@@ -48,9 +48,7 @@ class DataQualityCalculator(KPICalculatorBase):
         """Check if this calculator supports the given KPI."""
         return kpi.workstream == Workstream.WS1_DATA_QUALITY
 
-    def calculate(
-        self, kpi: KPIMetadata, context: dict[str, Any] | None = None
-    ) -> KPIResult:
+    def calculate(self, kpi: KPIMetadata, context: dict[str, Any] | None = None) -> KPIResult:
         """Calculate a data quality KPI.
 
         Args:
@@ -241,9 +239,7 @@ class DataQualityCalculator(KPICalculatorBase):
             return result[0]["median_ttr_days"]
         return 0.0
 
-    def _execute_query(
-        self, query: str, params: list[Any]
-    ) -> list[dict[str, Any]] | None:
+    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a SQL query and return results.
 
         Args:

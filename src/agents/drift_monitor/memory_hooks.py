@@ -16,7 +16,6 @@ Memory Types Required (per CONTRACT_VALIDATION.md):
 """
 
 import hashlib
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,9 +41,7 @@ class DriftDetectionContext:
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     episodic_context: List[Dict[str, Any]] = field(default_factory=list)
     semantic_context: Dict[str, Any] = field(default_factory=dict)
-    retrieval_timestamp: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    retrieval_timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -378,9 +375,7 @@ class DriftMonitorMemoryHooks:
                 # Filter for feature overlap
                 relevant_records = []
                 for record in response.data:
-                    record_features = record.get("metadata", {}).get(
-                        "features_monitored", []
-                    )
+                    record_features = record.get("metadata", {}).get("features_monitored", [])
                     if set(features) & set(record_features):
                         relevant_records.append(record)
                 return relevant_records[:max_records]
@@ -505,9 +500,7 @@ class DriftMonitorMemoryHooks:
                 "cached_at": datetime.now(timezone.utc).isoformat(),
                 "model_id": model_id,
             }
-            await self.working_memory.set(
-                session_key, cache_data, ttl=self.CACHE_TTL_SECONDS
-            )
+            await self.working_memory.set(session_key, cache_data, ttl=self.CACHE_TTL_SECONDS)
 
             # Cache per-feature results for quick lookup
             if features:
@@ -534,9 +527,7 @@ class DriftMonitorMemoryHooks:
             logger.warning(f"Error caching drift result: {e}")
             return False
 
-    async def get_cached_drift_result(
-        self, session_id: str
-    ) -> Optional[Dict[str, Any]]:
+    async def get_cached_drift_result(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve cached drift result for session.
 
         Args:
@@ -630,9 +621,7 @@ class DriftMonitorMemoryHooks:
                 severity_order = ["none", "low", "medium", "high", "critical"]
                 for alert in alerts:
                     alert_severity = alert.get("severity", "none")
-                    if severity_order.index(alert_severity) > severity_order.index(
-                        max_severity
-                    ):
+                    if severity_order.index(alert_severity) > severity_order.index(max_severity):
                         max_severity = alert_severity
 
             # Count drift types
@@ -675,9 +664,7 @@ class DriftMonitorMemoryHooks:
             }
 
             response = (
-                self.supabase_client.table("agent_activities")
-                .insert(activity_data)
-                .execute()
+                self.supabase_client.table("agent_activities").insert(activity_data).execute()
             )
 
             if response.data:
@@ -732,9 +719,7 @@ class DriftMonitorMemoryHooks:
             elif drift_type == "concept":
                 drift_results = result.get("concept_drift_results", [])
 
-            feature_result = next(
-                (r for r in drift_results if r.get("feature") == feature), {}
-            )
+            feature_result = next((r for r in drift_results if r.get("feature") == feature), {})
 
             # Create/update Feature node
             feature_query = f"""
@@ -757,8 +742,8 @@ class DriftMonitorMemoryHooks:
             SET
                 d.severity = '{severity}',
                 d.last_detected = '{timestamp}',
-                d.test_statistic = {feature_result.get('test_statistic', 0.0)},
-                d.p_value = {feature_result.get('p_value', 1.0)}
+                d.test_statistic = {feature_result.get("test_statistic", 0.0)},
+                d.p_value = {feature_result.get("p_value", 1.0)}
             RETURN d
             """
             await self.semantic_memory.query(pattern_query)
@@ -846,18 +831,14 @@ class DriftMonitorMemoryHooks:
     # Helper Methods
     # ========================================================================
 
-    def _generate_record_id(
-        self, session_id: str, result: Dict[str, Any]
-    ) -> str:
+    def _generate_record_id(self, session_id: str, result: Dict[str, Any]) -> str:
         """Generate unique record ID for episodic memory."""
         content = f"{session_id}:{result.get('overall_drift_score', 0)}"
         content += f":{len(result.get('features_with_drift', []))}"
         content += f":{datetime.now(timezone.utc).isoformat()}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    def _generate_pattern_id(
-        self, feature: str, drift_type: str, state: Dict[str, Any]
-    ) -> str:
+    def _generate_pattern_id(self, feature: str, drift_type: str, state: Dict[str, Any]) -> str:
         """Generate unique pattern ID for semantic memory."""
         model_id = state.get("model_id", "no_model")
         brand = state.get("brand", "no_brand")

@@ -4,7 +4,6 @@ Tests that agents properly load and utilize skills from the skills framework.
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
 
 
 class TestCausalImpactAgentSkills:

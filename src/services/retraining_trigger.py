@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +163,15 @@ class RetrainingTriggerService:
                 concept_drift_scores.append(score)
 
         # Calculate average drift scores
-        avg_data_drift = sum(data_drift_scores) / len(data_drift_scores) if data_drift_scores else 0.0
-        avg_model_drift = sum(model_drift_scores) / len(model_drift_scores) if model_drift_scores else 0.0
-        avg_concept_drift = sum(concept_drift_scores) / len(concept_drift_scores) if concept_drift_scores else 0.0
+        avg_data_drift = (
+            sum(data_drift_scores) / len(data_drift_scores) if data_drift_scores else 0.0
+        )
+        avg_model_drift = (
+            sum(model_drift_scores) / len(model_drift_scores) if model_drift_scores else 0.0
+        )
+        avg_concept_drift = (
+            sum(concept_drift_scores) / len(concept_drift_scores) if concept_drift_scores else 0.0
+        )
         overall_drift = max(avg_data_drift, avg_model_drift, avg_concept_drift)
 
         # Get performance metrics
@@ -280,7 +286,6 @@ class RetrainingTriggerService:
         Returns:
             Created retraining job
         """
-        import uuid
 
         from src.repositories.drift_monitoring import (
             DriftHistoryRepository,
@@ -291,9 +296,7 @@ class RetrainingTriggerService:
         # Get current metrics
         drift_repo = DriftHistoryRepository()
         drift_records = await drift_repo.get_latest_drift_status(model_version, limit=20)
-        drift_score = max(
-            (self._severity_to_score(r.severity) for r in drift_records), default=0.0
-        )
+        drift_score = max((self._severity_to_score(r.severity) for r in drift_records), default=0.0)
 
         tracker = get_performance_tracker()
         try:
@@ -483,11 +486,15 @@ class RetrainingTriggerService:
         """Check if model is in cooldown period."""
         try:
             # Get recent retraining for this model
-            result = await repo.client.table("ml_retraining_history").select(
-                "completed_at"
-            ).eq("old_model_version", model_version).eq("status", "completed").order(
-                "completed_at", desc=True
-            ).limit(1).execute()
+            result = (
+                await repo.client.table("ml_retraining_history")
+                .select("completed_at")
+                .eq("old_model_version", model_version)
+                .eq("status", "completed")
+                .order("completed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
 
             if result.data:
                 last_completed = datetime.fromisoformat(result.data[0]["completed_at"])

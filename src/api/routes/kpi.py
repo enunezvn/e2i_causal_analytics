@@ -19,12 +19,12 @@ Version: 1.0.0
 """
 
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from src.api.dependencies.auth import require_auth, require_admin
+from src.api.dependencies.auth import require_admin, require_auth
+from src.api.dependencies.supabase_client import get_supabase
 from src.api.schemas.kpi import (
     BatchKPICalculationRequest,
     BatchKPICalculationResponse,
@@ -39,7 +39,6 @@ from src.api.schemas.kpi import (
     WorkstreamInfo,
     WorkstreamListResponse,
 )
-from src.api.dependencies.supabase_client import get_supabase
 from src.kpi.calculator import KPICalculator
 from src.kpi.models import CausalLibrary, Workstream
 from src.kpi.registry import get_registry
@@ -305,7 +304,7 @@ async def health_check(
         System health status
     """
     try:
-        registry = get_registry()
+        get_registry()
         all_kpis = calculator.list_kpis()
 
         # Determine available workstreams

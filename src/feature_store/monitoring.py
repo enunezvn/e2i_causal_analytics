@@ -24,9 +24,9 @@ if TYPE_CHECKING:
 # Try to import prometheus_client
 try:
     from prometheus_client import (
-        CollectorRegistry,
+        CollectorRegistry,  # noqa: F401
         Counter,
-        Gauge,
+        Gauge,  # noqa: F401
         Histogram,
         Summary,
     )

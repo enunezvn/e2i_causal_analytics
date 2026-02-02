@@ -342,8 +342,8 @@ class DeepReasonerNode:
 
 {contexts_str}
 
-Target Audience: {state.get('user_expertise', 'analyst')}
-Focus Areas: {state.get('focus_areas', ['General overview'])}
+Target Audience: {state.get("user_expertise", "analyst")}
+Focus Areas: {state.get("focus_areas", ["General overview"])}
 
 Provide JSON with:
 - insights: List of insights with statement, category, confidence, priority
@@ -455,7 +455,7 @@ Provide JSON with:
             return Insight(
                 insight_id=f"rec_{rec_id}",
                 category="recommendation",
-                statement=f"ACTION: Investigate and scale the factors driving this performance pattern",
+                statement="ACTION: Investigate and scale the factors driving this performance pattern",
                 supporting_evidence=[f"Based on: {original_statement}"],
                 confidence=confidence * 0.85,
                 priority=priority,
@@ -467,7 +467,7 @@ Provide JSON with:
             return Insight(
                 insight_id=f"rec_{rec_id}",
                 category="recommendation",
-                statement=f"ACTION: Develop targeted strategy for this segment based on identified characteristics",
+                statement="ACTION: Develop targeted strategy for this segment based on identified characteristics",
                 supporting_evidence=[f"Based on: {original_statement}"],
                 confidence=confidence * 0.85,
                 priority=priority,
@@ -479,7 +479,7 @@ Provide JSON with:
             return Insight(
                 insight_id=f"rec_{rec_id}",
                 category="recommendation",
-                statement=f"ACTION: Design intervention targeting the identified causal mechanism",
+                statement="ACTION: Design intervention targeting the identified causal mechanism",
                 supporting_evidence=[f"Based on: {original_statement}"],
                 confidence=confidence * 0.8,
                 priority=priority,
@@ -491,7 +491,7 @@ Provide JSON with:
             return Insight(
                 insight_id=f"rec_{rec_id}",
                 category="recommendation",
-                statement=f"ACTION: Implement mitigation strategy to address identified risk factors",
+                statement="ACTION: Implement mitigation strategy to address identified risk factors",
                 supporting_evidence=[f"Based on: {original_statement}"],
                 confidence=confidence * 0.9,
                 priority=max(1, priority - 1),  # Increase priority for risks
@@ -503,7 +503,7 @@ Provide JSON with:
             return Insight(
                 insight_id=f"rec_{rec_id}",
                 category="recommendation",
-                statement=f"ACTION: Evaluate and prioritize this opportunity for resource allocation",
+                statement="ACTION: Evaluate and prioritize this opportunity for resource allocation",
                 supporting_evidence=[f"Based on: {original_statement}"],
                 confidence=confidence * 0.85,
                 priority=priority,
@@ -515,7 +515,7 @@ Provide JSON with:
             return Insight(
                 insight_id=f"rec_{rec_id}",
                 category="recommendation",
-                statement=f"ACTION: Conduct deeper analysis to determine actionable next steps",
+                statement="ACTION: Conduct deeper analysis to determine actionable next steps",
                 supporting_evidence=[f"Based on: {original_statement}"],
                 confidence=confidence * 0.7,
                 priority=priority + 1,  # Lower priority for generic
@@ -531,6 +531,7 @@ Provide JSON with:
 
         # Look for percentage improvements
         import re
+
         pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", statement)
         if pct_match:
             pct = pct_match.group(1)

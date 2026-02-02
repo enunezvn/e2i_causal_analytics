@@ -1,11 +1,8 @@
 """Tests for KPI models."""
 
-import pytest
-from datetime import datetime
-
 from src.kpi.models import (
-    CausalLibrary,
     CalculationType,
+    CausalLibrary,
     KPIBatchResult,
     KPIMetadata,
     KPIResult,

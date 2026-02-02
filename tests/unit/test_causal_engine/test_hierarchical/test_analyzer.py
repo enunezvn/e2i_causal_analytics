@@ -6,7 +6,6 @@ B9.1: Hierarchical analysis orchestration tests.
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.causal_engine.hierarchical import (
     HierarchicalAnalyzer,
@@ -89,11 +88,13 @@ class TestHierarchicalAnalyzer:
         """Create sample data for testing."""
         np.random.seed(42)
         n = 300
-        X = pd.DataFrame({
-            "feature_1": np.random.randn(n),
-            "feature_2": np.random.randn(n),
-            "feature_3": np.random.randn(n),
-        })
+        X = pd.DataFrame(
+            {
+                "feature_1": np.random.randn(n),
+                "feature_2": np.random.randn(n),
+                "feature_3": np.random.randn(n),
+            }
+        )
         treatment = np.random.binomial(1, 0.5, n)
         # Outcome with heterogeneous treatment effect
         base_effect = 0.1 + 0.05 * X["feature_1"].values

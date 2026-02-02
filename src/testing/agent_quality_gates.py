@@ -85,7 +85,7 @@ def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
         return default
 
     # Try dict-like access first
-    if hasattr(obj, "get") and callable(getattr(obj, "get")):
+    if hasattr(obj, "get") and callable(obj.get):
         return obj.get(key, default)
 
     # Fall back to attribute access
@@ -170,8 +170,7 @@ def _validate_prediction_synthesizer(output: dict[str, Any]) -> tuple[bool, str]
 
         # Check recommendations
         has_warning = any(
-            any(kw in str(r).lower() for kw in warning_keywords)
-            for r in recommendations
+            any(kw in str(r).lower() for kw in warning_keywords) for r in recommendations
         )
 
         # Check anomaly flags (which also contain warnings)
@@ -189,8 +188,7 @@ def _validate_prediction_synthesizer(output: dict[str, Any]) -> tuple[bool, str]
         if not has_warning:
             state_warnings = _safe_get(output, "warnings", []) or []
             has_warning = any(
-                any(kw in str(w).lower() for kw in warning_keywords)
-                for w in state_warnings
+                any(kw in str(w).lower() for kw in warning_keywords) for w in state_warnings
             )
 
         if not has_warning and status != "failed":
@@ -305,7 +303,7 @@ def _validate_experiment_designer(output: dict[str, Any]) -> tuple[bool, str]:
 def _validate_health_score(output: dict[str, Any]) -> tuple[bool, str]:
     """Health score must provide diagnostic details for low component scores."""
     component_score = _safe_get(output, "component_health_score", 1.0)
-    overall_score = _safe_get(output, "overall_health_score", 100)
+    _safe_get(output, "overall_health_score", 100)
 
     # If component score is low, some form of diagnostic info should be present
     if component_score and component_score < 0.8:
@@ -337,9 +335,8 @@ def _validate_health_score(output: dict[str, Any]) -> tuple[bool, str]:
         has_diagnostics = bool(diagnostics)
         has_issues = bool(critical_issues)
         has_warnings = bool(warnings)
-        has_summary_diagnostics = (
-            len(health_summary) > 50
-            and ("issue" in health_summary.lower() or "degraded" in health_summary.lower())
+        has_summary_diagnostics = len(health_summary) > 50 and (
+            "issue" in health_summary.lower() or "degraded" in health_summary.lower()
         )
 
         if not (has_diagnostics or has_issues or has_warnings or has_summary_diagnostics):
@@ -396,7 +393,7 @@ def _validate_resource_optimizer(output: dict[str, Any]) -> tuple[bool, str]:
 
 def _validate_explainer(output: dict[str, Any]) -> tuple[bool, str]:
     """Explainer must surface recommendations in output, not just count them."""
-    key_findings_count = output.get("key_findings_count", 0)
+    output.get("key_findings_count", 0)
     recommendations_count = output.get("recommendations_count", 0)
 
     if recommendations_count > 0:
@@ -412,10 +409,7 @@ def _validate_explainer(output: dict[str, Any]) -> tuple[bool, str]:
 
     # Reject meta-descriptions instead of actual explanations
     exec_summary = output.get("executive_summary", "")
-    if (
-        re.match(r"^Analysis complete with \d+ findings", exec_summary)
-        and len(exec_summary) < 100
-    ):
+    if re.match(r"^Analysis complete with \d+ findings", exec_summary) and len(exec_summary) < 100:
         return (
             False,
             "Executive summary is a meta-description, not an actual explanation: "
@@ -467,9 +461,8 @@ def _validate_heterogeneous_optimizer(output: dict[str, Any]) -> tuple[bool, str
     if het_status in ("completed", "success"):
         high_responders = _safe_get(output, "high_responders", None)
         low_responders = _safe_get(output, "low_responders", None)
-        if (
-            (high_responders is not None and not high_responders)
-            and (low_responders is not None and not low_responders)
+        if (high_responders is not None and not high_responders) and (
+            low_responders is not None and not low_responders
         ):
             return (
                 False,
@@ -509,9 +502,9 @@ def _validate_feedback_learner(output: dict[str, Any]) -> tuple[bool, str]:
         # Check counter-based outputs
         feedback_count = output.get("feedback_count", 0)
         pattern_count = output.get("pattern_count", 0)
-        has_counter_content = (
-            isinstance(feedback_count, (int, float)) and feedback_count > 0
-        ) or (isinstance(pattern_count, (int, float)) and pattern_count > 0)
+        has_counter_content = (isinstance(feedback_count, (int, float)) and feedback_count > 0) or (
+            isinstance(pattern_count, (int, float)) and pattern_count > 0
+        )
 
         if not has_list_content and not has_counter_content:
             return (
@@ -539,9 +532,7 @@ def _validate_orchestrator(output: dict[str, Any]) -> tuple[bool, str]:
         # No duplicate agent dispatches
         if isinstance(agents_dispatched, list) and len(agents_dispatched) > 0:
             if len(set(agents_dispatched)) < len(agents_dispatched):
-                duplicates = [
-                    a for a in set(agents_dispatched) if agents_dispatched.count(a) > 1
-                ]
+                duplicates = [a for a in set(agents_dispatched) if agents_dispatched.count(a) > 1]
                 return (
                     False,
                     f"Duplicate agents dispatched: {duplicates} - "

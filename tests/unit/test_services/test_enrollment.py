@@ -23,7 +23,6 @@ from src.services.enrollment import (
     EligibilityCriteria,
     EligibilityResult,
     EnrollmentConfig,
-    EnrollmentRecord,
     EnrollmentService,
     EnrollmentStats,
     EnrollmentStatus,
@@ -31,7 +30,6 @@ from src.services.enrollment import (
     WithdrawalInitiator,
     get_enrollment_service,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -432,9 +430,7 @@ class TestEligibilityCheck:
         experiment_id: UUID,
     ):
         """Test eligibility check with custom criteria."""
-        criteria = EligibilityCriteria(
-            custom_criteria={"is_contracted": True}
-        )
+        criteria = EligibilityCriteria(custom_criteria={"is_contracted": True})
         unit = {"id": "test", "is_contracted": False}
 
         result = await service.check_eligibility(
@@ -491,7 +487,7 @@ class TestEnrollment:
         mock_repo.create_enrollment.return_value = mock_enrollment
 
         with patch("src.repositories.ab_experiment.ABExperimentRepository", return_value=mock_repo):
-            result = await service.enroll_unit(
+            await service.enroll_unit(
                 assignment_id=assignment_id,
                 eligibility_result=eligibility,
                 consent_timestamp=datetime.now(timezone.utc),
@@ -568,7 +564,7 @@ class TestWithdrawal:
         mock_repo.update_enrollment_status.return_value = mock_enrollment
 
         with patch("src.repositories.ab_experiment.ABExperimentRepository", return_value=mock_repo):
-            result = await service.withdraw_unit(
+            await service.withdraw_unit(
                 enrollment_id=enrollment_id,
                 reason="Subject requested withdrawal",
             )
@@ -596,7 +592,10 @@ class TestWithdrawal:
             )
 
             call_args = mock_repo.update_enrollment_status.call_args
-            assert call_args.kwargs["withdrawal_initiated_by"] == WithdrawalInitiator.INVESTIGATOR.value
+            assert (
+                call_args.kwargs["withdrawal_initiated_by"]
+                == WithdrawalInitiator.INVESTIGATOR.value
+            )
 
 
 # =============================================================================
@@ -804,7 +803,7 @@ class TestEnrollmentStats:
         """Test enrollment stats calculates enrollment and withdrawal rates."""
         # Create 10 assignments
         mock_assignments = [MagicMock() for _ in range(10)]
-        for i, a in enumerate(mock_assignments):
+        for _i, a in enumerate(mock_assignments):
             a.id = uuid4()
             a.variant = "control"
 

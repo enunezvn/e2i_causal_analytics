@@ -27,7 +27,7 @@ import tempfile
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import yaml
@@ -49,7 +49,7 @@ def _expand_env_vars(text: str) -> str:
         Text with environment variables expanded.
     """
     # Pattern matches ${VAR} or ${VAR:-default}
-    pattern = r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}'
+    pattern = r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}"
 
     def replace_var(match: re.Match) -> str:
         var_name = match.group(1)
@@ -62,6 +62,7 @@ def _expand_env_vars(text: str) -> str:
         return value
 
     return re.sub(pattern, replace_var, text)
+
 
 # Feature repo path - relative to project root
 FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
@@ -452,8 +453,7 @@ class FeastClient:
         It returns the latest feature values instead.
         """
         logger.warning(
-            "Using fallback for historical features. "
-            "Point-in-time correctness NOT guaranteed."
+            "Using fallback for historical features. Point-in-time correctness NOT guaranteed."
         )
 
         if not self._custom_store:
@@ -522,8 +522,7 @@ class FeastClient:
             duration = (datetime.now() - start_time).total_seconds()
 
             logger.info(
-                f"Materialization completed in {duration:.2f}s. "
-                f"Views: {feature_views or 'all'}"
+                f"Materialization completed in {duration:.2f}s. Views: {feature_views or 'all'}"
             )
 
             # Track materialization timestamps
@@ -616,9 +615,7 @@ class FeastClient:
 
         return []
 
-    def _get_freshness_thresholds(
-        self, feature_view: str
-    ) -> tuple[float, float]:
+    def _get_freshness_thresholds(self, feature_view: str) -> tuple[float, float]:
         """Get freshness thresholds for a feature view.
 
         Args:
@@ -628,9 +625,7 @@ class FeastClient:
             Tuple of (max_staleness_hours, warning_threshold_hours).
         """
         # Check for view-specific config
-        view_config = self._materialization_config.get("feature_views", {}).get(
-            feature_view, {}
-        )
+        view_config = self._materialization_config.get("feature_views", {}).get(feature_view, {})
         global_config = self._materialization_config.get("materialization", {})
 
         # Get max staleness (view-specific or global default)
@@ -675,7 +670,10 @@ class FeastClient:
         # Check cache
         if not refresh and cache_key in self._stats_cache:
             cache_time = self._stats_cache_time.get(cache_key)
-            if cache_time and (datetime.now() - cache_time).total_seconds() < self.config.cache_ttl_seconds:
+            if (
+                cache_time
+                and (datetime.now() - cache_time).total_seconds() < self.config.cache_ttl_seconds
+            ):
                 return self._stats_cache[cache_key]
 
         # Compute statistics from offline store
@@ -846,7 +844,7 @@ class FeastClient:
                 count_result = await asyncio.to_thread(
                     lambda: client.table(table_name).select("*", count="exact").limit(0).execute()
                 )
-                total_count = count_result.count if hasattr(count_result, 'count') else 0
+                total_count = count_result.count if hasattr(count_result, "count") else 0
 
                 return FeatureStatistics(
                     feature_view=feature_view,
@@ -891,9 +889,9 @@ class FeastClient:
             fv = self._store.get_feature_view(feature_view)
 
             # Access the data source
-            data_source = fv.batch_source if hasattr(fv, 'batch_source') else None
+            data_source = fv.batch_source if hasattr(fv, "batch_source") else None
 
-            if data_source and hasattr(data_source, 'get_table_query_string'):
+            if data_source and hasattr(data_source, "get_table_query_string"):
                 # Could query the source directly
                 # This is implementation-specific to the data source type
                 pass
@@ -903,12 +901,14 @@ class FeastClient:
             start_date = end_date - timedelta(days=30)
 
             # Create minimal entity df for sampling
-            entity_df = pd.DataFrame({
-                "event_timestamp": [start_date, end_date],
-            })
+            entity_df = pd.DataFrame(
+                {
+                    "event_timestamp": [start_date, end_date],
+                }
+            )
 
             # Add required entity columns based on feature view
-            for entity in fv.entity_columns if hasattr(fv, 'entity_columns') else []:
+            for entity in fv.entity_columns if hasattr(fv, "entity_columns") else []:
                 entity_df[entity] = ["sample_id", "sample_id"]
 
             # Get historical features
@@ -966,11 +966,11 @@ class FeastClient:
             return [
                 {
                     "name": fv.name,
-                    "entities": [e for e in fv.entity_columns] if hasattr(fv, 'entity_columns') else [],
-                    "features": [f.name for f in fv.schema] if hasattr(fv, 'schema') else [],
-                    "ttl": str(fv.ttl) if hasattr(fv, 'ttl') else None,
-                    "online": fv.online if hasattr(fv, 'online') else False,
-                    "tags": dict(fv.tags) if hasattr(fv, 'tags') else {},
+                    "entities": list(fv.entity_columns) if hasattr(fv, "entity_columns") else [],
+                    "features": [f.name for f in fv.schema] if hasattr(fv, "schema") else [],
+                    "ttl": str(fv.ttl) if hasattr(fv, "ttl") else None,
+                    "online": fv.online if hasattr(fv, "online") else False,
+                    "tags": dict(fv.tags) if hasattr(fv, "tags") else {},
                 }
                 for fv in feature_views
             ]
@@ -997,7 +997,7 @@ class FeastClient:
                     "name": e.name,
                     "join_keys": list(e.join_keys),
                     "description": e.description,
-                    "tags": dict(e.tags) if hasattr(e, 'tags') else {},
+                    "tags": dict(e.tags) if hasattr(e, "tags") else {},
                 }
                 for e in entities
             ]
@@ -1032,9 +1032,7 @@ class FeastClient:
         self._ensure_initialized()
 
         # Get thresholds from config
-        max_staleness_hours, warning_threshold_hours = self._get_freshness_thresholds(
-            feature_view
-        )
+        max_staleness_hours, warning_threshold_hours = self._get_freshness_thresholds(feature_view)
 
         # Get last materialization time
         last_materialized = self._materialization_timestamps.get(feature_view)
@@ -1072,7 +1070,9 @@ class FeastClient:
         else:
             status = FreshnessStatus.EXPIRED
             is_fresh = False
-            message = f"Features are expired (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+            message = (
+                f"Features are expired (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+            )
 
         return FeatureFreshness(
             feature_view=feature_view,

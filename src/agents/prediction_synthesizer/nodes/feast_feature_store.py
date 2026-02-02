@@ -143,13 +143,12 @@ class FeastFeatureStore:
 
             # Remove entity key and metadata from result
             result = {
-                k: v for k, v in features.items()
+                k: v
+                for k, v in features.items()
                 if k not in [self._entity_key, "event_timestamp", "__feast_event_timestamp"]
             }
 
-            logger.debug(
-                f"Retrieved {len(result)} online features for entity {entity_id}"
-            )
+            logger.debug(f"Retrieved {len(result)} online features for entity {entity_id}")
             return result
 
         except Exception as e:
@@ -198,9 +197,10 @@ class FeastFeatureStore:
 
             # Process results
             result = {}
-            for entity_id, features in zip(entity_ids, batch_features):
+            for entity_id, features in zip(entity_ids, batch_features, strict=False):
                 result[entity_id] = {
-                    k: v for k, v in features.items()
+                    k: v
+                    for k, v in features.items()
                     if k not in [self._entity_key, "event_timestamp"]
                 }
 

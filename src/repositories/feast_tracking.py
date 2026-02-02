@@ -11,7 +11,7 @@ Tables: ml_feast_feature_views, ml_feast_materialization_jobs, ml_feast_feature_
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -144,9 +144,15 @@ class FeastFeatureView:
             batch_source_enabled=data.get("batch_source_enabled", True),
             tags=data.get("tags") or {},
             owner=data.get("owner"),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
-            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
-            deleted_at=datetime.fromisoformat(data["deleted_at"]) if data.get("deleted_at") else None,
+            created_at=datetime.fromisoformat(data["created_at"])
+            if data.get("created_at")
+            else None,
+            updated_at=datetime.fromisoformat(data["updated_at"])
+            if data.get("updated_at")
+            else None,
+            deleted_at=datetime.fromisoformat(data["deleted_at"])
+            if data.get("deleted_at")
+            else None,
         )
 
 
@@ -221,7 +227,9 @@ class FeastMaterializationJob:
             feature_view_name=data.get("feature_view_name", ""),
             job_id=data.get("job_id"),
             job_type=data.get("job_type", "incremental"),
-            start_time=datetime.fromisoformat(data["start_time"]) if data.get("start_time") else None,
+            start_time=datetime.fromisoformat(data["start_time"])
+            if data.get("start_time")
+            else None,
             end_time=datetime.fromisoformat(data["end_time"]) if data.get("end_time") else None,
             status=data.get("status", "pending"),
             error_message=data.get("error_message"),
@@ -232,9 +240,15 @@ class FeastMaterializationJob:
             online_store_latency_ms=data.get("online_store_latency_ms"),
             cpu_seconds=data.get("cpu_seconds"),
             memory_peak_mb=data.get("memory_peak_mb"),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
-            started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
-            completed_at=datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None,
+            created_at=datetime.fromisoformat(data["created_at"])
+            if data.get("created_at")
+            else None,
+            started_at=datetime.fromisoformat(data["started_at"])
+            if data.get("started_at")
+            else None,
+            completed_at=datetime.fromisoformat(data["completed_at"])
+            if data.get("completed_at")
+            else None,
         )
 
 
@@ -272,7 +286,9 @@ class FeastFeatureFreshness:
             "feature_view_id": str(self.feature_view_id) if self.feature_view_id else None,
             "feature_view_name": self.feature_view_name,
             "recorded_at": self.recorded_at.isoformat() if self.recorded_at else None,
-            "last_materialization_time": self.last_materialization_time.isoformat() if self.last_materialization_time else None,
+            "last_materialization_time": self.last_materialization_time.isoformat()
+            if self.last_materialization_time
+            else None,
             "staleness_seconds": self.staleness_seconds,
             "data_lag_seconds": self.data_lag_seconds,
             "null_rate": self.null_rate,
@@ -289,8 +305,12 @@ class FeastFeatureFreshness:
             id=UUID(data["id"]) if data.get("id") else None,
             feature_view_id=UUID(data["feature_view_id"]) if data.get("feature_view_id") else None,
             feature_view_name=data.get("feature_view_name", ""),
-            recorded_at=datetime.fromisoformat(data["recorded_at"]) if data.get("recorded_at") else None,
-            last_materialization_time=datetime.fromisoformat(data["last_materialization_time"]) if data.get("last_materialization_time") else None,
+            recorded_at=datetime.fromisoformat(data["recorded_at"])
+            if data.get("recorded_at")
+            else None,
+            last_materialization_time=datetime.fromisoformat(data["last_materialization_time"])
+            if data.get("last_materialization_time")
+            else None,
             staleness_seconds=data.get("staleness_seconds"),
             data_lag_seconds=data.get("data_lag_seconds"),
             null_rate=data.get("null_rate"),
@@ -441,11 +461,7 @@ class FeastFeatureViewRepository(BaseRepository[FeastFeatureView]):
             return []
 
         try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .is_("deleted_at", "null")
-            )
+            query = self.client.table(self.table_name).select("*").is_("deleted_at", "null")
 
             if project:
                 query = query.eq("project", project)
@@ -530,10 +546,12 @@ class FeastFeatureViewRepository(BaseRepository[FeastFeatureView]):
         try:
             result = (
                 self.client.table(self.table_name)
-                .update({
-                    "deleted_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                })
+                .update(
+                    {
+                        "deleted_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 .eq("id", str(view_id))
                 .execute()
             )
@@ -786,8 +804,12 @@ class FeastMaterializationRepository(BaseRepository[FeastMaterializationJob]):
                 "successful_jobs": len([j for j in jobs if j.status == "success"]),
                 "failed_jobs": len([j for j in jobs if j.status == "failed"]),
                 "total_rows_materialized": sum(j.rows_materialized for j in jobs),
-                "avg_duration_seconds": sum(j.duration_seconds or 0 for j in jobs) / len(jobs) if jobs else 0,
-                "success_rate": len([j for j in jobs if j.status == "success"]) / len(jobs) * 100 if jobs else 0,
+                "avg_duration_seconds": sum(j.duration_seconds or 0 for j in jobs) / len(jobs)
+                if jobs
+                else 0,
+                "success_rate": len([j for j in jobs if j.status == "success"]) / len(jobs) * 100
+                if jobs
+                else 0,
             }
 
         except Exception as e:

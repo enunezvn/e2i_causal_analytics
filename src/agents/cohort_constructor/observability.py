@@ -33,7 +33,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
 
 from .constants import AGENT_METADATA, SLAThreshold
-from .types import CohortConfig, CohortExecutionResult, Criterion, EligibilityLogEntry
+from .types import CohortConfig, CohortExecutionResult, Criterion
 
 logger = logging.getLogger(__name__)
 
@@ -271,9 +271,7 @@ class CohortMLflowLogger:
             config_json = json.dumps(config_dict, indent=2, default=str)
 
             # Write to temp file and log
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                 f.write(config_json)
                 temp_path = f.name
 
@@ -332,8 +330,7 @@ class CohortMLflowLogger:
                 connector.log_metrics(metrics, run_id=run_id)
 
             logger.debug(
-                f"Logged SLA compliance: compliant={sla_compliant}, "
-                f"margin={sla_margin_pct:.1f}%"
+                f"Logged SLA compliance: compliant={sla_compliant}, margin={sla_margin_pct:.1f}%"
             )
 
         except Exception as e:
@@ -400,7 +397,7 @@ class CohortOpikTracer:
 
         try:
             # Start trace
-            trace_id = trace_context.start_trace(
+            trace_context.start_trace(
                 name="cohort_construction",
                 inputs={
                     "brand": config.brand,
@@ -541,11 +538,7 @@ class CohortTraceContext:
 
         try:
             # Convert criterion to dict if needed
-            crit_dict = (
-                criterion.to_dict()
-                if hasattr(criterion, "to_dict")
-                else dict(criterion)
-            )
+            crit_dict = criterion.to_dict() if hasattr(criterion, "to_dict") else dict(criterion)
 
             span_data = {
                 "name": f"evaluate_{criterion_type}_criterion",
@@ -610,9 +603,7 @@ class CohortTraceContext:
                 "outputs": {
                     "passed_count": passed_count,
                     "failed_count": failed_count,
-                    "pass_rate": (passed_count / initial_count * 100)
-                    if initial_count > 0
-                    else 0,
+                    "pass_rate": (passed_count / initial_count * 100) if initial_count > 0 else 0,
                 },
             }
 
@@ -649,9 +640,7 @@ class CohortTraceContext:
             outputs = {
                 "eligible_count": eligible_count,
                 "total_count": total_count,
-                "eligibility_rate": (eligible_count / total_count * 100)
-                if total_count > 0
-                else 0,
+                "eligibility_rate": (eligible_count / total_count * 100) if total_count > 0 else 0,
                 "execution_time_ms": execution_time_ms,
                 "status": status,
             }
@@ -738,9 +727,7 @@ def track_cohort_step(step_name: str) -> Callable[[F], F]:
 
             finally:
                 if connector is not None:
-                    duration_ms = (
-                        datetime.utcnow() - start_time
-                    ).total_seconds() * 1000
+                    duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
 
                     try:
                         if hasattr(connector, "log_span"):

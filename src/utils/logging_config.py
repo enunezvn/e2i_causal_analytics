@@ -19,7 +19,7 @@ import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 # =============================================================================
 # Context Variables for Request Tracking
@@ -144,6 +144,7 @@ class JSONFormatter(logging.Formatter):
         # Cache hostname
         if include_hostname:
             import socket
+
             self._hostname = socket.gethostname()
         else:
             self._hostname = None
@@ -152,9 +153,7 @@ class JSONFormatter(logging.Formatter):
         """Format log record as JSON."""
         # Build base log entry
         log_entry = {
-            "timestamp": datetime.fromtimestamp(
-                record.created, tz=timezone.utc
-            ).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -262,10 +261,10 @@ class ColoredFormatter(logging.Formatter):
 
     # ANSI color codes
     COLORS = {
-        "DEBUG": "\033[36m",     # Cyan
-        "INFO": "\033[32m",      # Green
-        "WARNING": "\033[33m",   # Yellow
-        "ERROR": "\033[31m",     # Red
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
         "CRITICAL": "\033[35m",  # Magenta
         "RESET": "\033[0m",
         "GRAY": "\033[90m",
@@ -416,13 +415,15 @@ class LoggingConfig:
         # Create handler based on format
         if self.log_format == "json":
             handler = logging.StreamHandler(sys.stdout)
-            handler.setFormatter(JSONFormatter(
-                include_hostname=True,
-                extra_fields={
-                    "service": self.service_name,
-                    "environment": self.environment,
-                },
-            ))
+            handler.setFormatter(
+                JSONFormatter(
+                    include_hostname=True,
+                    extra_fields={
+                        "service": self.service_name,
+                        "environment": self.environment,
+                    },
+                )
+            )
         else:
             handler = logging.StreamHandler(sys.stdout)
             use_colors = os.environ.get("NO_COLOR", "").lower() not in ("1", "true", "yes")

@@ -32,10 +32,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel
 
-from src.api.dependencies.auth import require_analyst, require_auth
-
+from src.api.dependencies.auth import require_analyst
 from src.api.schemas.causal import (
     AggregationMethod,
     AnalysisStatus,
@@ -45,7 +43,6 @@ from src.api.schemas.causal import (
     CrossValidationResponse,
     EstimatorInfo,
     EstimatorListResponse,
-    EstimatorType,
     HierarchicalAnalysisRequest,
     HierarchicalAnalysisResponse,
     NestedCIResult,
@@ -105,7 +102,7 @@ async def run_hierarchical_analysis(
         HierarchicalAnalysisResponse with segment-level CATE results
     """
     analysis_id = str(uuid.uuid4())
-    start_time = time.time()
+    time.time()
 
     logger.info(
         f"Hierarchical analysis requested: {analysis_id}",
@@ -139,9 +136,7 @@ async def run_hierarchical_analysis(
         )
         _analysis_cache[analysis_id] = pending_response
 
-        background_tasks.add_task(
-            _run_hierarchical_analysis_task, analysis_id, request
-        )
+        background_tasks.add_task(_run_hierarchical_analysis_task, analysis_id, request)
 
         return pending_response
 
@@ -215,18 +210,22 @@ async def _execute_hierarchical_analysis(
     start_time = time.time()
 
     try:
+        import numpy as np
+        import pandas as pd
+
         from src.causal_engine.hierarchical import (
             AggregationMethod as EngineAggregationMethod,
+        )
+        from src.causal_engine.hierarchical import (
             HierarchicalAnalyzer,
             HierarchicalConfig,
             NestedCIConfig,
             NestedConfidenceInterval,
         )
-        from src.causal_engine.hierarchical.analyzer import SegmentationMethod as EngineSegmentationMethod
+        from src.causal_engine.hierarchical.analyzer import (
+            SegmentationMethod as EngineSegmentationMethod,
+        )
         from src.causal_engine.hierarchical.nested_ci import SegmentEstimate
-
-        import numpy as np
-        import pandas as pd
 
         # Map API enums to engine enums
         segmentation_map = {
@@ -246,10 +245,12 @@ async def _execute_hierarchical_analysis(
         # Generate mock data for demonstration
         np.random.seed(42)
         n = 500
-        df = pd.DataFrame({
-            request.treatment_var: np.random.binomial(1, 0.5, n),
-            request.outcome_var: np.random.normal(100, 20, n),
-        })
+        df = pd.DataFrame(
+            {
+                request.treatment_var: np.random.binomial(1, 0.5, n),
+                request.outcome_var: np.random.normal(100, 20, n),
+            }
+        )
         for modifier in request.effect_modifiers:
             df[modifier] = np.random.randn(n)
 
@@ -523,7 +524,7 @@ async def run_sequential_pipeline(
         SequentialPipelineResponse with stage results and consensus
     """
     pipeline_id = str(uuid.uuid4())
-    start_time = time.time()
+    time.time()
 
     logger.info(
         f"Sequential pipeline requested: {pipeline_id}",
@@ -611,6 +612,7 @@ async def _execute_sequential_pipeline(
 
             # Mock effect estimate (varies by library for demo)
             import random
+
             base_effect = 0.15
             effect = base_effect + random.uniform(-0.05, 0.05)
             ci_half_width = random.uniform(0.03, 0.08)
@@ -662,6 +664,7 @@ async def _execute_sequential_pipeline(
 
     if effect_estimates:
         import statistics
+
         consensus_effect = statistics.mean(effect_estimates)
         if len(effect_estimates) > 1:
             variance = statistics.variance(effect_estimates)
@@ -681,7 +684,9 @@ async def _execute_sequential_pipeline(
 
     return SequentialPipelineResponse(
         pipeline_id=pipeline_id,
-        status=AnalysisStatus.COMPLETED if stages_completed == len(request.stages) else AnalysisStatus.FAILED,
+        status=AnalysisStatus.COMPLETED
+        if stages_completed == len(request.stages)
+        else AnalysisStatus.FAILED,
         stages_completed=stages_completed,
         stages_total=len(request.stages),
         stage_results=stage_results,
@@ -726,10 +731,7 @@ async def run_parallel_pipeline(
 
     try:
         # Run all libraries in parallel
-        tasks = [
-            _run_library_analysis(lib, request)
-            for lib in request.libraries
-        ]
+        tasks = [_run_library_analysis(lib, request) for lib in request.libraries]
 
         results = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
@@ -742,7 +744,7 @@ async def run_parallel_pipeline(
         failed: List[str] = []
         effect_estimates: List[float] = []
 
-        for lib, result in zip(request.libraries, results):
+        for lib, result in zip(request.libraries, results, strict=False):
             if isinstance(result, Exception):
                 library_results[lib.value] = {"error": str(result)}
                 failed.append(lib.value)
@@ -760,6 +762,7 @@ async def run_parallel_pipeline(
 
         if effect_estimates:
             import statistics
+
             consensus_effect = statistics.mean(effect_estimates)
             if len(effect_estimates) > 1:
                 std = statistics.stdev(effect_estimates)
@@ -890,7 +893,10 @@ async def run_cross_validation(
 
         validation_effect = 0.15 + random.uniform(-0.03, 0.03)
         validation_ci_half = random.uniform(0.03, 0.06)
-        validation_ci = (validation_effect - validation_ci_half, validation_effect + validation_ci_half)
+        validation_ci = (
+            validation_effect - validation_ci_half,
+            validation_effect + validation_ci_half,
+        )
 
         # Compute agreement metrics
         effect_difference = abs(primary_effect - validation_effect)
@@ -901,7 +907,9 @@ async def run_cross_validation(
         overlap_end = min(primary_ci[1], validation_ci[1])
         if overlap_start < overlap_end:
             overlap_width = overlap_end - overlap_start
-            total_width = max(primary_ci[1], validation_ci[1]) - min(primary_ci[0], validation_ci[0])
+            total_width = max(primary_ci[1], validation_ci[1]) - min(
+                primary_ci[0], validation_ci[0]
+            )
             ci_overlap_ratio = overlap_width / total_width
         else:
             ci_overlap_ratio = 0.0
@@ -914,7 +922,9 @@ async def run_cross_validation(
 
         recommendations = []
         if not validation_passed:
-            recommendations.append("Consider investigating sources of disagreement between libraries")
+            recommendations.append(
+                "Consider investigating sources of disagreement between libraries"
+            )
             if ci_overlap_ratio < 0.5:
                 recommendations.append("CI overlap is low - check model specifications")
         else:
@@ -1132,25 +1142,29 @@ async def causal_health_check() -> CausalHealthResponse:
 
     # Check library availability
     try:
-        import dowhy
+        import dowhy  # noqa: F401
+
         libraries_available["dowhy"] = True
     except ImportError:
         pass
 
     try:
-        import econml
+        import econml  # noqa: F401
+
         libraries_available["econml"] = True
     except ImportError:
         pass
 
     try:
-        import causalml
+        import causalml  # noqa: F401
+
         libraries_available["causalml"] = True
     except ImportError:
         pass
 
     try:
-        import networkx
+        import networkx  # noqa: F401
+
         libraries_available["networkx"] = True
     except ImportError:
         pass
@@ -1159,14 +1173,17 @@ async def causal_health_check() -> CausalHealthResponse:
     hierarchical_ready = False
     pipeline_ready = False
     try:
-        from src.causal_engine.hierarchical import HierarchicalAnalyzer
+        from src.causal_engine.hierarchical import HierarchicalAnalyzer  # noqa: F401
+
         hierarchical_ready = True
     except ImportError:
         pass
 
     # Determine overall status
     all_libs = all(libraries_available.values())
-    status = "healthy" if all_libs else "degraded" if any(libraries_available.values()) else "unhealthy"
+    status = (
+        "healthy" if all_libs else "degraded" if any(libraries_available.values()) else "unhealthy"
+    )
 
     return CausalHealthResponse(
         status=status,

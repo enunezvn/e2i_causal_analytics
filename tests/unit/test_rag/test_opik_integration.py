@@ -28,7 +28,6 @@ from src.rag.opik_integration import (
     log_rubric_scores_to_opik,
 )
 
-
 # =============================================================================
 # Test EvaluationTraceContext
 # =============================================================================
@@ -205,9 +204,7 @@ class TestOpikEvaluationTracer:
             assert tracer._initialized is True
 
     def test_is_enabled_true(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             tracer = OpikEvaluationTracer(enabled=True)
 
             assert tracer.is_enabled is True
@@ -227,9 +224,7 @@ class TestOpikEvaluationTracer:
             assert tracer.is_enabled is False
 
     def test_circuit_breaker_status(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             tracer = OpikEvaluationTracer()
             tracer._ensure_initialized()  # Initialize the connector
 
@@ -248,9 +243,7 @@ class TestOpikEvaluationTracer:
 
     @pytest.mark.asyncio
     async def test_trace_evaluation_success(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             # Mock trace_agent context manager
             mock_span = Mock()
             mock_span.set_output = Mock()
@@ -285,9 +278,7 @@ class TestOpikEvaluationTracer:
     async def test_trace_evaluation_circuit_open(self, mock_connector):
         mock_connector.circuit_breaker.allow_request = Mock(return_value=False)
 
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             tracer = OpikEvaluationTracer()
 
             async with tracer.trace_evaluation("run_001") as ctx:
@@ -301,9 +292,7 @@ class TestOpikEvaluationTracer:
         # Mock trace_agent to raise error
         mock_connector.trace_agent.side_effect = Exception("Opik error")
 
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             tracer = OpikEvaluationTracer()
 
             async with tracer.trace_evaluation("run_001") as ctx:
@@ -315,9 +304,7 @@ class TestOpikEvaluationTracer:
 
     @pytest.mark.asyncio
     async def test_trace_evaluation_with_metadata(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             mock_span = Mock()
             async_cm = AsyncMock()
             async_cm.__aenter__ = AsyncMock(return_value=mock_span)
@@ -333,9 +320,7 @@ class TestOpikEvaluationTracer:
 
     @pytest.mark.asyncio
     async def test_trace_sample_evaluation(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             mock_span = Mock()
             async_cm = AsyncMock()
             async_cm.__aenter__ = AsyncMock(return_value=mock_span)
@@ -356,9 +341,7 @@ class TestOpikEvaluationTracer:
     async def test_trace_sample_evaluation_disabled(self):
         tracer = OpikEvaluationTracer(enabled=False)
 
-        async with tracer.trace_sample_evaluation(
-            sample_id="sample_001", query="test"
-        ) as ctx:
+        async with tracer.trace_sample_evaluation(sample_id="sample_001", query="test") as ctx:
             assert ctx is not None
 
 
@@ -379,9 +362,7 @@ class TestConvenienceFunctions:
         return connector
 
     def test_log_ragas_scores_to_opik(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_ragas_scores_to_opik(
                 run_id="run_001",
                 faithfulness=0.85,
@@ -398,9 +379,7 @@ class TestConvenienceFunctions:
         mock_connector = Mock()
         mock_connector.is_enabled = False
 
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_ragas_scores_to_opik(run_id="run_001", faithfulness=0.85)
 
             # Should not log if disabled
@@ -411,9 +390,7 @@ class TestConvenienceFunctions:
         mock_connector.is_enabled = True
         mock_connector.circuit_breaker.allow_request = Mock(return_value=False)
 
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_ragas_scores_to_opik(run_id="run_001", faithfulness=0.85)
 
             # Should not log if circuit is open
@@ -428,9 +405,7 @@ class TestConvenienceFunctions:
             log_ragas_scores_to_opik(run_id="run_001", faithfulness=0.85)
 
     def test_log_rubric_scores_to_opik(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_rubric_scores_to_opik(
                 run_id="run_001",
                 weighted_score=4.5,
@@ -448,9 +423,7 @@ class TestConvenienceFunctions:
         mock_connector = Mock()
         mock_connector.is_enabled = False
 
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_rubric_scores_to_opik(run_id="run_001", weighted_score=4.5)
 
             mock_connector.log_metric.assert_not_called()
@@ -460,19 +433,16 @@ class TestConvenienceFunctions:
         mock_connector.is_enabled = True
         mock_connector.circuit_breaker.allow_request = Mock(return_value=False)
 
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_rubric_scores_to_opik(run_id="run_001", weighted_score=4.5)
 
             mock_connector.log_metric.assert_not_called()
 
     def test_log_rubric_scores_normalization(self, mock_connector):
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_rubric_scores_to_opik(
-                run_id="run_001", weighted_score=5.0  # Max score
+                run_id="run_001",
+                weighted_score=5.0,  # Max score
             )
 
             # Should normalize 5.0 -> 1.0
@@ -530,12 +500,8 @@ class TestCombinedEvaluationResult:
             rubric_weighted_score=4.5,
         )
 
-        with patch(
-            "src.rag.opik_integration.log_ragas_scores_to_opik"
-        ) as mock_ragas:
-            with patch(
-                "src.rag.opik_integration.log_rubric_scores_to_opik"
-            ) as mock_rubric:
+        with patch("src.rag.opik_integration.log_ragas_scores_to_opik") as mock_ragas:
+            with patch("src.rag.opik_integration.log_rubric_scores_to_opik") as mock_rubric:
                 result.log_to_opik()
 
                 mock_ragas.assert_called_once()
@@ -562,7 +528,7 @@ class TestEdgeCases:
         tracer = OpikEvaluationTracer(enabled=False)
 
         try:
-            async with tracer.trace_evaluation("run_001") as ctx:
+            async with tracer.trace_evaluation("run_001"):
                 raise ValueError("Test error")
         except ValueError:
             pass
@@ -594,9 +560,7 @@ class TestEdgeCases:
                 ctx.log_ragas_scores(faithfulness=0.85)
                 return ctx.run_id
 
-        results = await asyncio.gather(
-            *[trace_eval(f"run_{i}") for i in range(5)]
-        )
+        results = await asyncio.gather(*[trace_eval(f"run_{i}") for i in range(5)])
 
         assert len(results) == 5
         assert len(set(results)) == 5  # All unique
@@ -617,7 +581,7 @@ class TestEdgeCases:
 
     def test_rubric_score_range(self):
         # Rubric scores should be 1-5, test normalization
-        result = CombinedEvaluationResult(
+        CombinedEvaluationResult(
             run_id="test",
             timestamp="2024-01-01",
             rubric_weighted_score=5.0,
@@ -628,9 +592,7 @@ class TestEdgeCases:
         mock_connector.circuit_breaker.allow_request = Mock(return_value=True)
         mock_connector.log_metric = Mock()
 
-        with patch(
-            "src.mlops.opik_connector.get_opik_connector", return_value=mock_connector
-        ):
+        with patch("src.mlops.opik_connector.get_opik_connector", return_value=mock_connector):
             log_rubric_scores_to_opik(
                 run_id="test",
                 weighted_score=5.0,

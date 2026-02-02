@@ -13,7 +13,6 @@ the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
-from datetime import datetime, timezone
 
 # Mark entire module to run on same worker - prevents import race conditions
 # with dspy when running tests in parallel with pytest-xdist.
@@ -21,13 +20,13 @@ from datetime import datetime, timezone
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.orchestrator.dspy_integration import (
-    RoutingTrainingSignal,
-    OrchestratorSignalCollector,
-    OrchestratorDSPyHub,
-    get_orchestrator_signal_collector,
-    get_orchestrator_dspy_hub,
-    reset_dspy_integration,
     DSPY_AVAILABLE,
+    OrchestratorDSPyHub,
+    OrchestratorSignalCollector,
+    RoutingTrainingSignal,
+    get_orchestrator_dspy_hub,
+    get_orchestrator_signal_collector,
+    reset_dspy_integration,
 )
 
 
@@ -427,17 +426,19 @@ class TestDSPySignatures:
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_agent_routing_signature(self):
         """Test AgentRoutingSignature exists."""
+        import dspy
+
         from src.agents.orchestrator.dspy_integration import AgentRoutingSignature
 
-        import dspy
         assert issubclass(AgentRoutingSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_intent_classification_signature(self):
         """Test IntentClassificationSignature exists."""
+        import dspy
+
         from src.agents.orchestrator.dspy_integration import IntentClassificationSignature
 
-        import dspy
         assert issubclass(IntentClassificationSignature, dspy.Signature)
 
 

@@ -10,7 +10,7 @@ Handles:
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 
 class DeploymentStrategy(str, Enum):
@@ -439,9 +439,7 @@ async def plan_deployment(state: Dict[str, Any]) -> Dict[str, Any]:
         rollback_config = _create_rollback_config(strategy, target_environment)
 
         # Get service template
-        service_template = SERVICE_TEMPLATES.get(
-            model_type.value, "ClassificationServiceTemplate"
-        )
+        service_template = SERVICE_TEMPLATES.get(model_type.value, "ClassificationServiceTemplate")
 
         # Create deployment plan
         plan = DeploymentPlan(

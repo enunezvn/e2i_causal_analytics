@@ -13,17 +13,16 @@ Phase 1 G03 from observability audit remediation plan.
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from src.agents.heterogeneous_optimizer.mlflow_tracker import (
+    EXPERIMENT_PREFIX,
     HeterogeneousOptimizerContext,
     HeterogeneousOptimizerMetrics,
     HeterogeneousOptimizerMLflowTracker,
-    EXPERIMENT_PREFIX,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -306,13 +305,13 @@ class TestLogParams:
 
     def test_log_params_from_output(self, tracker, sample_result):
         """Test parameter logging from output dict."""
-        with patch("mlflow.log_param") as mock_log_param:
+        with patch("mlflow.log_param"):
             tracker._log_params(sample_result)
 
     def test_log_params_includes_treatment(self, tracker, sample_result):
         """Test treatment is logged as parameter."""
         mock_state = {"treatment_var": "marketing_intensity", "outcome_var": "prescription_volume"}
-        with patch("mlflow.log_param") as mock_log_param:
+        with patch("mlflow.log_param"):
             tracker._log_params(sample_result, state=mock_state)
 
 

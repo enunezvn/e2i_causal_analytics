@@ -16,12 +16,11 @@ Gate Decisions:
 Author: E2I Causal Analytics Team
 """
 
+import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import networkx as nx
-import numpy as np
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -152,9 +151,7 @@ class DiscoveryGate:
             return GateEvaluation(
                 decision=GateDecision.REJECT,
                 confidence=0.0,
-                reasons=[
-                    f"Too few edges discovered: {result.n_edges} < {self.config.min_edges}"
-                ],
+                reasons=[f"Too few edges discovered: {result.n_edges} < {self.config.min_edges}"],
             )
 
         # Calculate component scores
@@ -163,17 +160,13 @@ class DiscoveryGate:
         structure_score = self._calculate_structure_score(result)
 
         # Overall confidence is weighted average
-        confidence = (
-            0.4 * agreement_score + 0.4 * edge_confidence_score + 0.2 * structure_score
-        )
+        confidence = 0.4 * agreement_score + 0.4 * edge_confidence_score + 0.2 * structure_score
 
         # Categorize edges
         high_conf_edges = [
             e for e in result.edges if e.confidence >= self.config.augment_edge_threshold
         ]
-        low_conf_edges = [
-            e for e in result.edges if e.confidence < self.config.review_threshold
-        ]
+        low_conf_edges = [e for e in result.edges if e.confidence < self.config.review_threshold]
 
         # Calculate rejected fraction
         rejected_fraction = len(low_conf_edges) / len(result.edges) if result.edges else 0
@@ -184,9 +177,7 @@ class DiscoveryGate:
         reasons.append(f"Structure score: {structure_score:.2%}")
 
         if rejected_fraction > self.config.max_rejected_edges_fraction:
-            warnings.append(
-                f"High fraction of low-confidence edges: {rejected_fraction:.1%}"
-            )
+            warnings.append(f"High fraction of low-confidence edges: {rejected_fraction:.1%}")
 
         # Validate against expected edges if provided
         if expected_edges:
@@ -252,9 +243,7 @@ class DiscoveryGate:
         if not result.edges or not result.algorithm_results:
             return 0.0
 
-        n_algorithms = len(
-            [r for r in result.algorithm_results if r.converged]
-        )
+        n_algorithms = len([r for r in result.algorithm_results if r.converged])
         if n_algorithms == 0:
             return 0.0
 
@@ -385,9 +374,7 @@ class DiscoveryGate:
                 valid_edges.append(edge)
             else:
                 temp_dag.remove_edge(edge.source, edge.target)
-                logger.warning(
-                    f"Skipping edge {edge.source} -> {edge.target}: would create cycle"
-                )
+                logger.warning(f"Skipping edge {edge.source} -> {edge.target}: would create cycle")
 
         return valid_edges
 

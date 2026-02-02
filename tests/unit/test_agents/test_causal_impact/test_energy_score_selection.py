@@ -5,9 +5,6 @@ Tests the integration of EstimatorSelector with the estimation node.
 """
 
 import pytest
-import numpy as np
-import pandas as pd
-from unittest.mock import patch, MagicMock
 
 from src.agents.causal_impact.nodes.estimation import EstimationNode
 from src.agents.causal_impact.state import CausalImpactState
@@ -50,17 +47,21 @@ class TestEnergyScoreSelectionEnabled:
     """Test energy score selection when enabled (default)."""
 
     @pytest.mark.asyncio
-    async def test_energy_score_selection_enabled_by_default(
-        self, estimation_node, base_state
-    ):
+    async def test_energy_score_selection_enabled_by_default(self, estimation_node, base_state):
         """Energy score selection is enabled by default."""
         # No explicit parameters - should use energy score path
         result = await estimation_node.execute(base_state)
 
         # Check that energy score is enabled
-        assert result.get("energy_score_enabled") is True or result.get("energy_score_enabled") is False
+        assert (
+            result.get("energy_score_enabled") is True
+            or result.get("energy_score_enabled") is False
+        )
         # Either path should complete successfully
-        assert result.get("estimation_result") is not None or result.get("estimation_error") is not None
+        assert (
+            result.get("estimation_result") is not None
+            or result.get("estimation_error") is not None
+        )
 
     @pytest.mark.asyncio
     async def test_energy_score_result_fields(self, estimation_node, base_state):
@@ -94,9 +95,7 @@ class TestLegacyModeWithExplicitMethod:
         assert result["estimation_result"]["method"] == "LinearDML"
 
     @pytest.mark.asyncio
-    async def test_legacy_mode_with_use_energy_score_false(
-        self, estimation_node, base_state
-    ):
+    async def test_legacy_mode_with_use_energy_score_false(self, estimation_node, base_state):
         """use_energy_score=False uses legacy path."""
         base_state["parameters"] = {"use_energy_score": False}
         result = await estimation_node.execute(base_state)

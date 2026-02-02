@@ -16,28 +16,23 @@ Covers:
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock, patch
 
 from src.causal_engine.energy_score.estimator_selector import (
-    EstimatorType,
-    SelectionStrategy,
-    EstimatorResult,
-    SelectionResult,
-    EstimatorConfig,
-    EstimatorSelectorConfig,
-    BaseEstimatorWrapper,
-    OLSWrapper,
-    SLearnerWrapper,
-    TLearnerWrapper,
     ESTIMATOR_WRAPPERS,
+    EstimatorConfig,
+    EstimatorResult,
     EstimatorSelector,
+    EstimatorSelectorConfig,
+    EstimatorType,
+    OLSWrapper,
+    SelectionResult,
+    SelectionStrategy,
     select_best_estimator,
 )
 from src.causal_engine.energy_score.score_calculator import (
     EnergyScoreConfig,
     EnergyScoreResult,
 )
-
 
 # =============================================================================
 # EstimatorType Enum Tests
@@ -188,7 +183,7 @@ class TestEstimatorResult:
             ate=2.0,
         )
 
-        assert result.energy_score == float('inf')
+        assert result.energy_score == float("inf")
 
     def test_to_dict(self):
         """Test to_dict method."""
@@ -424,16 +419,17 @@ class TestOLSWrapper:
         np.random.seed(42)
         n = 150
 
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-        })
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+            }
+        )
 
         treatment = np.random.binomial(1, 0.5, n)
         true_effect = 2.0
         outcome = (
-            1.0 + 0.5 * covariates["x1"] +
-            true_effect * treatment + np.random.normal(0, 0.5, n)
+            1.0 + 0.5 * covariates["x1"] + true_effect * treatment + np.random.normal(0, 0.5, n)
         )
 
         return {
@@ -566,10 +562,12 @@ class TestEstimatorSelector:
         np.random.seed(42)
         n = 100
 
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-        })
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+            }
+        )
 
         treatment = np.random.binomial(1, 0.5, n)
         outcome = 1.0 + 2.0 * treatment + np.random.normal(0, 0.5, n)
@@ -746,10 +744,12 @@ class TestSelectBestEstimatorFunction:
         np.random.seed(123)
         n = 100
 
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-        })
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+            }
+        )
 
         treatment = np.random.binomial(1, 0.5, n)
         outcome = 1.0 + 2.0 * treatment + np.random.normal(0, 0.3, n)
@@ -811,18 +811,19 @@ class TestEstimatorSelectorIntegration:
         np.random.seed(42)
         n = 200
 
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-        })
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+            }
+        )
 
         propensity = 1 / (1 + np.exp(-0.5 * covariates["x1"]))
         treatment = (np.random.random(n) < propensity).astype(int)
 
         true_effect = 2.5
         outcome = (
-            1.0 + 0.3 * covariates["x1"] +
-            true_effect * treatment + np.random.normal(0, 0.5, n)
+            1.0 + 0.3 * covariates["x1"] + true_effect * treatment + np.random.normal(0, 0.5, n)
         )
 
         # Use only OLS for fast testing
@@ -855,9 +856,11 @@ class TestEstimatorSelectorIntegration:
         np.random.seed(42)
         n = 100
 
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-        })
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+            }
+        )
 
         treatment = np.random.binomial(1, 0.5, n)
         outcome = 1.0 + 2.0 * treatment + np.random.normal(0, 0.5, n)

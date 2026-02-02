@@ -4,12 +4,11 @@ Tests for HCPGenerator.
 Tests HCP profile generation.
 """
 
-import pytest
-import numpy as np
 import pandas as pd
+import pytest
 
-from src.ml.synthetic.generators import HCPGenerator, GeneratorConfig
-from src.ml.synthetic.config import Brand, SpecialtyEnum, PracticeTypeEnum, RegionEnum
+from src.ml.synthetic.config import Brand, PracticeTypeEnum, RegionEnum, SpecialtyEnum
+from src.ml.synthetic.generators import GeneratorConfig, HCPGenerator
 
 
 class TestHCPGenerator:

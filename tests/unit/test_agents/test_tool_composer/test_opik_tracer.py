@@ -5,8 +5,7 @@ Tests the Opik observability integration for Tool Composer 4-phase pipeline.
 """
 
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -288,7 +287,7 @@ class TestCompositionTraceContext:
             query="Test query",
         )
 
-        async with ctx.trace_phase("plan") as phase:
+        async with ctx.trace_phase("plan"):
             await asyncio.sleep(0.01)  # Small delay for measurable duration
 
         assert ctx.phase_durations["plan"] >= 10  # At least 10ms
@@ -317,7 +316,9 @@ class TestCompositionTraceContext:
 
         assert len(ctx.phase_spans) == 4
         assert len(ctx.phase_durations) == 4
-        assert all(phase in ctx.phase_durations for phase in ["decompose", "plan", "execute", "synthesize"])
+        assert all(
+            phase in ctx.phase_durations for phase in ["decompose", "plan", "execute", "synthesize"]
+        )
 
     def test_get_phase_index(self):
         """Test phase index lookup."""
@@ -522,7 +523,9 @@ class TestToolComposerOpikTracer:
         """Test full composition trace with all phases."""
         tracer = ToolComposerOpikTracer(enabled=False)
 
-        async with tracer.trace_composition(query="Compare rep visits vs speaker programs") as trace:
+        async with tracer.trace_composition(
+            query="Compare rep visits vs speaker programs"
+        ) as trace:
             async with trace.trace_phase("decompose") as phase:
                 phase.log_decomposition(3, ["CAUSAL", "COMPARATIVE", "PREDICTIVE"])
 
@@ -548,7 +551,9 @@ class TestToolComposerOpikTracer:
             )
 
         assert len(trace.phase_spans) == 4
-        assert all(k in trace.phase_durations for k in ["decompose", "plan", "execute", "synthesize"])
+        assert all(
+            k in trace.phase_durations for k in ["decompose", "plan", "execute", "synthesize"]
+        )
 
 
 class TestTraceCompositionDecorator:
@@ -557,6 +562,7 @@ class TestTraceCompositionDecorator:
     @pytest.mark.asyncio
     async def test_decorator_creates_trace(self):
         """Test decorator creates trace context."""
+
         @trace_composition()
         async def compose(trace: CompositionTraceContext, query: str, context=None):
             assert isinstance(trace, CompositionTraceContext)
@@ -569,6 +575,7 @@ class TestTraceCompositionDecorator:
     @pytest.mark.asyncio
     async def test_decorator_with_custom_params(self):
         """Test decorator with custom parameter names."""
+
         @trace_composition(query_param="q", context_param="ctx")
         async def compose(trace: CompositionTraceContext, q: str, ctx=None):
             return trace.query
@@ -579,6 +586,7 @@ class TestTraceCompositionDecorator:
     @pytest.mark.asyncio
     async def test_decorator_preserves_function_metadata(self):
         """Test decorator preserves original function metadata."""
+
         @trace_composition()
         async def my_compose_function(trace: CompositionTraceContext, query: str):
             """This is the docstring."""

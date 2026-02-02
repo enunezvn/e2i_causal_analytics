@@ -26,20 +26,18 @@ Usage:
 Author: E2I Causal Analytics Team
 """
 
-import asyncio
 import json
-import time
+import logging
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import pandas as pd
-import logging
 
 logger = logging.getLogger(__name__)
 
-from .hasher import hash_dataframe, hash_config, make_cache_key
+from .hasher import hash_config, hash_dataframe, make_cache_key
 
 if TYPE_CHECKING:
     from .base import DiscoveryConfig, DiscoveryResult
@@ -275,10 +273,7 @@ class DiscoveryCache:
             self._stats.memory_items = 0
         else:
             # Clear entries matching data hash
-            keys_to_remove = [
-                key for key in self._memory_cache.keys()
-                if data_hash in key
-            ]
+            keys_to_remove = [key for key in self._memory_cache.keys() if data_hash in key]
             for key in keys_to_remove:
                 del self._memory_cache[key]
                 count += 1
@@ -378,12 +373,12 @@ class DiscoveryCache:
     def _deserialize_result(self, result_json: str) -> "DiscoveryResult":
         """Deserialize JSON to DiscoveryResult."""
         from .base import (
-            DiscoveryResult,
-            DiscoveryConfig,
             DiscoveredEdge,
+            DiscoveryAlgorithmType,
+            DiscoveryConfig,
+            DiscoveryResult,
             EdgeType,
             GateDecision,
-            DiscoveryAlgorithmType,
         )
 
         data = json.loads(result_json)
@@ -391,10 +386,7 @@ class DiscoveryCache:
         # Reconstruct config
         config_data = data.get("config", {})
         config = DiscoveryConfig(
-            algorithms=[
-                DiscoveryAlgorithmType(alg)
-                for alg in config_data.get("algorithms", [])
-            ],
+            algorithms=[DiscoveryAlgorithmType(alg) for alg in config_data.get("algorithms", [])],
             alpha=config_data.get("alpha", 0.05),
             max_cond_vars=config_data.get("max_cond_vars"),
             ensemble_threshold=config_data.get("ensemble_threshold", 0.5),
@@ -408,14 +400,16 @@ class DiscoveryCache:
         # Reconstruct edges
         edges = []
         for edge_data in data.get("edges", []):
-            edges.append(DiscoveredEdge(
-                source=edge_data["source"],
-                target=edge_data["target"],
-                edge_type=EdgeType(edge_data.get("edge_type", "directed")),
-                confidence=edge_data.get("confidence", 1.0),
-                algorithm_votes=edge_data.get("algorithm_votes", 1),
-                algorithms=edge_data.get("algorithms", []),
-            ))
+            edges.append(
+                DiscoveredEdge(
+                    source=edge_data["source"],
+                    target=edge_data["target"],
+                    edge_type=EdgeType(edge_data.get("edge_type", "directed")),
+                    confidence=edge_data.get("confidence", 1.0),
+                    algorithm_votes=edge_data.get("algorithm_votes", 1),
+                    algorithms=edge_data.get("algorithms", []),
+                )
+            )
 
         # Reconstruct gate decision
         gate_decision = None

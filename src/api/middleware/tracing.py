@@ -26,10 +26,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from src.utils.logging_config import (
+    clear_request_context as clear_logging_context,
+)
+
 # Import structured logging context (G14)
 from src.utils.logging_config import (
     set_request_context as set_logging_context,
-    clear_request_context as clear_logging_context,
 )
 
 # Use UUID7 for new request IDs (required by Opik)
@@ -87,9 +90,7 @@ class TraceContext:
         """
         # Extract request ID (or generate one)
         request_id = (
-            headers.get("x-request-id")
-            or headers.get("x-amzn-trace-id")
-            or generate_request_id()
+            headers.get("x-request-id") or headers.get("x-amzn-trace-id") or generate_request_id()
         )
 
         # Extract correlation ID (or use request ID)

@@ -9,11 +9,9 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from ..state import EnsemblePrediction, ModelPrediction, PredictionSynthesizerState
-
-from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -287,26 +285,30 @@ class EnsembleCombinerNode:
         # CRITICAL: Detect single-model predictions (agreement=0.0 means single model)
         models_count = len(individual) if individual else 0
         if models_count < 2:
-            interpretation["anomaly_flags"].append({
-                "type": "single_model_prediction",
-                "severity": "critical",
-                "message": (
-                    f"Only {models_count} model(s) succeeded. Cannot validate prediction "
-                    f"without model diversity. Ensemble confidence capped at 30%."
-                ),
-            })
+            interpretation["anomaly_flags"].append(
+                {
+                    "type": "single_model_prediction",
+                    "severity": "critical",
+                    "message": (
+                        f"Only {models_count} model(s) succeeded. Cannot validate prediction "
+                        f"without model diversity. Ensemble confidence capped at 30%."
+                    ),
+                }
+            )
             interpretation["reliability_assessment"] = "UNVALIDATED"
 
             # Special case: single model with zero prediction
             if pred == 0.0:
-                interpretation["anomaly_flags"].append({
-                    "type": "single_model_zero_prediction",
-                    "severity": "critical",
-                    "message": (
-                        "Zero prediction from single model - cannot validate. "
-                        "This could indicate model failure, missing features, or data issues."
-                    ),
-                })
+                interpretation["anomaly_flags"].append(
+                    {
+                        "type": "single_model_zero_prediction",
+                        "severity": "critical",
+                        "message": (
+                            "Zero prediction from single model - cannot validate. "
+                            "This could indicate model failure, missing features, or data issues."
+                        ),
+                    }
+                )
                 interpretation["recommendations"] = [
                     "DO NOT act on this prediction - insufficient model diversity",
                     "Run additional models before making decisions",
@@ -321,14 +323,16 @@ class EnsembleCombinerNode:
 
         # Check for extreme disagreement with extreme values
         elif pred == 0.0 and agreement < 0.3:
-            interpretation["anomaly_flags"].append({
-                "type": "extreme_disagreement",
-                "severity": "critical",
-                "message": (
-                    f"Prediction of 0.0 with only {agreement:.0%} model agreement is anomalous. "
-                    f"Models radically disagree - prediction is unreliable."
-                ),
-            })
+            interpretation["anomaly_flags"].append(
+                {
+                    "type": "extreme_disagreement",
+                    "severity": "critical",
+                    "message": (
+                        f"Prediction of 0.0 with only {agreement:.0%} model agreement is anomalous. "
+                        f"Models radically disagree - prediction is unreliable."
+                    ),
+                }
+            )
             interpretation["recommendations"].append(
                 "DO NOT act on this prediction. Investigate model disagreement root cause."
             )
@@ -336,14 +340,16 @@ class EnsembleCombinerNode:
 
         # Check for zero prediction when models disagree significantly
         elif pred == 0.0 and agreement < 0.5:
-            interpretation["anomaly_flags"].append({
-                "type": "zero_with_disagreement",
-                "severity": "warning",
-                "message": (
-                    f"Zero prediction with moderate disagreement ({agreement:.0%}) suggests "
-                    f"possible data quality issues or model calibration problems."
-                ),
-            })
+            interpretation["anomaly_flags"].append(
+                {
+                    "type": "zero_with_disagreement",
+                    "severity": "warning",
+                    "message": (
+                        f"Zero prediction with moderate disagreement ({agreement:.0%}) suggests "
+                        f"possible data quality issues or model calibration problems."
+                    ),
+                }
+            )
             interpretation["recommendations"].append(
                 "Validate input features and check for missing data before acting on this prediction."
             )
@@ -351,36 +357,42 @@ class EnsembleCombinerNode:
         # Check for extremely wide prediction intervals
         interval_width = upper - lower
         if interval_width > 0.5:
-            interpretation["anomaly_flags"].append({
-                "type": "high_uncertainty",
-                "severity": "warning",
-                "message": (
-                    f"Wide prediction interval ({lower:.2f} to {upper:.2f}) indicates "
-                    f"significant uncertainty. Consider gathering more data."
-                ),
-            })
+            interpretation["anomaly_flags"].append(
+                {
+                    "type": "high_uncertainty",
+                    "severity": "warning",
+                    "message": (
+                        f"Wide prediction interval ({lower:.2f} to {upper:.2f}) indicates "
+                        f"significant uncertainty. Consider gathering more data."
+                    ),
+                }
+            )
 
         # Check for prediction near decision boundary with low confidence
         if 0.45 <= pred <= 0.55 and confidence < 0.5:
-            interpretation["anomaly_flags"].append({
-                "type": "boundary_uncertainty",
-                "severity": "warning",
-                "message": (
-                    f"Prediction {pred:.2f} near 0.5 decision boundary with low confidence "
-                    f"({confidence:.0%}). Classification outcome is uncertain."
-                ),
-            })
+            interpretation["anomaly_flags"].append(
+                {
+                    "type": "boundary_uncertainty",
+                    "severity": "warning",
+                    "message": (
+                        f"Prediction {pred:.2f} near 0.5 decision boundary with low confidence "
+                        f"({confidence:.0%}). Classification outcome is uncertain."
+                    ),
+                }
+            )
 
         # Check for high prediction with low agreement
         if pred > 0.7 and agreement < 0.4:
-            interpretation["anomaly_flags"].append({
-                "type": "high_pred_low_agreement",
-                "severity": "warning",
-                "message": (
-                    f"High prediction ({pred:.2f}) but poor model agreement ({agreement:.0%}). "
-                    f"Some models may have significantly different views."
-                ),
-            })
+            interpretation["anomaly_flags"].append(
+                {
+                    "type": "high_pred_low_agreement",
+                    "severity": "warning",
+                    "message": (
+                        f"High prediction ({pred:.2f}) but poor model agreement ({agreement:.0%}). "
+                        f"Some models may have significantly different views."
+                    ),
+                }
+            )
 
         # ===== Risk Level Assessment =====
         # GUARD: Don't generate action recommendations if prediction is unreliable
@@ -397,7 +409,10 @@ class EnsembleCombinerNode:
 
         # Determine risk based on prediction value (assuming higher = higher risk for churn-like predictions)
         target_lower = (prediction_target or "").lower()
-        is_negative_outcome = any(word in target_lower for word in ["churn", "discontinuation", "attrition", "loss", "risk"])
+        is_negative_outcome = any(
+            word in target_lower
+            for word in ["churn", "discontinuation", "attrition", "loss", "risk"]
+        )
 
         if is_negative_outcome:
             # Higher prediction = higher risk (e.g., churn probability)
@@ -471,10 +486,7 @@ class EnsembleCombinerNode:
             # Check if any single model is an outlier
             pred_values = [p["prediction"] for p in individual]
             mean_pred = sum(pred_values) / len(pred_values)
-            outliers = [
-                p for p in individual
-                if abs(p["prediction"] - mean_pred) > 0.3
-            ]
+            outliers = [p for p in individual if abs(p["prediction"] - mean_pred) > 0.3]
             if outliers:
                 outlier_ids = [o["model_id"] for o in outliers]
                 interpretation["recommendations"].append(

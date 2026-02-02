@@ -11,23 +11,18 @@ Author: E2I Causal Analytics Team
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from fastapi import HTTPException
 
 from src.api.dependencies.auth import (
-    AuthError,
     ROLE_LEVELS,
+    AuthError,
     UserRole,
     get_user_role,
     has_role,
     require_admin,
     require_analyst,
-    require_auth,
     require_operator,
     require_viewer,
 )
-
 
 # =============================================================================
 # UserRole Enum Tests

@@ -31,13 +31,12 @@ Author: E2I Causal Analytics Team
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -490,9 +489,7 @@ class MetricsCache:
         count = 0
         now = time.time()
 
-        expired_keys = [
-            k for k, v in self._memory_cache.items() if v.expires_at <= now
-        ]
+        expired_keys = [k for k, v in self._memory_cache.items() if v.expires_at <= now]
         for key in expired_keys:
             del self._memory_cache[key]
             count += 1
@@ -503,9 +500,7 @@ class MetricsCache:
                 self._memory_cache.items(),
                 key=lambda x: x[1].created_at,
             )
-            to_remove = len(self._memory_cache) - int(
-                self._config.max_memory_entries * 0.8
-            )
+            to_remove = len(self._memory_cache) - int(self._config.max_memory_entries * 0.8)
             for key, _ in sorted_entries[:to_remove]:
                 del self._memory_cache[key]
                 count += 1

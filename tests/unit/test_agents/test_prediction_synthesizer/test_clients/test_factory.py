@@ -8,7 +8,6 @@ Tests cover:
 """
 
 import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -23,7 +22,6 @@ from src.agents.prediction_synthesizer.clients.factory import (
     get_model_client,
 )
 from src.agents.prediction_synthesizer.clients.http_model_client import HTTPModelClient
-
 
 # =============================================================================
 # MOCK CLIENT TESTS
@@ -116,9 +114,7 @@ endpoints:
     default_prediction: 0.8
     enabled: true
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
 
@@ -267,14 +263,16 @@ class TestConvenienceFunctions:
         await close_model_clients()
 
         # Configure with mock
-        configure_model_endpoints({
-            "endpoints": {
-                "test_model": {
-                    "client_type": "mock",
-                    "enabled": True,
+        configure_model_endpoints(
+            {
+                "endpoints": {
+                    "test_model": {
+                        "client_type": "mock",
+                        "enabled": True,
+                    },
                 },
-            },
-        })
+            }
+        )
 
         client = await get_model_client("test_model")
         assert isinstance(client, MockModelClient)
@@ -286,15 +284,17 @@ class TestConvenienceFunctions:
         """Test configure_model_endpoints function."""
         await close_model_clients()
 
-        configure_model_endpoints({
-            "default_base_url": "http://custom:3000",
-            "endpoints": {
-                "custom_model": {
-                    "url": "http://custom:3000/custom",
-                    "client_type": "mock",
+        configure_model_endpoints(
+            {
+                "default_base_url": "http://custom:3000",
+                "endpoints": {
+                    "custom_model": {
+                        "url": "http://custom:3000/custom",
+                        "client_type": "mock",
+                    },
                 },
-            },
-        })
+            }
+        )
 
         client = await get_model_client("custom_model")
         assert client is not None
@@ -306,21 +306,25 @@ class TestConvenienceFunctions:
         """Test close_model_clients cleanup."""
         await close_model_clients()
 
-        configure_model_endpoints({
-            "endpoints": {
-                "test_model": {"client_type": "mock"},
-            },
-        })
+        configure_model_endpoints(
+            {
+                "endpoints": {
+                    "test_model": {"client_type": "mock"},
+                },
+            }
+        )
 
         await get_model_client("test_model")
         await close_model_clients()
 
         # After cleanup, getting client again should work
-        configure_model_endpoints({
-            "endpoints": {
-                "test_model": {"client_type": "mock"},
-            },
-        })
+        configure_model_endpoints(
+            {
+                "endpoints": {
+                    "test_model": {"client_type": "mock"},
+                },
+            }
+        )
         client = await get_model_client("test_model")
         assert client is not None
 

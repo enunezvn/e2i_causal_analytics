@@ -18,7 +18,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -490,15 +490,11 @@ class ToolComposerCacheManager:
         """Cache execution plan."""
         self.plan_cache.set(decomposition, plan)
 
-    def get_tool_output(
-        self, tool_name: str, inputs: Dict[str, Any]
-    ) -> Optional[Any]:
+    def get_tool_output(self, tool_name: str, inputs: Dict[str, Any]) -> Optional[Any]:
         """Get cached tool output."""
         return self.output_cache.get(tool_name, inputs)
 
-    def cache_tool_output(
-        self, tool_name: str, inputs: Dict[str, Any], output: Any
-    ) -> None:
+    def cache_tool_output(self, tool_name: str, inputs: Dict[str, Any], output: Any) -> None:
         """Cache tool output."""
         self.output_cache.set(tool_name, inputs, output)
 

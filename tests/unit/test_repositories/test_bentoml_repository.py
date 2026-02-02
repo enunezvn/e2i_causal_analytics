@@ -7,20 +7,20 @@ Tests cover:
 - Metrics aggregation
 """
 
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
+from uuid import UUID, uuid4
+
 import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
-from uuid import uuid4, UUID
 
 from src.repositories.bentoml_service import (
-    BentoMLService,
-    BentoMLServingMetrics,
-    BentoMLServiceRepository,
     BentoMLMetricsRepository,
+    BentoMLService,
+    BentoMLServiceRepository,
+    BentoMLServingMetrics,
     ServiceHealthStatus,
     ServiceStatus,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -249,7 +249,9 @@ class TestBentoMLServiceRepository:
         assert service.health_status == "healthy"
 
     @pytest.mark.asyncio
-    async def test_get_active_services(self, service_repo, mock_supabase_client, sample_service_data):
+    async def test_get_active_services(
+        self, service_repo, mock_supabase_client, sample_service_data
+    ):
         """Test getting active services."""
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
             sample_service_data
@@ -283,7 +285,9 @@ class TestBentoMLServiceRepository:
         assert service.bento_tag == "test_model:v1"
 
     @pytest.mark.asyncio
-    async def test_get_unhealthy_services(self, service_repo, mock_supabase_client, sample_service_data):
+    async def test_get_unhealthy_services(
+        self, service_repo, mock_supabase_client, sample_service_data
+    ):
         """Test getting unhealthy services."""
         sample_service_data["health_status"] = "unhealthy"
         sample_service_data["health_check_failures"] = 5
@@ -334,7 +338,9 @@ class TestBentoMLMetricsRepository:
         assert metrics is None
 
     @pytest.mark.asyncio
-    async def test_get_latest_metrics(self, metrics_repo, mock_supabase_client, sample_metrics_data):
+    async def test_get_latest_metrics(
+        self, metrics_repo, mock_supabase_client, sample_metrics_data
+    ):
         """Test getting latest metrics."""
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
             sample_metrics_data

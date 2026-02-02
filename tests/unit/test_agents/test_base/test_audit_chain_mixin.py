@@ -4,19 +4,20 @@ Tests the audit chain integration layer for LangGraph agents,
 including the mixin class, decorators, and helper functions.
 """
 
-import pytest
 from datetime import datetime
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
+
+import pytest
 
 from src.agents.base.audit_chain_mixin import (
     AuditChainMixin,
+    _row_to_entry,
     audited_traced_node,
     create_workflow_initializer,
     get_audit_chain_service,
     set_audit_chain_service,
-    _row_to_entry,
 )
 from src.utils.audit_chain import (
     AgentTier,
@@ -25,7 +26,6 @@ from src.utils.audit_chain import (
     ChainVerificationResult,
     RefutationResults,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -156,9 +156,7 @@ class TestAuditChainMixin:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_start_audit_workflow_handles_exception(
-        self, mixin_instance, mock_audit_service
-    ):
+    async def test_start_audit_workflow_handles_exception(self, mixin_instance, mock_audit_service):
         """start_audit_workflow returns None on exception."""
         mock_audit_service.start_workflow.side_effect = Exception("DB error")
         set_audit_chain_service(mock_audit_service)
@@ -191,9 +189,7 @@ class TestAuditChainMixin:
         mock_audit_service.add_entry.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_add_audit_entry_service_unavailable(
-        self, mixin_instance, sample_workflow_id
-    ):
+    async def test_add_audit_entry_service_unavailable(self, mixin_instance, sample_workflow_id):
         """add_audit_entry returns None when service is unavailable."""
         result = await mixin_instance.add_audit_entry(
             workflow_id=sample_workflow_id,
@@ -271,18 +267,20 @@ class TestAuditChainMixin:
         mock_table.select.return_value = mock_table
         mock_table.eq.return_value = mock_table
         mock_table.order.return_value = mock_table
-        mock_table.execute.return_value = MagicMock(data=[
-            {
-                "entry_id": str(uuid4()),
-                "workflow_id": str(sample_workflow_id),
-                "sequence_number": 1,
-                "agent_name": "test",
-                "agent_tier": 2,
-                "action_type": "test",
-                "created_at": "2025-12-30T00:00:00Z",
-                "entry_hash": "abc123",
-            }
-        ])
+        mock_table.execute.return_value = MagicMock(
+            data=[
+                {
+                    "entry_id": str(uuid4()),
+                    "workflow_id": str(sample_workflow_id),
+                    "sequence_number": 1,
+                    "agent_name": "test",
+                    "agent_tier": 2,
+                    "action_type": "test",
+                    "created_at": "2025-12-30T00:00:00Z",
+                    "entry_hash": "abc123",
+                }
+            ]
+        )
         set_audit_chain_service(mock_audit_service)
 
         result = mixin_instance.get_workflow_entries(sample_workflow_id)
@@ -290,9 +288,7 @@ class TestAuditChainMixin:
         assert len(result) == 1
         assert result[0].agent_name == "test"
 
-    def test_get_workflow_entries_service_unavailable(
-        self, mixin_instance, sample_workflow_id
-    ):
+    def test_get_workflow_entries_service_unavailable(self, mixin_instance, sample_workflow_id):
         """get_workflow_entries returns empty list when service unavailable."""
         result = mixin_instance.get_workflow_entries(sample_workflow_id)
         assert result == []
@@ -330,9 +326,7 @@ class TestAuditedTracedNodeDecorator:
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_decorator_records_audit_entry(
-        self, mock_audit_service, sample_state
-    ):
+    async def test_decorator_records_audit_entry(self, mock_audit_service, sample_state):
         """Decorator records audit entry when service is available."""
         set_audit_chain_service(mock_audit_service)
 
@@ -402,9 +396,7 @@ class TestAuditedTracedNodeDecorator:
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_decorator_extracts_refutation_results(
-        self, mock_audit_service, sample_state
-    ):
+    async def test_decorator_extracts_refutation_results(self, mock_audit_service, sample_state):
         """Decorator extracts refutation results for refutation node."""
         set_audit_chain_service(mock_audit_service)
 
@@ -451,25 +443,19 @@ class TestCreateWorkflowInitializer:
         mock_audit_service.start_workflow.return_value = sample_entry
         set_audit_chain_service(mock_audit_service)
 
-        initializer = create_workflow_initializer(
-            "causal_impact", AgentTier.CAUSAL_ANALYTICS
-        )
+        initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {"query": "test", "treatment_var": "x", "outcome_var": "y"}
         result = initializer(state)
 
         assert "audit_workflow_id" in result
         assert result["audit_workflow_id"] == sample_entry.workflow_id
 
-    def test_initializer_preserves_existing_state(
-        self, mock_audit_service, sample_entry
-    ):
+    def test_initializer_preserves_existing_state(self, mock_audit_service, sample_entry):
         """Initializer preserves existing state fields."""
         mock_audit_service.start_workflow.return_value = sample_entry
         set_audit_chain_service(mock_audit_service)
 
-        initializer = create_workflow_initializer(
-            "causal_impact", AgentTier.CAUSAL_ANALYTICS
-        )
+        initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {
             "query": "test",
             "treatment_var": "x",
@@ -483,9 +469,7 @@ class TestCreateWorkflowInitializer:
 
     def test_initializer_returns_state_when_service_unavailable(self):
         """Initializer returns original state when service unavailable."""
-        initializer = create_workflow_initializer(
-            "causal_impact", AgentTier.CAUSAL_ANALYTICS
-        )
+        initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {"query": "test"}
         result = initializer(state)
 
@@ -497,9 +481,7 @@ class TestCreateWorkflowInitializer:
         mock_audit_service.start_workflow.side_effect = Exception("DB error")
         set_audit_chain_service(mock_audit_service)
 
-        initializer = create_workflow_initializer(
-            "causal_impact", AgentTier.CAUSAL_ANALYTICS
-        )
+        initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {"query": "test"}
         result = initializer(state)
 

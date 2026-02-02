@@ -119,7 +119,7 @@ async def supabase_health_check() -> Dict[str, Any]:
         # Lightweight connectivity test using PostgREST endpoint
         # This avoids depending on any specific table existing
         try:
-            result = client.rpc("", {}).execute()
+            client.rpc("", {}).execute()
         except Exception:
             # RPC with empty name may fail, but the HTTP round-trip
             # confirms PostgREST is reachable. Try a HEAD-style probe

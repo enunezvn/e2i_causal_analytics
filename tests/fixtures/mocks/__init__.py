@@ -7,18 +7,18 @@ This module provides consistent mock implementations for:
 - Registry classes (tools, models, agents)
 """
 
-from tests.fixtures.mocks.llm import (
-    MockLLMClient,
-    SimpleMockLLM,
-    mock_llm,
-    mock_simple_llm,
-    mock_advanced_llm,
-)
 from tests.fixtures.mocks.databases import (
     MockDatabaseClient,
     MockSupabaseClient,
     MockSupabaseQuery,
     mock_supabase_client,
+)
+from tests.fixtures.mocks.llm import (
+    MockLLMClient,
+    SimpleMockLLM,
+    mock_advanced_llm,
+    mock_llm,
+    mock_simple_llm,
 )
 
 __all__ = [

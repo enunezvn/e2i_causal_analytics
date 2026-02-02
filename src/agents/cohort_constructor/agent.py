@@ -21,16 +21,15 @@ Integration:
 """
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from .configs import get_brand_config, list_available_configs
-from .constants import AGENT_METADATA, Defaults, SLAThreshold, SUPPORTED_BRANDS
+from .constants import AGENT_METADATA, SUPPORTED_BRANDS, Defaults
 from .constructor import CohortConstructor
-from .graph import create_cohort_constructor_graph, create_simple_cohort_constructor_graph
-from .state import CohortConstructorState, create_initial_state
+from .graph import create_cohort_constructor_graph
+from .state import create_initial_state
 from .types import CohortConfig, CohortExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -40,6 +39,7 @@ def _get_supabase_client():
     """Get Supabase client (lazy import to avoid circular deps)."""
     try:
         from src.memory.services.factories import get_supabase_client
+
         return get_supabase_client()
     except Exception as e:
         logger.warning(f"Could not get Supabase client: {e}")
@@ -50,6 +50,7 @@ def _get_cohort_mlflow_logger():
     """Get CohortMLflowLogger (lazy import to avoid circular deps)."""
     try:
         from .observability import get_cohort_mlflow_logger
+
         return get_cohort_mlflow_logger()
     except Exception as e:
         logger.warning(f"Could not get CohortMLflowLogger: {e}")
@@ -60,6 +61,7 @@ def _get_cohort_opik_tracer():
     """Get CohortOpikTracer (lazy import to avoid circular deps)."""
     try:
         from .observability import get_cohort_opik_tracer
+
         return get_cohort_opik_tracer()
     except Exception as e:
         logger.warning(f"Could not get CohortOpikTracer: {e}")
@@ -186,9 +188,7 @@ class CohortConstructorAgent:
                 patient_df, brand, indication, config, environment, executed_by
             )
         else:
-            return self._run_direct(
-                patient_df, brand, indication, config, environment, executed_by
-            )
+            return self._run_direct(patient_df, brand, indication, config, environment, executed_by)
 
     async def _run_graph(
         self,
@@ -258,7 +258,9 @@ class CohortConstructorAgent:
             else:
                 # Fall back to index-based filtering
                 eligible_indices = final_state.get("_temporal_eligible_indices", [])
-                eligible_df = patient_df.loc[eligible_indices] if eligible_indices else pd.DataFrame()
+                eligible_df = (
+                    patient_df.loc[eligible_indices] if eligible_indices else pd.DataFrame()
+                )
 
             # Create execution result
             result = CohortExecutionResult(
@@ -428,7 +430,10 @@ class CohortConstructorAgent:
             Tuple of (eligible_df, execution_result)
         """
         return self._run_direct(
-            patient_df, brand, indication, config,
+            patient_df,
+            brand,
+            indication,
+            config,
             environment=Defaults.DEFAULT_ENVIRONMENT,
             executed_by=None,
         )

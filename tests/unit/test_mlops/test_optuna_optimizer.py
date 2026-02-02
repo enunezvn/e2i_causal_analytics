@@ -31,7 +31,6 @@ from src.mlops.optuna_optimizer import (
     run_hyperparameter_optimization,
 )
 
-
 # ============================================================================
 # FIXTURES
 # ============================================================================
@@ -253,9 +252,7 @@ class TestSuggestFromSearchSpace:
             "n_estimators": {"type": "int", "low": 50, "high": 200},
         }
 
-        params = OptunaOptimizer.suggest_from_search_space(
-            mock_optuna_trial, search_space
-        )
+        params = OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, search_space)
 
         assert "n_estimators" in params
         mock_optuna_trial.suggest_int.assert_called()
@@ -266,9 +263,7 @@ class TestSuggestFromSearchSpace:
             "n_estimators": {"type": "int", "low": 50, "high": 200, "step": 50},
         }
 
-        params = OptunaOptimizer.suggest_from_search_space(
-            mock_optuna_trial, search_space
-        )
+        params = OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, search_space)
 
         assert "n_estimators" in params
         call_args = mock_optuna_trial.suggest_int.call_args
@@ -280,9 +275,7 @@ class TestSuggestFromSearchSpace:
             "learning_rate": {"type": "float", "low": 0.01, "high": 0.3},
         }
 
-        params = OptunaOptimizer.suggest_from_search_space(
-            mock_optuna_trial, search_space
-        )
+        params = OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, search_space)
 
         assert "learning_rate" in params
         mock_optuna_trial.suggest_float.assert_called()
@@ -293,9 +286,7 @@ class TestSuggestFromSearchSpace:
             "learning_rate": {"type": "float", "low": 0.001, "high": 1.0, "log": True},
         }
 
-        params = OptunaOptimizer.suggest_from_search_space(
-            mock_optuna_trial, search_space
-        )
+        OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, search_space)
 
         call_args = mock_optuna_trial.suggest_float.call_args
         assert call_args[1].get("log") is True
@@ -306,9 +297,7 @@ class TestSuggestFromSearchSpace:
             "subsample": {"type": "float", "low": 0.6, "high": 1.0, "step": 0.1},
         }
 
-        params = OptunaOptimizer.suggest_from_search_space(
-            mock_optuna_trial, search_space
-        )
+        OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, search_space)
 
         call_args = mock_optuna_trial.suggest_float.call_args
         assert call_args[1].get("step") == 0.1
@@ -319,18 +308,14 @@ class TestSuggestFromSearchSpace:
             "booster": {"type": "categorical", "choices": ["gbtree", "gblinear"]},
         }
 
-        params = OptunaOptimizer.suggest_from_search_space(
-            mock_optuna_trial, search_space
-        )
+        params = OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, search_space)
 
         assert "booster" in params
         mock_optuna_trial.suggest_categorical.assert_called()
 
     def test_suggest_multiple_parameters(self, mock_optuna_trial, sample_search_space):
         """Test suggesting multiple parameters."""
-        params = OptunaOptimizer.suggest_from_search_space(
-            mock_optuna_trial, sample_search_space
-        )
+        params = OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, sample_search_space)
 
         assert len(params) == len(sample_search_space)
         assert all(key in params for key in sample_search_space)
@@ -342,9 +327,7 @@ class TestSuggestFromSearchSpace:
         }
 
         with patch("src.mlops.optuna_optimizer.logger") as mock_logger:
-            params = OptunaOptimizer.suggest_from_search_space(
-                mock_optuna_trial, search_space
-            )
+            params = OptunaOptimizer.suggest_from_search_space(mock_optuna_trial, search_space)
             mock_logger.warning.assert_called()
 
         assert "unknown_param" not in params
@@ -516,9 +499,7 @@ class TestEvaluateModel:
         model = RandomForestClassifier(n_estimators=10, random_state=42)
         model.fit(X_train, y_train)
 
-        score = OptunaOptimizer._evaluate_model(
-            model, X_val, y_val, "binary_classification", "f1"
-        )
+        score = OptunaOptimizer._evaluate_model(model, X_val, y_val, "binary_classification", "f1")
 
         assert 0 <= score <= 1
 
@@ -531,9 +512,7 @@ class TestEvaluateModel:
         model = RandomForestRegressor(n_estimators=10, random_state=42)
         model.fit(X_train, y_train)
 
-        score = OptunaOptimizer._evaluate_model(
-            model, X_val, y_val, "regression", "rmse"
-        )
+        score = OptunaOptimizer._evaluate_model(model, X_val, y_val, "regression", "rmse")
 
         # RMSE returns negative (so higher is better)
         assert score <= 0
@@ -547,9 +526,7 @@ class TestEvaluateModel:
         model = RandomForestRegressor(n_estimators=10, random_state=42)
         model.fit(X_train, y_train)
 
-        score = OptunaOptimizer._evaluate_model(
-            model, X_val, y_val, "regression", "r2"
-        )
+        score = OptunaOptimizer._evaluate_model(model, X_val, y_val, "regression", "r2")
 
         # R2 can be negative for poor models
         assert score <= 1
@@ -868,6 +845,7 @@ class TestSaveToDatabase:
 
         # Patch the import inside the function - need to patch the module itself
         import sys
+
         original_module = sys.modules.get("src.repositories.supabase_client")
 
         # Create a mock module that raises ImportError

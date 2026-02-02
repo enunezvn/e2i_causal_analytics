@@ -11,6 +11,7 @@ Supported Brands:
 
 from typing import Dict, Optional
 
+from .constants import SUPPORTED_BRANDS
 from .types import (
     CohortConfig,
     Criterion,
@@ -18,12 +19,11 @@ from .types import (
     Operator,
     TemporalRequirements,
 )
-from .constants import SUPPORTED_BRANDS
-
 
 # ==============================================================================
 # REMIBRUTINIB CSU CONFIGURATION
 # ==============================================================================
+
 
 def _get_remibrutinib_csu_config() -> CohortConfig:
     """Create cohort configuration for Remibrutinib CSU indication.
@@ -143,6 +143,7 @@ def _get_remibrutinib_csu_config() -> CohortConfig:
 # ==============================================================================
 # FABHALTA PNH/C3G CONFIGURATION
 # ==============================================================================
+
 
 def _get_fabhalta_pnh_config() -> CohortConfig:
     """Create cohort configuration for Fabhalta PNH indication.
@@ -369,6 +370,7 @@ def _get_fabhalta_c3g_config() -> CohortConfig:
 # KISQALI HR+/HER2- BREAST CANCER CONFIGURATION
 # ==============================================================================
 
+
 def _get_kisqali_hr_her2_bc_config() -> CohortConfig:
     """Create cohort configuration for Kisqali HR+/HER2- breast cancer indication.
 
@@ -399,8 +401,15 @@ def _get_kisqali_hr_her2_bc_config() -> CohortConfig:
             field="diagnosis_code",
             operator=Operator.IN,
             value=[
-                "C50.0", "C50.1", "C50.2", "C50.3", "C50.4",
-                "C50.5", "C50.6", "C50.8", "C50.9",
+                "C50.0",
+                "C50.1",
+                "C50.2",
+                "C50.3",
+                "C50.4",
+                "C50.5",
+                "C50.6",
+                "C50.8",
+                "C50.9",
             ],
             criterion_type=CriterionType.INCLUSION,
             description="Confirmed breast cancer diagnosis (ICD-10)",

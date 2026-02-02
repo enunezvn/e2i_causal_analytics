@@ -14,7 +14,7 @@ import logging
 import random
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -320,9 +320,7 @@ class SampleDataGenerator:
                     "change_percentage": round(change_pct, 2),
                     "detected_at": self._random_date(start, end).isoformat(),
                     "resolved_at": (
-                        self._random_date(start, end).isoformat()
-                        if random.random() > 0.4
-                        else None
+                        self._random_date(start, end).isoformat() if random.random() > 0.4 else None
                     ),
                     "created_at": self._random_date(start, end).isoformat(),
                 }
@@ -379,10 +377,7 @@ class SampleDataGenerator:
             # Generate events in chronological order
             patient_start = self._random_date(start, end)
             event_dates = sorted(
-                [
-                    patient_start + timedelta(days=random.randint(0, 180))
-                    for _ in range(n_events)
-                ]
+                [patient_start + timedelta(days=random.randint(0, 180)) for _ in range(n_events)]
             )
 
             for event_date in event_dates:
@@ -568,7 +563,6 @@ class SampleDataGenerator:
 
         # Valid journey statuses per Pandera schema
         # E2I_JOURNEY_STATUSES = ["active", "stable", "transitioning", "completed"]
-        valid_statuses = ["active", "stable", "transitioning", "completed"]
 
         # Valid regions per Pandera schema (lowercase)
         # E2I_REGIONS = ["northeast", "south", "midwest", "west"]
@@ -613,22 +607,24 @@ class SampleDataGenerator:
                 else None
             )
 
-            data.append({
-                "patient_journey_id": patient_journey_id,
-                "patient_id": patient_id,  # Required by schema
-                "brand": brand,
-                "geographic_region": geographic_region,  # Renamed per schema
-                "journey_status": journey_status,
-                "journey_start_date": journey_start.isoformat(),
-                "journey_end_date": journey_end.isoformat() if journey_end else None,
-                "data_quality_score": round(data_quality_score, 3),
-                "days_on_therapy": days_on_therapy,
-                "hcp_visits": hcp_visits,
-                "prior_treatments": prior_treatments,
-                "age_group": age_group,
-                "discontinuation_flag": discontinuation_flag,
-                "created_at": journey_start.isoformat(),
-            })
+            data.append(
+                {
+                    "patient_journey_id": patient_journey_id,
+                    "patient_id": patient_id,  # Required by schema
+                    "brand": brand,
+                    "geographic_region": geographic_region,  # Renamed per schema
+                    "journey_status": journey_status,
+                    "journey_start_date": journey_start.isoformat(),
+                    "journey_end_date": journey_end.isoformat() if journey_end else None,
+                    "data_quality_score": round(data_quality_score, 3),
+                    "days_on_therapy": days_on_therapy,
+                    "hcp_visits": hcp_visits,
+                    "prior_treatments": prior_treatments,
+                    "age_group": age_group,
+                    "discontinuation_flag": discontinuation_flag,
+                    "created_at": journey_start.isoformat(),
+                }
+            )
 
         return pd.DataFrame(data)
 

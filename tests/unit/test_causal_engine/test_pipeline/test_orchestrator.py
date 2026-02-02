@@ -9,22 +9,22 @@ Covers:
 - PipelineOrchestrator: initialization, state management, output creation, routing
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from src.causal_engine.pipeline.orchestrator import (
-    LibraryExecutor,
-    NetworkXExecutor,
+    CausalMLExecutor,
     DoWhyExecutor,
     EconMLExecutor,
-    CausalMLExecutor,
+    NetworkXExecutor,
     PipelineOrchestrator,
 )
 from src.causal_engine.pipeline.router import (
     CausalLibrary,
+    LibraryRouter,
     QuestionType,
     RoutingDecision,
-    LibraryRouter,
 )
 from src.causal_engine.pipeline.state import (
     LibraryExecutionResult,
@@ -34,7 +34,6 @@ from src.causal_engine.pipeline.state import (
     PipelineStage,
     PipelineState,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -208,9 +207,7 @@ class TestNetworkXExecutor:
         assert "market_size" in result["result"]["nodes"]
 
     @pytest.mark.asyncio
-    async def test_execute_handles_exception(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test execute handles exceptions gracefully."""
         executor = NetworkXExecutor()
 
@@ -246,9 +243,7 @@ class TestNetworkXExecutor:
         assert is_valid is True
         assert error == ""
 
-    def test_validate_input_fails_without_treatment_or_confounders(
-        self, minimal_pipeline_state
-    ):
+    def test_validate_input_fails_without_treatment_or_confounders(self, minimal_pipeline_state):
         """Test validate_input fails without treatment_var or confounders."""
         executor = NetworkXExecutor()
         state = minimal_pipeline_state.copy()
@@ -275,9 +270,7 @@ class TestDoWhyExecutor:
         assert executor.library == CausalLibrary.DOWHY
 
     @pytest.mark.asyncio
-    async def test_execute_success(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_execute_success(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test execute returns successful result."""
         executor = DoWhyExecutor()
 
@@ -308,9 +301,7 @@ class TestDoWhyExecutor:
         assert result["result"]["graph_source"] == "networkx"
 
     @pytest.mark.asyncio
-    async def test_execute_handles_exception(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test execute handles exceptions gracefully."""
         executor = DoWhyExecutor()
 
@@ -324,8 +315,7 @@ class TestDoWhyExecutor:
             return 100.0
 
         with patch(
-            "src.causal_engine.pipeline.orchestrator.time.time",
-            side_effect=time_side_effect
+            "src.causal_engine.pipeline.orchestrator.time.time", side_effect=time_side_effect
         ):
             result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
@@ -379,9 +369,7 @@ class TestEconMLExecutor:
         assert executor.library == CausalLibrary.ECONML
 
     @pytest.mark.asyncio
-    async def test_execute_success(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_execute_success(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test execute returns successful result."""
         executor = EconMLExecutor()
 
@@ -412,9 +400,7 @@ class TestEconMLExecutor:
         assert result["result"]["ate"] == 0.15
 
     @pytest.mark.asyncio
-    async def test_execute_handles_exception(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test execute handles exceptions gracefully."""
         executor = EconMLExecutor()
 
@@ -428,8 +414,7 @@ class TestEconMLExecutor:
             return 100.0
 
         with patch(
-            "src.causal_engine.pipeline.orchestrator.time.time",
-            side_effect=time_side_effect
+            "src.causal_engine.pipeline.orchestrator.time.time", side_effect=time_side_effect
         ):
             result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
@@ -483,9 +468,7 @@ class TestCausalMLExecutor:
         assert executor.library == CausalLibrary.CAUSALML
 
     @pytest.mark.asyncio
-    async def test_execute_success(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_execute_success(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test execute returns successful result."""
         executor = CausalMLExecutor()
 
@@ -517,9 +500,7 @@ class TestCausalMLExecutor:
         assert result["result"]["econml_comparison"] == "available"
 
     @pytest.mark.asyncio
-    async def test_execute_handles_exception(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test execute handles exceptions gracefully."""
         executor = CausalMLExecutor()
 
@@ -533,8 +514,7 @@ class TestCausalMLExecutor:
             return 100.0
 
         with patch(
-            "src.causal_engine.pipeline.orchestrator.time.time",
-            side_effect=time_side_effect
+            "src.causal_engine.pipeline.orchestrator.time.time", side_effect=time_side_effect
         ):
             result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
@@ -779,7 +759,9 @@ class TestPipelineOrchestrator:
         assert updated_state["auuc"] == 0.65
         assert updated_state["qini"] == 0.45
         assert updated_state["uplift_scores"] == {"high": 0.2, "low": 0.05}
-        assert updated_state["targeting_recommendations"] == [{"segment": "high", "action": "target"}]
+        assert updated_state["targeting_recommendations"] == [
+            {"segment": "high", "action": "target"}
+        ]
         assert "causalml" in updated_state["libraries_executed"]
 
     def test_update_state_with_failed_result(self, minimal_pipeline_state):
@@ -922,9 +904,7 @@ class TestOrchestratorIntegration:
         """Test that results from one executor can be used by another."""
         # Execute NetworkX first
         networkx_executor = NetworkXExecutor()
-        nx_result = await networkx_executor.execute(
-            minimal_pipeline_state, minimal_pipeline_config
-        )
+        nx_result = await networkx_executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
         # Update state with NetworkX result
         orchestrator = ConcreteOrchestrator()
@@ -942,9 +922,7 @@ class TestOrchestratorIntegration:
         assert dw_result["result"]["graph_source"] == "networkx"
 
     @pytest.mark.asyncio
-    async def test_econml_uses_dowhy_effect(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_econml_uses_dowhy_effect(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test that EconML uses causal_effect from DoWhy."""
         orchestrator = ConcreteOrchestrator()
 
@@ -972,9 +950,7 @@ class TestOrchestratorIntegration:
         assert ecn_result["result"]["ate"] == 0.25
 
     @pytest.mark.asyncio
-    async def test_causalml_sees_econml_cate(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
+    async def test_causalml_sees_econml_cate(self, minimal_pipeline_state, minimal_pipeline_config):
         """Test that CausalML notes CATE from EconML."""
         orchestrator = ConcreteOrchestrator()
 

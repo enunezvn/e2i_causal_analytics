@@ -11,11 +11,9 @@ Recipient agents:
 Run: pytest tests/integration/test_signal_flow/test_recipient_prompts.py -v
 """
 
-import pytest
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from unittest.mock import Mock, AsyncMock, patch
+from datetime import datetime
 
+import pytest
 
 # =============================================================================
 # HEALTH SCORE RECIPIENT TESTS
@@ -47,8 +45,8 @@ class TestHealthScoreRecipient:
     def test_health_score_has_prompts(self):
         """Verify health_score has prompt templates."""
         from src.agents.health_score.dspy_integration import (
-            HealthScoreDSPyIntegration,
             HealthReportPrompts,
+            HealthScoreDSPyIntegration,
         )
 
         integration = HealthScoreDSPyIntegration()
@@ -120,8 +118,8 @@ class TestHealthScoreSignatures:
     def test_import_health_summary_signature(self):
         """Verify HealthSummarySignature can be imported."""
         from src.agents.health_score.dspy_integration import (
-            HealthSummarySignature,
             DSPY_AVAILABLE,
+            HealthSummarySignature,
         )
 
         if DSPY_AVAILABLE:
@@ -132,8 +130,8 @@ class TestHealthScoreSignatures:
     def test_import_health_recommendation_signature(self):
         """Verify HealthRecommendationSignature can be imported."""
         from src.agents.health_score.dspy_integration import (
-            HealthRecommendationSignature,
             DSPY_AVAILABLE,
+            HealthRecommendationSignature,
         )
 
         if DSPY_AVAILABLE:
@@ -172,8 +170,8 @@ class TestResourceOptimizerRecipient:
     def test_resource_optimizer_has_prompts(self):
         """Verify resource_optimizer has prompt templates."""
         from src.agents.resource_optimizer.dspy_integration import (
-            ResourceOptimizerDSPyIntegration,
             ResourceOptimizationPrompts,
+            ResourceOptimizerDSPyIntegration,
         )
 
         integration = ResourceOptimizerDSPyIntegration()
@@ -221,8 +219,8 @@ class TestResourceOptimizerSignatures:
     def test_import_optimization_summary_signature(self):
         """Verify OptimizationSummarySignature can be imported."""
         from src.agents.resource_optimizer.dspy_integration import (
-            OptimizationSummarySignature,
             DSPY_AVAILABLE,
+            OptimizationSummarySignature,
         )
 
         if DSPY_AVAILABLE:
@@ -233,8 +231,8 @@ class TestResourceOptimizerSignatures:
     def test_import_allocation_recommendation_signature(self):
         """Verify AllocationRecommendationSignature can be imported."""
         from src.agents.resource_optimizer.dspy_integration import (
-            AllocationRecommendationSignature,
             DSPY_AVAILABLE,
+            AllocationRecommendationSignature,
         )
 
         if DSPY_AVAILABLE:
@@ -245,8 +243,8 @@ class TestResourceOptimizerSignatures:
     def test_import_scenario_narrative_signature(self):
         """Verify ScenarioNarrativeSignature can be imported."""
         from src.agents.resource_optimizer.dspy_integration import (
-            ScenarioNarrativeSignature,
             DSPY_AVAILABLE,
+            ScenarioNarrativeSignature,
         )
 
         if DSPY_AVAILABLE:
@@ -350,8 +348,8 @@ class TestExplainerSignatures:
     def test_import_explanation_synthesis_signature(self):
         """Verify ExplanationSynthesisSignature can be imported."""
         from src.agents.explainer.dspy_integration import (
-            ExplanationSynthesisSignature,
             DSPY_AVAILABLE,
+            ExplanationSynthesisSignature,
         )
 
         if DSPY_AVAILABLE:
@@ -362,8 +360,8 @@ class TestExplainerSignatures:
     def test_import_insight_extraction_signature(self):
         """Verify InsightExtractionSignature can be imported."""
         from src.agents.explainer.dspy_integration import (
-            InsightExtractionSignature,
             DSPY_AVAILABLE,
+            InsightExtractionSignature,
         )
 
         if DSPY_AVAILABLE:
@@ -374,8 +372,8 @@ class TestExplainerSignatures:
     def test_import_narrative_structure_signature(self):
         """Verify NarrativeStructureSignature can be imported."""
         from src.agents.explainer.dspy_integration import (
-            NarrativeStructureSignature,
             DSPY_AVAILABLE,
+            NarrativeStructureSignature,
         )
 
         if DSPY_AVAILABLE:
@@ -386,8 +384,8 @@ class TestExplainerSignatures:
     def test_import_query_rewrite_signature(self):
         """Verify QueryRewriteForExplanationSignature can be imported."""
         from src.agents.explainer.dspy_integration import (
-            QueryRewriteForExplanationSignature,
             DSPY_AVAILABLE,
+            QueryRewriteForExplanationSignature,
         )
 
         if DSPY_AVAILABLE:
@@ -406,9 +404,9 @@ class TestPromptDistribution:
 
     def test_all_recipients_have_recipient_type(self):
         """All recipient agents must have dspy_type='recipient'."""
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         recipients = [
             HealthScoreDSPyIntegration(),
@@ -421,9 +419,9 @@ class TestPromptDistribution:
 
     def test_all_recipients_can_update_prompts(self):
         """All recipients must support update_optimized_prompts method."""
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         recipients = [
             HealthScoreDSPyIntegration(),
@@ -499,10 +497,11 @@ class TestPromptQualityMetrics:
 
     def test_recipient_prompt_serialization(self):
         """Test that recipient prompts can be serialized."""
+        import json
+
+        from src.agents.explainer.dspy_integration import ExplanationPrompts
         from src.agents.health_score.dspy_integration import HealthReportPrompts
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizationPrompts
-        from src.agents.explainer.dspy_integration import ExplanationPrompts
-        import json
 
         prompt_classes = [
             HealthReportPrompts(),
@@ -562,9 +561,9 @@ class TestRecipientContractCompliance:
             "explainer",
         }
 
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         integrations = {
             "health_score": HealthScoreDSPyIntegration(),
@@ -579,9 +578,9 @@ class TestRecipientContractCompliance:
 
     def test_recipients_have_required_methods(self):
         """Recipients must have required interface methods."""
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         required_methods = ["update_optimized_prompts"]
 
@@ -598,9 +597,9 @@ class TestRecipientContractCompliance:
 
     def test_recipients_have_prompts_property(self):
         """Recipients must expose prompts property."""
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         recipients = [
             HealthScoreDSPyIntegration(),

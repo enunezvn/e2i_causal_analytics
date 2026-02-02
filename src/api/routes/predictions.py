@@ -260,7 +260,7 @@ async def predict_batch(
 
         # Process results
         raw_predictions = result.get("predictions", [])
-        for i, pred in enumerate(raw_predictions):
+        for _i, pred in enumerate(raw_predictions):
             if pred.get("error"):
                 failed_count += 1
                 continue

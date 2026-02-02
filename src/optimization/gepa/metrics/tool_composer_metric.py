@@ -12,7 +12,7 @@ The metric optimizes for:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 from dspy import Example, Prediction
 
@@ -40,7 +40,9 @@ class ToolComposerGEPAMetric:
     """
 
     name: str = "tool_composer_gepa"
-    description: str = "GEPA metric for Tier 1 Tool Composer - decomposition, planning, execution, synthesis"
+    description: str = (
+        "GEPA metric for Tier 1 Tool Composer - decomposition, planning, execution, synthesis"
+    )
 
     decomposition_weight: float = 0.25
     planning_weight: float = 0.25
@@ -121,9 +123,7 @@ class ToolComposerGEPAMetric:
             "feedback": self._build_feedback(total_score, scores, feedback_parts, pred_name),
         }
 
-    def _score_decomposition(
-        self, pred: Prediction, gold: Example
-    ) -> tuple[float, str]:
+    def _score_decomposition(self, pred: Prediction, gold: Example) -> tuple[float, str]:
         """Score decomposition quality from Phase 1.
 
         Evaluates:
@@ -225,9 +225,9 @@ class ToolComposerGEPAMetric:
             score += 0.3
 
             # Check mapping confidence
-            avg_confidence = sum(
-                getattr(m, "confidence", 0.5) for m in tool_mappings
-            ) / len(tool_mappings)
+            avg_confidence = sum(getattr(m, "confidence", 0.5) for m in tool_mappings) / len(
+                tool_mappings
+            )
             if avg_confidence >= 0.8:
                 score += 0.2
             elif avg_confidence >= 0.6:
@@ -311,24 +311,28 @@ class ToolComposerGEPAMetric:
                 score += 0.3
             elif total_duration <= self.max_execution_time_ms * 1.5:
                 score += 0.15
-                issues.append(f"Execution time {total_duration}ms > SLA {self.max_execution_time_ms}ms")
+                issues.append(
+                    f"Execution time {total_duration}ms > SLA {self.max_execution_time_ms}ms"
+                )
             else:
-                issues.append(f"Execution time {total_duration}ms >> SLA {self.max_execution_time_ms}ms")
+                issues.append(
+                    f"Execution time {total_duration}ms >> SLA {self.max_execution_time_ms}ms"
+                )
         else:
             score += 0.1  # No timing info
 
         # Check for retries (error recovery)
         step_results = getattr(execution, "step_results", [])
-        retry_count = sum(
-            getattr(r, "retries", 0) for r in step_results if r
-        )
+        retry_count = sum(getattr(r, "retries", 0) for r in step_results if r)
         if retry_count > 0 and success_rate > 0.5:
             score += 0.2  # Recovered from errors
         elif success_rate == 1.0:
             score += 0.2  # No retries needed
 
         if issues:
-            return min(score, 1.0), f"{success_rate*100:.0f}% success. Issues: {'; '.join(issues)}"
+            return min(
+                score, 1.0
+            ), f"{success_rate * 100:.0f}% success. Issues: {'; '.join(issues)}"
         return min(score, 1.0), f"All {tools_executed} tools succeeded in {total_duration}ms"
 
     def _score_synthesis(self, pred: Prediction, gold: Example) -> tuple[float, str]:
@@ -370,9 +374,8 @@ class ToolComposerGEPAMetric:
         confidence = getattr(response, "confidence", 0)
         execution = getattr(pred, "execution", None)
         if execution:
-            success_rate = (
-                getattr(execution, "tools_succeeded", 0)
-                / max(getattr(execution, "tools_executed", 1), 1)
+            success_rate = getattr(execution, "tools_succeeded", 0) / max(
+                getattr(execution, "tools_executed", 1), 1
             )
 
             # Confidence should roughly match success rate
@@ -446,7 +449,9 @@ class ToolComposerGEPAMetric:
                 "execution": "Improve execution: check error handling and retry logic",
                 "synthesis": "Improve synthesis: calibrate confidence and add caveats",
             }
-            lines.append(f"\n[SUGGESTION] {suggestions.get(lowest_component, 'Review lowest scoring component')}")
+            lines.append(
+                f"\n[SUGGESTION] {suggestions.get(lowest_component, 'Review lowest scoring component')}"
+            )
 
         if pred_name:
             lines.append(f"\n[Optimizing predictor: {pred_name}]")

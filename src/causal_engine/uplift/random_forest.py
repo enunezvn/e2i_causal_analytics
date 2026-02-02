@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-from .base import BaseUpliftModel, UpliftConfig, UpliftModelType, UpliftResult
+from .base import BaseUpliftModel, UpliftModelType
 
 
 class UpliftRandomForest(BaseUpliftModel):
@@ -54,8 +54,7 @@ class UpliftRandomForest(BaseUpliftModel):
             from causalml.inference.tree import UpliftRandomForestClassifier
         except ImportError:
             raise ImportError(
-                "CausalML is required for UpliftRandomForest. "
-                "Install with: pip install causalml"
+                "CausalML is required for UpliftRandomForest. Install with: pip install causalml"
             )
 
         return UpliftRandomForestClassifier(
@@ -142,16 +141,12 @@ class UpliftRandomForest(BaseUpliftModel):
             if hasattr(self.model, "feature_importances_"):
                 importances = self.model.feature_importances_
 
-                if self._feature_names is not None and len(self._feature_names) == len(
-                    importances
-                ):
+                if self._feature_names is not None and len(self._feature_names) == len(importances):
                     return {
                         name: float(imp)
-                        for name, imp in zip(self._feature_names, importances)
+                        for name, imp in zip(self._feature_names, importances, strict=False)
                     }
-                return {
-                    f"feature_{i}": float(imp) for i, imp in enumerate(importances)
-                }
+                return {f"feature_{i}": float(imp) for i, imp in enumerate(importances)}
         except Exception:
             pass
 
@@ -186,8 +181,7 @@ class UpliftTree(BaseUpliftModel):
             from causalml.inference.tree import UpliftTreeClassifier
         except ImportError:
             raise ImportError(
-                "CausalML is required for UpliftTree. "
-                "Install with: pip install causalml"
+                "CausalML is required for UpliftTree. Install with: pip install causalml"
             )
 
         return UpliftTreeClassifier(

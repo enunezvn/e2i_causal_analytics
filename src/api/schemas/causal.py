@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # =============================================================================
 # ENUMS
 # =============================================================================
@@ -179,9 +178,7 @@ class SegmentCATEResult(BaseModel):
     segment_id: int = Field(..., description="Segment identifier")
     segment_name: str = Field(..., description="Segment name (e.g., 'high_uplift')")
     n_samples: int = Field(..., description="Number of samples in segment")
-    uplift_range: tuple[float, float] = Field(
-        ..., description="Uplift score range (min, max)"
-    )
+    uplift_range: tuple[float, float] = Field(..., description="Uplift score range (min, max)")
     cate_mean: Optional[float] = Field(None, description="Mean CATE estimate")
     cate_std: Optional[float] = Field(None, description="CATE standard deviation")
     cate_ci_lower: Optional[float] = Field(None, description="CATE CI lower bound")
@@ -202,12 +199,8 @@ class NestedCIResult(BaseModel):
     segment_contributions: Dict[str, float] = Field(
         ..., description="Weight contribution from each segment"
     )
-    i_squared: Optional[float] = Field(
-        None, description="I² heterogeneity statistic (0-100)"
-    )
-    tau_squared: Optional[float] = Field(
-        None, description="τ² between-segment variance"
-    )
+    i_squared: Optional[float] = Field(None, description="I² heterogeneity statistic (0-100)")
+    tau_squared: Optional[float] = Field(None, description="τ² between-segment variance")
     n_segments_included: int = Field(..., description="Segments included in aggregate")
     total_sample_size: int = Field(..., description="Total samples across segments")
 
@@ -220,15 +213,11 @@ class HierarchicalAnalysisResponse(BaseModel):
     segment_results: List[SegmentCATEResult] = Field(
         default_factory=list, description="Per-segment CATE results"
     )
-    nested_ci: Optional[NestedCIResult] = Field(
-        None, description="Nested CI aggregation"
-    )
+    nested_ci: Optional[NestedCIResult] = Field(None, description="Nested CI aggregation")
     overall_ate: Optional[float] = Field(None, description="Overall ATE estimate")
     overall_ci_lower: Optional[float] = Field(None, description="Overall CI lower")
     overall_ci_upper: Optional[float] = Field(None, description="Overall CI upper")
-    segment_heterogeneity: Optional[float] = Field(
-        None, description="Heterogeneity score (I²)"
-    )
+    segment_heterogeneity: Optional[float] = Field(None, description="Heterogeneity score (I²)")
     n_segments_analyzed: int = Field(0, description="Number of segments analyzed")
     segmentation_method: str = Field(..., description="Segmentation method used")
     estimator_type: str = Field(..., description="EconML estimator used")
@@ -255,13 +244,9 @@ class RouteQueryRequest(BaseModel):
             "Who should we target for the promotional campaign?",
         ],
     )
-    treatment_var: Optional[str] = Field(
-        None, description="Treatment variable if known"
-    )
+    treatment_var: Optional[str] = Field(None, description="Treatment variable if known")
     outcome_var: Optional[str] = Field(None, description="Outcome variable if known")
-    context: Optional[Dict[str, Any]] = Field(
-        None, description="Additional context for routing"
-    )
+    context: Optional[Dict[str, Any]] = Field(None, description="Additional context for routing")
     prefer_library: Optional[CausalLibrary] = Field(
         None, description="Preferred library (optional override)"
     )
@@ -281,12 +266,8 @@ class RouteQueryResponse(BaseModel):
     """Response from query routing."""
 
     query: str = Field(..., description="Original query")
-    question_type: QuestionType = Field(
-        ..., description="Classified question type"
-    )
-    primary_library: CausalLibrary = Field(
-        ..., description="Recommended primary library"
-    )
+    question_type: QuestionType = Field(..., description="Classified question type")
+    primary_library: CausalLibrary = Field(..., description="Recommended primary library")
     secondary_libraries: List[CausalLibrary] = Field(
         default_factory=list, description="Recommended secondary libraries"
     )
@@ -296,12 +277,8 @@ class RouteQueryResponse(BaseModel):
     routing_confidence: float = Field(
         ..., ge=0.0, le=1.0, description="Confidence in routing decision"
     )
-    routing_rationale: str = Field(
-        ..., description="Explanation for routing decision"
-    )
-    suggested_pipeline: Optional[PipelineMode] = Field(
-        None, description="Suggested pipeline mode"
-    )
+    routing_rationale: str = Field(..., description="Explanation for routing decision")
+    suggested_pipeline: Optional[PipelineMode] = Field(None, description="Suggested pipeline mode")
 
 
 # =============================================================================
@@ -314,12 +291,8 @@ class PipelineStageConfig(BaseModel):
 
     library: CausalLibrary = Field(..., description="Library for this stage")
     estimator: Optional[str] = Field(None, description="Specific estimator")
-    parameters: Dict[str, Any] = Field(
-        default_factory=dict, description="Stage parameters"
-    )
-    timeout_seconds: int = Field(
-        default=60, ge=10, le=300, description="Stage timeout"
-    )
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Stage parameters")
+    timeout_seconds: int = Field(default=60, ge=10, le=300, description="Stage timeout")
 
 
 class SequentialPipelineRequest(BaseModel):
@@ -327,9 +300,7 @@ class SequentialPipelineRequest(BaseModel):
 
     treatment_var: str = Field(..., description="Treatment variable")
     outcome_var: str = Field(..., description="Outcome variable")
-    covariates: List[str] = Field(
-        default_factory=list, description="Covariate variables"
-    )
+    covariates: List[str] = Field(default_factory=list, description="Covariate variables")
     data_source: str = Field(default="mock_data", description="Data source")
     filters: Optional[Dict[str, Any]] = Field(None, description="Data filters")
 
@@ -424,9 +395,7 @@ class ParallelPipelineRequest(BaseModel):
 
     treatment_var: str = Field(..., description="Treatment variable")
     outcome_var: str = Field(..., description="Outcome variable")
-    covariates: List[str] = Field(
-        default_factory=list, description="Covariate variables"
-    )
+    covariates: List[str] = Field(default_factory=list, description="Covariate variables")
     data_source: str = Field(default="mock_data", description="Data source")
     filters: Optional[Dict[str, Any]] = Field(None, description="Data filters")
 
@@ -475,9 +444,7 @@ class ParallelPipelineResponse(BaseModel):
     libraries_succeeded: List[str] = Field(
         default_factory=list, description="Libraries that succeeded"
     )
-    libraries_failed: List[str] = Field(
-        default_factory=list, description="Libraries that failed"
-    )
+    libraries_failed: List[str] = Field(default_factory=list, description="Libraries that failed")
     library_results: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict, description="Results per library"
     )
@@ -486,9 +453,7 @@ class ParallelPipelineResponse(BaseModel):
     consensus_effect: Optional[float] = Field(None, description="Consensus effect")
     consensus_ci_lower: Optional[float] = Field(None, description="Consensus CI lower")
     consensus_ci_upper: Optional[float] = Field(None, description="Consensus CI upper")
-    library_agreement_score: Optional[float] = Field(
-        None, description="Agreement score"
-    )
+    library_agreement_score: Optional[float] = Field(None, description="Agreement score")
     consensus_method: str = Field(..., description="Consensus method used")
 
     total_latency_ms: int = Field(..., description="Total execution time")
@@ -506,18 +471,12 @@ class CrossValidationRequest(BaseModel):
 
     treatment_var: str = Field(..., description="Treatment variable")
     outcome_var: str = Field(..., description="Outcome variable")
-    covariates: List[str] = Field(
-        default_factory=list, description="Covariate variables"
-    )
+    covariates: List[str] = Field(default_factory=list, description="Covariate variables")
     data_source: str = Field(default="mock_data", description="Data source")
 
     # Validation configuration
-    primary_library: CausalLibrary = Field(
-        ..., description="Primary library for validation"
-    )
-    validation_library: CausalLibrary = Field(
-        ..., description="Library to validate against"
-    )
+    primary_library: CausalLibrary = Field(..., description="Primary library for validation")
+    validation_library: CausalLibrary = Field(..., description="Library to validate against")
     agreement_threshold: float = Field(
         default=0.85,
         ge=0.5,
@@ -558,21 +517,11 @@ class CrossValidationResponse(BaseModel):
     validation_ci: tuple[float, float] = Field(..., description="Validation CI")
 
     # Agreement metrics
-    effect_difference: float = Field(
-        ..., description="Absolute difference in effects"
-    )
-    relative_difference: float = Field(
-        ..., description="Relative difference percentage"
-    )
-    ci_overlap_ratio: float = Field(
-        ..., ge=0.0, le=1.0, description="CI overlap ratio"
-    )
-    agreement_score: float = Field(
-        ..., ge=0.0, le=1.0, description="Overall agreement score"
-    )
-    validation_passed: bool = Field(
-        ..., description="Whether validation threshold met"
-    )
+    effect_difference: float = Field(..., description="Absolute difference in effects")
+    relative_difference: float = Field(..., description="Relative difference percentage")
+    ci_overlap_ratio: float = Field(..., ge=0.0, le=1.0, description="CI overlap ratio")
+    agreement_score: float = Field(..., ge=0.0, le=1.0, description="Overall agreement score")
+    validation_passed: bool = Field(..., description="Whether validation threshold met")
     agreement_threshold: float = Field(..., description="Threshold used")
 
     latency_ms: int = Field(..., description="Validation execution time")
@@ -592,22 +541,12 @@ class EstimatorInfo(BaseModel):
 
     name: str = Field(..., description="Estimator name")
     library: CausalLibrary = Field(..., description="Source library")
-    estimator_type: str = Field(
-        ..., description="Type (CATE, uplift, identification, etc.)"
-    )
+    estimator_type: str = Field(..., description="Type (CATE, uplift, identification, etc.)")
     description: str = Field(..., description="Brief description")
-    best_for: List[str] = Field(
-        default_factory=list, description="Best use cases"
-    )
-    parameters: List[str] = Field(
-        default_factory=list, description="Key parameters"
-    )
-    supports_confidence_intervals: bool = Field(
-        ..., description="Whether CI is supported"
-    )
-    supports_heterogeneous_effects: bool = Field(
-        ..., description="Whether HTE is supported"
-    )
+    best_for: List[str] = Field(default_factory=list, description="Best use cases")
+    parameters: List[str] = Field(default_factory=list, description="Key parameters")
+    supports_confidence_intervals: bool = Field(..., description="Whether CI is supported")
+    supports_heterogeneous_effects: bool = Field(..., description="Whether HTE is supported")
 
 
 class EstimatorListResponse(BaseModel):
@@ -635,9 +574,7 @@ class CausalHealthResponse(BaseModel):
         description="Overall health status",
         examples=["healthy", "degraded", "unhealthy"],
     )
-    libraries_available: Dict[str, bool] = Field(
-        ..., description="Availability of each library"
-    )
+    libraries_available: Dict[str, bool] = Field(..., description="Availability of each library")
     estimators_loaded: int = Field(..., description="Number of estimators loaded")
     pipeline_orchestrator_ready: bool = Field(
         ..., description="Whether pipeline orchestrator is ready"
@@ -645,13 +582,7 @@ class CausalHealthResponse(BaseModel):
     hierarchical_analyzer_ready: bool = Field(
         ..., description="Whether hierarchical analyzer is ready"
     )
-    last_analysis: Optional[datetime] = Field(
-        None, description="Timestamp of last analysis"
-    )
-    analysis_count_24h: int = Field(
-        0, description="Analyses run in last 24 hours"
-    )
-    average_latency_ms: Optional[int] = Field(
-        None, description="Average analysis latency"
-    )
+    last_analysis: Optional[datetime] = Field(None, description="Timestamp of last analysis")
+    analysis_count_24h: int = Field(0, description="Analyses run in last 24 hours")
+    average_latency_ms: Optional[int] = Field(None, description="Average analysis latency")
     error: Optional[str] = Field(None, description="Error message if unhealthy")

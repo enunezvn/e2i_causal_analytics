@@ -1,7 +1,6 @@
 """Tests for IV Diagnostic functions."""
 
 import numpy as np
-import pytest
 
 from src.causal_engine.iv import (
     anderson_rubin_test,

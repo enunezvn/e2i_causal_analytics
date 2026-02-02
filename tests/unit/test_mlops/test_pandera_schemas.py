@@ -3,11 +3,16 @@
 Tests the PANDERA_SCHEMA_REGISTRY and all 6 E2I data source schemas.
 """
 
-import pandas as pd
-import pytest
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from src.mlops.pandera_schemas import (
+    # E2I constants
+    E2I_BRANDS,
+    E2I_REGIONS,
+    # Registry and utilities
+    PANDERA_SCHEMA_REGISTRY,
     # Schema classes
     AgentActivitiesSchema,
     BusinessMetricsSchema,
@@ -15,14 +20,9 @@ from src.mlops.pandera_schemas import (
     PatientJourneysSchema,
     PredictionsSchema,
     TriggersSchema,
-    # Registry and utilities
-    PANDERA_SCHEMA_REGISTRY,
     get_schema,
     list_registered_schemas,
     validate_dataframe,
-    # E2I constants
-    E2I_BRANDS,
-    E2I_REGIONS,
 )
 
 
@@ -95,53 +95,61 @@ class TestBusinessMetricsSchema:
 
     def test_valid_business_metrics(self):
         """Test validation passes with valid data."""
-        df = pd.DataFrame({
-            "metric_id": ["M001", "M002"],
-            "metric_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "metric_name": ["TRx", "NRx"],
-            "metric_value": [100.5, 200.0],
-            "brand": ["Remibrutinib", "Fabhalta"],
-            "region": ["northeast", "south"],
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": ["M001", "M002"],
+                "metric_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "metric_name": ["TRx", "NRx"],
+                "metric_value": [100.5, 200.0],
+                "brand": ["Remibrutinib", "Fabhalta"],
+                "region": ["northeast", "south"],
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         assert result["status"] == "passed"
         assert result["errors"] == []
 
     def test_invalid_brand_fails(self):
         """Test validation fails with invalid brand."""
-        df = pd.DataFrame({
-            "metric_id": ["M001"],
-            "metric_date": [datetime.now(timezone.utc)],
-            "metric_name": ["TRx"],
-            "metric_value": [100.5],
-            "brand": ["InvalidBrand"],  # Invalid brand
-            "region": ["northeast"],
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": ["M001"],
+                "metric_date": [datetime.now(timezone.utc)],
+                "metric_name": ["TRx"],
+                "metric_value": [100.5],
+                "brand": ["InvalidBrand"],  # Invalid brand
+                "region": ["northeast"],
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         assert result["status"] == "failed"
         assert len(result["errors"]) > 0
 
     def test_invalid_region_fails(self):
         """Test validation fails with invalid region."""
-        df = pd.DataFrame({
-            "metric_id": ["M001"],
-            "metric_date": [datetime.now(timezone.utc)],
-            "metric_name": ["TRx"],
-            "metric_value": [100.5],
-            "brand": ["Remibrutinib"],
-            "region": ["invalid_region"],  # Invalid region
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": ["M001"],
+                "metric_date": [datetime.now(timezone.utc)],
+                "metric_name": ["TRx"],
+                "metric_value": [100.5],
+                "brand": ["Remibrutinib"],
+                "region": ["invalid_region"],  # Invalid region
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         assert result["status"] == "failed"
 
     def test_null_metric_id_fails(self):
         """Test validation fails with null required field."""
-        df = pd.DataFrame({
-            "metric_id": [None, "M002"],  # Null value
-            "metric_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "metric_name": ["TRx", "NRx"],
-            "metric_value": [100.5, 200.0],
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": [None, "M002"],  # Null value
+                "metric_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "metric_name": ["TRx", "NRx"],
+                "metric_value": [100.5, 200.0],
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         assert result["status"] == "failed"
 
@@ -151,40 +159,46 @@ class TestPredictionsSchema:
 
     def test_valid_predictions(self):
         """Test validation passes with valid predictions data."""
-        df = pd.DataFrame({
-            "prediction_id": ["P001", "P002"],
-            "prediction_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "model_id": ["model_v1", "model_v1"],
-            "predicted_value": [0.85, 0.72],
-            "confidence_score": [0.95, 0.88],
-            "brand": ["Kisqali", "Fabhalta"],
-        })
+        df = pd.DataFrame(
+            {
+                "prediction_id": ["P001", "P002"],
+                "prediction_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "model_id": ["model_v1", "model_v1"],
+                "predicted_value": [0.85, 0.72],
+                "confidence_score": [0.95, 0.88],
+                "brand": ["Kisqali", "Fabhalta"],
+            }
+        )
         result = validate_dataframe(df, "predictions")
         assert result["status"] == "passed"
 
     def test_confidence_score_out_of_range_fails(self):
         """Test validation fails when confidence_score > 1.0."""
-        df = pd.DataFrame({
-            "prediction_id": ["P001"],
-            "prediction_date": [datetime.now(timezone.utc)],
-            "model_id": ["model_v1"],
-            "predicted_value": [0.85],
-            "confidence_score": [1.5],  # Out of range
-            "brand": ["Kisqali"],
-        })
+        df = pd.DataFrame(
+            {
+                "prediction_id": ["P001"],
+                "prediction_date": [datetime.now(timezone.utc)],
+                "model_id": ["model_v1"],
+                "predicted_value": [0.85],
+                "confidence_score": [1.5],  # Out of range
+                "brand": ["Kisqali"],
+            }
+        )
         result = validate_dataframe(df, "predictions")
         assert result["status"] == "failed"
 
     def test_negative_confidence_score_fails(self):
         """Test validation fails when confidence_score < 0."""
-        df = pd.DataFrame({
-            "prediction_id": ["P001"],
-            "prediction_date": [datetime.now(timezone.utc)],
-            "model_id": ["model_v1"],
-            "predicted_value": [0.85],
-            "confidence_score": [-0.1],  # Negative
-            "brand": ["Kisqali"],
-        })
+        df = pd.DataFrame(
+            {
+                "prediction_id": ["P001"],
+                "prediction_date": [datetime.now(timezone.utc)],
+                "model_id": ["model_v1"],
+                "predicted_value": [0.85],
+                "confidence_score": [-0.1],  # Negative
+                "brand": ["Kisqali"],
+            }
+        )
         result = validate_dataframe(df, "predictions")
         assert result["status"] == "failed"
 
@@ -194,24 +208,28 @@ class TestTriggersSchema:
 
     def test_valid_triggers(self):
         """Test validation passes with valid triggers data."""
-        df = pd.DataFrame({
-            "trigger_id": ["T001", "T002"],
-            "patient_id": ["P001", "P002"],  # Required
-            "trigger_timestamp": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "trigger_type": ["alert", "recommendation"],
-            "priority": ["high", "medium"],  # Uses priority, not severity
-            "confidence_score": [0.9, 0.85],
-        })
+        df = pd.DataFrame(
+            {
+                "trigger_id": ["T001", "T002"],
+                "patient_id": ["P001", "P002"],  # Required
+                "trigger_timestamp": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "trigger_type": ["alert", "recommendation"],
+                "priority": ["high", "medium"],  # Uses priority, not severity
+                "confidence_score": [0.9, 0.85],
+            }
+        )
         result = validate_dataframe(df, "triggers")
         assert result["status"] == "passed"
 
     def test_missing_patient_id_fails(self):
         """Test validation fails when patient_id is missing."""
-        df = pd.DataFrame({
-            "trigger_id": ["T001"],
-            "trigger_type": ["alert"],
-            # Missing patient_id - required field
-        })
+        df = pd.DataFrame(
+            {
+                "trigger_id": ["T001"],
+                "trigger_type": ["alert"],
+                # Missing patient_id - required field
+            }
+        )
         result = validate_dataframe(df, "triggers")
         assert result["status"] == "failed"
 
@@ -221,24 +239,28 @@ class TestPatientJourneysSchema:
 
     def test_valid_patient_journeys(self):
         """Test validation passes with valid patient journeys data."""
-        df = pd.DataFrame({
-            "patient_journey_id": ["J001", "J002"],  # Correct field name
-            "patient_id": ["P001", "P002"],  # Required
-            "journey_start_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "current_stage": ["diagnosis", "maintenance"],
-            "brand": ["Fabhalta", "Kisqali"],
-            "geographic_region": ["west", "midwest"],  # Uses geographic_region, not region
-        })
+        df = pd.DataFrame(
+            {
+                "patient_journey_id": ["J001", "J002"],  # Correct field name
+                "patient_id": ["P001", "P002"],  # Required
+                "journey_start_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "current_stage": ["diagnosis", "maintenance"],
+                "brand": ["Fabhalta", "Kisqali"],
+                "geographic_region": ["west", "midwest"],  # Uses geographic_region, not region
+            }
+        )
         result = validate_dataframe(df, "patient_journeys")
         assert result["status"] == "passed"
 
     def test_invalid_journey_stage_fails(self):
         """Test validation fails with invalid current_stage."""
-        df = pd.DataFrame({
-            "patient_journey_id": ["J001"],
-            "patient_id": ["P001"],
-            "current_stage": ["invalid_stage"],  # Invalid stage
-        })
+        df = pd.DataFrame(
+            {
+                "patient_journey_id": ["J001"],
+                "patient_id": ["P001"],
+                "current_stage": ["invalid_stage"],  # Invalid stage
+            }
+        )
         result = validate_dataframe(df, "patient_journeys")
         assert result["status"] == "failed"
 
@@ -248,52 +270,60 @@ class TestCausalPathsSchema:
 
     def test_valid_causal_paths(self):
         """Test validation passes with valid causal paths data."""
-        df = pd.DataFrame({
-            "path_id": ["CP001", "CP002"],
-            "discovery_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "source_node": ["marketing_spend", "rep_visits"],
-            "target_node": ["prescriptions", "awareness"],
-            "causal_effect_size": [0.45, -0.22],  # -1 to 1 range
-            "confidence_level": [0.92, 0.85],
-        })
+        df = pd.DataFrame(
+            {
+                "path_id": ["CP001", "CP002"],
+                "discovery_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "source_node": ["marketing_spend", "rep_visits"],
+                "target_node": ["prescriptions", "awareness"],
+                "causal_effect_size": [0.45, -0.22],  # -1 to 1 range
+                "confidence_level": [0.92, 0.85],
+            }
+        )
         result = validate_dataframe(df, "causal_paths")
         assert result["status"] == "passed"
 
     def test_causal_effect_size_out_of_range_fails(self):
         """Test validation fails when causal_effect_size > 1.0."""
-        df = pd.DataFrame({
-            "path_id": ["CP001"],
-            "discovery_date": [datetime.now(timezone.utc)],
-            "source_node": ["marketing"],
-            "target_node": ["sales"],
-            "causal_effect_size": [1.5],  # Out of range
-            "confidence_level": [0.9],
-        })
+        df = pd.DataFrame(
+            {
+                "path_id": ["CP001"],
+                "discovery_date": [datetime.now(timezone.utc)],
+                "source_node": ["marketing"],
+                "target_node": ["sales"],
+                "causal_effect_size": [1.5],  # Out of range
+                "confidence_level": [0.9],
+            }
+        )
         result = validate_dataframe(df, "causal_paths")
         assert result["status"] == "failed"
 
     def test_causal_effect_size_below_range_fails(self):
         """Test validation fails when causal_effect_size < -1.0."""
-        df = pd.DataFrame({
-            "path_id": ["CP001"],
-            "discovery_date": [datetime.now(timezone.utc)],
-            "source_node": ["marketing"],
-            "target_node": ["sales"],
-            "causal_effect_size": [-1.5],  # Out of range
-            "confidence_level": [0.9],
-        })
+        df = pd.DataFrame(
+            {
+                "path_id": ["CP001"],
+                "discovery_date": [datetime.now(timezone.utc)],
+                "source_node": ["marketing"],
+                "target_node": ["sales"],
+                "causal_effect_size": [-1.5],  # Out of range
+                "confidence_level": [0.9],
+            }
+        )
         result = validate_dataframe(df, "causal_paths")
         assert result["status"] == "failed"
 
     def test_invalid_p_value_fails(self):
         """Test validation fails when p_value > 1.0."""
-        df = pd.DataFrame({
-            "path_id": ["CP001"],
-            "discovery_date": [datetime.now(timezone.utc)],
-            "source_node": ["marketing"],
-            "target_node": ["sales"],
-            "p_value": [1.5],  # Out of range (must be 0-1)
-        })
+        df = pd.DataFrame(
+            {
+                "path_id": ["CP001"],
+                "discovery_date": [datetime.now(timezone.utc)],
+                "source_node": ["marketing"],
+                "target_node": ["sales"],
+                "p_value": [1.5],  # Out of range (must be 0-1)
+            }
+        )
         result = validate_dataframe(df, "causal_paths")
         assert result["status"] == "failed"
 
@@ -303,12 +333,14 @@ class TestAgentActivitiesSchema:
 
     def test_valid_agent_activities(self):
         """Test validation passes with valid agent activities data."""
-        df = pd.DataFrame({
-            "activity_id": ["A001", "A002"],
-            "activity_timestamp": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "agent_name": ["gap_analyzer", "causal_impact"],
-            "activity_type": ["analysis", "inference"],
-        })
+        df = pd.DataFrame(
+            {
+                "activity_id": ["A001", "A002"],
+                "activity_timestamp": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "agent_name": ["gap_analyzer", "causal_impact"],
+                "activity_type": ["analysis", "inference"],
+            }
+        )
         result = validate_dataframe(df, "agent_activities")
         assert result["status"] == "passed"
 
@@ -325,25 +357,29 @@ class TestValidateDataframeFunction:
 
     def test_empty_dataframe_passes(self):
         """Test empty DataFrame still validates (schema check passes)."""
-        df = pd.DataFrame({
-            "metric_id": pd.Series([], dtype=str),
-            "metric_date": pd.Series([], dtype="datetime64[ns, UTC]"),
-            "metric_name": pd.Series([], dtype=str),
-            "metric_value": pd.Series([], dtype=float),
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": pd.Series([], dtype=str),
+                "metric_date": pd.Series([], dtype="datetime64[ns, UTC]"),
+                "metric_name": pd.Series([], dtype=str),
+                "metric_value": pd.Series([], dtype=float),
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         # Empty df should pass schema validation (no rows to violate constraints)
         assert result["status"] == "passed"
 
     def test_lazy_validation_collects_all_errors(self):
         """Test lazy=True collects multiple errors."""
-        df = pd.DataFrame({
-            "metric_id": [None, None],  # Error 1: nulls
-            "metric_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
-            "metric_name": ["TRx", "NRx"],
-            "metric_value": [100.5, 200.0],
-            "brand": ["InvalidBrand", "AnotherInvalid"],  # Error 2: invalid brands
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": [None, None],  # Error 1: nulls
+                "metric_date": [datetime.now(timezone.utc), datetime.now(timezone.utc)],
+                "metric_name": ["TRx", "NRx"],
+                "metric_value": [100.5, 200.0],
+                "brand": ["InvalidBrand", "AnotherInvalid"],  # Error 2: invalid brands
+            }
+        )
         result = validate_dataframe(df, "business_metrics", lazy=True)
         assert result["status"] == "failed"
         # Should have collected multiple errors
@@ -351,12 +387,14 @@ class TestValidateDataframeFunction:
 
     def test_result_contains_required_fields(self):
         """Test result includes required fields: status, errors, rows_validated, schema_name."""
-        df = pd.DataFrame({
-            "metric_id": ["M001"],
-            "metric_date": [datetime.now(timezone.utc)],
-            "metric_name": ["TRx"],
-            "metric_value": [100.5],
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": ["M001"],
+                "metric_date": [datetime.now(timezone.utc)],
+                "metric_name": ["TRx"],
+                "metric_value": [100.5],
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         assert "status" in result
         assert "errors" in result
@@ -371,25 +409,29 @@ class TestSchemaConfigOptions:
 
     def test_strict_false_allows_extra_columns(self):
         """Test strict=False allows extra columns not in schema."""
-        df = pd.DataFrame({
-            "metric_id": ["M001"],
-            "metric_date": [datetime.now(timezone.utc)],
-            "metric_name": ["TRx"],
-            "metric_value": [100.5],
-            "extra_column": ["extra_value"],  # Not in schema
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": ["M001"],
+                "metric_date": [datetime.now(timezone.utc)],
+                "metric_name": ["TRx"],
+                "metric_value": [100.5],
+                "extra_column": ["extra_value"],  # Not in schema
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         # Should pass because strict=False in schema config
         assert result["status"] == "passed"
 
     def test_coerce_true_converts_types(self):
         """Test coerce=True converts compatible types."""
-        df = pd.DataFrame({
-            "metric_id": ["M001"],
-            "metric_date": ["2025-01-01"],  # String, should be coerced to datetime
-            "metric_name": ["TRx"],
-            "metric_value": [100],  # Int, should be coerced to float
-        })
+        df = pd.DataFrame(
+            {
+                "metric_id": ["M001"],
+                "metric_date": ["2025-01-01"],  # String, should be coerced to datetime
+                "metric_name": ["TRx"],
+                "metric_value": [100],  # Int, should be coerced to float
+            }
+        )
         result = validate_dataframe(df, "business_metrics")
         # With coerce=True, these should convert successfully
         assert result["status"] == "passed"

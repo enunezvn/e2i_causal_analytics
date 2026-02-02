@@ -815,7 +815,7 @@ async def example_usage():
     ]
 
     for query in queries:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Query: {query}")
 
         # Classify intent

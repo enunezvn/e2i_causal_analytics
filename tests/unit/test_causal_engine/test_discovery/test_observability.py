@@ -5,11 +5,7 @@ Tests for Discovery Observability Module
 Tests for the DiscoveryTracer and related observability components.
 """
 
-import asyncio
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID
+from unittest.mock import MagicMock, patch
 
 import pytest
 from uuid_utils import uuid7 as uuid7_func
@@ -17,7 +13,6 @@ from uuid_utils import uuid7 as uuid7_func
 from src.causal_engine.discovery.base import (
     AlgorithmResult,
     DiscoveryAlgorithmType,
-    DiscoveryConfig,
     GateDecision,
 )
 from src.causal_engine.discovery.observability import (
@@ -185,7 +180,7 @@ class TestDiscoveryTracer:
         with patch(
             "src.causal_engine.discovery.observability.DiscoveryTracer._init_opik"
         ) as mock_init:
-            tracer = DiscoveryTracer(enabled=True)
+            DiscoveryTracer(enabled=True)
             mock_init.assert_called_once()
 
     def test_is_enabled_property(self):
@@ -350,27 +345,21 @@ class TestDiscoveryTracerSingleton:
 
     def test_get_discovery_tracer_creates_singleton(self):
         """Test that get_discovery_tracer creates a singleton."""
-        with patch(
-            "src.causal_engine.discovery.observability.DiscoveryTracer._init_opik"
-        ):
+        with patch("src.causal_engine.discovery.observability.DiscoveryTracer._init_opik"):
             tracer1 = get_discovery_tracer()
             tracer2 = get_discovery_tracer()
             assert tracer1 is tracer2
 
     def test_get_discovery_tracer_force_new(self):
         """Test that force_new creates a new instance."""
-        with patch(
-            "src.causal_engine.discovery.observability.DiscoveryTracer._init_opik"
-        ):
+        with patch("src.causal_engine.discovery.observability.DiscoveryTracer._init_opik"):
             tracer1 = get_discovery_tracer()
             tracer2 = get_discovery_tracer(force_new=True)
             assert tracer1 is not tracer2
 
     def test_reset_discovery_tracer(self):
         """Test reset_discovery_tracer clears singleton."""
-        with patch(
-            "src.causal_engine.discovery.observability.DiscoveryTracer._init_opik"
-        ):
+        with patch("src.causal_engine.discovery.observability.DiscoveryTracer._init_opik"):
             tracer1 = get_discovery_tracer()
             reset_discovery_tracer()
             tracer2 = get_discovery_tracer()

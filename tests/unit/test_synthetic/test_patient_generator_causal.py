@@ -4,9 +4,6 @@ Tests causal columns are generated, engagement_score distribution,
 treatment_initiated binary values, and TRUE_ATE causal effect embedding.
 """
 
-from datetime import date
-
-import numpy as np
 import pandas as pd
 import pytest
 from scipy.stats import pearsonr
@@ -190,8 +187,10 @@ class TestTreatmentInitiatedBinary:
         # For non-initiated, days_to_treatment should be null
         non_initiated = df[df["treatment_initiated"] == 0]
         if len(non_initiated) > 0:
-            assert non_initiated["days_to_treatment"].isna().all() or \
-                   (non_initiated["days_to_treatment"] == None).all()
+            assert (
+                non_initiated["days_to_treatment"].isna().all()
+                or (non_initiated["days_to_treatment"] is None).all()
+            )
 
     def test_days_to_treatment_range_when_initiated(self):
         """Test days_to_treatment is in valid range for initiated."""

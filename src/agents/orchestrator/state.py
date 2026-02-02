@@ -3,8 +3,9 @@
 import operator
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
-from typing_extensions import NotRequired
 from uuid import UUID
+
+from typing_extensions import NotRequired
 
 
 class ParsedEntity(TypedDict, total=False):

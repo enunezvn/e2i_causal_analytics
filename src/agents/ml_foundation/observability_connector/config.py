@@ -342,9 +342,7 @@ class ObservabilityConfig:
 
         # Check if file exists
         if not Path(config_path).exists():
-            logger.warning(
-                f"Config file not found: {config_path}, using defaults"
-            )
+            logger.warning(f"Config file not found: {config_path}, using defaults")
             return cls()
 
         # Load YAML
@@ -387,18 +385,14 @@ class ObservabilityConfig:
         if "batching" in data:
             batching_data = data["batching"]
             if "retry" in batching_data:
-                batching_data["retry"] = _parse_dataclass(
-                    RetrySettings, batching_data["retry"]
-                )
+                batching_data["retry"] = _parse_dataclass(RetrySettings, batching_data["retry"])
             config.batching = _parse_dataclass(BatchingSettings, batching_data)
 
         # Parse circuit breaker settings
         if "circuit_breaker" in data:
             cb_data = data["circuit_breaker"]
             if "fallback" in cb_data:
-                cb_data["fallback"] = _parse_dataclass(
-                    CircuitBreakerFallback, cb_data["fallback"]
-                )
+                cb_data["fallback"] = _parse_dataclass(CircuitBreakerFallback, cb_data["fallback"])
             config.circuit_breaker = _parse_dataclass(CircuitBreakerSettings, cb_data)
 
         # Parse cache settings
@@ -413,13 +407,9 @@ class ObservabilityConfig:
                     default=ttl_data.get("default", 120),
                 )
             if "memory" in cache_data:
-                cache_data["memory"] = _parse_dataclass(
-                    CacheMemorySettings, cache_data["memory"]
-                )
+                cache_data["memory"] = _parse_dataclass(CacheMemorySettings, cache_data["memory"])
             if "redis" in cache_data:
-                cache_data["redis"] = _parse_dataclass(
-                    CacheRedisSettings, cache_data["redis"]
-                )
+                cache_data["redis"] = _parse_dataclass(CacheRedisSettings, cache_data["redis"])
             config.cache = _parse_dataclass(CacheSettings, cache_data)
 
         # Parse retention settings
@@ -450,9 +440,7 @@ class ObservabilityConfig:
         if "agent_tiers" in data:
             config.agent_tiers = {}
             for tier_name, tier_data in data["agent_tiers"].items():
-                config.agent_tiers[tier_name] = _parse_dataclass(
-                    AgentTierSettings, tier_data
-                )
+                config.agent_tiers[tier_name] = _parse_dataclass(AgentTierSettings, tier_data)
 
         # Parse logging settings
         if "logging" in data:
@@ -467,7 +455,7 @@ class ObservabilityConfig:
 
     def get_agent_tier(self, agent_name: str) -> Optional[AgentTierSettings]:
         """Get tier settings for an agent."""
-        for tier_name, tier_settings in self.agent_tiers.items():
+        for _tier_name, tier_settings in self.agent_tiers.items():
             if agent_name in tier_settings.agents:
                 return tier_settings
         return None

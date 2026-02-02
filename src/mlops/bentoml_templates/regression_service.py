@@ -29,6 +29,7 @@ except ImportError:
 
 try:
     import bentoml
+
     BENTOML_AVAILABLE = True
 except ImportError:
     BENTOML_AVAILABLE = False
@@ -38,7 +39,10 @@ try:
     from pydantic import BaseModel, Field
 except ImportError:
     BaseModel = object
-    Field = lambda *args, **kwargs: None
+
+    def Field(*args, **kwargs):
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +210,9 @@ class RegressionServiceTemplate:
 
                     # Load preprocessor if available
                     if enable_preprocessing:
-                        custom_objects = getattr(model_ref.info, 'custom_objects', {})
+                        custom_objects = getattr(model_ref.info, "custom_objects", {})
                         if custom_objects:
-                            self._preprocessor = custom_objects.get('preprocessor')
+                            self._preprocessor = custom_objects.get("preprocessor")
 
                     logger.info(f"Loaded regression model: {self.model_tag}")
 
@@ -236,7 +240,7 @@ class RegressionServiceTemplate:
                     return None, None
 
                 # Check for quantile prediction support
-                if hasattr(self._model, 'predict_quantiles'):
+                if hasattr(self._model, "predict_quantiles"):
                     alpha = 1 - confidence_level
                     quantiles = self._model.predict_quantiles(
                         features,
@@ -245,11 +249,11 @@ class RegressionServiceTemplate:
                     return quantiles[:, 0], quantiles[:, 1]
 
                 # Check for RandomForest/GradientBoosting ensemble
-                if hasattr(self._model, 'estimators_'):
+                if hasattr(self._model, "estimators_"):
                     # Bootstrap-like intervals from ensemble
-                    individual_preds = np.array([
-                        est.predict(features) for est in self._model.estimators_
-                    ])
+                    individual_preds = np.array(
+                        [est.predict(features) for est in self._model.estimators_]
+                    )
                     alpha = 1 - confidence_level
                     lower = np.percentile(individual_preds, 100 * alpha / 2, axis=0)
                     upper = np.percentile(individual_preds, 100 * (1 - alpha / 2), axis=0)
@@ -257,9 +261,10 @@ class RegressionServiceTemplate:
 
                 # Fallback: estimate from residual std (if available in metadata)
                 model_ref = bentoml.models.get(self.model_tag)
-                residual_std = model_ref.info.metadata.get('residual_std')
+                residual_std = model_ref.info.metadata.get("residual_std")
                 if residual_std:
                     from scipy import stats
+
                     z = stats.norm.ppf(1 - (1 - confidence_level) / 2)
                     return predictions - z * residual_std, predictions + z * residual_std
 
@@ -305,7 +310,7 @@ class RegressionServiceTemplate:
                 self._prediction_count += len(predictions)
                 self._total_latency_ms += elapsed_ms
                 self._prediction_sum += np.sum(predictions)
-                self._prediction_sq_sum += np.sum(predictions ** 2)
+                self._prediction_sq_sum += np.sum(predictions**2)
 
                 output = RegressionOutput(
                     predictions=predictions.tolist(),
@@ -327,7 +332,9 @@ class RegressionServiceTemplate:
                                 "return_intervals": input_data.return_intervals,
                             },
                             output_data={
-                                "predictions_sample": output.predictions[:10] if len(output.predictions) > 10 else output.predictions,
+                                "predictions_sample": output.predictions[:10]
+                                if len(output.predictions) > 10
+                                else output.predictions,
                                 "n_predictions": len(output.predictions),
                                 "mean_prediction": float(np.mean(predictions)),
                                 "has_intervals": output.lower_bounds is not None,
@@ -426,7 +433,7 @@ class RegressionServiceTemplate:
                 )
                 # Variance = E[X^2] - E[X]^2
                 var_pred = (
-                    (self._prediction_sq_sum / self._prediction_count) - mean_pred ** 2
+                    (self._prediction_sq_sum / self._prediction_count) - mean_pred**2
                     if self._prediction_count > 0
                     else 0.0
                 )

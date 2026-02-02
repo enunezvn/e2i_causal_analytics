@@ -37,6 +37,7 @@ def _get_opik_connector():
     """Get OpikConnector (lazy import to avoid circular deps)."""
     try:
         from src.mlops.opik_connector import get_opik_connector
+
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
@@ -47,6 +48,7 @@ def _get_procedural_memory():
     """Get procedural memory client (lazy import with graceful degradation)."""
     try:
         from src.memory.procedural_memory import get_procedural_memory_client
+
         return get_procedural_memory_client()
     except Exception as e:
         logger.debug(f"Procedural memory not available: {e}")
@@ -162,12 +164,14 @@ class ModelDeployerAgent:
                     final_state = await self.graph.ainvoke(initial_state)
                     # Set output on span
                     if span and not final_state.get("error"):
-                        span.set_output({
-                            "deployment_id": final_state.get("deployment_id"),
-                            "deployment_successful": final_state.get("deployment_successful"),
-                            "health_check_passed": final_state.get("health_check_passed"),
-                            "current_stage": final_state.get("current_stage"),
-                        })
+                        span.set_output(
+                            {
+                                "deployment_id": final_state.get("deployment_id"),
+                                "deployment_successful": final_state.get("deployment_successful"),
+                                "health_check_passed": final_state.get("health_check_passed"),
+                                "current_stage": final_state.get("current_stage"),
+                            }
+                        )
             else:
                 final_state = await self.graph.ainvoke(initial_state)
         except Exception as e:
@@ -300,12 +304,10 @@ class ModelDeployerAgent:
                 try:
                     model_registry_id = UUID(str(state["model_registry_id"]))
                 except ValueError:
-                    logger.warning(
-                        f"Invalid model_registry_id: {state.get('model_registry_id')}"
-                    )
+                    logger.warning(f"Invalid model_registry_id: {state.get('model_registry_id')}")
 
             # 1. Write to ml_deployments table
-            manifest = output.get("deployment_manifest", {})
+            output.get("deployment_manifest", {})
             deployment_config = {
                 "resources": state.get("resources", {"cpu": "2", "memory": "4Gi"}),
                 "max_batch_size": state.get("max_batch_size", 100),
@@ -353,9 +355,7 @@ class ModelDeployerAgent:
                     new_stage=new_stage,
                     archive_existing=(new_stage == "production"),
                 )
-                logger.info(
-                    f"Updated model {model_registry_id} stage to {new_stage}"
-                )
+                logger.info(f"Updated model {model_registry_id} stage to {new_stage}")
 
         except ImportError as e:
             logger.warning(f"Repository import failed (expected in testing): {e}")
@@ -400,9 +400,7 @@ class ModelDeployerAgent:
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
 
-            logger.info(
-                f"Updated procedural memory for deployment: {state.get('deployment_name')}"
-            )
+            logger.info(f"Updated procedural memory for deployment: {state.get('deployment_name')}")
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")

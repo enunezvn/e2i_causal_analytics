@@ -11,8 +11,7 @@ Tests cover:
 """
 
 import time
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,7 +29,6 @@ from src.feature_store.monitoring import (
     track_db_operation,
     track_retrieval,
 )
-
 
 # =============================================================================
 # Test Metrics Initialization
@@ -114,7 +112,7 @@ async def test_track_retrieval_context_manager():
 async def test_track_retrieval_with_error():
     """Test track_retrieval handles errors."""
     with pytest.raises(ValueError):
-        with track_retrieval("test_group") as metrics:
+        with track_retrieval("test_group"):
             raise ValueError("Test error")
 
     # Metrics should still be recorded even with error
@@ -320,7 +318,7 @@ def test_latency_tracker_get_stats_filtered():
     tracker = LatencyTracker()
 
     # Add samples for different groups
-    for i in range(5):
+    for _i in range(5):
         tracker.record(
             FeatureRetrievalMetrics(
                 feature_group="group1",

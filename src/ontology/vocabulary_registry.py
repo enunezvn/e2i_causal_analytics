@@ -22,11 +22,12 @@ Usage:
     # {'Remibrutinib': ['remi', 'remibrutinib'], 'Fabhalta': ['fab'], ...}
 """
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
+
 import yaml
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +100,11 @@ class VocabularyRegistry:
 
         logger.info(f"Loading vocabulary from {vocab_path}")
 
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             data = yaml.safe_load(f)
 
         # Extract version from metadata
-        version = data.get('metadata', {}).get('version', 'unknown')
+        version = data.get("metadata", {}).get("version", "unknown")
 
         logger.info(f"Loaded vocabulary v{version} with {len(data)} sections")
 
@@ -130,7 +131,7 @@ class VocabularyRegistry:
         Returns:
             List of brand names: ['Remibrutinib', 'Fabhalta', 'Kisqali']
         """
-        return self._data.get('brands', {}).get('values', [])
+        return self._data.get("brands", {}).get("values", [])
 
     def get_regions(self) -> list[str]:
         """
@@ -139,7 +140,7 @@ class VocabularyRegistry:
         Returns:
             List of region names: ['northeast', 'south', 'midwest', 'west']
         """
-        return self._data.get('regions', {}).get('values', [])
+        return self._data.get("regions", {}).get("values", [])
 
     def get_agents(self, tier: Optional[int] = None) -> dict[str, Any]:
         """
@@ -151,7 +152,7 @@ class VocabularyRegistry:
         Returns:
             Dictionary of agent configurations by tier or filtered by tier
         """
-        agents_data = self._data.get('agents', {})
+        agents_data = self._data.get("agents", {})
 
         if tier is None:
             return agents_data
@@ -177,7 +178,7 @@ class VocabularyRegistry:
         """
         agents = self.get_agents(tier)
         names = []
-        for key, value in agents.items():
+        for _key, value in agents.items():
             if isinstance(value, list):
                 names.extend(value)
             elif isinstance(value, dict):
@@ -194,7 +195,7 @@ class VocabularyRegistry:
         Returns:
             Dictionary of KPI configurations
         """
-        return self._data.get('kpis', {})
+        return self._data.get("kpis", {})
 
     def get_kpi_names(self) -> list[str]:
         """
@@ -217,11 +218,11 @@ class VocabularyRegistry:
             List of engagement journey stage names
         """
         # Try new location first (v5.1.0+)
-        stages = self._data.get('patient_engagement_stages', {}).get('values', [])
+        stages = self._data.get("patient_engagement_stages", {}).get("values", [])
         if stages:
             return stages
         # Fallback for backward compatibility
-        return self._data.get('journey_stages', {}).get('values', [])
+        return self._data.get("journey_stages", {}).get("values", [])
 
     def get_engagement_stages(self) -> list[str]:
         """
@@ -245,7 +246,7 @@ class VocabularyRegistry:
         Returns:
             List of treatment line stage names
         """
-        return self._data.get('treatment_line_stages', {}).get('values', [])
+        return self._data.get("treatment_line_stages", {}).get("values", [])
 
     def get_hcp_segments(self) -> list[str]:
         """
@@ -254,7 +255,7 @@ class VocabularyRegistry:
         Returns:
             List of HCP segments
         """
-        return self._data.get('hcp_segments', {}).get('values', [])
+        return self._data.get("hcp_segments", {}).get("values", [])
 
     def get_time_references(self) -> dict[str, Any]:
         """
@@ -263,7 +264,7 @@ class VocabularyRegistry:
         Returns:
             Dictionary of time reference patterns
         """
-        return self._data.get('time_references', {})
+        return self._data.get("time_references", {})
 
     def get_state_to_region_mapping(self) -> dict[str, list[str]]:
         """
@@ -273,8 +274,8 @@ class VocabularyRegistry:
             Dictionary mapping region names to list of state codes.
             Example: {'northeast': ['CT', 'ME', 'MA', ...], ...}
         """
-        mapping_data = self._data.get('state_to_region_mapping', {})
-        return mapping_data.get('mapping', {})
+        mapping_data = self._data.get("state_to_region_mapping", {})
+        return mapping_data.get("mapping", {})
 
     def get_region_for_state(self, state_code: str) -> Optional[str]:
         """
@@ -302,8 +303,8 @@ class VocabularyRegistry:
         Returns:
             List of competitor brand names
         """
-        competitor_data = self._data.get('competitor_brands', {})
-        by_area = competitor_data.get('by_therapeutic_area', {})
+        competitor_data = self._data.get("competitor_brands", {})
+        by_area = competitor_data.get("by_therapeutic_area", {})
 
         if therapeutic_area:
             return by_area.get(therapeutic_area, [])
@@ -324,8 +325,8 @@ class VocabularyRegistry:
         Returns:
             List of channel names
         """
-        channel_data = self._data.get('marketing_channels', {})
-        channels = channel_data.get('channels', {})
+        channel_data = self._data.get("marketing_channels", {})
+        channels = channel_data.get("channels", {})
 
         if channel_type:
             return channels.get(channel_type, [])
@@ -343,8 +344,8 @@ class VocabularyRegistry:
         Returns:
             Dictionary of payer categories with subcategories
         """
-        payer_data = self._data.get('payer_categories', {})
-        return payer_data.get('categories', {})
+        payer_data = self._data.get("payer_categories", {})
+        return payer_data.get("categories", {})
 
     def get_icd10_codes(self, brand: Optional[str] = None) -> dict[str, list[str]]:
         """
@@ -356,17 +357,17 @@ class VocabularyRegistry:
         Returns:
             Dictionary mapping brand names to ICD-10 code lists
         """
-        icd_data = self._data.get('brand_icd10_mappings', {})
-        mappings = icd_data.get('mappings', {})
+        icd_data = self._data.get("brand_icd10_mappings", {})
+        mappings = icd_data.get("mappings", {})
 
         if brand:
             brand_data = mappings.get(brand, {})
-            return {brand: brand_data.get('icd10_codes', [])}
+            return {brand: brand_data.get("icd10_codes", [])}
 
         # Return all mappings
         result = {}
         for brand_name, brand_info in mappings.items():
-            result[brand_name] = brand_info.get('icd10_codes', [])
+            result[brand_name] = brand_info.get("icd10_codes", [])
         return result
 
     def get_ndc_codes(self, brand: Optional[str] = None) -> dict[str, list[str]]:
@@ -379,17 +380,17 @@ class VocabularyRegistry:
         Returns:
             Dictionary mapping brand names to NDC code lists
         """
-        ndc_data = self._data.get('brand_ndc_codes', {})
-        mappings = ndc_data.get('mappings', {})
+        ndc_data = self._data.get("brand_ndc_codes", {})
+        mappings = ndc_data.get("mappings", {})
 
         if brand:
             brand_data = mappings.get(brand, {})
-            return {brand: brand_data.get('ndc_codes', [])}
+            return {brand: brand_data.get("ndc_codes", [])}
 
         # Return all mappings
         result = {}
         for brand_name, brand_info in mappings.items():
-            result[brand_name] = brand_info.get('ndc_codes', [])
+            result[brand_name] = brand_info.get("ndc_codes", [])
         return result
 
     # ================================================================
@@ -410,7 +411,7 @@ class VocabularyRegistry:
             Example: {'Remibrutinib': ['remi', 'remibrutinib', 'Remibrutinib'], ...}
         """
         entity_data = self._data.get(entity_type, {})
-        global_aliases = self._data.get('aliases', {})
+        global_aliases = self._data.get("aliases", {})
 
         if not entity_data:
             return {}
@@ -418,9 +419,9 @@ class VocabularyRegistry:
         result = {}
 
         # Handle different entity structures
-        if 'values' in entity_data:
+        if "values" in entity_data:
             # Simple list-based entities (brands, regions)
-            for value in entity_data.get('values', []):
+            for value in entity_data.get("values", []):
                 # Include the value itself as an alias
                 result[value] = [value, value.lower()]
                 # Check global aliases for this entity
@@ -431,9 +432,9 @@ class VocabularyRegistry:
                     elif isinstance(entity_aliases, str):
                         result[value].append(entity_aliases)
 
-        if 'aliases' in entity_data:
+        if "aliases" in entity_data:
             # Entities with explicit aliases within the section
-            for canonical, aliases in entity_data['aliases'].items():
+            for canonical, aliases in entity_data["aliases"].items():
                 if canonical not in result:
                     result[canonical] = [canonical, canonical.lower()]
                 if isinstance(aliases, list):
@@ -442,19 +443,19 @@ class VocabularyRegistry:
                     result[canonical].append(aliases)
 
         # For KPIs, extract from nested structure
-        if entity_type == 'kpis':
+        if entity_type == "kpis":
             for kpi_name, kpi_data in entity_data.items():
                 if isinstance(kpi_data, dict):
-                    display_name = kpi_data.get('display_name', kpi_name)
-                    aliases = kpi_data.get('aliases', [])
+                    display_name = kpi_data.get("display_name", kpi_name)
+                    aliases = kpi_data.get("aliases", [])
                     result[display_name] = [display_name, kpi_name] + list(aliases)
 
         # For agents, flatten the tier structure
-        if entity_type == 'agents':
-            for tier_key, agents in entity_data.items():
+        if entity_type == "agents":
+            for _tier_key, agents in entity_data.items():
                 if isinstance(agents, list):
                     for agent in agents:
-                        result[agent] = [agent, agent.replace('_', ' ')]
+                        result[agent] = [agent, agent.replace("_", " ")]
 
         # Deduplicate aliases while preserving order
         for key in result:
@@ -476,7 +477,7 @@ class VocabularyRegistry:
         Returns:
             Dictionary of canonical names to their aliases
         """
-        return self._data.get('aliases', {})
+        return self._data.get("aliases", {})
 
     def resolve_alias(self, text: str, entity_type: Optional[str] = None) -> Optional[str]:
         """
@@ -522,10 +523,10 @@ class VocabularyRegistry:
             List of valid enum values
         """
         enum_map = {
-            'brand_type': self.get_brands,
-            'region_type': self.get_regions,
-            'journey_stage_type': self.get_journey_stages,
-            'hcp_segment_type': self.get_hcp_segments,
+            "brand_type": self.get_brands,
+            "region_type": self.get_regions,
+            "journey_stage_type": self.get_journey_stages,
+            "hcp_segment_type": self.get_hcp_segments,
         }
 
         getter = enum_map.get(enum_name)
@@ -554,7 +555,7 @@ class VocabularyRegistry:
 
         # Check aliases
         value_lower = value.lower()
-        for canonical, aliases in entities.items():
+        for _canonical, aliases in entities.items():
             if value_lower in [a.lower() for a in aliases]:
                 return True
 

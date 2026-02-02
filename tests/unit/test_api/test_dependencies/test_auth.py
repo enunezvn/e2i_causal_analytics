@@ -13,7 +13,7 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, status
@@ -340,14 +340,15 @@ class TestAuthenticationFunctions:
     @pytest.mark.asyncio
     async def test_require_auth_testing_mode(self):
         """Test require_auth returns test user in testing mode."""
-        from src.api.dependencies.auth import require_auth
 
         mock_request = MagicMock()
 
         with patch.dict("os.environ", {"E2I_TESTING_MODE": "true"}):
             # Re-import to pick up environment change
             import importlib
+
             import src.api.dependencies.auth
+
             importlib.reload(src.api.dependencies.auth)
             from src.api.dependencies.auth import require_auth as require_auth_reload
 
@@ -365,7 +366,9 @@ class TestAuthenticationFunctions:
         with patch.dict("os.environ", {"E2I_TESTING_MODE": "false"}):
             # Re-import to pick up environment change
             import importlib
+
             import src.api.dependencies.auth
+
             importlib.reload(src.api.dependencies.auth)
             from src.api.dependencies.auth import require_auth as require_auth_reload
 
@@ -385,7 +388,9 @@ class TestAuthenticationFunctions:
         with patch.dict("os.environ", {"E2I_TESTING_MODE": "false"}):
             # Re-import to pick up environment change
             import importlib
+
             import src.api.dependencies.auth
+
             importlib.reload(src.api.dependencies.auth)
             from src.api.dependencies.auth import require_auth as require_auth_reload
 
@@ -498,7 +503,9 @@ class TestAuthUtilityFunctions:
         ):
             # Re-import to pick up environment change
             import importlib
+
             import src.api.dependencies.auth
+
             importlib.reload(src.api.dependencies.auth)
             from src.api.dependencies.auth import is_auth_enabled as is_auth_enabled_reload
 
@@ -516,7 +523,6 @@ class TestAuthUtilityFunctions:
 
     def test_is_auth_enabled_testing_mode(self):
         """Test is_auth_enabled returns False in testing mode."""
-        from src.api.dependencies.auth import is_auth_enabled
 
         with patch.dict(
             "os.environ",
@@ -528,7 +534,9 @@ class TestAuthUtilityFunctions:
         ):
             # Re-import to pick up environment change
             import importlib
+
             import src.api.dependencies.auth
+
             importlib.reload(src.api.dependencies.auth)
             from src.api.dependencies.auth import is_auth_enabled as is_auth_enabled_reload
 
@@ -536,12 +544,13 @@ class TestAuthUtilityFunctions:
 
     def test_is_testing_mode(self):
         """Test is_testing_mode detection."""
-        from src.api.dependencies.auth import is_testing_mode
 
         with patch.dict("os.environ", {"E2I_TESTING_MODE": "true"}):
             # Re-import to pick up environment change
             import importlib
+
             import src.api.dependencies.auth
+
             importlib.reload(src.api.dependencies.auth)
             from src.api.dependencies.auth import is_testing_mode as is_testing_mode_reload
 
@@ -549,7 +558,9 @@ class TestAuthUtilityFunctions:
 
         with patch.dict("os.environ", {"E2I_TESTING_MODE": "false"}):
             import importlib
+
             import src.api.dependencies.auth
+
             importlib.reload(src.api.dependencies.auth)
             from src.api.dependencies.auth import is_testing_mode as is_testing_mode_reload2
 

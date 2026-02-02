@@ -31,16 +31,6 @@ from .config import (
     SelfImprovementConfig,
     load_self_improvement_config,
 )
-
-# Scheduler exports (v4.3)
-from .scheduler import (
-    CycleResult,
-    FeedbackLearnerScheduler,
-    SchedulerConfig,
-    SchedulerMetrics,
-    SchedulerState,
-    create_scheduler,
-)
 from .dspy_integration import (
     DSPY_AVAILABLE,
     GEPA_AVAILABLE,
@@ -53,11 +43,11 @@ from .dspy_integration import (
 )
 from .dspy_receiver import (
     TrainingSignalReceiver,
-    get_signal_receiver,
-    receive_training_signals,
-    get_pending_training_signals,
     get_feedback_items_from_signals,
+    get_pending_training_signals,
+    get_signal_receiver,
     get_training_data,
+    receive_training_signals,
 )
 
 # Evaluation exports
@@ -71,14 +61,26 @@ from .evaluation import (
 )
 from .graph import build_feedback_learner_graph, build_simple_feedback_learner_graph
 from .mlflow_tracker import (
-    FeedbackLearnerMLflowTracker,
     FeedbackLearnerMetrics,
+    FeedbackLearnerMLflowTracker,
     LearningContext,
+)
+from .mlflow_tracker import (
     create_tracker as create_mlflow_tracker,
 )
 
 # Node exports
 from .nodes import RubricNode
+
+# Scheduler exports (v4.3)
+from .scheduler import (
+    CycleResult,
+    FeedbackLearnerScheduler,
+    SchedulerConfig,
+    SchedulerMetrics,
+    SchedulerState,
+    create_scheduler,
+)
 from .state import (
     DetectedPattern,
     FeedbackItem,

@@ -51,10 +51,11 @@ class ImpactProjectorNode:
             # total_outcome / optimized_total produce near-zero values.
             # Instead, compute ROI from raw response coefficients.
             allocation_targets = state.get("allocation_targets", [])
-            response_by_entity = {
-                t.get("entity_id"): t.get("expected_response", 0)
-                for t in allocation_targets
-            } if allocation_targets else {}
+            response_by_entity = (
+                {t.get("entity_id"): t.get("expected_response", 0) for t in allocation_targets}
+                if allocation_targets
+                else {}
+            )
 
             if response_by_entity:
                 # Use original expected_response to compute meaningful projected outcome
@@ -66,21 +67,31 @@ class ImpactProjectorNode:
                     t.get("expected_response", 0) * t.get("current_allocation", 0)
                     for t in allocation_targets
                 )
-                roi = (projected_outcome - current_outcome) / optimized_total if optimized_total > 0 else 0
+                roi = (
+                    (projected_outcome - current_outcome) / optimized_total
+                    if optimized_total > 0
+                    else 0
+                )
                 total_outcome = projected_outcome
             else:
                 roi = total_outcome / optimized_total if optimized_total > 0 else 0
 
             # Calculate projected savings (efficiency gains)
             # Savings = outcome improvement per unit of investment compared to baseline
-            baseline_outcome = state.get("baseline_outcome", current_total * 0.5)  # Assume 50% baseline conversion
+            baseline_outcome = state.get(
+                "baseline_outcome", current_total * 0.5
+            )  # Assume 50% baseline conversion
             outcome_improvement = total_outcome - baseline_outcome
-            savings_pct = (outcome_improvement / baseline_outcome * 100) if baseline_outcome > 0 else 0
+            savings_pct = (
+                (outcome_improvement / baseline_outcome * 100) if baseline_outcome > 0 else 0
+            )
             projected_savings = {
                 "outcome_improvement": outcome_improvement,
                 "savings_percentage": savings_pct,
                 "efficiency_gain": roi - 0.5 if roi > 0.5 else 0,  # vs baseline 0.5 ROI
-                "reallocation_value": sum(abs(a.get("change", 0)) for a in allocations if a.get("change", 0) > 0),
+                "reallocation_value": sum(
+                    abs(a.get("change", 0)) for a in allocations if a.get("change", 0) > 0
+                ),
             }
 
             # Impact by segment
@@ -118,7 +129,9 @@ class ImpactProjectorNode:
                 **state,
                 "errors": [{"node": "impact_projector", "error": str(e)}],
                 # Set required output default on failure
-                "optimization_summary": state.get("optimization_summary", "Impact projection failed"),
+                "optimization_summary": state.get(
+                    "optimization_summary", "Impact projection failed"
+                ),
                 "status": "failed",
             }
 

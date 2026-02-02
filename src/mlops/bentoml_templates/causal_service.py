@@ -30,6 +30,7 @@ except ImportError:
 
 try:
     import bentoml
+
     BENTOML_AVAILABLE = True
 except ImportError:
     BENTOML_AVAILABLE = False
@@ -39,7 +40,10 @@ try:
     from pydantic import BaseModel, Field
 except ImportError:
     BaseModel = object
-    Field = lambda *args, **kwargs: None
+
+    def Field(*args, **kwargs):
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -249,9 +253,9 @@ class CausalInferenceServiceTemplate:
 
                     # Load preprocessor if available
                     if enable_preprocessing:
-                        custom_objects = getattr(model_ref.info, 'custom_objects', {})
+                        custom_objects = getattr(model_ref.info, "custom_objects", {})
                         if custom_objects:
-                            self._preprocessor = custom_objects.get('preprocessor')
+                            self._preprocessor = custom_objects.get("preprocessor")
 
                     logger.info(f"Loaded causal model: {self.model_tag}")
 
@@ -274,11 +278,11 @@ class CausalInferenceServiceTemplate:
                 Supports EconML estimators (DML, CausalForest, etc.)
                 """
                 # EconML models use effect() or const_marginal_effect()
-                if hasattr(self._model, 'effect'):
+                if hasattr(self._model, "effect"):
                     return self._model.effect(features)
-                elif hasattr(self._model, 'const_marginal_effect'):
+                elif hasattr(self._model, "const_marginal_effect"):
                     return self._model.const_marginal_effect(features)
-                elif hasattr(self._model, 'predict'):
+                elif hasattr(self._model, "predict"):
                     return self._model.predict(features)
                 else:
                     raise ValueError("Model does not support CATE estimation")
@@ -292,14 +296,14 @@ class CausalInferenceServiceTemplate:
                 alpha = 1 - confidence_level
 
                 # EconML models with inference support
-                if hasattr(self._model, 'effect_interval'):
+                if hasattr(self._model, "effect_interval"):
                     lower, upper = self._model.effect_interval(
                         features,
                         alpha=alpha,
                     )
                     return lower.flatten(), upper.flatten()
 
-                if hasattr(self._model, 'const_marginal_effect_interval'):
+                if hasattr(self._model, "const_marginal_effect_interval"):
                     lower, upper = self._model.const_marginal_effect_interval(
                         features,
                         alpha=alpha,
@@ -307,7 +311,7 @@ class CausalInferenceServiceTemplate:
                     return lower.flatten(), upper.flatten()
 
                 # Fallback: bootstrap if model has fit method
-                if hasattr(self._model, 'effect_inference'):
+                if hasattr(self._model, "effect_inference"):
                     inference = self._model.effect_inference(features)
                     lower, upper = inference.conf_int(alpha=alpha)
                     return lower.flatten(), upper.flatten()
@@ -359,7 +363,7 @@ class CausalInferenceServiceTemplate:
                 self._prediction_count += len(cate)
                 self._total_latency_ms += elapsed_ms
                 self._cate_sum += np.sum(cate)
-                self._cate_sq_sum += np.sum(cate ** 2)
+                self._cate_sq_sum += np.sum(cate**2)
 
                 output = CATEOutput(
                     cate=cate.tolist(),
@@ -388,7 +392,9 @@ class CausalInferenceServiceTemplate:
                                 "ate_std": output.ate_std,
                                 "n_cate_estimates": len(output.cate),
                                 "has_intervals": output.lower_bounds is not None,
-                                "cate_sample": output.cate[:10] if len(output.cate) > 10 else output.cate,
+                                "cate_sample": output.cate[:10]
+                                if len(output.cate) > 10
+                                else output.cate,
                             },
                             latency_ms=elapsed_ms,
                             metadata={
@@ -422,14 +428,16 @@ class CausalInferenceServiceTemplate:
 
                 # Estimate potential outcomes for each treatment value
                 for t in treatment_values:
-                    if hasattr(self._model, 'effect'):
+                    if hasattr(self._model, "effect"):
                         # For DML-style models, effect is already the difference
                         if t == 1:
-                            potential_outcomes[f"T={t}"] = self._model.effect(features).flatten().tolist()
+                            potential_outcomes[f"T={t}"] = (
+                                self._model.effect(features).flatten().tolist()
+                            )
                         else:
                             # T=0 is baseline
                             potential_outcomes[f"T={t}"] = [0.0] * len(features)
-                    elif hasattr(self._model, 'predict'):
+                    elif hasattr(self._model, "predict"):
                         # For models that predict outcomes directly
                         treatment_array = np.full(len(features), t)
                         outcomes = self._model.predict(features, treatment_array)
@@ -437,7 +445,9 @@ class CausalInferenceServiceTemplate:
 
                 # Calculate treatment effects (Y1 - Y0)
                 if "T=1" in potential_outcomes and "T=0" in potential_outcomes:
-                    effects = np.array(potential_outcomes["T=1"]) - np.array(potential_outcomes["T=0"])
+                    effects = np.array(potential_outcomes["T=1"]) - np.array(
+                        potential_outcomes["T=0"]
+                    )
                 else:
                     # If only effect available
                     effects = np.array(potential_outcomes.get("T=1", [0.0] * len(features)))
@@ -563,13 +573,11 @@ class CausalInferenceServiceTemplate:
                     else 0.0
                 )
                 mean_cate = (
-                    self._cate_sum / self._prediction_count
-                    if self._prediction_count > 0
-                    else 0.0
+                    self._cate_sum / self._prediction_count if self._prediction_count > 0 else 0.0
                 )
                 # Variance = E[X^2] - E[X]^2
                 var_cate = (
-                    (self._cate_sq_sum / self._prediction_count) - mean_cate ** 2
+                    (self._cate_sq_sum / self._prediction_count) - mean_cate**2
                     if self._prediction_count > 0
                     else 0.0
                 )

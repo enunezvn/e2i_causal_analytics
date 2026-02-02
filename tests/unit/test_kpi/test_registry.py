@@ -1,11 +1,11 @@
 """Tests for KPI Registry."""
 
+from unittest.mock import mock_open, patch
+
 import pytest
-from unittest.mock import patch, mock_open
 
-from src.kpi.models import CausalLibrary, Workstream
+from src.kpi.models import Workstream
 from src.kpi.registry import KPIRegistry, get_registry
-
 
 # Sample YAML content for testing
 SAMPLE_KPI_YAML = """

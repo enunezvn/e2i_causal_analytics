@@ -26,9 +26,11 @@ from .config import (
 )
 from .graph import build_explainer_graph, build_simple_explainer_graph
 from .mlflow_tracker import (
-    ExplainerMLflowTracker,
     ExplainerMetrics,
+    ExplainerMLflowTracker,
     ExplanationContext,
+)
+from .mlflow_tracker import (
     create_tracker as create_mlflow_tracker,
 )
 from .state import (

@@ -18,7 +18,7 @@ import logging
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -433,11 +433,13 @@ class ResourceOptimizerMemoryHooks:
             adjustments = []
             for alloc in allocations[:5]:  # Top 5 adjustments
                 if abs(alloc.get("change_percentage", 0)) > 10:
-                    adjustments.append({
-                        "entity_type": alloc.get("entity_type", "unknown"),
-                        "direction": "increase" if alloc.get("change", 0) > 0 else "decrease",
-                        "magnitude": abs(alloc.get("change_percentage", 0)),
-                    })
+                    adjustments.append(
+                        {
+                            "entity_type": alloc.get("entity_type", "unknown"),
+                            "direction": "increase" if alloc.get("change", 0) > 0 else "decrease",
+                            "magnitude": abs(alloc.get("change_percentage", 0)),
+                        }
+                    )
 
             # Build description
             description = (

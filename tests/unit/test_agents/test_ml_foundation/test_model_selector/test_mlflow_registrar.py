@@ -1,7 +1,6 @@
 """Unit tests for mlflow_registrar node."""
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -197,7 +196,7 @@ class TestEnsureExperiment:
         """Should create experiment with correct naming."""
         experiment_id = "exp_test_123"
 
-        result = await _ensure_experiment(mock_mlflow_connector, experiment_id)
+        await _ensure_experiment(mock_mlflow_connector, experiment_id)
 
         # Should call get_or_create_experiment
         mock_mlflow_connector.get_or_create_experiment.assert_called_once()
@@ -242,7 +241,9 @@ class TestLogSelectionParams:
         assert "row_count" in params
         assert "column_count" in params
 
-    async def test_logs_hyperparameters_with_prefix(self, mock_mlflow_connector, primary_candidate, base_state):
+    async def test_logs_hyperparameters_with_prefix(
+        self, mock_mlflow_connector, primary_candidate, base_state
+    ):
         """Should log hyperparameters with default_ prefix."""
         await _log_selection_params(mock_mlflow_connector, primary_candidate, base_state)
 
@@ -270,7 +271,9 @@ class TestLogSelectionMetrics:
         assert "interpretability_score" in metrics
         assert "scalability_score" in metrics
 
-    async def test_logs_benchmark_metrics_when_available(self, mock_mlflow_connector, primary_candidate):
+    async def test_logs_benchmark_metrics_when_available(
+        self, mock_mlflow_connector, primary_candidate
+    ):
         """Should log benchmark metrics when available."""
         benchmark_results = {
             "XGBoost": {
@@ -288,7 +291,9 @@ class TestLogSelectionMetrics:
         assert "benchmark_cv_std" in metrics
         assert "benchmark_time_seconds" in metrics
 
-    async def test_handles_missing_benchmark_results(self, mock_mlflow_connector, primary_candidate):
+    async def test_handles_missing_benchmark_results(
+        self, mock_mlflow_connector, primary_candidate
+    ):
         """Should handle missing benchmark results."""
         benchmark_results = {}
 
@@ -361,8 +366,16 @@ class TestLogBenchmarkComparison:
         """Should log benchmark metrics for each algorithm."""
         state = {
             "benchmark_results": {
-                "XGBoost": {"cv_score_mean": 0.82, "cv_score_std": 0.03, "training_time_seconds": 5.0},
-                "LightGBM": {"cv_score_mean": 0.80, "cv_score_std": 0.04, "training_time_seconds": 3.0},
+                "XGBoost": {
+                    "cv_score_mean": 0.82,
+                    "cv_score_std": 0.03,
+                    "training_time_seconds": 5.0,
+                },
+                "LightGBM": {
+                    "cv_score_mean": 0.80,
+                    "cv_score_std": 0.04,
+                    "training_time_seconds": 3.0,
+                },
             },
             "mlflow_run_id": "run_123",
         }
@@ -445,8 +458,7 @@ class TestCreateSelectionSummary:
     async def test_limits_alternatives_to_three(self, base_state):
         """Should limit alternatives to 3."""
         base_state["alternative_candidates"] = [
-            {"name": f"Algo{i}", "selection_score": 0.7 - i * 0.05}
-            for i in range(5)
+            {"name": f"Algo{i}", "selection_score": 0.7 - i * 0.05} for i in range(5)
         ]
 
         result = await create_selection_summary(base_state)
@@ -498,8 +510,8 @@ class TestSummaryForDatabaseStorage:
                     check_types(v, f"{path}[{i}]")
             else:
                 # Should be primitive type
-                assert isinstance(
-                    obj, (str, int, float, bool, type(None))
-                ), f"Non-primitive at {path}: {type(obj)}"
+                assert isinstance(obj, (str, int, float, bool, type(None))), (
+                    f"Non-primitive at {path}: {type(obj)}"
+                )
 
         check_types(summary)

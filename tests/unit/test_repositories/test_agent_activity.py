@@ -154,7 +154,7 @@ class TestGetByTier(TestAgentActivityRepository):
         mock_eq.order.return_value = mock_order
         mock_client.table.return_value.select.return_value.eq.return_value = mock_eq
 
-        result = await repo.get_by_tier(tier="causal_analytics")
+        await repo.get_by_tier(tier="causal_analytics")
 
         mock_eq.order.assert_called_with("activity_timestamp", desc=True)
 
@@ -303,14 +303,14 @@ class TestGetRecentActivities(TestAgentActivityRepository):
 
         # Get current time before the call
         before_time = datetime.now(timezone.utc)
-        result = await repo.get_recent_activities(hours=24)
+        await repo.get_recent_activities(hours=24)
         after_time = datetime.now(timezone.utc)
 
         # Verify gte was called with a timestamp roughly 24 hours ago
         call_args = mock_client.table.return_value.select.return_value.gte.call_args
         assert call_args[0][0] == "activity_timestamp"
         # The cutoff should be within a few seconds of 24 hours ago
-        cutoff = datetime.fromisoformat(call_args[0][1].replace('Z', '+00:00'))
+        cutoff = datetime.fromisoformat(call_args[0][1].replace("Z", "+00:00"))
         expected_cutoff_before = before_time - timedelta(hours=24)
         expected_cutoff_after = after_time - timedelta(hours=24)
         assert expected_cutoff_before <= cutoff <= expected_cutoff_after
@@ -374,7 +374,7 @@ class TestGetByWorkstream(TestAgentActivityRepository):
         mock_eq.order.return_value = mock_order
         mock_client.table.return_value.select.return_value.eq.return_value = mock_eq
 
-        result = await repo.get_by_workstream(workstream="WS2")
+        await repo.get_by_workstream(workstream="WS2")
 
         mock_eq.order.assert_called_with("activity_timestamp", desc=True)
 

@@ -8,21 +8,19 @@ Tests for the graph-based inference engine including:
 - PathFinder static methods
 """
 
-import pytest
 from datetime import datetime
-from typing import List, Tuple
-from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.ontology.inference_engine import (
-    InferenceType,
-    ConfidenceLevel,
-    InferredRelationship,
     CausalPath,
-    InferenceRule,
+    ConfidenceLevel,
     InferenceEngine,
+    InferenceRule,
+    InferenceType,
+    InferredRelationship,
     PathFinder,
 )
-
 
 # =============================================================================
 # ENUM TESTS
@@ -59,8 +57,12 @@ class TestInferenceTypeEnum:
     def test_all_enum_members_exist(self):
         """Test that all expected enum members exist."""
         expected_members = {
-            'TRANSITIVE', 'SYMMETRIC', 'INVERSE',
-            'PROPERTY', 'CAUSAL_CHAIN', 'SIMILARITY'
+            "TRANSITIVE",
+            "SYMMETRIC",
+            "INVERSE",
+            "PROPERTY",
+            "CAUSAL_CHAIN",
+            "SIMILARITY",
         }
         actual_members = {m.name for m in InferenceType}
         assert expected_members == actual_members
@@ -87,7 +89,7 @@ class TestConfidenceLevelEnum:
 
     def test_all_confidence_levels_exist(self):
         """Test that all expected confidence levels exist."""
-        expected = {'HIGH', 'MEDIUM', 'LOW', 'UNCERTAIN'}
+        expected = {"HIGH", "MEDIUM", "LOW", "UNCERTAIN"}
         actual = {m.name for m in ConfidenceLevel}
         assert expected == actual
 
@@ -109,7 +111,7 @@ class TestInferredRelationshipDataclass:
             confidence=0.85,
             inference_type=InferenceType.TRANSITIVE,
             reasoning_path=[("a", "REL", "b")],
-            supporting_evidence={"source": "test"}
+            supporting_evidence={"source": "test"},
         )
 
         assert rel.from_id == "entity_a"
@@ -129,7 +131,7 @@ class TestInferredRelationshipDataclass:
             confidence=0.5,
             inference_type=InferenceType.CAUSAL_CHAIN,
             reasoning_path=[],
-            supporting_evidence={}
+            supporting_evidence={},
         )
 
         assert rel.timestamp is not None
@@ -138,45 +140,65 @@ class TestInferredRelationshipDataclass:
     def test_confidence_level_high(self):
         """Test confidence_level property returns HIGH for >0.8."""
         rel = InferredRelationship(
-            from_id="a", to_id="b", relationship_type="CAUSES",
-            confidence=0.85, inference_type=InferenceType.TRANSITIVE,
-            reasoning_path=[], supporting_evidence={}
+            from_id="a",
+            to_id="b",
+            relationship_type="CAUSES",
+            confidence=0.85,
+            inference_type=InferenceType.TRANSITIVE,
+            reasoning_path=[],
+            supporting_evidence={},
         )
         assert rel.confidence_level == ConfidenceLevel.HIGH
 
     def test_confidence_level_medium(self):
         """Test confidence_level property returns MEDIUM for 0.5-0.8."""
         rel = InferredRelationship(
-            from_id="a", to_id="b", relationship_type="CAUSES",
-            confidence=0.65, inference_type=InferenceType.TRANSITIVE,
-            reasoning_path=[], supporting_evidence={}
+            from_id="a",
+            to_id="b",
+            relationship_type="CAUSES",
+            confidence=0.65,
+            inference_type=InferenceType.TRANSITIVE,
+            reasoning_path=[],
+            supporting_evidence={},
         )
         assert rel.confidence_level == ConfidenceLevel.MEDIUM
 
     def test_confidence_level_low(self):
         """Test confidence_level property returns LOW for 0.2-0.5."""
         rel = InferredRelationship(
-            from_id="a", to_id="b", relationship_type="CAUSES",
-            confidence=0.35, inference_type=InferenceType.TRANSITIVE,
-            reasoning_path=[], supporting_evidence={}
+            from_id="a",
+            to_id="b",
+            relationship_type="CAUSES",
+            confidence=0.35,
+            inference_type=InferenceType.TRANSITIVE,
+            reasoning_path=[],
+            supporting_evidence={},
         )
         assert rel.confidence_level == ConfidenceLevel.LOW
 
     def test_confidence_level_uncertain(self):
         """Test confidence_level property returns UNCERTAIN for <0.2."""
         rel = InferredRelationship(
-            from_id="a", to_id="b", relationship_type="CAUSES",
-            confidence=0.15, inference_type=InferenceType.TRANSITIVE,
-            reasoning_path=[], supporting_evidence={}
+            from_id="a",
+            to_id="b",
+            relationship_type="CAUSES",
+            confidence=0.15,
+            inference_type=InferenceType.TRANSITIVE,
+            reasoning_path=[],
+            supporting_evidence={},
         )
         assert rel.confidence_level == ConfidenceLevel.UNCERTAIN
 
     def test_confidence_level_boundary_high(self):
         """Test boundary at 0.8 returns MEDIUM (not HIGH)."""
         rel = InferredRelationship(
-            from_id="a", to_id="b", relationship_type="CAUSES",
-            confidence=0.8, inference_type=InferenceType.TRANSITIVE,
-            reasoning_path=[], supporting_evidence={}
+            from_id="a",
+            to_id="b",
+            relationship_type="CAUSES",
+            confidence=0.8,
+            inference_type=InferenceType.TRANSITIVE,
+            reasoning_path=[],
+            supporting_evidence={},
         )
         # 0.8 is not > 0.8, so MEDIUM
         assert rel.confidence_level == ConfidenceLevel.MEDIUM
@@ -184,9 +206,13 @@ class TestInferredRelationshipDataclass:
     def test_confidence_level_boundary_medium(self):
         """Test boundary at 0.5 returns LOW (not MEDIUM)."""
         rel = InferredRelationship(
-            from_id="a", to_id="b", relationship_type="CAUSES",
-            confidence=0.5, inference_type=InferenceType.TRANSITIVE,
-            reasoning_path=[], supporting_evidence={}
+            from_id="a",
+            to_id="b",
+            relationship_type="CAUSES",
+            confidence=0.5,
+            inference_type=InferenceType.TRANSITIVE,
+            reasoning_path=[],
+            supporting_evidence={},
         )
         # 0.5 is not > 0.5, so LOW
         assert rel.confidence_level == ConfidenceLevel.LOW
@@ -204,7 +230,7 @@ class TestCausalPathDataclass:
             path_length=2,
             path_strength=0.72,
             mediated_by=["mid"],
-            confounders=[]
+            confounders=[],
         )
 
         assert path.source_id == "source"
@@ -218,19 +244,27 @@ class TestCausalPathDataclass:
     def test_causal_path_metadata_default(self):
         """Test that metadata defaults to empty dict."""
         path = CausalPath(
-            source_id="s", target_id="t", path=[],
-            path_length=0, path_strength=1.0,
-            mediated_by=[], confounders=[]
+            source_id="s",
+            target_id="t",
+            path=[],
+            path_length=0,
+            path_strength=1.0,
+            mediated_by=[],
+            confounders=[],
         )
         assert path.metadata == {}
 
     def test_causal_path_with_metadata(self):
         """Test CausalPath with custom metadata."""
         path = CausalPath(
-            source_id="s", target_id="t", path=[],
-            path_length=0, path_strength=1.0,
-            mediated_by=[], confounders=[],
-            metadata={"discovered_at": "2024-01-01"}
+            source_id="s",
+            target_id="t",
+            path=[],
+            path_length=0,
+            path_strength=1.0,
+            mediated_by=[],
+            confounders=[],
+            metadata={"discovered_at": "2024-01-01"},
         )
         assert path.metadata["discovered_at"] == "2024-01-01"
 
@@ -240,14 +274,16 @@ class TestInferenceRuleDataclass:
 
     def test_create_inference_rule(self):
         """Test creating an InferenceRule."""
-        confidence_fn = lambda d: 0.75
+
+        def confidence_fn(d):
+            return 0.75
 
         rule = InferenceRule(
             name="test_rule",
             inference_type=InferenceType.TRANSITIVE,
             source_pattern="(a)-[:CAUSES]->(b)",
             inferred_pattern="(a)-[:INDIRECTLY_CAUSES]->(c)",
-            confidence_calculator=confidence_fn
+            confidence_calculator=confidence_fn,
         )
 
         assert rule.name == "test_rule"
@@ -262,7 +298,7 @@ class TestInferenceRuleDataclass:
             inference_type=InferenceType.CAUSAL_CHAIN,
             source_pattern="pattern",
             inferred_pattern="result",
-            confidence_calculator=lambda d: 0.5
+            confidence_calculator=lambda d: 0.5,
         )
 
         assert rule.bidirectional is False
@@ -276,7 +312,7 @@ class TestInferenceRuleDataclass:
             source_pattern="p",
             inferred_pattern="r",
             confidence_calculator=lambda d: 0.5,
-            max_depth=10
+            max_depth=10,
         )
 
         assert rule.max_depth == 10
@@ -309,18 +345,18 @@ class TestInferenceEngineInit:
         engine = InferenceEngine(mock_graph_client)
 
         rule_names = [r.name for r in engine.rules]
-        assert 'transitive_causation' in rule_names
-        assert 'intervention_outcome_chain' in rule_names
-        assert 'hcp_influence' in rule_names
+        assert "transitive_causation" in rule_names
+        assert "intervention_outcome_chain" in rule_names
+        assert "hcp_influence" in rule_names
 
     def test_default_rule_types(self, mock_graph_client):
         """Test default rule inference types."""
         engine = InferenceEngine(mock_graph_client)
 
-        transitive_rules = [r for r in engine.rules
-                          if r.inference_type == InferenceType.TRANSITIVE]
-        causal_chain_rules = [r for r in engine.rules
-                            if r.inference_type == InferenceType.CAUSAL_CHAIN]
+        transitive_rules = [r for r in engine.rules if r.inference_type == InferenceType.TRANSITIVE]
+        causal_chain_rules = [
+            r for r in engine.rules if r.inference_type == InferenceType.CAUSAL_CHAIN
+        ]
 
         assert len(transitive_rules) == 1
         assert len(causal_chain_rules) == 2
@@ -339,7 +375,7 @@ class TestInferenceEngineAddRule:
             inference_type=InferenceType.SIMILARITY,
             source_pattern="(a:Brand)-[:SIMILAR_TO]->(b:Brand)",
             inferred_pattern="(b)-[:SIMILAR_TO]->(a)",
-            confidence_calculator=lambda d: 0.9
+            confidence_calculator=lambda d: 0.9,
         )
 
         engine.add_rule(custom_rule)
@@ -358,7 +394,7 @@ class TestInferenceEngineAddRule:
                 inference_type=InferenceType.PROPERTY,
                 source_pattern="p",
                 inferred_pattern="r",
-                confidence_calculator=lambda d: 0.5
+                confidence_calculator=lambda d: 0.5,
             )
             engine.add_rule(rule)
 
@@ -421,10 +457,7 @@ class TestInferenceEngineDiscoverCausalPaths:
         """Test path discovery with relationship type filter."""
         engine = InferenceEngine(mock_graph_client)
 
-        engine.discover_causal_paths(
-            "a", "b",
-            relationship_types=["CAUSES", "LEADS_TO"]
-        )
+        engine.discover_causal_paths("a", "b", relationship_types=["CAUSES", "LEADS_TO"])
 
         query = mock_graph_client.queries_executed[0]
         assert "CAUSES|LEADS_TO" in query
@@ -455,11 +488,15 @@ class TestInferenceEngineInferRelationships:
         """Test that min_confidence filters results."""
         # Set up mock result
         from tests.unit.test_ontology.conftest import MockQueryResult
-        mock_graph_client.set_mock_result('MATCH path', MockQueryResult(
-            result_set=[
-                ("a", "c", "b", 0.3, 0.4)  # conf1 * conf2 would be low
-            ]
-        ))
+
+        mock_graph_client.set_mock_result(
+            "MATCH path",
+            MockQueryResult(
+                result_set=[
+                    ("a", "c", "b", 0.3, 0.4)  # conf1 * conf2 would be low
+                ]
+            ),
+        )
 
         engine = InferenceEngine(mock_graph_client)
 
@@ -501,7 +538,10 @@ class TestInferenceEngineFindConfounders:
 
         if len(confounders) > 1:
             for i in range(len(confounders) - 1):
-                assert confounders[i]['confounder_strength'] >= confounders[i+1]['confounder_strength']
+                assert (
+                    confounders[i]["confounder_strength"]
+                    >= confounders[i + 1]["confounder_strength"]
+                )
 
 
 class TestInferenceEngineFindMediators:
@@ -537,14 +577,14 @@ class TestInferenceEngineComputePathImportance:
             path_length=2,
             path_strength=0.72,
             mediated_by=["mid"],
-            confounders=[]
+            confounders=[],
         )
 
     def test_compute_importance_edge_weight(self, mock_graph_client, sample_causal_path):
         """Test edge_weight method returns path_strength."""
         engine = InferenceEngine(mock_graph_client)
 
-        score = engine.compute_path_importance(sample_causal_path, method='edge_weight')
+        score = engine.compute_path_importance(sample_causal_path, method="edge_weight")
 
         assert score == 0.72
 
@@ -552,7 +592,7 @@ class TestInferenceEngineComputePathImportance:
         """Test length method favors shorter paths."""
         engine = InferenceEngine(mock_graph_client)
 
-        score = engine.compute_path_importance(sample_causal_path, method='length')
+        score = engine.compute_path_importance(sample_causal_path, method="length")
 
         # 1 / (path_length + 1) = 1/3 ≈ 0.333
         assert score == pytest.approx(1.0 / 3.0, rel=0.01)
@@ -561,7 +601,7 @@ class TestInferenceEngineComputePathImportance:
         """Test mediator_count method penalizes mediators."""
         engine = InferenceEngine(mock_graph_client)
 
-        score = engine.compute_path_importance(sample_causal_path, method='mediator_count')
+        score = engine.compute_path_importance(sample_causal_path, method="mediator_count")
 
         # 1 mediator * 0.1 penalty = 0.9
         assert score == pytest.approx(0.9, rel=0.01)
@@ -570,7 +610,7 @@ class TestInferenceEngineComputePathImportance:
         """Test combined method uses all factors."""
         engine = InferenceEngine(mock_graph_client)
 
-        score = engine.compute_path_importance(sample_causal_path, method='combined')
+        score = engine.compute_path_importance(sample_causal_path, method="combined")
 
         # Combined: weight*0.5 + length*0.3 + mediator*0.2
         # 0.72*0.5 + 0.333*0.3 + 0.9*0.2 = 0.36 + 0.1 + 0.18 = 0.64
@@ -580,7 +620,7 @@ class TestInferenceEngineComputePathImportance:
         """Test unknown method returns default 0.5."""
         engine = InferenceEngine(mock_graph_client)
 
-        score = engine.compute_path_importance(sample_causal_path, method='unknown')
+        score = engine.compute_path_importance(sample_causal_path, method="unknown")
 
         assert score == 0.5
 
@@ -612,7 +652,7 @@ class TestInferenceEngineRankCausalPaths:
             CausalPath("a", "b", [], 2, 0.7, [], []),  # Middle score
         ]
 
-        ranked = engine.rank_causal_paths(paths, method='edge_weight')
+        ranked = engine.rank_causal_paths(paths, method="edge_weight")
 
         scores = [score for _, score in ranked]
         assert scores == sorted(scores, reverse=True)
@@ -635,12 +675,13 @@ class TestInferenceEngineMaterializeRelationships:
 
         relationships = [
             InferredRelationship(
-                from_id="a", to_id="b",
+                from_id="a",
+                to_id="b",
                 relationship_type="CAUSES",
                 confidence=0.85,
                 inference_type=InferenceType.TRANSITIVE,
                 reasoning_path=[],
-                supporting_evidence={}
+                supporting_evidence={},
             )
         ]
 
@@ -655,12 +696,13 @@ class TestInferenceEngineMaterializeRelationships:
 
         relationships = [
             InferredRelationship(
-                from_id="a", to_id="b",
+                from_id="a",
+                to_id="b",
                 relationship_type="CAUSES",
                 confidence=0.5,  # Below default 0.7 threshold
                 inference_type=InferenceType.TRANSITIVE,
                 reasoning_path=[],
-                supporting_evidence={}
+                supporting_evidence={},
             )
         ]
 
@@ -674,20 +716,22 @@ class TestInferenceEngineMaterializeRelationships:
 
         relationships = [
             InferredRelationship(
-                from_id="a", to_id="b",
+                from_id="a",
+                to_id="b",
                 relationship_type="CAUSES",
                 confidence=0.9,
                 inference_type=InferenceType.TRANSITIVE,
                 reasoning_path=[],
-                supporting_evidence={}
+                supporting_evidence={},
             ),
             InferredRelationship(
-                from_id="c", to_id="d",
+                from_id="c",
+                to_id="d",
                 relationship_type="LEADS_TO",
                 confidence=0.85,
                 inference_type=InferenceType.CAUSAL_CHAIN,
                 reasoning_path=[],
-                supporting_evidence={}
+                supporting_evidence={},
             ),
         ]
 
@@ -720,8 +764,7 @@ class TestPathFinderShortestPath:
     def test_shortest_path_with_relationship_filter(self, mock_graph_client):
         """Test shortest_path with relationship type filter."""
         PathFinder.shortest_path(
-            mock_graph_client, "a", "b",
-            relationship_types=["CAUSES", "LEADS_TO"]
+            mock_graph_client, "a", "b", relationship_types=["CAUSES", "LEADS_TO"]
         )
 
         query = mock_graph_client.queries_executed[0]
@@ -731,16 +774,14 @@ class TestPathFinderShortestPath:
         """Test that path is returned as list of tuples."""
         from tests.unit.test_ontology.conftest import MockQueryResult
 
-        mock_graph_client.set_mock_result('shortestPath', MockQueryResult(
-            result_set=[
-                (['a', 'b', 'c'], ['REL1', 'REL2'])
-            ]
-        ))
+        mock_graph_client.set_mock_result(
+            "shortestPath", MockQueryResult(result_set=[(["a", "b", "c"], ["REL1", "REL2"])])
+        )
 
         path = PathFinder.shortest_path(mock_graph_client, "a", "c")
 
         assert path is not None
-        assert path == [('a', 'REL1', 'b'), ('b', 'REL2', 'c')]
+        assert path == [("a", "REL1", "b"), ("b", "REL2", "c")]
 
 
 class TestPathFinderAllSimplePaths:
@@ -770,18 +811,21 @@ class TestPathFinderAllSimplePaths:
         """Test that multiple paths are returned."""
         from tests.unit.test_ontology.conftest import MockQueryResult
 
-        mock_graph_client.set_mock_result('MATCH path', MockQueryResult(
-            result_set=[
-                (['a', 'b', 'c'], ['REL1', 'REL2']),
-                (['a', 'd', 'c'], ['REL3', 'REL4']),
-            ]
-        ))
+        mock_graph_client.set_mock_result(
+            "MATCH path",
+            MockQueryResult(
+                result_set=[
+                    (["a", "b", "c"], ["REL1", "REL2"]),
+                    (["a", "d", "c"], ["REL3", "REL4"]),
+                ]
+            ),
+        )
 
         paths = PathFinder.all_simple_paths(mock_graph_client, "a", "c")
 
         assert len(paths) == 2
-        assert paths[0] == [('a', 'REL1', 'b'), ('b', 'REL2', 'c')]
-        assert paths[1] == [('a', 'REL3', 'd'), ('d', 'REL4', 'c')]
+        assert paths[0] == [("a", "REL1", "b"), ("b", "REL2", "c")]
+        assert paths[1] == [("a", "REL3", "d"), ("d", "REL4", "c")]
 
 
 # =============================================================================
@@ -804,11 +848,14 @@ class TestInferenceEngineEdgeCases:
         """Test that null weights are handled (default to 1.0)."""
         from tests.unit.test_ontology.conftest import MockQueryResult
 
-        mock_graph_client.set_mock_result('MATCH path', MockQueryResult(
-            result_set=[
-                (None, 2, ['a', 'b', 'c'], ['REL1', 'REL2'], None)  # null weights
-            ]
-        ))
+        mock_graph_client.set_mock_result(
+            "MATCH path",
+            MockQueryResult(
+                result_set=[
+                    (None, 2, ["a", "b", "c"], ["REL1", "REL2"], None)  # null weights
+                ]
+            ),
+        )
 
         engine = InferenceEngine(mock_graph_client)
         paths = engine.discover_causal_paths("a", "c")
@@ -820,11 +867,9 @@ class TestInferenceEngineEdgeCases:
         """Test path with only 2 nodes (no mediators)."""
         from tests.unit.test_ontology.conftest import MockQueryResult
 
-        mock_graph_client.set_mock_result('MATCH path', MockQueryResult(
-            result_set=[
-                (None, 1, ['a', 'b'], ['DIRECT'], [1.0])
-            ]
-        ))
+        mock_graph_client.set_mock_result(
+            "MATCH path", MockQueryResult(result_set=[(None, 1, ["a", "b"], ["DIRECT"], [1.0])])
+        )
 
         engine = InferenceEngine(mock_graph_client)
         paths = engine.discover_causal_paths("a", "b")
@@ -838,8 +883,8 @@ class TestInferenceEngineEdgeCases:
         engine = InferenceEngine(mock_graph_client)
 
         # Test the transitive rule calculator directly
-        transitive_rule = next(r for r in engine.rules if r.name == 'transitive_causation')
-        evidence = {'confidence_ab': 0.8, 'confidence_bc': 0.9}
+        transitive_rule = next(r for r in engine.rules if r.name == "transitive_causation")
+        evidence = {"confidence_ab": 0.8, "confidence_bc": 0.9}
 
         confidence = transitive_rule.confidence_calculator(evidence)
 

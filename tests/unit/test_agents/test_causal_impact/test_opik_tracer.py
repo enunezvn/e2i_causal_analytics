@@ -21,7 +21,6 @@ from src.agents.causal_impact.opik_tracer import (
     reset_tracer,
 )
 
-
 # ==============================================================================
 # Test Fixtures
 # ==============================================================================
@@ -356,7 +355,7 @@ class TestAnalysisTraceContext:
         """Test that trace_node appends span to node_spans."""
         assert len(analysis_trace_context.node_spans) == 0
 
-        async with analysis_trace_context.trace_node("estimation") as node:
+        async with analysis_trace_context.trace_node("estimation"):
             pass
 
         assert len(analysis_trace_context.node_spans) == 1
@@ -373,7 +372,7 @@ class TestAnalysisTraceContext:
     @pytest.mark.asyncio
     async def test_trace_node_calculates_duration(self, analysis_trace_context):
         """Test that trace_node calculates duration_ms."""
-        async with analysis_trace_context.trace_node("sensitivity") as node:
+        async with analysis_trace_context.trace_node("sensitivity"):
             pass
 
         assert analysis_trace_context.node_spans[0].duration_ms is not None
@@ -383,7 +382,7 @@ class TestAnalysisTraceContext:
     async def test_trace_node_handles_exception(self, analysis_trace_context):
         """Test that trace_node handles exceptions and sets error."""
         with pytest.raises(ValueError):
-            async with analysis_trace_context.trace_node("estimation") as node:
+            async with analysis_trace_context.trace_node("estimation"):
                 raise ValueError("Test error")
 
         # Span should still be appended
@@ -452,7 +451,11 @@ class TestCausalImpactOpikTracer:
         mock_connector = MagicMock(is_enabled=True)
         with patch.dict(
             "sys.modules",
-            {"src.mlops.opik_connector": MagicMock(get_opik_connector=MagicMock(return_value=mock_connector))}
+            {
+                "src.mlops.opik_connector": MagicMock(
+                    get_opik_connector=MagicMock(return_value=mock_connector)
+                )
+            },
         ):
             tracer._ensure_initialized()
 
@@ -466,13 +469,12 @@ class TestCausalImpactOpikTracer:
 
         # Mock the _ensure_initialized method to simulate import failure
         # by directly testing the behavior (connector stays None)
-        original_ensure = tracer._ensure_initialized
 
         def mock_ensure():
             tracer._initialized = True
             tracer._opik = None  # Simulates failed import
 
-        with patch.object(tracer, '_ensure_initialized', side_effect=mock_ensure):
+        with patch.object(tracer, "_ensure_initialized", side_effect=mock_ensure):
             tracer._ensure_initialized()
 
         assert tracer._initialized is True
@@ -579,7 +581,7 @@ class TestTraceAnalysis:
             query="Test query",
             treatment_var="X",
             outcome_var="Y",
-        ) as ctx:
+        ):
             mock_opik_connector.trace_agent.assert_called_once()
 
     @pytest.mark.asyncio
@@ -590,7 +592,7 @@ class TestTraceAnalysis:
                 query="Test query",
                 treatment_var="X",
                 outcome_var="Y",
-            ) as ctx:
+            ):
                 raise ValueError("Test error")
 
 
@@ -647,10 +649,12 @@ class TestTraceNodeDecorator:
                 "treatment_var": state.get("treatment_var"),
             }
 
-        result = await build_graph({
-            "expected_nodes": 10,
-            "treatment_var": "marketing_spend",
-        })
+        result = await build_graph(
+            {
+                "expected_nodes": 10,
+                "treatment_var": "marketing_spend",
+            }
+        )
 
         assert result["graph_nodes"] == 10
         assert result["treatment_var"] == "marketing_spend"
@@ -717,53 +721,53 @@ class TestIntegration:
             outcome_var="Y",
             brand="TestBrand",
         ) as trace:
-                # Node 1: Graph Builder
-                async with trace.trace_node("graph_builder") as node:
-                    node.log_graph_construction(
-                        num_nodes=10,
-                        num_edges=15,
-                        confidence=0.85,
-                    )
-
-                # Node 2: Estimation
-                async with trace.trace_node("estimation") as node:
-                    node.log_estimation(
-                        ate=0.15,
-                        ci_lower=0.10,
-                        ci_upper=0.20,
-                        method="doubly_robust",
-                        sample_size=1000,
-                    )
-
-                # Node 3: Refutation
-                async with trace.trace_node("refutation") as node:
-                    node.log_refutation(
-                        tests_passed=3,
-                        tests_total=3,
-                        refutation_rate=1.0,
-                    )
-
-                # Node 4: Sensitivity
-                async with trace.trace_node("sensitivity") as node:
-                    node.log_sensitivity(
-                        e_value=2.5,
-                        robustness_score=0.9,
-                    )
-
-                # Node 5: Interpretation
-                async with trace.trace_node("interpretation") as node:
-                    node.log_interpretation(
-                        summary_generated=True,
-                        summary_length=150,
-                        confidence_level="high",
-                    )
-
-                trace.log_analysis_complete(
-                    success=True,
-                    ate=0.15,
-                    refutation_rate=1.0,
-                    confidence_score=0.9,
+            # Node 1: Graph Builder
+            async with trace.trace_node("graph_builder") as node:
+                node.log_graph_construction(
+                    num_nodes=10,
+                    num_edges=15,
+                    confidence=0.85,
                 )
+
+            # Node 2: Estimation
+            async with trace.trace_node("estimation") as node:
+                node.log_estimation(
+                    ate=0.15,
+                    ci_lower=0.10,
+                    ci_upper=0.20,
+                    method="doubly_robust",
+                    sample_size=1000,
+                )
+
+            # Node 3: Refutation
+            async with trace.trace_node("refutation") as node:
+                node.log_refutation(
+                    tests_passed=3,
+                    tests_total=3,
+                    refutation_rate=1.0,
+                )
+
+            # Node 4: Sensitivity
+            async with trace.trace_node("sensitivity") as node:
+                node.log_sensitivity(
+                    e_value=2.5,
+                    robustness_score=0.9,
+                )
+
+            # Node 5: Interpretation
+            async with trace.trace_node("interpretation") as node:
+                node.log_interpretation(
+                    summary_generated=True,
+                    summary_length=150,
+                    confidence_level="high",
+                )
+
+            trace.log_analysis_complete(
+                success=True,
+                ate=0.15,
+                refutation_rate=1.0,
+                confidence_score=0.9,
+            )
 
         # Verify all nodes were traced
         assert len(trace.node_spans) == 5
@@ -792,17 +796,17 @@ class TestIntegration:
             treatment_var="X",
             outcome_var="Y",
         ) as trace:
-                async with trace.trace_node("graph_builder") as node:
-                    node.log_graph_construction(
-                        num_nodes=5,
-                        num_edges=8,
-                        confidence=0.7,
-                    )
+            async with trace.trace_node("graph_builder") as node:
+                node.log_graph_construction(
+                    num_nodes=5,
+                    num_edges=8,
+                    confidence=0.7,
+                )
 
-                # Estimation fails
-                with pytest.raises(RuntimeError):
-                    async with trace.trace_node("estimation") as node:
-                        raise RuntimeError("Estimation failed")
+            # Estimation fails
+            with pytest.raises(RuntimeError):
+                async with trace.trace_node("estimation") as node:
+                    raise RuntimeError("Estimation failed")
 
         # Both spans should be recorded
         assert len(trace.node_spans) == 2

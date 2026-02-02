@@ -153,7 +153,7 @@ def validate_twin_fidelity(
         >>> print(f"Fidelity grade: {result['fidelity_grade']}")
     """
     logger.info(
-        f"validate_twin_fidelity called: simulation={simulation_id}, " f"actual_ate={actual_ate}"
+        f"validate_twin_fidelity called: simulation={simulation_id}, actual_ate={actual_ate}"
     )
 
     try:

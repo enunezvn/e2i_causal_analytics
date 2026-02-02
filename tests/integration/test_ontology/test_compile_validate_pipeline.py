@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-
 # =============================================================================
 # YAML FILE EXISTENCE TESTS
 # =============================================================================
@@ -26,13 +25,21 @@ class TestOntologyFilesExist:
 
     def test_ontology_config_directory_exists(self, ontology_config_dir: Path):
         """Test that the ontology config directory exists."""
-        assert ontology_config_dir.exists(), f"Ontology config directory not found: {ontology_config_dir}"
-        assert ontology_config_dir.is_dir(), f"Ontology config path is not a directory: {ontology_config_dir}"
+        assert ontology_config_dir.exists(), (
+            f"Ontology config directory not found: {ontology_config_dir}"
+        )
+        assert ontology_config_dir.is_dir(), (
+            f"Ontology config path is not a directory: {ontology_config_dir}"
+        )
 
     def test_domain_vocabulary_file_exists(self, domain_vocabulary_path: Path):
         """Test that domain_vocabulary.yaml exists."""
-        assert domain_vocabulary_path.exists(), f"Domain vocabulary file not found: {domain_vocabulary_path}"
-        assert domain_vocabulary_path.is_file(), f"Domain vocabulary path is not a file: {domain_vocabulary_path}"
+        assert domain_vocabulary_path.exists(), (
+            f"Domain vocabulary file not found: {domain_vocabulary_path}"
+        )
+        assert domain_vocabulary_path.is_file(), (
+            f"Domain vocabulary path is not a file: {domain_vocabulary_path}"
+        )
 
     def test_required_ontology_files_exist(
         self,
@@ -113,13 +120,16 @@ class TestSchemaCompilation:
 
     def test_compiled_schema_has_relationships_attribute(self, compiled_schema):
         """Test that compiled schema has relationships attribute."""
-        assert hasattr(compiled_schema, "relationships"), "Compiled schema missing relationships attribute"
+        assert hasattr(compiled_schema, "relationships"), (
+            "Compiled schema missing relationships attribute"
+        )
         # relationships may be empty dict if YAML files don't define relationships
         assert isinstance(compiled_schema.relationships, dict), "relationships should be a dict"
 
     def test_compiled_schema_is_valid_dataclass(self, compiled_schema):
         """Test that compiled schema is a valid dataclass structure."""
         from dataclasses import is_dataclass
+
         assert is_dataclass(compiled_schema), "CompiledSchema should be a dataclass"
         # Required attributes
         assert hasattr(compiled_schema, "entities"), "Missing entities"
@@ -128,7 +138,9 @@ class TestSchemaCompilation:
 
     def test_compiled_schema_constraints_attribute(self, compiled_schema):
         """Test that compiled schema has constraints attribute."""
-        assert hasattr(compiled_schema, "constraints"), "Compiled schema missing constraints attribute"
+        assert hasattr(compiled_schema, "constraints"), (
+            "Compiled schema missing constraints attribute"
+        )
 
     def test_schema_compilation_performance(
         self,
@@ -141,7 +153,9 @@ class TestSchemaCompilation:
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         threshold = performance_thresholds["schema_compile_ms"]
-        assert elapsed_ms < threshold, f"Schema compilation took {elapsed_ms:.2f}ms, threshold is {threshold}ms"
+        assert elapsed_ms < threshold, (
+            f"Schema compilation took {elapsed_ms:.2f}ms, threshold is {threshold}ms"
+        )
 
 
 # =============================================================================
@@ -184,7 +198,9 @@ class TestSchemaValidation:
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         threshold = performance_thresholds["validation_ms"]
-        assert elapsed_ms < threshold, f"Validation took {elapsed_ms:.2f}ms, threshold is {threshold}ms"
+        assert elapsed_ms < threshold, (
+            f"Validation took {elapsed_ms:.2f}ms, threshold is {threshold}ms"
+        )
 
 
 # =============================================================================
@@ -257,8 +273,11 @@ class TestCompileValidatePipeline:
         # Should extract brand and region
         assert result is not None, "Extraction failed"
         # QueryExtractionResult uses brand_filter and region_filter attributes
-        assert result.brand_filter is not None or result.region_filter is not None or len(result.entities) > 0, \
-            "No entities extracted"
+        assert (
+            result.brand_filter is not None
+            or result.region_filter is not None
+            or len(result.entities) > 0
+        ), "No entities extracted"
 
 
 # =============================================================================
@@ -279,8 +298,7 @@ class TestSchemaConstraints:
         """Test that entities with primary keys have unique constraints."""
         entities = compiled_schema.entities
         entities_with_pk = [
-            (name, entity) for name, entity in entities.items()
-            if entity.primary_key
+            (name, entity) for name, entity in entities.items() if entity.primary_key
         ]
 
         # Entities with primary keys should have uniqueness constraints
@@ -315,10 +333,10 @@ class TestSchemaExport:
             # DDL should contain CREATE statements, comments, or be empty
             # Both Cypher (//) and SQL (--) style comments are valid
             has_valid_content = (
-                "CREATE" in ddl.upper() or
-                "//" in ddl or  # Cypher-style comments
-                "--" in ddl or  # SQL-style comments
-                len(ddl) == 0
+                "CREATE" in ddl.upper()
+                or "//" in ddl  # Cypher-style comments
+                or "--" in ddl  # SQL-style comments
+                or len(ddl) == 0
             )
             assert has_valid_content, "DDL should contain CREATE statements, comments, or be empty"
         except NotImplementedError:
@@ -341,8 +359,7 @@ class TestSchemaRegressions:
 
         # Check for self-referencing relationships (may be intentional)
         self_referencing = [
-            name for name, rel in relationships.items()
-            if rel.from_entity == rel.to_entity
+            name for name, rel in relationships.items() if rel.from_entity == rel.to_entity
         ]
 
         # Self-referencing relationships should be intentional (like parent-child)
@@ -359,9 +376,13 @@ class TestSchemaRegressions:
         invalid_refs = []
         for name, rel in relationships.items():
             if rel.from_entity not in entity_names:
-                invalid_refs.append(f"Relationship '{name}' references unknown from_entity: {rel.from_entity}")
+                invalid_refs.append(
+                    f"Relationship '{name}' references unknown from_entity: {rel.from_entity}"
+                )
             if rel.to_entity not in entity_names:
-                invalid_refs.append(f"Relationship '{name}' references unknown to_entity: {rel.to_entity}")
+                invalid_refs.append(
+                    f"Relationship '{name}' references unknown to_entity: {rel.to_entity}"
+                )
 
         assert not invalid_refs, f"Invalid entity references found: {invalid_refs}"
 
@@ -376,5 +397,7 @@ class TestSchemaRegressions:
         """Test that there are no duplicate relationship names."""
         # Since relationships is a dict, keys are inherently unique
         relationships = compiled_schema.relationships
-        assert isinstance(relationships, dict), "Relationships should be a dictionary (keys are unique)"
+        assert isinstance(relationships, dict), (
+            "Relationships should be a dictionary (keys are unique)"
+        )
         # Dict keys are unique by definition, so this test passes if relationships is a dict

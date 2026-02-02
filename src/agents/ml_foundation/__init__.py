@@ -16,8 +16,8 @@ Agents:
 Pipeline: scope_definer → cohort_constructor → data_preparer → ...
 """
 
-from .data_preparer import DataPreparerAgent, DataPreparerState
 from ..cohort_constructor import CohortConstructorAgent, CohortConstructorState
+from .data_preparer import DataPreparerAgent, DataPreparerState
 
 __all__ = [
     "DataPreparerAgent",

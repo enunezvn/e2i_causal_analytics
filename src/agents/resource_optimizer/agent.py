@@ -10,7 +10,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -265,7 +265,9 @@ class ResourceOptimizerAgent:
             )
             return output, result
 
-        async def contribute_memory(output: ResourceOptimizerOutput, final_state: Dict[str, Any]) -> None:
+        async def contribute_memory(
+            output: ResourceOptimizerOutput, final_state: Dict[str, Any]
+        ) -> None:
             """Contribute optimization results to memory systems."""
             if self.enable_memory and self.memory_hooks and output.status != "failed":
                 try:

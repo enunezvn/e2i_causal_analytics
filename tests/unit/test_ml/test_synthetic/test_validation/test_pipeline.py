@@ -5,7 +5,7 @@ Tests the validation pipeline integration for synthetic data.
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
@@ -116,9 +116,7 @@ class TestValidateDataset:
     @patch("src.ml.synthetic.validation.pipeline.GX_AVAILABLE", True)
     @patch("src.ml.synthetic.validation.pipeline.validate_dataframe_with_expectations")
     @patch("src.ml.synthetic.validation.pipeline.SCHEMA_REGISTRY", {"test_table": Mock()})
-    def test_validate_dataset_both_validations(
-        self, mock_gx_validate, mock_pandera_validate
-    ):
+    def test_validate_dataset_both_validations(self, mock_gx_validate, mock_pandera_validate):
         """Test validate_dataset with both Pandera and GX."""
         df = pd.DataFrame({"id": [1, 2, 3]})
 
@@ -204,9 +202,7 @@ class TestValidateDataset:
         mock_gx_result = Mock()
         mock_gx_validate.return_value = mock_gx_result
 
-        result = validate_dataset(
-            df, "test_table", dgp_type=DGPType.SIMPLE_LINEAR, run_gx=True
-        )
+        validate_dataset(df, "test_table", dgp_type=DGPType.SIMPLE_LINEAR, run_gx=True)
 
         # Check that DGP type was passed to GX validation
         mock_gx_validate.assert_called_once_with(df, "test_table", DGPType.SIMPLE_LINEAR)
@@ -219,9 +215,7 @@ class TestValidatePipelineOutput:
     @patch("src.ml.synthetic.validation.pipeline.validate_dataset")
     @patch("src.ml.synthetic.validation.pipeline.ValidationObserver")
     @patch("src.ml.synthetic.validation.pipeline.create_validation_span")
-    def test_validate_pipeline_output_basic(
-        self, mock_span, mock_observer, mock_validate_dataset
-    ):
+    def test_validate_pipeline_output_basic(self, mock_span, mock_observer, mock_validate_dataset):
         """Test validate_pipeline_output basic functionality."""
         datasets = {
             "table1": pd.DataFrame({"id": [1, 2, 3]}),
@@ -250,9 +244,7 @@ class TestValidatePipelineOutput:
         mock_obs_instance.finalize.return_value = {"mlflow_run_id": "test-run-id"}
         mock_observer.return_value = mock_obs_instance
 
-        results, obs_summary = validate_pipeline_output(
-            datasets, enable_observability=True
-        )
+        results, obs_summary = validate_pipeline_output(datasets, enable_observability=True)
 
         assert len(results) == 2
         assert "table1" in results
@@ -278,9 +270,7 @@ class TestValidatePipelineOutput:
         mock_span_ctx.__exit__ = Mock(return_value=False)
         mock_span.return_value = mock_span_ctx
 
-        results, obs_summary = validate_pipeline_output(
-            datasets, enable_observability=False
-        )
+        results, obs_summary = validate_pipeline_output(datasets, enable_observability=False)
 
         assert len(results) == 1
         assert obs_summary == {}
@@ -316,9 +306,7 @@ class TestValidatePipelineOutput:
         mock_obs_instance.finalize.return_value = {}
         mock_observer.return_value = mock_obs_instance
 
-        results, obs_summary = validate_pipeline_output(
-            datasets, enable_observability=True
-        )
+        results, obs_summary = validate_pipeline_output(datasets, enable_observability=True)
 
         # Verify GX result was logged
         mock_span_ctx.log_result.assert_called_once_with(mock_gx_result)
@@ -336,9 +324,7 @@ class TestValidatePipelineOutput:
         mock_span_ctx.__exit__ = Mock(return_value=False)
         mock_span.return_value = mock_span_ctx
 
-        results, obs_summary = validate_pipeline_output(
-            datasets, enable_observability=False
-        )
+        results, obs_summary = validate_pipeline_output(datasets, enable_observability=False)
 
         assert results == {}
         assert obs_summary == {}

@@ -191,13 +191,17 @@ class EnrollmentService:
         rx_months = unit.get("rx_history_months") or 0
         results["min_rx_history"] = rx_months >= criteria.min_rx_history_months
         if not results["min_rx_history"]:
-            failed.append(f"Insufficient Rx history: {rx_months} < {criteria.min_rx_history_months} months")
+            failed.append(
+                f"Insufficient Rx history: {rx_months} < {criteria.min_rx_history_months} months"
+            )
 
         # Check patient panel size (handle None values)
         panel_size = unit.get("patient_panel_size") or 0
         results["min_patient_panel"] = panel_size >= criteria.min_patient_panel_size
         if not results["min_patient_panel"]:
-            failed.append(f"Insufficient patient panel: {panel_size} < {criteria.min_patient_panel_size}")
+            failed.append(
+                f"Insufficient patient panel: {panel_size} < {criteria.min_patient_panel_size}"
+            )
 
         # Check territory activity
         if criteria.active_in_territory:
@@ -321,8 +325,7 @@ class EnrollmentService:
         )
 
         logger.info(
-            f"Withdrew enrollment {enrollment_id}: {reason} "
-            f"(initiated by {initiated_by.value})"
+            f"Withdrew enrollment {enrollment_id}: {reason} (initiated by {initiated_by.value})"
         )
 
         return enrollment
@@ -429,13 +432,15 @@ class EnrollmentService:
 
         # Add deviation
         deviations = enrollment.protocol_deviations or []
-        deviations.append({
-            "date": deviation.date.isoformat(),
-            "type": deviation.deviation_type,
-            "severity": deviation.severity.value,
-            "description": deviation.description,
-            "corrective_action": deviation.corrective_action,
-        })
+        deviations.append(
+            {
+                "date": deviation.date.isoformat(),
+                "type": deviation.deviation_type,
+                "severity": deviation.severity.value,
+                "description": deviation.description,
+                "corrective_action": deviation.corrective_action,
+            }
+        )
 
         # Update enrollment
         enrollment = await repo.update_protocol_deviations(
@@ -449,9 +454,9 @@ class EnrollmentService:
         )
 
         # Auto-exclude on major deviation if configured
-        if (
-            self.config.auto_exclude_on_major_deviation
-            and deviation.severity in (DeviationSeverity.MAJOR, DeviationSeverity.CRITICAL)
+        if self.config.auto_exclude_on_major_deviation and deviation.severity in (
+            DeviationSeverity.MAJOR,
+            DeviationSeverity.CRITICAL,
         ):
             enrollment = await self.mark_excluded(
                 enrollment_id,
@@ -460,8 +465,7 @@ class EnrollmentService:
 
         # Check minor deviation threshold
         minor_count = sum(
-            1 for d in deviations
-            if d.get("severity") == DeviationSeverity.MINOR.value
+            1 for d in deviations if d.get("severity") == DeviationSeverity.MINOR.value
         )
         if minor_count >= self.config.max_minor_deviations:
             logger.warning(
@@ -493,7 +497,7 @@ class EnrollmentService:
         total_assigned = len(assignments)
 
         # Initialize counts
-        status_counts = {status: 0 for status in EnrollmentStatus}
+        status_counts = dict.fromkeys(EnrollmentStatus, 0)
         by_variant: Dict[str, Dict[str, int]] = {}
 
         total_enrolled = 0
@@ -581,9 +585,7 @@ class EnrollmentService:
                 )
 
                 if eligibility.is_eligible:
-                    consent_timestamp = (
-                        datetime.now(timezone.utc) if auto_consent else None
-                    )
+                    consent_timestamp = datetime.now(timezone.utc) if auto_consent else None
                     consent_method = ConsentMethod.IMPLIED if auto_consent else None
 
                     await self.enroll_unit(
@@ -593,25 +595,31 @@ class EnrollmentService:
                         consent_method=consent_method,
                     )
                     results["enrolled"] += 1
-                    results["details"].append({
-                        "assignment_id": assignment_id,
-                        "status": "enrolled",
-                    })
+                    results["details"].append(
+                        {
+                            "assignment_id": assignment_id,
+                            "status": "enrolled",
+                        }
+                    )
                 else:
                     results["ineligible"] += 1
-                    results["details"].append({
-                        "assignment_id": assignment_id,
-                        "status": "ineligible",
-                        "reasons": eligibility.failed_criteria,
-                    })
+                    results["details"].append(
+                        {
+                            "assignment_id": assignment_id,
+                            "status": "ineligible",
+                            "reasons": eligibility.failed_criteria,
+                        }
+                    )
 
             except Exception as e:
                 results["errors"] += 1
-                results["details"].append({
-                    "assignment_id": assignment_id,
-                    "status": "error",
-                    "error": str(e),
-                })
+                results["details"].append(
+                    {
+                        "assignment_id": assignment_id,
+                        "status": "error",
+                        "error": str(e),
+                    }
+                )
                 logger.error(f"Error enrolling assignment {assignment_id}: {e}")
 
         logger.info(

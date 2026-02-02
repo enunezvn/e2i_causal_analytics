@@ -18,12 +18,12 @@ from src.api.middleware.auth_middleware import (
 from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
 from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 from src.api.middleware.tracing import (
-    TracingMiddleware,
     TraceContext,
-    get_request_id,
+    TracingMiddleware,
     get_correlation_id,
-    get_trace_id,
+    get_request_id,
     get_trace_context,
+    get_trace_id,
     with_trace_context,
 )
 

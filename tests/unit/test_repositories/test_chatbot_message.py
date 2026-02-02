@@ -77,9 +77,7 @@ class TestAddMessage(TestChatbotMessageRepository):
     """Tests for add_message method."""
 
     @pytest.mark.asyncio
-    async def test_adds_user_message_successfully(
-        self, repo, mock_client, sample_user_message
-    ):
+    async def test_adds_user_message_successfully(self, repo, mock_client, sample_user_message):
         """Test adding a user message."""
         mock_result = MagicMock()
         mock_result.data = [sample_user_message]
@@ -154,9 +152,7 @@ class TestGetSessionMessages(TestChatbotMessageRepository):
         mock_result = MagicMock()
         mock_result.data = [sample_user_message, sample_assistant_message]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.offset.return_value.execute = (
-            mock_execute
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.offset.return_value.execute = mock_execute
 
         result = await repo.get_session_messages("user-123~uuid-456")
 
@@ -186,9 +182,7 @@ class TestGetRecentMessages(TestChatbotMessageRepository):
         mock_result = MagicMock()
         mock_result.data = [sample_assistant_message, sample_user_message]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute = (
-            mock_execute
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_recent_messages("user-123~uuid-456", count=10)
 
@@ -202,16 +196,12 @@ class TestGetByRole(TestChatbotMessageRepository):
     """Tests for get_by_role method."""
 
     @pytest.mark.asyncio
-    async def test_returns_messages_by_role(
-        self, repo, mock_client, sample_assistant_message
-    ):
+    async def test_returns_messages_by_role(self, repo, mock_client, sample_assistant_message):
         """Test filtering messages by role."""
         mock_result = MagicMock()
         mock_result.data = [sample_assistant_message]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute = (
-            mock_execute
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_by_role("user-123~uuid-456", "assistant")
 
@@ -253,12 +243,15 @@ class TestGetToolUsageStats(TestChatbotMessageRepository):
         mock_result = MagicMock()
         mock_result.data = [
             {"tool_calls": [{"tool_name": "e2i_data_query_tool"}]},
-            {"tool_calls": [{"tool_name": "e2i_data_query_tool"}, {"tool_name": "causal_analysis_tool"}]},
+            {
+                "tool_calls": [
+                    {"tool_name": "e2i_data_query_tool"},
+                    {"tool_name": "causal_analysis_tool"},
+                ]
+            },
         ]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.neq.return_value.limit.return_value.execute = (
-            mock_execute
-        )
+        mock_client.table.return_value.select.return_value.neq.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_tool_usage_stats()
 
@@ -272,16 +265,12 @@ class TestSearchMessages(TestChatbotMessageRepository):
     """Tests for search_messages method."""
 
     @pytest.mark.asyncio
-    async def test_searches_messages_by_content(
-        self, repo, mock_client, sample_assistant_message
-    ):
+    async def test_searches_messages_by_content(self, repo, mock_client, sample_assistant_message):
         """Test searching messages by content."""
         mock_result = MagicMock()
         mock_result.data = [sample_assistant_message]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.ilike.return_value.order.return_value.limit.return_value.execute = (
-            mock_execute
-        )
+        mock_client.table.return_value.select.return_value.ilike.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.search_messages("TRx")
 

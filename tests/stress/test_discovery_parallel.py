@@ -12,12 +12,12 @@ Performance targets:
 - Timeouts should be respected
 """
 
-import asyncio
 import gc
 import os
 import time
 import tracemalloc
-from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -222,17 +222,21 @@ def run_algorithms_parallel(
                 result = future.result(timeout=timeout)
                 results.append(result)
             except FuturesTimeoutError:
-                results.append({
-                    "algorithm": algo,
-                    "error": "timeout",
-                    "success": False,
-                })
+                results.append(
+                    {
+                        "algorithm": algo,
+                        "error": "timeout",
+                        "success": False,
+                    }
+                )
             except Exception as e:
-                results.append({
-                    "algorithm": algo,
-                    "error": str(e),
-                    "success": False,
-                })
+                results.append(
+                    {
+                        "algorithm": algo,
+                        "error": str(e),
+                        "success": False,
+                    }
+                )
 
     total_duration = time.time() - start
     return results, total_duration
@@ -290,9 +294,7 @@ class TestParallelSpeedup:
         seq_results, seq_duration = run_algorithms_sequential(data, algorithms)
 
         # Run parallel
-        par_results, par_duration = run_algorithms_parallel(
-            data, algorithms, max_workers=3
-        )
+        par_results, par_duration = run_algorithms_parallel(data, algorithms, max_workers=3)
 
         # Both should have results
         seq_success = sum(1 for r in seq_results if r.get("success"))
@@ -345,9 +347,7 @@ class TestProcessPoolSerialization:
 
         # Should not raise pickling errors
         try:
-            results, _ = run_algorithms_parallel(
-                data, ["lingam"], max_workers=1, timeout=120
-            )
+            results, _ = run_algorithms_parallel(data, ["lingam"], max_workers=1, timeout=120)
             # Success or algorithm failure (not serialization failure)
             assert len(results) == 1
         except Exception as e:
@@ -366,9 +366,9 @@ class TestTimeoutBehavior:
 
             start = time.time()
             try:
-                result = future.result(timeout=2.0)
+                future.result(timeout=2.0)
                 # Should not reach here
-                assert False, "Timeout was not raised"
+                raise AssertionError("Timeout was not raised")
             except FuturesTimeoutError:
                 elapsed = time.time() - start
                 # Should timeout within 3 seconds (2s timeout + margin)
@@ -380,9 +380,7 @@ class TestTimeoutBehavior:
         data = small_parallel_data
 
         # Run just one fast algorithm with short timeout
-        results, duration = run_algorithms_parallel(
-            data, ["ges"], max_workers=1, timeout=30
-        )
+        results, duration = run_algorithms_parallel(data, ["ges"], max_workers=1, timeout=30)
 
         # Should complete (ges is fast)
         assert len(results) == 1
@@ -425,7 +423,7 @@ class TestMemoryCleanup:
         data = small_parallel_data
         memory_snapshots = []
 
-        for i in range(3):
+        for _i in range(3):
             run_algorithms_parallel(data, ["ges"], max_workers=1, timeout=60)
             gc.collect()
             _, current = tracemalloc.get_traced_memory()

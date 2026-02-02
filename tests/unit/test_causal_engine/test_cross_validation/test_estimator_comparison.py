@@ -14,10 +14,11 @@ Assertions:
 - Confidence intervals overlap for consistent estimators
 """
 
+from typing import Dict, Tuple
+
 import numpy as np
 import pandas as pd
 import pytest
-from typing import Dict, Tuple
 
 # Mark all tests in this module for the dspy_integration xdist group
 pytestmark = pytest.mark.xdist_group(name="cross_validation")
@@ -52,7 +53,7 @@ def generate_synthetic_causal_data(
     # Generate confounders
     confounders = {}
     for i in range(n_confounders):
-        confounders[f"X{i+1}"] = np.random.normal(0, 1, n_samples)
+        confounders[f"X{i + 1}"] = np.random.normal(0, 1, n_samples)
 
     # Treatment assignment (affected by confounders)
     propensity = 0.5 + 0.1 * confounders["X1"]
@@ -120,7 +121,6 @@ def large_effect_dataset():
 def estimate_with_dowhy_ols(data: pd.DataFrame) -> Dict[str, float]:
     """Estimate ATE using DoWhy OLS."""
     try:
-        import dowhy
         from dowhy import CausalModel
 
         confounders = [c for c in data.columns if c.startswith("X")]
@@ -151,7 +151,6 @@ def estimate_with_dowhy_ols(data: pd.DataFrame) -> Dict[str, float]:
 def estimate_with_dowhy_ipw(data: pd.DataFrame) -> Dict[str, float]:
     """Estimate ATE using DoWhy IPW."""
     try:
-        import dowhy
         from dowhy import CausalModel
 
         confounders = [c for c in data.columns if c.startswith("X")]
@@ -393,7 +392,7 @@ class TestConfidenceIntervalOverlap:
     def test_ci_overlap_linear_methods(self, medium_dataset):
         """Test that CIs from linear methods overlap."""
         data, metadata = medium_dataset
-        true_ate = metadata["true_ate"]
+        metadata["true_ate"]
 
         dowhy_result = estimate_with_dowhy_ols(data)
         econml_result = estimate_with_econml_linear_dml(data)

@@ -5,17 +5,15 @@ Tests ML entity generation with referential integrity and business logic.
 """
 
 import pytest
-import numpy as np
-import pandas as pd
 
+from src.ml.synthetic.config import Brand, DGPType
 from src.ml.synthetic.generators import (
+    GeneratorConfig,
     HCPGenerator,
     PatientGenerator,
     PredictionGenerator,
     TriggerGenerator,
-    GeneratorConfig,
 )
-from src.ml.synthetic.config import Brand, DGPType
 
 
 class TestPredictionGenerator:
@@ -328,9 +326,7 @@ class TestMLGeneratorIntegration:
 
         # Predictions
         prediction_config = GeneratorConfig(seed=42, n_records=200)
-        prediction_df = PredictionGenerator(
-            prediction_config, patient_df=patient_df
-        ).generate()
+        prediction_df = PredictionGenerator(prediction_config, patient_df=patient_df).generate()
 
         # Triggers
         trigger_config = GeneratorConfig(seed=42, n_records=150)

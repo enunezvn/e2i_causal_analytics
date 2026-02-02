@@ -106,17 +106,15 @@ class TestSegmentCATECalculator:
         """Create sample segment data."""
         np.random.seed(42)
         n = 200
-        X = pd.DataFrame({
-            "x1": np.random.randn(n),
-            "x2": np.random.randn(n),
-        })
+        X = pd.DataFrame(
+            {
+                "x1": np.random.randn(n),
+                "x2": np.random.randn(n),
+            }
+        )
         treatment = np.random.binomial(1, 0.5, n)
         # Simple linear outcome with treatment effect
-        outcome = (
-            X["x1"].values * 0.3
-            + treatment * 0.15
-            + np.random.randn(n) * 0.1
-        )
+        outcome = X["x1"].values * 0.3 + treatment * 0.15 + np.random.randn(n) * 0.1
         return X, treatment, outcome
 
     def test_create_calculator(self) -> None:
@@ -555,17 +553,15 @@ class TestMultipleEstimatorComparison:
         """Create data with known treatment effect."""
         np.random.seed(42)
         n = 300
-        X = pd.DataFrame({
-            "x1": np.random.randn(n),
-            "x2": np.random.randn(n),
-        })
+        X = pd.DataFrame(
+            {
+                "x1": np.random.randn(n),
+                "x2": np.random.randn(n),
+            }
+        )
         treatment = np.random.binomial(1, 0.5, n)
         # Known treatment effect of ~0.20
-        outcome = (
-            X["x1"].values * 0.3
-            + treatment * 0.20
-            + np.random.randn(n) * 0.05
-        )
+        outcome = X["x1"].values * 0.3 + treatment * 0.20 + np.random.randn(n) * 0.05
         return X, treatment, outcome
 
     @pytest.mark.asyncio

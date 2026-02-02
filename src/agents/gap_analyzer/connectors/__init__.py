@@ -5,18 +5,18 @@ Provides factory functions to get appropriate data connectors
 based on environment (mock for testing, Supabase for production).
 """
 
-from typing import Union
-
 # Type hints for connector classes
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
+    from ..nodes.gap_detector import MockBenchmarkStore, MockDataConnector
     from .benchmark_store import BenchmarkStore
     from .supabase_connector import SupabaseDataConnector
-    from ..nodes.gap_detector import MockBenchmarkStore, MockDataConnector
 
 
-def get_data_connector(use_mock: bool = False) -> Union["SupabaseDataConnector", "MockDataConnector"]:
+def get_data_connector(
+    use_mock: bool = False,
+) -> Union["SupabaseDataConnector", "MockDataConnector"]:
     """
     Factory to get appropriate data connector.
 

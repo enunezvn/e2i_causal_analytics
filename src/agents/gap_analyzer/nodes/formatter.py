@@ -11,7 +11,6 @@ Additionally handles:
 - DSPy training signal collection
 """
 
-import asyncio
 import logging
 import time
 from typing import Any, Dict, List
@@ -163,8 +162,9 @@ class FormatterNode:
             total_latency_ms: Total workflow latency
         """
         try:
-            from ..dspy_integration import get_gap_analyzer_signal_collector
             from src.agents.tier2_signal_router import route_gap_analyzer_signal
+
+            from ..dspy_integration import get_gap_analyzer_signal_collector
 
             collector = get_gap_analyzer_signal_collector()
 

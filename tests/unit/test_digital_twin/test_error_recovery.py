@@ -32,7 +32,6 @@ from src.digital_twin.models.twin_models import (
 )
 from src.digital_twin.simulation_engine import SimulationEngine
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================

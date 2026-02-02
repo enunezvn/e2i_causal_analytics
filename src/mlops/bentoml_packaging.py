@@ -11,10 +11,7 @@ Version: 1.0.0
 """
 
 import logging
-import os
-import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 try:
     import bentoml
     from bentoml import Model
+
     BENTOML_AVAILABLE = True
 except ImportError:
     BENTOML_AVAILABLE = False
@@ -44,6 +42,7 @@ def _get_bentoml_executable() -> str:
     bin directory, falling back to 'bentoml' if not found.
     """
     import sys
+
     venv_bin = Path(sys.executable).parent
     bentoml_path = venv_bin / "bentoml"
     if bentoml_path.exists():
@@ -401,6 +400,7 @@ def _bento_exists(bento_name: str, version: Optional[str] = None) -> bool:
         if result.returncode == 0 and result.stdout.strip():
             # Parse JSON output to verify it's not empty
             import json
+
             bentos = json.loads(result.stdout)
             return len(bentos) > 0
         return False
@@ -481,6 +481,7 @@ def build_bento(
 
     # Pattern 1: "Successfully built Bento(name:version)"
     import re
+
     for line in stdout.split("\n"):
         if "Successfully built Bento" in line:
             # Try to extract tag from line
@@ -503,6 +504,7 @@ def build_bento(
     combined_output = stdout + "\n" + stderr
     if bento_name:
         import re
+
         pattern = rf"{re.escape(bento_name)}:[a-zA-Z0-9_.-]+"
         match = re.search(pattern, combined_output)
         if match:
@@ -545,9 +547,11 @@ def containerize_bento(
 
     # Build Docker image
     cmd = [
-        _get_bentoml_executable(), "containerize",
+        _get_bentoml_executable(),
+        "containerize",
         bento_tag,
-        "-t", config.full_image_name,
+        "-t",
+        config.full_image_name,
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -665,7 +669,9 @@ def _generate_classification_service(
     timeout: int = 60,
 ) -> str:
     """Generate self-contained classification service code."""
-    class_names_str = repr(class_names) if class_names else f"[f'class_{{i}}' for i in range({n_classes})]"
+    class_names_str = (
+        repr(class_names) if class_names else f"[f'class_{{i}}' for i in range({n_classes})]"
+    )
 
     return f'''"""Auto-generated BentoML Classification Service.
 
@@ -1115,7 +1121,12 @@ def generate_docker_compose(
             "networks": [network_name],
             "restart": "unless-stopped",
             "healthcheck": {
-                "test": ["CMD", "curl", "-f", f"http://localhost:{svc.get('internal_port', 3000)}/health"],
+                "test": [
+                    "CMD",
+                    "curl",
+                    "-f",
+                    f"http://localhost:{svc.get('internal_port', 3000)}/health",
+                ],
                 "interval": "30s",
                 "timeout": "10s",
                 "retries": 3,
@@ -1211,9 +1222,7 @@ def validate_bento(bento_tag: str, strict: bool = False) -> Dict[str, Any]:
                 if strict:
                     result["errors"].append("No service.py found in Bento")
                 else:
-                    result["warnings"].append(
-                        "No service.py found (may be embedded in Bento)"
-                    )
+                    result["warnings"].append("No service.py found (may be embedded in Bento)")
                 result["checks"]["has_service"] = False
 
             # Check for bentofile.yaml (optional in modern BentoML)
@@ -1234,9 +1243,7 @@ def validate_bento(bento_tag: str, strict: bool = False) -> Dict[str, Any]:
                 if strict:
                     result["errors"].append("No models found in Bento")
                 else:
-                    result["warnings"].append(
-                        "No models embedded (may be loaded dynamically)"
-                    )
+                    result["warnings"].append("No models embedded (may be loaded dynamically)")
         else:
             result["checks"]["has_models"] = False
             result["model_count"] = 0

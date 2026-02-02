@@ -49,6 +49,7 @@ def get_orchestrator():
             return None
     return _orchestrator_instance
 
+
 router = APIRouter(prefix="/cognitive", tags=["Cognitive Workflow"])
 
 
@@ -312,16 +313,18 @@ async def process_cognitive_query(
 
         if orchestrator:
             try:
-                orchestrator_result = await orchestrator.run({
-                    "query": request.query,
-                    "session_id": session_id,
-                    "user_id": request.user_id,
-                    "user_context": {
-                        "brand": request.brand,
-                        "region": request.region,
-                        "evidence": [e.content for e in evidence] if evidence else [],
-                    },
-                })
+                orchestrator_result = await orchestrator.run(
+                    {
+                        "query": request.query,
+                        "session_id": session_id,
+                        "user_id": request.user_id,
+                        "user_context": {
+                            "brand": request.brand,
+                            "region": request.region,
+                            "evidence": [e.content for e in evidence] if evidence else [],
+                        },
+                    }
+                )
 
                 response_text = orchestrator_result.get("response_text", "")
                 response_confidence = orchestrator_result.get("response_confidence", 0.85)
@@ -338,7 +341,10 @@ async def process_cognitive_query(
             except Exception as e:
                 logger.warning(f"Orchestrator execution failed, using fallback: {e}")
                 response_text = _generate_placeholder_response(
-                    query=request.query, query_type=query_type, evidence=evidence, brand=request.brand
+                    query=request.query,
+                    query_type=query_type,
+                    evidence=evidence,
+                    brand=request.brand,
                 )
         else:
             # Fallback to placeholder if orchestrator not available
@@ -737,4 +743,6 @@ async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResp
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Cognitive RAG search failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Cognitive RAG search failed: {str(e)[:200]}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Cognitive RAG search failed: {str(e)[:200]}"
+        ) from e

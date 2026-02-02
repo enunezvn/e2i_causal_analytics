@@ -4,28 +4,27 @@ Integration Tests for Synthetic Data Pipeline
 End-to-end tests for synthetic data generation and validation.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import date, timedelta
+
+import numpy as np
+import pandas as pd
+import pytest
 from scipy.special import expit
 
 from src.ml.synthetic.config import (
-    SyntheticDataConfig,
-    DGPType,
-    Brand,
     DGP_CONFIGS,
-)
-from src.ml.synthetic.validators import (
-    SchemaValidator,
-    CausalValidator,
-    SplitValidator,
+    Brand,
+    DGPType,
+    SyntheticDataConfig,
 )
 from src.ml.synthetic.ground_truth.causal_effects import (
-    GroundTruthStore,
     create_ground_truth_from_dgp_config,
-    store_ground_truth,
     get_global_store,
+)
+from src.ml.synthetic.validators import (
+    CausalValidator,
+    SchemaValidator,
+    SplitValidator,
 )
 
 
@@ -64,30 +63,32 @@ class TestSyntheticDataPipelineIntegration:
         n_patients = 500
 
         # Generate HCPs
-        hcp_df = pd.DataFrame({
-            "hcp_id": [f"hcp_{i:05d}" for i in range(n_hcps)],
-            "npi": [f"{1000000000 + i}" for i in range(n_hcps)],
-            "specialty": np.random.choice(
-                ["dermatology", "hematology", "oncology"],
-                n_hcps,
-            ),
-            "practice_type": np.random.choice(
-                ["academic", "community", "private"],
-                n_hcps,
-                p=[0.3, 0.5, 0.2],
-            ),
-            "geographic_region": np.random.choice(
-                ["northeast", "south", "midwest", "west"],
-                n_hcps,
-            ),
-            "years_experience": np.random.randint(2, 35, n_hcps),
-            "academic_hcp": np.random.binomial(1, 0.3, n_hcps),
-            "total_patient_volume": np.random.randint(50, 500, n_hcps),
-            "brand": np.random.choice(
-                ["Remibrutinib", "Fabhalta", "Kisqali"],
-                n_hcps,
-            ),
-        })
+        hcp_df = pd.DataFrame(
+            {
+                "hcp_id": [f"hcp_{i:05d}" for i in range(n_hcps)],
+                "npi": [f"{1000000000 + i}" for i in range(n_hcps)],
+                "specialty": np.random.choice(
+                    ["dermatology", "hematology", "oncology"],
+                    n_hcps,
+                ),
+                "practice_type": np.random.choice(
+                    ["academic", "community", "private"],
+                    n_hcps,
+                    p=[0.3, 0.5, 0.2],
+                ),
+                "geographic_region": np.random.choice(
+                    ["northeast", "south", "midwest", "west"],
+                    n_hcps,
+                ),
+                "years_experience": np.random.randint(2, 35, n_hcps),
+                "academic_hcp": np.random.binomial(1, 0.3, n_hcps),
+                "total_patient_volume": np.random.randint(50, 500, n_hcps),
+                "brand": np.random.choice(
+                    ["Remibrutinib", "Fabhalta", "Kisqali"],
+                    n_hcps,
+                ),
+            }
+        )
 
         # Generate confounders
         disease_severity = np.clip(np.random.normal(5, 2, n_patients), 0, 10)
@@ -96,20 +97,17 @@ class TestSyntheticDataPipelineIntegration:
 
         # Generate treatment (engagement) with confounding
         engagement_propensity = (
-            3.0 +
-            0.3 * disease_severity +
-            2.0 * hcp_academic +
-            np.random.normal(0, 1, n_patients)
+            3.0 + 0.3 * disease_severity + 2.0 * hcp_academic + np.random.normal(0, 1, n_patients)
         )
         engagement_score = expit(engagement_propensity / 3) * 10
 
         # Generate outcome with TRUE_ATE = 0.25
         outcome_propensity = (
-            -2.0 +
-            0.25 * engagement_score +  # TRUE CAUSAL EFFECT
-            0.4 * disease_severity +
-            0.6 * hcp_academic +
-            np.random.normal(0, 1, n_patients)
+            -2.0
+            + 0.25 * engagement_score  # TRUE CAUSAL EFFECT
+            + 0.4 * disease_severity
+            + 0.6 * hcp_academic
+            + np.random.normal(0, 1, n_patients)
         )
         treatment_initiated = (expit(outcome_propensity) > 0.5).astype(int)
 
@@ -138,35 +136,37 @@ class TestSyntheticDataPipelineIntegration:
             else:
                 data_splits.append("holdout")
 
-        patient_df = pd.DataFrame({
-            "patient_journey_id": [f"patient_{i:06d}" for i in range(n_patients)],
-            "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
-            "hcp_id": hcp_ids,
-            "brand": np.random.choice(
-                ["Remibrutinib", "Fabhalta", "Kisqali"],
-                n_patients,
-            ),
-            "journey_start_date": [d.strftime("%Y-%m-%d") for d in journey_dates],
-            "data_split": data_splits,
-            "disease_severity": disease_severity,
-            "academic_hcp": hcp_academic,
-            "engagement_score": engagement_score,
-            "treatment_initiated": treatment_initiated,
-            "days_to_treatment": np.where(
-                treatment_initiated == 1,
-                np.random.randint(7, 90, n_patients),
-                None,
-            ),
-            "geographic_region": np.random.choice(
-                ["northeast", "south", "midwest", "west"],
-                n_patients,
-            ),
-            "insurance_type": np.random.choice(
-                ["commercial", "medicare", "medicaid"],
-                n_patients,
-            ),
-            "age_at_diagnosis": np.random.randint(18, 80, n_patients),
-        })
+        patient_df = pd.DataFrame(
+            {
+                "patient_journey_id": [f"patient_{i:06d}" for i in range(n_patients)],
+                "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
+                "hcp_id": hcp_ids,
+                "brand": np.random.choice(
+                    ["Remibrutinib", "Fabhalta", "Kisqali"],
+                    n_patients,
+                ),
+                "journey_start_date": [d.strftime("%Y-%m-%d") for d in journey_dates],
+                "data_split": data_splits,
+                "disease_severity": disease_severity,
+                "academic_hcp": hcp_academic,
+                "engagement_score": engagement_score,
+                "treatment_initiated": treatment_initiated,
+                "days_to_treatment": np.where(
+                    treatment_initiated == 1,
+                    np.random.randint(7, 90, n_patients),
+                    None,
+                ),
+                "geographic_region": np.random.choice(
+                    ["northeast", "south", "midwest", "west"],
+                    n_patients,
+                ),
+                "insurance_type": np.random.choice(
+                    ["commercial", "medicare", "medicaid"],
+                    n_patients,
+                ),
+                "age_at_diagnosis": np.random.randint(18, 80, n_patients),
+            }
+        )
 
         return {
             "hcp_profiles": hcp_df,
@@ -181,15 +181,17 @@ class TestSyntheticDataPipelineIntegration:
         synthetic_dataset,
     ):
         """Test the complete validation pipeline."""
-        hcp_df = synthetic_dataset["hcp_profiles"]
+        synthetic_dataset["hcp_profiles"]
         patient_df = synthetic_dataset["patient_journeys"]
 
         # 1. Schema validation
         schema_results = schema_validator.validate_all(synthetic_dataset)
-        assert schema_results["hcp_profiles"].is_valid is True, \
+        assert schema_results["hcp_profiles"].is_valid is True, (
             f"HCP schema validation failed: {schema_results['hcp_profiles'].errors}"
-        assert schema_results["patient_journeys"].is_valid is True, \
+        )
+        assert schema_results["patient_journeys"].is_valid is True, (
             f"Patient schema validation failed: {schema_results['patient_journeys'].errors}"
+        )
 
         # 2. Split validation
         split_result = split_validator.validate(
@@ -198,8 +200,7 @@ class TestSyntheticDataPipelineIntegration:
             date_column="journey_start_date",
             split_column="data_split",
         )
-        assert split_result.is_valid is True, \
-            f"Split validation failed: {split_result.leakages}"
+        assert split_result.is_valid is True, f"Split validation failed: {split_result.leakages}"
         assert not split_result.has_critical_leakage()
 
         # 3. Causal validation
@@ -299,7 +300,7 @@ class TestSyntheticDataPipelineIntegration:
         # Process in batches
         batch_size = 100
         for i in range(0, len(patient_df), batch_size):
-            batch = patient_df.iloc[i:i + batch_size]
+            batch = patient_df.iloc[i : i + batch_size]
             # Simulate processing
             _ = batch.describe()
 
@@ -361,65 +362,90 @@ class TestPipelineValidationPhase6:
             engagement_score = expit(propensity / 3) * 10
         else:
             # Standard confounding
-            propensity = 3.0 + 0.3 * disease_severity + 2.0 * academic_hcp + np.random.normal(0, 1, n_patients)
+            propensity = (
+                3.0
+                + 0.3 * disease_severity
+                + 2.0 * academic_hcp
+                + np.random.normal(0, 1, n_patients)
+            )
             engagement_score = expit(propensity / 3) * 10
 
         # Generate outcome based on DGP type
         if dgp_type == DGPType.SIMPLE_LINEAR:
-            outcome_propensity = -2.0 + true_ate * engagement_score + np.random.normal(0, 1, n_patients)
+            outcome_propensity = (
+                -2.0 + true_ate * engagement_score + np.random.normal(0, 1, n_patients)
+            )
         elif dgp_type == DGPType.HETEROGENEOUS:
             # CATE by segment
-            cate = np.where(
-                disease_severity > 7, 0.50,
-                np.where(disease_severity > 4, 0.30, 0.15)
-            )
+            cate = np.where(disease_severity > 7, 0.50, np.where(disease_severity > 4, 0.30, 0.15))
             outcome_propensity = (
-                -2.0 + cate * engagement_score + 0.4 * disease_severity +
-                0.6 * academic_hcp + np.random.normal(0, 1, n_patients)
+                -2.0
+                + cate * engagement_score
+                + 0.4 * disease_severity
+                + 0.6 * academic_hcp
+                + np.random.normal(0, 1, n_patients)
             )
         elif dgp_type == DGPType.TIME_SERIES:
             lag_effect = 0.85 ** np.arange(n_patients)
             effective_treatment = engagement_score * (0.5 + 0.5 * lag_effect)
             outcome_propensity = (
-                -2.0 + true_ate * effective_treatment + 0.4 * disease_severity +
-                0.6 * academic_hcp + np.random.normal(0, 1, n_patients)
+                -2.0
+                + true_ate * effective_treatment
+                + 0.4 * disease_severity
+                + 0.6 * academic_hcp
+                + np.random.normal(0, 1, n_patients)
             )
         elif dgp_type == DGPType.SELECTION_BIAS:
             selection_baseline = 0.3 * disease_severity
             outcome_propensity = (
-                -2.0 + selection_baseline + true_ate * engagement_score +
-                0.2 * disease_severity + 0.6 * academic_hcp + np.random.normal(0, 1, n_patients)
+                -2.0
+                + selection_baseline
+                + true_ate * engagement_score
+                + 0.2 * disease_severity
+                + 0.6 * academic_hcp
+                + np.random.normal(0, 1, n_patients)
             )
         else:  # CONFOUNDED
             outcome_propensity = (
-                -2.0 + true_ate * engagement_score + 0.4 * disease_severity +
-                0.6 * academic_hcp + np.random.normal(0, 1, n_patients)
+                -2.0
+                + true_ate * engagement_score
+                + 0.4 * disease_severity
+                + 0.6 * academic_hcp
+                + np.random.normal(0, 1, n_patients)
             )
 
         treatment_initiated = (expit(outcome_propensity) > 0.5).astype(int)
 
         # Build DataFrame
-        df = pd.DataFrame({
-            "patient_journey_id": [f"patient_{i:06d}" for i in range(n_patients)],
-            "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
-            "hcp_id": [f"hcp_{i % 50:05d}" for i in range(n_patients)],
-            "brand": ["Remibrutinib"] * n_patients,
-            "journey_start_date": [
-                (date(2022, 1, 1) + timedelta(days=i * 2)).strftime("%Y-%m-%d")
-                for i in range(n_patients)
-            ],
-            "data_split": ["train"] * int(n_patients * 0.6) +
-                         ["validation"] * int(n_patients * 0.2) +
-                         ["test"] * int(n_patients * 0.15) +
-                         ["holdout"] * (n_patients - int(n_patients * 0.6) - int(n_patients * 0.2) - int(n_patients * 0.15)),
-            "disease_severity": disease_severity,
-            "academic_hcp": academic_hcp,
-            "engagement_score": engagement_score,
-            "treatment_initiated": treatment_initiated,
-            "geographic_region": ["northeast"] * n_patients,
-            "insurance_type": ["commercial"] * n_patients,
-            "age_at_diagnosis": np.random.randint(18, 80, n_patients),
-        })
+        df = pd.DataFrame(
+            {
+                "patient_journey_id": [f"patient_{i:06d}" for i in range(n_patients)],
+                "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
+                "hcp_id": [f"hcp_{i % 50:05d}" for i in range(n_patients)],
+                "brand": ["Remibrutinib"] * n_patients,
+                "journey_start_date": [
+                    (date(2022, 1, 1) + timedelta(days=i * 2)).strftime("%Y-%m-%d")
+                    for i in range(n_patients)
+                ],
+                "data_split": ["train"] * int(n_patients * 0.6)
+                + ["validation"] * int(n_patients * 0.2)
+                + ["test"] * int(n_patients * 0.15)
+                + ["holdout"]
+                * (
+                    n_patients
+                    - int(n_patients * 0.6)
+                    - int(n_patients * 0.2)
+                    - int(n_patients * 0.15)
+                ),
+                "disease_severity": disease_severity,
+                "academic_hcp": academic_hcp,
+                "engagement_score": engagement_score,
+                "treatment_initiated": treatment_initiated,
+                "geographic_region": ["northeast"] * n_patients,
+                "insurance_type": ["commercial"] * n_patients,
+                "age_at_diagnosis": np.random.randint(18, 80, n_patients),
+            }
+        )
 
         df.attrs["true_ate"] = true_ate
         df.attrs["dgp_type"] = dgp_type.value
@@ -608,10 +634,7 @@ class TestPipelineValidationPhase6:
             assert result["estimated_ate"] is not None, f"{dgp_name}: ATE estimation failed"
 
         # Count DGPs with positive effects (correct direction)
-        positive_effects = sum(
-            1 for r in results.values()
-            if r["is_positive"]
-        )
+        positive_effects = sum(1 for r in results.values() if r["is_positive"])
 
         # All DGPs should detect positive effects (correct direction)
         pass_rate = positive_effects / len(results)
@@ -719,24 +742,29 @@ class TestValidatorIntegration:
         n = 100
 
         # Create minimal valid data
-        df = pd.DataFrame({
-            "patient_id": [f"pt_{i:05d}" for i in range(n)],
-            "patient_journey_id": [f"journey_{i:05d}" for i in range(n)],
-            "hcp_id": [f"hcp_{i % 10:05d}" for i in range(n)],
-            "brand": ["Remibrutinib"] * n,
-            "journey_start_date": [
-                (date(2022, 1, 1) + timedelta(days=i * 10)).strftime("%Y-%m-%d")
-                for i in range(n)
-            ],
-            "data_split": ["train"] * 60 + ["validation"] * 20 + ["test"] * 15 + ["holdout"] * 5,
-            "disease_severity": np.random.uniform(0, 10, n),
-            "academic_hcp": np.random.binomial(1, 0.3, n),
-            "engagement_score": np.random.uniform(0, 10, n),
-            "treatment_initiated": np.random.binomial(1, 0.5, n),
-            "geographic_region": ["northeast"] * n,
-            "insurance_type": ["commercial"] * n,
-            "age_at_diagnosis": np.random.randint(18, 80, n),
-        })
+        df = pd.DataFrame(
+            {
+                "patient_id": [f"pt_{i:05d}" for i in range(n)],
+                "patient_journey_id": [f"journey_{i:05d}" for i in range(n)],
+                "hcp_id": [f"hcp_{i % 10:05d}" for i in range(n)],
+                "brand": ["Remibrutinib"] * n,
+                "journey_start_date": [
+                    (date(2022, 1, 1) + timedelta(days=i * 10)).strftime("%Y-%m-%d")
+                    for i in range(n)
+                ],
+                "data_split": ["train"] * 60
+                + ["validation"] * 20
+                + ["test"] * 15
+                + ["holdout"] * 5,
+                "disease_severity": np.random.uniform(0, 10, n),
+                "academic_hcp": np.random.binomial(1, 0.3, n),
+                "engagement_score": np.random.uniform(0, 10, n),
+                "treatment_initiated": np.random.binomial(1, 0.5, n),
+                "geographic_region": ["northeast"] * n,
+                "insurance_type": ["commercial"] * n,
+                "age_at_diagnosis": np.random.randint(18, 80, n),
+            }
+        )
 
         # Schema validation
         schema_validator = SchemaValidator()

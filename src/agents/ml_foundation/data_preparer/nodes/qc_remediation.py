@@ -5,8 +5,7 @@ and attempt automatic remediation when possible.
 """
 
 import logging
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import anthropic
 import pandas as pd
@@ -127,7 +126,6 @@ def _gather_qc_context(state: DataPreparerState) -> Dict[str, Any]:
         "qc_status": state.get("qc_status", "unknown"),
         "overall_score": state.get("overall_score"),
         "gate_passed": state.get("gate_passed", False),
-
         # Dimension scores
         "dimension_scores": {
             "completeness": state.get("completeness_score"),
@@ -136,29 +134,27 @@ def _gather_qc_context(state: DataPreparerState) -> Dict[str, Any]:
             "uniqueness": state.get("uniqueness_score"),
             "timeliness": state.get("timeliness_score"),
         },
-
         # Issues
         "blocking_issues": state.get("blocking_issues", []),
         "failed_expectations": state.get("failed_expectations", []),
         "warnings": state.get("warnings", []),
         "existing_remediation_steps": state.get("remediation_steps", []),
-
         # Schema validation
         "schema_validation_status": state.get("schema_validation_status"),
         "schema_validation_errors": state.get("schema_validation_errors", []),
-
         # Leakage detection
         "leakage_detected": state.get("leakage_detected", False),
         "leakage_issues": state.get("leakage_issues", []),
-
         # Data stats
         "data_stats": {
             "train_samples": len(train_df) if train_df is not None else 0,
             "columns": list(train_df.columns) if train_df is not None else [],
-            "dtypes": {col: str(dtype) for col, dtype in (train_df.dtypes.items() if train_df is not None else {})},
+            "dtypes": {
+                col: str(dtype)
+                for col, dtype in (train_df.dtypes.items() if train_df is not None else {})
+            },
             "null_counts": train_df.isnull().sum().to_dict() if train_df is not None else {},
         },
-
         # Configuration
         "scope_spec": state.get("scope_spec", {}),
     }
@@ -221,41 +217,41 @@ def _build_qc_analysis_prompt(context: Dict[str, Any]) -> str:
     prompt = f"""You are a data quality expert analyzing ML pipeline QC failures.
 
 ## QC Status
-- Overall Status: {context.get('qc_status', 'unknown')}
-- Overall Score: {context.get('overall_score', 'N/A')}
-- Gate Passed: {context.get('gate_passed', False)}
+- Overall Status: {context.get("qc_status", "unknown")}
+- Overall Score: {context.get("overall_score", "N/A")}
+- Gate Passed: {context.get("gate_passed", False)}
 
 ## Dimension Scores
-- Completeness: {dimension_scores.get('completeness', 'N/A')}
-- Validity: {dimension_scores.get('validity', 'N/A')}
-- Consistency: {dimension_scores.get('consistency', 'N/A')}
-- Uniqueness: {dimension_scores.get('uniqueness', 'N/A')}
-- Timeliness: {dimension_scores.get('timeliness', 'N/A')}
+- Completeness: {dimension_scores.get("completeness", "N/A")}
+- Validity: {dimension_scores.get("validity", "N/A")}
+- Consistency: {dimension_scores.get("consistency", "N/A")}
+- Uniqueness: {dimension_scores.get("uniqueness", "N/A")}
+- Timeliness: {dimension_scores.get("timeliness", "N/A")}
 
 ## Blocking Issues
-{chr(10).join(f'- {issue}' for issue in blocking_issues) if blocking_issues else '- None detected'}
+{chr(10).join(f"- {issue}" for issue in blocking_issues) if blocking_issues else "- None detected"}
 
 ## Data Statistics
-- Training samples: {data_stats.get('train_samples', 0)}
-- Columns: {len(data_stats.get('columns', []))}
-- Null counts per column: {data_stats.get('null_counts', {})}
+- Training samples: {data_stats.get("train_samples", 0)}
+- Columns: {len(data_stats.get("columns", []))}
+- Null counts per column: {data_stats.get("null_counts", {})}
 
 ## Schema Validation
-- Status: {context.get('schema_validation_status', 'unknown')}
-- Errors: {context.get('schema_validation_errors', [])}
+- Status: {context.get("schema_validation_status", "unknown")}
+- Errors: {context.get("schema_validation_errors", [])}
 
 ## Leakage Detection
-- Leakage Detected: {context.get('leakage_detected', False)}
-- Issues: {context.get('leakage_issues', [])}
+- Leakage Detected: {context.get("leakage_detected", False)}
+- Issues: {context.get("leakage_issues", [])}
 
 ## Failed Expectations
-{context.get('failed_expectations', [])}
+{context.get("failed_expectations", [])}
 
 ## Warnings
-{context.get('warnings', [])}
+{context.get("warnings", [])}
 
 ## Existing Remediation Suggestions
-{context.get('existing_remediation_steps', [])}
+{context.get("existing_remediation_steps", [])}
 
 ---
 
@@ -414,7 +410,9 @@ def _rule_based_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
     # Analyze dimension scores
     for dim, score in dimension_scores.items():
         if score is None:
-            analysis["root_causes"].append(f"{dim} score could not be computed - check if data loaded correctly")
+            analysis["root_causes"].append(
+                f"{dim} score could not be computed - check if data loaded correctly"
+            )
         elif score < 0.80:
             analysis["root_causes"].append(f"Low {dim} score ({score:.2f}) below 0.80 threshold")
 
@@ -435,11 +433,13 @@ def _rule_based_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
         analysis["root_causes"].append(f"Columns with null values: {', '.join(high_null_cols[:5])}")
         analysis["can_auto_remediate"] = True
         for col in high_null_cols[:3]:  # Limit to first 3
-            analysis["remediation_actions"].append({
-                "type": "impute",
-                "column": col,
-                "params": {"strategy": "median" if "score" in col.lower() else "mode"},
-            })
+            analysis["remediation_actions"].append(
+                {
+                    "type": "impute",
+                    "column": col,
+                    "params": {"strategy": "median" if "score" in col.lower() else "mode"},
+                }
+            )
 
     # Check for leakage
     if context.get("leakage_detected"):
@@ -450,11 +450,13 @@ def _rule_based_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
 
     # Analyze blocking issues
     for issue in blocking_issues:
-        analysis["blocking_issues_analysis"].append({
-            "issue": issue,
-            "severity": "blocking",
-            "can_auto_fix": False,
-        })
+        analysis["blocking_issues_analysis"].append(
+            {
+                "issue": issue,
+                "severity": "blocking",
+                "can_auto_fix": False,
+            }
+        )
 
     # Determine effort
     if len(analysis["root_causes"]) > 3:
@@ -485,7 +487,6 @@ async def _apply_automatic_remediation(
         Result of remediation attempt
     """
     actions_taken = []
-    errors = []
 
     train_df = state.get("train_df")
     validation_df = state.get("validation_df")
@@ -586,9 +587,7 @@ async def _generate_failure_analysis(state: DataPreparerState) -> Dict[str, Any]
             f"Status: {context.get('qc_status')}, Score: {context.get('overall_score')}"
         ),
         "blocking_issues": context.get("blocking_issues", []),
-        "root_causes_identified": [
-            issue for issue in context.get("blocking_issues", [])
-        ],
+        "root_causes_identified": list(context.get("blocking_issues", [])),
         "recommended_manual_actions": [
             "Review data source connectivity (SUPABASE_URL)",
             "Check data loading node for errors",

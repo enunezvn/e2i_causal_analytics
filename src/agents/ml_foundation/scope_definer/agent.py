@@ -16,7 +16,7 @@ Integration:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from .graph import create_scope_definer_graph
 from .state import ScopeDefinerState
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 async def _get_experiment_repository():
     """Get MLExperimentRepository with async client (lazy import to avoid circular deps)."""
     try:
-        from src.repositories.ml_experiment import MLExperimentRepository
         from src.memory.services.factories import get_async_supabase_client
+        from src.repositories.ml_experiment import MLExperimentRepository
 
         client = await get_async_supabase_client()
         return MLExperimentRepository(supabase_client=client)
@@ -41,6 +41,7 @@ def _get_opik_connector():
     """Get OpikConnector (lazy import to avoid circular deps)."""
     try:
         from src.mlops.opik_connector import get_opik_connector
+
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
@@ -51,6 +52,7 @@ def _get_procedural_memory():
     """Get procedural memory client (lazy import with graceful degradation)."""
     try:
         from src.memory.procedural_memory import get_procedural_memory_client
+
         return get_procedural_memory_client()
     except Exception as e:
         logger.debug(f"Procedural memory not available: {e}")
@@ -169,11 +171,15 @@ class ScopeDefinerAgent:
                     final_state = await self.graph.ainvoke(initial_state)
                     # Set output on span
                     if span:
-                        span.set_output({
-                            "experiment_id": final_state.get("experiment_id"),
-                            "problem_type": final_state.get("scope_spec", {}).get("problem_type"),
-                            "validation_passed": final_state.get("validation_passed"),
-                        })
+                        span.set_output(
+                            {
+                                "experiment_id": final_state.get("experiment_id"),
+                                "problem_type": final_state.get("scope_spec", {}).get(
+                                    "problem_type"
+                                ),
+                                "validation_passed": final_state.get("validation_passed"),
+                            }
+                        )
             else:
                 final_state = await self.graph.ainvoke(initial_state)
 
@@ -209,9 +215,7 @@ class ScopeDefinerAgent:
 
             # Log execution time
             duration = (datetime.now() - start_time).total_seconds()
-            logger.info(
-                f"Scope definition completed in {duration:.2f}s (SLA: {self.sla_seconds}s)"
-            )
+            logger.info(f"Scope definition completed in {duration:.2f}s (SLA: {self.sla_seconds}s)")
 
             # Check SLA
             if duration > self.sla_seconds:

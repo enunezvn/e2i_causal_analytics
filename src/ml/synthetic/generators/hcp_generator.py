@@ -4,18 +4,18 @@ HCP (Healthcare Provider) Generator.
 Generates synthetic HCP profiles matching Supabase schema.
 """
 
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 import pandas as pd
 
-from .base import BaseGenerator, GeneratorConfig
 from ..config import (
     Brand,
-    SpecialtyEnum,
     PracticeTypeEnum,
     RegionEnum,
+    SpecialtyEnum,
 )
+from .base import BaseGenerator
 
 
 class HCPGenerator(BaseGenerator[pd.DataFrame]):
@@ -95,21 +95,23 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
         practice_types = self._generate_practice_types(specialties)
 
         # Generate base data
-        df = pd.DataFrame({
-            "hcp_id": self._generate_ids("hcp", n),
-            "npi": self._generate_npis(n),
-            "specialty": specialties,
-            "practice_type": practice_types,
-            "geographic_region": self._random_choice(
-                [r.value for r in RegionEnum],
-                n,
-                p=[self.REGION_DIST[r] for r in RegionEnum],
-            ),
-            "years_experience": self._random_int(2, 40, n),
-            "academic_hcp": self._generate_academic_flags(practice_types),
-            "total_patient_volume": self._generate_patient_volumes(practice_types),
-            "brand": brands,
-        })
+        df = pd.DataFrame(
+            {
+                "hcp_id": self._generate_ids("hcp", n),
+                "npi": self._generate_npis(n),
+                "specialty": specialties,
+                "practice_type": practice_types,
+                "geographic_region": self._random_choice(
+                    [r.value for r in RegionEnum],
+                    n,
+                    p=[self.REGION_DIST[r] for r in RegionEnum],
+                ),
+                "years_experience": self._random_int(2, 40, n),
+                "academic_hcp": self._generate_academic_flags(practice_types),
+                "total_patient_volume": self._generate_patient_volumes(practice_types),
+                "brand": brands,
+            }
+        )
 
         self._log(f"Generated {len(df)} HCP profiles")
         return df
@@ -146,10 +148,7 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
             if "oncology" in specialty.lower():
                 probs = [0.40, 0.40, 0.20]  # Higher academic
             else:
-                probs = [
-                    self.PRACTICE_TYPE_DIST[p]
-                    for p in PracticeTypeEnum
-                ]
+                probs = [self.PRACTICE_TYPE_DIST[p] for p in PracticeTypeEnum]
 
             practice_type = self._rng.choice(
                 [p.value for p in PracticeTypeEnum],

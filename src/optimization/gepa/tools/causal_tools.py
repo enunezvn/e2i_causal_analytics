@@ -8,7 +8,7 @@ Primary use case: Causal Impact agent (Tier 2 Hybrid) with DoWhy/EconML estimato
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 
 @dataclass

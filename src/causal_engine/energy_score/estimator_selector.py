@@ -32,7 +32,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Protocol, TypeVar
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -42,7 +42,6 @@ from .score_calculator import (
     EnergyScoreCalculator,
     EnergyScoreConfig,
     EnergyScoreResult,
-    compute_energy_score,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,9 +64,9 @@ class EstimatorType(str, Enum):
 class SelectionStrategy(str, Enum):
     """Strategy for selecting among estimators."""
 
-    FIRST_SUCCESS = "first_success"    # Legacy: use first that doesn't fail
+    FIRST_SUCCESS = "first_success"  # Legacy: use first that doesn't fail
     BEST_ENERGY_SCORE = "best_energy"  # New: use lowest energy score
-    ENSEMBLE = "ensemble"               # Future: combine multiple estimators
+    ENSEMBLE = "ensemble"  # Future: combine multiple estimators
 
 
 @dataclass
@@ -106,7 +105,7 @@ class EstimatorResult:
     def energy_score(self) -> float:
         """Get energy score value, or infinity if not computed."""
         if self.energy_score_result is None:
-            return float('inf')
+            return float("inf")
         return self.energy_score_result.energy_score
 
     def to_dict(self) -> dict[str, Any]:
@@ -181,12 +180,14 @@ class EstimatorSelectorConfig:
     strategy: SelectionStrategy = SelectionStrategy.BEST_ENERGY_SCORE
 
     # Estimator chain (ordered by priority)
-    estimators: list[EstimatorConfig] = field(default_factory=lambda: [
-        EstimatorConfig(EstimatorType.CAUSAL_FOREST, priority=1),
-        EstimatorConfig(EstimatorType.LINEAR_DML, priority=2),
-        EstimatorConfig(EstimatorType.DRLEARNER, priority=3),
-        EstimatorConfig(EstimatorType.OLS, priority=4),
-    ])
+    estimators: list[EstimatorConfig] = field(
+        default_factory=lambda: [
+            EstimatorConfig(EstimatorType.CAUSAL_FOREST, priority=1),
+            EstimatorConfig(EstimatorType.LINEAR_DML, priority=2),
+            EstimatorConfig(EstimatorType.DRLEARNER, priority=3),
+            EstimatorConfig(EstimatorType.OLS, priority=4),
+        ]
+    )
 
     # Energy score configuration
     energy_score_config: EnergyScoreConfig = field(default_factory=EnergyScoreConfig)
@@ -213,7 +214,7 @@ class BaseEstimatorWrapper(ABC):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         """Fit the estimator and return results."""
         pass
@@ -240,10 +241,11 @@ class CausalForestWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
         import warnings
+
         start = time.perf_counter()
 
         try:
@@ -286,6 +288,7 @@ class CausalForestWrapper(BaseEstimatorWrapper):
 
             # Estimate propensity scores for energy score
             from sklearn.linear_model import LogisticRegressionCV
+
             ps_model = LogisticRegressionCV(cv=3, max_iter=500)
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
@@ -332,14 +335,15 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
+
         start = time.perf_counter()
 
         try:
             from econml.dml import LinearDML
-            from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+            from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
             # Fit model
             model = LinearDML(
@@ -366,6 +370,7 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
+
             ps_model = LogisticRegressionCV(cv=3, max_iter=500)
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
@@ -412,14 +417,15 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
+
         start = time.perf_counter()
 
         try:
             from econml.dr import DRLearner
-            from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
+            from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
             model = DRLearner(
                 model_regression=GradientBoostingRegressor(n_estimators=50, random_state=42),
@@ -438,6 +444,7 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
+
             ps_model = LogisticRegressionCV(cv=3, max_iter=500)
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
@@ -484,9 +491,10 @@ class OLSWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
+
         start = time.perf_counter()
 
         try:
@@ -518,6 +526,7 @@ class OLSWrapper(BaseEstimatorWrapper):
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
+
             ps_model = LogisticRegressionCV(cv=3, max_iter=500)
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
@@ -573,9 +582,10 @@ class SLearnerWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
+
         start = time.perf_counter()
 
         try:
@@ -608,6 +618,7 @@ class SLearnerWrapper(BaseEstimatorWrapper):
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
+
             ps_model = LogisticRegressionCV(cv=3, max_iter=500)
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
@@ -662,9 +673,10 @@ class TLearnerWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
+
         start = time.perf_counter()
 
         try:
@@ -701,6 +713,7 @@ class TLearnerWrapper(BaseEstimatorWrapper):
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
+
             ps_model = LogisticRegressionCV(cv=3, max_iter=500)
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
@@ -760,9 +773,10 @@ class XLearnerWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
+
         start = time.perf_counter()
 
         try:
@@ -874,9 +888,10 @@ class OrthoForestWrapper(BaseEstimatorWrapper):
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> EstimatorResult:
         import time
+
         start = time.perf_counter()
 
         try:
@@ -912,6 +927,7 @@ class OrthoForestWrapper(BaseEstimatorWrapper):
 
             # Propensity scores
             from sklearn.linear_model import LogisticRegressionCV
+
             ps_model = LogisticRegressionCV(cv=3, max_iter=500)
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
@@ -979,9 +995,7 @@ class EstimatorSelector:
     def __init__(self, config: Optional[EstimatorSelectorConfig] = None):
         """Initialize selector with configuration."""
         self.config = config or EstimatorSelectorConfig()
-        self.energy_calculator = EnergyScoreCalculator(
-            self.config.energy_score_config
-        )
+        self.energy_calculator = EnergyScoreCalculator(self.config.energy_score_config)
 
         # Build estimator chain
         self.estimators: list[BaseEstimatorWrapper] = []
@@ -995,7 +1009,7 @@ class EstimatorSelector:
         treatment: NDArray[np.int_],
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
-        **kwargs
+        **kwargs,
     ) -> SelectionResult:
         """
         Evaluate all estimators and select the best one.
@@ -1010,6 +1024,7 @@ class EstimatorSelector:
             SelectionResult with selected estimator and comparison data
         """
         import time
+
         total_start = time.perf_counter()
 
         results: list[EstimatorResult] = []
@@ -1024,6 +1039,7 @@ class EstimatorSelector:
             if result.success and result.cate is not None:
                 # Fix 5B: Recursion guard for energy score computation
                 import sys
+
                 old_limit = sys.getrecursionlimit()
                 sys.setrecursionlimit(max(old_limit, 5000))
                 try:
@@ -1061,10 +1077,7 @@ class EstimatorSelector:
             selection = self._select_best_energy(results)  # Default
 
         # Build energy score comparison
-        energy_scores = {
-            r.estimator_type.value: r.energy_score
-            for r in results if r.success
-        }
+        energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
 
         # Compute gap between best and second best
         sorted_scores = sorted([s for s in energy_scores.values() if np.isfinite(s)])
@@ -1091,10 +1104,14 @@ class EstimatorSelector:
         if not successful:
             logger.warning("All estimators failed, using fallback")
             # Return the last failure or create a dummy result
-            return results[-1] if results else EstimatorResult(
-                estimator_type=EstimatorType.OLS,
-                success=False,
-                error_message="All estimators failed",
+            return (
+                results[-1]
+                if results
+                else EstimatorResult(
+                    estimator_type=EstimatorType.OLS,
+                    success=False,
+                    error_message="All estimators failed",
+                )
             )
 
         # Sort by energy score (lower is better)
@@ -1118,16 +1135,18 @@ class EstimatorSelector:
                 return result
 
         # All failed
-        return results[-1] if results else EstimatorResult(
-            estimator_type=EstimatorType.OLS,
-            success=False,
-            error_message="All estimators failed",
+        return (
+            results[-1]
+            if results
+            else EstimatorResult(
+                estimator_type=EstimatorType.OLS,
+                success=False,
+                error_message="All estimators failed",
+            )
         )
 
     def _get_selection_reason(
-        self,
-        selected: EstimatorResult,
-        all_results: list[EstimatorResult]
+        self, selected: EstimatorResult, all_results: list[EstimatorResult]
     ) -> str:
         """Generate human-readable selection reason."""
         if not selected.success:
@@ -1151,7 +1170,7 @@ def select_best_estimator(
     outcome: NDArray[np.float64],
     covariates: pd.DataFrame,
     config: Optional[EstimatorSelectorConfig] = None,
-    **kwargs
+    **kwargs,
 ) -> SelectionResult:
     """
     Convenience function for estimator selection.

@@ -134,10 +134,7 @@ class ChatbotFeedbackRepository(BaseRepository):
             return None
 
         result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("message_id", message_id)
-            .execute()
+            self.client.table(self.table_name).select("*").eq("message_id", message_id).execute()
         )
         return result.data[0] if result.data else None
 

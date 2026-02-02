@@ -10,7 +10,6 @@ Author: E2I Causal Analytics Team
 
 import pytest
 
-
 # =============================================================================
 # VOCABULARY CONTENT TESTS
 # =============================================================================
@@ -26,14 +25,19 @@ class TestVocabularyAgentSync:
 
         # Tier 0 agents as defined in production vocabulary (ML Foundation)
         tier_0_agents = [
-            "scope_definer", "data_preparer", "model_selector",
-            "model_trainer", "model_evaluator", "model_deployer",
-            "model_monitor"
+            "scope_definer",
+            "data_preparer",
+            "model_selector",
+            "model_trainer",
+            "model_evaluator",
+            "model_deployer",
+            "model_monitor",
         ]
 
         for agent in tier_0_agents:
-            assert any(agent in name for name in agent_names), \
+            assert any(agent in name for name in agent_names), (
                 f"Tier 0 agent '{agent}' not found in vocabulary"
+            )
 
     def test_vocabulary_has_all_tier_1_agents(self, vocabulary_registry):
         """Test that vocabulary includes all Tier 1 orchestration agents."""
@@ -42,19 +46,26 @@ class TestVocabularyAgentSync:
         tier_1_agents = ["orchestrator", "tool_composer"]
 
         for agent in tier_1_agents:
-            assert any(agent in name for name in agent_names), \
+            assert any(agent in name for name in agent_names), (
                 f"Tier 1 agent '{agent}' not found in vocabulary"
+            )
 
     def test_vocabulary_has_all_tier_2_agents(self, vocabulary_registry):
         """Test that vocabulary includes all Tier 2 causal analytics agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
         # Tier 2: Causal Analytics (4 agents) - includes experiment_designer
-        tier_2_agents = ["causal_impact", "gap_analyzer", "heterogeneous_optimizer", "experiment_designer"]
+        tier_2_agents = [
+            "causal_impact",
+            "gap_analyzer",
+            "heterogeneous_optimizer",
+            "experiment_designer",
+        ]
 
         for agent in tier_2_agents:
-            assert any(agent in name for name in agent_names), \
+            assert any(agent in name for name in agent_names), (
                 f"Tier 2 agent '{agent}' not found in vocabulary"
+            )
 
     def test_vocabulary_has_all_tier_3_agents(self, vocabulary_registry):
         """Test that vocabulary includes all Tier 3 monitoring agents."""
@@ -65,8 +76,9 @@ class TestVocabularyAgentSync:
         tier_3_agents = ["drift_monitor", "data_quality_monitor", "health_score"]
 
         for agent in tier_3_agents:
-            assert any(agent in name for name in agent_names), \
+            assert any(agent in name for name in agent_names), (
                 f"Tier 3 agent '{agent}' not found in vocabulary"
+            )
 
     def test_vocabulary_has_all_tier_4_agents(self, vocabulary_registry):
         """Test that vocabulary includes all Tier 4 ML prediction agents."""
@@ -77,8 +89,9 @@ class TestVocabularyAgentSync:
         tier_4_agents = ["prediction_synthesizer", "risk_assessor", "resource_optimizer"]
 
         for agent in tier_4_agents:
-            assert any(agent in name for name in agent_names), \
+            assert any(agent in name for name in agent_names), (
                 f"Tier 4 agent '{agent}' not found in vocabulary"
+            )
 
     def test_vocabulary_has_all_tier_5_agents(self, vocabulary_registry):
         """Test that vocabulary includes all Tier 5 self-improvement agents."""
@@ -88,15 +101,17 @@ class TestVocabularyAgentSync:
         tier_5_agents = ["explainer", "feedback_learner"]
 
         for agent in tier_5_agents:
-            assert any(agent in name for name in agent_names), \
+            assert any(agent in name for name in agent_names), (
                 f"Tier 5 agent '{agent}' not found in vocabulary"
+            )
 
     def test_vocabulary_has_explainer_agent(self, vocabulary_registry):
         """Test that vocabulary includes Explainer agent for self-improvement."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        assert any("explainer" in name for name in agent_names), \
+        assert any("explainer" in name for name in agent_names), (
             "Explainer agent not found in vocabulary"
+        )
 
     def test_health_score_in_tier_3(self, vocabulary_registry):
         """Test that health_score is classified in Tier 3 (Monitoring).
@@ -107,8 +122,9 @@ class TestVocabularyAgentSync:
         agents = vocabulary_registry.get_agents()
         tier_3_agents = agents.get("tier_3_monitoring", [])
 
-        assert "health_score" in tier_3_agents, \
+        assert "health_score" in tier_3_agents, (
             f"health_score should be in tier_3_monitoring, not legacy. Found in: {[k for k, v in agents.items() if 'health_score' in v]}"
+        )
 
     def test_resource_optimizer_in_tier_4(self, vocabulary_registry):
         """Test that resource_optimizer is classified in Tier 4 (Prediction).
@@ -119,8 +135,9 @@ class TestVocabularyAgentSync:
         agents = vocabulary_registry.get_agents()
         tier_4_agents = agents.get("tier_4_prediction", [])
 
-        assert "resource_optimizer" in tier_4_agents, \
+        assert "resource_optimizer" in tier_4_agents, (
             f"resource_optimizer should be in tier_4_prediction, not legacy. Found in: {[k for k, v in agents.items() if 'resource_optimizer' in v]}"
+        )
 
     def test_no_agents_in_legacy(self, vocabulary_registry):
         """Test that no agents remain in legacy section.
@@ -132,8 +149,9 @@ class TestVocabularyAgentSync:
         agents = vocabulary_registry.get_agents()
         legacy_agents = agents.get("legacy", [])
 
-        assert len(legacy_agents) == 0, \
+        assert len(legacy_agents) == 0, (
             f"Legacy section should be empty after reclassification. Found: {legacy_agents}"
+        )
 
     def test_vocabulary_agent_count_matches_expected(self, vocabulary_registry):
         """Test that vocabulary has expected number of agents (18-20)."""
@@ -165,24 +183,23 @@ class TestVocabularyBrandSync:
         brands = vocabulary_registry.get_brands()
         brand_names = self._get_brand_names(brands)
 
-        assert any("remibrutinib" in name for name in brand_names), \
+        assert any("remibrutinib" in name for name in brand_names), (
             "Remibrutinib not found in vocabulary"
+        )
 
     def test_vocabulary_has_fabhalta(self, vocabulary_registry):
         """Test that vocabulary includes Fabhalta brand."""
         brands = vocabulary_registry.get_brands()
         brand_names = self._get_brand_names(brands)
 
-        assert any("fabhalta" in name for name in brand_names), \
-            "Fabhalta not found in vocabulary"
+        assert any("fabhalta" in name for name in brand_names), "Fabhalta not found in vocabulary"
 
     def test_vocabulary_has_kisqali(self, vocabulary_registry):
         """Test that vocabulary includes Kisqali brand."""
         brands = vocabulary_registry.get_brands()
         brand_names = self._get_brand_names(brands)
 
-        assert any("kisqali" in name for name in brand_names), \
-            "Kisqali not found in vocabulary"
+        assert any("kisqali" in name for name in brand_names), "Kisqali not found in vocabulary"
 
     def test_vocabulary_brand_count_matches_expected(self, vocabulary_registry):
         """Test that vocabulary has expected number of brands."""
@@ -212,32 +229,30 @@ class TestVocabularyRegionSync:
         regions = vocabulary_registry.get_regions()
         region_names = self._get_region_names(regions)
 
-        assert any("northeast" in r for r in region_names), \
+        assert any("northeast" in r for r in region_names), (
             "Northeast region not found in vocabulary"
+        )
 
     def test_vocabulary_has_south_region(self, vocabulary_registry):
         """Test that vocabulary includes South US region."""
         regions = vocabulary_registry.get_regions()
         region_names = self._get_region_names(regions)
 
-        assert any("south" in r for r in region_names), \
-            "South region not found in vocabulary"
+        assert any("south" in r for r in region_names), "South region not found in vocabulary"
 
     def test_vocabulary_has_midwest_region(self, vocabulary_registry):
         """Test that vocabulary includes Midwest US region."""
         regions = vocabulary_registry.get_regions()
         region_names = self._get_region_names(regions)
 
-        assert any("midwest" in r for r in region_names), \
-            "Midwest region not found in vocabulary"
+        assert any("midwest" in r for r in region_names), "Midwest region not found in vocabulary"
 
     def test_vocabulary_has_west_region(self, vocabulary_registry):
         """Test that vocabulary includes West US region."""
         regions = vocabulary_registry.get_regions()
         region_names = self._get_region_names(regions)
 
-        assert any("west" in r for r in region_names), \
-            "West region not found in vocabulary"
+        assert any("west" in r for r in region_names), "West region not found in vocabulary"
 
     def test_vocabulary_regions_have_names(self, vocabulary_registry):
         """Test that all regions have name identifiers."""
@@ -245,7 +260,7 @@ class TestVocabularyRegionSync:
 
         # get_regions() returns list[str], so each item is already a string identifier
         for region in regions:
-            assert region, f"Empty region identifier found"
+            assert region, "Empty region identifier found"
 
 
 # =============================================================================
@@ -269,8 +284,7 @@ class TestVocabularyTierSync:
         tier_keys = [key for key in agents.keys() if key.startswith("tier_")]
 
         # Should have tier keys covering multiple tiers
-        assert len(tier_keys) >= 3, \
-            f"Expected tier keys (tier_X_*), found: {list(agents.keys())}"
+        assert len(tier_keys) >= 3, f"Expected tier keys (tier_X_*), found: {list(agents.keys())}"
 
     def test_vocabulary_tiers_are_valid(self, vocabulary_registry):
         """Test that tier values are in valid range (0-5)."""
@@ -314,7 +328,9 @@ class TestDatabaseEnumStructure:
         agent_names = db_enum_values["agent_name"]
 
         # Should have at least 18 agents
-        assert len(agent_names) >= 18, f"Expected at least 18 agents in enum, found {len(agent_names)}"
+        assert len(agent_names) >= 18, (
+            f"Expected at least 18 agents in enum, found {len(agent_names)}"
+        )
 
 
 # =============================================================================
@@ -348,13 +364,16 @@ class TestVocabularyDatabaseAlignment:
 
         # Check for overlap (may not be exact match due to naming conventions)
         overlap = vocab_region_codes & db_regions
-        assert len(overlap) > 0 or len(vocab_regions) > 0, \
+        assert len(overlap) > 0 or len(vocab_regions) > 0, (
             "No overlap between vocabulary and DB region codes"
+        )
 
     def test_vocabulary_agents_align_with_db(self, vocabulary_registry, db_enum_values):
         """Test that vocabulary agents align with database enum values."""
         # Use get_agent_names() for the flattened list of agent names
-        vocab_agent_names = {name.lower().replace(" ", "_") for name in vocabulary_registry.get_agent_names()}
+        vocab_agent_names = {
+            name.lower().replace(" ", "_") for name in vocabulary_registry.get_agent_names()
+        }
 
         db_agents = {a.lower() for a in db_enum_values["agent_name"]}
 
@@ -389,8 +408,9 @@ class TestVocabularyAliases:
             try:
                 resolved = vocabulary_registry.resolve_alias(alias, "brand")
                 if resolved:
-                    assert expected_contains.lower() in resolved.lower(), \
+                    assert expected_contains.lower() in resolved.lower(), (
                         f"Alias '{alias}' resolved to '{resolved}', expected to contain '{expected_contains}'"
+                    )
             except (AttributeError, NotImplementedError):
                 # Alias resolution may not be implemented
                 pytest.skip("Alias resolution not implemented")
@@ -403,7 +423,7 @@ class TestVocabularyAliases:
             ("EXP", "explainer"),
         ]
 
-        for alias, expected_contains in test_cases:
+        for alias, _expected_contains in test_cases:
             try:
                 resolved = vocabulary_registry.resolve_alias(alias, "agent")
                 if resolved:
@@ -444,7 +464,7 @@ class TestVocabularyValidation:
         agent_names = vocabulary_registry.get_agent_names()
 
         for name in agent_names:
-            assert name, f"Empty agent name found"
+            assert name, "Empty agent name found"
 
     def test_brands_have_required_fields(self, vocabulary_registry):
         """Test that brands have required fields."""
@@ -452,7 +472,7 @@ class TestVocabularyValidation:
 
         # get_brands() returns list[str], each string is the brand name
         for brand in brands:
-            assert brand, f"Empty brand name found"
+            assert brand, "Empty brand name found"
 
 
 # =============================================================================
@@ -469,8 +489,9 @@ class TestMigrationCompatibility:
         # Verify vocabulary can provide values for these
 
         vocab_agent_names = vocabulary_registry.get_agent_names()
-        assert len(vocab_agent_names) >= len(db_enum_values["agent_name"]) - 5, \
+        assert len(vocab_agent_names) >= len(db_enum_values["agent_name"]) - 5, (
             "Vocabulary has significantly fewer agents than DB enum"
+        )
 
     def test_vocabulary_tier_mapping_consistency(self, vocabulary_registry):
         """Test that vocabulary tier mappings are consistent."""
@@ -507,8 +528,9 @@ class TestNodeTypesAgentSync:
     @pytest.fixture
     def node_types_agents(self):
         """Load agent names from node_types.yaml."""
-        import yaml
         from pathlib import Path
+
+        import yaml
 
         node_types_path = Path(__file__).parents[3] / "config" / "ontology" / "node_types.yaml"
         if not node_types_path.exists():
@@ -522,42 +544,44 @@ class TestNodeTypesAgentSync:
         agent_name_prop = properties.get("agent_name", {})
         values = agent_name_prop.get("values", [])
 
-        return set(v.lower() for v in values)
+        return {v.lower() for v in values}
 
     def test_node_types_uses_snake_case(self, node_types_agents):
         """Test that node_types.yaml uses snake_case agent names (not PascalCase)."""
         for agent in node_types_agents:
             # PascalCase would have uppercase letters after the first
-            assert agent == agent.lower(), \
-                f"Agent '{agent}' should be snake_case, not PascalCase"
+            assert agent == agent.lower(), f"Agent '{agent}' should be snake_case, not PascalCase"
             # Should not have spaces
-            assert " " not in agent, \
-                f"Agent '{agent}' should use underscores, not spaces"
+            assert " " not in agent, f"Agent '{agent}' should use underscores, not spaces"
 
     def test_node_types_agents_match_vocabulary(self, vocabulary_registry, node_types_agents):
         """Test that node_types.yaml agent names match domain_vocabulary.yaml."""
-        vocab_agents = set(a.lower() for a in vocabulary_registry.get_agent_names())
+        vocab_agents = {a.lower() for a in vocabulary_registry.get_agent_names()}
 
         # Every agent in node_types should be in vocabulary
         missing_from_vocab = node_types_agents - vocab_agents
-        assert not missing_from_vocab, \
+        assert not missing_from_vocab, (
             f"node_types.yaml has agents not in domain_vocabulary.yaml: {missing_from_vocab}"
+        )
 
     def test_vocabulary_agents_in_node_types(self, vocabulary_registry, node_types_agents):
         """Test that domain_vocabulary.yaml agents are in node_types.yaml."""
-        vocab_agents = set(a.lower() for a in vocabulary_registry.get_agent_names())
+        vocab_agents = {a.lower() for a in vocabulary_registry.get_agent_names()}
 
         # Every vocabulary agent should be in node_types
         missing_from_node_types = vocab_agents - node_types_agents
-        assert not missing_from_node_types, \
+        assert not missing_from_node_types, (
             f"domain_vocabulary.yaml has agents not in node_types.yaml: {missing_from_node_types}"
+        )
 
     def test_node_types_has_18_agents(self, node_types_agents):
         """Test that node_types.yaml has the expected 18 agents."""
-        assert len(node_types_agents) >= 18, \
+        assert len(node_types_agents) >= 18, (
             f"Expected at least 18 agents in node_types.yaml, found {len(node_types_agents)}"
-        assert len(node_types_agents) <= 25, \
+        )
+        assert len(node_types_agents) <= 25, (
             f"Unexpectedly high agent count in node_types.yaml: {len(node_types_agents)}"
+        )
 
 
 # =============================================================================
@@ -571,8 +595,9 @@ class TestJourneyStageConsistency:
     @pytest.fixture
     def core_attributes_stages(self):
         """Load journey stages from core_attributes.yaml."""
-        import yaml
         from pathlib import Path
+
+        import yaml
 
         core_attrs_path = Path(__file__).parents[3] / "config" / "ontology" / "core_attributes.yaml"
         if not core_attrs_path.exists():
@@ -582,13 +607,14 @@ class TestJourneyStageConsistency:
             data = yaml.safe_load(f)
 
         stages = data.get("patient_journey_stages", {}).get("values", [])
-        return set(s.lower() for s in stages)
+        return {s.lower() for s in stages}
 
     @pytest.fixture
     def node_types_stages(self):
         """Load journey stages from node_types.yaml."""
-        import yaml
         from pathlib import Path
+
+        import yaml
 
         node_types_path = Path(__file__).parents[3] / "config" / "ontology" / "node_types.yaml"
         if not node_types_path.exists():
@@ -602,19 +628,29 @@ class TestJourneyStageConsistency:
         journey_prop = properties.get("journey_stage", {})
         values = journey_prop.get("values", [])
 
-        return set(v.lower() for v in values)
+        return {v.lower() for v in values}
 
     def test_engagement_stages_in_core_attributes(self, core_attributes_stages):
         """Test that core_attributes.yaml has 7-stage engagement funnel."""
-        expected = {"aware", "considering", "prescribed", "first_fill", "adherent", "discontinued", "maintained"}
-        assert expected == core_attributes_stages, \
+        expected = {
+            "aware",
+            "considering",
+            "prescribed",
+            "first_fill",
+            "adherent",
+            "discontinued",
+            "maintained",
+        }
+        assert expected == core_attributes_stages, (
             f"core_attributes.yaml stages mismatch. Expected: {expected}, Got: {core_attributes_stages}"
+        )
 
     def test_node_types_matches_core_attributes(self, node_types_stages, core_attributes_stages):
         """Test that node_types.yaml journey stages match core_attributes.yaml."""
-        assert node_types_stages == core_attributes_stages, \
-            f"node_types.yaml stages differ from core_attributes.yaml. " \
+        assert node_types_stages == core_attributes_stages, (
+            f"node_types.yaml stages differ from core_attributes.yaml. "
             f"node_types: {node_types_stages}, core_attributes: {core_attributes_stages}"
+        )
 
     def test_vocabulary_has_both_stage_types(self, vocabulary_registry):
         """Test that vocabulary has both engagement and treatment line stages."""
@@ -625,13 +661,17 @@ class TestJourneyStageConsistency:
         assert len(treatment) == 7, f"Expected 7 treatment line stages, got {len(treatment)}"
 
         # They should be different stage types
-        assert set(engagement) != set(treatment), \
+        assert set(engagement) != set(treatment), (
             "Engagement and treatment line stages should be different"
+        )
 
-    def test_engagement_stages_match_core_attributes(self, vocabulary_registry, core_attributes_stages):
+    def test_engagement_stages_match_core_attributes(
+        self, vocabulary_registry, core_attributes_stages
+    ):
         """Test that vocabulary engagement stages match core_attributes.yaml."""
-        vocab_engagement = set(s.lower() for s in vocabulary_registry.get_engagement_stages())
+        vocab_engagement = {s.lower() for s in vocabulary_registry.get_engagement_stages()}
 
-        assert vocab_engagement == core_attributes_stages, \
-            f"Vocabulary engagement stages differ from core_attributes.yaml. " \
+        assert vocab_engagement == core_attributes_stages, (
+            f"Vocabulary engagement stages differ from core_attributes.yaml. "
             f"Vocabulary: {vocab_engagement}, core_attributes: {core_attributes_stages}"
+        )

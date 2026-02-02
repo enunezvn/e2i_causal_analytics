@@ -14,10 +14,9 @@ Sender agents:
 Run: pytest tests/integration/test_signal_flow/test_sender_signals.py -v
 """
 
-import pytest
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+import pytest
 
 # =============================================================================
 # SENDER SIGNAL IMPORTS
@@ -447,38 +446,30 @@ class TestAllSendersConsistency:
         from src.agents.causal_impact.dspy_integration import (
             CausalAnalysisTrainingSignal,
         )
-        from src.agents.gap_analyzer.dspy_integration import (
-            GapAnalysisTrainingSignal,
-        )
-        from src.agents.heterogeneous_optimizer.dspy_integration import (
-            HeterogeneousOptimizationTrainingSignal,
-        )
         from src.agents.drift_monitor.dspy_integration import (
             DriftDetectionTrainingSignal,
         )
         from src.agents.experiment_designer.dspy_integration import (
             ExperimentDesignTrainingSignal,
         )
+        from src.agents.gap_analyzer.dspy_integration import (
+            GapAnalysisTrainingSignal,
+        )
+        from src.agents.heterogeneous_optimizer.dspy_integration import (
+            HeterogeneousOptimizationTrainingSignal,
+        )
         from src.agents.prediction_synthesizer.dspy_integration import (
             PredictionSynthesisTrainingSignal,
         )
 
         signals = [
-            CausalAnalysisTrainingSignal(
-                signal_id="ci_001", session_id="session_test"
-            ).to_dict(),
-            GapAnalysisTrainingSignal(
-                signal_id="ga_001", session_id="session_test"
-            ).to_dict(),
+            CausalAnalysisTrainingSignal(signal_id="ci_001", session_id="session_test").to_dict(),
+            GapAnalysisTrainingSignal(signal_id="ga_001", session_id="session_test").to_dict(),
             HeterogeneousOptimizationTrainingSignal(
                 signal_id="ho_001", session_id="session_test"
             ).to_dict(),
-            DriftDetectionTrainingSignal(
-                signal_id="dm_001", session_id="session_test"
-            ).to_dict(),
-            ExperimentDesignTrainingSignal(
-                signal_id="ed_001", session_id="session_test"
-            ).to_dict(),
+            DriftDetectionTrainingSignal(signal_id="dm_001", session_id="session_test").to_dict(),
+            ExperimentDesignTrainingSignal(signal_id="ed_001", session_id="session_test").to_dict(),
             PredictionSynthesisTrainingSignal(
                 signal_id="ps_001", session_id="session_test"
             ).to_dict(),
@@ -511,16 +502,12 @@ class TestAllSendersConsistency:
     def test_all_signals_have_timestamp(self, all_sender_signals):
         """All signals should have timestamp."""
         for signal in all_sender_signals:
-            assert "timestamp" in signal, (
-                f"Signal from {signal['source_agent']} missing timestamp"
-            )
+            assert "timestamp" in signal, f"Signal from {signal['source_agent']} missing timestamp"
 
     def test_all_signals_have_reward(self, all_sender_signals):
         """All signals should have computed reward."""
         for signal in all_sender_signals:
-            assert "reward" in signal, (
-                f"Signal from {signal['source_agent']} missing reward"
-            )
+            assert "reward" in signal, f"Signal from {signal['source_agent']} missing reward"
             assert 0.0 <= signal["reward"] <= 1.0, (
                 f"Signal from {signal['source_agent']} has invalid reward: {signal['reward']}"
             )
@@ -597,9 +584,7 @@ class TestSignalQualityThresholds:
             ).to_dict(),  # High quality
         ]
 
-        high_quality_signals = [
-            s for s in signals if s["reward"] >= MIN_SIGNAL_QUALITY
-        ]
+        high_quality_signals = [s for s in signals if s["reward"] >= MIN_SIGNAL_QUALITY]
 
         # At least one should pass (high quality)
         assert len(high_quality_signals) >= 1

@@ -1,16 +1,16 @@
 """Tests for BentoML packaging utilities."""
 
-import pytest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.mlops.bentoml_packaging import (
     BentoConfig,
     ContainerConfig,
-    register_model_auto,
-    generate_service_file,
-    generate_docker_compose,
     create_bentofile,
+    generate_docker_compose,
+    generate_service_file,
+    register_model_auto,
 )
 
 

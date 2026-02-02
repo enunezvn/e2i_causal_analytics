@@ -10,11 +10,7 @@ Hub agents:
 Run: pytest tests/integration/test_signal_flow/test_hub_coordination.py -v
 """
 
-import pytest
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from unittest.mock import Mock, AsyncMock, patch
-
 
 # =============================================================================
 # FEEDBACK LEARNER HUB TESTS
@@ -135,8 +131,16 @@ class TestFeedbackLearnerOptimizer:
         # Mock prediction with patterns
         class MockPrediction:
             patterns = [
-                {"type": "recurring_issue", "severity": "high", "affected_agents": ["causal_impact"]},
-                {"type": "performance_drop", "severity": "medium", "affected_agents": ["gap_analyzer"]},
+                {
+                    "type": "recurring_issue",
+                    "severity": "high",
+                    "affected_agents": ["causal_impact"],
+                },
+                {
+                    "type": "performance_drop",
+                    "severity": "medium",
+                    "affected_agents": ["gap_analyzer"],
+                },
             ]
             confidence = 0.75
             root_causes = ["data_quality", "prompt_drift"]
@@ -426,7 +430,6 @@ class TestSignalFlowCoordination:
         """Hybrid agents can both generate signals and receive prompts."""
         from src.agents.feedback_learner.dspy_integration import (
             FeedbackLearnerTrainingSignal,
-            DSPY_AVAILABLE,
         )
 
         # feedback_learner generates its own training signal
@@ -466,14 +469,12 @@ class TestOptimizationThresholds:
 
         # Below threshold
         small_batch = [
-            CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict()
-            for i in range(50)
+            CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict() for i in range(50)
         ]
 
         # At threshold
         full_batch = [
-            CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict()
-            for i in range(100)
+            CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict() for i in range(100)
         ]
 
         should_optimize_small = len(small_batch) >= MIN_SIGNALS

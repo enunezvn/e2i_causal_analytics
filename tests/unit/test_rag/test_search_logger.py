@@ -244,9 +244,7 @@ class TestSearchLoggerAnalytics:
             {"log_id": str(uuid4()), "query": "slow query 1", "total_latency_ms": 2000.0},
             {"log_id": str(uuid4()), "query": "slow query 2", "total_latency_ms": 1500.0},
         ]
-        mock_supabase_client.from_.return_value.select.return_value.gt.return_value.order.return_value.limit.return_value.execute.return_value = (
-            mock_response
-        )
+        mock_supabase_client.from_.return_value.select.return_value.gt.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
 
         slow_queries = await search_logger.get_slow_queries(limit=10, threshold_ms=1000.0)
 
@@ -282,9 +280,7 @@ class TestSearchLoggerAnalytics:
                 "error_count": 1,
             },
         ]
-        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = (
-            mock_response
-        )
+        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
 
         summary = await search_logger.get_search_stats_summary(hours=24)
 
@@ -298,9 +294,7 @@ class TestSearchLoggerAnalytics:
         """Test stats summary with no data."""
         mock_response = MagicMock()
         mock_response.data = []
-        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = (
-            mock_response
-        )
+        mock_supabase_client.from_.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = mock_response
 
         summary = await search_logger.get_search_stats_summary(hours=24)
 

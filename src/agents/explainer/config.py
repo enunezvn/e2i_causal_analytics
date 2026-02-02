@@ -202,14 +202,10 @@ class ComplexityScorer:
         word_count = len(query.split())
 
         # Check for simple patterns (reduce score)
-        simple_matches = sum(
-            1 for p in self._compiled_simple_patterns if p.search(query_lower)
-        )
+        simple_matches = sum(1 for p in self._compiled_simple_patterns if p.search(query_lower))
 
         # Check for complex patterns (increase score)
-        complex_matches = sum(
-            1 for p in self._compiled_complex_patterns if p.search(query_lower)
-        )
+        complex_matches = sum(1 for p in self._compiled_complex_patterns if p.search(query_lower))
 
         # Base score from word count
         if word_count <= 5:
@@ -248,10 +244,7 @@ class ComplexityScorer:
 
             # Check nested structures
             if isinstance(result.get("data"), dict):
-                if any(
-                    key in result["data"]
-                    for key in ["dag", "graph", "causal_structure"]
-                ):
+                if any(key in result["data"] for key in ["dag", "graph", "causal_structure"]):
                     return 0.8
 
         return 0.0
@@ -293,9 +286,7 @@ def compute_complexity(
         Complexity score between 0.0 and 1.0
     """
     scorer = ComplexityScorer(config)
-    return scorer.compute_complexity(
-        analysis_results, query, user_expertise, has_causal_discovery
-    )
+    return scorer.compute_complexity(analysis_results, query, user_expertise, has_causal_discovery)
 
 
 def should_use_llm(
@@ -319,6 +310,4 @@ def should_use_llm(
         Tuple of (should_use_llm, complexity_score, reason)
     """
     scorer = ComplexityScorer(config)
-    return scorer.should_use_llm(
-        analysis_results, query, user_expertise, has_causal_discovery
-    )
+    return scorer.should_use_llm(analysis_results, query, user_expertise, has_causal_discovery)

@@ -27,9 +27,9 @@ import logging
 import os
 import tempfile
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from src.agents.causal_impact.state import CausalImpactOutput, CausalImpactState
@@ -304,8 +304,6 @@ class CausalImpactMLflowTracker:
             logger.debug("MLflow not available, skipping metric logging")
             return
 
-        import mlflow
-
         try:
             # Extract and log metrics
             metrics = self._extract_metrics(output, state)
@@ -371,15 +369,11 @@ class CausalImpactMLflowTracker:
             # Refutation details
             metrics.n_refutation_tests = refutation_results.get("n_tests", 0)
             metrics.tests_passed = refutation_results.get("tests_passed", 0)
-            metrics.confidence_adjustment = refutation_results.get(
-                "confidence_adjustment", 1.0
-            )
+            metrics.confidence_adjustment = refutation_results.get("confidence_adjustment", 1.0)
 
             # Sensitivity analysis
             metrics.e_value = sensitivity_analysis.get("e_value")
-            metrics.robust_to_confounding = sensitivity_analysis.get(
-                "robust_to_confounding", False
-            )
+            metrics.robust_to_confounding = sensitivity_analysis.get("robust_to_confounding", False)
 
         return metrics
 
@@ -466,15 +460,12 @@ class CausalImpactMLflowTracker:
         state: Optional["CausalImpactState"] = None,
     ) -> None:
         """Log artifacts to MLflow."""
-        import mlflow
 
         # Log causal DAG if available
         if state:
             causal_graph = state.get("causal_graph", {})
             if causal_graph:
-                await self._log_json_artifact(
-                    causal_graph, "causal_dag.json", "causal_graph"
-                )
+                await self._log_json_artifact(causal_graph, "causal_dag.json", "causal_graph")
 
             # Log sensitivity analysis details
             sensitivity = state.get("sensitivity_analysis", {})
@@ -486,15 +477,11 @@ class CausalImpactMLflowTracker:
             # Log refutation details
             refutation = state.get("refutation_results", {})
             if refutation:
-                await self._log_json_artifact(
-                    refutation, "refutation_results.json", "refutation"
-                )
+                await self._log_json_artifact(refutation, "refutation_results.json", "refutation")
 
         # Log full output as JSON
         output_dict = dict(output) if hasattr(output, "items") else output
-        await self._log_json_artifact(
-            output_dict, "analysis_output.json", "output"
-        )
+        await self._log_json_artifact(output_dict, "analysis_output.json", "output")
 
     async def _log_json_artifact(
         self,
@@ -506,9 +493,7 @@ class CausalImpactMLflowTracker:
         import mlflow
 
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                 json.dump(data, f, indent=2, default=str)
                 temp_path = f.name
 
@@ -541,7 +526,6 @@ class CausalImpactMLflowTracker:
 
         try:
             import mlflow
-            from datetime import timedelta
 
             # Build filter string
             filters = []
@@ -632,9 +616,7 @@ class CausalImpactMLflowTracker:
             "analyses_by_brand": self._count_by_field(history, "brand"),
         }
 
-    def _count_by_field(
-        self, history: list[dict[str, Any]], field: str
-    ) -> dict[str, int]:
+    def _count_by_field(self, history: list[dict[str, Any]], field: str) -> dict[str, int]:
         """Count analyses by a specific field."""
         counts: dict[str, int] = {}
         for h in history:

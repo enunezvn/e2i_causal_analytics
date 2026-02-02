@@ -9,14 +9,9 @@ Test count: ~10 tests
 
 from __future__ import annotations
 
-import pytest
-
 from .conftest import (
-    AGENT_REGISTRY_COLUMNS,
-    CAUSAL_PATHS_COLUMNS,
     SPLIT_VIEW_PREFIXES,
 )
-
 
 # =============================================================================
 # TABLE COUNT TESTS
@@ -37,9 +32,7 @@ class TestTableCounts:
         count = pg_cursor.fetchone()[0]
 
         expected = expected_counts["public_tables"]
-        assert count >= expected, (
-            f"Expected >= {expected} public tables, got {count}"
-        )
+        assert count >= expected, f"Expected >= {expected} public tables, got {count}"
 
     def test_auth_table_count(self, pg_cursor, expected_counts):
         """Test that auth schema has expected number of tables."""
@@ -52,9 +45,7 @@ class TestTableCounts:
         count = pg_cursor.fetchone()[0]
 
         expected = expected_counts["auth_tables"]
-        assert count >= expected, (
-            f"Expected >= {expected} auth tables, got {count}"
-        )
+        assert count >= expected, f"Expected >= {expected} auth tables, got {count}"
 
 
 # =============================================================================
@@ -183,8 +174,7 @@ class TestSplitAwareViews:
 
         # Check for at least some split-aware views
         found_split_views = [
-            v for v in views
-            if any(v.startswith(prefix) for prefix in SPLIT_VIEW_PREFIXES)
+            v for v in views if any(v.startswith(prefix) for prefix in SPLIT_VIEW_PREFIXES)
         ]
 
         assert len(found_split_views) > 0, (

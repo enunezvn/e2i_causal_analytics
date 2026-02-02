@@ -4,8 +4,6 @@ Unit tests for src/ml/synthetic/loaders/stats.py
 Tests statistics utility functions for synthetic datasets.
 """
 
-from datetime import datetime
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -174,9 +172,7 @@ class TestGetColumnStats:
 
     def test_get_column_stats_numeric(self):
         """Test column stats for numeric column."""
-        df = pd.DataFrame({
-            "values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        })
+        df = pd.DataFrame({"values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
 
         stats = get_column_stats(df, "values")
 
@@ -191,9 +187,7 @@ class TestGetColumnStats:
 
     def test_get_column_stats_with_nulls(self):
         """Test column stats with null values."""
-        df = pd.DataFrame({
-            "values": [1, 2, None, 4, None, 6, 7, 8, 9, 10]
-        })
+        df = pd.DataFrame({"values": [1, 2, None, 4, None, 6, 7, 8, 9, 10]})
 
         stats = get_column_stats(df, "values")
 
@@ -203,9 +197,7 @@ class TestGetColumnStats:
 
     def test_get_column_stats_categorical(self):
         """Test column stats for categorical column."""
-        df = pd.DataFrame({
-            "category": ["A", "B", "A", "C", "B", "A", "C", "C"]
-        })
+        df = pd.DataFrame({"category": ["A", "B", "A", "C", "B", "A", "C", "C"]})
 
         stats = get_column_stats(df, "category")
 
@@ -216,9 +208,11 @@ class TestGetColumnStats:
 
     def test_get_column_stats_percentiles(self):
         """Test column stats percentile calculation."""
-        df = pd.DataFrame({
-            "values": list(range(1, 101))  # 1 to 100
-        })
+        df = pd.DataFrame(
+            {
+                "values": list(range(1, 101))  # 1 to 100
+            }
+        )
 
         stats = get_column_stats(df, "values")
 
@@ -229,9 +223,7 @@ class TestGetColumnStats:
 
     def test_get_column_stats_sample_values(self):
         """Test column stats sample values."""
-        df = pd.DataFrame({
-            "values": ["val1", "val2", "val3", "val4", "val5", "val6"]
-        })
+        df = pd.DataFrame({"values": ["val1", "val2", "val3", "val4", "val5", "val6"]})
 
         stats = get_column_stats(df, "values")
 
@@ -254,9 +246,9 @@ class TestGetSplitStats:
 
     def test_get_split_stats_basic(self):
         """Test split stats calculation."""
-        df = pd.DataFrame({
-            "data_split": ["train"] * 60 + ["validation"] * 20 + ["test"] * 15 + ["holdout"] * 5
-        })
+        df = pd.DataFrame(
+            {"data_split": ["train"] * 60 + ["validation"] * 20 + ["test"] * 15 + ["holdout"] * 5}
+        )
 
         stats = get_split_stats(df, "data_split")
 
@@ -267,10 +259,12 @@ class TestGetSplitStats:
 
     def test_get_split_stats_with_dates(self):
         """Test split stats with date ranges."""
-        df = pd.DataFrame({
-            "data_split": ["train"] * 3 + ["validation"] * 3,
-            "date": pd.date_range("2022-01-01", periods=6),
-        })
+        df = pd.DataFrame(
+            {
+                "data_split": ["train"] * 3 + ["validation"] * 3,
+                "date": pd.date_range("2022-01-01", periods=6),
+            }
+        )
 
         stats = get_split_stats(df, "data_split", "date")
 
@@ -287,9 +281,7 @@ class TestGetSplitStats:
 
     def test_get_split_stats_partial_splits(self):
         """Test split stats when not all splits are present."""
-        df = pd.DataFrame({
-            "data_split": ["train"] * 70 + ["test"] * 30
-        })
+        df = pd.DataFrame({"data_split": ["train"] * 70 + ["test"] * 30})
 
         stats = get_split_stats(df, "data_split")
 
@@ -305,11 +297,13 @@ class TestGetDatasetStats:
 
     def test_get_dataset_stats_basic(self):
         """Test basic dataset stats calculation."""
-        df = pd.DataFrame({
-            "id": [1, 2, 3, 4, 5],
-            "value": [10, 20, 30, 40, 50],
-            "category": ["A", "B", "A", "C", "B"],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1, 2, 3, 4, 5],
+                "value": [10, 20, 30, 40, 50],
+                "category": ["A", "B", "A", "C", "B"],
+            }
+        )
 
         stats = get_dataset_stats(df, "test_table")
 
@@ -322,10 +316,15 @@ class TestGetDatasetStats:
 
     def test_get_dataset_stats_with_splits(self):
         """Test dataset stats with split information."""
-        df = pd.DataFrame({
-            "id": list(range(100)),
-            "data_split": ["train"] * 60 + ["validation"] * 20 + ["test"] * 15 + ["holdout"] * 5,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(100)),
+                "data_split": ["train"] * 60
+                + ["validation"] * 20
+                + ["test"] * 15
+                + ["holdout"] * 5,
+            }
+        )
 
         stats = get_dataset_stats(df, "test_table", split_column="data_split")
 
@@ -334,12 +333,12 @@ class TestGetDatasetStats:
 
     def test_get_dataset_stats_with_brands(self):
         """Test dataset stats with brand distribution."""
-        df = pd.DataFrame({
-            "id": list(range(100)),
-            "brand": (
-                ["Remibrutinib"] * 35 + ["Fabhalta"] * 33 + ["Kisqali"] * 32
-            ),
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(100)),
+                "brand": (["Remibrutinib"] * 35 + ["Fabhalta"] * 33 + ["Kisqali"] * 32),
+            }
+        )
 
         stats = get_dataset_stats(df, "test_table", brand_column="brand")
 
@@ -349,9 +348,7 @@ class TestGetDatasetStats:
 
     def test_get_dataset_stats_memory_usage(self):
         """Test dataset stats calculates memory usage."""
-        df = pd.DataFrame({
-            "values": list(range(1000))
-        })
+        df = pd.DataFrame({"values": list(range(1000))})
 
         stats = get_dataset_stats(df, "test_table")
 
@@ -389,10 +386,12 @@ class TestGetAllDatasetsStats:
     def test_get_all_datasets_stats_with_splits(self):
         """Test all datasets stats with split information."""
         datasets = {
-            "table1": pd.DataFrame({
-                "id": [1, 2, 3, 4],
-                "data_split": ["train", "train", "test", "test"],
-            }),
+            "table1": pd.DataFrame(
+                {
+                    "id": [1, 2, 3, 4],
+                    "data_split": ["train", "train", "test", "test"],
+                }
+            ),
         }
 
         all_stats = get_all_datasets_stats(datasets, split_column="data_split")
@@ -413,11 +412,13 @@ class TestValidateSupabaseData:
     def test_validate_supabase_data_valid(self):
         """Test validation with valid data."""
         datasets = {
-            "patient_journeys": pd.DataFrame({
-                "patient_id": [1, 2, 3, 4],
-                "brand": ["Remibrutinib", "Fabhalta", "Kisqali", "Remibrutinib"],
-                "data_split": ["train", "validation", "test", "holdout"],  # Need all 4 splits
-            }),
+            "patient_journeys": pd.DataFrame(
+                {
+                    "patient_id": [1, 2, 3, 4],
+                    "brand": ["Remibrutinib", "Fabhalta", "Kisqali", "Remibrutinib"],
+                    "data_split": ["train", "validation", "test", "holdout"],  # Need all 4 splits
+                }
+            ),
         }
 
         result = validate_supabase_data(datasets)
@@ -428,11 +429,13 @@ class TestValidateSupabaseData:
     def test_validate_supabase_data_invalid_brands(self):
         """Test validation with invalid brand values."""
         datasets = {
-            "patient_journeys": pd.DataFrame({
-                "patient_id": [1, 2],
-                "brand": ["InvalidBrand", "Remibrutinib"],
-                "data_split": ["train", "test"],
-            }),
+            "patient_journeys": pd.DataFrame(
+                {
+                    "patient_id": [1, 2],
+                    "brand": ["InvalidBrand", "Remibrutinib"],
+                    "data_split": ["train", "test"],
+                }
+            ),
         }
 
         result = validate_supabase_data(datasets)
@@ -444,11 +447,13 @@ class TestValidateSupabaseData:
     def test_validate_supabase_data_lowercase_brands(self):
         """Test validation catches lowercase brand names."""
         datasets = {
-            "patient_journeys": pd.DataFrame({
-                "patient_id": [1, 2],
-                "brand": ["remibrutinib", "fabhalta"],
-                "data_split": ["train", "test"],
-            }),
+            "patient_journeys": pd.DataFrame(
+                {
+                    "patient_id": [1, 2],
+                    "brand": ["remibrutinib", "fabhalta"],
+                    "data_split": ["train", "test"],
+                }
+            ),
         }
 
         result = validate_supabase_data(datasets)
@@ -459,11 +464,13 @@ class TestValidateSupabaseData:
     def test_validate_supabase_data_missing_splits(self):
         """Test validation with missing splits."""
         datasets = {
-            "patient_journeys": pd.DataFrame({
-                "patient_id": [1, 2],
-                "brand": ["Remibrutinib", "Fabhalta"],
-                "data_split": ["train", "test"],  # Missing validation and holdout
-            }),
+            "patient_journeys": pd.DataFrame(
+                {
+                    "patient_id": [1, 2],
+                    "brand": ["Remibrutinib", "Fabhalta"],
+                    "data_split": ["train", "test"],  # Missing validation and holdout
+                }
+            ),
         }
 
         result = validate_supabase_data(datasets)
@@ -474,11 +481,13 @@ class TestValidateSupabaseData:
     def test_validate_supabase_data_missing_holdout(self):
         """Test validation flags missing holdout as error."""
         datasets = {
-            "patient_journeys": pd.DataFrame({
-                "patient_id": [1, 2, 3],
-                "brand": ["Remibrutinib"] * 3,
-                "data_split": ["train", "validation", "test"],  # Missing holdout
-            }),
+            "patient_journeys": pd.DataFrame(
+                {
+                    "patient_id": [1, 2, 3],
+                    "brand": ["Remibrutinib"] * 3,
+                    "data_split": ["train", "validation", "test"],  # Missing holdout
+                }
+            ),
         }
 
         result = validate_supabase_data(datasets)
@@ -500,10 +509,12 @@ class TestValidateSupabaseData:
     def test_validate_supabase_data_custom_brands(self):
         """Test validation with custom expected brands."""
         datasets = {
-            "patient_journeys": pd.DataFrame({
-                "patient_id": [1, 2],
-                "brand": ["BrandA", "BrandB"],
-            }),
+            "patient_journeys": pd.DataFrame(
+                {
+                    "patient_id": [1, 2],
+                    "brand": ["BrandA", "BrandB"],
+                }
+            ),
         }
 
         result = validate_supabase_data(datasets, expected_brands=["BrandA", "BrandB"])
@@ -531,13 +542,17 @@ class TestPrintDatasetSummary:
     def test_print_dataset_summary(self, capsys):
         """Test dataset summary printing."""
         datasets = {
-            "patient_journeys": pd.DataFrame({
-                "patient_id": list(range(100)),
-                "brand": ["Remibrutinib"] * 100,
-            }),
-            "hcp_profiles": pd.DataFrame({
-                "hcp_id": list(range(50)),
-            }),
+            "patient_journeys": pd.DataFrame(
+                {
+                    "patient_id": list(range(100)),
+                    "brand": ["Remibrutinib"] * 100,
+                }
+            ),
+            "hcp_profiles": pd.DataFrame(
+                {
+                    "hcp_id": list(range(50)),
+                }
+            ),
         }
 
         print_dataset_summary(datasets)
@@ -586,9 +601,7 @@ class TestEdgeCases:
 
     def test_split_stats_unordered_splits(self):
         """Test split stats with non-standard split names."""
-        df = pd.DataFrame({
-            "data_split": ["custom1", "custom2", "train"]
-        })
+        df = pd.DataFrame({"data_split": ["custom1", "custom2", "train"]})
 
         stats = get_split_stats(df, "data_split")
 
@@ -598,10 +611,12 @@ class TestEdgeCases:
 
     def test_dataset_stats_large_dataframe(self):
         """Test dataset stats with large DataFrame."""
-        df = pd.DataFrame({
-            "id": list(range(100000)),
-            "value": np.random.randn(100000),
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(100000)),
+                "value": np.random.randn(100000),
+            }
+        )
 
         stats = get_dataset_stats(df, "large_table")
 
@@ -623,10 +638,12 @@ class TestEdgeCases:
     def test_validate_supabase_data_no_split_column(self):
         """Test validation when split column is missing."""
         datasets = {
-            "table": pd.DataFrame({
-                "id": [1, 2, 3],
-                "brand": ["Remibrutinib"] * 3,
-            }),
+            "table": pd.DataFrame(
+                {
+                    "id": [1, 2, 3],
+                    "brand": ["Remibrutinib"] * 3,
+                }
+            ),
         }
 
         result = validate_supabase_data(datasets)

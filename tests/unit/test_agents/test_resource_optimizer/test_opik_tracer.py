@@ -4,10 +4,7 @@ Version: 1.0.0
 Tests the Opik observability integration for Resource Optimizer agent's optimization pipeline.
 """
 
-import asyncio
-import time
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,7 +18,6 @@ from src.agents.resource_optimizer.opik_tracer import (
     get_resource_optimizer_tracer,
 )
 
-
 # ============================================================================
 # FIXTURES
 # ============================================================================
@@ -34,6 +30,7 @@ def reset_singleton():
     ResourceOptimizerOpikTracer._initialized = False
     # Also reset module-level singleton
     import src.agents.resource_optimizer.opik_tracer as tracer_module
+
     tracer_module._tracer_instance = None
     yield
     ResourceOptimizerOpikTracer._instance = None
@@ -540,7 +537,7 @@ class TestResourceOptimizerOpikTracer:
                 run_scenarios=True,
             )
 
-            node = ctx.start_node_span("formulate", {"constraints": 10})
+            ctx.start_node_span("formulate", {"constraints": 10})
             ctx.end_node_span("formulate", {"variables": 100})
             ctx.log_problem_formulation(
                 target_count=50,

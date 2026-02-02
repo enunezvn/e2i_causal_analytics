@@ -4,14 +4,12 @@ Tests for SchemaValidator.
 Tests schema validation against Supabase table definitions.
 """
 
-import pytest
 import pandas as pd
-import numpy as np
+import pytest
 
 from src.ml.synthetic.validators.schema_validator import (
-    SchemaValidator,
     SchemaValidationResult,
-    TABLE_SCHEMAS,
+    SchemaValidator,
 )
 
 
@@ -26,37 +24,41 @@ class TestSchemaValidator:
     @pytest.fixture
     def valid_hcp_df(self):
         """Create a valid HCP profiles DataFrame."""
-        return pd.DataFrame({
-            "hcp_id": ["hcp_00001", "hcp_00002", "hcp_00003"],
-            "npi": ["1234567890", "1234567891", "1234567892"],
-            "specialty": ["dermatology", "hematology", "oncology"],
-            "practice_type": ["academic", "community", "private"],
-            "geographic_region": ["northeast", "south", "midwest"],
-            "years_experience": [10, 20, 5],
-            "academic_hcp": [1, 0, 0],
-            "total_patient_volume": [200, 300, 150],
-            "brand": ["Remibrutinib", "Fabhalta", "Kisqali"],
-        })
+        return pd.DataFrame(
+            {
+                "hcp_id": ["hcp_00001", "hcp_00002", "hcp_00003"],
+                "npi": ["1234567890", "1234567891", "1234567892"],
+                "specialty": ["dermatology", "hematology", "oncology"],
+                "practice_type": ["academic", "community", "private"],
+                "geographic_region": ["northeast", "south", "midwest"],
+                "years_experience": [10, 20, 5],
+                "academic_hcp": [1, 0, 0],
+                "total_patient_volume": [200, 300, 150],
+                "brand": ["Remibrutinib", "Fabhalta", "Kisqali"],
+            }
+        )
 
     @pytest.fixture
     def valid_patient_df(self):
         """Create a valid patient journeys DataFrame."""
-        return pd.DataFrame({
-            "patient_journey_id": ["patient_000001", "patient_000002"],
-            "patient_id": ["pt_000001", "pt_000002"],
-            "hcp_id": ["hcp_00001", "hcp_00002"],
-            "brand": ["Remibrutinib", "Fabhalta"],
-            "journey_start_date": ["2023-01-01", "2023-06-15"],
-            "data_split": ["train", "validation"],
-            "disease_severity": [5.5, 7.2],
-            "academic_hcp": [1, 0],
-            "engagement_score": [6.5, 8.0],
-            "treatment_initiated": [1, 0],
-            "days_to_treatment": [30.0, None],
-            "geographic_region": ["northeast", "south"],
-            "insurance_type": ["commercial", "medicare"],
-            "age_at_diagnosis": [45, 62],
-        })
+        return pd.DataFrame(
+            {
+                "patient_journey_id": ["patient_000001", "patient_000002"],
+                "patient_id": ["pt_000001", "pt_000002"],
+                "hcp_id": ["hcp_00001", "hcp_00002"],
+                "brand": ["Remibrutinib", "Fabhalta"],
+                "journey_start_date": ["2023-01-01", "2023-06-15"],
+                "data_split": ["train", "validation"],
+                "disease_severity": [5.5, 7.2],
+                "academic_hcp": [1, 0],
+                "engagement_score": [6.5, 8.0],
+                "treatment_initiated": [1, 0],
+                "days_to_treatment": [30.0, None],
+                "geographic_region": ["northeast", "south"],
+                "insurance_type": ["commercial", "medicare"],
+                "age_at_diagnosis": [45, 62],
+            }
+        )
 
     def test_validate_valid_hcp_profiles(self, validator, valid_hcp_df):
         """Test validation of valid HCP profiles."""
@@ -175,9 +177,7 @@ class TestSchemaValidationResult:
 
     def test_add_error_sets_invalid(self):
         """Test that adding an error sets is_valid to False."""
-        result = SchemaValidationResult(
-            is_valid=True, table_name="test", total_rows=100
-        )
+        result = SchemaValidationResult(is_valid=True, table_name="test", total_rows=100)
 
         result.add_error("test_col", "test_type", "Test message")
 
@@ -186,9 +186,7 @@ class TestSchemaValidationResult:
 
     def test_add_warning_preserves_validity(self):
         """Test that adding a warning doesn't affect is_valid."""
-        result = SchemaValidationResult(
-            is_valid=True, table_name="test", total_rows=100
-        )
+        result = SchemaValidationResult(is_valid=True, table_name="test", total_rows=100)
 
         result.add_warning("Test warning")
 

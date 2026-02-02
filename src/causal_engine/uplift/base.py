@@ -14,7 +14,6 @@ Author: E2I Causal Analytics Team
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -136,9 +135,7 @@ class UpliftResult:
             "model_type": self.model_type.value,
             "success": self.success,
             "uplift_scores": (
-                self.uplift_scores.tolist()
-                if self.uplift_scores is not None
-                else None
+                self.uplift_scores.tolist() if self.uplift_scores is not None else None
             ),
             "ate": self.ate,
             "att": self.att,
@@ -310,9 +307,7 @@ class BaseUpliftModel(ABC):
             uplift_scores = self.predict(X_pred)
 
             # Calculate aggregate treatment effects
-            ate, att, atc, ate_std = self._calculate_ate(
-                uplift_scores, treatment_eval, y_eval
-            )
+            ate, att, atc, ate_std = self._calculate_ate(uplift_scores, treatment_eval, y_eval)
 
             # Calculate confidence interval (assuming normal distribution)
             n = len(uplift_scores)
@@ -406,9 +401,7 @@ class BaseUpliftModel(ABC):
         except Exception:
             return None, None, None, None
 
-    def _normalize_scores(
-        self, scores: NDArray[np.float64]
-    ) -> NDArray[np.float64]:
+    def _normalize_scores(self, scores: NDArray[np.float64]) -> NDArray[np.float64]:
         """Normalize uplift scores.
 
         Args:
@@ -450,15 +443,10 @@ class BaseUpliftModel(ABC):
                 importances = self.model.feature_importances_
 
                 # Map to feature names if available
-                if self._feature_names is not None and len(self._feature_names) == len(
-                    importances
-                ):
-                    return dict(zip(self._feature_names, importances.tolist()))
+                if self._feature_names is not None and len(self._feature_names) == len(importances):
+                    return dict(zip(self._feature_names, importances.tolist(), strict=False))
                 else:
-                    return {
-                        f"feature_{i}": float(imp)
-                        for i, imp in enumerate(importances)
-                    }
+                    return {f"feature_{i}": float(imp) for i, imp in enumerate(importances)}
         except Exception:
             pass
 

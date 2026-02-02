@@ -10,7 +10,6 @@ Tests both Sender and optimizer role implementation including:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 
 # Mark all tests in this module as dspy_integration to group them
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
@@ -256,9 +255,9 @@ class TestFeedbackLearnerOptimizer:
     def test_initialization_gepa(self):
         """Test optimizer initializes with GEPA when available."""
         from src.agents.feedback_learner.dspy_integration import (
-            FeedbackLearnerOptimizer,
-            GEPA_AVAILABLE,
             DSPY_AVAILABLE,
+            GEPA_AVAILABLE,
+            FeedbackLearnerOptimizer,
         )
 
         optimizer = FeedbackLearnerOptimizer(optimizer_type="gepa")
@@ -273,8 +272,8 @@ class TestFeedbackLearnerOptimizer:
     def test_initialization_miprov2(self):
         """Test optimizer initializes with MIPROv2."""
         from src.agents.feedback_learner.dspy_integration import (
-            FeedbackLearnerOptimizer,
             DSPY_AVAILABLE,
+            FeedbackLearnerOptimizer,
         )
 
         optimizer = FeedbackLearnerOptimizer(optimizer_type="miprov2")
@@ -294,7 +293,12 @@ class TestFeedbackLearnerOptimizer:
         class MockPrediction:
             patterns = [
                 {"type": "accuracy_drop", "severity": "high", "affected_agents": ["causal_impact"]},
-                {"type": "latency_spike", "severity": "medium", "affected_agents": ["orchestrator"], "root_cause_hypothesis": "LLM timeout"},
+                {
+                    "type": "latency_spike",
+                    "severity": "medium",
+                    "affected_agents": ["orchestrator"],
+                    "root_cause_hypothesis": "LLM timeout",
+                },
             ]
             confidence = 0.7
             root_causes = ["LLM timeout", "Data quality issue"]
@@ -332,7 +336,9 @@ class TestFeedbackLearnerOptimizer:
                 {"category": "config_change", "expected_impact": "20% latency reduction"},
             ]
             implementation_order = ["prompt_update", "config_change"]
-            risk_assessment = "Low risk changes. Rollback possible if metrics degrade significantly."
+            risk_assessment = (
+                "Low risk changes. Rollback possible if metrics degrade significantly."
+            )
 
         score = optimizer.recommendation_metric(None, MockPrediction())
 
@@ -387,8 +393,8 @@ class TestDSPySignatures:
     def test_pattern_detection_signature(self):
         """Test PatternDetectionSignature is valid DSPy signature."""
         from src.agents.feedback_learner.dspy_integration import (
-            PatternDetectionSignature,
             DSPY_AVAILABLE,
+            PatternDetectionSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -405,8 +411,8 @@ class TestDSPySignatures:
     def test_recommendation_generation_signature(self):
         """Test RecommendationGenerationSignature is valid DSPy signature."""
         from src.agents.feedback_learner.dspy_integration import (
-            RecommendationGenerationSignature,
             DSPY_AVAILABLE,
+            RecommendationGenerationSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -423,8 +429,8 @@ class TestDSPySignatures:
     def test_knowledge_update_signature(self):
         """Test KnowledgeUpdateSignature is valid DSPy signature."""
         from src.agents.feedback_learner.dspy_integration import (
-            KnowledgeUpdateSignature,
             DSPY_AVAILABLE,
+            KnowledgeUpdateSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -441,8 +447,8 @@ class TestDSPySignatures:
     def test_learning_summary_signature(self):
         """Test LearningSummarySignature is valid DSPy signature."""
         from src.agents.feedback_learner.dspy_integration import (
-            LearningSummarySignature,
             DSPY_AVAILABLE,
+            LearningSummarySignature,
         )
 
         if not DSPY_AVAILABLE:

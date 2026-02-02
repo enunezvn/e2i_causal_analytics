@@ -4,7 +4,6 @@ Chatbot Message Repository.
 Handles individual messages in chatbot conversations with agent attribution.
 """
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.repositories.base import BaseRepository
@@ -254,11 +253,7 @@ class ChatbotMessageRepository(BaseRepository):
         if not self.client:
             return {}
 
-        query = (
-            self.client.table(self.table_name)
-            .select("tool_calls")
-            .neq("tool_calls", [])
-        )
+        query = self.client.table(self.table_name).select("tool_calls").neq("tool_calls", [])
 
         if session_id:
             query = query.eq("session_id", session_id)
@@ -316,9 +311,7 @@ class ChatbotMessageRepository(BaseRepository):
 
             agent_stats[agent_name]["message_count"] += 1
             agent_stats[agent_name]["total_tokens"] += row.get("tokens_used", 0) or 0
-            agent_stats[agent_name]["total_latency_ms"] += (
-                row.get("latency_ms", 0) or 0
-            )
+            agent_stats[agent_name]["total_latency_ms"] += row.get("latency_ms", 0) or 0
 
         # Calculate averages
         for stats in agent_stats.values():

@@ -16,7 +16,7 @@ Run with: pytest -n 1 tests/integration/test_digital_twin_e2e.py -v
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import numpy as np
@@ -34,9 +34,6 @@ from src.digital_twin.models.simulation_models import (
 )
 from src.digital_twin.models.twin_models import (
     Brand,
-    DigitalTwin,
-    TwinModelConfig,
-    TwinPopulation,
     TwinType,
 )
 from src.digital_twin.retraining_service import (
@@ -46,7 +43,6 @@ from src.digital_twin.retraining_service import (
 )
 from src.digital_twin.simulation_engine import SimulationEngine
 from src.digital_twin.twin_generator import TwinGenerator
-
 
 # Mark all tests as E2E integration tests
 pytestmark = [
@@ -65,22 +61,20 @@ def training_data():
     np.random.seed(42)
     n_samples = 2000
 
-    data = pd.DataFrame({
-        "specialty": np.random.choice(
-            ["rheumatology", "dermatology", "allergy"], n_samples
-        ),
-        "decile": np.random.randint(1, 11, n_samples),
-        "region": np.random.choice(
-            ["northeast", "south", "midwest", "west"], n_samples
-        ),
-        "digital_engagement_score": np.random.uniform(0.1, 0.9, n_samples),
-        "adoption_stage": np.random.choice(
-            ["innovator", "early_adopter", "early_majority", "late_majority", "laggard"],
-            n_samples,
-        ),
-        "patient_volume": np.random.randint(50, 500, n_samples),
-        "prescribing_change": np.random.uniform(-0.1, 0.3, n_samples),  # Target
-    })
+    data = pd.DataFrame(
+        {
+            "specialty": np.random.choice(["rheumatology", "dermatology", "allergy"], n_samples),
+            "decile": np.random.randint(1, 11, n_samples),
+            "region": np.random.choice(["northeast", "south", "midwest", "west"], n_samples),
+            "digital_engagement_score": np.random.uniform(0.1, 0.9, n_samples),
+            "adoption_stage": np.random.choice(
+                ["innovator", "early_adopter", "early_majority", "late_majority", "laggard"],
+                n_samples,
+            ),
+            "patient_volume": np.random.randint(50, 500, n_samples),
+            "prescribing_change": np.random.uniform(-0.1, 0.3, n_samples),  # Target
+        }
+    )
 
     return data
 
@@ -163,9 +157,7 @@ def retraining_service(mock_repository):
 class TestFullWorkflowDeploy:
     """Tests for full workflow ending in DEPLOY recommendation."""
 
-    def test_generate_simulate_deploy(
-        self, generator, training_data, high_effect_config
-    ):
+    def test_generate_simulate_deploy(self, generator, training_data, high_effect_config):
         """Test complete workflow: generate twins -> simulate -> get DEPLOY."""
         # Step 1: Train generator on data
         metrics = generator.train(
@@ -198,9 +190,7 @@ class TestFullWorkflowDeploy:
             SimulationRecommendation.REFINE,
         ]
 
-    def test_workflow_with_population_filter(
-        self, generator, training_data, email_campaign_config
-    ):
+    def test_workflow_with_population_filter(self, generator, training_data, email_campaign_config):
         """Test workflow with population filtering."""
         # Train and generate
         generator.train(data=training_data, target_col="prescribing_change")
@@ -223,9 +213,7 @@ class TestFullWorkflowDeploy:
 class TestFullWorkflowSkip:
     """Tests for full workflow ending in SKIP recommendation."""
 
-    def test_generate_simulate_skip(
-        self, generator, training_data, low_effect_config
-    ):
+    def test_generate_simulate_skip(self, generator, training_data, low_effect_config):
         """Test workflow that results in SKIP recommendation."""
         # Train and generate
         generator.train(data=training_data, target_col="prescribing_change")
@@ -348,7 +336,7 @@ class TestFidelityValidationWorkflow:
             created_at=datetime.now(timezone.utc),
         )
 
-        record = fidelity_tracker.record_prediction(result)
+        fidelity_tracker.record_prediction(result)
 
         # Validate with very different actual (50% error)
         validated = fidelity_tracker.validate(
@@ -370,9 +358,7 @@ class TestRetrainingTriggerWorkflow:
     """Tests for automatic retraining trigger workflow."""
 
     @pytest.mark.asyncio
-    async def test_fidelity_triggers_retrain_evaluation(
-        self, retraining_service, mock_repository
-    ):
+    async def test_fidelity_triggers_retrain_evaluation(self, retraining_service, mock_repository):
         """Test that poor fidelity triggers retraining evaluation."""
         model_id = uuid4()
 
@@ -430,9 +416,7 @@ class TestRetrainingTriggerWorkflow:
         assert decision.should_retrain is False
 
     @pytest.mark.asyncio
-    async def test_insufficient_validations_no_retrain(
-        self, retraining_service, mock_repository
-    ):
+    async def test_insufficient_validations_no_retrain(self, retraining_service, mock_repository):
         """Test that insufficient validations don't trigger retraining."""
         model_id = uuid4()
 
@@ -459,9 +443,7 @@ class TestRetrainingTriggerWorkflow:
         assert "insufficient_validations" in decision.details.get("blocked_reason", "")
 
     @pytest.mark.asyncio
-    async def test_trigger_retraining_creates_job(
-        self, retraining_service, mock_repository
-    ):
+    async def test_trigger_retraining_creates_job(self, retraining_service, mock_repository):
         """Test that triggering retraining creates a job."""
         model_id = uuid4()
 
@@ -511,7 +493,7 @@ class TestCompleteE2EWorkflow:
         assert result.status == SimulationStatus.COMPLETED
 
         # 4. Record prediction
-        record = fidelity_tracker.record_prediction(result)
+        fidelity_tracker.record_prediction(result)
 
         # 5. "Run" the actual experiment (simulated)
         # Assume actual results are close to prediction
@@ -574,9 +556,7 @@ class TestCompleteE2EWorkflow:
 
         assert decision.should_retrain is True
 
-    def test_workflow_heterogeneity_analysis(
-        self, generator, training_data, email_campaign_config
-    ):
+    def test_workflow_heterogeneity_analysis(self, generator, training_data, email_campaign_config):
         """Test workflow with heterogeneity analysis for segment targeting."""
         generator.train(data=training_data, target_col="prescribing_change")
         population = generator.generate(n=500, seed=42)

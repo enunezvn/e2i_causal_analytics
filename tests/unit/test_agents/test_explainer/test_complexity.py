@@ -149,12 +149,8 @@ class TestComplexityScorer:
     def test_score_with_causal_discovery_flag(self, scorer):
         """Explicit causal discovery flag should increase complexity."""
         results = [{"data": "test"}]
-        score_without = scorer.compute_complexity(
-            results, "query", has_causal_discovery=False
-        )
-        score_with = scorer.compute_complexity(
-            results, "query", has_causal_discovery=True
-        )
+        score_without = scorer.compute_complexity(results, "query", has_causal_discovery=False)
+        score_with = scorer.compute_complexity(results, "query", has_causal_discovery=True)
 
         assert score_with > score_without
 
@@ -186,15 +182,9 @@ class TestComplexityScorer:
     def test_score_executive_expertise(self, scorer):
         """Executive expertise should have higher complexity (needs synthesis)."""
         results = [{"data": "test"}]
-        score_exec = scorer.compute_complexity(
-            results, "query", user_expertise="executive"
-        )
-        score_analyst = scorer.compute_complexity(
-            results, "query", user_expertise="analyst"
-        )
-        score_ds = scorer.compute_complexity(
-            results, "query", user_expertise="data_scientist"
-        )
+        score_exec = scorer.compute_complexity(results, "query", user_expertise="executive")
+        score_analyst = scorer.compute_complexity(results, "query", user_expertise="analyst")
+        score_ds = scorer.compute_complexity(results, "query", user_expertise="data_scientist")
 
         assert score_exec > score_analyst
         assert score_analyst > score_ds
@@ -202,12 +192,8 @@ class TestComplexityScorer:
     def test_score_unknown_expertise_defaults_to_medium(self, scorer):
         """Unknown expertise should default to medium complexity."""
         results = [{"data": "test"}]
-        score_unknown = scorer.compute_complexity(
-            results, "query", user_expertise="unknown"
-        )
-        score_analyst = scorer.compute_complexity(
-            results, "query", user_expertise="analyst"
-        )
+        score_unknown = scorer.compute_complexity(results, "query", user_expertise="unknown")
+        score_analyst = scorer.compute_complexity(results, "query", user_expertise="analyst")
 
         assert score_unknown == score_analyst
 
@@ -226,9 +212,7 @@ class TestComplexityScorer:
         results = [{"data": f"test_{i}"} for i in range(5)]
         query = "explain why the causal relationship between marketing and sales changed"
 
-        should_use, score, reason = scorer.should_use_llm(
-            results, query, has_causal_discovery=True
-        )
+        should_use, score, reason = scorer.should_use_llm(results, query, has_causal_discovery=True)
 
         assert should_use is True
         assert score >= 0.5
@@ -241,14 +225,10 @@ class TestComplexityScorer:
 
         # With default threshold (0.5), this might trigger LLM
         default_scorer = ComplexityScorer()
-        should_use_default, score_default, _ = default_scorer.should_use_llm(
-            results, query
-        )
+        should_use_default, score_default, _ = default_scorer.should_use_llm(results, query)
 
         # With higher threshold (0.7), less likely to trigger
-        should_use_custom, score_custom, _ = custom_scorer.should_use_llm(
-            results, query
-        )
+        should_use_custom, score_custom, _ = custom_scorer.should_use_llm(results, query)
 
         # Scores should be the same, but decision might differ
         assert abs(score_default - score_custom) < 0.01
@@ -264,9 +244,7 @@ class TestComplexityScorer:
         ]
 
         for results, query in test_cases:
-            score = scorer.compute_complexity(
-                results, query, has_causal_discovery=True
-            )
+            score = scorer.compute_complexity(results, query, has_causal_discovery=True)
             assert 0.0 <= score <= 1.0
 
 
@@ -295,9 +273,7 @@ class TestModuleLevelFunctions:
         config = ExplainerConfig(llm_threshold=0.9)
         results = [{"data": f"test_{i}"} for i in range(5)]
 
-        should_use, _, _ = should_use_llm(
-            results, "explain the trend", config=config
-        )
+        should_use, _, _ = should_use_llm(results, "explain the trend", config=config)
 
         # With very high threshold, should not use LLM
         assert should_use is False
@@ -336,18 +312,14 @@ class TestExplainerAgentIntegration:
         """Agent should respect explicit LLM mode."""
         assert agent_explicit_llm._use_llm is True
 
-    def test_agent_explicit_deterministic_initialization(
-        self, agent_explicit_deterministic
-    ):
+    def test_agent_explicit_deterministic_initialization(self, agent_explicit_deterministic):
         """Agent should respect explicit deterministic mode."""
         assert agent_explicit_deterministic._use_llm is False
 
     def test_agent_should_use_llm_method(self, agent_auto_mode):
         """Agent _should_use_llm method should work."""
         results = [{"data": "test"}]
-        should_use, score, reason = agent_auto_mode._should_use_llm(
-            results, "query", "analyst"
-        )
+        should_use, score, reason = agent_auto_mode._should_use_llm(results, "query", "analyst")
 
         assert isinstance(should_use, bool)
         assert isinstance(score, float)
@@ -358,12 +330,8 @@ class TestExplainerAgentIntegration:
         results_without = [{"data": "test"}]
         results_with = [{"discovered_dag": {"nodes": ["A", "B"]}}]
 
-        _, score_without, _ = agent_auto_mode._should_use_llm(
-            results_without, "query", "analyst"
-        )
-        _, score_with, _ = agent_auto_mode._should_use_llm(
-            results_with, "query", "analyst"
-        )
+        _, score_without, _ = agent_auto_mode._should_use_llm(results_without, "query", "analyst")
+        _, score_with, _ = agent_auto_mode._should_use_llm(results_with, "query", "analyst")
 
         assert score_with > score_without
 
@@ -416,7 +384,5 @@ class TestEdgeCases:
     def test_special_characters_in_query(self, scorer):
         """Should handle special characters in query."""
         results = [{"data": "test"}]
-        score = scorer.compute_complexity(
-            results, "why? explain! compare... (analyze)"
-        )
+        score = scorer.compute_complexity(results, "why? explain! compare... (analyze)")
         assert 0.0 <= score <= 1.0

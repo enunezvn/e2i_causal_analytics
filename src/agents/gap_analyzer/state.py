@@ -171,12 +171,14 @@ class GapAnalyzerState(TypedDict):
     # Pipeline-aware ROI estimates
     pipeline_roi_adjustment: Optional[float]  # ROI adjustment factor from pipeline confidence
     cross_validated_roi: Optional[bool]  # Whether ROI was cross-validated across libraries
-    roi_confidence_source: Optional[Literal[
-        "single_library",  # ROI from single library
-        "multi_library_consensus",  # ROI from consensus of multiple libraries
-        "cross_validated",  # ROI cross-validated (DoWhy ↔ CausalML)
-        "pipeline_orchestrated",  # Full pipeline orchestration
-    ]]
+    roi_confidence_source: Optional[
+        Literal[
+            "single_library",  # ROI from single library
+            "multi_library_consensus",  # ROI from consensus of multiple libraries
+            "cross_validated",  # ROI cross-validated (DoWhy ↔ CausalML)
+            "pipeline_orchestrated",  # Full pipeline orchestration
+        ]
+    ]
 
     # Causal library results feeding into ROI
     dowhy_effect_estimate: Optional[float]  # ATE from DoWhy
@@ -192,12 +194,14 @@ class GapAnalyzerState(TypedDict):
     validation_passed: Optional[bool]  # Whether cross-validation passed thresholds
 
     # Multi-library routing metadata
-    question_type: Optional[Literal[
-        "performance_gap",  # Gap analysis → DoWhy/EconML primary
-        "roi_optimization",  # ROI focus → CausalML primary
-        "system_analysis",  # Impact flow → NetworkX primary
-        "comprehensive",  # All libraries
-    ]]
+    question_type: Optional[
+        Literal[
+            "performance_gap",  # Gap analysis → DoWhy/EconML primary
+            "roi_optimization",  # ROI focus → CausalML primary
+            "system_analysis",  # Impact flow → NetworkX primary
+            "comprehensive",  # All libraries
+        ]
+    ]
     routing_confidence: Optional[float]  # Confidence in library routing decision
     routing_rationale: Optional[str]  # Why this library routing was chosen
 

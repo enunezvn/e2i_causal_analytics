@@ -7,7 +7,7 @@ with confidence-weighted result aggregation.
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .orchestrator import (
     CausalLibrary,
@@ -98,9 +98,7 @@ class ParallelPipeline(PipelineOrchestrator):
 
         return self._create_output(state)
 
-    def _get_libraries_to_execute(
-        self, state: PipelineState
-    ) -> List[CausalLibrary]:
+    def _get_libraries_to_execute(self, state: PipelineState) -> List[CausalLibrary]:
         """Get list of libraries to execute.
 
         Args:
@@ -175,9 +173,7 @@ class ParallelPipeline(PipelineOrchestrator):
         # Process results
         for result in results:
             if isinstance(result, Exception):
-                state["errors"].append(
-                    {"library": "unknown", "error": str(result)}
-                )
+                state["errors"].append({"library": "unknown", "error": str(result)})
             elif isinstance(result, tuple):
                 library, exec_result = result
                 state = self._update_state_with_result(state, library, exec_result)
@@ -253,9 +249,7 @@ class ParallelPipeline(PipelineOrchestrator):
 
         pending = set(tasks)
         while pending:
-            done, pending = await asyncio.wait(
-                pending, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
 
             for task in done:
                 try:
@@ -411,9 +405,7 @@ class ParallelPipeline(PipelineOrchestrator):
                 if state["consensus_effect"] < 0
                 else "neutral"
             )
-            insights.append(
-                f"Consensus analysis indicates {direction} treatment effect"
-            )
+            insights.append(f"Consensus analysis indicates {direction} treatment effect")
 
         # Agreement insight
         if state["library_agreement"]:
@@ -423,9 +415,7 @@ class ParallelPipeline(PipelineOrchestrator):
                     "Library disagreement detected - results may need further investigation"
                 )
             elif min_agreement >= 0.9:
-                insights.append(
-                    "High agreement across libraries - results are robust"
-                )
+                insights.append("High agreement across libraries - results are robust")
 
         # Individual library insights
         if state["causal_graph"]:

@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
 from uuid_utils import uuid7 as uuid7_func
 
 if TYPE_CHECKING:
-    from src.mlops.opik_connector import OpikConnector, SpanContext
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +87,14 @@ class PhaseSpanContext:
             extracted_entities: Entities extracted from query
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "sub_question_count": sub_question_count,
-            "intents": intents,
-            "extracted_entities": extracted_entities or [],
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "sub_question_count": sub_question_count,
+                "intents": intents,
+                "extracted_entities": extracted_entities or [],
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("sub_question_count", sub_question_count)
@@ -105,10 +107,7 @@ class PhaseSpanContext:
                 },
             )
 
-        logger.debug(
-            f"[DECOMPOSE] {sub_question_count} sub-questions, "
-            f"intents: {intents}"
-        )
+        logger.debug(f"[DECOMPOSE] {sub_question_count} sub-questions, intents: {intents}")
 
     def log_planning(
         self,
@@ -127,13 +126,15 @@ class PhaseSpanContext:
             avg_confidence: Average tool mapping confidence
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "step_count": step_count,
-            "tool_mappings": tool_mappings,
-            "parallel_groups": parallel_groups,
-            "avg_confidence": avg_confidence,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "step_count": step_count,
+                "tool_mappings": tool_mappings,
+                "parallel_groups": parallel_groups,
+                "avg_confidence": avg_confidence,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("step_count", step_count)
@@ -176,15 +177,17 @@ class PhaseSpanContext:
         """
         success_rate = tools_succeeded / tools_executed if tools_executed > 0 else 0.0
 
-        self.metadata.update({
-            "tools_executed": tools_executed,
-            "tools_succeeded": tools_succeeded,
-            "success_rate": success_rate,
-            "retry_count": retry_count,
-            "parallel_executions": parallel_executions,
-            "step_durations_ms": step_durations_ms or [],
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "tools_executed": tools_executed,
+                "tools_succeeded": tools_succeeded,
+                "success_rate": success_rate,
+                "retry_count": retry_count,
+                "parallel_executions": parallel_executions,
+                "step_durations_ms": step_durations_ms or [],
+                **kwargs,
+            }
+        )
 
         # Add circuit breaker metrics (V4.3)
         if circuit_breaker_summary:
@@ -214,7 +217,8 @@ class PhaseSpanContext:
                     "retry_count": retry_count,
                     "circuit_trips": (
                         circuit_breaker_summary.get("total_trips", 0)
-                        if circuit_breaker_summary else 0
+                        if circuit_breaker_summary
+                        else 0
                     ),
                 },
             )
@@ -289,13 +293,15 @@ class PhaseSpanContext:
             failed_components: Components that failed
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "answer_length": answer_length,
-            "confidence": confidence,
-            "caveat_count": caveat_count,
-            "failed_components": failed_components or [],
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "answer_length": answer_length,
+                "confidence": confidence,
+                "caveat_count": caveat_count,
+                "failed_components": failed_components or [],
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("answer_length", answer_length)
@@ -378,8 +384,6 @@ class CompositionTraceContext:
             _parent_ctx=self,
         )
 
-        opik_phase_span = None
-
         try:
             # Create child span in Opik if parent is traced
             if self._opik_span and self._tracer and self._tracer.enabled:
@@ -422,9 +426,7 @@ class CompositionTraceContext:
             # Store in parent context
             self.phase_spans[phase_name] = phase_ctx
 
-            logger.debug(
-                f"Phase {phase_name} completed in {phase_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"Phase {phase_name} completed in {phase_ctx.duration_ms:.2f}ms")
 
     def _get_phase_index(self, phase_name: str) -> int:
         """Get numeric index for phase ordering."""
@@ -556,11 +558,7 @@ class ToolComposerOpikTracer:
     def is_enabled(self) -> bool:
         """Check if tracing is enabled and available."""
         self._ensure_initialized()
-        return (
-            self.enabled
-            and self._opik_connector is not None
-            and self._opik_connector.is_enabled
-        )
+        return self.enabled and self._opik_connector is not None and self._opik_connector.is_enabled
 
     def _should_trace(self) -> bool:
         """Determine if this composition should be traced."""
@@ -608,11 +606,13 @@ class ToolComposerOpikTracer:
         }
 
         if context:
-            trace_metadata.update({
-                "session_id": context.get("session_id"),
-                "brand": context.get("brand"),
-                "region": context.get("region"),
-            })
+            trace_metadata.update(
+                {
+                    "session_id": context.get("session_id"),
+                    "brand": context.get("brand"),
+                    "region": context.get("region"),
+                }
+            )
 
         # Create trace context
         trace_ctx = CompositionTraceContext(
@@ -623,9 +623,6 @@ class ToolComposerOpikTracer:
             metadata=trace_metadata,
             _tracer=self,
         )
-
-        error_occurred = False
-        error_info = None
 
         try:
             # Create Opik trace if enabled and sampled
@@ -656,8 +653,7 @@ class ToolComposerOpikTracer:
             yield trace_ctx
 
         except Exception as e:
-            error_occurred = True
-            error_info = {"type": type(e).__name__, "message": str(e)}
+            {"type": type(e).__name__, "message": str(e)}
             raise
 
         finally:
@@ -666,9 +662,7 @@ class ToolComposerOpikTracer:
             trace_ctx.end_time = end_time
             trace_ctx.duration_ms = (end_time - start_time).total_seconds() * 1000
 
-            logger.debug(
-                f"Composition trace completed in {trace_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"Composition trace completed in {trace_ctx.duration_ms:.2f}ms")
 
 
 def trace_composition(

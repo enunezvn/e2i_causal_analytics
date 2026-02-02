@@ -1,7 +1,8 @@
 """Integration tests for ModelDeployerAgent."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from src.agents.ml_foundation.model_deployer.agent import ModelDeployerAgent
 

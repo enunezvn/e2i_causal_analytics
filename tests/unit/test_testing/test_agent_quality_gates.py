@@ -135,7 +135,9 @@ class TestToolComposerValidator:
         }
         is_valid, reason = _validate_tool_composer(output)
         assert is_valid is False
-        assert "tool" in reason.lower() and ("failed" in reason.lower() or "no successful" in reason.lower())
+        assert "tool" in reason.lower() and (
+            "failed" in reason.lower() or "no successful" in reason.lower()
+        )
 
     def test_reports_success_but_no_tools(self):
         """Test validation fails when reporting success but no tools executed."""
@@ -601,14 +603,14 @@ class TestAgentQualityGates:
 
     def test_gates_have_required_fields(self):
         """Test that gates have required structure."""
-        for agent_name, gate in AGENT_QUALITY_GATES.items():
+        for _agent_name, gate in AGENT_QUALITY_GATES.items():
             assert "description" in gate
             assert "required_output_fields" in gate
             assert isinstance(gate["required_output_fields"], list)
 
     def test_gates_have_semantic_validators(self):
         """Test that all gates have semantic validators."""
-        for agent_name, gate in AGENT_QUALITY_GATES.items():
+        for _agent_name, gate in AGENT_QUALITY_GATES.items():
             assert "semantic_validator" in gate
             assert callable(gate["semantic_validator"])
 

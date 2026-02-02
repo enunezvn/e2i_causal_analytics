@@ -86,12 +86,15 @@ class TestLoadSplits:
         }
 
         # Mock both Feast and DB as unavailable
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=None,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=None,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=None,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=None,
+            ),
         ):
             result = await load_splits(state)
 
@@ -273,13 +276,15 @@ class TestFeastSplitLoading:
     @pytest.fixture
     def mock_feast_features(self):
         """Create mock feature DataFrame from Feast."""
-        return pd.DataFrame({
-            "hcp_id": ["hcp_001", "hcp_002", "hcp_003"],
-            "event_timestamp": pd.to_datetime(["2024-01-01"] * 3),
-            "feature_view__feature1": [0.1, 0.2, 0.3],
-            "feature_view__feature2": [1.0, 2.0, 3.0],
-            "target": [0, 1, 0],
-        })
+        return pd.DataFrame(
+            {
+                "hcp_id": ["hcp_001", "hcp_002", "hcp_003"],
+                "event_timestamp": pd.to_datetime(["2024-01-01"] * 3),
+                "feature_view__feature1": [0.1, 0.2, 0.3],
+                "feature_view__feature2": [1.0, 2.0, 3.0],
+                "target": [0, 1, 0],
+            }
+        )
 
     async def test_fetch_splits_from_feast_success(self, mock_split_metadata, mock_feast_features):
         """Should successfully fetch splits from Feast."""
@@ -289,12 +294,15 @@ class TestFeastSplitLoading:
         mock_loader = MagicMock()
         mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=mock_adapter,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=mock_loader,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=mock_loader,
+            ),
         ):
             result = await _fetch_splits_from_feast(
                 experiment_id="exp_test_123",
@@ -323,12 +331,15 @@ class TestFeastSplitLoading:
         """Should return None when MLDataLoader is unavailable."""
         mock_adapter = MagicMock()
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=mock_adapter,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=None,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=None,
+            ),
         ):
             result = await _fetch_splits_from_feast(experiment_id="exp_test_123")
 
@@ -340,12 +351,15 @@ class TestFeastSplitLoading:
         mock_loader = MagicMock()
         mock_loader.get_split_metadata = AsyncMock(return_value=None)
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=mock_adapter,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=mock_loader,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=mock_loader,
+            ),
         ):
             result = await _fetch_splits_from_feast(experiment_id="exp_test_123")
 
@@ -363,12 +377,15 @@ class TestFeastSplitLoading:
 
         state = {"experiment_id": "exp_feast_test"}
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=mock_adapter,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=mock_loader,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=mock_loader,
+            ),
         ):
             result = await load_splits(state)
 
@@ -410,12 +427,15 @@ class TestFeastSplitLoading:
 
         state = {"experiment_id": "exp_db_fallback_test"}
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=None,  # Feast unavailable
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=mock_loader,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=None,  # Feast unavailable
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=mock_loader,
+            ),
         ):
             result = await load_splits(state)
 
@@ -433,19 +453,24 @@ class TestFeastSplitLoading:
         mock_loader = MagicMock()
         mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=mock_adapter,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=mock_loader,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=mock_loader,
+            ),
         ):
             result = await _fetch_splits_from_feast(experiment_id="exp_test_123")
 
         # Should return None on exception
         assert result is None
 
-    async def test_fetch_splits_uses_custom_entity_key(self, mock_split_metadata, mock_feast_features):
+    async def test_fetch_splits_uses_custom_entity_key(
+        self, mock_split_metadata, mock_feast_features
+    ):
         """Should use custom entity key when provided."""
         mock_adapter = MagicMock()
         mock_adapter.get_training_features = AsyncMock(return_value=mock_feast_features)
@@ -453,12 +478,15 @@ class TestFeastSplitLoading:
         mock_loader = MagicMock()
         mock_loader.get_split_metadata = AsyncMock(return_value=mock_split_metadata)
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=mock_adapter,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=mock_loader,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=mock_loader,
+            ),
         ):
             result = await _fetch_splits_from_feast(
                 experiment_id="exp_test_123",
@@ -485,12 +513,15 @@ class TestFeastSplitLoading:
             "entity_key": "custom_id",
         }
 
-        with patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
-            return_value=mock_adapter,
-        ), patch(
-            "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
-            return_value=mock_loader,
+        with (
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_feature_analyzer_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "src.agents.ml_foundation.model_trainer.nodes.split_loader._get_ml_data_loader",
+                return_value=mock_loader,
+            ),
         ):
             result = await load_splits(state)
 

@@ -3,7 +3,6 @@
 Tests the organizational learning context loading functionality.
 """
 
-
 import pytest
 
 from src.agents.experiment_designer.graph import create_initial_state

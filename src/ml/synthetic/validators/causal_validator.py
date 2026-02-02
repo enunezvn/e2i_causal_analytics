@@ -7,14 +7,13 @@ Validates that causal inference pipelines can recover TRUE_ATE:
 - Confounder balance verification
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
 import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 
-from ..config import DGPConfig, DGPType, DGP_CONFIGS
+from ..config import DGP_CONFIGS, DGPType
 from ..ground_truth.causal_effects import GroundTruthEffect
 
 logger = logging.getLogger(__name__)
@@ -58,8 +57,7 @@ class CausalValidationResult:
     def meets_criteria(self) -> bool:
         """Check if all validation criteria are met."""
         return (
-            self.ate_within_tolerance
-            and self.refutation_pass_rate >= self.min_required_pass_rate
+            self.ate_within_tolerance and self.refutation_pass_rate >= self.min_required_pass_rate
         )
 
 
@@ -100,6 +98,7 @@ class CausalValidator:
         """Check if DoWhy is available."""
         try:
             import dowhy  # noqa: F401
+
             return True
         except ImportError:
             logger.warning("DoWhy not available. Limited validation possible.")
@@ -155,9 +154,7 @@ class CausalValidator:
 
         # Estimate ATE
         try:
-            estimated_ate = self._estimate_ate(
-                df, treatment, outcome, confounders
-            )
+            estimated_ate = self._estimate_ate(df, treatment, outcome, confounders)
             result.estimated_ate = estimated_ate
             result.ate_error = abs(estimated_ate - ground_truth.true_ate)
             result.ate_within_tolerance = result.ate_error <= ground_truth.tolerance
@@ -166,9 +163,7 @@ class CausalValidator:
             return result
 
         # Check confounder balance
-        result.confounder_balance = self._check_confounder_balance(
-            df, treatment, confounders
-        )
+        result.confounder_balance = self._check_confounder_balance(df, treatment, confounders)
 
         # Run refutation tests if DoWhy available and requested
         if run_refutations and self._dowhy_available:
@@ -335,18 +330,22 @@ class CausalValidator:
                     method_name="placebo_treatment_refuter",
                 )
                 passed = abs(refute_placebo.new_effect) < abs(estimate.value) * 0.1
-                result.add_refutation(RefutationResult(
-                    test_name="placebo_treatment",
-                    passed=passed,
-                    effect_size=float(refute_placebo.new_effect),
-                    message=str(refute_placebo),
-                ))
+                result.add_refutation(
+                    RefutationResult(
+                        test_name="placebo_treatment",
+                        passed=passed,
+                        effect_size=float(refute_placebo.new_effect),
+                        message=str(refute_placebo),
+                    )
+                )
             except Exception as e:
-                result.add_refutation(RefutationResult(
-                    test_name="placebo_treatment",
-                    passed=False,
-                    message=f"Test failed: {str(e)}",
-                ))
+                result.add_refutation(
+                    RefutationResult(
+                        test_name="placebo_treatment",
+                        passed=False,
+                        message=f"Test failed: {str(e)}",
+                    )
+                )
 
             # 2. Random common cause test
             try:
@@ -358,18 +357,22 @@ class CausalValidator:
                 original = estimate.value
                 new = refute_random.new_effect
                 passed = abs(new - original) < abs(original) * 0.1
-                result.add_refutation(RefutationResult(
-                    test_name="random_common_cause",
-                    passed=passed,
-                    effect_size=float(refute_random.new_effect),
-                    message=str(refute_random),
-                ))
+                result.add_refutation(
+                    RefutationResult(
+                        test_name="random_common_cause",
+                        passed=passed,
+                        effect_size=float(refute_random.new_effect),
+                        message=str(refute_random),
+                    )
+                )
             except Exception as e:
-                result.add_refutation(RefutationResult(
-                    test_name="random_common_cause",
-                    passed=False,
-                    message=f"Test failed: {str(e)}",
-                ))
+                result.add_refutation(
+                    RefutationResult(
+                        test_name="random_common_cause",
+                        passed=False,
+                        message=f"Test failed: {str(e)}",
+                    )
+                )
 
             # 3. Data subset test
             try:
@@ -382,18 +385,22 @@ class CausalValidator:
                 original = estimate.value
                 new = refute_subset.new_effect
                 passed = abs(new - original) < abs(original) * 0.2
-                result.add_refutation(RefutationResult(
-                    test_name="data_subset",
-                    passed=passed,
-                    effect_size=float(refute_subset.new_effect),
-                    message=str(refute_subset),
-                ))
+                result.add_refutation(
+                    RefutationResult(
+                        test_name="data_subset",
+                        passed=passed,
+                        effect_size=float(refute_subset.new_effect),
+                        message=str(refute_subset),
+                    )
+                )
             except Exception as e:
-                result.add_refutation(RefutationResult(
-                    test_name="data_subset",
-                    passed=False,
-                    message=f"Test failed: {str(e)}",
-                ))
+                result.add_refutation(
+                    RefutationResult(
+                        test_name="data_subset",
+                        passed=False,
+                        message=f"Test failed: {str(e)}",
+                    )
+                )
 
         except Exception as e:
             result.errors.append(f"Refutation tests failed: {str(e)}")
@@ -418,8 +425,8 @@ class CausalValidator:
         dgp_config = DGP_CONFIGS[dgp_type]
 
         # Create a ground truth effect from the config
-        from ..ground_truth.causal_effects import create_ground_truth_from_dgp_config
         from ..config import Brand
+        from ..ground_truth.causal_effects import create_ground_truth_from_dgp_config
 
         ground_truth = create_ground_truth_from_dgp_config(
             brand=Brand.REMIBRUTINIB,  # Default brand for validation
@@ -436,9 +443,7 @@ class CausalValidator:
             run_refutations=run_refutations,
         )
 
-    def get_validation_summary(
-        self, result: CausalValidationResult
-    ) -> Dict[str, Any]:
+    def get_validation_summary(self, result: CausalValidationResult) -> Dict[str, Any]:
         """Get a summary of causal validation."""
         return {
             "is_valid": result.is_valid,
@@ -451,8 +456,7 @@ class CausalValidator:
             "refutation_pass_rate": result.refutation_pass_rate,
             "min_required_pass_rate": result.min_required_pass_rate,
             "refutations": [
-                {"name": r.test_name, "passed": r.passed}
-                for r in result.refutation_results
+                {"name": r.test_name, "passed": r.passed} for r in result.refutation_results
             ],
             "confounder_balance": result.confounder_balance,
             "errors": result.errors,

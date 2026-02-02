@@ -557,7 +557,7 @@ class TestExperimentKnowledgeStore:
             outcome = ValidationOutcome(
                 outcome_id=f"vo_test_{i}",
                 outcome_type=ValidationOutcomeType.FAILED_CRITICAL,
-                timestamp=f"2024-01-{15+i}T10:00:00Z",
+                timestamp=f"2024-01-{15 + i}T10:00:00Z",
                 treatment_variable="rep_visits" if i % 2 == 0 else "digital_engagement",
                 outcome_variable="trx_total" if i % 2 == 0 else "nrx",
                 gate_decision="block",

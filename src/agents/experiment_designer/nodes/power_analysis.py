@@ -129,7 +129,7 @@ class PowerAnalysisNode:
             state["power_analysis"] = power_result
             state["sample_size_justification"] = (
                 f"Based on {result['details'].get('analysis_type', 'power analysis')}: "
-                f"n={result['sample_size']} provides {power_target*100:.0f}% power to detect "
+                f"n={result['sample_size']} provides {power_target * 100:.0f}% power to detect "
                 f"effect size of {effect_size:.3f} at alpha={alpha}."
             )
             state["duration_estimate_days"] = duration_days

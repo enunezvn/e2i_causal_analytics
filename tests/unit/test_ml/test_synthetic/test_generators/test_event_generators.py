@@ -5,18 +5,16 @@ Tests event generation with referential integrity and causal relationships.
 """
 
 import pytest
-import numpy as np
-import pandas as pd
 
+from src.ml.synthetic.config import DGPType, EngagementTypeEnum
 from src.ml.synthetic.generators import (
+    EngagementGenerator,
+    GeneratorConfig,
     HCPGenerator,
+    OutcomeGenerator,
     PatientGenerator,
     TreatmentGenerator,
-    EngagementGenerator,
-    OutcomeGenerator,
-    GeneratorConfig,
 )
-from src.ml.synthetic.config import Brand, DGPType, EngagementTypeEnum
 
 
 class TestTreatmentGenerator:
@@ -304,19 +302,13 @@ class TestEventGeneratorIntegration:
 
         # Events
         treatment_config = GeneratorConfig(seed=42, n_records=500)
-        treatment_df = TreatmentGenerator(
-            treatment_config, patient_df=patient_df
-        ).generate()
+        treatment_df = TreatmentGenerator(treatment_config, patient_df=patient_df).generate()
 
         engagement_config = GeneratorConfig(seed=42, n_records=300)
-        engagement_df = EngagementGenerator(
-            engagement_config, hcp_df=hcp_df
-        ).generate()
+        engagement_df = EngagementGenerator(engagement_config, hcp_df=hcp_df).generate()
 
         outcome_config = GeneratorConfig(seed=42, n_records=100)
-        outcome_df = OutcomeGenerator(
-            outcome_config, patient_df=patient_df
-        ).generate()
+        outcome_df = OutcomeGenerator(outcome_config, patient_df=patient_df).generate()
 
         return {
             "hcps": hcp_df,
@@ -331,9 +323,7 @@ class TestEventGeneratorIntegration:
         assert len(full_pipeline_data["hcps"]) > 0
         assert len(full_pipeline_data["patients"]) > 0
         # Treatment and outcome only for initiated patients
-        initiated_count = (
-            full_pipeline_data["patients"]["treatment_initiated"] == 1
-        ).sum()
+        initiated_count = (full_pipeline_data["patients"]["treatment_initiated"] == 1).sum()
         if initiated_count > 0:
             assert len(full_pipeline_data["treatments"]) > 0
             assert len(full_pipeline_data["outcomes"]) > 0
@@ -342,7 +332,7 @@ class TestEventGeneratorIntegration:
     def test_referential_integrity_chain(self, full_pipeline_data):
         """Test referential integrity across all entities."""
         hcp_ids = set(full_pipeline_data["hcps"]["hcp_id"])
-        patient_ids = set(full_pipeline_data["patients"]["patient_id"])
+        set(full_pipeline_data["patients"]["patient_id"])
         initiated_ids = set(
             full_pipeline_data["patients"][
                 full_pipeline_data["patients"]["treatment_initiated"] == 1

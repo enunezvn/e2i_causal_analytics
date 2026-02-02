@@ -482,9 +482,7 @@ class TestWithdrawUnit:
     def test_withdraw_unit_not_found(self):
         """Should return 404 when enrollment not found."""
         mock_service = MagicMock()
-        mock_service.withdraw_unit = AsyncMock(
-            side_effect=ValueError("Enrollment not found")
-        )
+        mock_service.withdraw_unit = AsyncMock(side_effect=ValueError("Enrollment not found"))
 
         with patch(
             "src.services.enrollment.EnrollmentService",
@@ -549,9 +547,7 @@ class TestTriggerInterimAnalysis:
     def test_interim_analysis_sync_success(self, sample_interim_analysis):
         """Should perform interim analysis synchronously."""
         mock_service = MagicMock()
-        mock_service.perform_interim_analysis = AsyncMock(
-            return_value=sample_interim_analysis
-        )
+        mock_service.perform_interim_analysis = AsyncMock(return_value=sample_interim_analysis)
 
         with patch(
             "src.services.interim_analysis.InterimAnalysisService",
@@ -638,9 +634,7 @@ class TestGetExperimentResults:
             "src.repositories.ab_results.ABResultsRepository",
             return_value=mock_repo,
         ):
-            response = client.get(
-                "/api/experiments/11111111-1111-1111-1111-111111111111/results"
-            )
+            response = client.get("/api/experiments/11111111-1111-1111-1111-111111111111/results")
 
         assert response.status_code == 200
         data = response.json()
@@ -761,17 +755,13 @@ class TestGetFidelityComparisons:
     def test_get_fidelity_comparisons_success(self, sample_fidelity_comparison):
         """Should return Digital Twin fidelity comparisons."""
         mock_repo = MagicMock()
-        mock_repo.get_fidelity_comparisons = AsyncMock(
-            return_value=[sample_fidelity_comparison]
-        )
+        mock_repo.get_fidelity_comparisons = AsyncMock(return_value=[sample_fidelity_comparison])
 
         with patch(
             "src.repositories.ab_results.ABResultsRepository",
             return_value=mock_repo,
         ):
-            response = client.get(
-                "/api/experiments/11111111-1111-1111-1111-111111111111/fidelity"
-            )
+            response = client.get("/api/experiments/11111111-1111-1111-1111-111111111111/fidelity")
 
         assert response.status_code == 200
         data = response.json()
@@ -788,9 +778,7 @@ class TestGetFidelityComparisons:
             "src.repositories.ab_results.ABResultsRepository",
             return_value=mock_repo,
         ):
-            response = client.get(
-                "/api/experiments/11111111-1111-1111-1111-111111111111/fidelity"
-            )
+            response = client.get("/api/experiments/11111111-1111-1111-1111-111111111111/fidelity")
 
         assert response.status_code == 200
         data = response.json()
@@ -903,9 +891,7 @@ class TestGetExperimentHealth:
             "src.agents.experiment_monitor.ExperimentMonitorAgent",
             return_value=mock_agent,
         ):
-            response = client.get(
-                "/api/experiments/11111111-1111-1111-1111-111111111111/health"
-            )
+            response = client.get("/api/experiments/11111111-1111-1111-1111-111111111111/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -925,9 +911,7 @@ class TestGetExperimentHealth:
             "src.agents.experiment_monitor.ExperimentMonitorAgent",
             return_value=mock_agent,
         ):
-            response = client.get(
-                "/api/experiments/99999999-9999-9999-9999-999999999999/health"
-            )
+            response = client.get("/api/experiments/99999999-9999-9999-9999-999999999999/health")
 
         assert response.status_code == 404
 
@@ -944,9 +928,7 @@ class TestGetExperimentAlerts:
             "src.repositories.ab_results.ABResultsRepository",
             return_value=mock_repo,
         ):
-            response = client.get(
-                "/api/experiments/11111111-1111-1111-1111-111111111111/alerts"
-            )
+            response = client.get("/api/experiments/11111111-1111-1111-1111-111111111111/alerts")
 
         assert response.status_code == 200
         data = response.json()
@@ -980,9 +962,7 @@ class TestGetExperimentAlerts:
             "src.repositories.ab_results.ABResultsRepository",
             return_value=mock_repo,
         ):
-            response = client.get(
-                "/api/experiments/11111111-1111-1111-1111-111111111111/alerts"
-            )
+            response = client.get("/api/experiments/11111111-1111-1111-1111-111111111111/alerts")
 
         assert response.status_code == 200
         data = response.json()

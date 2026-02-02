@@ -13,7 +13,6 @@ Fixtures are designed to cover:
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -30,7 +29,6 @@ from src.agents.experiment_monitor.state import (
     MonitorStatus,
     SRMIssue,
 )
-
 
 # ============================================================================
 # MOCK SUPABASE CLIENT
@@ -179,16 +177,16 @@ def mock_supabase_with_experiments(mock_supabase_client):
     # Add assignments (balanced for exp-001, imbalanced for exp-002)
     assignments = []
     # exp-001: 500 assignments, balanced (250/250)
-    for i in range(250):
+    for _i in range(250):
         assignments.append({"experiment_id": "exp-001", "variant": "control"})
         assignments.append({"experiment_id": "exp-001", "variant": "treatment"})
     # exp-002: 200 assignments, imbalanced (140/60 - SRM)
-    for i in range(140):
+    for _i in range(140):
         assignments.append({"experiment_id": "exp-002", "variant": "control"})
-    for i in range(60):
+    for _i in range(60):
         assignments.append({"experiment_id": "exp-002", "variant": "treatment"})
     # exp-003: 50 assignments only (low enrollment)
-    for i in range(25):
+    for _i in range(25):
         assignments.append({"experiment_id": "exp-003", "variant": "control"})
         assignments.append({"experiment_id": "exp-003", "variant": "treatment"})
 
@@ -511,9 +509,7 @@ def state_after_health_check(
 
 
 @pytest.fixture
-def state_after_srm_detection(
-    state_after_health_check, sample_srm_issue
-) -> ExperimentMonitorState:
+def state_after_srm_detection(state_after_health_check, sample_srm_issue) -> ExperimentMonitorState:
     """State after srm_detector node execution."""
     state = state_after_health_check.copy()
     state["srm_issues"] = [sample_srm_issue]

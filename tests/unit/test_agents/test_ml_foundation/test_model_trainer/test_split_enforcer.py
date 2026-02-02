@@ -297,9 +297,7 @@ class TestCheckDuplicateIndices:
         test_data = {"indices": [7, 8, 9]}
         holdout_data = {"indices": [10, 11]}
 
-        warnings = _check_duplicate_indices(
-            train_data, validation_data, test_data, holdout_data
-        )
+        warnings = _check_duplicate_indices(train_data, validation_data, test_data, holdout_data)
 
         assert len(warnings) == 1
         assert "CRITICAL" in warnings[0]
@@ -313,9 +311,7 @@ class TestCheckDuplicateIndices:
         test_data = {"indices": [3, 4, 8, 9]}  # Indices 3, 4 overlap with train
         holdout_data = None
 
-        warnings = _check_duplicate_indices(
-            train_data, validation_data, test_data, holdout_data
-        )
+        warnings = _check_duplicate_indices(train_data, validation_data, test_data, holdout_data)
 
         assert len(warnings) == 1
         assert "CRITICAL" in warnings[0]
@@ -329,9 +325,7 @@ class TestCheckDuplicateIndices:
         test_data = {"indices": [5, 6, 7]}  # Index 5 overlaps with validation
         holdout_data = None
 
-        warnings = _check_duplicate_indices(
-            train_data, validation_data, test_data, holdout_data
-        )
+        warnings = _check_duplicate_indices(train_data, validation_data, test_data, holdout_data)
 
         assert len(warnings) == 1
         assert "CRITICAL" in warnings[0]
@@ -344,9 +338,7 @@ class TestCheckDuplicateIndices:
         test_data = {"indices": [7, 8]}
         holdout_data = {"indices": [2, 9]}  # Index 2 overlaps with train
 
-        warnings = _check_duplicate_indices(
-            train_data, validation_data, test_data, holdout_data
-        )
+        warnings = _check_duplicate_indices(train_data, validation_data, test_data, holdout_data)
 
         assert len(warnings) == 1
         assert "CRITICAL" in warnings[0]
@@ -359,9 +351,7 @@ class TestCheckDuplicateIndices:
         test_data = {"indices": [7, 8, 9]}
         holdout_data = {"indices": [10, 11]}
 
-        warnings = _check_duplicate_indices(
-            train_data, validation_data, test_data, holdout_data
-        )
+        warnings = _check_duplicate_indices(train_data, validation_data, test_data, holdout_data)
 
         assert len(warnings) == 0
 
@@ -372,9 +362,7 @@ class TestCheckDuplicateIndices:
         test_data = {"indices": []}
         holdout_data = None
 
-        warnings = _check_duplicate_indices(
-            train_data, validation_data, test_data, holdout_data
-        )
+        warnings = _check_duplicate_indices(train_data, validation_data, test_data, holdout_data)
 
         assert len(warnings) == 0
 
@@ -385,9 +373,7 @@ class TestCheckDuplicateIndices:
         test_data = {"indices": [5, 6, 7]}  # Overlaps with validation
         holdout_data = {"indices": [0, 8]}  # Overlaps with train
 
-        warnings = _check_duplicate_indices(
-            train_data, validation_data, test_data, holdout_data
-        )
+        warnings = _check_duplicate_indices(train_data, validation_data, test_data, holdout_data)
 
         assert len(warnings) == 3  # train-val, val-test, train-holdout
 
@@ -439,11 +425,13 @@ class TestCheckFeatureLeakage:
 
     def test_detects_direct_target_leakage(self):
         """Should detect when target column is in features."""
-        X = pd.DataFrame({
-            "feature1": [1, 2, 3],
-            "feature2": [4, 5, 6],
-            "target": [0, 1, 0],  # Target in features!
-        })
+        X = pd.DataFrame(
+            {
+                "feature1": [1, 2, 3],
+                "feature2": [4, 5, 6],
+                "target": [0, 1, 0],  # Target in features!
+            }
+        )
 
         warning = _check_feature_leakage(X, "target")
 
@@ -453,10 +441,12 @@ class TestCheckFeatureLeakage:
 
     def test_detects_similar_name_leakage(self):
         """Should warn about features with similar names to target."""
-        X = pd.DataFrame({
-            "feature1": [1, 2, 3],
-            "target_prediction": [0.5, 0.7, 0.3],  # Similar to target
-        })
+        X = pd.DataFrame(
+            {
+                "feature1": [1, 2, 3],
+                "target_prediction": [0.5, 0.7, 0.3],  # Similar to target
+            }
+        )
 
         warning = _check_feature_leakage(X, "target")
 
@@ -466,10 +456,12 @@ class TestCheckFeatureLeakage:
 
     def test_no_warning_when_no_leakage(self):
         """Should return None when no leakage detected."""
-        X = pd.DataFrame({
-            "feature1": [1, 2, 3],
-            "feature2": [4, 5, 6],
-        })
+        X = pd.DataFrame(
+            {
+                "feature1": [1, 2, 3],
+                "feature2": [4, 5, 6],
+            }
+        )
 
         warning = _check_feature_leakage(X, "target")
 
@@ -483,10 +475,12 @@ class TestCheckFeatureLeakage:
 
     def test_case_insensitive_matching(self):
         """Should match target regardless of case."""
-        X = pd.DataFrame({
-            "feature1": [1, 2, 3],
-            "TARGET": [0, 1, 0],  # Uppercase target
-        })
+        X = pd.DataFrame(
+            {
+                "feature1": [1, 2, 3],
+                "TARGET": [0, 1, 0],  # Uppercase target
+            }
+        )
 
         warning = _check_feature_leakage(X, "target")
 
@@ -500,27 +494,31 @@ class TestCheckTemporalOrdering:
     def test_detects_train_validation_temporal_leak(self):
         """Should detect when train data is after validation data."""
         train_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-15", "2024-01-20", "2024-01-25"]),
-                "value": [1, 2, 3],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-15", "2024-01-20", "2024-01-25"]),
+                    "value": [1, 2, 3],
+                }
+            )
         }
         validation_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-10", "2024-01-12"]),  # Before train!
-                "value": [4, 5],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-10", "2024-01-12"]),  # Before train!
+                    "value": [4, 5],
+                }
+            )
         }
         test_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-30"]),
-                "value": [6],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-30"]),
+                    "value": [6],
+                }
+            )
         }
 
-        warnings = _check_temporal_ordering(
-            train_data, validation_data, test_data, "timestamp"
-        )
+        warnings = _check_temporal_ordering(train_data, validation_data, test_data, "timestamp")
 
         assert len(warnings) >= 1
         assert any("temporal leakage" in w.lower() for w in warnings)
@@ -528,27 +526,31 @@ class TestCheckTemporalOrdering:
     def test_detects_train_test_temporal_leak(self):
         """Should detect when train data is after test data."""
         train_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-20", "2024-01-25"]),
-                "value": [1, 2],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-20", "2024-01-25"]),
+                    "value": [1, 2],
+                }
+            )
         }
         validation_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-26", "2024-01-27"]),
-                "value": [3, 4],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-26", "2024-01-27"]),
+                    "value": [3, 4],
+                }
+            )
         }
         test_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-10", "2024-01-15"]),  # Before train!
-                "value": [5, 6],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-10", "2024-01-15"]),  # Before train!
+                    "value": [5, 6],
+                }
+            )
         }
 
-        warnings = _check_temporal_ordering(
-            train_data, validation_data, test_data, "timestamp"
-        )
+        warnings = _check_temporal_ordering(train_data, validation_data, test_data, "timestamp")
 
         assert len(warnings) >= 1
         assert any("test" in w.lower() for w in warnings)
@@ -556,27 +558,31 @@ class TestCheckTemporalOrdering:
     def test_no_warning_when_properly_ordered(self):
         """Should return empty when data is properly ordered."""
         train_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-10"]),
-                "value": [1, 2],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-01", "2024-01-10"]),
+                    "value": [1, 2],
+                }
+            )
         }
         validation_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-15", "2024-01-20"]),
-                "value": [3, 4],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-15", "2024-01-20"]),
+                    "value": [3, 4],
+                }
+            )
         }
         test_data = {
-            "X": pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-25", "2024-01-30"]),
-                "value": [5, 6],
-            })
+            "X": pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(["2024-01-25", "2024-01-30"]),
+                    "value": [5, 6],
+                }
+            )
         }
 
-        warnings = _check_temporal_ordering(
-            train_data, validation_data, test_data, "timestamp"
-        )
+        warnings = _check_temporal_ordering(train_data, validation_data, test_data, "timestamp")
 
         assert len(warnings) == 0
 
@@ -586,9 +592,7 @@ class TestCheckTemporalOrdering:
         validation_data = {"X": pd.DataFrame({"value": [4, 5]})}
         test_data = {"X": pd.DataFrame({"value": [6]})}
 
-        warnings = _check_temporal_ordering(
-            train_data, validation_data, test_data, "timestamp"
-        )
+        warnings = _check_temporal_ordering(train_data, validation_data, test_data, "timestamp")
 
         assert len(warnings) == 0  # Should not crash, just return empty
 
@@ -598,8 +602,6 @@ class TestCheckTemporalOrdering:
         validation_data = {"X": None}
         test_data = {"X": None}
 
-        warnings = _check_temporal_ordering(
-            train_data, validation_data, test_data, "timestamp"
-        )
+        warnings = _check_temporal_ordering(train_data, validation_data, test_data, "timestamp")
 
         assert len(warnings) == 0

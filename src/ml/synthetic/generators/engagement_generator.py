@@ -4,13 +4,13 @@ Engagement Event Generator.
 Generates synthetic engagement events (rep visits, digital, etc.).
 """
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
-from .base import BaseGenerator, GeneratorConfig
 from ..config import Brand, EngagementTypeEnum
+from .base import BaseGenerator, GeneratorConfig
 
 
 class EngagementGenerator(BaseGenerator[pd.DataFrame]):
@@ -139,17 +139,19 @@ class EngagementGenerator(BaseGenerator[pd.DataFrame]):
             brands = self._random_choice([b.value for b in Brand], n_actual)
 
         # Build DataFrame
-        df = pd.DataFrame({
-            "engagement_event_id": engagement_ids,
-            "hcp_id": hcp_ids[:n_actual] if isinstance(hcp_ids, list) else hcp_ids,
-            "rep_id": rep_assignments,
-            "brand": brands,
-            "engagement_date": engagement_dates,
-            "engagement_type": engagement_types,
-            "quality_score": quality_scores,
-            "duration_minutes": duration_minutes,
-            "data_split": self._assign_splits(engagement_dates),
-        })
+        df = pd.DataFrame(
+            {
+                "engagement_event_id": engagement_ids,
+                "hcp_id": hcp_ids[:n_actual] if isinstance(hcp_ids, list) else hcp_ids,
+                "rep_id": rep_assignments,
+                "brand": brands,
+                "engagement_date": engagement_dates,
+                "engagement_type": engagement_types,
+                "quality_score": quality_scores,
+                "duration_minutes": duration_minutes,
+                "data_split": self._assign_splits(engagement_dates),
+            }
+        )
 
         self._log(f"Generated {len(df)} engagement events")
         return df

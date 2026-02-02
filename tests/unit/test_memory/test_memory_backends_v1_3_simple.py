@@ -5,9 +5,6 @@ Tests the main functionality with mocked external dependencies.
 """
 
 import importlib
-import json
-import sys
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -200,11 +197,13 @@ async def test_working_memory_create_session(mock_get_redis, mock_redis_client):
 @pytest.mark.asyncio
 async def test_working_memory_get_session(mock_get_redis, mock_redis_client):
     """Test session retrieval."""
-    mock_redis_client.hgetall = AsyncMock(return_value={
-        "session_id": "sess123",
-        "user_id": "user123",
-        "message_count": "5",
-    })
+    mock_redis_client.hgetall = AsyncMock(
+        return_value={
+            "session_id": "sess123",
+            "user_id": "user123",
+            "message_count": "5",
+        }
+    )
     mock_get_redis.return_value = mock_redis_client
 
     memory = mb.RedisWorkingMemory()

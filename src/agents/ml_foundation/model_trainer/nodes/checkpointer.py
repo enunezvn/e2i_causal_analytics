@@ -12,7 +12,6 @@ import hashlib
 import json
 import logging
 import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -65,7 +64,7 @@ async def save_checkpoint(state: Dict[str, Any]) -> Dict[str, Any]:
     # Extract configuration
     experiment_id = state.get("experiment_id", "unknown")
     algorithm_name = state.get("algorithm_name", "unknown")
-    problem_type = state.get("problem_type", "unknown")
+    state.get("problem_type", "unknown")
     framework = state.get("framework", _get_framework(algorithm_name))
 
     # Checkpoint directory
@@ -156,8 +155,7 @@ async def load_checkpoint(state: Dict[str, Any]) -> Dict[str, Any]:
             current_hash = _compute_model_hash(model)
             if current_hash != metadata["model_hash"]:
                 logger.warning(
-                    f"Model hash mismatch: expected {metadata['model_hash']}, "
-                    f"got {current_hash}"
+                    f"Model hash mismatch: expected {metadata['model_hash']}, got {current_hash}"
                 )
 
         logger.info(f"Model loaded from checkpoint: {checkpoint_path}")
@@ -254,34 +252,27 @@ def _prepare_metadata(
         "checkpoint_name": checkpoint_name,
         "model_hash": model_hash,
         "created_at": datetime.now(timezone.utc).isoformat(),
-
         # Configuration
         "experiment_id": state.get("experiment_id"),
         "algorithm_name": state.get("algorithm_name"),
         "problem_type": state.get("problem_type"),
         "framework": state.get("framework"),
-
         # Hyperparameters
         "best_hyperparameters": state.get("best_hyperparameters", {}),
-
         # HPO info
         "hpo_completed": state.get("hpo_completed", False),
         "hpo_best_value": state.get("hpo_best_value"),
         "hpo_trials_run": state.get("hpo_trials_run"),
-
         # Training info
         "training_duration_seconds": state.get("training_duration_seconds"),
         "early_stopped": state.get("early_stopped", False),
         "final_epoch": state.get("final_epoch"),
-
         # Key metrics
         "test_metrics": _filter_serializable(test_metrics),
         "validation_metrics": _filter_serializable(validation_metrics),
-
         # Model info
         "success_criteria_met": state.get("success_criteria_met", False),
         "optimal_threshold": state.get("optimal_threshold"),
-
         # MLflow reference
         "mlflow_run_id": state.get("mlflow_run_id"),
         "mlflow_experiment_id": state.get("mlflow_experiment_id"),
@@ -393,9 +384,7 @@ def list_checkpoints(
             # Add path info
             metadata["metadata_path"] = str(metadata_path)
             metadata["model_path"] = str(
-                metadata_path.with_name(
-                    metadata_path.name.replace("_metadata.json", ".pkl")
-                )
+                metadata_path.with_name(metadata_path.name.replace("_metadata.json", ".pkl"))
             )
 
             checkpoints.append(metadata)

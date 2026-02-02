@@ -154,7 +154,9 @@ class TestMemorySearch:
 
     def test_search_filters_by_min_score(self, mock_hybrid_search):
         """search should filter results below min_score."""
-        response = client.post("/api/memory/search", json={"query": "TRx analysis", "min_score": 0.8})
+        response = client.post(
+            "/api/memory/search", json={"query": "TRx analysis", "min_score": 0.8}
+        )
 
         assert response.status_code == 200
         data = response.json()

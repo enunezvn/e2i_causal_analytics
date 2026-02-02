@@ -5,7 +5,6 @@ Tests CRUD operations for ml_shap_analyses table.
 """
 
 import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -45,7 +44,11 @@ class TestShapAnalysisRepository:
                 },
             ],
             "interpretation": "Key drivers are recency and adherence metrics.",
-            "top_features": ["days_since_last_visit", "therapy_adherence_score", "total_hcp_interactions"],
+            "top_features": [
+                "days_since_last_visit",
+                "therapy_adherence_score",
+                "total_hcp_interactions",
+            ],
             "samples_analyzed": 500,
             "computation_time_seconds": 45.2,
             "explainer_type": "TreeExplainer",
@@ -73,7 +76,11 @@ class TestShapAnalysisRepository:
                 },
             ],
             "natural_language_explanation": "Key drivers are recency and adherence metrics.",
-            "key_drivers": ["days_since_last_visit", "therapy_adherence_score", "total_hcp_interactions"],
+            "key_drivers": [
+                "days_since_last_visit",
+                "therapy_adherence_score",
+                "total_hcp_interactions",
+            ],
             "sample_size": 500,
             "computation_duration_seconds": 45,
             "computation_method": "TreeExplainer",
@@ -85,7 +92,9 @@ class TestStoreAnalysis(TestShapAnalysisRepository):
     """Tests for store_analysis method."""
 
     @pytest.mark.asyncio
-    async def test_stores_analysis_successfully(self, repo, mock_client, sample_analysis_dict, sample_db_record):
+    async def test_stores_analysis_successfully(
+        self, repo, mock_client, sample_analysis_dict, sample_db_record
+    ):
         """Test that analysis is stored correctly."""
         # Setup mock
         mock_result = MagicMock()
@@ -107,7 +116,9 @@ class TestStoreAnalysis(TestShapAnalysisRepository):
         mock_insert.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_stores_analysis_without_registry_id(self, repo, mock_client, sample_analysis_dict, sample_db_record):
+    async def test_stores_analysis_without_registry_id(
+        self, repo, mock_client, sample_analysis_dict, sample_db_record
+    ):
         """Test that analysis can be stored without model_registry_id."""
         # Setup mock
         mock_result = MagicMock()
@@ -345,6 +356,7 @@ class TestGetShapAnalysisRepository:
         """Test that a repository instance is returned."""
         # Reset singleton
         import src.repositories.shap_analysis as module
+
         monkeypatch.setattr(module, "_shap_analysis_repository", None)
 
         repo = get_shap_analysis_repository()
@@ -354,6 +366,7 @@ class TestGetShapAnalysisRepository:
     def test_returns_same_instance(self, monkeypatch):
         """Test that the same instance is returned on subsequent calls."""
         import src.repositories.shap_analysis as module
+
         monkeypatch.setattr(module, "_shap_analysis_repository", None)
 
         repo1 = get_shap_analysis_repository()

@@ -134,7 +134,8 @@ class TestCognitiveQuery:
         """Should include evidence when requested."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/api/cognitive/query", json={"query": "Analyze TRx trends", "include_evidence": True}
+                "/api/cognitive/query",
+                json={"query": "Analyze TRx trends", "include_evidence": True},
             )
 
         assert response.status_code == 200
@@ -192,7 +193,8 @@ class TestCognitiveQuery:
         """Should use explicit query type when provided."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             response = client.post(
-                "/api/cognitive/query", json={"query": "Analyze this data", "query_type": "monitoring"}
+                "/api/cognitive/query",
+                json={"query": "Analyze this data", "query_type": "monitoring"},
             )
 
         assert response.status_code == 200

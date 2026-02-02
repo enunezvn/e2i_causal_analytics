@@ -5,9 +5,7 @@ Tests the E2IDataLoader class and helper functions for data loading.
 """
 
 import json
-import os
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, call, mock_open, patch
+from unittest.mock import Mock, mock_open, patch
 
 import pytest
 
@@ -164,7 +162,7 @@ class TestHelperFunctions:
         records = [{"id": 1, "data": {"key": "value"}}]
         original_data = records[0]["data"]
 
-        result = transform_for_supabase("test_table", records)
+        transform_for_supabase("test_table", records)
 
         # Original should be unchanged
         assert records[0]["data"] is original_data
@@ -231,7 +229,9 @@ class TestHelperFunctions:
         mock_client = Mock()
 
         # Batch insert fails
-        mock_client.table.return_value.insert.return_value.execute.side_effect = Exception("Batch error")
+        mock_client.table.return_value.insert.return_value.execute.side_effect = Exception(
+            "Batch error"
+        )
 
         # One-by-one inserts succeed for 2 out of 3
         individual_responses = [
@@ -532,16 +532,7 @@ class TestEdgeCases:
     def test_transform_deeply_nested_jsonb(self):
         """Test transformation with deeply nested JSONB."""
         records = [
-            {
-                "id": 1,
-                "probability_scores": {
-                    "level1": {
-                        "level2": {
-                            "level3": {"value": 0.5}
-                        }
-                    }
-                }
-            }
+            {"id": 1, "probability_scores": {"level1": {"level2": {"level3": {"value": 0.5}}}}}
         ]
 
         result = transform_for_supabase("ml_predictions", records)

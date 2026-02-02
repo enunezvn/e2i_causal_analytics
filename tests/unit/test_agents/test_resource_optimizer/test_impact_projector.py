@@ -46,7 +46,7 @@ class TestImpactProjectorNode:
         # Build response map - handle both AllocationTarget objects and dicts
         response_by_entity = {}
         for t in allocation_targets:
-            if hasattr(t, 'entity_id'):
+            if hasattr(t, "entity_id"):
                 # AllocationTarget object
                 response_by_entity[t.entity_id] = t.expected_response
             else:
@@ -61,7 +61,7 @@ class TestImpactProjectorNode:
         # Calculate current outcome
         current_outcome = 0
         for t in allocation_targets:
-            if hasattr(t, 'entity_id'):
+            if hasattr(t, "entity_id"):
                 current_outcome += t.expected_response * t.current_allocation
             else:
                 current_outcome += t.get("expected_response", 0) * t.get("current_allocation", 0)

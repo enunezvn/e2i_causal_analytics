@@ -6,12 +6,11 @@ Tests the DirectLiNGAM and ICA-LiNGAM algorithm wrappers for causal discovery.
 
 import sys
 import types
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock, patch
-
 
 # =============================================================================
 # Mock lingam module fixture
@@ -42,6 +41,7 @@ def mock_lingam_module():
     else:
         sys.modules.pop("lingam", None)
 
+
 from src.causal_engine.discovery.algorithms.lingam_wrapper import (
     DirectLiNGAMAlgorithm,
     ICALiNGAMAlgorithm,
@@ -51,7 +51,6 @@ from src.causal_engine.discovery.base import (
     DiscoveryAlgorithmType,
     DiscoveryConfig,
 )
-
 
 # =============================================================================
 # DirectLiNGAM Tests (10 tests)
@@ -140,11 +139,13 @@ class TestDirectLiNGAMDiscovery:
 
         with patch("lingam.DirectLiNGAM") as MockLiNGAM:
             mock_model = MagicMock()
-            mock_model.adjacency_matrix_ = np.array([
-                [0.0, 0.8, 0.0],
-                [0.0, 0.0, 0.8],
-                [0.0, 0.0, 0.0],
-            ])
+            mock_model.adjacency_matrix_ = np.array(
+                [
+                    [0.0, 0.8, 0.0],
+                    [0.0, 0.0, 0.8],
+                    [0.0, 0.0, 0.0],
+                ]
+            )
             mock_model.causal_order_ = [0, 1, 2]
             MockLiNGAM.return_value = mock_model
 
@@ -162,11 +163,13 @@ class TestDirectLiNGAMDiscovery:
 
         with patch("lingam.DirectLiNGAM") as MockLiNGAM:
             mock_model = MagicMock()
-            mock_model.adjacency_matrix_ = np.array([
-                [0.0, 0.8, 0.0],
-                [0.0, 0.0, 0.8],
-                [0.0, 0.0, 0.0],
-            ])
+            mock_model.adjacency_matrix_ = np.array(
+                [
+                    [0.0, 0.8, 0.0],
+                    [0.0, 0.0, 0.8],
+                    [0.0, 0.0, 0.0],
+                ]
+            )
             mock_model.causal_order_ = [0, 1, 2]
             MockLiNGAM.return_value = mock_model
 
@@ -175,17 +178,21 @@ class TestDirectLiNGAMDiscovery:
             assert "causal_order" in result.metadata
             assert result.metadata["causal_order"] == ["X", "Y", "Z"]
 
-    def test_adjacency_weights_in_metadata(self, direct_lingam, non_gaussian_data, mock_lingam_module):
+    def test_adjacency_weights_in_metadata(
+        self, direct_lingam, non_gaussian_data, mock_lingam_module
+    ):
         """Test that adjacency weights are included in metadata."""
         config = DiscoveryConfig(random_state=42)
 
         with patch("lingam.DirectLiNGAM") as MockLiNGAM:
             mock_model = MagicMock()
-            adj_weights = np.array([
-                [0.0, 0.8, 0.0],
-                [0.0, 0.0, 0.8],
-                [0.0, 0.0, 0.0],
-            ])
+            adj_weights = np.array(
+                [
+                    [0.0, 0.8, 0.0],
+                    [0.0, 0.0, 0.8],
+                    [0.0, 0.0, 0.0],
+                ]
+            )
             mock_model.adjacency_matrix_ = adj_weights
             mock_model.causal_order_ = [0, 1, 2]
             MockLiNGAM.return_value = mock_model
@@ -206,8 +213,8 @@ class TestDirectLiNGAMErrorHandling:
 
     def test_import_error_handling(self, direct_lingam):
         """Test handling of lingam package import error."""
-        config = DiscoveryConfig()
-        df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0]})
+        DiscoveryConfig()
+        pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0]})
 
         with patch.dict("sys.modules", {"lingam": None}):
             with patch(
@@ -215,7 +222,7 @@ class TestDirectLiNGAMErrorHandling:
                 side_effect=ImportError("lingam not installed"),
             ):
                 # Create a fresh instance to test import error path
-                algo = DirectLiNGAMAlgorithm()
+                DirectLiNGAMAlgorithm()
                 # The actual import error would be caught in the discover method
                 pass
 
@@ -336,11 +343,13 @@ class TestICALiNGAMDiscovery:
 
         with patch("lingam.ICALiNGAM") as MockLiNGAM:
             mock_model = MagicMock()
-            mock_model.adjacency_matrix_ = np.array([
-                [0.0, 0.8, 0.0],
-                [0.0, 0.0, 0.8],
-                [0.0, 0.0, 0.0],
-            ])
+            mock_model.adjacency_matrix_ = np.array(
+                [
+                    [0.0, 0.8, 0.0],
+                    [0.0, 0.0, 0.8],
+                    [0.0, 0.0, 0.0],
+                ]
+            )
             mock_model.causal_order_ = [0, 1, 2]
             MockLiNGAM.return_value = mock_model
 
@@ -358,11 +367,13 @@ class TestICALiNGAMDiscovery:
 
         with patch("lingam.ICALiNGAM") as MockLiNGAM:
             mock_model = MagicMock()
-            mock_model.adjacency_matrix_ = np.array([
-                [0.0, 0.8, 0.0],
-                [0.0, 0.0, 0.8],
-                [0.0, 0.0, 0.0],
-            ])
+            mock_model.adjacency_matrix_ = np.array(
+                [
+                    [0.0, 0.8, 0.0],
+                    [0.0, 0.0, 0.8],
+                    [0.0, 0.0, 0.0],
+                ]
+            )
             mock_model.causal_order_ = [0, 1, 2]
             MockLiNGAM.return_value = mock_model
 
@@ -377,11 +388,13 @@ class TestICALiNGAMDiscovery:
 
         with patch("lingam.ICALiNGAM") as MockLiNGAM:
             mock_model = MagicMock()
-            adj_weights = np.array([
-                [0.0, 0.8, 0.0],
-                [0.0, 0.0, 0.8],
-                [0.0, 0.0, 0.0],
-            ])
+            adj_weights = np.array(
+                [
+                    [0.0, 0.8, 0.0],
+                    [0.0, 0.0, 0.8],
+                    [0.0, 0.0, 0.0],
+                ]
+            )
             mock_model.adjacency_matrix_ = adj_weights
             mock_model.causal_order_ = [0, 1, 2]
             MockLiNGAM.return_value = mock_model
@@ -523,11 +536,13 @@ class TestLiNGAMThresholding:
     def test_direct_lingam_threshold_adjacency(self):
         """Test DirectLiNGAM threshold_adjacency method."""
         algo = DirectLiNGAMAlgorithm()
-        weights = np.array([
-            [0.0, 0.8, 0.05],  # 0.05 should be filtered
-            [0.0, 0.0, 0.3],
-            [0.0, 0.0, 0.0],
-        ])
+        weights = np.array(
+            [
+                [0.0, 0.8, 0.05],  # 0.05 should be filtered
+                [0.0, 0.0, 0.3],
+                [0.0, 0.0, 0.0],
+            ]
+        )
 
         binary = algo._threshold_adjacency(weights)
 
@@ -538,11 +553,13 @@ class TestLiNGAMThresholding:
     def test_ica_lingam_threshold_adjacency(self):
         """Test ICA-LiNGAM threshold_adjacency method."""
         algo = ICALiNGAMAlgorithm()
-        weights = np.array([
-            [0.0, 0.8, 0.05],
-            [0.0, 0.0, 0.3],
-            [0.0, 0.0, 0.0],
-        ])
+        weights = np.array(
+            [
+                [0.0, 0.8, 0.05],
+                [0.0, 0.0, 0.3],
+                [0.0, 0.0, 0.0],
+            ]
+        )
 
         binary = algo._threshold_adjacency(weights, threshold=0.2)
 

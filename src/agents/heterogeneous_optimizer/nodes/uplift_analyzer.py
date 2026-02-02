@@ -83,9 +83,7 @@ class UpliftAnalyzerNode:
         self.use_propensity = use_propensity
         self.timeout_seconds = timeout_seconds
 
-    async def execute(
-        self, state: HeterogeneousOptimizerState
-    ) -> Dict[str, Any]:
+    async def execute(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Execute uplift analysis.
 
         Uses the CausalML uplift module to compute individual-level
@@ -139,9 +137,7 @@ class UpliftAnalyzerNode:
             )
 
             # Calculate targeting efficiency
-            targeting_efficiency = self._calculate_targeting_efficiency(
-                uplift_scores, treatment, y
-            )
+            targeting_efficiency = self._calculate_targeting_efficiency(uplift_scores, treatment, y)
 
             uplift_latency_ms = int((time.time() - start_time) * 1000)
 
@@ -500,9 +496,7 @@ class UpliftAnalyzerNode:
                 top_10_mean = segment_scores[segment_scores >= top_10_threshold].mean()
                 overall_mean = segment_scores.mean()
                 top_10_lift = (
-                    (top_10_mean - overall_mean) / abs(overall_mean)
-                    if overall_mean != 0
-                    else 0.0
+                    (top_10_mean - overall_mean) / abs(overall_mean) if overall_mean != 0 else 0.0
                 )
 
                 segment_results.append(

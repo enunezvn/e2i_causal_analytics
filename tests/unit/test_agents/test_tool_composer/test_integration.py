@@ -10,9 +10,7 @@ Tests cover:
 """
 
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -25,19 +23,11 @@ from src.agents.tool_composer.decomposer import QueryDecomposer
 from src.agents.tool_composer.executor import PlanExecutor
 from src.agents.tool_composer.models.composition_models import (
     ComposedResponse,
-    CompositionPhase,
     CompositionResult,
     DecompositionResult,
-    DependencyType,
     ExecutionPlan,
-    ExecutionStatus,
-    ExecutionStep,
     ExecutionTrace,
-    StepResult,
     SubQuestion,
-    ToolInput,
-    ToolMapping,
-    ToolOutput,
 )
 from src.agents.tool_composer.planner import ToolPlanner
 from src.agents.tool_composer.synthesizer import ResponseSynthesizer
@@ -54,9 +44,7 @@ class TestFullPipelineIntegration:
             tool_registry=mock_tool_registry,
         )
 
-        result = await composer.compose(
-            "What is the causal effect of rep visits on Rx volume?"
-        )
+        result = await composer.compose("What is the causal effect of rep visits on Rx volume?")
 
         assert result is not None
         assert result.success is True
@@ -66,31 +54,31 @@ class TestFullPipelineIntegration:
         assert len(result.response.answer) > 0
 
     @pytest.mark.asyncio
-    async def test_complex_query_with_dependencies(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_complex_query_with_dependencies(self, mock_llm_client, mock_tool_registry):
         """Test pipeline with query requiring sequential execution."""
         # Configure response with dependencies
         mock_llm_client.set_decomposition_response(
-            json.dumps({
-                "reasoning": "Needs causal then regional analysis",
-                "sub_questions": [
-                    {
-                        "id": "sq_1",
-                        "question": "What is the causal effect of rep visits?",
-                        "intent": "CAUSAL",
-                        "entities": ["rep_visits"],
-                        "depends_on": [],
-                    },
-                    {
-                        "id": "sq_2",
-                        "question": "How does this vary by region?",
-                        "intent": "COMPARATIVE",
-                        "entities": ["region"],
-                        "depends_on": ["sq_1"],
-                    },
-                ],
-            })
+            json.dumps(
+                {
+                    "reasoning": "Needs causal then regional analysis",
+                    "sub_questions": [
+                        {
+                            "id": "sq_1",
+                            "question": "What is the causal effect of rep visits?",
+                            "intent": "CAUSAL",
+                            "entities": ["rep_visits"],
+                            "depends_on": [],
+                        },
+                        {
+                            "id": "sq_2",
+                            "question": "How does this vary by region?",
+                            "intent": "COMPARATIVE",
+                            "entities": ["region"],
+                            "depends_on": ["sq_1"],
+                        },
+                    ],
+                }
+            )
         )
 
         composer = ToolComposer(
@@ -98,9 +86,7 @@ class TestFullPipelineIntegration:
             tool_registry=mock_tool_registry,
         )
 
-        result = await composer.compose(
-            "Compare causal impact of rep visits by region"
-        )
+        result = await composer.compose("Compare causal impact of rep visits by region")
 
         assert result.success is True
         assert result.decomposition.question_count == 2
@@ -113,62 +99,66 @@ class TestFullPipelineIntegration:
         """Test pipeline executes independent tools in parallel groups."""
         # Configure all-parallel decomposition
         mock_llm_client.set_decomposition_response(
-            json.dumps({
-                "reasoning": "Three independent analyses",
-                "sub_questions": [
-                    {
-                        "id": "sq_1",
-                        "question": "Effect of rep visits?",
-                        "intent": "CAUSAL",
-                        "entities": ["rep_visits"],
-                        "depends_on": [],
-                    },
-                    {
-                        "id": "sq_2",
-                        "question": "Effect of speaker programs?",
-                        "intent": "CAUSAL",
-                        "entities": ["speaker_programs"],
-                        "depends_on": [],
-                    },
-                ],
-            })
+            json.dumps(
+                {
+                    "reasoning": "Three independent analyses",
+                    "sub_questions": [
+                        {
+                            "id": "sq_1",
+                            "question": "Effect of rep visits?",
+                            "intent": "CAUSAL",
+                            "entities": ["rep_visits"],
+                            "depends_on": [],
+                        },
+                        {
+                            "id": "sq_2",
+                            "question": "Effect of speaker programs?",
+                            "intent": "CAUSAL",
+                            "entities": ["speaker_programs"],
+                            "depends_on": [],
+                        },
+                    ],
+                }
+            )
         )
 
         mock_llm_client.set_planning_response(
-            json.dumps({
-                "reasoning": "Both can run in parallel",
-                "tool_mappings": [
-                    {
-                        "sub_question_id": "sq_1",
-                        "tool_name": "causal_effect_estimator",
-                        "confidence": 0.9,
-                        "reasoning": "Matches causal intent",
-                    },
-                    {
-                        "sub_question_id": "sq_2",
-                        "tool_name": "causal_effect_estimator",
-                        "confidence": 0.9,
-                        "reasoning": "Matches causal intent",
-                    },
-                ],
-                "execution_steps": [
-                    {
-                        "step_id": "step_1",
-                        "sub_question_id": "sq_1",
-                        "tool_name": "causal_effect_estimator",
-                        "input_mapping": {"treatment": "rep_visits", "outcome": "rx"},
-                        "depends_on_steps": [],
-                    },
-                    {
-                        "step_id": "step_2",
-                        "sub_question_id": "sq_2",
-                        "tool_name": "causal_effect_estimator",
-                        "input_mapping": {"treatment": "speaker_programs", "outcome": "rx"},
-                        "depends_on_steps": [],
-                    },
-                ],
-                "parallel_groups": [["step_1", "step_2"]],  # Both in same group
-            })
+            json.dumps(
+                {
+                    "reasoning": "Both can run in parallel",
+                    "tool_mappings": [
+                        {
+                            "sub_question_id": "sq_1",
+                            "tool_name": "causal_effect_estimator",
+                            "confidence": 0.9,
+                            "reasoning": "Matches causal intent",
+                        },
+                        {
+                            "sub_question_id": "sq_2",
+                            "tool_name": "causal_effect_estimator",
+                            "confidence": 0.9,
+                            "reasoning": "Matches causal intent",
+                        },
+                    ],
+                    "execution_steps": [
+                        {
+                            "step_id": "step_1",
+                            "sub_question_id": "sq_1",
+                            "tool_name": "causal_effect_estimator",
+                            "input_mapping": {"treatment": "rep_visits", "outcome": "rx"},
+                            "depends_on_steps": [],
+                        },
+                        {
+                            "step_id": "step_2",
+                            "sub_question_id": "sq_2",
+                            "tool_name": "causal_effect_estimator",
+                            "input_mapping": {"treatment": "speaker_programs", "outcome": "rx"},
+                            "depends_on_steps": [],
+                        },
+                    ],
+                    "parallel_groups": [["step_1", "step_2"]],  # Both in same group
+                }
+            )
         )
 
         composer = ToolComposer(
@@ -176,9 +166,7 @@ class TestFullPipelineIntegration:
             tool_registry=mock_tool_registry,
         )
 
-        result = await composer.compose(
-            "Compare rep visits vs speaker programs"
-        )
+        result = await composer.compose("Compare rep visits vs speaker programs")
 
         assert result.success is True
         # Both steps should be in the same parallel group
@@ -187,9 +175,7 @@ class TestFullPipelineIntegration:
         assert "step_2" in result.plan.parallel_groups[0]
 
     @pytest.mark.asyncio
-    async def test_error_recovery_partial_success(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_error_recovery_partial_success(self, mock_llm_client, mock_tool_registry):
         """Test pipeline handles partial tool failures gracefully."""
         # Register a failing tool alongside working ones
         from src.tool_registry.registry import ToolParameter, ToolSchema
@@ -249,9 +235,7 @@ class TestFullPipelineIntegration:
             tool_registry=mock_tool_registry,
         )
 
-        result = await composer.compose(
-            "Compare causal impact of different interventions"
-        )
+        result = await composer.compose("Compare causal impact of different interventions")
 
         assert result is not None
         # Check that all phases recorded durations
@@ -284,9 +268,7 @@ class TestPhaseHandoffs:
     """Tests for data handoffs between pipeline phases."""
 
     @pytest.mark.asyncio
-    async def test_decomposition_to_planning_handoff(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_decomposition_to_planning_handoff(self, mock_llm_client, mock_tool_registry):
         """Test that decomposition results are passed to planner."""
         # Create decomposer and planner
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
@@ -320,9 +302,7 @@ class TestPhaseHandoffs:
         assert trace.plan_id == sample_execution_plan.plan_id
 
     @pytest.mark.asyncio
-    async def test_execution_to_synthesis_handoff(
-        self, mock_llm_client, sample_synthesis_input
-    ):
+    async def test_execution_to_synthesis_handoff(self, mock_llm_client, sample_synthesis_input):
         """Test that execution trace is passed to synthesizer."""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
 
@@ -333,9 +313,7 @@ class TestPhaseHandoffs:
         assert response.answer is not None
 
     @pytest.mark.asyncio
-    async def test_state_preserved_across_phases(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_state_preserved_across_phases(self, mock_llm_client, mock_tool_registry):
         """Test that key state is preserved across all phases."""
         original_query = "Original test query for state preservation"
 
@@ -454,62 +432,66 @@ class TestEdgeCases:
         so minimum 2 sub-questions is required by design.
         """
         mock_llm_client.set_decomposition_response(
-            json.dumps({
-                "reasoning": "Simple two-part question",
-                "sub_questions": [
-                    {
-                        "id": "sq_1",
-                        "question": "What is the effect?",
-                        "intent": "CAUSAL",
-                        "entities": ["effect"],
-                        "depends_on": [],
-                    },
-                    {
-                        "id": "sq_2",
-                        "question": "What is the magnitude?",
-                        "intent": "DESCRIPTIVE",
-                        "entities": ["magnitude"],
-                        "depends_on": [],
-                    },
-                ],
-            })
+            json.dumps(
+                {
+                    "reasoning": "Simple two-part question",
+                    "sub_questions": [
+                        {
+                            "id": "sq_1",
+                            "question": "What is the effect?",
+                            "intent": "CAUSAL",
+                            "entities": ["effect"],
+                            "depends_on": [],
+                        },
+                        {
+                            "id": "sq_2",
+                            "question": "What is the magnitude?",
+                            "intent": "DESCRIPTIVE",
+                            "entities": ["magnitude"],
+                            "depends_on": [],
+                        },
+                    ],
+                }
+            )
         )
 
         mock_llm_client.set_planning_response(
-            json.dumps({
-                "reasoning": "Two tools needed",
-                "tool_mappings": [
-                    {
-                        "sub_question_id": "sq_1",
-                        "tool_name": "causal_effect_estimator",
-                        "confidence": 0.95,
-                        "reasoning": "Matches causal intent",
-                    },
-                    {
-                        "sub_question_id": "sq_2",
-                        "tool_name": "gap_calculator",
-                        "confidence": 0.9,
-                        "reasoning": "Provides magnitude",
-                    },
-                ],
-                "execution_steps": [
-                    {
-                        "step_id": "step_1",
-                        "sub_question_id": "sq_1",
-                        "tool_name": "causal_effect_estimator",
-                        "input_mapping": {"treatment": "x", "outcome": "y"},
-                        "depends_on_steps": [],
-                    },
-                    {
-                        "step_id": "step_2",
-                        "sub_question_id": "sq_2",
-                        "tool_name": "gap_calculator",
-                        "input_mapping": {"metric": "effect"},
-                        "depends_on_steps": [],
-                    },
-                ],
-                "parallel_groups": [["step_1", "step_2"]],
-            })
+            json.dumps(
+                {
+                    "reasoning": "Two tools needed",
+                    "tool_mappings": [
+                        {
+                            "sub_question_id": "sq_1",
+                            "tool_name": "causal_effect_estimator",
+                            "confidence": 0.95,
+                            "reasoning": "Matches causal intent",
+                        },
+                        {
+                            "sub_question_id": "sq_2",
+                            "tool_name": "gap_calculator",
+                            "confidence": 0.9,
+                            "reasoning": "Provides magnitude",
+                        },
+                    ],
+                    "execution_steps": [
+                        {
+                            "step_id": "step_1",
+                            "sub_question_id": "sq_1",
+                            "tool_name": "causal_effect_estimator",
+                            "input_mapping": {"treatment": "x", "outcome": "y"},
+                            "depends_on_steps": [],
+                        },
+                        {
+                            "step_id": "step_2",
+                            "sub_question_id": "sq_2",
+                            "tool_name": "gap_calculator",
+                            "input_mapping": {"metric": "effect"},
+                            "depends_on_steps": [],
+                        },
+                    ],
+                    "parallel_groups": [["step_1", "step_2"]],
+                }
+            )
         )
 
         composer = ToolComposer(
@@ -526,46 +508,50 @@ class TestEdgeCases:
     async def test_all_parallel_steps(self, mock_llm_client, mock_tool_registry):
         """Test pipeline with all steps being parallel (no dependencies)."""
         mock_llm_client.set_decomposition_response(
-            json.dumps({
-                "reasoning": "All independent",
-                "sub_questions": [
-                    {
-                        "id": f"sq_{i}",
-                        "question": f"Question {i}",
-                        "intent": "CAUSAL",
-                        "entities": [],
-                        "depends_on": [],
-                    }
-                    for i in range(1, 4)
-                ],
-            })
+            json.dumps(
+                {
+                    "reasoning": "All independent",
+                    "sub_questions": [
+                        {
+                            "id": f"sq_{i}",
+                            "question": f"Question {i}",
+                            "intent": "CAUSAL",
+                            "entities": [],
+                            "depends_on": [],
+                        }
+                        for i in range(1, 4)
+                    ],
+                }
+            )
         )
 
         # Add planning response with mappings for all 3 sub-questions
         mock_llm_client.set_planning_response(
-            json.dumps({
-                "reasoning": "All can run in parallel",
-                "tool_mappings": [
-                    {
-                        "sub_question_id": f"sq_{i}",
-                        "tool_name": "causal_effect_estimator",
-                        "confidence": 0.9,
-                        "reasoning": f"Matches question {i}",
-                    }
-                    for i in range(1, 4)
-                ],
-                "execution_steps": [
-                    {
-                        "step_id": f"step_{i}",
-                        "sub_question_id": f"sq_{i}",
-                        "tool_name": "causal_effect_estimator",
-                        "input_mapping": {"treatment": f"var_{i}", "outcome": "rx"},
-                        "depends_on_steps": [],
-                    }
-                    for i in range(1, 4)
-                ],
-                "parallel_groups": [["step_1", "step_2", "step_3"]],
-            })
+            json.dumps(
+                {
+                    "reasoning": "All can run in parallel",
+                    "tool_mappings": [
+                        {
+                            "sub_question_id": f"sq_{i}",
+                            "tool_name": "causal_effect_estimator",
+                            "confidence": 0.9,
+                            "reasoning": f"Matches question {i}",
+                        }
+                        for i in range(1, 4)
+                    ],
+                    "execution_steps": [
+                        {
+                            "step_id": f"step_{i}",
+                            "sub_question_id": f"sq_{i}",
+                            "tool_name": "causal_effect_estimator",
+                            "input_mapping": {"treatment": f"var_{i}", "outcome": "rx"},
+                            "depends_on_steps": [],
+                        }
+                        for i in range(1, 4)
+                    ],
+                    "parallel_groups": [["step_1", "step_2", "step_3"]],
+                }
+            )
         )
 
         composer = ToolComposer(
@@ -585,71 +571,75 @@ class TestEdgeCases:
     async def test_deep_dependency_chain(self, mock_llm_client, mock_tool_registry):
         """Test pipeline with deep dependency chain (A -> B -> C -> D)."""
         mock_llm_client.set_decomposition_response(
-            json.dumps({
-                "reasoning": "Sequential analysis chain",
-                "sub_questions": [
-                    {
-                        "id": "sq_1",
-                        "question": "Step 1",
-                        "intent": "CAUSAL",
-                        "entities": [],
-                        "depends_on": [],
-                    },
-                    {
-                        "id": "sq_2",
-                        "question": "Step 2",
-                        "intent": "CAUSAL",
-                        "entities": [],
-                        "depends_on": ["sq_1"],
-                    },
-                    {
-                        "id": "sq_3",
-                        "question": "Step 3",
-                        "intent": "CAUSAL",
-                        "entities": [],
-                        "depends_on": ["sq_2"],
-                    },
-                ],
-            })
+            json.dumps(
+                {
+                    "reasoning": "Sequential analysis chain",
+                    "sub_questions": [
+                        {
+                            "id": "sq_1",
+                            "question": "Step 1",
+                            "intent": "CAUSAL",
+                            "entities": [],
+                            "depends_on": [],
+                        },
+                        {
+                            "id": "sq_2",
+                            "question": "Step 2",
+                            "intent": "CAUSAL",
+                            "entities": [],
+                            "depends_on": ["sq_1"],
+                        },
+                        {
+                            "id": "sq_3",
+                            "question": "Step 3",
+                            "intent": "CAUSAL",
+                            "entities": [],
+                            "depends_on": ["sq_2"],
+                        },
+                    ],
+                }
+            )
         )
 
         mock_llm_client.set_planning_response(
-            json.dumps({
-                "reasoning": "Fully sequential",
-                "tool_mappings": [
-                    {
-                        "sub_question_id": f"sq_{i}",
-                        "tool_name": "causal_effect_estimator",
-                        "confidence": 0.9,
-                        "reasoning": "Sequential step",
-                    }
-                    for i in range(1, 4)
-                ],
-                "execution_steps": [
-                    {
-                        "step_id": "step_1",
-                        "sub_question_id": "sq_1",
-                        "tool_name": "causal_effect_estimator",
-                        "input_mapping": {"treatment": "x", "outcome": "y"},
-                        "depends_on_steps": [],
-                    },
-                    {
-                        "step_id": "step_2",
-                        "sub_question_id": "sq_2",
-                        "tool_name": "causal_effect_estimator",
-                        "input_mapping": {"treatment": "$step_1.effect", "outcome": "z"},
-                        "depends_on_steps": ["step_1"],
-                    },
-                    {
-                        "step_id": "step_3",
-                        "sub_question_id": "sq_3",
-                        "tool_name": "causal_effect_estimator",
-                        "input_mapping": {"treatment": "$step_2.effect", "outcome": "w"},
-                        "depends_on_steps": ["step_2"],
-                    },
-                ],
-                "parallel_groups": [["step_1"], ["step_2"], ["step_3"]],
-            })
+            json.dumps(
+                {
+                    "reasoning": "Fully sequential",
+                    "tool_mappings": [
+                        {
+                            "sub_question_id": f"sq_{i}",
+                            "tool_name": "causal_effect_estimator",
+                            "confidence": 0.9,
+                            "reasoning": "Sequential step",
+                        }
+                        for i in range(1, 4)
+                    ],
+                    "execution_steps": [
+                        {
+                            "step_id": "step_1",
+                            "sub_question_id": "sq_1",
+                            "tool_name": "causal_effect_estimator",
+                            "input_mapping": {"treatment": "x", "outcome": "y"},
+                            "depends_on_steps": [],
+                        },
+                        {
+                            "step_id": "step_2",
+                            "sub_question_id": "sq_2",
+                            "tool_name": "causal_effect_estimator",
+                            "input_mapping": {"treatment": "$step_1.effect", "outcome": "z"},
+                            "depends_on_steps": ["step_1"],
+                        },
+                        {
+                            "step_id": "step_3",
+                            "sub_question_id": "sq_3",
+                            "tool_name": "causal_effect_estimator",
+                            "input_mapping": {"treatment": "$step_2.effect", "outcome": "w"},
+                            "depends_on_steps": ["step_2"],
+                        },
+                    ],
+                    "parallel_groups": [["step_1"], ["step_2"], ["step_3"]],
+                }
+            )
         )
 
         composer = ToolComposer(
@@ -704,9 +694,7 @@ class TestOrchestratorIntegration:
         assert "metadata" in result
 
     @pytest.mark.asyncio
-    async def test_orchestrator_response_format(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_orchestrator_response_format(self, mock_llm_client, mock_tool_registry):
         """Test response format matches Orchestrator expectations."""
         composer = ToolComposer(
             llm_client=mock_llm_client,
@@ -852,9 +840,7 @@ class TestToolRegistryInteraction:
     """Tests for interaction with the tool registry."""
 
     @pytest.mark.asyncio
-    async def test_composer_uses_provided_registry(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_composer_uses_provided_registry(self, mock_llm_client, mock_tool_registry):
         """Test that composer uses the provided registry."""
         composer = ToolComposer(
             llm_client=mock_llm_client,

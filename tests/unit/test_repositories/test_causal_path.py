@@ -216,7 +216,7 @@ class TestGetPathBetween(TestCausalPathRepository):
         mock_eq_cause.eq.return_value = mock_eq_effect
         mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_cause
 
-        result = await repo.get_path_between(cause="HCP_engagement", effect="TRx_growth")
+        await repo.get_path_between(cause="HCP_engagement", effect="TRx_growth")
 
         mock_eq_effect.limit.assert_called_with(1)
 

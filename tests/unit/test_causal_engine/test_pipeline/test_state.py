@@ -10,18 +10,14 @@ Covers:
 - PipelineOutput TypedDict
 """
 
-import pytest
-from typing import get_type_hints, get_origin, get_args
-
 from src.causal_engine.pipeline.state import (
-    PipelineStage,
     LibraryExecutionResult,
     PipelineConfig,
-    PipelineState,
     PipelineInput,
     PipelineOutput,
+    PipelineStage,
+    PipelineState,
 )
-
 
 # =============================================================================
 # PipelineStage Enum Tests

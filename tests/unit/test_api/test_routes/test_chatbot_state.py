@@ -4,11 +4,7 @@ Comprehensive tests for E2I Chatbot State module.
 Tests the TypedDict definitions and state factory function.
 """
 
-import operator
 import uuid
-from typing import get_type_hints
-
-import pytest
 
 from src.api.routes.chatbot_state import (
     AgentRequest,
@@ -635,9 +631,7 @@ class TestIntegrationScenarios:
         state["intent"] = IntentType.CAUSAL_ANALYSIS
         state["intent_confidence"] = 0.89
         state["routed_agent"] = "causal_impact"
-        state["tool_results"] = [
-            {"tool": "causal_chain_tracer", "result": {"effect": -0.12}}
-        ]
+        state["tool_results"] = [{"tool": "causal_chain_tracer", "result": {"effect": -0.12}}]
         state["response_text"] = "The decline was primarily caused by..."
         state["confidence_statement"] = "High confidence based on causal analysis"
         state["synthesis_method"] = "dspy"

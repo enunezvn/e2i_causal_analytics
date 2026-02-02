@@ -8,7 +8,7 @@ Performance Target: <1s per experiment
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from src.agents.experiment_monitor.state import (
     ErrorDetails,
@@ -70,9 +70,7 @@ class FidelityCheckerNode:
 
             for exp in experiments:
                 exp_id = exp["experiment_id"]
-                issue = await self._check_fidelity(
-                    exp_id, client, fidelity_threshold
-                )
+                issue = await self._check_fidelity(exp_id, client, fidelity_threshold)
                 if issue:
                     fidelity_issues.append(issue)
 
@@ -115,8 +113,7 @@ class FidelityCheckerNode:
             result = await (
                 client.table("twin_fidelity_tracking")
                 .select(
-                    "simulation_id, simulated_ate, actual_ate, "
-                    "prediction_error, fidelity_grade"
+                    "simulation_id, simulated_ate, actual_ate, prediction_error, fidelity_grade"
                 )
                 .eq("actual_experiment_id", experiment_id)
                 .order("created_at", desc=True)

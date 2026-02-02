@@ -5,14 +5,14 @@ Tests the significance scoring and episodic memory bridge functionality
 that saves significant chatbot interactions to long-term episodic memory.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.api.routes.chatbot_graph import (
+    INTENT_TO_EVENT_TYPE,
     SIGNIFICANCE_THRESHOLD,
     SIGNIFICANT_INTENTS,
-    INTENT_TO_EVENT_TYPE,
     _calculate_significance_score,
     _save_to_episodic_memory,
 )

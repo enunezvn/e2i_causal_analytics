@@ -10,19 +10,17 @@ This module provides BentoML integration for model serving:
 Version: 1.1.0
 """
 
-import hashlib
-import json
 import logging
 import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type
 
 import numpy as np
 
 try:
     import bentoml
+
     # Note: bentoml.io module deprecated in v1.4+
     # Use Pydantic models with @bentoml.api decorator instead
     BENTOML_AVAILABLE = True
@@ -39,7 +37,10 @@ try:
     from pydantic import BaseModel, Field
 except ImportError:
     BaseModel = object
-    Field = lambda *args, **kwargs: None
+
+    def Field(*args, **kwargs):
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ try:
         log_prediction_audit,
         prediction_audit_context,
     )
+
     OPIK_AUDIT_AVAILABLE = True
 except ImportError:
     OPIK_AUDIT_AVAILABLE = False
@@ -177,10 +179,7 @@ class BentoMLModelManager:
             model_store_path: Optional custom model store path
         """
         if not BENTOML_AVAILABLE:
-            raise ImportError(
-                "BentoML is not installed. "
-                "Install with: pip install bentoml"
-            )
+            raise ImportError("BentoML is not installed. Install with: pip install bentoml")
 
         self.model_store_path = model_store_path or DEFAULT_MODEL_STORE_PATH
 
@@ -460,10 +459,10 @@ def create_prediction_service(
                 # BentoML 1.4+: custom_objects is on the model ref, not model_ref.info
                 if enable_preprocessing:
                     try:
-                        if hasattr(model_ref, 'custom_objects'):
-                            self._preprocessor = model_ref.custom_objects.get('preprocessor')
-                        elif hasattr(model_ref.info, 'custom_objects'):
-                            self._preprocessor = model_ref.info.custom_objects.get('preprocessor')
+                        if hasattr(model_ref, "custom_objects"):
+                            self._preprocessor = model_ref.custom_objects.get("preprocessor")
+                        elif hasattr(model_ref.info, "custom_objects"):
+                            self._preprocessor = model_ref.info.custom_objects.get("preprocessor")
                     except Exception as e:
                         logger.warning(f"Could not load preprocessor: {e}")
 
@@ -486,22 +485,26 @@ def create_prediction_service(
             Returns:
                 Predictions array
             """
-            import time
             import asyncio
+            import time
+
             start_time = time.time()
 
             # Store original input for audit trail
-            original_input = input_data.copy() if hasattr(input_data, 'copy') else input_data
+            original_input = input_data.copy() if hasattr(input_data, "copy") else input_data
 
             # Apply preprocessing if available
             if self._preprocessor is not None:
                 import pandas as pd
+
                 if input_data.ndim == 1:
                     input_data = input_data.reshape(1, -1)
                 feature_names = None
-                if hasattr(self._preprocessor, 'numeric_features'):
-                    feature_names = list(self._preprocessor.numeric_features) + list(getattr(self._preprocessor, 'categorical_features', []))
-                elif hasattr(self._preprocessor, 'feature_names_in_'):
+                if hasattr(self._preprocessor, "numeric_features"):
+                    feature_names = list(self._preprocessor.numeric_features) + list(
+                        getattr(self._preprocessor, "categorical_features", [])
+                    )
+                elif hasattr(self._preprocessor, "feature_names_in_"):
                     feature_names = list(self._preprocessor.feature_names_in_)
                 if feature_names and len(feature_names) == input_data.shape[1]:
                     input_data = pd.DataFrame(input_data, columns=feature_names)
@@ -522,10 +525,21 @@ def create_prediction_service(
                             model_name=self.model_tag.split(":")[0],
                             model_tag=self.model_tag,
                             service_type="prediction",
-                            input_data={"features": original_input.tolist() if hasattr(original_input, 'tolist') else original_input},
-                            output_data={"predictions": predictions.tolist() if hasattr(predictions, 'tolist') else predictions},
+                            input_data={
+                                "features": original_input.tolist()
+                                if hasattr(original_input, "tolist")
+                                else original_input
+                            },
+                            output_data={
+                                "predictions": predictions.tolist()
+                                if hasattr(predictions, "tolist")
+                                else predictions
+                            },
                             latency_ms=elapsed_ms,
-                            metadata={"framework": self.framework, "batch_size": len(original_input)},
+                            metadata={
+                                "framework": self.framework,
+                                "batch_size": len(original_input),
+                            },
                         )
                     )
                 except Exception as e:
@@ -546,29 +560,33 @@ def create_prediction_service(
             Returns:
                 Probability array (samples x classes)
             """
-            import time
             import asyncio
+            import time
+
             start_time = time.time()
 
             # Store original input for audit trail
-            original_input = input_data.copy() if hasattr(input_data, 'copy') else input_data
+            original_input = input_data.copy() if hasattr(input_data, "copy") else input_data
 
             # Apply preprocessing if available
             if self._preprocessor is not None:
                 import pandas as pd
+
                 if input_data.ndim == 1:
                     input_data = input_data.reshape(1, -1)
                 feature_names = None
-                if hasattr(self._preprocessor, 'numeric_features'):
-                    feature_names = list(self._preprocessor.numeric_features) + list(getattr(self._preprocessor, 'categorical_features', []))
-                elif hasattr(self._preprocessor, 'feature_names_in_'):
+                if hasattr(self._preprocessor, "numeric_features"):
+                    feature_names = list(self._preprocessor.numeric_features) + list(
+                        getattr(self._preprocessor, "categorical_features", [])
+                    )
+                elif hasattr(self._preprocessor, "feature_names_in_"):
                     feature_names = list(self._preprocessor.feature_names_in_)
                 if feature_names and len(feature_names) == input_data.shape[1]:
                     input_data = pd.DataFrame(input_data, columns=feature_names)
                 input_data = self._preprocessor.transform(input_data)
 
             # Check if model supports predict_proba
-            if not hasattr(self._model, 'predict_proba'):
+            if not hasattr(self._model, "predict_proba"):
                 raise ValueError("Model does not support probability predictions")
 
             probabilities = self._model.predict_proba(input_data)
@@ -584,10 +602,21 @@ def create_prediction_service(
                             model_name=self.model_tag.split(":")[0],
                             model_tag=self.model_tag,
                             service_type="classification_proba",
-                            input_data={"features": original_input.tolist() if hasattr(original_input, 'tolist') else original_input},
-                            output_data={"probabilities": probabilities.tolist() if hasattr(probabilities, 'tolist') else probabilities},
+                            input_data={
+                                "features": original_input.tolist()
+                                if hasattr(original_input, "tolist")
+                                else original_input
+                            },
+                            output_data={
+                                "probabilities": probabilities.tolist()
+                                if hasattr(probabilities, "tolist")
+                                else probabilities
+                            },
                             latency_ms=elapsed_ms,
-                            metadata={"framework": self.framework, "batch_size": len(original_input)},
+                            metadata={
+                                "framework": self.framework,
+                                "batch_size": len(original_input),
+                            },
                         )
                     )
                 except Exception as e:
@@ -970,9 +999,10 @@ async def _persist_deployment(
     """
     try:
         from uuid import UUID
+
         from src.repositories.deployment import (
-            MLDeploymentRepository,
             DeploymentStatus,
+            MLDeploymentRepository,
         )
 
         repo = MLDeploymentRepository(supabase_client)

@@ -61,9 +61,7 @@ class BentoMLClientConfig:
     )
 
     # Request timeout in seconds
-    timeout: float = field(
-        default_factory=lambda: float(os.environ.get("BENTOML_TIMEOUT", "10.0"))
-    )
+    timeout: float = field(default_factory=lambda: float(os.environ.get("BENTOML_TIMEOUT", "10.0")))
 
     # Maximum retries for failed requests
     max_retries: int = field(
@@ -136,9 +134,7 @@ class CircuitBreaker:
 
         if self.failure_count >= self.failure_threshold:
             self.state = CircuitState.OPEN
-            logger.warning(
-                f"Circuit breaker opened after {self.failure_count} failures"
-            )
+            logger.warning(f"Circuit breaker opened after {self.failure_count} failures")
 
     def can_execute(self) -> bool:
         """Check if a call can be executed."""
@@ -261,8 +257,7 @@ class BentoMLClient:
 
         if not circuit.can_execute():
             raise RuntimeError(
-                f"Circuit breaker open for model '{model_name}'. "
-                f"Service may be unavailable."
+                f"Circuit breaker open for model '{model_name}'. Service may be unavailable."
             )
 
         start_time = time.time()

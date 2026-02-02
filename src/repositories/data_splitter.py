@@ -13,8 +13,7 @@ Version: 1.0.0
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -567,15 +566,15 @@ class LeakageDetector:
 
         # Check feature leakage (target information in features)
         if target_column:
-            feature_report = self._check_feature_leakage(
-                train_df, val_df, test_df, target_column
-            )
+            feature_report = self._check_feature_leakage(train_df, val_df, test_df, target_column)
             if feature_report["has_warnings"]:
                 report.feature_leakage = feature_report["has_critical"]
                 report.feature_warnings = feature_report["warnings"]
                 report.recommendations.extend(feature_report["recommendations"])
 
-        report.has_leakage = report.entity_leakage or report.temporal_leakage or report.feature_leakage
+        report.has_leakage = (
+            report.entity_leakage or report.temporal_leakage or report.feature_leakage
+        )
         return report
 
     def _check_entity_leakage(
@@ -590,7 +589,9 @@ class LeakageDetector:
         train_entities = set(train_df[entity_column].unique())
         val_entities = set(val_df[entity_column].unique())
         test_entities = set(test_df[entity_column].unique())
-        holdout_entities = set(holdout_df[entity_column].unique()) if holdout_df is not None else set()
+        holdout_entities = (
+            set(holdout_df[entity_column].unique()) if holdout_df is not None else set()
+        )
 
         overlap = {}
         recommendations = []
@@ -623,7 +624,11 @@ class LeakageDetector:
 
         # Check holdout overlaps
         if holdout_entities:
-            for split_name, split_entities in [("train", train_entities), ("val", val_entities), ("test", test_entities)]:
+            for split_name, split_entities in [
+                ("train", train_entities),
+                ("val", val_entities),
+                ("test", test_entities),
+            ]:
                 holdout_overlap = holdout_entities & split_entities
                 if holdout_overlap:
                     overlap[f"{split_name}_holdout"] = list(holdout_overlap)[:10]
@@ -661,12 +666,14 @@ class LeakageDetector:
 
         # Check train max vs val min
         if val_min is not None and train_max > val_min:
-            violations.append({
-                "type": "train_val_overlap",
-                "train_max": train_max.isoformat(),
-                "val_min": val_min.isoformat(),
-                "severity": "high",
-            })
+            violations.append(
+                {
+                    "type": "train_val_overlap",
+                    "train_max": train_max.isoformat(),
+                    "val_min": val_min.isoformat(),
+                    "severity": "high",
+                }
+            )
             recommendations.append(
                 f"Training data contains dates ({train_max.date()}) after validation start ({val_min.date()}). "
                 f"Use temporal_split() to prevent future data leakage."
@@ -674,24 +681,28 @@ class LeakageDetector:
 
         # Check val max vs test min
         if val_max is not None and test_min is not None and val_max > test_min:
-            violations.append({
-                "type": "val_test_overlap",
-                "val_max": val_max.isoformat(),
-                "test_min": test_min.isoformat(),
-                "severity": "high",
-            })
+            violations.append(
+                {
+                    "type": "val_test_overlap",
+                    "val_max": val_max.isoformat(),
+                    "test_min": test_min.isoformat(),
+                    "severity": "high",
+                }
+            )
             recommendations.append(
                 f"Validation data contains dates ({val_max.date()}) after test start ({test_min.date()})."
             )
 
         # Check train max vs test min (critical)
         if test_min is not None and train_max > test_min:
-            violations.append({
-                "type": "train_test_overlap",
-                "train_max": train_max.isoformat(),
-                "test_min": test_min.isoformat(),
-                "severity": "critical",
-            })
+            violations.append(
+                {
+                    "type": "train_test_overlap",
+                    "train_max": train_max.isoformat(),
+                    "test_min": test_min.isoformat(),
+                    "severity": "critical",
+                }
+            )
             recommendations.append(
                 f"CRITICAL: Training data contains dates ({train_max.date()}) after test start ({test_min.date()}). "
                 f"Test evaluation is invalid."
@@ -743,9 +754,7 @@ class LeakageDetector:
         suspect_names = ["target", "label", "outcome", "result", "prediction"]
         for col in feature_columns:
             if any(s in col.lower() for s in suspect_names):
-                warnings.append(
-                    f"Feature '{col}' has suspicious name suggesting target leakage."
-                )
+                warnings.append(f"Feature '{col}' has suspicious name suggesting target leakage.")
                 recommendations.append(
                     f"Review feature '{col}' - name suggests it may be derived from target."
                 )

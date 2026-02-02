@@ -96,8 +96,7 @@ class QueryOptimizer:
                     cache_enabled=cache_enabled,
                 )
                 logger.info(
-                    f"Typo correction enabled "
-                    f"(fasttext={self._typo_handler.is_fasttext_available})"
+                    f"Typo correction enabled (fasttext={self._typo_handler.is_fasttext_available})"
                 )
             except Exception as e:
                 logger.warning(f"Failed to initialize typo handler: {e}")

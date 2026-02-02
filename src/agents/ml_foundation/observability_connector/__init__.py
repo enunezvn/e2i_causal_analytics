@@ -38,6 +38,18 @@ from .config import (
     get_observability_config,
     reset_observability_config,
 )
+from .models import (
+    AgentNameEnum,
+    AgentTierEnum,
+    LatencyStats,
+    ObservabilitySpan,
+    QualityMetrics,
+    SpanEvent,
+    SpanStatusEnum,
+    TokenUsage,
+    create_llm_span,
+    create_span,
+)
 from .self_monitor import (
     AsyncLatencyContext,
     ComponentHealth,
@@ -50,18 +62,6 @@ from .self_monitor import (
     SelfMonitorConfig,
     get_self_monitor,
     reset_self_monitor,
-)
-from .models import (
-    AgentNameEnum,
-    AgentTierEnum,
-    LatencyStats,
-    ObservabilitySpan,
-    QualityMetrics,
-    SpanEvent,
-    SpanStatusEnum,
-    TokenUsage,
-    create_llm_span,
-    create_span,
 )
 from .state import ObservabilityConnectorState
 

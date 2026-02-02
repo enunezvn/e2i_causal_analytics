@@ -13,7 +13,6 @@ from uuid import uuid4
 
 import pytest
 
-
 # =============================================================================
 # PREDICTION FIXTURES
 # =============================================================================
@@ -38,18 +37,20 @@ def small_prediction_batch() -> List[Dict[str, Any]]:
     predictions = []
     for i in range(10):
         pred_type = prediction_types[i % len(prediction_types)]
-        predictions.append({
-            "prediction_id": str(uuid4()),
-            "prediction_type": pred_type,
-            "entity_type": "hcp",
-            "entity_id": f"hcp_{i:03d}",
-            "prediction_value": 0.3 + (i * 0.05),  # Range: 0.3 to 0.75
-            "confidence": 0.7 + (i * 0.02),  # Range: 0.70 to 0.88
-            "created_at": (base_time + timedelta(days=i)).isoformat(),
-            "brand": ["remibrutinib", "fabhalta", "kisqali"][i % 3],
-            "model_version": "v1.0.0",
-            "features_used": ["feature_a", "feature_b", "feature_c"],
-        })
+        predictions.append(
+            {
+                "prediction_id": str(uuid4()),
+                "prediction_type": pred_type,
+                "entity_type": "hcp",
+                "entity_id": f"hcp_{i:03d}",
+                "prediction_value": 0.3 + (i * 0.05),  # Range: 0.3 to 0.75
+                "confidence": 0.7 + (i * 0.02),  # Range: 0.70 to 0.88
+                "created_at": (base_time + timedelta(days=i)).isoformat(),
+                "brand": ["remibrutinib", "fabhalta", "kisqali"][i % 3],
+                "model_version": "v1.0.0",
+                "features_used": ["feature_a", "feature_b", "feature_c"],
+            }
+        )
 
     return predictions
 
@@ -69,21 +70,23 @@ def labeled_prediction_batch() -> List[Dict[str, Any]]:
         predicted_positive = i % 2 == 0
         actual_positive = i % 3 != 0  # Different pattern for drift
 
-        predictions.append({
-            "prediction_id": str(uuid4()),
-            "prediction_type": "trigger",
-            "entity_type": "hcp",
-            "entity_id": f"hcp_{i:03d}",
-            "prediction_value": 0.75 if predicted_positive else 0.25,
-            "confidence": 0.85,
-            "created_at": (base_time + timedelta(days=i)).isoformat(),
-            "brand": "remibrutinib",
-            # Ground truth labels
-            "actual_outcome": 1 if actual_positive else 0,
-            "outcome_recorded_at": (outcome_time + timedelta(days=i)).isoformat(),
-            "truth_confidence": 0.95,
-            "truth_source": "crm_activity",
-        })
+        predictions.append(
+            {
+                "prediction_id": str(uuid4()),
+                "prediction_type": "trigger",
+                "entity_type": "hcp",
+                "entity_id": f"hcp_{i:03d}",
+                "prediction_value": 0.75 if predicted_positive else 0.25,
+                "confidence": 0.85,
+                "created_at": (base_time + timedelta(days=i)).isoformat(),
+                "brand": "remibrutinib",
+                # Ground truth labels
+                "actual_outcome": 1 if actual_positive else 0,
+                "outcome_recorded_at": (outcome_time + timedelta(days=i)).isoformat(),
+                "truth_confidence": 0.95,
+                "truth_source": "crm_activity",
+            }
+        )
 
     return predictions
 
@@ -224,6 +227,7 @@ def mock_concept_drift_metrics() -> List[Dict[str, Any]]:
 @pytest.fixture
 def mock_supabase_rpc_response():
     """Factory fixture for creating mock Supabase RPC responses."""
+
     def _create_response(data: Any, error: Any = None):
         class MockResponse:
             def __init__(self, data, error):
@@ -231,12 +235,14 @@ def mock_supabase_rpc_response():
                 self.error = error
 
         return MockResponse(data, error)
+
     return _create_response
 
 
 @pytest.fixture
 def mock_supabase_table_response():
     """Factory fixture for creating mock Supabase table query responses."""
+
     def _create_response(data: List[Dict], count: int = None):
         class MockQueryResponse:
             def __init__(self, data, count):
@@ -244,6 +250,7 @@ def mock_supabase_table_response():
                 self.count = count or len(data)
 
         return MockQueryResponse(data, count)
+
     return _create_response
 
 
@@ -255,6 +262,7 @@ def mock_supabase_table_response():
 @pytest.fixture
 def mock_celery_request():
     """Mock Celery task request object."""
+
     class MockRequest:
         id = str(uuid4())
         retries = 0
@@ -267,6 +275,7 @@ def mock_celery_request():
 @pytest.fixture
 def mock_celery_task_result():
     """Mock Celery AsyncResult for chained tasks."""
+
     class MockAsyncResult:
         def __init__(self, task_id: str = None):
             self.id = task_id or str(uuid4())

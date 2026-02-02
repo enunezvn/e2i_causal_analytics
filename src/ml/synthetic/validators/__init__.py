@@ -7,9 +7,9 @@ Validation framework ensuring:
 - ML-compliant splits with no data leakage
 """
 
-from .schema_validator import SchemaValidator, SchemaValidationResult
-from .causal_validator import CausalValidator, CausalValidationResult
-from .split_validator import SplitValidator, SplitValidationResult
+from .causal_validator import CausalValidationResult, CausalValidator
+from .schema_validator import SchemaValidationResult, SchemaValidator
+from .split_validator import SplitValidationResult, SplitValidator
 
 __all__ = [
     "SchemaValidator",

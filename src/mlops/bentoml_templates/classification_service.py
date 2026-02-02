@@ -30,6 +30,7 @@ except ImportError:
 
 try:
     import bentoml
+
     # Note: bentoml.io module deprecated in v1.4+
     # Use Pydantic models with @bentoml.api decorator instead
     BENTOML_AVAILABLE = True
@@ -41,7 +42,10 @@ try:
     from pydantic import BaseModel, Field
 except ImportError:
     BaseModel = object
-    Field = lambda *args, **kwargs: None
+
+    def Field(*args, **kwargs):
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -217,9 +221,9 @@ class ClassificationServiceTemplate:
 
                     # Load preprocessor if available
                     if enable_preprocessing:
-                        custom_objects = getattr(model_ref.info, 'custom_objects', {})
+                        custom_objects = getattr(model_ref.info, "custom_objects", {})
                         if custom_objects:
-                            self._preprocessor = custom_objects.get('preprocessor')
+                            self._preprocessor = custom_objects.get("preprocessor")
 
                     logger.info(f"Loaded classification model: {self.model_tag}")
 
@@ -258,14 +262,16 @@ class ClassificationServiceTemplate:
                 predictions = self._model.predict(features)
 
                 # Get probabilities if available
-                if hasattr(self._model, 'predict_proba'):
+                if hasattr(self._model, "predict_proba"):
                     all_proba = self._model.predict_proba(features)
 
                     if self.n_classes == 2:
                         # Binary: return positive class probability
                         probabilities = all_proba[:, 1].tolist()
                         # Apply threshold
-                        predictions = (np.array(probabilities) >= input_data.threshold).astype(int).tolist()
+                        predictions = (
+                            (np.array(probabilities) >= input_data.threshold).astype(int).tolist()
+                        )
                     else:
                         # Multiclass: return max probability
                         probabilities = np.max(all_proba, axis=1).tolist()
@@ -289,7 +295,9 @@ class ClassificationServiceTemplate:
                 output = ClassificationOutput(
                     predictions=list(map(int, predictions)),
                     probabilities=probabilities,
-                    all_probabilities=all_proba.tolist() if input_data.return_all_classes and all_proba is not None else None,
+                    all_probabilities=all_proba.tolist()
+                    if input_data.return_all_classes and all_proba is not None
+                    else None,
                     confidence_scores=confidence_scores,
                     model_id=self.model_tag,
                     prediction_time_ms=elapsed_ms,
@@ -309,7 +317,9 @@ class ClassificationServiceTemplate:
                             },
                             output_data={
                                 "predictions": output.predictions,
-                                "probabilities": output.probabilities[:10] if len(output.probabilities) > 10 else output.probabilities,
+                                "probabilities": output.probabilities[:10]
+                                if len(output.probabilities) > 10
+                                else output.probabilities,
                                 "n_predictions": len(output.predictions),
                             },
                             latency_ms=elapsed_ms,
@@ -342,11 +352,13 @@ class ClassificationServiceTemplate:
 
                 predictions = self._model.predict(features)
 
-                if hasattr(self._model, 'predict_proba'):
+                if hasattr(self._model, "predict_proba"):
                     proba = self._model.predict_proba(features)
                     if self.n_classes == 2:
                         probabilities = proba[:, 1].tolist()
-                        predictions = (np.array(probabilities) >= input_data.threshold).astype(int).tolist()
+                        predictions = (
+                            (np.array(probabilities) >= input_data.threshold).astype(int).tolist()
+                        )
                     else:
                         probabilities = np.max(proba, axis=1).tolist()
                 else:

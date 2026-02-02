@@ -8,13 +8,11 @@ Tests cover:
 - Edge cases and error handling
 """
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.agents.experiment_monitor.nodes.srm_detector import SRMDetectorNode
-from src.agents.experiment_monitor.state import ExperimentMonitorState
 
 
 class TestSRMDetectorNodeInit:
@@ -224,8 +222,8 @@ class TestCheckSRM:
         mock_client = MagicMock()
         mock_result = MagicMock()
         mock_result.data = (
-            [{"variant": "control"}] * 350 +
-            [{"variant": "treatment"}] * 150  # 70/30 split, significant SRM
+            [{"variant": "control"}] * 350
+            + [{"variant": "treatment"}] * 150  # 70/30 split, significant SRM
         )
 
         mock_query = MagicMock()
@@ -246,8 +244,7 @@ class TestCheckSRM:
         mock_client = MagicMock()
         mock_result = MagicMock()
         mock_result.data = (
-            [{"variant": "control"}] * 250 +
-            [{"variant": "treatment"}] * 250  # Perfect 50/50 split
+            [{"variant": "control"}] * 250 + [{"variant": "treatment"}] * 250  # Perfect 50/50 split
         )
 
         mock_query = MagicMock()
@@ -262,7 +259,9 @@ class TestCheckSRM:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_uses_mock_data_without_client(self, node, experiment_summary, state_with_threshold):
+    async def test_uses_mock_data_without_client(
+        self, node, experiment_summary, state_with_threshold
+    ):
         """Test that mock data is used without client."""
         result = await node._check_srm(experiment_summary, None, state_with_threshold)
 
@@ -270,7 +269,9 @@ class TestCheckSRM:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_empty_counts(self, node, experiment_summary, state_with_threshold):
+    async def test_returns_none_for_empty_counts(
+        self, node, experiment_summary, state_with_threshold
+    ):
         """Test handling of empty variant counts."""
         mock_client = MagicMock()
         mock_result = MagicMock()
@@ -310,15 +311,14 @@ class TestSRMSeverity:
         }
 
     @pytest.mark.asyncio
-    async def test_critical_severity_very_low_p_value(self, node, experiment_summary, state_with_threshold):
+    async def test_critical_severity_very_low_p_value(
+        self, node, experiment_summary, state_with_threshold
+    ):
         """Test critical severity for very low p-value."""
         mock_client = MagicMock()
         mock_result = MagicMock()
         # Extreme imbalance: 900 control, 100 treatment
-        mock_result.data = (
-            [{"variant": "control"}] * 900 +
-            [{"variant": "treatment"}] * 100
-        )
+        mock_result.data = [{"variant": "control"}] * 900 + [{"variant": "treatment"}] * 100
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -333,15 +333,14 @@ class TestSRMSeverity:
         assert result["p_value"] < 0.0001
 
     @pytest.mark.asyncio
-    async def test_warning_severity_moderate_p_value(self, node, experiment_summary, state_with_threshold):
+    async def test_warning_severity_moderate_p_value(
+        self, node, experiment_summary, state_with_threshold
+    ):
         """Test warning severity for moderate p-value."""
         mock_client = MagicMock()
         mock_result = MagicMock()
         # Moderate imbalance that gives p-value around 0.0001-0.001
-        mock_result.data = (
-            [{"variant": "control"}] * 600 +
-            [{"variant": "treatment"}] * 400
-        )
+        mock_result.data = [{"variant": "control"}] * 600 + [{"variant": "treatment"}] * 400
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)

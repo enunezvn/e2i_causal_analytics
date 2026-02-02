@@ -1,15 +1,14 @@
 """Tests for CohortConstructor types and data structures."""
 
-import pytest
 from src.agents.cohort_constructor import (
-    Operator,
-    CriterionType,
-    Criterion,
-    TemporalRequirements,
     CohortConfig,
-    EligibilityLogEntry,
-    PatientAssignment,
     CohortExecutionResult,
+    Criterion,
+    CriterionType,
+    EligibilityLogEntry,
+    Operator,
+    PatientAssignment,
+    TemporalRequirements,
 )
 
 
@@ -19,8 +18,16 @@ class TestOperator:
     def test_all_operators_defined(self):
         """Test that all expected operators are defined."""
         expected = [
-            "EQUAL", "NOT_EQUAL", "GREATER", "GREATER_EQUAL",
-            "LESS", "LESS_EQUAL", "IN", "NOT_IN", "BETWEEN", "CONTAINS"
+            "EQUAL",
+            "NOT_EQUAL",
+            "GREATER",
+            "GREATER_EQUAL",
+            "LESS",
+            "LESS_EQUAL",
+            "IN",
+            "NOT_IN",
+            "BETWEEN",
+            "CONTAINS",
         ]
         for op in expected:
             assert hasattr(Operator, op), f"Missing operator: {op}"

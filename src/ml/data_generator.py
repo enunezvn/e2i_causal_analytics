@@ -1401,7 +1401,7 @@ if __name__ == "__main__":
     # Export to JSON
     files = generator.export_to_json(output_dir)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("FILES GENERATED:")
     print("=" * 60)
     for f in files:

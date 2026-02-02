@@ -9,7 +9,6 @@ Endpoints covered:
 - Batch 2C.2: Infrastructure (GET /explain/models, GET /explain/health)
 """
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

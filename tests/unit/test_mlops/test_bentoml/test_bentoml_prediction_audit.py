@@ -12,18 +12,16 @@ Phase 1 G07 from observability audit remediation plan.
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
 
 import pytest
 
 from src.mlops.bentoml_prediction_audit import (
-    log_prediction_audit,
-    prediction_audit_context,
     PredictionAuditContext,
-    log_prediction_audit_sync,
     _check_opik_available,
+    log_prediction_audit,
+    log_prediction_audit_sync,
+    prediction_audit_context,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -48,6 +46,7 @@ def mock_opik_connector():
 def reset_opik_available():
     """Reset the _OPIK_AVAILABLE global."""
     import src.mlops.bentoml_prediction_audit as module
+
     original = module._OPIK_AVAILABLE
     module._OPIK_AVAILABLE = None
     yield
@@ -74,6 +73,7 @@ class TestCheckOpikAvailable:
     def test_returns_true_when_opik_available(self, reset_opik_available):
         """Test returns True when OpikConnector can be imported."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = None
 
         # Mock the opik_connector module to make import succeed
@@ -87,6 +87,7 @@ class TestCheckOpikAvailable:
     def test_caches_availability_result(self, reset_opik_available):
         """Test that availability result is cached."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = True
 
         result = _check_opik_available()
@@ -110,6 +111,7 @@ class TestLogPredictionAudit:
     async def test_returns_none_when_opik_unavailable(self, reset_opik_available):
         """Test returns None when Opik is unavailable."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = False
 
         result = await log_prediction_audit(
@@ -129,9 +131,10 @@ class TestLogPredictionAudit:
     ):
         """Test that prediction is logged to Opik."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = True
 
-        result = await log_prediction_audit(
+        await log_prediction_audit(
             model_name="churn_classifier",
             model_tag="churn_classifier:v1",
             service_type="classification",
@@ -152,6 +155,7 @@ class TestLogPredictionAudit:
     ):
         """Test that metadata is included in Opik log."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = True
 
         await log_prediction_audit(
@@ -181,6 +185,7 @@ class TestLogPredictionAudit:
     ):
         """Test that trace ID is returned."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = True
 
         result = await log_prediction_audit(
@@ -198,11 +203,11 @@ class TestLogPredictionAudit:
     async def test_handles_exception_gracefully(self, reset_opik_available):
         """Test that exceptions are handled gracefully."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = True
 
         with patch(
-            "src.mlops.opik_connector.OpikConnector",
-            side_effect=Exception("Connection failed")
+            "src.mlops.opik_connector.OpikConnector", side_effect=Exception("Connection failed")
         ):
             result = await log_prediction_audit(
                 model_name="test_model",
@@ -297,6 +302,7 @@ class TestPredictionAuditContextManager:
     async def test_context_manager_records_timing(self, reset_opik_available):
         """Test that context manager records start and end time."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = False  # Disable to avoid actual logging
 
         async with prediction_audit_context(
@@ -335,6 +341,7 @@ class TestLogPredictionAuditSync:
     def test_returns_none_when_opik_unavailable(self, reset_opik_available):
         """Test returns None when Opik is unavailable."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = False
 
         # Should not raise, just return None
@@ -352,12 +359,12 @@ class TestLogPredictionAuditSync:
     def test_handles_no_event_loop(self, reset_opik_available):
         """Test handles case when no event loop exists."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = True
 
         # This might create a new event loop
         with patch(
-            "src.mlops.bentoml_prediction_audit.log_prediction_audit",
-            new_callable=AsyncMock
+            "src.mlops.bentoml_prediction_audit.log_prediction_audit", new_callable=AsyncMock
         ) as mock_async:
             mock_async.return_value = "trace-123"
 
@@ -392,6 +399,7 @@ class TestServiceTypes:
     ):
         """Test that all supported service types are accepted."""
         import src.mlops.bentoml_prediction_audit as module
+
         module._OPIK_AVAILABLE = True
 
         await log_prediction_audit(

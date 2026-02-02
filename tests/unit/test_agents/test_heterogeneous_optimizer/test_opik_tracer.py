@@ -4,9 +4,8 @@ Version: 1.0.0
 Tests the Opik observability integration for Heterogeneous Optimizer CATE pipeline.
 """
 
-import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,7 +17,6 @@ from src.agents.heterogeneous_optimizer.opik_tracer import (
     get_heterogeneous_optimizer_tracer,
     reset_heterogeneous_optimizer_tracer,
 )
-
 
 # ============================================================================
 # FIXTURES

@@ -6,20 +6,20 @@ Tests the 4-Memory Architecture integration for drift detection:
 - Semantic Memory: Storing drift patterns
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.agents.drift_monitor.memory_hooks import (
     DriftDetectionContext,
     DriftDetectionRecord,
-    DriftPatternRecord,
     DriftMonitorMemoryHooks,
+    DriftPatternRecord,
     contribute_to_memory,
     get_drift_monitor_memory_hooks,
     reset_memory_hooks,
 )
-
 
 # ============================================================================
 # Test Data Structures
@@ -218,7 +218,11 @@ class TestDriftMonitorMemoryHooks:
         assert context.session_id == "test-session"
         assert context.working_memory == []
         assert context.episodic_context == []
-        assert context.semantic_context == {"patterns": [], "feature_clusters": [], "drift_history": {}}
+        assert context.semantic_context == {
+            "patterns": [],
+            "feature_clusters": [],
+            "drift_history": {},
+        }
 
     @pytest.mark.asyncio
     async def test_cache_drift_result_no_client(self):
@@ -414,8 +418,20 @@ class TestDriftMonitorMemoryHooksWithMocks:
         result_data = {
             "features_with_drift": ["f1", "f2"],
             "data_drift_results": [
-                {"feature": "f1", "drift_detected": True, "severity": "high", "test_statistic": 2.0, "p_value": 0.01},
-                {"feature": "f2", "drift_detected": True, "severity": "medium", "test_statistic": 1.5, "p_value": 0.03},
+                {
+                    "feature": "f1",
+                    "drift_detected": True,
+                    "severity": "high",
+                    "test_statistic": 2.0,
+                    "p_value": 0.01,
+                },
+                {
+                    "feature": "f2",
+                    "drift_detected": True,
+                    "severity": "medium",
+                    "test_statistic": 1.5,
+                    "p_value": 0.03,
+                },
             ],
             "model_drift_results": [],
             "concept_drift_results": [],
@@ -557,8 +573,20 @@ class TestContributeToMemory:
             "features_with_drift": ["f1", "f2"],
             "alerts": [{"severity": "high"}],
             "data_drift_results": [
-                {"feature": "f1", "drift_detected": True, "severity": "high", "test_statistic": 2.0, "p_value": 0.01},
-                {"feature": "f2", "drift_detected": True, "severity": "medium", "test_statistic": 1.5, "p_value": 0.03},
+                {
+                    "feature": "f1",
+                    "drift_detected": True,
+                    "severity": "high",
+                    "test_statistic": 2.0,
+                    "p_value": 0.01,
+                },
+                {
+                    "feature": "f2",
+                    "drift_detected": True,
+                    "severity": "medium",
+                    "test_statistic": 1.5,
+                    "p_value": 0.03,
+                },
             ],
             "model_drift_results": [],
             "concept_drift_results": [],

@@ -8,8 +8,9 @@ Includes tests for:
 - containerize_model: Docker containerization
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator import (
     check_rollback_availability,

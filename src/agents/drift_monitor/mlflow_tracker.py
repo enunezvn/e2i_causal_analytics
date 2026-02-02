@@ -444,8 +444,8 @@ class DriftMonitorMLflowTracker:
         if mlflow is None:
             return
 
-        import tempfile
         import os
+        import tempfile
 
         # Handle both Pydantic models and dicts
         if hasattr(output, "model_dump"):
@@ -470,8 +470,12 @@ class DriftMonitorMLflowTracker:
                     "timestamp": output_dict.get("timestamp", ""),
                     "context": {
                         "brand": self._current_context.brand if self._current_context else None,
-                        "model_id": self._current_context.model_id if self._current_context else None,
-                        "time_window": self._current_context.time_window if self._current_context else None,
+                        "model_id": self._current_context.model_id
+                        if self._current_context
+                        else None,
+                        "time_window": self._current_context.time_window
+                        if self._current_context
+                        else None,
                     },
                 }
                 summary_path = os.path.join(tmpdir, "monitoring_summary.json")

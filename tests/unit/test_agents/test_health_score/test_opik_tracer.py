@@ -4,10 +4,7 @@ Version: 1.0.0
 Tests the Opik observability integration for Health Score agent's fast path pipeline.
 """
 
-import asyncio
-import time
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,7 +18,6 @@ from src.agents.health_score.opik_tracer import (
     NodeSpanContext,
     get_health_score_tracer,
 )
-
 
 # ============================================================================
 # FIXTURES

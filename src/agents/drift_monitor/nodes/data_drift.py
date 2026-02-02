@@ -11,7 +11,6 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import numpy as np
 from scipy import stats

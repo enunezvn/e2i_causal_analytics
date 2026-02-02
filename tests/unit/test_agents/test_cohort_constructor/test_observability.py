@@ -1,10 +1,10 @@
 """Tests for CohortConstructor observability integration."""
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 from src.agents.cohort_constructor import (
-    CohortConfig,
     CohortExecutionResult,
     EligibilityLogEntry,
 )
@@ -12,11 +12,11 @@ from src.agents.cohort_constructor.observability import (
     CohortMLflowLogger,
     CohortOpikTracer,
     CohortTraceContext,
-    track_cohort_step,
-    track_cohort_construction,
     get_cohort_mlflow_logger,
     get_cohort_opik_tracer,
     reset_observability_singletons,
+    track_cohort_construction,
+    track_cohort_step,
 )
 
 
@@ -100,9 +100,7 @@ class TestCohortOpikTracer:
         """Test initialization."""
         assert cohort_tracer._connector == mock_opik_connector
 
-    def test_trace_cohort_construction_context_manager(
-        self, cohort_tracer, sample_config
-    ):
+    def test_trace_cohort_construction_context_manager(self, cohort_tracer, sample_config):
         """Test trace_cohort_construction as context manager."""
         with cohort_tracer.trace_cohort_construction(
             config=sample_config,
@@ -110,9 +108,7 @@ class TestCohortOpikTracer:
         ) as ctx:
             assert isinstance(ctx, CohortTraceContext)
 
-    def test_trace_cohort_construction_with_metadata(
-        self, cohort_tracer, sample_config
-    ):
+    def test_trace_cohort_construction_with_metadata(self, cohort_tracer, sample_config):
         """Test trace_cohort_construction with metadata."""
         with cohort_tracer.trace_cohort_construction(
             config=sample_config,
@@ -173,7 +169,7 @@ class TestCohortTraceContext:
     def test_start_and_end_trace(self, trace_context):
         """Test starting and ending a trace."""
         # Start trace
-        trace_id = trace_context.start_trace(
+        trace_context.start_trace(
             name="test_trace",
             inputs={"test": "value"},
             metadata={"env": "test"},
@@ -191,6 +187,7 @@ class TestDecorators:
 
     def test_track_cohort_step_decorator(self):
         """Test track_cohort_step decorator."""
+
         @track_cohort_step("test_step")
         def sample_function(x, y):
             return x + y
@@ -201,6 +198,7 @@ class TestDecorators:
 
     def test_track_cohort_construction_decorator(self):
         """Test track_cohort_construction decorator."""
+
         @track_cohort_construction()  # Parameterized decorator requires ()
         def sample_construction(config=None, patient_df=None):
             return {"eligible": 50, "total": 100}

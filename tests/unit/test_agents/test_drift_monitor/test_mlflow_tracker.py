@@ -17,12 +17,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.agents.drift_monitor.mlflow_tracker import (
+    EXPERIMENT_PREFIX,
     DriftMonitorContext,
     DriftMonitorMetrics,
     DriftMonitorMLflowTracker,
-    EXPERIMENT_PREFIX,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -58,8 +57,18 @@ def sample_result():
         "overall_drift_score": 0.45,
         "total_latency_ms": 250,
         "data_drift_results": [
-            {"drift_detected": True, "severity": "high", "test_statistic": 0.15, "drift_type": "psi"},
-            {"drift_detected": False, "severity": "none", "test_statistic": 0.05, "drift_type": "psi"},
+            {
+                "drift_detected": True,
+                "severity": "high",
+                "test_statistic": 0.15,
+                "drift_type": "psi",
+            },
+            {
+                "drift_detected": False,
+                "severity": "none",
+                "test_statistic": 0.05,
+                "drift_type": "psi",
+            },
         ],
         "model_drift_results": [
             {"drift_detected": True, "severity": "medium", "test_statistic": 0.12},

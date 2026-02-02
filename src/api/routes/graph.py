@@ -468,7 +468,9 @@ async def list_relationships(
 
     except Exception as e:
         logger.error(f"Failed to list relationships: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list relationships: {str(e)}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list relationships: {str(e)}"
+        ) from e
 
 
 # =============================================================================

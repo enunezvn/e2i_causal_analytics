@@ -11,15 +11,11 @@ validating:
 This validates the DSPy integration described in orchestrator-agent.md.
 """
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any, List
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.agents.orchestrator.agent import OrchestratorAgent
-from src.agents.orchestrator.state import OrchestratorState
-
 
 # =============================================================================
 # Test Data
@@ -137,7 +133,7 @@ class TestCognitiveRAGRoutingAcceptance:
             orchestrator_with_registry,
             "classify_intent",
             new_callable=AsyncMock,
-        ) as mock_classify:
+        ):
             # The classify_intent should NOT be called when pre-routing is accepted
             result = await orchestrator_with_registry.run(input_data)
 
@@ -166,9 +162,7 @@ class TestCognitiveRAGRoutingAcceptance:
                 assert result["status"] in ["completed", "partial_success", "failed"]
 
     @pytest.mark.asyncio
-    async def test_multi_agent_routing_from_cognitive_rag(
-        self, orchestrator_with_registry
-    ):
+    async def test_multi_agent_routing_from_cognitive_rag(self, orchestrator_with_registry):
         """Orchestrator should handle multi-agent routing from CognitiveRAG."""
         input_data = {
             "query": "What drives NRx differences across segments and why?",
@@ -361,9 +355,7 @@ class TestEdgeCases:
         assert result["status"] in ["completed", "partial_success", "failed"]
 
     @pytest.mark.asyncio
-    async def test_cognitive_routing_with_empty_parameters(
-        self, orchestrator_with_registry
-    ):
+    async def test_cognitive_routing_with_empty_parameters(self, orchestrator_with_registry):
         """Handle routing with empty parameters dict."""
         routing_no_params = {
             "primary_agent": "gap_analyzer",
@@ -416,9 +408,7 @@ class TestOrchestratorFlowIntegration:
             assert result["status"] in ["completed", "partial_success", "failed"]
 
     @pytest.mark.asyncio
-    async def test_synthesis_works_with_cognitive_routing(
-        self, orchestrator_with_registry
-    ):
+    async def test_synthesis_works_with_cognitive_routing(self, orchestrator_with_registry):
         """Response synthesis should work with CognitiveRAG-routed agents."""
         input_data = {
             "query": "Explain the drivers of NRx growth",
@@ -433,9 +423,7 @@ class TestOrchestratorFlowIntegration:
         assert result["status"] in ["completed", "partial_success", "failed"]
 
     @pytest.mark.asyncio
-    async def test_latency_tracking_with_cognitive_routing(
-        self, orchestrator_with_registry
-    ):
+    async def test_latency_tracking_with_cognitive_routing(self, orchestrator_with_registry):
         """Latency should still be tracked with CognitiveRAG routing."""
         input_data = {
             "query": "Quick analysis of market share",

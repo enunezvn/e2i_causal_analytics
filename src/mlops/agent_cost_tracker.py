@@ -43,7 +43,6 @@ Version: 1.0.0 (Phase 4 - G25)
 
 import logging
 import threading
-import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -335,8 +334,7 @@ class AgentCostTracker:
 
         if spend > budget:
             logger.warning(
-                f"Agent {agent_name} exceeded daily budget: "
-                f"${spend:.4f} > ${budget:.4f}"
+                f"Agent {agent_name} exceeded daily budget: ${spend:.4f} > ${budget:.4f}"
             )
 
     def _cleanup(self) -> None:
@@ -384,9 +382,7 @@ class AgentCostTracker:
 
         with self._lock:
             agent_records = [
-                r
-                for r in self._records
-                if r.agent_name == agent_name and r.timestamp > cutoff
+                r for r in self._records if r.agent_name == agent_name and r.timestamp > cutoff
             ]
 
         if not agent_records:
@@ -407,17 +403,13 @@ class AgentCostTracker:
         total_calls = len(agent_records)
 
         # Group by model
-        by_model: Dict[str, Dict[str, float]] = defaultdict(
-            lambda: {"cost": 0.0, "calls": 0}
-        )
+        by_model: Dict[str, Dict[str, float]] = defaultdict(lambda: {"cost": 0.0, "calls": 0})
         for r in agent_records:
             by_model[r.model]["cost"] += r.cost_usd
             by_model[r.model]["calls"] += 1
 
         # Group by operation
-        by_operation: Dict[str, Dict[str, float]] = defaultdict(
-            lambda: {"cost": 0.0, "calls": 0}
-        )
+        by_operation: Dict[str, Dict[str, float]] = defaultdict(lambda: {"cost": 0.0, "calls": 0})
         for r in agent_records:
             op = r.operation or "unknown"
             by_operation[op]["cost"] += r.cost_usd
@@ -446,7 +438,7 @@ class AgentCostTracker:
             Dict mapping agent names to summaries
         """
         with self._lock:
-            agent_names = set(r.agent_name for r in self._records)
+            agent_names = {r.agent_name for r in self._records}
 
         return {name: self.get_agent_summary(name, hours) for name in agent_names}
 

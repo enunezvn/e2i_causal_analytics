@@ -20,18 +20,16 @@ Version: 4.1.0
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from src.api.dependencies.auth import require_auth
 from src.utils.audit_chain import (
-    AuditChainEntry,
     AuditChainService,
-    ChainVerificationResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,15 +246,13 @@ async def get_workflow_summary(
         )
 
         if not result.data:
-            raise HTTPException(
-                status_code=404, detail=f"Workflow {workflow_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
 
         entries = result.data
 
         # Aggregate data
-        agents = list(set(e["agent_name"] for e in entries))
-        tiers = list(set(e["agent_tier"] for e in entries))
+        agents = list({e["agent_name"] for e in entries})
+        tiers = list({e["agent_tier"] for e in entries})
 
         total_duration = sum(e.get("duration_ms") or 0 for e in entries)
 
@@ -267,12 +263,8 @@ async def get_workflow_summary(
             sum(confidence_scores) / len(confidence_scores) if confidence_scores else None
         )
 
-        validation_passed = sum(
-            1 for e in entries if e.get("validation_passed") is True
-        )
-        validation_failed = sum(
-            1 for e in entries if e.get("validation_passed") is False
-        )
+        validation_passed = sum(1 for e in entries if e.get("validation_passed") is True)
+        validation_failed = sum(1 for e in entries if e.get("validation_passed") is False)
 
         # Check chain validity
         try:
@@ -287,12 +279,8 @@ async def get_workflow_summary(
         return WorkflowSummaryResponse(
             workflow_id=workflow_id,
             total_entries=len(entries),
-            first_entry_at=datetime.fromisoformat(
-                entries[0]["created_at"].replace("Z", "+00:00")
-            ),
-            last_entry_at=datetime.fromisoformat(
-                entries[-1]["created_at"].replace("Z", "+00:00")
-            ),
+            first_entry_at=datetime.fromisoformat(entries[0]["created_at"].replace("Z", "+00:00")),
+            last_entry_at=datetime.fromisoformat(entries[-1]["created_at"].replace("Z", "+00:00")),
             agents_involved=sorted(agents),
             tiers_involved=sorted(tiers),
             chain_verified=chain_verified,
@@ -437,9 +425,7 @@ async def _get_recent_workflows_fallback(
             workflows.append(
                 RecentWorkflowResponse(
                     workflow_id=workflow_id,
-                    started_at=datetime.fromisoformat(
-                        row["created_at"].replace("Z", "+00:00")
-                    ),
+                    started_at=datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")),
                     entry_count=entry_count,
                     first_agent=row["agent_name"],
                     last_agent=last_agent,

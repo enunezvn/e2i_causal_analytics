@@ -25,6 +25,7 @@ class TestCORSConfiguration:
             import importlib
 
             from src.api import main
+
             importlib.reload(main)
 
             assert "http://138.197.4.36" in main._DEFAULT_ORIGINS
@@ -89,6 +90,7 @@ class TestCORSEnvironmentOverride:
             import importlib
 
             from src.api import main
+
             importlib.reload(main)
 
             assert test_origin in main.ALLOWED_ORIGINS
@@ -101,6 +103,7 @@ class TestCORSEnvironmentOverride:
             import importlib
 
             from src.api import main
+
             importlib.reload(main)
 
             assert "https://example.com" in main.ALLOWED_ORIGINS
@@ -114,6 +117,7 @@ class TestCORSEnvironmentOverride:
             import importlib
 
             from src.api import main
+
             importlib.reload(main)
 
             assert "https://valid.com" in main.ALLOWED_ORIGINS
@@ -143,6 +147,7 @@ class TestCORSEnvironmentOverride:
             import importlib
 
             from src.api import main
+
             importlib.reload(main)
 
             assert main.ALLOWED_ORIGINS == main._DEFAULT_ORIGINS
@@ -153,6 +158,7 @@ class TestCORSEnvironmentOverride:
             import importlib
 
             from src.api import main
+
             importlib.reload(main)
 
             assert main.ALLOWED_ORIGINS == main._DEFAULT_ORIGINS

@@ -28,9 +28,7 @@ class TestPgvectorExtension:
     def test_pgvector_installed(self, pg_connection):
         """pgvector extension should be installed."""
         with pg_connection.cursor() as cur:
-            cur.execute(
-                "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector'"
-            )
+            cur.execute("SELECT extname, extversion FROM pg_extension WHERE extname = 'vector'")
             result = cur.fetchone()
 
         assert result is not None, "pgvector extension not found"
@@ -39,9 +37,7 @@ class TestPgvectorExtension:
     def test_pgvector_version(self, pg_connection):
         """pgvector should be at least version 0.5.0."""
         with pg_connection.cursor() as cur:
-            cur.execute(
-                "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
-            )
+            cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             result = cur.fetchone()
 
         assert result is not None
@@ -64,9 +60,7 @@ class TestVectorColumns:
             ("experiment_knowledge_store", "embedding", 1536),
         ],
     )
-    def test_vector_column_exists(
-        self, pg_connection, table_name, column_name, expected_dims
-    ):
+    def test_vector_column_exists(self, pg_connection, table_name, column_name, expected_dims):
         """Vector columns should exist with 1536 dimensions."""
         with pg_connection.cursor() as cur:
             cur.execute(
@@ -85,9 +79,9 @@ class TestVectorColumns:
             result = cur.fetchone()
 
         assert result is not None, f"Column {table_name}.{column_name} not found"
-        assert (
-            result[0] == f"vector({expected_dims})"
-        ), f"Expected vector({expected_dims}), got {result[0]}"
+        assert result[0] == f"vector({expected_dims})", (
+            f"Expected vector({expected_dims}), got {result[0]}"
+        )
 
 
 class TestVectorIndexes:
@@ -119,9 +113,7 @@ class TestVectorIndexes:
             )
             result = cur.fetchone()
 
-        assert (
-            result is not None
-        ), f"No {index_type} index found for {table_name}"
+        assert result is not None, f"No {index_type} index found for {table_name}"
         assert "vector_cosine_ops" in result[1], "Index should use cosine distance"
 
 

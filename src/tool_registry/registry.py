@@ -18,10 +18,9 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
-from pydantic import BaseModel, ValidationError, validator
-from pydantic import BaseModel as PydanticModel
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +62,7 @@ class ToolCategory(str, Enum):
     DESCRIPTIVE = "descriptive"
     EXPERIMENTAL = "experimental"
     MONITORING = "monitoring"
+
 
 # Type variable for tool functions
 T = TypeVar("T", bound=Callable[..., Any])
@@ -479,7 +479,7 @@ class ToolRegistry:
         """
         stats = {"inserted": 0, "updated": 0, "skipped": 0}
 
-        for tool_name, registered_tool in self._tools.items():
+        for _tool_name, registered_tool in self._tools.items():
             schema = registered_tool.schema
 
             # Prepare record

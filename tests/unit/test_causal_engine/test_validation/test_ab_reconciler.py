@@ -6,8 +6,8 @@ B8.2: A/B reconciliation tests.
 import pytest
 
 from src.causal_engine.validation import (
-    ABReconciler,
     ABExperimentResult,
+    ABReconciler,
     LibraryEffectEstimate,
 )
 
@@ -145,7 +145,10 @@ class TestABReconciler:
 
         assert result["reconciliation_status"] == "failed"
         assert result["direction_match"] is False
-        assert "opposite" in result["discrepancy_analysis"].lower() or "direction" in result["discrepancy_analysis"].lower()
+        assert (
+            "opposite" in result["discrepancy_analysis"].lower()
+            or "direction" in result["discrepancy_analysis"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_within_ci_check(
@@ -207,8 +210,7 @@ class TestABReconciler:
         assert len(result["recommended_adjustments"]) > 0
         # Should have actionable recommendations
         assert all(
-            isinstance(adj, str) and len(adj) > 10
-            for adj in result["recommended_adjustments"]
+            isinstance(adj, str) and len(adj) > 10 for adj in result["recommended_adjustments"]
         )
 
 

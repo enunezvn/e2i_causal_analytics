@@ -7,10 +7,8 @@ production YAML files and database connections.
 Author: E2I Causal Analytics Team
 """
 
-import os
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -196,18 +194,32 @@ def db_enum_values():
         "agent_tier": ["tier_0", "tier_1", "tier_2", "tier_3", "tier_4", "tier_5"],
         "agent_name": [
             # Tier 0: ML Foundation (7 agents)
-            "scope_definer", "data_preparer", "model_selector",
-            "model_trainer", "model_evaluator", "model_deployer", "model_monitor",
+            "scope_definer",
+            "data_preparer",
+            "model_selector",
+            "model_trainer",
+            "model_evaluator",
+            "model_deployer",
+            "model_monitor",
             # Tier 1: Coordination (2 agents)
-            "orchestrator", "tool_composer",
+            "orchestrator",
+            "tool_composer",
             # Tier 2: Causal (4 agents)
-            "causal_impact", "heterogeneous_optimizer", "gap_analyzer", "experiment_designer",
+            "causal_impact",
+            "heterogeneous_optimizer",
+            "gap_analyzer",
+            "experiment_designer",
             # Tier 3: Monitoring (3 agents) - CORRECTED: health_score belongs here
-            "drift_monitor", "data_quality_monitor", "health_score",
+            "drift_monitor",
+            "data_quality_monitor",
+            "health_score",
             # Tier 4: Prediction (3 agents) - CORRECTED: resource_optimizer belongs here
-            "prediction_synthesizer", "risk_assessor", "resource_optimizer",
+            "prediction_synthesizer",
+            "risk_assessor",
+            "resource_optimizer",
             # Tier 5: Self-Improvement (2 agents)
-            "explainer", "feedback_learner"
+            "explainer",
+            "feedback_learner",
         ],
         "brand_name": ["remibrutinib", "fabhalta", "kisqali"],
         "region_code": ["northeast", "south", "midwest", "west"],
@@ -223,11 +235,13 @@ def db_enum_values():
 def mock_orchestrator():
     """Create a mock orchestrator for testing query routing flow."""
     mock = MagicMock()
-    mock.route_query = MagicMock(return_value={
-        "agent": "causal_impact",
-        "confidence": 0.85,
-        "reasoning": "Query involves causal analysis"
-    })
+    mock.route_query = MagicMock(
+        return_value={
+            "agent": "causal_impact",
+            "confidence": 0.85,
+            "reasoning": "Query involves causal analysis",
+        }
+    )
     return mock
 
 

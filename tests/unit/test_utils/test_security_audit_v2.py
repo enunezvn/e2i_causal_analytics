@@ -21,10 +21,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock
 from uuid import UUID
-
-import pytest
 
 from src.utils.security_audit import (
     SecurityAuditEvent,
@@ -34,7 +32,6 @@ from src.utils.security_audit import (
     get_security_audit_service,
     reset_security_audit_service,
 )
-
 
 # =============================================================================
 # Test Enums
@@ -52,10 +49,7 @@ def test_security_event_type_auth_events():
 def test_security_event_type_authz_events():
     """Test authorization event types."""
     assert SecurityEventType.AUTHZ_ACCESS_DENIED.value == "authz.access.denied"
-    assert (
-        SecurityEventType.AUTHZ_PRIVILEGE_ESCALATION.value
-        == "authz.privilege.escalation"
-    )
+    assert SecurityEventType.AUTHZ_PRIVILEGE_ESCALATION.value == "authz.privilege.escalation"
 
 
 def test_security_event_type_rate_limit_events():
@@ -68,9 +62,7 @@ def test_security_event_type_rate_limit_events():
 def test_security_event_type_api_security_events():
     """Test API security event types."""
     assert SecurityEventType.API_INVALID_REQUEST.value == "api.invalid_request"
-    assert (
-        SecurityEventType.API_SUSPICIOUS_ACTIVITY.value == "api.suspicious_activity"
-    )
+    assert SecurityEventType.API_SUSPICIOUS_ACTIVITY.value == "api.suspicious_activity"
     assert SecurityEventType.API_INJECTION_ATTEMPT.value == "api.injection_attempt"
 
 
@@ -602,9 +594,7 @@ def test_get_recent_events_filtered():
     service.log_auth_success(user_id="user3", user_email="user3@example.com")
 
     # Filter by event type
-    login_successes = service.get_recent_events(
-        event_types=[SecurityEventType.AUTH_LOGIN_SUCCESS]
-    )
+    login_successes = service.get_recent_events(event_types=[SecurityEventType.AUTH_LOGIN_SUCCESS])
 
     assert len(login_successes) == 2
 

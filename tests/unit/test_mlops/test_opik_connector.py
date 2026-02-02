@@ -5,8 +5,7 @@ Tests the Opik SDK wrapper with mocked SDK operations.
 """
 
 import os
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,7 +14,6 @@ from src.mlops.opik_connector import (
     OpikConfig,
     OpikConnector,
     SpanContext,
-    SpanStatus,
 )
 
 
@@ -263,7 +261,7 @@ class TestOpikConnector:
             async with connector.trace_agent(
                 agent_name="error_agent",
                 operation="failing_op",
-            ) as ctx:
+            ):
                 raise ValueError("Test error")
 
         # Context should have recorded the error
@@ -335,7 +333,7 @@ class TestOpikConnector:
 
         # Run multiple traces and check that some are sampled
         sampled_count = 0
-        for i in range(20):
+        for _i in range(20):
             async with connector.trace_agent(
                 agent_name="sample_test",
                 operation="test",

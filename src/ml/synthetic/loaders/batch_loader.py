@@ -9,7 +9,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -81,52 +81,119 @@ LOADING_ORDER = [
 # Column mappings for each table (aligned with actual Supabase schema)
 TABLE_COLUMNS = {
     "hcp_profiles": [
-        "hcp_id", "npi", "specialty", "practice_type", "geographic_region",
-        "years_experience", "total_patient_volume",
+        "hcp_id",
+        "npi",
+        "specialty",
+        "practice_type",
+        "geographic_region",
+        "years_experience",
+        "total_patient_volume",
     ],
     "patient_journeys": [
-        "patient_journey_id", "patient_id", "hcp_id", "brand",
-        "journey_start_date", "insurance_type", "geographic_region",
-        "disease_severity", "academic_hcp", "engagement_score",
-        "treatment_initiated", "days_to_treatment", "age_at_diagnosis",
+        "patient_journey_id",
+        "patient_id",
+        "hcp_id",
+        "brand",
+        "journey_start_date",
+        "insurance_type",
+        "geographic_region",
+        "disease_severity",
+        "academic_hcp",
+        "engagement_score",
+        "treatment_initiated",
+        "days_to_treatment",
+        "age_at_diagnosis",
         "data_split",
     ],
     "treatment_events": [
-        "treatment_event_id", "patient_journey_id", "patient_id", "brand",
-        "event_date", "event_type", "duration_days",
+        "treatment_event_id",
+        "patient_journey_id",
+        "patient_id",
+        "brand",
+        "event_date",
+        "event_type",
+        "duration_days",
         "data_split",
     ],
     "ml_predictions": [
-        "prediction_id", "patient_id", "hcp_id",
-        "prediction_type", "prediction_value", "confidence_score",
-        "model_version", "prediction_timestamp", "data_split",
+        "prediction_id",
+        "patient_id",
+        "hcp_id",
+        "prediction_type",
+        "prediction_value",
+        "confidence_score",
+        "model_version",
+        "prediction_timestamp",
+        "data_split",
     ],
     "triggers": [
-        "trigger_id", "patient_id", "hcp_id", "trigger_timestamp",
-        "trigger_type", "priority", "confidence_score", "lead_time_days",
-        "expiration_date", "delivery_channel", "delivery_status",
-        "acceptance_status", "outcome_tracked", "outcome_value",
-        "trigger_reason", "causal_chain", "supporting_evidence",
-        "recommended_action", "data_split",
+        "trigger_id",
+        "patient_id",
+        "hcp_id",
+        "trigger_timestamp",
+        "trigger_type",
+        "priority",
+        "confidence_score",
+        "lead_time_days",
+        "expiration_date",
+        "delivery_channel",
+        "delivery_status",
+        "acceptance_status",
+        "outcome_tracked",
+        "outcome_value",
+        "trigger_reason",
+        "causal_chain",
+        "supporting_evidence",
+        "recommended_action",
+        "data_split",
     ],
     "business_metrics": [
-        "metric_id", "metric_date", "metric_type", "metric_name",
-        "brand", "region", "value", "target", "achievement_rate",
-        "year_over_year_change", "month_over_month_change", "roi",
-        "statistical_significance", "confidence_interval_lower",
-        "confidence_interval_upper", "sample_size", "data_split",
+        "metric_id",
+        "metric_date",
+        "metric_type",
+        "metric_name",
+        "brand",
+        "region",
+        "value",
+        "target",
+        "achievement_rate",
+        "year_over_year_change",
+        "month_over_month_change",
+        "roi",
+        "statistical_significance",
+        "confidence_interval_lower",
+        "confidence_interval_upper",
+        "sample_size",
+        "data_split",
     ],
     "feature_groups": [
-        "id", "name", "description", "owner", "tags",
-        "source_table", "expected_update_frequency_hours", "max_age_hours",
+        "id",
+        "name",
+        "description",
+        "owner",
+        "tags",
+        "source_table",
+        "expected_update_frequency_hours",
+        "max_age_hours",
     ],
     "features": [
-        "id", "feature_group_id", "name", "description", "value_type",
-        "entity_keys", "owner", "tags", "drift_threshold",
+        "id",
+        "feature_group_id",
+        "name",
+        "description",
+        "value_type",
+        "entity_keys",
+        "owner",
+        "tags",
+        "drift_threshold",
     ],
     "feature_values": [
-        "id", "feature_id", "entity_values", "value",
-        "event_timestamp", "freshness_status",
+        "id",
+        "feature_id",
+        "entity_values",
+        "value",
+        "event_timestamp",
+        "freshness_status",
     ],
 }
 
@@ -159,6 +226,7 @@ class BatchLoader:
         if self._client is None and not self.config.dry_run:
             try:
                 from supabase import create_client
+
                 self._client = create_client(
                     self.config.supabase_url,
                     self.config.supabase_key,
@@ -246,6 +314,7 @@ class BatchLoader:
 
         # Handle None/NaN values - replace with None for JSON compatibility
         import numpy as np
+
         df_to_load = df_to_load.replace({np.nan: None, np.inf: None, -np.inf: None})
         df_to_load = df_to_load.where(pd.notnull(df_to_load), None)
 
@@ -316,9 +385,12 @@ class BatchLoader:
                 error_msg = str(e)
                 if attempt < self.config.max_retries - 1:
                     import time
+
                     time.sleep(self.config.retry_delay_seconds * (attempt + 1))
                 else:
-                    logger.error(f"Batch {batch_idx} failed after {self.config.max_retries} attempts: {error_msg}")
+                    logger.error(
+                        f"Batch {batch_idx} failed after {self.config.max_retries} attempts: {error_msg}"
+                    )
                     return False, error_msg
 
         return False, "Unknown error"
@@ -397,7 +469,9 @@ class BatchLoader:
             )
 
         lines.append("-" * 60)
-        overall_rate = total_loaded / (total_loaded + total_failed) if (total_loaded + total_failed) > 0 else 0
+        overall_rate = (
+            total_loaded / (total_loaded + total_failed) if (total_loaded + total_failed) > 0 else 0
+        )
         lines.append(
             f"TOTAL: {total_loaded:,} loaded, {total_failed:,} failed "
             f"({overall_rate:.1%}) [{total_duration:.1f}s]"
@@ -450,7 +524,4 @@ class AsyncBatchLoader(BatchLoader):
         """
         # Run in executor for non-blocking behavior
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            lambda: self.load_table(table_name, df)
-        )
+        return await loop.run_in_executor(None, lambda: self.load_table(table_name, df))

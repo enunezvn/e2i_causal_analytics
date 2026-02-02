@@ -9,13 +9,11 @@ Tests cover:
 - Category filtering
 """
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.tool_registry.registry import (
-    RegisteredTool,
     ToolCategory,
     ToolNotFoundError,
     ToolParameter,
@@ -28,7 +26,6 @@ from src.tool_registry.registry import (
     list_available_tools,
     register_tool,
 )
-
 
 # =============================================================================
 # EXCEPTION TESTS
@@ -144,9 +141,7 @@ class TestToolSchema:
             description="Tool for serialization test",
             source_agent="test_agent",
             tier=1,
-            input_parameters=[
-                ToolParameter(name="input", type="str", description="Input param")
-            ],
+            input_parameters=[ToolParameter(name="input", type="str", description="Input param")],
         )
 
         result = schema.to_dict()
@@ -333,9 +328,7 @@ class TestToolRegistry:
             description="Tool for planning test",
             source_agent="planner",
             tier=1,
-            input_parameters=[
-                ToolParameter(name="query", type="str", description="Search query")
-            ],
+            input_parameters=[ToolParameter(name="query", type="str", description="Search query")],
             avg_execution_ms=250,
         )
         registry.register(schema, lambda: None)
@@ -646,9 +639,7 @@ class TestDatabaseSync:
             description="Brand new tool to sync",
             source_agent="test_agent",
             tier=1,
-            input_parameters=[
-                ToolParameter(name="x", type="int", description="Input")
-            ],
+            input_parameters=[ToolParameter(name="x", type="int", description="Input")],
         )
         registry.register(schema, lambda x: x)
 
@@ -659,9 +650,7 @@ class TestDatabaseSync:
         mock_check_result.data = []  # Not exists
         mock_insert_result = MagicMock()
 
-        mock_db.execute = AsyncMock(
-            side_effect=[mock_check_result, mock_insert_result]
-        )
+        mock_db.execute = AsyncMock(side_effect=[mock_check_result, mock_insert_result])
 
         stats = await registry.sync_to_database(mock_db)
 
@@ -687,9 +676,7 @@ class TestDatabaseSync:
         mock_check_result.data = [{"tool_id": 1}]
         mock_update_result = MagicMock()
 
-        mock_db.execute = AsyncMock(
-            side_effect=[mock_check_result, mock_update_result]
-        )
+        mock_db.execute = AsyncMock(side_effect=[mock_check_result, mock_update_result])
 
         stats = await registry.sync_to_database(mock_db, update_existing=True)
 
@@ -776,9 +763,7 @@ class TestComposableToolDecorator:
             description="Tool with attached schema",
             source_agent="test_agent",
             tier=2,
-            input_parameters=[
-                {"name": "x", "type": "int", "description": "Input value"}
-            ],
+            input_parameters=[{"name": "x", "type": "int", "description": "Input value"}],
         )
         def tool_func(x: int) -> int:
             return x

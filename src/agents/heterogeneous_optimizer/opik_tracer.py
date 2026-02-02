@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
 from uuid_utils import uuid7 as uuid7_func
 
 if TYPE_CHECKING:
-    from src.mlops.opik_connector import OpikConnector, SpanContext
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -100,14 +100,16 @@ class NodeSpanContext:
             estimation_method: ML method used for CATE
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "segments_count": segments_count,
-            "overall_ate": overall_ate,
-            "heterogeneity_score": heterogeneity_score,
-            "n_estimators": n_estimators,
-            "estimation_method": estimation_method,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "segments_count": segments_count,
+                "overall_ate": overall_ate,
+                "heterogeneity_score": heterogeneity_score,
+                "n_estimators": n_estimators,
+                "estimation_method": estimation_method,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("segments_count", segments_count)
@@ -148,15 +150,17 @@ class NodeSpanContext:
             min_cate: Minimum CATE value
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "high_responders_count": high_responders_count,
-            "low_responders_count": low_responders_count,
-            "total_segments_analyzed": total_segments_analyzed,
-            "significant_effects_count": significant_effects_count,
-            "max_cate": max_cate,
-            "min_cate": min_cate,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "high_responders_count": high_responders_count,
+                "low_responders_count": low_responders_count,
+                "total_segments_analyzed": total_segments_analyzed,
+                "significant_effects_count": significant_effects_count,
+                "max_cate": max_cate,
+                "min_cate": min_cate,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("high_responders_count", high_responders_count)
@@ -193,13 +197,15 @@ class NodeSpanContext:
             budget_impact: Estimated budget impact
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "recommendations_count": recommendations_count,
-            "expected_total_lift": expected_total_lift,
-            "reallocations_suggested": reallocations_suggested,
-            "budget_impact": budget_impact,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "recommendations_count": recommendations_count,
+                "expected_total_lift": expected_total_lift,
+                "reallocations_suggested": reallocations_suggested,
+                "budget_impact": budget_impact,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("recommendations_count", recommendations_count)
@@ -234,12 +240,14 @@ class NodeSpanContext:
             summary_length: Length of executive summary
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "profiles_generated": profiles_generated,
-            "insights_count": insights_count,
-            "summary_length": summary_length,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "profiles_generated": profiles_generated,
+                "insights_count": insights_count,
+                "summary_length": summary_length,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("profiles_generated", profiles_generated)
@@ -253,8 +261,7 @@ class NodeSpanContext:
             )
 
         logger.debug(
-            f"[GENERATE_PROFILES] {profiles_generated} profiles, "
-            f"{insights_count} insights"
+            f"[GENERATE_PROFILES] {profiles_generated} profiles, {insights_count} insights"
         )
 
     def set_output(self, output: Dict[str, Any]) -> None:
@@ -362,9 +369,7 @@ class CATEAnalysisTraceContext:
             # Store in parent context
             self.node_spans[node_name] = node_ctx
 
-            logger.debug(
-                f"Node {node_name} completed in {node_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"Node {node_name} completed in {node_ctx.duration_ms:.2f}ms")
 
     def _get_node_index(self, node_name: str) -> int:
         """Get numeric index for node ordering."""
@@ -515,11 +520,7 @@ class HeterogeneousOptimizerOpikTracer:
     def is_enabled(self) -> bool:
         """Check if tracing is enabled and available."""
         self._ensure_initialized()
-        return (
-            self.enabled
-            and self._opik_connector is not None
-            and self._opik_connector.is_enabled
-        )
+        return self.enabled and self._opik_connector is not None and self._opik_connector.is_enabled
 
     def _should_trace(self) -> bool:
         """Determine if this analysis should be traced."""
@@ -583,9 +584,6 @@ class HeterogeneousOptimizerOpikTracer:
             _tracer=self,
         )
 
-        error_occurred = False
-        error_info = None
-
         try:
             # Create Opik trace if enabled and sampled
             opik_span = None
@@ -602,7 +600,12 @@ class HeterogeneousOptimizerOpikTracer:
                             "agent_type": AGENT_METADATA["type"],
                             **trace_metadata,
                         },
-                        tags=["heterogeneous_optimizer", "cate_analysis", "tier2", brand or "unknown"],
+                        tags=[
+                            "heterogeneous_optimizer",
+                            "cate_analysis",
+                            "tier2",
+                            brand or "unknown",
+                        ],
                         input_data={
                             "query": query[:500],  # Truncate for Opik
                             "treatment_var": treatment_var,
@@ -622,8 +625,7 @@ class HeterogeneousOptimizerOpikTracer:
             yield trace_ctx
 
         except Exception as e:
-            error_occurred = True
-            error_info = {"type": type(e).__name__, "message": str(e)}
+            {"type": type(e).__name__, "message": str(e)}
             raise
 
         finally:
@@ -639,9 +641,7 @@ class HeterogeneousOptimizerOpikTracer:
             trace_ctx.end_time = end_time
             trace_ctx.duration_ms = (end_time - start_time).total_seconds() * 1000
 
-            logger.debug(
-                f"CATE analysis trace completed in {trace_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"CATE analysis trace completed in {trace_ctx.duration_ms:.2f}ms")
 
 
 def trace_cate_analysis(

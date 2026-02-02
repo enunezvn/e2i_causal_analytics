@@ -8,17 +8,18 @@ Tests cover:
 - Fallback to custom store
 """
 
-import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-import pandas as pd
+from unittest.mock import AsyncMock, MagicMock
 
+import pandas as pd
+import pytest
+
+from src.feature_store.feast_client import FeastClient, FeatureStatistics
 from src.feature_store.feature_analyzer_adapter import (
+    PYTHON_TO_FEATURE_TYPE,
     FeatureAnalyzerAdapter,
     get_feature_analyzer_adapter,
-    PYTHON_TO_FEATURE_TYPE,
 )
-from src.feature_store.feast_client import FeastClient, FeatureStatistics
 from src.feature_store.models import FeatureValueType
 
 
@@ -162,10 +163,12 @@ class TestGetTrainingFeatures:
         mock_fs_client = MagicMock()
         adapter = FeatureAnalyzerAdapter(mock_fs_client)
 
-        entity_df = pd.DataFrame({
-            "hcp_id": ["123"],
-            "event_timestamp": [datetime.now()],
-        })
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime.now()],
+            }
+        )
 
         with pytest.raises(ValueError, match="feature_refs cannot be empty"):
             await adapter.get_training_features(
@@ -180,11 +183,13 @@ class TestGetTrainingFeatures:
         mock_feast_client = MagicMock(spec=FeastClient)
         mock_feast_client.initialize = AsyncMock()
 
-        entity_df = pd.DataFrame({
-            "hcp_id": ["123", "456"],
-            "brand_id": ["remibrutinib", "remibrutinib"],
-            "event_timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 15)],
-        })
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123", "456"],
+                "brand_id": ["remibrutinib", "remibrutinib"],
+                "event_timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 15)],
+            }
+        )
 
         result_df = entity_df.copy()
         result_df["hcp_conversion_features__engagement_score"] = [0.85, 0.72]
@@ -213,14 +218,14 @@ class TestGetTrainingFeatures:
 
         mock_feast_client = MagicMock(spec=FeastClient)
         mock_feast_client.initialize = AsyncMock()
-        mock_feast_client.get_historical_features = AsyncMock(
-            side_effect=Exception("Feast error")
-        )
+        mock_feast_client.get_historical_features = AsyncMock(side_effect=Exception("Feast error"))
 
-        entity_df = pd.DataFrame({
-            "hcp_id": ["123"],
-            "event_timestamp": [datetime.now()],
-        })
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime.now()],
+            }
+        )
 
         adapter = FeatureAnalyzerAdapter(
             mock_fs_client,
@@ -247,19 +252,21 @@ class TestDiscoverFeatures:
 
         mock_feast_client = MagicMock(spec=FeastClient)
         mock_feast_client.initialize = AsyncMock()
-        mock_feast_client.list_feature_views = AsyncMock(return_value=[
-            {
-                "name": "hcp_conversion_features",
-                "entities": ["hcp", "brand"],
-                "tags": {"use_case": "hcp_conversion"},
-                "online": True,
-                "ttl_days": 7,
-                "schema": [
-                    {"name": "engagement_score", "dtype": "FLOAT64"},
-                    {"name": "trx_count", "dtype": "INT64"},
-                ],
-            }
-        ])
+        mock_feast_client.list_feature_views = AsyncMock(
+            return_value=[
+                {
+                    "name": "hcp_conversion_features",
+                    "entities": ["hcp", "brand"],
+                    "tags": {"use_case": "hcp_conversion"},
+                    "online": True,
+                    "ttl_days": 7,
+                    "schema": [
+                        {"name": "engagement_score", "dtype": "FLOAT64"},
+                        {"name": "trx_count", "dtype": "INT64"},
+                    ],
+                }
+            ]
+        )
 
         adapter = FeatureAnalyzerAdapter(
             mock_fs_client,
@@ -280,20 +287,22 @@ class TestDiscoverFeatures:
 
         mock_feast_client = MagicMock(spec=FeastClient)
         mock_feast_client.initialize = AsyncMock()
-        mock_feast_client.list_feature_views = AsyncMock(return_value=[
-            {
-                "name": "hcp_conversion_features",
-                "entities": ["hcp"],
-                "tags": {"use_case": "hcp_conversion"},
-                "schema": [{"name": "engagement_score", "dtype": "FLOAT64"}],
-            },
-            {
-                "name": "patient_journey_features",
-                "entities": ["patient"],
-                "tags": {"use_case": "churn_prediction"},
-                "schema": [{"name": "adherence_rate", "dtype": "FLOAT64"}],
-            },
-        ])
+        mock_feast_client.list_feature_views = AsyncMock(
+            return_value=[
+                {
+                    "name": "hcp_conversion_features",
+                    "entities": ["hcp"],
+                    "tags": {"use_case": "hcp_conversion"},
+                    "schema": [{"name": "engagement_score", "dtype": "FLOAT64"}],
+                },
+                {
+                    "name": "patient_journey_features",
+                    "entities": ["patient"],
+                    "tags": {"use_case": "churn_prediction"},
+                    "schema": [{"name": "adherence_rate", "dtype": "FLOAT64"}],
+                },
+            ]
+        )
 
         adapter = FeatureAnalyzerAdapter(
             mock_fs_client,
@@ -313,20 +322,22 @@ class TestDiscoverFeatures:
 
         mock_feast_client = MagicMock(spec=FeastClient)
         mock_feast_client.initialize = AsyncMock()
-        mock_feast_client.list_feature_views = AsyncMock(return_value=[
-            {
-                "name": "hcp_conversion_features",
-                "entities": ["hcp", "brand"],
-                "tags": {},
-                "schema": [{"name": "engagement_score", "dtype": "FLOAT64"}],
-            },
-            {
-                "name": "patient_journey_features",
-                "entities": ["patient"],
-                "tags": {},
-                "schema": [{"name": "adherence_rate", "dtype": "FLOAT64"}],
-            },
-        ])
+        mock_feast_client.list_feature_views = AsyncMock(
+            return_value=[
+                {
+                    "name": "hcp_conversion_features",
+                    "entities": ["hcp", "brand"],
+                    "tags": {},
+                    "schema": [{"name": "engagement_score", "dtype": "FLOAT64"}],
+                },
+                {
+                    "name": "patient_journey_features",
+                    "entities": ["patient"],
+                    "tags": {},
+                    "schema": [{"name": "adherence_rate", "dtype": "FLOAT64"}],
+                },
+            ]
+        )
 
         adapter = FeatureAnalyzerAdapter(
             mock_fs_client,
@@ -446,9 +457,7 @@ class TestSyncFeaturesToFeast:
 
         mock_feast_client = MagicMock(spec=FeastClient)
         mock_feast_client.initialize = AsyncMock()
-        mock_feast_client.materialize_incremental = AsyncMock(
-            return_value={"status": "completed"}
-        )
+        mock_feast_client.materialize_incremental = AsyncMock(return_value={"status": "completed"})
 
         adapter = FeatureAnalyzerAdapter(
             mock_fs_client,

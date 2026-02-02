@@ -851,8 +851,12 @@ class FalkorDBSemanticMemory:
             rel_dict = dict(rel.properties) if rel.properties else {}
             rel_dict["id"] = str(rel.id)
             # Use node's name property as the identifier
-            rel_dict["source_id"] = str(record[1]) if record[1] is not None else str(rel.id) + "_src"
-            rel_dict["target_id"] = str(record[2]) if record[2] is not None else str(rel.id) + "_tgt"
+            rel_dict["source_id"] = (
+                str(record[1]) if record[1] is not None else str(rel.id) + "_src"
+            )
+            rel_dict["target_id"] = (
+                str(record[2]) if record[2] is not None else str(rel.id) + "_tgt"
+            )
             rel_dict["type"] = record[3]
             relationships.append(rel_dict)
 

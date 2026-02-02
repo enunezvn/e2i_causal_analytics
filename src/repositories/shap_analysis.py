@@ -6,7 +6,6 @@ Handles CRUD operations for ml_shap_analyses table.
 
 import logging
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .base import BaseRepository
@@ -48,12 +47,18 @@ class ShapAnalysisRepository(BaseRepository):
             # Build top_interactions JSONB
             top_interactions = []
             for interaction in analysis_dict.get("interactions", [])[:10]:
-                top_interactions.append({
-                    "feature_1": interaction["features"][0] if interaction.get("features") else None,
-                    "feature_2": interaction["features"][1] if len(interaction.get("features", [])) > 1 else None,
-                    "interaction_strength": interaction.get("interaction_strength"),
-                    "interpretation": interaction.get("interpretation"),
-                })
+                top_interactions.append(
+                    {
+                        "feature_1": interaction["features"][0]
+                        if interaction.get("features")
+                        else None,
+                        "feature_2": interaction["features"][1]
+                        if len(interaction.get("features", [])) > 1
+                        else None,
+                        "interaction_strength": interaction.get("interaction_strength"),
+                        "interpretation": interaction.get("interpretation"),
+                    }
+                )
 
             # Map Python types to database column names (per mlops_tables.sql schema)
             db_record = {
@@ -66,7 +71,9 @@ class ShapAnalysisRepository(BaseRepository):
                 "key_drivers": analysis_dict.get("top_features", [])[:5],
                 "sample_size": analysis_dict.get("samples_analyzed"),
                 # Schema uses computation_duration_seconds (INTEGER), not computation_time_seconds
-                "computation_duration_seconds": int(analysis_dict.get("computation_time_seconds", 0)),
+                "computation_duration_seconds": int(
+                    analysis_dict.get("computation_time_seconds", 0)
+                ),
                 # Schema uses computation_method, not model_type
                 "computation_method": analysis_dict.get("explainer_type"),
                 # Note: model_version is stored in ml_model_registry, not in this table

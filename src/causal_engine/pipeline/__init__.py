@@ -20,6 +20,11 @@ from .orchestrator import (
     NetworkXExecutor,
     PipelineOrchestrator,
 )
+from .parallel import (
+    ParallelPipeline,
+    ParallelPipelineBuilder,
+    create_parallel_pipeline,
+)
 from .router import CausalLibrary, LibraryCapability, LibraryRouter, QuestionType
 from .sequential import (
     LIBRARY_STAGES,
@@ -27,11 +32,6 @@ from .sequential import (
     SequentialPipeline,
     SequentialPipelineBuilder,
     create_sequential_pipeline,
-)
-from .parallel import (
-    ParallelPipeline,
-    ParallelPipelineBuilder,
-    create_parallel_pipeline,
 )
 from .state import (
     LibraryExecutionResult,

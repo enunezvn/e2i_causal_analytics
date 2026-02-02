@@ -158,7 +158,7 @@ def _anonymize_feature_names(
         Tuple of (anonymized_names, mapping from anonymous to original)
     """
     anonymized = [f"feature_{i}" for i in range(len(feature_names))]
-    mapping = {anon: orig for anon, orig in zip(anonymized, feature_names)}
+    mapping = dict(zip(anonymized, feature_names, strict=False))
     return anonymized, mapping
 
 
@@ -243,8 +243,8 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             feature_names = [f"feature_{i}" for i in range(n_features)]
             logger.warning(
-                f"Using generic feature names (feature_0, feature_1, ...) - "
-                f"feature_columns not preserved from data_preparer"
+                "Using generic feature names (feature_0, feature_1, ...) - "
+                "feature_columns not preserved from data_preparer"
             )
 
         # L5 Fix: Support feature name anonymization to prevent schema leakage

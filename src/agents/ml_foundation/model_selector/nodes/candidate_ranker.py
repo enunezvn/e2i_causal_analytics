@@ -91,7 +91,14 @@ def _requires_causal_inference(problem_type: str, scope_spec: Dict[str, Any]) ->
 
     # Check business objective for causal keywords
     business_objective = scope_spec.get("business_objective", "").lower()
-    causal_keywords = ["treatment effect", "causal", "intervention", "uplift", "what-if", "counterfactual"]
+    causal_keywords = [
+        "treatment effect",
+        "causal",
+        "intervention",
+        "uplift",
+        "what-if",
+        "counterfactual",
+    ]
     if any(keyword in business_objective for keyword in causal_keywords):
         return True
 

@@ -21,7 +21,6 @@ from src.causal_engine.validation.state import (
     ABReconciliationResult,
     CrossValidationResult,
     LibraryEffectEstimate,
-    PairwiseValidation,
 )
 
 logger = logging.getLogger(__name__)
@@ -305,9 +304,7 @@ class ConfidenceScorer:
             return 1.0
 
         majority_significant = sum(significances) > len(significances) / 2
-        agreement = sum(
-            1 for s in significances if s == majority_significant
-        ) / len(significances)
+        agreement = sum(1 for s in significances if s == majority_significant) / len(significances)
 
         return agreement
 
@@ -332,7 +329,7 @@ class ConfidenceScorer:
             if ci_a_lower is None or ci_a_upper is None:
                 continue
 
-            for est_b in estimates[i + 1:]:
+            for est_b in estimates[i + 1 :]:
                 ci_b_lower = est_b.get("ci_lower")
                 ci_b_upper = est_b.get("ci_upper")
 
@@ -456,7 +453,7 @@ class ConfidenceScorer:
         if total_weight <= 0:
             consensus = float(np.mean(effects))
         else:
-            consensus = sum(e * w for e, w in zip(effects, weights)) / total_weight
+            consensus = sum(e * w for e, w in zip(effects, weights, strict=False)) / total_weight
 
         # Standard deviation
         std = float(np.std(effects)) if len(effects) > 1 else 0.0
@@ -493,9 +490,7 @@ class ConfidenceScorer:
 
         # Compute from available sources
         if ab_reconciliation and cross_validation:
-            score, tier = self.score_with_ab_reconciliation(
-                cross_validation, ab_reconciliation
-            )
+            score, tier = self.score_with_ab_reconciliation(cross_validation, ab_reconciliation)
             breakdown["sources"] = ["cross_validation", "ab_reconciliation"]
 
             # Add AB-specific components
@@ -505,9 +500,7 @@ class ConfidenceScorer:
             breakdown["components"]["ab_direction_match"] = ab_reconciliation.get(
                 "direction_match", False
             )
-            breakdown["components"]["ab_within_ci"] = ab_reconciliation.get(
-                "within_ci", False
-            )
+            breakdown["components"]["ab_within_ci"] = ab_reconciliation.get("within_ci", False)
 
         elif cross_validation:
             score, tier = self.score_from_cross_validation(cross_validation)

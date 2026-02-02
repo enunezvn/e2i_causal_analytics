@@ -119,8 +119,7 @@ class FulltextBackend:
                 )
 
             logger.debug(
-                f"Full-text search returned {len(results)} results "
-                f"in {self._last_latency_ms:.1f}ms"
+                f"Full-text search returned {len(results)} results in {self._last_latency_ms:.1f}ms"
             )
 
             return results

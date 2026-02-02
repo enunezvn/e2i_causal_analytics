@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -456,7 +456,7 @@ class ExperimentMonitorMemoryHooks:
                     "warning_count": warning_count,
                     "critical_count": critical_count,
                     "alert_count": len(alerts),
-                    "alert_types": list(set(a.get("alert_type", "") for a in alerts)),
+                    "alert_types": list({a.get("alert_type", "") for a in alerts}),
                     "check_latency_ms": result.get("check_latency_ms", 0),
                     "summary": result.get("monitor_summary", ""),
                 },

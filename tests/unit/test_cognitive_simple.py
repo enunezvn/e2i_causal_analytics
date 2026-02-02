@@ -173,9 +173,9 @@ async def investigator_node(state: CognitiveState) -> CognitiveState:
     llm = AnthropicLLM()
 
     # Set investigation goal
-    goal_prompt = f"""Given this user query: "{state['user_query']}"
-    And detected intent: {state['detected_intent']}
-    And entities: {state['detected_entities']}
+    goal_prompt = f"""Given this user query: "{state["user_query"]}"
+    And detected intent: {state["detected_intent"]}
+    And entities: {state["detected_entities"]}
 
     What specific information do we need to answer this query? Be specific. Keep it to 2-3 sentences."""
 
@@ -296,15 +296,15 @@ async def agent_node(state: CognitiveState) -> CognitiveState:
     # Generate response
     synthesis_prompt = f"""You are the E2I Causal Analytics assistant. Answer this query based on the evidence.
 
-User Query: {state['user_query']}
+User Query: {state["user_query"]}
 
-Investigation Goal: {state['investigation_goal']}
+Investigation Goal: {state["investigation_goal"]}
 
 Evidence from Memory Systems:
 {evidence_context}
 
-Detected Intent: {state['detected_intent']}
-Detected Entities: {state['detected_entities']}
+Detected Intent: {state["detected_intent"]}
+Detected Entities: {state["detected_entities"]}
 
 Provide a clear, analytical response that:
 1. Directly addresses the user's question
@@ -347,9 +347,9 @@ async def reflector_node(state: CognitiveState) -> CognitiveState:
     # Evaluate if worth remembering
     eval_prompt = f"""Evaluate this interaction for learning potential:
 
-Query: {state['user_query']}
-Confidence: {state['confidence_score']:.2f}
-Evidence Items: {len(state['evidence_trail'])}
+Query: {state["user_query"]}
+Confidence: {state["confidence_score"]:.2f}
+Evidence Items: {len(state["evidence_trail"])}
 
 Should this be remembered? Answer REMEMBER or SKIP with brief reason."""
 
@@ -536,25 +536,25 @@ def generate_markdown_report(result: CognitiveState, output_path: Optional[str] 
     report = f"""# E2I Cognitive Cycle Report
 
 **Generated**: {timestamp}
-**Session ID**: `{result.get('session_id', 'N/A')}`
-**Cycle ID**: `{result.get('cycle_id', 'N/A')}`
-**User ID**: `{result.get('user_id', 'Anonymous')}`
+**Session ID**: `{result.get("session_id", "N/A")}`
+**Cycle ID**: `{result.get("cycle_id", "N/A")}`
+**User ID**: `{result.get("user_id", "Anonymous")}`
 
 ---
 
 ## Query Analysis
 
 ### User Query
-> {result.get('user_query', 'N/A')}
+> {result.get("user_query", "N/A")}
 
 ### Detected Intent
-`{result.get('detected_intent', 'N/A')}`
+`{result.get("detected_intent", "N/A")}`
 
 ### Detected Entities
 {entities_section}
 
 ### Investigation Goal
-{result.get('investigation_goal', 'N/A')}
+{result.get("investigation_goal", "N/A")}
 
 ---
 
@@ -562,17 +562,17 @@ def generate_markdown_report(result: CognitiveState, output_path: Optional[str] 
 
 | Phase | Duration | Status |
 |-------|----------|--------|
-| Summarizer | {phase_durations.get('summarizer', 'N/A')} | ✅ Complete |
-| Investigator | {phase_durations.get('investigator', 'N/A')} | ✅ Complete |
-| Agent | {phase_durations.get('agent', 'N/A')} | ✅ Complete |
-| Reflector | {phase_durations.get('reflector', 'N/A')} | ✅ Complete |
+| Summarizer | {phase_durations.get("summarizer", "N/A")} | ✅ Complete |
+| Investigator | {phase_durations.get("investigator", "N/A")} | ✅ Complete |
+| Agent | {phase_durations.get("agent", "N/A")} | ✅ Complete |
+| Reflector | {phase_durations.get("reflector", "N/A")} | ✅ Complete |
 
 ---
 
 ## Evidence Trail
 
-**Total Evidence Items**: {len(result.get('evidence_trail', []))}
-**Investigation Decision**: `{result.get('investigation_decision', 'N/A')}`
+**Total Evidence Items**: {len(result.get("evidence_trail", []))}
+**Investigation Decision**: `{result.get("investigation_decision", "N/A")}`
 
 | Hop | Source | Query Type | Content | Relevance |
 |-----|--------|------------|---------|-----------|
@@ -582,7 +582,7 @@ def generate_markdown_report(result: CognitiveState, output_path: Optional[str] 
 
 ## Agent Execution
 
-**Agents Invoked**: {', '.join(result.get('agents_to_invoke', ['None']))}
+**Agents Invoked**: {", ".join(result.get("agents_to_invoke", ["None"]))}
 
 | Agent | Status | Confidence |
 |-------|--------|------------|
@@ -592,15 +592,15 @@ def generate_markdown_report(result: CognitiveState, output_path: Optional[str] 
 
 ## Synthesized Response
 
-**Overall Confidence**: {f"{result.get('confidence_score', 0):.0%}" if result.get('confidence_score') else "N/A"}
+**Overall Confidence**: {f"{result.get('confidence_score', 0):.0%}" if result.get("confidence_score") else "N/A"}
 
-{result.get('synthesized_response', 'No response generated.')}
+{result.get("synthesized_response", "No response generated.")}
 
 ---
 
 ## Learning & Reflection
 
-**Worth Remembering**: {'✅ Yes' if result.get('worth_remembering') else '❌ No'}
+**Worth Remembering**: {"✅ Yes" if result.get("worth_remembering") else "❌ No"}
 {learnings_section}
 
 ---
@@ -609,11 +609,11 @@ def generate_markdown_report(result: CognitiveState, output_path: Optional[str] 
 
 | Property | Value |
 |----------|-------|
-| Context Compressed | {'Yes' if result.get('context_compressed') else 'No'} |
-| Compression Ratio | {result.get('compression_ratio', 'N/A')} |
-| Max Hops Configured | {result.get('max_hops', 4)} |
-| Hops Executed | {result.get('current_hop', 0)} |
-| Error | {result.get('error', 'None')} |
+| Context Compressed | {"Yes" if result.get("context_compressed") else "No"} |
+| Compression Ratio | {result.get("compression_ratio", "N/A")} |
+| Max Hops Configured | {result.get("max_hops", 4)} |
+| Hops Executed | {result.get("current_hop", 0)} |
+| Error | {result.get("error", "None")} |
 
 ---
 
@@ -654,7 +654,7 @@ async def main():
     print(f"Agents Used: {result['agents_to_invoke']}")
     print(f"Confidence: {result['confidence_score']:.0%}" if result["confidence_score"] else "N/A")
     print(f"Worth Remembering: {result['worth_remembering']}")
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("RESPONSE")
     print("=" * 70)
     print(result["synthesized_response"])

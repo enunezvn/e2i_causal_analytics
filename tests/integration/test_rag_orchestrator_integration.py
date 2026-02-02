@@ -215,9 +215,9 @@ class TestRAGOrchestratorPerformance:
         )
 
         # Should be well under 2000ms with mock agents
-        assert (
-            orchestration_overhead < 2000
-        ), f"Orchestration overhead {orchestration_overhead}ms exceeds 2s target"
+        assert orchestration_overhead < 2000, (
+            f"Orchestration overhead {orchestration_overhead}ms exceeds 2s target"
+        )
 
     @pytest.mark.asyncio
     async def test_rag_latency_under_500ms(self):
@@ -229,9 +229,9 @@ class TestRAGOrchestratorPerformance:
         result = await orchestrator.run(input_data)
 
         # RAG should be fast (under 500ms target)
-        assert (
-            result["rag_latency_ms"] < 500
-        ), f"RAG latency {result['rag_latency_ms']}ms exceeds 500ms target"
+        assert result["rag_latency_ms"] < 500, (
+            f"RAG latency {result['rag_latency_ms']}ms exceeds 500ms target"
+        )
 
 
 class TestRAGGraphConfiguration:

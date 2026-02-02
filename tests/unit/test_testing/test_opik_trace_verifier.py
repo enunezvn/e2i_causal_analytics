@@ -4,7 +4,6 @@ Tests the Opik trace verification functionality for agent observability.
 """
 
 import os
-from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx

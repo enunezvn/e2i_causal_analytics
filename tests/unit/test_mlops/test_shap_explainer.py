@@ -13,10 +13,8 @@ Author: E2I Causal Analytics
 Version: 4.3.0
 """
 
-import asyncio
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, Mock, patch, AsyncMock
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -28,7 +26,6 @@ from src.mlops.shap_explainer_realtime import (
     SHAPResult,
     SHAPVisualization,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -188,7 +185,9 @@ class TestExplainerTypeDetection:
         """Should use name hints when model object is None."""
         assert explainer._get_explainer_type("propensity", model=None) == ExplainerType.TREE
         assert explainer._get_explainer_type("xgboost_model", model=None) == ExplainerType.TREE
-        assert explainer._get_explainer_type("baseline_logistic", model=None) == ExplainerType.LINEAR
+        assert (
+            explainer._get_explainer_type("baseline_logistic", model=None) == ExplainerType.LINEAR
+        )
         assert explainer._get_explainer_type("deep_nba", model=None) == ExplainerType.DEEP
         assert explainer._get_explainer_type("unknown_model", model=None) == ExplainerType.KERNEL
 
@@ -346,7 +345,9 @@ class TestBackgroundDataGeneration:
         mock_feast.get_historical_features = Mock(side_effect=Exception("Feast unavailable"))
 
         feature_names = ["feature_1", "feature_2"]
-        background = explainer._generate_synthetic_background(feature_names, feast_client=mock_feast)
+        background = explainer._generate_synthetic_background(
+            feature_names, feast_client=mock_feast
+        )
 
         # Should fallback to synthetic after Feast failure
         assert background.shape == (50, 2)  # default_background_sample=50
@@ -357,7 +358,9 @@ class TestBackgroundDataGeneration:
         # Create large background data
         large_background = np.random.randn(500, 10)
 
-        with patch.object(explainer, "_generate_synthetic_background", return_value=large_background):
+        with patch.object(
+            explainer, "_generate_synthetic_background", return_value=large_background
+        ):
             # When creating kernel explainer with large background
             # It should sample down to default_background_sample (50)
             sampled = large_background.copy()
@@ -384,31 +387,23 @@ class TestErrorHandling:
             # Create a mock invalid explainer type
             invalid_type = Mock()
             invalid_type.value = "InvalidExplainer"
-            explainer._create_explainer(
-                mock_tree_model, invalid_type, None, ["f1", "f2"]
-            )
+            explainer._create_explainer(mock_tree_model, invalid_type, None, ["f1", "f2"])
 
     def test_create_linear_explainer_missing_background(self, explainer, mock_linear_model):
         """Should raise ValueError when LinearExplainer lacks background data."""
         with pytest.raises(ValueError, match="LinearExplainer requires background_data"):
-            explainer._create_explainer(
-                mock_linear_model, ExplainerType.LINEAR, None, ["f1", "f2"]
-            )
+            explainer._create_explainer(mock_linear_model, ExplainerType.LINEAR, None, ["f1", "f2"])
 
     def test_create_deep_explainer_missing_background(self, explainer, mock_deep_model):
         """Should raise ValueError when DeepExplainer lacks background data."""
         with pytest.raises(ValueError, match="DeepExplainer requires background_data"):
-            explainer._create_explainer(
-                mock_deep_model, ExplainerType.DEEP, None, ["f1", "f2"]
-            )
+            explainer._create_explainer(mock_deep_model, ExplainerType.DEEP, None, ["f1", "f2"])
 
     def test_create_gradient_explainer_missing_background(self, explainer):
         """Should raise ValueError when GradientExplainer lacks background data."""
         model = Mock()
         with pytest.raises(ValueError, match="GradientExplainer requires background_data"):
-            explainer._create_explainer(
-                model, ExplainerType.GRADIENT, None, ["f1", "f2"]
-            )
+            explainer._create_explainer(model, ExplainerType.GRADIENT, None, ["f1", "f2"])
 
     @patch("src.mlops.shap_explainer_realtime._USE_MOCK_MODELS", False)
     def test_get_mock_model_disabled_in_production(self, explainer):
@@ -721,9 +716,7 @@ class TestSHAPVisualization:
             "feature_e": 0.5,
         }
 
-        data = SHAPVisualization.generate_waterfall_data(
-            sample_shap_result, features, top_k=3
-        )
+        data = SHAPVisualization.generate_waterfall_data(sample_shap_result, features, top_k=3)
 
         assert "base_value" in data
         assert "final_value" in data

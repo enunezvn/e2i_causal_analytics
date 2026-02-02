@@ -11,7 +11,7 @@ Tests cover:
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -27,7 +27,6 @@ from src.services.retraining_trigger import (
     evaluate_and_trigger_retraining,
     get_retraining_trigger_service,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -401,9 +400,7 @@ class TestRetrainingTriggerService:
             "src.repositories.drift_monitoring.DriftHistoryRepository"
         ) as mock_drift_repo_cls:
             mock_drift_repo = MagicMock()
-            mock_drift_repo.get_latest_drift_status = AsyncMock(
-                return_value=mock_drift_records
-            )
+            mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo
 
             with patch(
@@ -452,9 +449,7 @@ class TestRetrainingTriggerService:
             "src.repositories.drift_monitoring.DriftHistoryRepository"
         ) as mock_drift_repo_cls:
             mock_drift_repo = MagicMock()
-            mock_drift_repo.get_latest_drift_status = AsyncMock(
-                return_value=mock_drift_records
-            )
+            mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo
 
             with patch(
@@ -504,9 +499,7 @@ class TestRetrainingTriggerService:
             "src.repositories.drift_monitoring.DriftHistoryRepository"
         ) as mock_drift_repo_cls:
             mock_drift_repo = MagicMock()
-            mock_drift_repo.get_latest_drift_status = AsyncMock(
-                return_value=mock_drift_records
-            )
+            mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo
 
             with patch(
@@ -555,9 +548,7 @@ class TestRetrainingTriggerService:
             "src.repositories.drift_monitoring.DriftHistoryRepository"
         ) as mock_drift_repo_cls:
             mock_drift_repo = MagicMock()
-            mock_drift_repo.get_latest_drift_status = AsyncMock(
-                return_value=mock_drift_records
-            )
+            mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo
 
             with patch(
@@ -614,9 +605,7 @@ class TestRetrainingTriggerService:
             "src.repositories.drift_monitoring.DriftHistoryRepository"
         ) as mock_drift_repo_cls:
             mock_drift_repo = MagicMock()
-            mock_drift_repo.get_latest_drift_status = AsyncMock(
-                return_value=mock_drift_records
-            )
+            mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo
 
             with patch(
@@ -673,9 +662,7 @@ class TestRetrainingTriggerService:
             assert job.status == RetrainingStatus.TRAINING
 
     @pytest.mark.asyncio
-    async def test_complete_retraining_success(
-        self, retraining_service: RetrainingTriggerService
-    ):
+    async def test_complete_retraining_success(self, retraining_service: RetrainingTriggerService):
         """Test completing retraining successfully."""
         mock_record = MockRetrainingRecord(
             id="job-126",
@@ -707,9 +694,7 @@ class TestRetrainingTriggerService:
             assert job.performance_after == 0.88
 
     @pytest.mark.asyncio
-    async def test_complete_retraining_failure(
-        self, retraining_service: RetrainingTriggerService
-    ):
+    async def test_complete_retraining_failure(self, retraining_service: RetrainingTriggerService):
         """Test completing retraining with failure."""
         mock_record = MockRetrainingRecord(
             id="job-127",
@@ -791,9 +776,7 @@ class TestHelperFunctions:
     @pytest.mark.asyncio
     async def test_evaluate_and_trigger_retraining(self):
         """Test convenience function for evaluation and triggering."""
-        with patch(
-            "src.services.retraining_trigger.get_retraining_trigger_service"
-        ) as mock_get:
+        with patch("src.services.retraining_trigger.get_retraining_trigger_service") as mock_get:
             mock_service = MagicMock()
 
             mock_decision = RetrainingDecision(
@@ -860,9 +843,7 @@ class TestThresholds:
             "src.repositories.drift_monitoring.DriftHistoryRepository"
         ) as mock_drift_repo_cls:
             mock_drift_repo = MagicMock()
-            mock_drift_repo.get_latest_drift_status = AsyncMock(
-                return_value=mock_drift_records
-            )
+            mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo
 
             with patch(
@@ -883,17 +864,13 @@ class TestThresholds:
                     ) as mock_cooldown:
                         mock_cooldown.return_value = None
 
-                        decision = await retraining_service.evaluate_retraining_need(
-                            "test_v1.0"
-                        )
+                        decision = await retraining_service.evaluate_retraining_need("test_v1.0")
 
                         # At exactly 0.5 threshold with >= comparison should trigger
                         assert decision.should_retrain in [True, False]
 
     @pytest.mark.asyncio
-    async def test_multiple_thresholds_exceeded(
-        self, retraining_service: RetrainingTriggerService
-    ):
+    async def test_multiple_thresholds_exceeded(self, retraining_service: RetrainingTriggerService):
         """Test when multiple thresholds are exceeded."""
         mock_drift_records = [
             MockDriftRecord(drift_type="data", severity="high"),
@@ -912,9 +889,7 @@ class TestThresholds:
             "src.repositories.drift_monitoring.DriftHistoryRepository"
         ) as mock_drift_repo_cls:
             mock_drift_repo = MagicMock()
-            mock_drift_repo.get_latest_drift_status = AsyncMock(
-                return_value=mock_drift_records
-            )
+            mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo
 
             with patch(
@@ -935,9 +910,7 @@ class TestThresholds:
                     ) as mock_cooldown:
                         mock_cooldown.return_value = None
 
-                        decision = await retraining_service.evaluate_retraining_need(
-                            "test_v1.0"
-                        )
+                        decision = await retraining_service.evaluate_retraining_need("test_v1.0")
 
                         assert decision.should_retrain is True
 
@@ -966,9 +939,7 @@ class TestEdgeCases:
                 "src.services.performance_tracking.get_performance_tracker"
             ) as mock_tracker_fn:
                 mock_tracker = MagicMock()
-                mock_tracker.get_performance_trend = AsyncMock(
-                    side_effect=Exception("No data")
-                )
+                mock_tracker.get_performance_trend = AsyncMock(side_effect=Exception("No data"))
                 mock_tracker_fn.return_value = mock_tracker
 
                 with patch(
@@ -990,9 +961,7 @@ class TestEdgeCases:
                         assert decision.should_retrain is False
 
     @pytest.mark.asyncio
-    async def test_get_status_nonexistent_job(
-        self, retraining_service: RetrainingTriggerService
-    ):
+    async def test_get_status_nonexistent_job(self, retraining_service: RetrainingTriggerService):
         """Test getting status of non-existent job."""
         with patch(
             "src.repositories.drift_monitoring.RetrainingHistoryRepository"
@@ -1023,9 +992,7 @@ class TestEdgeCases:
 class TestTrainingConfig:
     """Tests for training configuration building."""
 
-    def test_build_training_config_data_drift(
-        self, retraining_service: RetrainingTriggerService
-    ):
+    def test_build_training_config_data_drift(self, retraining_service: RetrainingTriggerService):
         """Test training config for data drift trigger."""
         config = retraining_service._build_training_config(
             trigger_reason=TriggerReason.DATA_DRIFT,
@@ -1101,7 +1068,7 @@ class TestRetrainingWorkflow:
             recommended_config={},
         )
 
-        mock_record = MockRetrainingRecord(
+        MockRetrainingRecord(
             id="job-130",
             old_model_version="propensity_v2.1.0",
             new_model_version="propensity_v2.1.0_retrained_20250101",

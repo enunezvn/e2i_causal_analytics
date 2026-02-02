@@ -15,31 +15,31 @@ import pytest
 
 # Group all DSPy tests on same worker to prevent import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.api.routes.chatbot_dspy import (
-    # Intent classification
-    classify_intent_hardcoded,
-    classify_intent_dspy,
-    classify_intent_sync,
-    _normalize_intent,
-    _validate_confidence,
-    _matches_pattern,
-    _is_multi_faceted_query,
+    AGENT_CAPABILITIES,
+    VALID_AGENTS,
+    VALID_INTENTS,
     IntentTrainingSignal,
     IntentTrainingSignalCollector,
-    get_signal_collector,
-    VALID_INTENTS,
-    # Agent routing
-    route_agent_hardcoded,
-    route_agent_dspy,
-    route_agent_sync,
-    _normalize_agent,
     RoutingTrainingSignal,
     RoutingTrainingSignalCollector,
+    _is_multi_faceted_query,
+    _matches_pattern,
+    _normalize_agent,
+    _normalize_intent,
+    _validate_confidence,
+    classify_intent_dspy,
+    # Intent classification
+    classify_intent_hardcoded,
+    classify_intent_sync,
     get_routing_signal_collector,
-    VALID_AGENTS,
-    AGENT_CAPABILITIES,
+    get_signal_collector,
+    route_agent_dspy,
+    # Agent routing
+    route_agent_hardcoded,
+    route_agent_sync,
 )
 from src.api.routes.chatbot_state import IntentType
 
@@ -381,9 +381,7 @@ class TestSyncClassification:
 
     def test_sync_classification(self):
         """Test synchronous classification uses hardcoded fallback."""
-        intent, confidence, reasoning, method = classify_intent_sync(
-            "What is TRx for Kisqali?"
-        )
+        intent, confidence, reasoning, method = classify_intent_sync("What is TRx for Kisqali?")
         assert intent == IntentType.KPI_QUERY
         assert method == "hardcoded"
         assert confidence >= 0.8
@@ -569,9 +567,7 @@ class TestHardcodedRouting:
         assert agent == "causal_impact"
 
         # KPI intent should boost health_score
-        agent, _, _, _ = route_agent_hardcoded(
-            "Show performance data", intent=IntentType.KPI_QUERY
-        )
+        agent, _, _, _ = route_agent_hardcoded("Show performance data", intent=IntentType.KPI_QUERY)
         assert agent == "health_score"
 
         # Recommendation intent should boost gap_analyzer
@@ -782,15 +778,15 @@ class TestAgentCapabilitiesMapping:
 # ============================================================================
 
 from src.api.routes.chatbot_dspy import (
+    CHATBOT_COGNITIVE_RAG_ENABLED,
+    E2I_DOMAIN_VOCABULARY,
     # Cognitive RAG components
     CognitiveRAGResult,
     RAGTrainingSignal,
     RAGTrainingSignalCollector,
+    cognitive_rag_retrieve,
     get_rag_signal_collector,
     rewrite_query_hardcoded,
-    cognitive_rag_retrieve,
-    CHATBOT_COGNITIVE_RAG_ENABLED,
-    E2I_DOMAIN_VOCABULARY,
 )
 
 
@@ -803,9 +799,7 @@ class TestCognitiveRAGResult:
             rewritten_query="TRx metrics for Kisqali Northeast region",
             search_keywords=["trx", "kisqali", "northeast"],
             graph_entities=["Kisqali", "Northeast"],
-            evidence=[
-                {"source_id": "doc1", "content": "TRx is 1000", "score": 0.9}
-            ],
+            evidence=[{"source_id": "doc1", "content": "TRx is 1000", "score": 0.9}],
             hop_count=1,
             avg_relevance_score=0.85,
             retrieval_method="cognitive",
@@ -1111,14 +1105,14 @@ class TestChatbotCognitiveRAGFeatureFlag:
 # =============================================================================
 
 from src.api.routes.chatbot_dspy import (
-    # Phase 6: Evidence Synthesis
-    synthesize_response_hardcoded,
-    synthesize_response_dspy,
+    CHATBOT_DSPY_SYNTHESIS_ENABLED,
+    SynthesisResult,
     SynthesisTrainingSignal,
     SynthesisTrainingSignalCollector,
     get_synthesis_signal_collector,
-    SynthesisResult,
-    CHATBOT_DSPY_SYNTHESIS_ENABLED,
+    synthesize_response_dspy,
+    # Phase 6: Evidence Synthesis
+    synthesize_response_hardcoded,
 )
 
 
@@ -1127,11 +1121,13 @@ class TestHardcodedSynthesis:
 
     def test_synthesis_with_no_evidence(self):
         """Test synthesis when no evidence is available."""
-        response, confidence_statement, citations, follow_ups, level = synthesize_response_hardcoded(
-            query="What is the TRx for Kisqali?",
-            intent="kpi_query",
-            evidence=[],
-            brand_context="Kisqali",
+        response, confidence_statement, citations, follow_ups, level = (
+            synthesize_response_hardcoded(
+                query="What is the TRx for Kisqali?",
+                intent="kpi_query",
+                evidence=[],
+                brand_context="Kisqali",
+            )
         )
 
         assert response is not None
@@ -1153,11 +1149,13 @@ class TestHardcodedSynthesis:
             }
         ]
 
-        response, confidence_statement, citations, follow_ups, level = synthesize_response_hardcoded(
-            query="What is the TRx for Kisqali?",
-            intent="kpi_query",
-            evidence=evidence,
-            brand_context="Kisqali",
+        response, confidence_statement, citations, follow_ups, level = (
+            synthesize_response_hardcoded(
+                query="What is the TRx for Kisqali?",
+                intent="kpi_query",
+                evidence=evidence,
+                brand_context="Kisqali",
+            )
         )
 
         assert response is not None
@@ -1188,11 +1186,13 @@ class TestHardcodedSynthesis:
             },
         ]
 
-        response, confidence_statement, citations, follow_ups, level = synthesize_response_hardcoded(
-            query="What is driving Kisqali TRx growth?",
-            intent="causal_analysis",
-            evidence=evidence,
-            brand_context="Kisqali",
+        response, confidence_statement, citations, follow_ups, level = (
+            synthesize_response_hardcoded(
+                query="What is driving Kisqali TRx growth?",
+                intent="causal_analysis",
+                evidence=evidence,
+                brand_context="Kisqali",
+            )
         )
 
         assert response is not None
@@ -1203,7 +1203,14 @@ class TestHardcodedSynthesis:
 
     def test_synthesis_kpi_query_intent(self):
         """Test synthesis output format for KPI queries."""
-        evidence = [{"source_id": "kpi_src", "content": "TRx is 10,000 units", "relevance_score": 0.9, "source": "kpi"}]
+        evidence = [
+            {
+                "source_id": "kpi_src",
+                "content": "TRx is 10,000 units",
+                "relevance_score": 0.9,
+                "source": "kpi",
+            }
+        ]
 
         response, _, _, follow_ups, _ = synthesize_response_hardcoded(
             query="What is TRx?",
@@ -1211,13 +1218,27 @@ class TestHardcodedSynthesis:
             evidence=evidence,
         )
 
-        assert "metric" in response.lower() or "trend" in response.lower() or "data" in response.lower()
+        assert (
+            "metric" in response.lower()
+            or "trend" in response.lower()
+            or "data" in response.lower()
+        )
         # KPI follow-ups should suggest trend or driver analysis
-        assert any("trend" in f.lower() or "driver" in f.lower() or "period" in f.lower() for f in follow_ups)
+        assert any(
+            "trend" in f.lower() or "driver" in f.lower() or "period" in f.lower()
+            for f in follow_ups
+        )
 
     def test_synthesis_causal_intent(self):
         """Test synthesis output format for causal analysis."""
-        evidence = [{"source_id": "causal_src", "content": "Campaign caused 10% lift", "relevance_score": 0.85, "source": "causal"}]
+        evidence = [
+            {
+                "source_id": "causal_src",
+                "content": "Campaign caused 10% lift",
+                "relevance_score": 0.85,
+                "source": "causal",
+            }
+        ]
 
         response, _, _, follow_ups, _ = synthesize_response_hardcoded(
             query="What caused the increase?",
@@ -1225,13 +1246,30 @@ class TestHardcodedSynthesis:
             evidence=evidence,
         )
 
-        assert "causal" in response.lower() or "factor" in response.lower() or "finding" in response.lower()
+        assert (
+            "causal" in response.lower()
+            or "factor" in response.lower()
+            or "finding" in response.lower()
+        )
         # Causal follow-ups should suggest deeper analysis
-        assert any("driver" in f.lower() or "detail" in f.lower() or "compare" in f.lower() or "segment" in f.lower() for f in follow_ups)
+        assert any(
+            "driver" in f.lower()
+            or "detail" in f.lower()
+            or "compare" in f.lower()
+            or "segment" in f.lower()
+            for f in follow_ups
+        )
 
     def test_synthesis_recommendation_intent(self):
         """Test synthesis output format for recommendations."""
-        evidence = [{"source_id": "rec_src", "content": "Recommend focusing on top HCPs", "relevance_score": 0.75, "source": "rec"}]
+        evidence = [
+            {
+                "source_id": "rec_src",
+                "content": "Recommend focusing on top HCPs",
+                "relevance_score": 0.75,
+                "source": "rec",
+            }
+        ]
 
         response, _, _, follow_ups, _ = synthesize_response_hardcoded(
             query="What should we do?",
@@ -1239,9 +1277,16 @@ class TestHardcodedSynthesis:
             evidence=evidence,
         )
 
-        assert "recommendation" in response.lower() or "insight" in response.lower() or "analysis" in response.lower()
+        assert (
+            "recommendation" in response.lower()
+            or "insight" in response.lower()
+            or "analysis" in response.lower()
+        )
         # Recommendation follow-ups should suggest action items
-        assert any("action" in f.lower() or "prioritize" in f.lower() or "impact" in f.lower() for f in follow_ups)
+        assert any(
+            "action" in f.lower() or "prioritize" in f.lower() or "impact" in f.lower()
+            for f in follow_ups
+        )
 
     def test_synthesis_confidence_levels(self):
         """Test confidence level calculation based on evidence quality."""
@@ -1254,7 +1299,9 @@ class TestHardcodedSynthesis:
         assert level_high == "high"
 
         # Moderate confidence: fewer sources or lower scores
-        mod_evidence = [{"source_id": "m1", "content": "Data", "relevance_score": 0.6, "source": "a"}]
+        mod_evidence = [
+            {"source_id": "m1", "content": "Data", "relevance_score": 0.6, "source": "a"}
+        ]
         _, _, _, _, level_mod = synthesize_response_hardcoded("q", "general", mod_evidence)
         assert level_mod in ["moderate", "low"]
 
@@ -1483,7 +1530,9 @@ class TestAsyncSynthesis:
         collector = get_synthesis_signal_collector()
         initial_count = len(collector.get_signals())
 
-        evidence = [{"source_id": "test", "content": "Test data", "relevance_score": 0.7, "source": "test"}]
+        evidence = [
+            {"source_id": "test", "content": "Test data", "relevance_score": 0.7, "source": "test"}
+        ]
 
         await synthesize_response_dspy(
             query="Test query",
@@ -1496,7 +1545,14 @@ class TestAsyncSynthesis:
 
     async def test_synthesis_dspy_with_conversation_context(self):
         """Test synthesis with conversation context."""
-        evidence = [{"source_id": "src", "content": "Relevant data", "relevance_score": 0.8, "source": "data"}]
+        evidence = [
+            {
+                "source_id": "src",
+                "content": "Relevant data",
+                "relevance_score": 0.8,
+                "source": "data",
+            }
+        ]
 
         result = await synthesize_response_dspy(
             query="And what about the Northeast?",
@@ -1513,8 +1569,18 @@ class TestAsyncSynthesis:
     async def test_synthesis_dspy_follow_up_suggestions(self):
         """Test that synthesis provides follow-up suggestions."""
         evidence = [
-            {"source_id": "src1", "content": "TRx is 10,000 units", "relevance_score": 0.9, "source": "kpi"},
-            {"source_id": "src2", "content": "Growth is 15%", "relevance_score": 0.85, "source": "kpi"},
+            {
+                "source_id": "src1",
+                "content": "TRx is 10,000 units",
+                "relevance_score": 0.9,
+                "source": "kpi",
+            },
+            {
+                "source_id": "src2",
+                "content": "Growth is 15%",
+                "relevance_score": 0.85,
+                "source": "kpi",
+            },
         ]
 
         result = await synthesize_response_dspy(
@@ -1745,7 +1811,7 @@ class TestChatbotSessionSignal:
         assert "satisfaction" in rewards
         assert "overall" in rewards
 
-        for key, value in rewards.items():
+        for _key, value in rewards.items():
             assert 0.0 <= value <= 1.0
 
         # Overall should be weighted average

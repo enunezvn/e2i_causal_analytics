@@ -213,7 +213,8 @@ class TestAddE2IEntity:
         # Create a mock entity type that's not in the mapping
         with patch.dict(E2I_TO_LABEL, {}, clear=True):
             semantic_memory.add_e2i_entity(
-                E2IEntityType.PATIENT, "test_123"  # Will not find mapping
+                E2IEntityType.PATIENT,
+                "test_123",  # Will not find mapping
             )
 
         call_args = mock_graph.query.call_args

@@ -10,7 +10,7 @@ This is a deterministic computation node with no LLM calls.
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -76,15 +76,9 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
                 X_test = pd.DataFrame(X_test, columns=columns)
 
         # Auto-detect column types if not provided
-        temporal_columns = state.get(
-            "temporal_columns", _detect_temporal_columns(X_train)
-        )
-        categorical_columns = state.get(
-            "categorical_columns", _detect_categorical_columns(X_train)
-        )
-        numeric_columns = state.get(
-            "numeric_columns", _detect_numeric_columns(X_train)
-        )
+        temporal_columns = state.get("temporal_columns", _detect_temporal_columns(X_train))
+        categorical_columns = state.get("categorical_columns", _detect_categorical_columns(X_train))
+        numeric_columns = state.get("numeric_columns", _detect_numeric_columns(X_train))
 
         # Track generated features
         generated_features: List[Dict[str, Any]] = []
@@ -163,9 +157,7 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # 4. Generate aggregate features
         if feature_config.get("generate_aggregates", True) and numeric_columns:
-            X_train, aggregate_meta = _generate_aggregate_features(
-                X_train, numeric_columns
-            )
+            X_train, aggregate_meta = _generate_aggregate_features(X_train, numeric_columns)
             feature_metadata["aggregate"] = aggregate_meta
             generated_features.extend(aggregate_meta)
 
@@ -189,9 +181,7 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
         all_features = list(X_train.columns)
         new_features = [f for f in all_features if f not in original_features]
 
-        logger.info(
-            f"Generated {len(new_features)} new features in {computation_time:.2f}s"
-        )
+        logger.info(f"Generated {len(new_features)} new features in {computation_time:.2f}s")
 
         return {
             "X_train_generated": X_train,
@@ -222,8 +212,17 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
 def _detect_temporal_columns(df: pd.DataFrame) -> List[str]:
     """Detect columns suitable for temporal feature generation."""
     temporal_keywords = [
-        "date", "time", "timestamp", "day", "month", "year",
-        "week", "quarter", "period", "created", "updated",
+        "date",
+        "time",
+        "timestamp",
+        "day",
+        "month",
+        "year",
+        "week",
+        "quarter",
+        "period",
+        "created",
+        "updated",
     ]
     temporal_cols = []
 
@@ -263,8 +262,8 @@ def _detect_numeric_columns(df: pd.DataFrame) -> List[str]:
 def _generate_temporal_features(
     df: pd.DataFrame,
     temporal_columns: List[str],
-    lag_periods: List[int] = [1, 7, 30],
-    rolling_windows: List[int] = [7, 30],
+    lag_periods: List[int] = None,
+    rolling_windows: List[int] = None,
 ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """Generate temporal features from time-series columns.
 
@@ -282,6 +281,10 @@ def _generate_temporal_features(
     Returns:
         Tuple of (transformed DataFrame, feature metadata list)
     """
+    if rolling_windows is None:
+        rolling_windows = [7, 30]
+    if lag_periods is None:
+        lag_periods = [1, 7, 30]
     df = df.copy()
     metadata = []
 
@@ -294,42 +297,50 @@ def _generate_temporal_features(
             # Day of week (0=Monday, 6=Sunday)
             new_col = f"{col}_dayofweek"
             df[new_col] = df[col].dt.dayofweek
-            metadata.append({
-                "name": new_col,
-                "source": col,
-                "type": TEMPORAL_FEATURES,
-                "transformation": "dayofweek",
-            })
+            metadata.append(
+                {
+                    "name": new_col,
+                    "source": col,
+                    "type": TEMPORAL_FEATURES,
+                    "transformation": "dayofweek",
+                }
+            )
 
             # Month
             new_col = f"{col}_month"
             df[new_col] = df[col].dt.month
-            metadata.append({
-                "name": new_col,
-                "source": col,
-                "type": TEMPORAL_FEATURES,
-                "transformation": "month",
-            })
+            metadata.append(
+                {
+                    "name": new_col,
+                    "source": col,
+                    "type": TEMPORAL_FEATURES,
+                    "transformation": "month",
+                }
+            )
 
             # Quarter
             new_col = f"{col}_quarter"
             df[new_col] = df[col].dt.quarter
-            metadata.append({
-                "name": new_col,
-                "source": col,
-                "type": TEMPORAL_FEATURES,
-                "transformation": "quarter",
-            })
+            metadata.append(
+                {
+                    "name": new_col,
+                    "source": col,
+                    "type": TEMPORAL_FEATURES,
+                    "transformation": "quarter",
+                }
+            )
 
             # Is weekend
             new_col = f"{col}_is_weekend"
             df[new_col] = (df[col].dt.dayofweek >= 5).astype(int)
-            metadata.append({
-                "name": new_col,
-                "source": col,
-                "type": TEMPORAL_FEATURES,
-                "transformation": "is_weekend",
-            })
+            metadata.append(
+                {
+                    "name": new_col,
+                    "source": col,
+                    "type": TEMPORAL_FEATURES,
+                    "transformation": "is_weekend",
+                }
+            )
 
         # Handle numeric columns - create lags and rolling stats
         elif pd.api.types.is_numeric_dtype(df[col]):
@@ -337,37 +348,43 @@ def _generate_temporal_features(
             for lag in lag_periods:
                 new_col = f"{col}_lag_{lag}"
                 df[new_col] = df[col].shift(lag)
-                metadata.append({
-                    "name": new_col,
-                    "source": col,
-                    "type": TEMPORAL_FEATURES,
-                    "transformation": f"lag_{lag}",
-                    "lag_period": lag,
-                })
+                metadata.append(
+                    {
+                        "name": new_col,
+                        "source": col,
+                        "type": TEMPORAL_FEATURES,
+                        "transformation": f"lag_{lag}",
+                        "lag_period": lag,
+                    }
+                )
 
             # Rolling statistics
             for window in rolling_windows:
                 # Rolling mean
                 new_col = f"{col}_rolling_mean_{window}"
                 df[new_col] = df[col].rolling(window=window, min_periods=1).mean()
-                metadata.append({
-                    "name": new_col,
-                    "source": col,
-                    "type": TEMPORAL_FEATURES,
-                    "transformation": f"rolling_mean_{window}",
-                    "window_size": window,
-                })
+                metadata.append(
+                    {
+                        "name": new_col,
+                        "source": col,
+                        "type": TEMPORAL_FEATURES,
+                        "transformation": f"rolling_mean_{window}",
+                        "window_size": window,
+                    }
+                )
 
                 # Rolling std
                 new_col = f"{col}_rolling_std_{window}"
                 df[new_col] = df[col].rolling(window=window, min_periods=1).std()
-                metadata.append({
-                    "name": new_col,
-                    "source": col,
-                    "type": TEMPORAL_FEATURES,
-                    "transformation": f"rolling_std_{window}",
-                    "window_size": window,
-                })
+                metadata.append(
+                    {
+                        "name": new_col,
+                        "source": col,
+                        "type": TEMPORAL_FEATURES,
+                        "transformation": f"rolling_std_{window}",
+                        "window_size": window,
+                    }
+                )
 
     return df, metadata
 
@@ -402,18 +419,20 @@ def _generate_interaction_features(
     for i, col1 in enumerate(cat_cols):
         if interaction_count >= max_interactions:
             break
-        for col2 in cat_cols[i + 1:]:
+        for col2 in cat_cols[i + 1 :]:
             if interaction_count >= max_interactions:
                 break
 
             new_col = f"{col1}_x_{col2}"
             df[new_col] = df[col1].astype(str) + "_" + df[col2].astype(str)
-            metadata.append({
-                "name": new_col,
-                "sources": [col1, col2],
-                "type": INTERACTION_FEATURES,
-                "transformation": "categorical_cross",
-            })
+            metadata.append(
+                {
+                    "name": new_col,
+                    "sources": [col1, col2],
+                    "type": INTERACTION_FEATURES,
+                    "transformation": "categorical_cross",
+                }
+            )
             interaction_count += 1
 
     # Numeric x Numeric interactions (top pairs by correlation)
@@ -423,31 +442,35 @@ def _generate_interaction_features(
         for i, col1 in enumerate(num_cols[:5]):  # Limit to top 5 numeric cols
             if interaction_count >= max_interactions:
                 break
-            for col2 in num_cols[i + 1:6]:  # Limit pairs
+            for col2 in num_cols[i + 1 : 6]:  # Limit pairs
                 if interaction_count >= max_interactions:
                     break
 
                 # Product interaction
                 new_col = f"{col1}_times_{col2}"
                 df[new_col] = df[col1] * df[col2]
-                metadata.append({
-                    "name": new_col,
-                    "sources": [col1, col2],
-                    "type": INTERACTION_FEATURES,
-                    "transformation": "product",
-                })
+                metadata.append(
+                    {
+                        "name": new_col,
+                        "sources": [col1, col2],
+                        "type": INTERACTION_FEATURES,
+                        "transformation": "product",
+                    }
+                )
                 interaction_count += 1
 
                 # Ratio interaction (with zero handling)
                 if interaction_count < max_interactions:
                     new_col = f"{col1}_div_{col2}"
                     df[new_col] = df[col1] / (df[col2].replace(0, np.nan))
-                    metadata.append({
-                        "name": new_col,
-                        "sources": [col1, col2],
-                        "type": INTERACTION_FEATURES,
-                        "transformation": "ratio",
-                    })
+                    metadata.append(
+                        {
+                            "name": new_col,
+                            "sources": [col1, col2],
+                            "type": INTERACTION_FEATURES,
+                            "transformation": "ratio",
+                        }
+                    )
                     interaction_count += 1
 
     return df, metadata
@@ -481,24 +504,28 @@ def _generate_domain_features(
     if trx_col and nrx_col and trx_col in df.columns and nrx_col in df.columns:
         new_col = "trx_nrx_ratio"
         df[new_col] = df[trx_col] / (df[nrx_col].replace(0, np.nan))
-        metadata.append({
-            "name": new_col,
-            "sources": [trx_col, nrx_col],
-            "type": DOMAIN_FEATURES,
-            "transformation": "trx_nrx_ratio",
-            "domain": "pharma_kpi",
-        })
+        metadata.append(
+            {
+                "name": new_col,
+                "sources": [trx_col, nrx_col],
+                "type": DOMAIN_FEATURES,
+                "transformation": "trx_nrx_ratio",
+                "domain": "pharma_kpi",
+            }
+        )
 
         # Refill rate proxy
         new_col = "refill_rate"
         df[new_col] = (df[trx_col] - df[nrx_col]) / (df[trx_col].replace(0, np.nan))
-        metadata.append({
-            "name": new_col,
-            "sources": [trx_col, nrx_col],
-            "type": DOMAIN_FEATURES,
-            "transformation": "refill_rate",
-            "domain": "pharma_kpi",
-        })
+        metadata.append(
+            {
+                "name": new_col,
+                "sources": [trx_col, nrx_col],
+                "type": DOMAIN_FEATURES,
+                "transformation": "refill_rate",
+                "domain": "pharma_kpi",
+            }
+        )
 
     # Market share (if market_share or share column exists)
     share_col = columns_lower.get("market_share") or columns_lower.get("share")
@@ -506,13 +533,15 @@ def _generate_domain_features(
         # Share momentum (change)
         new_col = f"{share_col}_momentum"
         df[new_col] = df[share_col].diff()
-        metadata.append({
-            "name": new_col,
-            "source": share_col,
-            "type": DOMAIN_FEATURES,
-            "transformation": "momentum",
-            "domain": "market",
-        })
+        metadata.append(
+            {
+                "name": new_col,
+                "source": share_col,
+                "type": DOMAIN_FEATURES,
+                "transformation": "momentum",
+                "domain": "market",
+            }
+        )
 
     # Conversion rate (if visits and conversions exist)
     visits_col = columns_lower.get("visits") or columns_lower.get("hcp_visits")
@@ -522,17 +551,20 @@ def _generate_domain_features(
         if visits_col in df.columns and conversions_col in df.columns:
             new_col = "conversion_rate"
             df[new_col] = df[conversions_col] / (df[visits_col].replace(0, np.nan))
-            metadata.append({
-                "name": new_col,
-                "sources": [visits_col, conversions_col],
-                "type": DOMAIN_FEATURES,
-                "transformation": "conversion_rate",
-                "domain": "sales",
-            })
+            metadata.append(
+                {
+                    "name": new_col,
+                    "sources": [visits_col, conversions_col],
+                    "type": DOMAIN_FEATURES,
+                    "transformation": "conversion_rate",
+                    "domain": "sales",
+                }
+            )
 
     # HCP engagement score (if activity columns exist)
     activity_cols = [
-        c for c in df.columns
+        c
+        for c in df.columns
         if any(kw in c.lower() for kw in ["call", "email", "sample", "activity"])
     ]
     if len(activity_cols) >= 2:
@@ -542,13 +574,15 @@ def _generate_domain_features(
         df[new_col] = (engagement_sum - engagement_sum.min()) / (
             engagement_sum.max() - engagement_sum.min() + 1e-10
         )
-        metadata.append({
-            "name": new_col,
-            "sources": activity_cols,
-            "type": DOMAIN_FEATURES,
-            "transformation": "engagement_score",
-            "domain": "hcp",
-        })
+        metadata.append(
+            {
+                "name": new_col,
+                "sources": activity_cols,
+                "type": DOMAIN_FEATURES,
+                "transformation": "engagement_score",
+                "domain": "hcp",
+            }
+        )
 
     return df, metadata
 
@@ -580,42 +614,50 @@ def _generate_aggregate_features(
     # Row-wise mean
     new_col = "numeric_mean"
     df[new_col] = df[num_cols].mean(axis=1)
-    metadata.append({
-        "name": new_col,
-        "sources": num_cols,
-        "type": AGGREGATE_FEATURES,
-        "transformation": "row_mean",
-    })
+    metadata.append(
+        {
+            "name": new_col,
+            "sources": num_cols,
+            "type": AGGREGATE_FEATURES,
+            "transformation": "row_mean",
+        }
+    )
 
     # Row-wise std
     new_col = "numeric_std"
     df[new_col] = df[num_cols].std(axis=1)
-    metadata.append({
-        "name": new_col,
-        "sources": num_cols,
-        "type": AGGREGATE_FEATURES,
-        "transformation": "row_std",
-    })
+    metadata.append(
+        {
+            "name": new_col,
+            "sources": num_cols,
+            "type": AGGREGATE_FEATURES,
+            "transformation": "row_std",
+        }
+    )
 
     # Row-wise max
     new_col = "numeric_max"
     df[new_col] = df[num_cols].max(axis=1)
-    metadata.append({
-        "name": new_col,
-        "sources": num_cols,
-        "type": AGGREGATE_FEATURES,
-        "transformation": "row_max",
-    })
+    metadata.append(
+        {
+            "name": new_col,
+            "sources": num_cols,
+            "type": AGGREGATE_FEATURES,
+            "transformation": "row_max",
+        }
+    )
 
     # Row-wise range
     new_col = "numeric_range"
     df[new_col] = df[num_cols].max(axis=1) - df[num_cols].min(axis=1)
-    metadata.append({
-        "name": new_col,
-        "sources": num_cols,
-        "type": AGGREGATE_FEATURES,
-        "transformation": "row_range",
-    })
+    metadata.append(
+        {
+            "name": new_col,
+            "sources": num_cols,
+            "type": AGGREGATE_FEATURES,
+            "transformation": "row_range",
+        }
+    )
 
     return df, metadata
 

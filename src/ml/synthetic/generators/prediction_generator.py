@@ -4,13 +4,13 @@ ML Prediction Generator.
 Generates synthetic ML predictions for patient journeys.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 
-from .base import BaseGenerator, GeneratorConfig
 from ..config import Brand
+from .base import BaseGenerator, GeneratorConfig
 
 
 class PredictionGenerator(BaseGenerator[pd.DataFrame]):
@@ -100,7 +100,7 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
 
         # Adjust based on patient engagement and severity
         engagement_score = patient.get("engagement_score", 5.0)
-        disease_severity = patient.get("disease_severity", 5.0)
+        patient.get("disease_severity", 5.0)
 
         # Higher engagement improves positive predictions
         if prediction_type in ["propensity", "risk", "trigger"]:
@@ -165,8 +165,7 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
 
         # Model versions
         model_versions = [
-            f"v{self._rng.integers(1, 5)}.{self._rng.integers(0, 10)}"
-            for _ in range(n)
+            f"v{self._rng.integers(1, 5)}.{self._rng.integers(0, 10)}" for _ in range(n)
         ]
 
         # Dates and brands
@@ -176,15 +175,17 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
         else:
             brands = self._random_choice([b.value for b in Brand], n)
 
-        return pd.DataFrame({
-            "patient_journey_id": journey_ids,
-            "patient_id": patient_ids,
-            "hcp_id": self._random_choice(hcp_ids, n).tolist(),
-            "brand": brands,
-            "prediction_type": prediction_types,
-            "prediction_value": prediction_values,
-            "confidence_score": np.round(confidences, 3),
-            "uncertainty": np.round(uncertainties, 3),
-            "model_version": model_versions,
-            "prediction_date": prediction_dates,
-        })
+        return pd.DataFrame(
+            {
+                "patient_journey_id": journey_ids,
+                "patient_id": patient_ids,
+                "hcp_id": self._random_choice(hcp_ids, n).tolist(),
+                "brand": brands,
+                "prediction_type": prediction_types,
+                "prediction_value": prediction_values,
+                "confidence_score": np.round(confidences, 3),
+                "uncertainty": np.round(uncertainties, 3),
+                "model_version": model_versions,
+                "prediction_date": prediction_dates,
+            }
+        )

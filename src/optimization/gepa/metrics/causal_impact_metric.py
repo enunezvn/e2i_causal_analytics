@@ -11,11 +11,11 @@ The metric optimizes for:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 from dspy import Example, Prediction
 
-from src.optimization.gepa.metrics.base import DSPyTrace, ScoreWithFeedback
+from src.optimization.gepa.metrics.base import DSPyTrace
 
 
 @dataclass
@@ -182,7 +182,10 @@ class CausalImpactGEPAMetric:
         elif e_value >= 2:
             return 0.8, f"Good robustness (E-value={e_value:.2f} ≥ 2.0)"
         elif e_value >= 1.5:
-            return 0.5, f"MARGINAL (E-value={e_value:.2f}). Increase sample or use stronger instruments"
+            return (
+                0.5,
+                f"MARGINAL (E-value={e_value:.2f}). Increase sample or use stronger instruments",
+            )
         else:
             return 0.2, f"WEAK (E-value={e_value:.2f} < 1.5). High risk of unobserved confounding"
 

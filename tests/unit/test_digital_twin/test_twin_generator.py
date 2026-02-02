@@ -10,10 +10,6 @@ Tests cover:
 - Model metrics
 """
 
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch
-from uuid import UUID
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -26,7 +22,6 @@ from src.digital_twin.models.twin_models import (
 )
 from src.digital_twin.twin_generator import TwinGenerator
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -38,26 +33,28 @@ def hcp_training_data() -> pd.DataFrame:
     np.random.seed(42)
     n = 1500
 
-    return pd.DataFrame({
-        "specialty": np.random.choice(["rheumatology", "dermatology", "allergy"], n),
-        "years_experience": np.random.randint(1, 40, n),
-        "practice_type": np.random.choice(["academic", "community", "private"], n),
-        "practice_size": np.random.choice(["solo", "small", "medium", "large"], n),
-        "region": np.random.choice(["northeast", "south", "midwest", "west"], n),
-        "decile": np.random.randint(1, 11, n),
-        "priority_tier": np.random.randint(1, 6, n),
-        "total_patient_volume": np.random.randint(100, 10000, n),
-        "target_patient_volume": np.random.randint(10, 1000, n),
-        "digital_engagement_score": np.random.uniform(0, 1, n),
-        "preferred_channel": np.random.choice(["email", "phone", "in_person"], n),
-        "last_interaction_days": np.random.randint(0, 365, n),
-        "interaction_frequency": np.random.uniform(0, 10, n),
-        "adoption_stage": np.random.choice(
-            ["innovator", "early_adopter", "early_majority", "late_majority", "laggard"], n
-        ),
-        "peer_influence_score": np.random.uniform(0, 1, n),
-        "prescribing_change": np.random.uniform(-0.2, 0.3, n),  # Target
-    })
+    return pd.DataFrame(
+        {
+            "specialty": np.random.choice(["rheumatology", "dermatology", "allergy"], n),
+            "years_experience": np.random.randint(1, 40, n),
+            "practice_type": np.random.choice(["academic", "community", "private"], n),
+            "practice_size": np.random.choice(["solo", "small", "medium", "large"], n),
+            "region": np.random.choice(["northeast", "south", "midwest", "west"], n),
+            "decile": np.random.randint(1, 11, n),
+            "priority_tier": np.random.randint(1, 6, n),
+            "total_patient_volume": np.random.randint(100, 10000, n),
+            "target_patient_volume": np.random.randint(10, 1000, n),
+            "digital_engagement_score": np.random.uniform(0, 1, n),
+            "preferred_channel": np.random.choice(["email", "phone", "in_person"], n),
+            "last_interaction_days": np.random.randint(0, 365, n),
+            "interaction_frequency": np.random.uniform(0, 10, n),
+            "adoption_stage": np.random.choice(
+                ["innovator", "early_adopter", "early_majority", "late_majority", "laggard"], n
+            ),
+            "peer_influence_score": np.random.uniform(0, 1, n),
+            "prescribing_change": np.random.uniform(-0.2, 0.3, n),  # Target
+        }
+    )
 
 
 @pytest.fixture
@@ -66,22 +63,24 @@ def patient_training_data() -> pd.DataFrame:
     np.random.seed(42)
     n = 1500
 
-    return pd.DataFrame({
-        "age_group": np.random.choice(["18-34", "35-44", "45-54", "55-64", "65+"], n),
-        "gender": np.random.choice(["male", "female"], n),
-        "geographic_region": np.random.choice(["northeast", "south", "midwest", "west"], n),
-        "socioeconomic_index": np.random.uniform(0, 1, n),
-        "primary_diagnosis_code": np.random.choice(["L40.0", "L40.1", "L40.2"], n),
-        "comorbidity_count": np.random.randint(0, 5, n),
-        "risk_score": np.random.uniform(0, 1, n),
-        "journey_complexity_score": np.random.uniform(0, 1, n),
-        "insurance_type": np.random.choice(["commercial", "medicare", "medicaid"], n),
-        "insurance_coverage_flag": np.random.choice([True, False], n),
-        "journey_stage": np.random.choice(["diagnosis", "treatment", "maintenance"], n),
-        "journey_duration_days": np.random.randint(1, 1000, n),
-        "treatment_line": np.random.randint(1, 4, n),
-        "adherence_rate": np.random.uniform(0.3, 1.0, n),  # Target
-    })
+    return pd.DataFrame(
+        {
+            "age_group": np.random.choice(["18-34", "35-44", "45-54", "55-64", "65+"], n),
+            "gender": np.random.choice(["male", "female"], n),
+            "geographic_region": np.random.choice(["northeast", "south", "midwest", "west"], n),
+            "socioeconomic_index": np.random.uniform(0, 1, n),
+            "primary_diagnosis_code": np.random.choice(["L40.0", "L40.1", "L40.2"], n),
+            "comorbidity_count": np.random.randint(0, 5, n),
+            "risk_score": np.random.uniform(0, 1, n),
+            "journey_complexity_score": np.random.uniform(0, 1, n),
+            "insurance_type": np.random.choice(["commercial", "medicare", "medicaid"], n),
+            "insurance_coverage_flag": np.random.choice([True, False], n),
+            "journey_stage": np.random.choice(["diagnosis", "treatment", "maintenance"], n),
+            "journey_duration_days": np.random.randint(1, 1000, n),
+            "treatment_line": np.random.randint(1, 4, n),
+            "adherence_rate": np.random.uniform(0.3, 1.0, n),  # Target
+        }
+    )
 
 
 @pytest.fixture
@@ -90,19 +89,21 @@ def territory_training_data() -> pd.DataFrame:
     np.random.seed(42)
     n = 1500
 
-    return pd.DataFrame({
-        "region": np.random.choice(["northeast", "south", "midwest", "west"], n),
-        "state_count": np.random.randint(1, 10, n),
-        "zip_count": np.random.randint(10, 500, n),
-        "total_hcps": np.random.randint(50, 2000, n),
-        "covered_hcps": np.random.randint(30, 1500, n),
-        "coverage_rate": np.random.uniform(0.4, 1.0, n),
-        "total_patient_volume": np.random.randint(1000, 100000, n),
-        "market_share": np.random.uniform(0.05, 0.50, n),
-        "growth_rate": np.random.uniform(-0.1, 0.2, n),
-        "competitor_presence": np.random.uniform(0.2, 0.8, n),
-        "territory_performance": np.random.uniform(-0.2, 0.3, n),  # Target
-    })
+    return pd.DataFrame(
+        {
+            "region": np.random.choice(["northeast", "south", "midwest", "west"], n),
+            "state_count": np.random.randint(1, 10, n),
+            "zip_count": np.random.randint(10, 500, n),
+            "total_hcps": np.random.randint(50, 2000, n),
+            "covered_hcps": np.random.randint(30, 1500, n),
+            "coverage_rate": np.random.uniform(0.4, 1.0, n),
+            "total_patient_volume": np.random.randint(1000, 100000, n),
+            "market_share": np.random.uniform(0.05, 0.50, n),
+            "growth_rate": np.random.uniform(-0.1, 0.2, n),
+            "competitor_presence": np.random.uniform(0.2, 0.8, n),
+            "territory_performance": np.random.uniform(-0.2, 0.3, n),  # Target
+        }
+    )
 
 
 @pytest.fixture
@@ -111,11 +112,13 @@ def small_training_data() -> pd.DataFrame:
     np.random.seed(42)
     n = 500  # Below minimum
 
-    return pd.DataFrame({
-        "specialty": np.random.choice(["rheumatology", "dermatology"], n),
-        "decile": np.random.randint(1, 11, n),
-        "prescribing_change": np.random.uniform(-0.2, 0.3, n),
-    })
+    return pd.DataFrame(
+        {
+            "specialty": np.random.choice(["rheumatology", "dermatology"], n),
+            "decile": np.random.randint(1, 11, n),
+            "prescribing_change": np.random.uniform(-0.2, 0.3, n),
+        }
+    )
 
 
 @pytest.fixture
@@ -234,7 +237,7 @@ class TestTwinGeneratorTraining:
         """Test training with custom feature columns."""
         custom_features = ["specialty", "decile", "digital_engagement_score"]
 
-        metrics = hcp_generator.train(
+        hcp_generator.train(
             data=hcp_training_data,
             target_col="prescribing_change",
             feature_cols=custom_features,
@@ -469,12 +472,14 @@ class TestEdgeCases:
         n = 1500
 
         # Data with only some expected features
-        data = pd.DataFrame({
-            "specialty": np.random.choice(["rheumatology", "dermatology"], n),
-            "decile": np.random.randint(1, 11, n),
-            # Missing many expected HCP features
-            "prescribing_change": np.random.uniform(-0.2, 0.3, n),
-        })
+        data = pd.DataFrame(
+            {
+                "specialty": np.random.choice(["rheumatology", "dermatology"], n),
+                "decile": np.random.randint(1, 11, n),
+                # Missing many expected HCP features
+                "prescribing_change": np.random.uniform(-0.2, 0.3, n),
+            }
+        )
 
         # Should train with available features, warning about missing ones
         metrics = hcp_generator.train(data=data, target_col="prescribing_change")
@@ -588,8 +593,8 @@ class TestDataLeakagePrevention:
         )
 
         # Record training data statistics
-        training_mean = hcp_training_data["digital_engagement_score"].mean()
-        training_std = hcp_training_data["digital_engagement_score"].std()
+        hcp_training_data["digital_engagement_score"].mean()
+        hcp_training_data["digital_engagement_score"].std()
 
         generator.train(data=hcp_training_data, target_col="prescribing_change")
 
@@ -603,8 +608,7 @@ class TestDataLeakagePrevention:
         population = generator.generate(n=500, seed=42)
 
         engagement_scores = [
-            t.features.get("digital_engagement_score", 0.5)
-            for t in population.twins
+            t.features.get("digital_engagement_score", 0.5) for t in population.twins
         ]
 
         # Generated engagement should have similar range to training
@@ -613,7 +617,6 @@ class TestDataLeakagePrevention:
 
     def test_no_future_information_in_features(self, hcp_training_data):
         """Test that no future information leaks into twin generation."""
-        import warnings
 
         generator = TwinGenerator(
             twin_type=TwinType.HCP,
@@ -720,7 +723,7 @@ class TestDataLeakagePrevention:
         propensities1 = [t.baseline_propensity for t in population1.twins]
         propensities2 = [t.baseline_propensity for t in population2.twins]
 
-        for p1, p2 in zip(propensities1, propensities2):
+        for p1, p2 in zip(propensities1, propensities2, strict=False):
             assert abs(p1 - p2) < 0.001
 
     def test_different_seeds_produce_different_twins(self, hcp_training_data):

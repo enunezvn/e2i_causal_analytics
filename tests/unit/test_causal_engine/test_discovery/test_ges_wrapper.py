@@ -4,10 +4,11 @@ Version: 1.0.0
 Tests the GES algorithm wrapper for score-based causal discovery.
 """
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock, patch
 
 from src.causal_engine.discovery.algorithms.ges_wrapper import GESAlgorithm
 from src.causal_engine.discovery.base import (
@@ -15,7 +16,6 @@ from src.causal_engine.discovery.base import (
     DiscoveryAlgorithmType,
     DiscoveryConfig,
 )
-
 
 # =============================================================================
 # GESAlgorithm Basic Properties Tests
@@ -217,11 +217,9 @@ class TestGESErrorHandling:
 
         # Force the import to fail by making causallearn unavailable
         import sys
+
         original_modules = {}
-        modules_to_remove = [
-            k for k in sys.modules.keys()
-            if k.startswith("causallearn")
-        ]
+        modules_to_remove = [k for k in sys.modules.keys() if k.startswith("causallearn")]
         for mod in modules_to_remove:
             original_modules[mod] = sys.modules.pop(mod)
 
@@ -236,9 +234,12 @@ class TestGESErrorHandling:
                 ges.discover(df, config)
         finally:
             # Restore original modules
-            for mod in ["causallearn", "causallearn.search",
-                       "causallearn.search.ScoreBased",
-                       "causallearn.search.ScoreBased.GES"]:
+            for mod in [
+                "causallearn",
+                "causallearn.search",
+                "causallearn.search.ScoreBased",
+                "causallearn.search.ScoreBased.GES",
+            ]:
                 sys.modules.pop(mod, None)
             sys.modules.update(original_modules)
 
@@ -260,11 +261,13 @@ class TestGESAdjacencyConversion:
         """Test adjacency matrix has correct shape."""
         mock_graph = MagicMock()
         # 3x3 graph with one directed edge (0 -> 1)
-        mock_graph.graph = np.array([
-            [0, -1, 0],  # Row 0: tail at 1
-            [1, 0, 0],   # Row 1: arrow at 0
-            [0, 0, 0],   # Row 2
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],  # Row 0: tail at 1
+                [1, 0, 0],  # Row 1: arrow at 0
+                [0, 0, 0],  # Row 2
+            ]
+        )
 
         adj = ges._graph_to_adjacency(mock_graph, 3)
 
@@ -276,11 +279,13 @@ class TestGESAdjacencyConversion:
         # Directed edge 0 -> 1:
         # - graph[0,1] = -1 (tail at node 0)
         # - graph[1,0] = 1 (arrow at node 1)
-        mock_graph.graph = np.array([
-            [0, -1, 0],
-            [1, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],
+                [1, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj = ges._graph_to_adjacency(mock_graph, 3)
 
@@ -291,11 +296,13 @@ class TestGESAdjacencyConversion:
         """Test detection of undirected edges in CPDAG."""
         mock_graph = MagicMock()
         # Undirected edge 0 - 1: tails at both ends
-        mock_graph.graph = np.array([
-            [0, -1, 0],
-            [-1, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],
+                [-1, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj = ges._graph_to_adjacency(mock_graph, 3)
 
@@ -306,11 +313,13 @@ class TestGESAdjacencyConversion:
     def test_empty_graph_returns_zeros(self, ges):
         """Test empty graph returns zero adjacency matrix."""
         mock_graph = MagicMock()
-        mock_graph.graph = np.array([
-            [0, 0, 0],
-            [0, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj = ges._graph_to_adjacency(mock_graph, 3)
 

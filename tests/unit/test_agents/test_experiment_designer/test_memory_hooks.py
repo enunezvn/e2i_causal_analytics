@@ -5,20 +5,20 @@ Tests the 4-Memory Architecture integration for experiment design:
 - Episodic Memory: Storing design history for learning
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.agents.experiment_designer.memory_hooks import (
     ExperimentDesignContext,
+    ExperimentDesignerMemoryHooks,
     ExperimentDesignRecord,
     ValidityThreatRecord,
-    ExperimentDesignerMemoryHooks,
     contribute_to_memory,
     get_experiment_designer_memory_hooks,
     reset_memory_hooks,
 )
-
 
 # ============================================================================
 # Test Data Structures
@@ -562,7 +562,11 @@ class TestContributeToMemory:
             "validity_confidence": "high",
             "validity_threats": [
                 {"threat_type": "internal", "threat_name": "Attrition", "severity": "low"},
-                {"threat_type": "external", "threat_name": "Generalizability", "severity": "medium"},
+                {
+                    "threat_type": "external",
+                    "threat_name": "Generalizability",
+                    "severity": "medium",
+                },
             ],
             "power_analysis": {
                 "required_sample_size": 500,
@@ -580,9 +584,7 @@ class TestContributeToMemory:
             "constraints": {"power": 0.80},
         }
 
-        counts = await contribute_to_memory(
-            result, state, "test-session", brand="Remibrutinib"
-        )
+        counts = await contribute_to_memory(result, state, "test-session", brand="Remibrutinib")
 
         assert counts["working"] == 2  # Session + question caches
         assert counts["episodic"] >= 1  # Design record + threats

@@ -160,18 +160,10 @@ class TestDiscoveryFeedbackNode:
     async def test_accuracy_calculation(self, node_low_threshold):
         """Node should correctly calculate accuracy metrics."""
         items = [
-            create_discovery_feedback(
-                algorithm="pc", user_decision="accept", accuracy_score=0.9
-            ),
-            create_discovery_feedback(
-                algorithm="pc", user_decision="accept", accuracy_score=0.8
-            ),
-            create_discovery_feedback(
-                algorithm="pc", user_decision="modify", accuracy_score=0.7
-            ),
-            create_discovery_feedback(
-                algorithm="pc", user_decision="reject", accuracy_score=0.5
-            ),
+            create_discovery_feedback(algorithm="pc", user_decision="accept", accuracy_score=0.9),
+            create_discovery_feedback(algorithm="pc", user_decision="accept", accuracy_score=0.8),
+            create_discovery_feedback(algorithm="pc", user_decision="modify", accuracy_score=0.7),
+            create_discovery_feedback(algorithm="pc", user_decision="reject", accuracy_score=0.5),
         ]
         state = create_state_with_discovery_feedback(items)
 
@@ -214,14 +206,10 @@ class TestDiscoveryFeedbackNode:
         """High rejection rate should trigger recommendations."""
         # Create 10 items with 5 rejected (50% rejection rate)
         items = [
-            create_discovery_feedback(
-                algorithm="pc", user_decision="reject", accuracy_score=0.4
-            )
+            create_discovery_feedback(algorithm="pc", user_decision="reject", accuracy_score=0.4)
             for _ in range(5)
         ] + [
-            create_discovery_feedback(
-                algorithm="pc", user_decision="accept", accuracy_score=0.6
-            )
+            create_discovery_feedback(algorithm="pc", user_decision="accept", accuracy_score=0.6)
             for _ in range(5)
         ]
         state = create_state_with_discovery_feedback(items)
@@ -238,9 +226,7 @@ class TestDiscoveryFeedbackNode:
     async def test_no_recommendation_for_good_accuracy(self, node_low_threshold):
         """Good accuracy should not trigger recommendations."""
         items = [
-            create_discovery_feedback(
-                algorithm="pc", user_decision="accept", accuracy_score=0.9
-            )
+            create_discovery_feedback(algorithm="pc", user_decision="accept", accuracy_score=0.9)
             for _ in range(10)
         ]
         state = create_state_with_discovery_feedback(items)
@@ -255,9 +241,7 @@ class TestDiscoveryFeedbackNode:
         """Should require minimum runs before recommending."""
         # Create only 5 items (below default threshold of 10)
         items = [
-            create_discovery_feedback(
-                algorithm="pc", user_decision="reject", accuracy_score=0.3
-            )
+            create_discovery_feedback(algorithm="pc", user_decision="reject", accuracy_score=0.3)
             for _ in range(5)
         ]
         state = create_state_with_discovery_feedback(items)
@@ -272,14 +256,10 @@ class TestDiscoveryFeedbackNode:
     async def test_low_acceptance_pattern_detected(self, node_low_threshold):
         """Low acceptance rate should be detected as pattern."""
         items = [
-            create_discovery_feedback(
-                algorithm="pc", user_decision="reject", accuracy_score=0.3
-            )
+            create_discovery_feedback(algorithm="pc", user_decision="reject", accuracy_score=0.3)
             for _ in range(8)
         ] + [
-            create_discovery_feedback(
-                algorithm="pc", user_decision="accept", accuracy_score=0.8
-            )
+            create_discovery_feedback(algorithm="pc", user_decision="accept", accuracy_score=0.8)
             for _ in range(2)
         ]
         state = create_state_with_discovery_feedback(items)
@@ -287,9 +267,7 @@ class TestDiscoveryFeedbackNode:
         result = await node_low_threshold.execute(state)
 
         patterns = result.get("detected_patterns")
-        accuracy_patterns = [
-            p for p in patterns if p["pattern_type"] == "accuracy_issue"
-        ]
+        accuracy_patterns = [p for p in patterns if p["pattern_type"] == "accuracy_issue"]
         assert len(accuracy_patterns) >= 1
         assert "pc" in accuracy_patterns[0]["description"]
 
@@ -317,8 +295,7 @@ class TestDiscoveryFeedbackNode:
         ]
         # Add some normal items
         normal_items = [
-            create_discovery_feedback(algorithm="pc", user_decision="accept")
-            for _ in range(4)
+            create_discovery_feedback(algorithm="pc", user_decision="accept") for _ in range(4)
         ]
         items = override_items + normal_items
         state = create_state_with_discovery_feedback(items)
@@ -326,9 +303,7 @@ class TestDiscoveryFeedbackNode:
         result = await node_low_threshold.execute(state)
 
         patterns = result.get("detected_patterns")
-        coverage_patterns = [
-            p for p in patterns if p["pattern_type"] == "coverage_gap"
-        ]
+        coverage_patterns = [p for p in patterns if p["pattern_type"] == "coverage_gap"]
         # 6/10 = 60% override rate > 20% threshold
         assert len(coverage_patterns) >= 1
 
@@ -338,9 +313,7 @@ class TestDiscoveryFeedbackNode:
         """Node should handle errors gracefully."""
         # Create state with invalid data
         state = create_state_with_discovery_feedback([])
-        state["discovery_feedback_items"] = [
-            {"invalid": "data"}
-        ]  # Missing required fields
+        state["discovery_feedback_items"] = [{"invalid": "data"}]  # Missing required fields
 
         result = await node.execute(state)
 

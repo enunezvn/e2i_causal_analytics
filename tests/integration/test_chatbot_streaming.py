@@ -5,7 +5,7 @@ Tests the streaming SSE endpoint in copilotkit.py including
 response format and error handling.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +34,7 @@ class TestChatStreamEndpoint:
     @patch("src.api.routes.chatbot_graph.stream_chatbot")
     async def test_stream_returns_sse_format(self, mock_stream_chatbot):
         """Test that streaming endpoint returns SSE format."""
+
         # Mock the stream to yield state updates
         async def mock_stream(*args, **kwargs):
             yield {"init": {"messages": []}}
@@ -42,9 +43,7 @@ class TestChatStreamEndpoint:
 
         mock_stream_chatbot.return_value = mock_stream()
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat/stream",
                 json={
@@ -60,9 +59,7 @@ class TestChatStreamEndpoint:
     @pytest.mark.asyncio
     async def test_stream_requires_query(self):
         """Test that query is required."""
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat/stream",
                 json={
@@ -76,9 +73,7 @@ class TestChatStreamEndpoint:
     @pytest.mark.asyncio
     async def test_stream_requires_user_id(self):
         """Test that user_id is required."""
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat/stream",
                 json={
@@ -105,9 +100,7 @@ class TestChatEndpoint:
             "streaming_complete": True,
         }
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat",
                 json={
@@ -133,9 +126,7 @@ class TestChatEndpoint:
             "streaming_complete": True,
         }
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat",
                 json={
@@ -161,9 +152,7 @@ class TestChatEndpoint:
             "streaming_complete": True,
         }
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat",
                 json={
@@ -184,9 +173,7 @@ class TestChatEndpoint:
         """Test that errors are handled gracefully."""
         mock_run_chatbot.side_effect = Exception("Internal error")
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat",
                 json={
@@ -206,9 +193,7 @@ class TestExistingCopilotKitEndpoints:
     @pytest.mark.asyncio
     async def test_info_endpoint_still_works(self):
         """Test that /api/copilotkit/info still returns info."""
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post("/api/copilotkit/info")
 
         # Should return 200 or appropriate response
@@ -217,9 +202,7 @@ class TestExistingCopilotKitEndpoints:
     @pytest.mark.asyncio
     async def test_health_endpoint(self):
         """Test health endpoint."""
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.get("/health")
 
         assert response.status_code == 200
@@ -232,6 +215,7 @@ class TestSSEFormat:
     @patch("src.api.routes.chatbot_graph.stream_chatbot")
     async def test_sse_includes_session_id_event(self, mock_stream_chatbot):
         """Test that SSE includes session_id event."""
+
         async def mock_stream(*args, **kwargs):
             yield {
                 "init": {
@@ -243,9 +227,7 @@ class TestSSEFormat:
 
         mock_stream_chatbot.return_value = mock_stream()
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/api/copilotkit/chat/stream",
                 json={
@@ -258,4 +240,6 @@ class TestSSEFormat:
         assert response.status_code == 200
         # Response should contain SSE data
         content = response.text
-        assert "data:" in content or response.headers["content-type"].startswith("text/event-stream")
+        assert "data:" in content or response.headers["content-type"].startswith(
+            "text/event-stream"
+        )

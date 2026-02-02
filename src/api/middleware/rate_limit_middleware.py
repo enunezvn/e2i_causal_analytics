@@ -78,6 +78,7 @@ class RedisBackend(RateLimitBackend):
 
         try:
             import redis
+
             url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379")
             self._redis = redis.from_url(url, decode_responses=True)
             self._redis.ping()
@@ -124,11 +125,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     # Default rate limits (requests per minute)
     DEFAULT_LIMITS = {
-        "default": (100, 60),      # 100 requests per minute
-        "health": (300, 60),       # 300 requests per minute for health checks
-        "auth": (20, 60),          # 20 requests per minute for auth endpoints
-        "calculate": (30, 60),     # 30 requests per minute for calculations
-        "batch": (10, 60),         # 10 requests per minute for batch operations
+        "default": (100, 60),  # 100 requests per minute
+        "health": (300, 60),  # 300 requests per minute for health checks
+        "auth": (20, 60),  # 20 requests per minute for auth endpoints
+        "calculate": (30, 60),  # 30 requests per minute for calculations
+        "batch": (10, 60),  # 10 requests per minute for batch operations
     }
 
     # Paths that are exempt from rate limiting
@@ -177,7 +178,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             window = default_window or (int(env_window) if env_window else 60)
             self.DEFAULT_LIMITS["default"] = (limit, window)
 
-        logger.info(f"Rate limiting enabled: {self.DEFAULT_LIMITS['default'][0]} req/{self.DEFAULT_LIMITS['default'][1]}s")
+        logger.info(
+            f"Rate limiting enabled: {self.DEFAULT_LIMITS['default'][0]} req/{self.DEFAULT_LIMITS['default'][1]}s"
+        )
 
     def _get_client_key(self, request: Request) -> str:
         """Extract client identifier from request.

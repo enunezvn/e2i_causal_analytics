@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from src.skills import SkillLoader, SkillMatcher, SkillMatch, Skill
+from src.skills import Skill, SkillLoader, SkillMatch, SkillMatcher
 
 if TYPE_CHECKING:
     pass
@@ -148,9 +148,7 @@ class SkillsMixin:
             logger.error(f"Failed to load skill {skill_path}: {e}")
             return None
 
-    async def load_skill_section(
-        self, skill_path: str, section_name: str
-    ) -> str | None:
+    async def load_skill_section(self, skill_path: str, section_name: str) -> str | None:
         """Load a specific section from a skill.
 
         Useful when you only need one section's content rather than
@@ -187,9 +185,7 @@ class SkillsMixin:
             logger.error(f"Failed to load section from {skill_path}: {e}")
             return None
 
-    async def find_relevant_skills(
-        self, query: str, top_k: int = 5
-    ) -> list[SkillMatch]:
+    async def find_relevant_skills(self, query: str, top_k: int = 5) -> list[SkillMatch]:
         """Find skills relevant to a query.
 
         Uses keyword matching and domain-specific boosts to find
@@ -287,7 +283,12 @@ class SkillsMixin:
         try:
             # Get all skill paths
             all_skill_paths = []
-            for category in ["causal-inference", "experiment-design", "gap-analysis", "pharma-commercial"]:
+            for category in [
+                "causal-inference",
+                "experiment-design",
+                "gap-analysis",
+                "pharma-commercial",
+            ]:
                 try:
                     category_skills = loader.list_skills(category)
                     all_skill_paths.extend(category_skills)

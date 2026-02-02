@@ -211,7 +211,6 @@ Changelog:
     1.0.0 - Initial CopilotKit integration
 """
 
-import asyncio
 import contextvars
 import json
 import logging
@@ -221,17 +220,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Sequence, TypedDict
 
-from copilotkit import CopilotKitRemoteEndpoint, Action as CopilotAction
-from copilotkit.langgraph import copilotkit_emit_message, copilotkit_emit_state
-from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
 from ag_ui.core import RunAgentInput
+from copilotkit import Action as CopilotAction
+from copilotkit import CopilotKitRemoteEndpoint
 from copilotkit.integrations.fastapi import (
     handler as sdk_handler,
-    handle_execute_action,
-    handle_execute_agent,
-    handle_get_agent_state,
 )
-from copilotkit.sdk import COPILOTKIT_SDK_VERSION, CopilotKitContext
+from copilotkit.langgraph import copilotkit_emit_message, copilotkit_emit_state
+from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
+from copilotkit.sdk import COPILOTKIT_SDK_VERSION
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -241,9 +238,9 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
-from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
-from src.utils.llm_factory import get_chat_llm, get_llm_provider, MODEL_MAPPINGS
+from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
@@ -497,8 +494,8 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         By using a fresh thread_id, the checkpointer always returns empty state.
         """
         import time
-        import sys
         from datetime import datetime
+
         start_time = time.time()
 
         def dbg(msg):
@@ -514,14 +511,16 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # so the regenerate check (0 > N) is always False.
         original_thread_id = thread_id
         thread_id = str(uuid.uuid4())
-        dbg(f"Using fresh thread_id={thread_id[:8]}... (original={original_thread_id[:8] if original_thread_id else 'None'}...)")
+        dbg(
+            f"Using fresh thread_id={thread_id[:8]}... (original={original_thread_id[:8] if original_thread_id else 'None'}...)"
+        )
 
         # Convert messages to the format expected by RunAgentInput
         # Messages can come from:
         # 1. AG-UI protocol: dicts like {"role": "user", "content": "..."}
         # 2. SDK internals: LangChain message objects with .type and .content attributes
         # Note: ag_ui.core.Message is a Union type, so we must use specific types
-        from ag_ui.core import UserMessage, AssistantMessage
+        from ag_ui.core import AssistantMessage, UserMessage
 
         agui_messages = []
         dbg(f"Converting {len(messages or [])} messages to AG-UI format")
@@ -641,41 +640,49 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         try:
             async for event in self.run(run_input):
                 event_count += 1
-                event_type = getattr(event, 'type', 'unknown') if hasattr(event, 'type') else type(event).__name__
+                event_type = (
+                    getattr(event, "type", "unknown")
+                    if hasattr(event, "type")
+                    else type(event).__name__
+                )
                 # FIX (v1.26.0): Log every event for comprehensive debugging (ERROR level to ensure visibility)
-                logger.error(f"[CopilotKit] Event #{event_count}: type={event_type}, streaming_started={streaming_started}")
+                logger.error(
+                    f"[CopilotKit] Event #{event_count}: type={event_type}, streaming_started={streaming_started}"
+                )
                 dbg(f"Yielding event #{event_count} type={event_type}")
 
                 # Check if this is a CUSTOM event with copilotkit_manually_emit_message
                 # If so, emit TEXT_MESSAGE events (mimicking what CopilotKit Runtime does)
                 is_streaming_event = (
-                    hasattr(event, 'type') and
-                    event.type == EventType.CUSTOM and
-                    getattr(event, 'name', None) == "copilotkit_manually_emit_message"
+                    hasattr(event, "type")
+                    and event.type == EventType.CUSTOM
+                    and getattr(event, "name", None) == "copilotkit_manually_emit_message"
                 )
 
                 # FIX (v1.24.0): Detect state events that should NOT end streaming
                 # State emissions (copilotkit_emit_state) are informational and should
                 # not interrupt the text message lifecycle
                 is_state_event = (
-                    hasattr(event, 'type') and
-                    event.type == EventType.CUSTOM and
-                    getattr(event, 'name', None) == "copilotkit_emit_state"
+                    hasattr(event, "type")
+                    and event.type == EventType.CUSTOM
+                    and getattr(event, "name", None) == "copilotkit_emit_state"
                 )
 
                 # FIX (v1.24.0): Detect terminal events that SHOULD end streaming
                 # Only RUN_FINISHED and RUN_ERROR indicate the end of a response
                 event_type_str = ""
-                if hasattr(event, 'type'):
-                    if hasattr(event.type, 'value'):
+                if hasattr(event, "type"):
+                    if hasattr(event.type, "value"):
                         event_type_str = str(event.type.value).upper()
                     else:
                         event_type_str = str(event.type).upper()
-                is_terminal_event = event_type_str in ('RUN_FINISHED', 'RUN_ERROR')
+                is_terminal_event = event_type_str in ("RUN_FINISHED", "RUN_ERROR")
 
                 # FIX (v1.26.0): Log all terminal events for debugging duplicates (ERROR level to ensure visibility)
                 if is_terminal_event:
-                    logger.error(f"[CopilotKit] Terminal event received: {event_type_str}, streaming_started={streaming_started}, event_count={event_count}")
+                    logger.error(
+                        f"[CopilotKit] Terminal event received: {event_type_str}, streaming_started={streaming_started}, event_count={event_count}"
+                    )
 
                 # FIX (v1.25.0): Filter out TOOL_CALL_RESULT events
                 # These contain raw JSON tool results that should NOT be rendered as messages
@@ -683,39 +690,53 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                 # Without this filter, users see duplicate messages:
                 # 1. Raw JSON: {"success": true, "query_type": "kpi", ...}
                 # 2. Synthesized response: "Here is a summary of the recent TRx performance..."
-                is_tool_result_event = event_type_str == 'TOOL_CALL_RESULT'
+                is_tool_result_event = event_type_str == "TOOL_CALL_RESULT"
 
                 if is_tool_result_event:
-                    dbg(f"Skipping TOOL_CALL_RESULT event (raw tool results should not be rendered)")
+                    dbg("Skipping TOOL_CALL_RESULT event (raw tool results should not be rendered)")
                     continue
 
                 # FIX (v1.27.0): Detect when ag_ui_langgraph emits TEXT_MESSAGE_START
                 # ag_ui_langgraph automatically converts LLM streaming to TEXT_MESSAGE events
                 # These have rawEvent containing "on_chat_model_stream" from LangGraph callback
                 # When we detect this, set flag to skip our CUSTOM event conversion (prevents duplicates)
-                if hasattr(event, 'type') and event.type == EventType.TEXT_MESSAGE_START:
+                if hasattr(event, "type") and event.type == EventType.TEXT_MESSAGE_START:
                     ag_ui_handling_stream = True
-                    logger.error(f"[CopilotKit] ag_ui_langgraph TEXT_MESSAGE_START detected - will skip CUSTOM event conversion")
+                    logger.error(
+                        "[CopilotKit] ag_ui_langgraph TEXT_MESSAGE_START detected - will skip CUSTOM event conversion"
+                    )
 
                 # FIX (v1.27.0): Reset flag when ag_ui_langgraph's stream ends
-                if hasattr(event, 'type') and event.type == EventType.TEXT_MESSAGE_END:
+                if hasattr(event, "type") and event.type == EventType.TEXT_MESSAGE_END:
                     if ag_ui_handling_stream:
-                        logger.error(f"[CopilotKit] ag_ui_langgraph TEXT_MESSAGE_END detected - stream complete")
+                        logger.error(
+                            "[CopilotKit] ag_ui_langgraph TEXT_MESSAGE_END detected - stream complete"
+                        )
                         # Don't reset here - keep flag set for rest of this run to prevent any late CUSTOM events
 
                 # FIX (v1.24.0): End streaming only on terminal events, not state events
                 # Previously ended on ANY non-streaming event, causing multiple message lifecycles
                 # when state was emitted between content chunks
-                if streaming_started and not is_streaming_event and not is_state_event and is_terminal_event:
+                if (
+                    streaming_started
+                    and not is_streaming_event
+                    and not is_state_event
+                    and is_terminal_event
+                ):
                     import time
+
                     current_ts = int(time.time() * 1000)
                     source = "e2i-copilot"
                     yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
                     event_count += 1
                     # FIX (v1.26.0): Track completed messages for duplicate detection (ERROR level to ensure visibility)
                     completed_message_ids.append(streaming_message_id)
-                    logger.error(f"[CopilotKit] TEXT_MESSAGE_END: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, event_type={event_type_str}")
-                    dbg(f"Ended streaming on terminal event {event_type_str}, message_id={streaming_message_id}")
+                    logger.error(
+                        f"[CopilotKit] TEXT_MESSAGE_END: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, event_type={event_type_str}"
+                    )
+                    dbg(
+                        f"Ended streaming on terminal event {event_type_str}, message_id={streaming_message_id}"
+                    )
                     streaming_started = False
                     streaming_message_id = None
 
@@ -724,23 +745,25 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     # ag_ui_langgraph already converts LLM streaming to TEXT_MESSAGE events, so our
                     # CUSTOM -> TEXT_MESSAGE conversion would create duplicate message lifecycles
                     if ag_ui_handling_stream:
-                        dbg(f"Skipping CUSTOM copilotkit_manually_emit_message - ag_ui_langgraph handling stream")
+                        dbg(
+                            "Skipping CUSTOM copilotkit_manually_emit_message - ag_ui_langgraph handling stream"
+                        )
                         continue
 
-                    event_value = getattr(event, 'value', {}) or {}
-                    raw_message = event_value.get('message', '')
+                    event_value = getattr(event, "value", {}) or {}
+                    raw_message = event_value.get("message", "")
 
                     # FIX (v1.21.4): Handle message as list of content blocks
                     # copilotkit_manually_emit_message sends message as list: [{'text': '...', 'type': 'text', 'index': 0}]
                     # But delta field expects a string, not a list
                     if isinstance(raw_message, list):
                         # Extract text from all content blocks
-                        message = ''.join(
-                            block.get('text', '') if isinstance(block, dict) else str(block)
+                        message = "".join(
+                            block.get("text", "") if isinstance(block, dict) else str(block)
                             for block in raw_message
                         )
                     else:
-                        message = str(raw_message) if raw_message else ''
+                        message = str(raw_message) if raw_message else ""
 
                     # CRITICAL FIX (v1.16.0): Use SCREAMING_SNAKE_CASE event types
                     # CopilotKit React SDK (v1.50.1) uses Zod validation that expects
@@ -748,6 +771,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     #
                     # CRITICAL FIX (v1.19.0): Add timestamp and source to ALL events
                     import time
+
                     current_ts = int(time.time() * 1000)
                     source = "e2i-copilot"
 
@@ -758,9 +782,13 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         streaming_message_id = str(uuid.uuid4())
                         streaming_started = True
                         # FIX (v1.26.0): Log message lifecycle for duplicate detection (ERROR level to ensure visibility)
-                        logger.error(f"[CopilotKit] TEXT_MESSAGE_START: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, completed_count={len(completed_message_ids)}")
+                        logger.error(
+                            f"[CopilotKit] TEXT_MESSAGE_START: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, completed_count={len(completed_message_ids)}"
+                        )
                         if message_lifecycle_count > 1:
-                            logger.warning(f"[CopilotKit] DUPLICATE LIFECYCLE DETECTED: This is lifecycle #{message_lifecycle_count}, previous completed: {completed_message_ids}")
+                            logger.warning(
+                                f"[CopilotKit] DUPLICATE LIFECYCLE DETECTED: This is lifecycle #{message_lifecycle_count}, previous completed: {completed_message_ids}"
+                            )
                         yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': streaming_message_id, 'parentMessageId': last_user_msg_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
                         dbg(f"Started streaming message_id={streaming_message_id}")
@@ -827,6 +855,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             # This handles the case where the generator ends without a non-streaming event
             if streaming_started and streaming_message_id:
                 import time
+
                 current_ts = int(time.time() * 1000)
                 source = "e2i-copilot"
                 # Note: We can't yield from finally, so we need a different approach
@@ -842,6 +871,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # This ensures the message is properly terminated even if generator ends
         if streaming_started and streaming_message_id:
             import time
+
             current_ts = int(time.time() * 1000)
             source = "e2i-copilot"
             yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
@@ -941,11 +971,7 @@ def _persist_message_sync(
             "metadata": metadata or {},
         }
 
-        result = (
-            client.table("chatbot_messages")
-            .insert(message_data)
-            .execute()
-        )
+        result = client.table("chatbot_messages").insert(message_data).execute()
 
         if result.data:
             logger.debug(f"_persist_message_sync: inserted message id={result.data[0].get('id')}")
@@ -974,20 +1000,27 @@ def _classify_query_type(query: str) -> str:
     query_lower = query.lower()
 
     # Multi-faceted detection (multiple topics)
-    topic_count = sum([
-        any(kw in query_lower for kw in ["trx", "nrx", "kpi", "metric", "performance"]),
-        any(kw in query_lower for kw in ["causal", "impact", "effect", "intervention"]),
-        any(kw in query_lower for kw in ["predict", "forecast", "future"]),
-        any(kw in query_lower for kw in ["experiment", "test", "ab test", "a/b"]),
-        any(kw in query_lower for kw in ["drift", "shift", "degradation"]),
-    ])
+    topic_count = sum(
+        [
+            any(kw in query_lower for kw in ["trx", "nrx", "kpi", "metric", "performance"]),
+            any(kw in query_lower for kw in ["causal", "impact", "effect", "intervention"]),
+            any(kw in query_lower for kw in ["predict", "forecast", "future"]),
+            any(kw in query_lower for kw in ["experiment", "test", "ab test", "a/b"]),
+            any(kw in query_lower for kw in ["drift", "shift", "degradation"]),
+        ]
+    )
     if topic_count >= 2:
         return "multi_faceted"
 
     # Single topic detection
-    if any(kw in query_lower for kw in ["kpi", "trx", "nrx", "market share", "metric", "performance", "volume"]):
+    if any(
+        kw in query_lower
+        for kw in ["kpi", "trx", "nrx", "market share", "metric", "performance", "volume"]
+    ):
         return "kpi_inquiry"
-    if any(kw in query_lower for kw in ["causal", "impact", "effect", "intervention", "why", "cause"]):
+    if any(
+        kw in query_lower for kw in ["causal", "impact", "effect", "intervention", "why", "cause"]
+    ):
         return "causal_analysis"
     if any(kw in query_lower for kw in ["agent", "status", "tier", "health", "system"]):
         return "agent_status"
@@ -1040,17 +1073,15 @@ def _record_analytics_sync(
             "orchestrator_used": orchestrator_used,
             "tool_composer_used": tool_composer_used,
             "metadata": metadata or {},
-            "response_completed_at": datetime.now(timezone.utc).isoformat() if response_time_ms else None,
+            "response_completed_at": datetime.now(timezone.utc).isoformat()
+            if response_time_ms
+            else None,
         }
 
         # Remove None values for cleaner insert
         analytics_data = {k: v for k, v in analytics_data.items() if v is not None}
 
-        result = (
-            client.table("chatbot_analytics")
-            .insert(analytics_data)
-            .execute()
-        )
+        result = client.table("chatbot_analytics").insert(analytics_data).execute()
 
         if result.data:
             logger.debug(f"[CopilotKit] Recorded analytics id={result.data[0].get('id')}")
@@ -1116,16 +1147,18 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
                 "metadata": {"source": "copilotkit", "created_automatically": True},
             }
             result = (
-                conv_repo.client.table("chatbot_conversations")
-                .insert(conversation_data)
-                .execute()
+                conv_repo.client.table("chatbot_conversations").insert(conversation_data).execute()
             )
             logger.debug(f"_ensure_conversation_exists: create result data={result.data}")
             if result.data:
-                logger.info(f"[CopilotKit] Created conversation for session_id={session_id[:20]}...")
+                logger.info(
+                    f"[CopilotKit] Created conversation for session_id={session_id[:20]}..."
+                )
                 return True
             else:
-                logger.warning(f"[CopilotKit] Failed to create conversation for session_id={session_id}")
+                logger.warning(
+                    f"[CopilotKit] Failed to create conversation for session_id={session_id}"
+                )
                 return False
         except Exception as create_err:
             logger.debug(f"_ensure_conversation_exists: Create error: {create_err}")
@@ -1284,13 +1317,15 @@ async def _fetch_agents_from_db() -> Optional[List[Dict[str, Any]]]:
         for tier in range(1, 6):  # Tiers 1-5
             tier_agents = await repo.get_by_tier(tier)
             for agent in tier_agents:
-                all_agents.append({
-                    "id": agent.get("agent_name", "unknown"),
-                    "name": agent.get("display_name", agent.get("agent_name", "Unknown")),
-                    "tier": agent.get("tier", tier),
-                    "status": "active" if agent.get("is_active", True) else "idle",
-                    "description": agent.get("description", ""),
-                })
+                all_agents.append(
+                    {
+                        "id": agent.get("agent_name", "unknown"),
+                        "name": agent.get("display_name", agent.get("agent_name", "Unknown")),
+                        "tier": agent.get("tier", tier),
+                        "status": "active" if agent.get("is_active", True) else "idle",
+                        "description": agent.get("description", ""),
+                    }
+                )
 
         return all_agents if all_agents else None
 
@@ -1337,6 +1372,7 @@ def _get_orchestrator():
     """Get OrchestratorAgent singleton for causal analysis."""
     try:
         from src.api.routes.cognitive import get_orchestrator
+
         return get_orchestrator()
     except Exception as e:
         logger.warning(f"Failed to get orchestrator: {e}")
@@ -1370,14 +1406,16 @@ async def run_causal_analysis(
     if orchestrator:
         try:
             query = f"What is the causal impact of {intervention} on {target_kpi} for {brand}?"
-            result = await orchestrator.run({
-                "query": query,
-                "user_context": {
-                    "brand": brand,
-                    "intervention": intervention,
-                    "target_kpi": target_kpi,
-                },
-            })
+            result = await orchestrator.run(
+                {
+                    "query": query,
+                    "user_context": {
+                        "brand": brand,
+                        "intervention": intervention,
+                        "target_kpi": target_kpi,
+                    },
+                }
+            )
 
             # Extract causal results if available
             if result and result.get("response_text"):
@@ -1385,12 +1423,15 @@ async def run_causal_analysis(
                     "intervention": intervention,
                     "target_kpi": target_kpi,
                     "brand": brand,
-                    "results": result.get("causal_results", {
-                        "average_treatment_effect": result.get("ate", 0.0),
-                        "confidence_interval": result.get("ci", [0.0, 0.0]),
-                        "p_value": result.get("p_value", 0.0),
-                        "statistical_significance": result.get("significant", False),
-                    }),
+                    "results": result.get(
+                        "causal_results",
+                        {
+                            "average_treatment_effect": result.get("ate", 0.0),
+                            "confidence_interval": result.get("ci", [0.0, 0.0]),
+                            "p_value": result.get("p_value", 0.0),
+                            "statistical_significance": result.get("significant", False),
+                        },
+                    ),
                     "interpretation": result.get("response_text", ""),
                     "data_source": data_source,
                     "agents_used": result.get("agents_dispatched", []),
@@ -1402,6 +1443,7 @@ async def run_causal_analysis(
 
     # Fallback to simulated results
     import random
+
     data_source = "simulated"
     ate = random.uniform(0.05, 0.25)
 
@@ -1700,7 +1742,9 @@ def create_e2i_chat_agent():
 
         # If the last message has tool calls, go to tools node
         if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
-            logger.info(f"[CopilotKit] Claude requested {len(last_message.tool_calls)} tool call(s)")
+            logger.info(
+                f"[CopilotKit] Claude requested {len(last_message.tool_calls)} tool call(s)"
+            )
             return "tools"
 
         return "end"
@@ -1709,11 +1753,14 @@ def create_e2i_chat_agent():
         """Process chat messages using Claude with bound tools."""
         import time
         from datetime import datetime
+
         node_start = time.time()
 
         # Log chat_node invocation
         logger.debug(f"[CopilotKit] chat_node CALLED at {datetime.now()}")
-        logger.debug(f"[CopilotKit] chat_node state keys: {list(state.keys()) if state else 'None'}")
+        logger.debug(
+            f"[CopilotKit] chat_node state keys: {list(state.keys()) if state else 'None'}"
+        )
 
         # CoAgent State Sync: Emit initial state for real-time UI progress
         state["current_node"] = "chat"
@@ -1743,7 +1790,9 @@ def create_e2i_chat_agent():
             session_id = configurable.get("thread_id") if configurable else None
             session_id_source = "config.thread_id" if session_id else None
 
-        logger.info(f"[CopilotKit] chat_node: {len(messages)} messages, session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})")
+        logger.info(
+            f"[CopilotKit] chat_node: {len(messages)} messages, session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})"
+        )
 
         # Get the last human message
         last_human_message = None
@@ -1757,7 +1806,9 @@ def create_e2i_chat_agent():
 
         # Persist user message to database
         user_message_id = None
-        logger.debug(f"Persistence check: last_human_message={last_human_message[:50] if last_human_message else 'None'}..., session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})")
+        logger.debug(
+            f"Persistence check: last_human_message={last_human_message[:50] if last_human_message else 'None'}..., session_id={session_id[:20] if session_id else 'None'}... (source={session_id_source})"
+        )
         if last_human_message and session_id:
             try:
                 # Ensure conversation exists before inserting messages (FK constraint)
@@ -1827,7 +1878,9 @@ def create_e2i_chat_agent():
                     elif role == "assistant":
                         llm_messages.append(AIMessage(content=content))
 
-            logger.info(f"[CopilotKit] Invoking {provider} LLM with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound")
+            logger.info(
+                f"[CopilotKit] Invoking {provider} LLM with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound"
+            )
 
             # STREAMING IMPLEMENTATION (v1.24.0)
             # FIX: Don't emit content during streaming if tool calls may follow.
@@ -1846,10 +1899,12 @@ def create_e2i_chat_agent():
             content_chunks = []  # Buffer chunks for potential later emission
             response = None
 
-            logger.debug(f"[CopilotKit] Starting streaming LLM response with {len(llm_messages)} messages")
+            logger.debug(
+                f"[CopilotKit] Starting streaming LLM response with {len(llm_messages)} messages"
+            )
             async for chunk in llm_with_tools.astream(llm_messages):
                 # Accumulate content chunks (DON'T emit yet - wait to check for tool calls)
-                if hasattr(chunk, 'content') and chunk.content:
+                if hasattr(chunk, "content") and chunk.content:
                     # Anthropic returns content as list of blocks, OpenAI returns str
                     chunk_text = chunk.content
                     if isinstance(chunk_text, list):
@@ -1867,112 +1922,134 @@ def create_e2i_chat_agent():
                 # 2. Then, tool_call_chunks with the args streamed character by character
                 # We need to MERGE these: use tool_calls for name/id, tool_call_chunks for args
 
-                if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                if hasattr(chunk, "tool_calls") and chunk.tool_calls:
                     logger.debug(f"[CopilotKit] Got complete tool_calls: {chunk.tool_calls}")
-                    for i, tc in enumerate(chunk.tool_calls):
+                    for _i, tc in enumerate(chunk.tool_calls):
                         # Skip empty/invalid entries (these sometimes come through)
-                        if not tc.get('name') and not tc.get('id'):
+                        if not tc.get("name") and not tc.get("id"):
                             continue
                         # Add index for later matching with tool_call_chunks
                         # Also initialize args_str for streaming accumulation
                         tc_entry = dict(tc)  # Copy to avoid mutating original
-                        tc_entry['index'] = tc_entry.get('index', len(accumulated_tool_calls))
-                        tc_entry['args_str'] = ''  # For accumulating streamed args
+                        tc_entry["index"] = tc_entry.get("index", len(accumulated_tool_calls))
+                        tc_entry["args_str"] = ""  # For accumulating streamed args
                         accumulated_tool_calls.append(tc_entry)
 
-                if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
                     # LangChain/Anthropic streams tool call args as chunks
                     for tc_chunk in chunk.tool_call_chunks:
-                        tc_index = tc_chunk.get('index', 0)
-                        tc_id = tc_chunk.get('id')
-                        tc_name = tc_chunk.get('name')
-                        tc_args = tc_chunk.get('args', '')
+                        tc_index = tc_chunk.get("index", 0)
+                        tc_id = tc_chunk.get("id")
+                        tc_name = tc_chunk.get("name")
+                        tc_args = tc_chunk.get("args", "")
 
-                        logger.debug(f"[CopilotKit] Tool chunk: index={tc_index}, id={tc_id}, name={tc_name}, args_len={len(tc_args) if tc_args else 0}")
+                        logger.debug(
+                            f"[CopilotKit] Tool chunk: index={tc_index}, id={tc_id}, name={tc_name}, args_len={len(tc_args) if tc_args else 0}"
+                        )
 
                         # Find existing tool call by index (matches order from tool_calls)
                         existing = None
                         for tc in accumulated_tool_calls:
-                            if tc.get('index') == tc_index:
+                            if tc.get("index") == tc_index:
                                 existing = tc
                                 break
 
                         if existing:
                             # Update with any new info from chunk
-                            if tc_id and not existing.get('id'):
-                                existing['id'] = tc_id
-                            if tc_name and not existing.get('name'):
-                                existing['name'] = tc_name
+                            if tc_id and not existing.get("id"):
+                                existing["id"] = tc_id
+                            if tc_name and not existing.get("name"):
+                                existing["name"] = tc_name
                             # CRITICAL: Accumulate args as string for later JSON parsing
                             if tc_args:
-                                existing['args_str'] = existing.get('args_str', '') + tc_args
+                                existing["args_str"] = existing.get("args_str", "") + tc_args
                         else:
                             # No existing entry - create one (shouldn't happen normally)
-                            accumulated_tool_calls.append({
-                                'index': tc_index,
-                                'id': tc_id or str(uuid.uuid4()),
-                                'name': tc_name or '',
-                                'args': {},
-                                'args_str': tc_args or '',
-                            })
+                            accumulated_tool_calls.append(
+                                {
+                                    "index": tc_index,
+                                    "id": tc_id or str(uuid.uuid4()),
+                                    "name": tc_name or "",
+                                    "args": {},
+                                    "args_str": tc_args or "",
+                                }
+                            )
 
                 # Keep last chunk as final response
                 response = chunk
 
-            logger.debug(f"[CopilotKit] Streaming complete: {len(full_content)} chars, {len(accumulated_tool_calls)} tool calls")
+            logger.debug(
+                f"[CopilotKit] Streaming complete: {len(full_content)} chars, {len(accumulated_tool_calls)} tool calls"
+            )
 
             # Build final AIMessage with accumulated content and tool calls
             if accumulated_tool_calls or full_content:
-                logger.debug(f"[CopilotKit] Accumulated tool calls before parsing: {accumulated_tool_calls}")
+                logger.debug(
+                    f"[CopilotKit] Accumulated tool calls before parsing: {accumulated_tool_calls}"
+                )
 
                 # Parse tool call args from JSON strings
                 # STREAMING FIX: Use args_str (accumulated from chunks) preferentially over args
                 # The original args from tool_calls is often empty {}, while args_str has the real data
                 parsed_tool_calls = []
                 for tc in accumulated_tool_calls:
-                    if tc.get('name'):  # Only include valid tool calls with names
+                    if tc.get("name"):  # Only include valid tool calls with names
                         # Prefer args_str (from streaming chunks) over args (often empty)
-                        args_str = tc.get('args_str', '')
-                        args = tc.get('args', {})
+                        args_str = tc.get("args_str", "")
+                        args = tc.get("args", {})
 
-                        logger.debug(f"[CopilotKit] Tool {tc.get('name')} args={args}, args_str_len={len(args_str) if args_str else 0}")
+                        logger.debug(
+                            f"[CopilotKit] Tool {tc.get('name')} args={args}, args_str_len={len(args_str) if args_str else 0}"
+                        )
 
                         # If we have streamed args, parse them
                         if args_str:
                             # The args_str might be missing outer braces if it started mid-JSON
                             # Check if it looks like it needs wrapping
                             args_str_stripped = args_str.strip()
-                            if args_str_stripped and not args_str_stripped.startswith('{'):
-                                args_str_stripped = '{' + args_str_stripped
-                            if args_str_stripped and not args_str_stripped.endswith('}'):
-                                args_str_stripped = args_str_stripped + '}'
+                            if args_str_stripped and not args_str_stripped.startswith("{"):
+                                args_str_stripped = "{" + args_str_stripped
+                            if args_str_stripped and not args_str_stripped.endswith("}"):
+                                args_str_stripped = args_str_stripped + "}"
 
                             try:
                                 import json as json_mod
-                                args = json_mod.loads(args_str_stripped) if args_str_stripped else {}
-                                logger.debug(f"[CopilotKit] Parsed args_str for {tc.get('name')}: {args}")
+
+                                args = (
+                                    json_mod.loads(args_str_stripped) if args_str_stripped else {}
+                                )
+                                logger.debug(
+                                    f"[CopilotKit] Parsed args_str for {tc.get('name')}: {args}"
+                                )
                             except json_mod.JSONDecodeError as e:
-                                logger.error(f"[CopilotKit] Failed to parse args_str for {tc.get('name')}: {e}")
-                                logger.error(f"[CopilotKit] Raw args_str: {args_str[:500] if args_str else 'empty'}")
+                                logger.error(
+                                    f"[CopilotKit] Failed to parse args_str for {tc.get('name')}: {e}"
+                                )
+                                logger.error(
+                                    f"[CopilotKit] Raw args_str: {args_str[:500] if args_str else 'empty'}"
+                                )
                                 # Fall back to original args if parsing fails
                                 if isinstance(args, str):
                                     try:
                                         args = json_mod.loads(args) if args else {}
-                                    except:
+                                    except:  # noqa: E722
                                         args = {}
                         elif isinstance(args, str):
                             # No streamed args, try to parse args if it's a string
                             try:
                                 import json as json_mod
+
                                 args = json_mod.loads(args) if args else {}
                             except json_mod.JSONDecodeError:
                                 args = {}
 
-                        parsed_tool_calls.append({
-                            'id': tc.get('id', str(uuid.uuid4())),
-                            'name': tc['name'],
-                            'args': args,
-                        })
+                        parsed_tool_calls.append(
+                            {
+                                "id": tc.get("id", str(uuid.uuid4())),
+                                "name": tc["name"],
+                                "args": args,
+                            }
+                        )
 
                 response = AIMessage(
                     content=full_content,
@@ -1983,18 +2060,21 @@ def create_e2i_chat_agent():
             # Previously only checked response.tool_calls, but due to streaming this can be
             # empty [] even when accumulated_tool_calls has entries (name comes before args).
             # Now we also check accumulated_tool_calls directly as a fallback.
-            has_tool_calls = (
-                (getattr(response, "tool_calls", None) and response.tool_calls) or
-                any(tc.get('name') or tc.get('id') for tc in accumulated_tool_calls)
+            has_tool_calls = (getattr(response, "tool_calls", None) and response.tool_calls) or any(
+                tc.get("name") or tc.get("id") for tc in accumulated_tool_calls
             )
 
             # If response has tool calls, return without additional emit (tools node will handle)
             if has_tool_calls:
                 # Get tool names from response.tool_calls if available, else from accumulated
                 tool_names = (
-                    [tc['name'] for tc in response.tool_calls if tc.get('name')]
+                    [tc["name"] for tc in response.tool_calls if tc.get("name")]
                     if response.tool_calls
-                    else [tc.get('name', 'unknown') for tc in accumulated_tool_calls if tc.get('name') or tc.get('id')]
+                    else [
+                        tc.get("name", "unknown")
+                        for tc in accumulated_tool_calls
+                        if tc.get("name") or tc.get("id")
+                    ]
                 )
                 logger.info(f"[CopilotKit] Claude invoked tools: {tool_names}")
 
@@ -2019,8 +2099,11 @@ def create_e2i_chat_agent():
                             metadata={
                                 "source": "copilotkit",
                                 "type": "tool_request",
-                                "tool_calls": [{"name": tc["name"], "args": tc.get("args", {})} for tc in response.tool_calls],
-                                "model_used": model_name,
+                                "tool_calls": [
+                                    {"name": tc["name"], "args": tc.get("args", {})}
+                                    for tc in response.tool_calls
+                                ],
+                                "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                             },
                         )
                     except Exception as e:
@@ -2030,10 +2113,12 @@ def create_e2i_chat_agent():
             # FIX (v1.24.0): NOW emit buffered content since we confirmed no tool calls
             # This is a direct text response, so stream the accumulated chunks
             if full_content and content_chunks:
-                logger.debug(f"[CopilotKit] Emitting {len(content_chunks)} buffered chunks (no tool calls)")
+                logger.debug(
+                    f"[CopilotKit] Emitting {len(content_chunks)} buffered chunks (no tool calls)"
+                )
                 for chunk_content in content_chunks:
                     await copilotkit_emit_message(config, chunk_content)
-                logger.debug(f"[CopilotKit] Finished emitting buffered content")
+                logger.debug("[CopilotKit] Finished emitting buffered content")
 
             if full_content:
                 # Persist assistant response to database
@@ -2047,11 +2132,11 @@ def create_e2i_chat_agent():
                             agent_name="copilotkit",
                             metadata={
                                 "source": "copilotkit",
-                                "model_used": model_name,
+                                "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                                 "latency_ms": elapsed_ms,
                             },
                         )
-                        logger.info(f"[CopilotKit] Persisted assistant message")
+                        logger.info("[CopilotKit] Persisted assistant message")
                     except Exception as e:
                         logger.warning(f"[CopilotKit] Failed to persist assistant message: {e}")
 
@@ -2067,7 +2152,10 @@ def create_e2i_chat_agent():
                     response_time_ms=elapsed_ms,
                     tools_invoked=[],
                     primary_agent="copilotkit",
-                    metadata={"model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}", "direct_response": True},
+                    metadata={
+                        "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
+                        "direct_response": True,
+                    },
                 )
 
             # CoAgent State Sync: Emit completion state for direct responses
@@ -2103,6 +2191,7 @@ def create_e2i_chat_agent():
     async def synthesize_node(state: E2IAgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Synthesize tool results into a final response."""
         import time
+
         node_start = time.time()
 
         # CoAgent State Sync: Emit synthesizing state
@@ -2172,12 +2261,14 @@ Synthesize these results into a natural, conversational response. Include specif
 
             # STREAMING (v1.22.0): Stream synthesis response token-by-token
             full_content = ""
-            logger.debug(f"[CopilotKit] Starting streaming synthesis response")
-            async for chunk in llm.astream([
-                SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT),
-                HumanMessage(content=synthesis_prompt)
-            ]):
-                if hasattr(chunk, 'content') and chunk.content:
+            logger.debug("[CopilotKit] Starting streaming synthesis response")
+            async for chunk in llm.astream(
+                [
+                    SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT),
+                    HumanMessage(content=synthesis_prompt),
+                ]
+            ):
+                if hasattr(chunk, "content") and chunk.content:
                     # Anthropic returns content as list of blocks, OpenAI returns str
                     chunk_text = chunk.content
                     if isinstance(chunk_text, list):
@@ -2204,12 +2295,12 @@ Synthesize these results into a natural, conversational response. Include specif
                         metadata={
                             "source": "copilotkit",
                             "type": "synthesis",
-                            "model_used": model_name,
+                            "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                             "tool_results": tool_results,
                             "latency_ms": elapsed_ms,
                         },
                     )
-                    logger.info(f"[CopilotKit] Persisted synthesized message")
+                    logger.info("[CopilotKit] Persisted synthesized message")
                 except Exception as e:
                     logger.warning(f"[CopilotKit] Failed to persist synthesized message: {e}")
 
@@ -2422,7 +2513,9 @@ def create_copilotkit_sdk() -> CopilotKitRemoteEndpoint:
         actions=COPILOT_ACTIONS,
     )
 
-    logger.info(f"[CopilotKit] Remote endpoint initialized with 1 agent and {len(COPILOT_ACTIONS)} actions")
+    logger.info(
+        f"[CopilotKit] Remote endpoint initialized with 1 agent and {len(COPILOT_ACTIONS)} actions"
+    )
     return sdk
 
 
@@ -2454,9 +2547,7 @@ def transform_info_response(sdk: CopilotKitRemoteEndpoint) -> Dict[str, Any]:
     agents_dict = {}
     for agent in agents:
         agent_id = agent.name
-        agents_dict[agent_id] = {
-            "description": getattr(agent, "description", "") or ""
-        }
+        agents_dict[agent_id] = {"description": getattr(agent, "description", "") or ""}
 
     return {
         "actions": actions_list,
@@ -2465,7 +2556,9 @@ def transform_info_response(sdk: CopilotKitRemoteEndpoint) -> Dict[str, Any]:
     }
 
 
-async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpoint, path: str = "") -> JSONResponse:
+async def copilotkit_custom_handler(
+    request: Request, sdk: CopilotKitRemoteEndpoint, path: str = ""
+) -> JSONResponse:
     """
     Custom CopilotKit endpoint handler that transforms info responses for frontend v1.x.
 
@@ -2481,8 +2574,6 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
         JSONResponse with properly formatted data
     """
     import json
-    from typing import cast
-    from fastapi.encoders import jsonable_encoder
 
     method = request.method
 
@@ -2525,7 +2616,9 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
 
             if is_info_request:
                 response = transform_info_response(sdk)
-                logger.debug(f"Returning info response with agents: {list(response['agents'].keys())}")
+                logger.debug(
+                    f"Returning info response with agents: {list(response['agents'].keys())}"
+                )
                 return JSONResponse(content=response)
 
             # Non-info POST request - check AG-UI protocol method
@@ -2536,20 +2629,28 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
             if agui_method == "agent/run":
                 params = body_json.get("params", {})
                 body_data = body_json.get("body", {})
-                agent_name = params.get("agentId", "default") or body_json.get("agentName", "default")
+                agent_name = params.get("agentId", "default") or body_json.get(
+                    "agentName", "default"
+                )
 
                 logger.debug(f"Executing agent '{agent_name}' with AG-UI protocol")
 
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = body_data.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
+                thread_id = (
+                    body_data.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
+                )
                 state = body_data.get("state") or body_json.get("state") or {}
                 messages = body_data.get("messages") or body_json.get("messages") or []
-                actions = body_data.get("tools") or body_json.get("tools") or []  # AG-UI uses "tools"
+                actions = (
+                    body_data.get("tools") or body_json.get("tools") or []
+                )  # AG-UI uses "tools"
                 node_name = body_data.get("nodeName") or body_json.get("nodeName")
 
-                logger.debug(f"agent/run: thread_id={thread_id[:8]}..., messages={len(messages)}, actions={len(actions)}, node={node_name}")
+                logger.debug(
+                    f"agent/run: thread_id={thread_id[:8]}..., messages={len(messages)}, actions={len(actions)}, node={node_name}"
+                )
 
                 # CUSTOM STREAMING HANDLER: Bypass SDK's handle_execute_agent to fix
                 # the streaming lifecycle bug where HTTP response completes before all
@@ -2573,8 +2674,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
 
                 if agent is None:
                     return JSONResponse(
-                        status_code=404,
-                        content={"error": f"Agent '{agent_name}' not found"}
+                        status_code=404, content={"error": f"Agent '{agent_name}' not found"}
                     )
 
                 async def stream_agent_events():
@@ -2587,6 +2687,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                     """
                     import time
                     from datetime import datetime
+
                     stream_start = time.time()
 
                     def sdbg(msg):
@@ -2613,6 +2714,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                             yield event
                     except Exception as e:
                         import traceback
+
                         tb_str = traceback.format_exc()
                         sdbg(f"Error: {e}")
                         sdbg(f"Traceback:\n{tb_str}")
@@ -2621,9 +2723,9 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
                         # FIX (v1.21.4): Use RUN_ERROR event type (AG-UI protocol)
                         # "error" is not a valid AG-UI event type - causes ZodError on frontend
                         error_event = {
-                            'type': 'RUN_ERROR',
-                            'message': str(e),
-                            'code': 'STREAM_ERROR',
+                            "type": "RUN_ERROR",
+                            "message": str(e),
+                            "code": "STREAM_ERROR",
                         }
                         yield f"data: {json.dumps(error_event)}\n\n"
 
@@ -2675,6 +2777,7 @@ async def copilotkit_custom_handler(request: Request, sdk: CopilotKitRemoteEndpo
     # FIX v1.9.3: SDK handler expects path in path_params, but base route has no path param
     async def receive():
         return {"type": "http.request", "body": body_bytes}
+
     scope_with_path = dict(request.scope)
     scope_with_path["path_params"] = {**request.path_params, "path": path}
     new_request = Request(scope_with_path, receive)
@@ -2731,7 +2834,9 @@ def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None
         include_in_schema=False,
     )
 
-    logger.info(f"[CopilotKit] Routes added at {normalized_prefix} and {normalized_prefix}/{{path}} (custom handler with info transformation)")
+    logger.info(
+        f"[CopilotKit] Routes added at {normalized_prefix} and {normalized_prefix}/{{path}} (custom handler with info transformation)"
+    )
 
 
 # =============================================================================
@@ -2754,7 +2859,9 @@ async def get_copilotkit_status() -> Dict[str, Any]:
         "action_names": [a.name for a in COPILOT_ACTIONS],
         "llm_provider": provider,
         "llm_model": MODEL_MAPPINGS[provider]["standard"],
-        "llm_configured": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")),
+        "llm_configured": bool(
+            os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        ),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2783,9 +2890,7 @@ class ChatRequest(BaseModel):
     brand_context: Optional[str] = Field(
         default=None, description="Brand filter (Kisqali, Fabhalta, Remibrutinib)"
     )
-    region_context: Optional[str] = Field(
-        default=None, description="Region filter (US, EU, APAC)"
-    )
+    region_context: Optional[str] = Field(default=None, description="Region filter (US, EU, APAC)")
 
 
 class ChatResponse(BaseModel):
@@ -2834,6 +2939,7 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
         session_id = request.session_id
         if not session_id:
             import uuid
+
             session_id = f"{request.user_id}~{uuid.uuid4()}"
 
         yield f"data: {json.dumps({'type': 'session_id', 'data': session_id})}\n\n"
@@ -2864,20 +2970,27 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
             # Extract response from state updates
             if isinstance(state_update, dict):
                 # Check for node outputs
-                for node_name, node_output in state_update.items():
+                for _node_name, node_output in state_update.items():
                     if isinstance(node_output, dict):
                         # Get response text from finalize node
                         if "response_text" in node_output and node_output["response_text"]:
                             text_chunk = node_output["response_text"]
                             if text_chunk and text_chunk != response_text:
                                 # Yield new text
-                                new_text = text_chunk[len(response_text):] if response_text else text_chunk
+                                new_text = (
+                                    text_chunk[len(response_text) :]
+                                    if response_text
+                                    else text_chunk
+                                )
                                 if new_text:
                                     yield f"data: {json.dumps({'type': 'text', 'data': new_text})}\n\n"
                                     response_text = text_chunk
 
                         # Get conversation title
-                        if "conversation_title" in node_output and node_output["conversation_title"]:
+                        if (
+                            "conversation_title" in node_output
+                            and node_output["conversation_title"]
+                        ):
                             title = node_output["conversation_title"]
                             if title != conversation_title:
                                 conversation_title = title
@@ -2888,7 +3001,11 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
                             for msg in node_output["messages"]:
                                 if isinstance(msg, AIMessage) and msg.content:
                                     if msg.content != response_text:
-                                        new_text = msg.content[len(response_text):] if response_text else msg.content
+                                        new_text = (
+                                            msg.content[len(response_text) :]
+                                            if response_text
+                                            else msg.content
+                                        )
                                         if new_text:
                                             yield f"data: {json.dumps({'type': 'text', 'data': new_text})}\n\n"
                                             response_text = msg.content
@@ -2901,7 +3018,9 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
                         if "routed_agent" in node_output:
                             dispatch_info["routed_agent"] = node_output["routed_agent"]
                         if "response_confidence" in node_output:
-                            dispatch_info["response_confidence"] = node_output["response_confidence"]
+                            dispatch_info["response_confidence"] = node_output[
+                                "response_confidence"
+                            ]
                         if "intent" in node_output:
                             dispatch_info["intent"] = node_output["intent"]
                         if "intent_confidence" in node_output:
@@ -3058,7 +3177,9 @@ async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
         routing_rationale = result.get("routing_rationale")
 
         # Generate title from query
-        title = chat_request.query[:50] + "..." if len(chat_request.query) > 50 else chat_request.query
+        title = (
+            chat_request.query[:50] + "..." if len(chat_request.query) > 50 else chat_request.query
+        )
 
         logger.info(
             f"[Chatbot] Response: orchestrator={orchestrator_used}, "
@@ -3173,7 +3294,9 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
 
     try:
         import os
+
         from supabase import create_client
+
         from src.memory.services.factories import get_async_supabase_client
         from src.repositories import get_chatbot_feedback_repository
 
@@ -3193,9 +3316,13 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
         lookup_error = None
         try:
             service_client = create_client(service_url, service_key)
-            message_result = service_client.table("chatbot_messages").select(
-                "id, session_id"
-            ).eq("id", request.message_id).limit(1).execute()
+            message_result = (
+                service_client.table("chatbot_messages")
+                .select("id, session_id")
+                .eq("id", request.message_id)
+                .limit(1)
+                .execute()
+            )
 
             if message_result.data and len(message_result.data) > 0:
                 session_id = message_result.data[0].get("session_id")
@@ -3251,9 +3378,7 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
 
 
 @router.get("/feedback/stats")
-async def get_feedback_stats(
-    agent_name: Optional[str] = None, days: int = 30
-) -> Dict[str, Any]:
+async def get_feedback_stats(agent_name: Optional[str] = None, days: int = 30) -> Dict[str, Any]:
     """
     Get feedback statistics for analytics.
 

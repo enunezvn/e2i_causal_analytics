@@ -131,8 +131,7 @@ class TestSkillsMixinLoadSkillSection:
         # Use "Standard Revenue Multipliers" which has actual content
         # ("Revenue Impact Calculation" is empty since content is in subsections)
         section = await agent.load_skill_section(
-            "gap-analysis/roi-estimation.md",
-            "Standard Revenue Multipliers"
+            "gap-analysis/roi-estimation.md", "Standard Revenue Multipliers"
         )
 
         assert section is not None
@@ -143,8 +142,7 @@ class TestSkillsMixinLoadSkillSection:
     async def test_load_nonexistent_section(self, agent):
         """Test loading a non-existent section returns None."""
         section = await agent.load_skill_section(
-            "gap-analysis/roi-estimation.md",
-            "Nonexistent Section"
+            "gap-analysis/roi-estimation.md", "Nonexistent Section"
         )
 
         assert section is None
@@ -152,10 +150,7 @@ class TestSkillsMixinLoadSkillSection:
     @pytest.mark.asyncio
     async def test_load_section_from_nonexistent_skill(self, agent):
         """Test loading section from non-existent skill returns None."""
-        section = await agent.load_skill_section(
-            "nonexistent/skill.md",
-            "Some Section"
-        )
+        section = await agent.load_skill_section("nonexistent/skill.md", "Some Section")
 
         assert section is None
 

@@ -6,29 +6,24 @@ Integrates Pandera schemas and Great Expectations into the data generation pipel
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
 from ..config import DGPType
-from .schemas import (
-    SCHEMA_REGISTRY,
-    validate_dataframe,
-    validate_all_datasets,
-    get_validation_summary as get_schema_summary,
-)
 from .expectations import (
+    GX_AVAILABLE,
     ValidationResult,
     validate_dataframe_with_expectations,
-    run_validation_checkpoint,
-    get_checkpoint_summary,
-    GX_AVAILABLE,
 )
 from .observability import (
     ValidationObserver,
     create_validation_span,
-    log_validation_to_mlflow,
     get_observability_status,
+)
+from .schemas import (
+    SCHEMA_REGISTRY,
+    validate_dataframe,
 )
 
 
@@ -200,11 +195,13 @@ def get_combined_summary(
             error_count = len(result.pandera_errors.failure_cases)
             lines.append(f"    ({error_count} schema errors)")
 
-    lines.extend([
-        "",
-        "GREAT EXPECTATIONS VALIDATION",
-        "-" * 35,
-    ])
+    lines.extend(
+        [
+            "",
+            "GREAT EXPECTATIONS VALIDATION",
+            "-" * 35,
+        ]
+    )
 
     if not GX_AVAILABLE:
         lines.append("  (Great Expectations not installed)")
@@ -219,31 +216,34 @@ def get_combined_summary(
             else:
                 lines.append(f"  {table_name}: SKIPPED")
 
-    lines.extend([
-        "",
-        "OVERALL RESULTS",
-        "-" * 35,
-    ])
+    lines.extend(
+        [
+            "",
+            "OVERALL RESULTS",
+            "-" * 35,
+        ]
+    )
 
     all_valid = all(r.is_valid for r in results.values())
     overall_status = "ALL PASSED" if all_valid else "VALIDATION FAILED"
     lines.append(f"  Status: {overall_status}")
     lines.append(f"  Tables Validated: {len(results)}")
-    lines.append(f"  Pandera Valid: {sum(1 for r in results.values() if r.pandera_valid)}/{len(results)}")
+    lines.append(
+        f"  Pandera Valid: {sum(1 for r in results.values() if r.pandera_valid)}/{len(results)}"
+    )
 
     if GX_AVAILABLE:
-        gx_valid_count = sum(
-            1 for r in results.values()
-            if r.gx_result and r.gx_result.success
-        )
+        gx_valid_count = sum(1 for r in results.values() if r.gx_result and r.gx_result.success)
         lines.append(f"  GX Valid: {gx_valid_count}/{len(results)}")
 
     if obs_summary:
-        lines.extend([
-            "",
-            "OBSERVABILITY",
-            "-" * 35,
-        ])
+        lines.extend(
+            [
+                "",
+                "OBSERVABILITY",
+                "-" * 35,
+            ]
+        )
         if obs_summary.get("mlflow_run_id"):
             lines.append(f"  MLflow Run ID: {obs_summary['mlflow_run_id']}")
         status = get_observability_status()
@@ -258,6 +258,7 @@ def get_combined_summary(
 # =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
+
 
 def quick_validate(
     datasets: Dict[str, pd.DataFrame],

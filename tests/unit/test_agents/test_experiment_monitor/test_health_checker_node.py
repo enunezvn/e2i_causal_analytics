@@ -754,7 +754,9 @@ class TestEdgeCases:
             "name": "Z Suffix Date",
             "status": "running",
             "config": {"target_sample_size": 1000},
-            "created_at": (datetime.now(timezone.utc) - timedelta(days=3)).isoformat().replace("+00:00", "Z"),
+            "created_at": (datetime.now(timezone.utc) - timedelta(days=3))
+            .isoformat()
+            .replace("+00:00", "Z"),
         }
 
         summary = await node._check_experiment_health(experiment, None)

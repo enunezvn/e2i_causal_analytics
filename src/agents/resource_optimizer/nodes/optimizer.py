@@ -157,13 +157,13 @@ class OptimizerNode:
 
         try:
             from pulp import (
+                PULP_CBC_CMD,
                 LpMaximize,
                 LpProblem,
                 LpStatus,
                 LpVariable,
                 lpSum,
                 value,
-                PULP_CBC_CMD,
             )
         except ImportError:
             logger.warning("PuLP not available, falling back to linear solver")
@@ -223,12 +223,12 @@ class OptimizerNode:
 
         # Add inequality constraints (A_ub @ x <= b_ub)
         if problem.get("a_ub") and problem.get("b_ub"):
-            for j, (row, b) in enumerate(zip(problem["a_ub"], problem["b_ub"])):
+            for j, (row, b) in enumerate(zip(problem["a_ub"], problem["b_ub"], strict=False)):
                 prob += lpSum(row[i] * x[i] for i in range(n)) <= b, f"ineq_{j}"
 
         # Add equality constraints (A_eq @ x == b_eq)
         if problem.get("a_eq") and problem.get("b_eq"):
-            for j, (row, b) in enumerate(zip(problem["a_eq"], problem["b_eq"])):
+            for j, (row, b) in enumerate(zip(problem["a_eq"], problem["b_eq"], strict=False)):
                 prob += lpSum(row[i] * x[i] for i in range(n)) == b, f"eq_{j}"
 
         # Add cardinality constraints (link allocation to selection)

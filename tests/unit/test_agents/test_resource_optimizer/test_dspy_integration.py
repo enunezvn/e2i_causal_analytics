@@ -10,7 +10,6 @@ Tests the Recipient role implementation including:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
 
 # Mark all tests in this module as dspy_integration to group them
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
@@ -76,8 +75,8 @@ class TestResourceOptimizerDSPyIntegration:
     def test_prompts_property(self):
         """Test prompts property returns ResourceOptimizationPrompts."""
         from src.agents.resource_optimizer.dspy_integration import (
-            ResourceOptimizerDSPyIntegration,
             ResourceOptimizationPrompts,
+            ResourceOptimizerDSPyIntegration,
         )
 
         integration = ResourceOptimizerDSPyIntegration()
@@ -127,9 +126,7 @@ class TestResourceOptimizerDSPyIntegration:
         )
 
         # First update - version changes from 1.0 to 1.1
-        integration.update_optimized_prompts(
-            {"summary_template": template}, 0.8
-        )
+        integration.update_optimized_prompts({"summary_template": template}, 0.8)
         first_version = integration.prompts.version
         assert first_version > initial_version  # "1.1" > "1.0"
         assert integration.prompts.optimization_score == 0.8
@@ -303,8 +300,8 @@ class TestDSPySignatures:
     def test_optimization_summary_signature(self):
         """Test OptimizationSummarySignature is valid DSPy signature."""
         from src.agents.resource_optimizer.dspy_integration import (
-            OptimizationSummarySignature,
             DSPY_AVAILABLE,
+            OptimizationSummarySignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -321,8 +318,8 @@ class TestDSPySignatures:
     def test_allocation_recommendation_signature(self):
         """Test AllocationRecommendationSignature is valid DSPy signature."""
         from src.agents.resource_optimizer.dspy_integration import (
-            AllocationRecommendationSignature,
             DSPY_AVAILABLE,
+            AllocationRecommendationSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -339,8 +336,8 @@ class TestDSPySignatures:
     def test_scenario_narrative_signature(self):
         """Test ScenarioNarrativeSignature is valid DSPy signature."""
         from src.agents.resource_optimizer.dspy_integration import (
-            ScenarioNarrativeSignature,
             DSPY_AVAILABLE,
+            ScenarioNarrativeSignature,
         )
 
         if not DSPY_AVAILABLE:

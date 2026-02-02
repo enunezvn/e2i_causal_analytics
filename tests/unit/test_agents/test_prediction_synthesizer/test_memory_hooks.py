@@ -9,20 +9,20 @@ Tests the memory integration for the Prediction Synthesizer agent including:
 """
 
 import json
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from src.agents.prediction_synthesizer.memory_hooks import (
-    PredictionSynthesizerMemoryHooks,
+    ModelPredictionRecord,
     PredictionMemoryContext,
     PredictionRecord,
-    ModelPredictionRecord,
+    PredictionSynthesizerMemoryHooks,
     contribute_to_memory,
     get_prediction_synthesizer_memory_hooks,
     reset_memory_hooks,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -148,7 +148,9 @@ class TestGetContext:
     async def test_get_context_returns_context_object(self, memory_hooks):
         """Test that get_context returns a PredictionMemoryContext."""
         # Mock episodic memory to avoid hitting real database
-        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+        with patch(
+            "src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock
+        ) as mock_search:
             mock_search.return_value = []
 
             context = await memory_hooks.get_context(
@@ -166,7 +168,9 @@ class TestGetContext:
     async def test_get_context_with_time_horizon(self, memory_hooks):
         """Test context retrieval with time horizon."""
         # Mock episodic memory to avoid hitting real database
-        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+        with patch(
+            "src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock
+        ) as mock_search:
             mock_search.return_value = []
 
             context = await memory_hooks.get_context(
@@ -187,10 +191,15 @@ class TestGetContext:
     async def test_get_context_graceful_degradation(self, memory_hooks):
         """Test that context retrieval handles missing memory gracefully."""
         # Patch both working memory and episodic memory to simulate unavailability
-        with patch(
-            "src.agents.prediction_synthesizer.memory_hooks.PredictionSynthesizerMemoryHooks.working_memory",
-            new_callable=lambda: property(lambda self: None),
-        ), patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+        with (
+            patch(
+                "src.agents.prediction_synthesizer.memory_hooks.PredictionSynthesizerMemoryHooks.working_memory",
+                new_callable=lambda: property(lambda self: None),
+            ),
+            patch(
+                "src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock
+            ) as mock_search,
+        ):
             mock_search.return_value = []
 
             context = await memory_hooks.get_context(
@@ -211,9 +220,7 @@ class TestWorkingMemoryContext:
     """Tests for working memory context retrieval."""
 
     @pytest.mark.asyncio
-    async def test_get_working_memory_context_success(
-        self, memory_hooks, mock_working_memory
-    ):
+    async def test_get_working_memory_context_success(self, memory_hooks, mock_working_memory):
         """Test successful working memory context retrieval."""
         mock_working_memory.get_messages.return_value = [
             {"role": "user", "content": "Predict churn for HCP 123"},
@@ -225,9 +232,7 @@ class TestWorkingMemoryContext:
         messages = await memory_hooks._get_working_memory_context("test-session")
 
         assert len(messages) == 2
-        mock_working_memory.get_messages.assert_called_once_with(
-            "test-session", limit=10
-        )
+        mock_working_memory.get_messages.assert_called_once_with("test-session", limit=10)
 
     @pytest.mark.asyncio
     async def test_get_working_memory_context_unavailable(self, memory_hooks):
@@ -259,9 +264,7 @@ class TestCachedPredictions:
 
         assert len(result) == 1
         assert result[0]["point_estimate"] == 0.72
-        mock_redis.get.assert_called_once_with(
-            "prediction_synthesizer:entity:hcp:hcp_123:churn"
-        )
+        mock_redis.get.assert_called_once_with("prediction_synthesizer:entity:hcp:hcp_123:churn")
 
     @pytest.mark.asyncio
     async def test_get_cached_predictions_not_found(
@@ -284,9 +287,7 @@ class TestModelPerformance:
     """Tests for model performance history retrieval."""
 
     @pytest.mark.asyncio
-    async def test_get_model_performance_found(
-        self, memory_hooks, mock_working_memory, mock_redis
-    ):
+    async def test_get_model_performance_found(self, memory_hooks, mock_working_memory, mock_redis):
         """Test retrieving model performance history."""
         performance_data = {
             "xgboost_churn": {"accuracy": 0.85, "calibration_error": 0.05},
@@ -301,9 +302,7 @@ class TestModelPerformance:
         assert result["xgboost_churn"]["accuracy"] == 0.85
 
     @pytest.mark.asyncio
-    async def test_get_model_performance_empty(
-        self, memory_hooks, mock_working_memory, mock_redis
-    ):
+    async def test_get_model_performance_empty(self, memory_hooks, mock_working_memory, mock_redis):
         """Test when no model performance history exists."""
         mock_redis.get.return_value = None
         memory_hooks._working_memory = mock_working_memory
@@ -361,9 +360,7 @@ class TestCachePrediction:
         assert first_call[0][1] == 3600  # PREDICTION_CACHE_TTL
 
     @pytest.mark.asyncio
-    async def test_cache_prediction_no_working_memory(
-        self, memory_hooks, sample_prediction_result
-    ):
+    async def test_cache_prediction_no_working_memory(self, memory_hooks, sample_prediction_result):
         """Test caching when working memory unavailable."""
         # Patch the property to return None, simulating unavailable memory
         with patch(
@@ -456,7 +453,9 @@ class TestGetCalibrationData:
     async def test_get_calibration_data_graceful_failure(self, memory_hooks):
         """Test that calibration data retrieval handles errors gracefully."""
         # Mock episodic memory to raise exception, testing graceful failure
-        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+        with patch(
+            "src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock
+        ) as mock_search:
             mock_search.side_effect = Exception("Database unavailable")
 
             results = await memory_hooks.get_calibration_data(
@@ -474,7 +473,9 @@ class TestGetSimilarPredictions:
     async def test_get_similar_predictions_graceful_failure(self, memory_hooks):
         """Test that similar prediction retrieval handles errors gracefully."""
         # Mock episodic memory to raise exception, testing graceful failure
-        with patch("src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock) as mock_search:
+        with patch(
+            "src.memory.episodic_memory.search_episodic_by_text", new_callable=AsyncMock
+        ) as mock_search:
             mock_search.side_effect = Exception("Database unavailable")
 
             results = await memory_hooks.get_similar_predictions(
@@ -542,9 +543,7 @@ class TestContributeToMemory:
         assert counts["working_cached"] == 1
 
     @pytest.mark.asyncio
-    async def test_contribute_generates_session_id(
-        self, sample_prediction_result, sample_state
-    ):
+    async def test_contribute_generates_session_id(self, sample_prediction_result, sample_state):
         """Test that session ID is generated if not provided."""
         counts = await contribute_to_memory(
             result=sample_prediction_result,
@@ -556,9 +555,7 @@ class TestContributeToMemory:
         assert isinstance(counts, dict)
 
     @pytest.mark.asyncio
-    async def test_contribute_skips_caching_without_entity_info(
-        self, sample_prediction_result
-    ):
+    async def test_contribute_skips_caching_without_entity_info(self, sample_prediction_result):
         """Test that caching is skipped without entity info."""
         state = {
             "status": "completed",
@@ -703,7 +700,9 @@ class TestMemoryHooksIntegration:
 
         # First call should be entity key
         entity_key = calls[0][0][0]
-        assert entity_key == "prediction_synthesizer:entity:territory:territory_northeast:conversion"
+        assert (
+            entity_key == "prediction_synthesizer:entity:territory:territory_northeast:conversion"
+        )
 
         # Second call should be session key
         session_key = calls[1][0][0]

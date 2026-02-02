@@ -28,7 +28,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from src.agents.gap_analyzer.state import GapAnalyzerState
@@ -274,8 +274,6 @@ class GapAnalyzerMLflowTracker:
             logger.debug("MLflow not available, skipping metric logging")
             return
 
-        import mlflow
-
         try:
             # Extract and log metrics
             metrics = self._extract_metrics(output, state)
@@ -337,15 +335,21 @@ class GapAnalyzerMLflowTracker:
                 expected_rois = [r.get("expected_roi", 0) for r in roi_estimates]
                 risk_adjusted_rois = [r.get("risk_adjusted_roi", 0) for r in roi_estimates]
 
-                metrics.avg_expected_roi = sum(expected_rois) / len(expected_rois) if expected_rois else 0.0
-                metrics.avg_risk_adjusted_roi = sum(risk_adjusted_rois) / len(risk_adjusted_rois) if risk_adjusted_rois else 0.0
+                metrics.avg_expected_roi = (
+                    sum(expected_rois) / len(expected_rois) if expected_rois else 0.0
+                )
+                metrics.avg_risk_adjusted_roi = (
+                    sum(risk_adjusted_rois) / len(risk_adjusted_rois) if risk_adjusted_rois else 0.0
+                )
                 metrics.max_expected_roi = max(expected_rois) if expected_rois else 0.0
 
             # Gap percentage metrics
             gaps_detected = state.get("gaps_detected", []) or []
             if gaps_detected:
                 gap_percentages = [g.get("gap_percentage", 0) for g in gaps_detected]
-                metrics.avg_gap_percentage = sum(gap_percentages) / len(gap_percentages) if gap_percentages else 0.0
+                metrics.avg_gap_percentage = (
+                    sum(gap_percentages) / len(gap_percentages) if gap_percentages else 0.0
+                )
                 metrics.max_gap_percentage = max(gap_percentages) if gap_percentages else 0.0
 
         return metrics
@@ -399,7 +403,9 @@ class GapAnalyzerMLflowTracker:
             mlflow.log_param("n_segments", len(state.get("segments", [])))
 
         # Result parameters
-        mlflow.log_param("requires_further_analysis", output.get("requires_further_analysis", False))
+        mlflow.log_param(
+            "requires_further_analysis", output.get("requires_further_analysis", False)
+        )
         if output.get("suggested_next_agent"):
             mlflow.log_param("suggested_next_agent", output["suggested_next_agent"])
 
@@ -413,7 +419,6 @@ class GapAnalyzerMLflowTracker:
         state: Optional["GapAnalyzerState"] = None,
     ) -> None:
         """Log artifacts to MLflow."""
-        import mlflow
 
         # Log prioritized opportunities
         opportunities = output.get("prioritized_opportunities", [])
@@ -425,32 +430,24 @@ class GapAnalyzerMLflowTracker:
         # Log quick wins
         quick_wins = output.get("quick_wins", [])
         if quick_wins:
-            await self._log_json_artifact(
-                quick_wins, "quick_wins.json", "opportunities"
-            )
+            await self._log_json_artifact(quick_wins, "quick_wins.json", "opportunities")
 
         # Log strategic bets
         strategic_bets = output.get("strategic_bets", [])
         if strategic_bets:
-            await self._log_json_artifact(
-                strategic_bets, "strategic_bets.json", "opportunities"
-            )
+            await self._log_json_artifact(strategic_bets, "strategic_bets.json", "opportunities")
 
         # Log detailed state if available
         if state:
             # Log ROI estimates
             roi_estimates = state.get("roi_estimates", [])
             if roi_estimates:
-                await self._log_json_artifact(
-                    roi_estimates, "roi_estimates.json", "analysis"
-                )
+                await self._log_json_artifact(roi_estimates, "roi_estimates.json", "analysis")
 
             # Log gaps by segment
             gaps_by_segment = state.get("gaps_by_segment", {})
             if gaps_by_segment:
-                await self._log_json_artifact(
-                    gaps_by_segment, "gaps_by_segment.json", "analysis"
-                )
+                await self._log_json_artifact(gaps_by_segment, "gaps_by_segment.json", "analysis")
 
     async def _log_json_artifact(
         self,
@@ -462,9 +459,7 @@ class GapAnalyzerMLflowTracker:
         import mlflow
 
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                 json.dump(data, f, indent=2, default=str)
                 temp_path = f.name
 
@@ -576,23 +571,25 @@ class GapAnalyzerMLflowTracker:
             }
 
         total = len(history)
-        addressable_values = [h["total_addressable_value"] for h in history if h.get("total_addressable_value")]
+        addressable_values = [
+            h["total_addressable_value"] for h in history if h.get("total_addressable_value")
+        ]
         expected_rois = [h["avg_expected_roi"] for h in history if h.get("avg_expected_roi")]
         latencies = [h["latency_ms"] for h in history if h.get("latency_ms")]
 
         return {
             "total_analyses": total,
             "total_addressable_value_sum": sum(addressable_values),
-            "avg_addressable_value": sum(addressable_values) / len(addressable_values) if addressable_values else 0.0,
+            "avg_addressable_value": sum(addressable_values) / len(addressable_values)
+            if addressable_values
+            else 0.0,
             "avg_expected_roi": sum(expected_rois) / len(expected_rois) if expected_rois else 0.0,
             "avg_latency_ms": sum(latencies) / len(latencies) if latencies else 0.0,
             "analyses_by_brand": self._count_by_field(history, "brand"),
             "analyses_by_gap_type": self._count_by_field(history, "gap_type"),
         }
 
-    def _count_by_field(
-        self, history: list[dict[str, Any]], field: str
-    ) -> dict[str, int]:
+    def _count_by_field(self, history: list[dict[str, Any]], field: str) -> dict[str, int]:
         """Count analyses by a specific field."""
         counts: dict[str, int] = {}
         for h in history:

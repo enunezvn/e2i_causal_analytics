@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -38,9 +38,7 @@ class RubricCriterion(BaseModel):
         expected_keys = {1, 2, 3, 4, 5}
         actual_keys = set(v.keys())
         if actual_keys != expected_keys:
-            logger.warning(
-                f"Scoring guide should have keys 1-5, got {sorted(actual_keys)}"
-            )
+            logger.warning(f"Scoring guide should have keys 1-5, got {sorted(actual_keys)}")
         return v
 
 
@@ -93,7 +91,9 @@ class DecisionFrameworkConfig(BaseModel):
         default_factory=list, description="Override conditions"
     )
 
-    def get_decision(self, score: float) -> Literal["acceptable", "suggestion", "auto_update", "escalate"]:
+    def get_decision(
+        self, score: float
+    ) -> Literal["acceptable", "suggestion", "auto_update", "escalate"]:
         """Determine the decision based on score."""
         if score >= self.thresholds.get("acceptable", 4.0):
             return "acceptable"

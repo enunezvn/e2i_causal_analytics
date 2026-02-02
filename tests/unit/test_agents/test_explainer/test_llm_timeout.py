@@ -6,7 +6,7 @@ Tests LLM timeout handling and fallback behavior.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -312,4 +312,6 @@ class TestErrorReporting:
 
         # If status is completed, should have content
         if result.status == "completed":
-            assert result.executive_summary or result.detailed_explanation or result.narrative_sections
+            assert (
+                result.executive_summary or result.detailed_explanation or result.narrative_sections
+            )

@@ -5,13 +5,13 @@ Integrates validation results with MLflow and Opik for tracking and monitoring.
 """
 
 import json
-from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 # Optional imports for observability tools
 try:
     import mlflow
+
     MLFLOW_AVAILABLE = True
 except ImportError:
     MLFLOW_AVAILABLE = False
@@ -19,6 +19,7 @@ except ImportError:
 
 try:
     import opik
+
     OPIK_AVAILABLE = True
 except ImportError:
     OPIK_AVAILABLE = False
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 # =============================================================================
 # MLFLOW INTEGRATION
 # =============================================================================
+
 
 def log_validation_to_mlflow(
     results: Dict[str, "ValidationResult"],
@@ -73,41 +75,42 @@ def log_validation_to_mlflow(
             total_tables = len(results)
             passed_tables = sum(1 for r in results.values() if r.success)
             total_expectations = sum(
-                r.statistics.get("evaluated_expectations", 0)
-                for r in results.values()
+                r.statistics.get("evaluated_expectations", 0) for r in results.values()
             )
             passed_expectations = sum(
-                r.statistics.get("successful_expectations", 0)
-                for r in results.values()
+                r.statistics.get("successful_expectations", 0) for r in results.values()
             )
 
-            mlflow.log_metrics({
-                "total_tables_validated": total_tables,
-                "tables_passed": passed_tables,
-                "tables_failed": total_tables - passed_tables,
-                "total_expectations": total_expectations,
-                "passed_expectations": passed_expectations,
-                "failed_expectations": total_expectations - passed_expectations,
-                "overall_success_rate": (
-                    passed_expectations / total_expectations
-                    if total_expectations > 0 else 0.0
-                ),
-            })
+            mlflow.log_metrics(
+                {
+                    "total_tables_validated": total_tables,
+                    "tables_passed": passed_tables,
+                    "tables_failed": total_tables - passed_tables,
+                    "total_expectations": total_expectations,
+                    "passed_expectations": passed_expectations,
+                    "failed_expectations": total_expectations - passed_expectations,
+                    "overall_success_rate": (
+                        passed_expectations / total_expectations if total_expectations > 0 else 0.0
+                    ),
+                }
+            )
 
             # Log per-table metrics
             for table_name, result in results.items():
                 prefix = f"{table_name}_"
-                mlflow.log_metrics({
-                    f"{prefix}success": 1 if result.success else 0,
-                    f"{prefix}success_rate": result.success_rate,
-                    f"{prefix}evaluated_expectations": result.statistics.get(
-                        "evaluated_expectations", 0
-                    ),
-                    f"{prefix}successful_expectations": result.statistics.get(
-                        "successful_expectations", 0
-                    ),
-                    f"{prefix}run_time_seconds": result.run_time_seconds,
-                })
+                mlflow.log_metrics(
+                    {
+                        f"{prefix}success": 1 if result.success else 0,
+                        f"{prefix}success_rate": result.success_rate,
+                        f"{prefix}evaluated_expectations": result.statistics.get(
+                            "evaluated_expectations", 0
+                        ),
+                        f"{prefix}successful_expectations": result.statistics.get(
+                            "successful_expectations", 0
+                        ),
+                        f"{prefix}run_time_seconds": result.run_time_seconds,
+                    }
+                )
 
             # Log failed expectations as artifact
             failed_expectations = {}
@@ -122,16 +125,10 @@ def log_validation_to_mlflow(
                     ]
 
             if failed_expectations:
-                mlflow.log_dict(
-                    failed_expectations,
-                    "failed_expectations.json"
-                )
+                mlflow.log_dict(failed_expectations, "failed_expectations.json")
 
             # Log full results as artifact
-            full_results = {
-                table_name: result.to_dict()
-                for table_name, result in results.items()
-            }
+            full_results = {table_name: result.to_dict() for table_name, result in results.items()}
             mlflow.log_dict(full_results, "validation_results.json")
 
             return run.info.run_id
@@ -158,6 +155,7 @@ def _serialize_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
 # OPIK INTEGRATION
 # =============================================================================
 
+
 class ValidationSpan:
     """Context manager for Opik validation spans."""
 
@@ -183,7 +181,7 @@ class ValidationSpan:
                         "table_name": self.table_name,
                         "validation_type": "synthetic_data",
                         **self.metadata,
-                    }
+                    },
                 )
             except Exception:
                 pass
@@ -246,6 +244,7 @@ def create_validation_span(
 # =============================================================================
 # COMBINED OBSERVABILITY
 # =============================================================================
+
 
 class ValidationObserver:
     """

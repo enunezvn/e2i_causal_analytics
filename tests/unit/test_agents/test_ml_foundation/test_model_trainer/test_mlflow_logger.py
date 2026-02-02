@@ -3,19 +3,17 @@
 Tests the log_to_mlflow function with mock MLflow connector.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from sklearn.ensemble import RandomForestClassifier
 
 import numpy as np
+import pytest
 
 from src.agents.ml_foundation.model_trainer.nodes.mlflow_logger import (
-    log_to_mlflow,
     _get_framework,
     _get_mlflow_flavor,
     _get_primary_metric,
+    log_to_mlflow,
 )
-
 
 # ============================================================================
 # Test fixtures
@@ -153,9 +151,7 @@ class TestLogToMlflow:
 
         assert result["mlflow_model_uri"] == "runs:/run_abc123/model"
 
-    async def test_registers_model_when_requested(
-        self, training_state, mock_mlflow_connector
-    ):
+    async def test_registers_model_when_requested(self, training_state, mock_mlflow_connector):
         """Should register model when requested."""
         training_state["register_model"] = True
         training_state["model_name"] = "my_model"
@@ -199,9 +195,7 @@ class TestLogToMlflow:
         assert result["mlflow_status"] == "failed"
         assert "error" in result
 
-    async def test_uses_default_experiment_name(
-        self, training_state, mock_mlflow_connector
-    ):
+    async def test_uses_default_experiment_name(self, training_state, mock_mlflow_connector):
         """Should use default experiment name if not provided."""
         del training_state["experiment_name"]
 

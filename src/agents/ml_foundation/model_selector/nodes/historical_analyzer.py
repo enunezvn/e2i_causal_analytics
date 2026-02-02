@@ -25,16 +25,14 @@ async def analyze_historical_performance(state: Dict[str, Any]) -> Dict[str, Any
     """
     problem_type = state.get("problem_type", "binary_classification")
     kpi_category = state.get("kpi_category")
-    experiment_id = state.get("experiment_id", "")
+    state.get("experiment_id", "")
 
     # Try to get historical data from database
     historical_data = await _query_historical_experiments(problem_type, kpi_category)
 
     if historical_data:
         success_rates = _compute_success_rates(historical_data)
-        similar_experiments = _find_similar_experiments(
-            historical_data, problem_type, kpi_category
-        )
+        similar_experiments = _find_similar_experiments(historical_data, problem_type, kpi_category)
     else:
         # Use prior knowledge as defaults
         success_rates = _get_default_success_rates(problem_type)
@@ -370,11 +368,7 @@ async def get_recommendations_from_history(state: Dict[str, Any]) -> Dict[str, A
 
     # Get top performers from history
     if success_rates:
-        sorted_algos = sorted(
-            success_rates.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
+        sorted_algos = sorted(success_rates.items(), key=lambda x: x[1], reverse=True)
         recommended = [name for name, rate in sorted_algos[:3] if rate > 0.6]
     else:
         # Default recommendations based on problem type and domain

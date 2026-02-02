@@ -53,9 +53,7 @@ async def error_handler(state: CohortConstructorState) -> Dict[str, Any]:
     error_code = state.get("error_code", "CC_000")
     error_category = state.get("error_category", "UNKNOWN")
 
-    logger.error(
-        f"CohortConstructor workflow failed: [{error_code}] {error_category} - {error}"
-    )
+    logger.error(f"CohortConstructor workflow failed: [{error_code}] {error_category} - {error}")
 
     return {
         "current_phase": "complete",

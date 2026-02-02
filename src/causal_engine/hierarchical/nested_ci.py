@@ -14,7 +14,7 @@ Methods:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -158,8 +158,7 @@ class NestedConfidenceInterval:
 
         # Filter segments by minimum size
         valid_segments = [
-            s for s in segment_estimates
-            if s.sample_size >= self.config.min_segment_size
+            s for s in segment_estimates if s.sample_size >= self.config.min_segment_size
         ]
 
         n_excluded = len(segment_estimates) - len(valid_segments)
@@ -231,9 +230,7 @@ class NestedConfidenceInterval:
                 "consider segment-specific analysis"
             )
         elif result.i_squared > 50:
-            result.warnings.append(
-                f"Moderate heterogeneity (I²={result.i_squared:.1f}%)"
-            )
+            result.warnings.append(f"Moderate heterogeneity (I²={result.i_squared:.1f}%)")
 
         return result
 
@@ -254,10 +251,7 @@ class NestedConfidenceInterval:
 
         # Pooled variance with weights
         # Var(weighted mean) = sum(w_i^2 * var_i)
-        weighted_var = sum(
-            (s.sample_size / total_n) ** 2 * s.ate_std ** 2
-            for s in segments
-        )
+        weighted_var = sum((s.sample_size / total_n) ** 2 * s.ate_std**2 for s in segments)
         std = np.sqrt(weighted_var)
 
         # Confidence interval
@@ -285,7 +279,7 @@ class NestedConfidenceInterval:
         the same underlying effect. Uses inverse-variance weighting.
         """
         # Inverse-variance weights
-        variances = np.array([s.ate_std ** 2 for s in segments])
+        variances = np.array([s.ate_std**2 for s in segments])
 
         # Handle zero variance (exact estimates)
         variances = np.where(variances < 1e-10, 1e-10, variances)
@@ -294,10 +288,7 @@ class NestedConfidenceInterval:
         total_inv_var = np.sum(inv_var)
         weights_array = inv_var / total_inv_var
 
-        weights = {
-            s.segment_name: float(w)
-            for s, w in zip(segments, weights_array)
-        }
+        weights = {s.segment_name: float(w) for s, w in zip(segments, weights_array, strict=False)}
 
         # Weighted mean
         effects = np.array([s.ate for s in segments])
@@ -339,8 +330,8 @@ class NestedConfidenceInterval:
         ate = float(np.mean(effects))
 
         # Standard error of mean
-        variances = np.array([s.ate_std ** 2 for s in segments])
-        var = np.sum(variances) / (n ** 2)
+        variances = np.array([s.ate_std**2 for s in segments])
+        var = np.sum(variances) / (n**2)
         std = np.sqrt(var)
 
         # Confidence interval
@@ -435,19 +426,16 @@ class NestedConfidenceInterval:
     ) -> NDArray[np.float64]:
         """Parametric bootstrap from segment estimates."""
         bootstrap_ates = np.zeros(n_iter)
-        n_seg = len(segments)
+        len(segments)
 
         for i in range(n_iter):
             # Sample from each segment's distribution
-            segment_samples = [
-                self._rng.normal(s.ate, s.ate_std)
-                for s in segments
-            ]
+            segment_samples = [self._rng.normal(s.ate, s.ate_std) for s in segments]
             # Sample-weighted average
             total_n = sum(s.sample_size for s in segments)
             weights = [s.sample_size / total_n for s in segments]
             bootstrap_ates[i] = sum(
-                w * sample for w, sample in zip(weights, segment_samples)
+                w * sample for w, sample in zip(weights, segment_samples, strict=False)
             )
 
         return bootstrap_ates
@@ -469,7 +457,7 @@ class NestedConfidenceInterval:
             return {"q_statistic": 0.0, "i_squared": 0.0, "tau_squared": 0.0}
 
         # Inverse-variance weights
-        variances = np.array([s.ate_std ** 2 for s in segments])
+        variances = np.array([s.ate_std**2 for s in segments])
         variances = np.where(variances < 1e-10, 1e-10, variances)
         inv_var = 1.0 / variances
         effects = np.array([s.ate for s in segments])
@@ -485,7 +473,7 @@ class NestedConfidenceInterval:
         i_squared = max(0.0, (q - df) / q * 100) if q > 0 else 0.0
 
         # τ² (DerSimonian-Laird estimator)
-        c = np.sum(inv_var) - np.sum(inv_var ** 2) / np.sum(inv_var)
+        c = np.sum(inv_var) - np.sum(inv_var**2) / np.sum(inv_var)
         tau_squared = max(0.0, (q - df) / c) if c > 0 else 0.0
 
         return {
@@ -497,6 +485,7 @@ class NestedConfidenceInterval:
     def _get_z_score(self) -> float:
         """Get z-score for configured confidence level."""
         from scipy import stats
+
         alpha = 1 - self.config.confidence_level
         return float(stats.norm.ppf(1 - alpha / 2))
 
@@ -518,10 +507,7 @@ class NestedConfidenceInterval:
         warnings: List[str] = []
 
         # Filter segments
-        valid_segments = [
-            s for s in segments
-            if s.sample_size >= self.config.min_segment_size
-        ]
+        valid_segments = [s for s in segments if s.sample_size >= self.config.min_segment_size]
 
         if len(valid_segments) < 2:
             return self.compute(segments)
@@ -531,7 +517,7 @@ class NestedConfidenceInterval:
         tau_squared = het["tau_squared"]
 
         # Random-effects weights: 1 / (var_i + tau^2)
-        variances = np.array([s.ate_std ** 2 for s in valid_segments])
+        variances = np.array([s.ate_std**2 for s in valid_segments])
         re_var = variances + tau_squared
         re_var = np.where(re_var < 1e-10, 1e-10, re_var)
         inv_var_re = 1.0 / re_var
@@ -539,8 +525,7 @@ class NestedConfidenceInterval:
 
         weights_array = inv_var_re / total_inv_var
         weights = {
-            s.segment_name: float(w)
-            for s, w in zip(valid_segments, weights_array)
+            s.segment_name: float(w) for s, w in zip(valid_segments, weights_array, strict=False)
         }
 
         # Random-effects pooled estimate

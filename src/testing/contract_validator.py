@@ -107,9 +107,7 @@ class ContractValidator:
             else:
                 required_present += 1
                 # Type check
-                type_error = self._check_type(
-                    field_name, state[field_name], hints.get(field_name)
-                )
+                type_error = self._check_type(field_name, state[field_name], hints.get(field_name))
                 if type_error:
                     type_errors.append(type_error)
 
@@ -124,9 +122,7 @@ class ContractValidator:
                     continue
                 optional_present += 1
                 # Type check
-                type_error = self._check_type(
-                    field_name, value, hints.get(field_name)
-                )
+                type_error = self._check_type(field_name, value, hints.get(field_name))
                 if type_error:
                     type_errors.append(type_error)
 
@@ -268,7 +264,7 @@ class ContractValidator:
                 "field": field_name,
                 "expected": str(expected_type),
                 "actual": type(value).__name__,
-                "message": f"Value doesn't match any type in Union",
+                "message": "Value doesn't match any type in Union",
             }
 
         # Handle list, dict, etc.
@@ -310,7 +306,7 @@ class ContractValidator:
                 "field": field_name,
                 "expected": str(expected_type),
                 "actual": type(value).__name__,
-                "message": f"Type mismatch",
+                "message": "Type mismatch",
             }
 
         return None

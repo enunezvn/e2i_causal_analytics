@@ -24,7 +24,6 @@ import pytest
 # Mark entire module to run on same worker - prevents import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
-import asyncio
 import os
 import time
 import uuid
@@ -318,7 +317,9 @@ class TestDSPySignatureInvocation:
                 assert result.response is not None or result.visualization_config is not None
                 assert result.routed_agents is not None
 
-    async def test_reflector_signatures_invoked(self, mock_lm, mock_signal_collector, cognitive_state):
+    async def test_reflector_signatures_invoked(
+        self, mock_lm, mock_signal_collector, cognitive_state
+    ):
         """Test Phase 4 signatures: MemoryWorthiness, ProcedureLearning."""
         # Prepare state with response
         cognitive_state.response = "Kisqali adoption increased due to HCP engagement"
@@ -358,7 +359,9 @@ class TestDSPySignatureInvocation:
 class TestTrainingSignalCollection:
     """Verify training signals are collected and persisted correctly."""
 
-    async def test_signals_collected_in_phase4(self, mock_lm, mock_signal_collector, cognitive_state):
+    async def test_signals_collected_in_phase4(
+        self, mock_lm, mock_signal_collector, cognitive_state
+    ):
         """Run cognitive cycle and verify signals appear in state.dspy_signals."""
         cognitive_state.response = "Analysis complete"
         cognitive_state.detected_intent = "CAUSAL_ANALYSIS"
@@ -767,7 +770,9 @@ class TestDSPyPerformance:
     """Performance benchmark tests for DSPy integration."""
 
     @pytest.mark.asyncio
-    async def test_signal_collection_under_1000ms(self, mock_lm, mock_signal_collector, cognitive_state):
+    async def test_signal_collection_under_1000ms(
+        self, mock_lm, mock_signal_collector, cognitive_state
+    ):
         """Benchmark Phase 4 signal collection latency.
 
         Uses 1000ms threshold to account for:

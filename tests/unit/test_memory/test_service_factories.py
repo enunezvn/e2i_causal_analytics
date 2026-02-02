@@ -223,6 +223,7 @@ class TestEmbeddingServices:
         service = get_embedding_service("local_pilot")
         # Accept either OpenAI or Fallback depending on environment
         from src.memory.services.factories import FallbackEmbeddingService
+
         assert isinstance(service, (OpenAIEmbeddingService, FallbackEmbeddingService))
 
     def test_get_embedding_service_returns_bedrock_for_production(self):
@@ -232,6 +233,7 @@ class TestEmbeddingServices:
         service = get_embedding_service("aws_production")
         # Accept either Bedrock or Fallback depending on environment
         from src.memory.services.factories import FallbackEmbeddingService
+
         assert isinstance(service, (BedrockEmbeddingService, FallbackEmbeddingService))
 
     @patch.dict(os.environ, {"E2I_ENVIRONMENT": "local_pilot"})
@@ -242,6 +244,7 @@ class TestEmbeddingServices:
         service = get_embedding_service()
         # Accept either OpenAI or Fallback depending on environment
         from src.memory.services.factories import FallbackEmbeddingService
+
         assert isinstance(service, (OpenAIEmbeddingService, FallbackEmbeddingService))
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": ""})

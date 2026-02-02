@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
 from uuid_utils import uuid7 as uuid7_func
 
 if TYPE_CHECKING:
-    from src.mlops.opik_connector import OpikConnector, SpanContext
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +98,14 @@ class NodeSpanContext:
             user_id: User identifier
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "is_new_conversation": is_new_conversation,
-            "session_id": session_id,
-            "user_id": user_id,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "is_new_conversation": is_new_conversation,
+                "session_id": session_id,
+                "user_id": user_id,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("is_new_conversation", is_new_conversation)
@@ -116,10 +118,7 @@ class NodeSpanContext:
                 },
             )
 
-        logger.debug(
-            f"[INIT] new_conversation={is_new_conversation}, "
-            f"session={session_id}"
-        )
+        logger.debug(f"[INIT] new_conversation={is_new_conversation}, session={session_id}")
 
     def log_context_load(
         self,
@@ -138,13 +137,15 @@ class NodeSpanContext:
             region_context: Region filter applied
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "previous_message_count": previous_message_count,
-            "conversation_title": conversation_title,
-            "brand_context": brand_context,
-            "region_context": region_context,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "previous_message_count": previous_message_count,
+                "conversation_title": conversation_title,
+                "brand_context": brand_context,
+                "region_context": region_context,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("previous_message_count", previous_message_count)
@@ -180,12 +181,14 @@ class NodeSpanContext:
             classification_method: Method used (hardcoded, dspy)
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "intent": intent,
-            "confidence": confidence,
-            "classification_method": classification_method,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "intent": intent,
+                "confidence": confidence,
+                "classification_method": classification_method,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("intent", intent)
@@ -228,15 +231,17 @@ class NodeSpanContext:
         if relevance_scores and len(relevance_scores) > 0:
             avg_score = sum(relevance_scores) / len(relevance_scores)
 
-        self.metadata.update({
-            "result_count": result_count,
-            "avg_relevance_score": avg_score,
-            "relevance_scores": relevance_scores or [],
-            "kpi_filter": kpi_filter,
-            "brand_filter": brand_filter,
-            "retrieval_method": retrieval_method,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "result_count": result_count,
+                "avg_relevance_score": avg_score,
+                "relevance_scores": relevance_scores or [],
+                "kpi_filter": kpi_filter,
+                "brand_filter": brand_filter,
+                "retrieval_method": retrieval_method,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("result_count", result_count)
@@ -282,16 +287,18 @@ class NodeSpanContext:
         """
         total_tokens = input_tokens + output_tokens
 
-        self.metadata.update({
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": total_tokens,
-            "model": model,
-            "provider": provider,
-            "tool_calls_count": tool_calls_count,
-            "temperature": temperature,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "model": model,
+                "provider": provider,
+                "tool_calls_count": tool_calls_count,
+                "temperature": temperature,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("input_tokens", input_tokens)
@@ -332,13 +339,15 @@ class NodeSpanContext:
             error: Error message if failed
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "tool_name": tool_name,
-            "tool_success": success,
-            "result_size": result_size,
-            "tool_error": error,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "tool_name": tool_name,
+                "tool_success": success,
+                "result_size": result_size,
+                "tool_error": error,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("tool_name", tool_name)
@@ -352,9 +361,7 @@ class NodeSpanContext:
                 },
             )
 
-        logger.debug(
-            f"[TOOL] {tool_name}: success={success}, result_size={result_size}"
-        )
+        logger.debug(f"[TOOL] {tool_name}: success={success}, result_size={result_size}")
 
     def log_finalize(
         self,
@@ -373,13 +380,15 @@ class NodeSpanContext:
             significance_score: Significance score for episodic memory
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "response_length": response_length,
-            "messages_persisted": messages_persisted,
-            "episodic_memory_saved": episodic_memory_saved,
-            "significance_score": significance_score,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "response_length": response_length,
+                "messages_persisted": messages_persisted,
+                "episodic_memory_saved": episodic_memory_saved,
+                "significance_score": significance_score,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("response_length", response_length)
@@ -527,15 +536,18 @@ class ChatbotTraceContext:
             # Store in parent context
             self.node_spans[node_name] = node_ctx
 
-            logger.debug(
-                f"Node {node_name} completed in {node_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"Node {node_name} completed in {node_ctx.duration_ms:.2f}ms")
 
     def _get_node_index(self, node_name: str) -> int:
         """Get numeric index for node ordering."""
         node_order = [
-            "init", "load_context", "classify_intent",
-            "retrieve_rag", "generate", "tools", "finalize"
+            "init",
+            "load_context",
+            "classify_intent",
+            "retrieve_rag",
+            "generate",
+            "tools",
+            "finalize",
         ]
         return node_order.index(node_name) if node_name in node_order else -1
 
@@ -670,11 +682,7 @@ class ChatbotOpikTracer:
     def is_enabled(self) -> bool:
         """Check if tracing is enabled and available."""
         self._ensure_initialized()
-        return (
-            self.enabled
-            and self._opik_connector is not None
-            and self._opik_connector.is_enabled
-        )
+        return self.enabled and self._opik_connector is not None and self._opik_connector.is_enabled
 
     def _should_trace(self) -> bool:
         """Determine if this workflow should be traced."""
@@ -739,9 +747,6 @@ class ChatbotOpikTracer:
             _tracer=self,
         )
 
-        error_occurred = False
-        error_info = None
-
         try:
             # Create Opik trace if enabled and sampled
             logger.debug(
@@ -752,26 +757,30 @@ class ChatbotOpikTracer:
             if self.is_enabled and self._should_trace():
                 try:
                     logger.info(f"Creating chatbot trace with id={trace_id}")
-                    async with self._opik_connector.trace_agent(
-                        agent_name="chatbot",
-                        operation="workflow",
-                        trace_id=trace_id,
-                        metadata={
-                            "pipeline": "init→load_context→classify_intent→retrieve_rag→generate→finalize",
-                            "tier": 1,
-                            **trace_metadata,
-                        },
-                        tags=["chatbot", "workflow", "copilotkit"],
-                        input_data={
-                            "query": query[:500],  # Truncate for Opik
-                            "session_id": session_id,
-                            "brand": brand_context,
-                            "region": region_context,
-                        },
-                        force_new_trace=True,  # We're creating a new workflow trace with our own trace_id
-                    ) as span:
+                    async with (
+                        self._opik_connector.trace_agent(
+                            agent_name="chatbot",
+                            operation="workflow",
+                            trace_id=trace_id,
+                            metadata={
+                                "pipeline": "init→load_context→classify_intent→retrieve_rag→generate→finalize",
+                                "tier": 1,
+                                **trace_metadata,
+                            },
+                            tags=["chatbot", "workflow", "copilotkit"],
+                            input_data={
+                                "query": query[:500],  # Truncate for Opik
+                                "session_id": session_id,
+                                "brand": brand_context,
+                                "region": region_context,
+                            },
+                            force_new_trace=True,  # We're creating a new workflow trace with our own trace_id
+                        ) as span
+                    ):
                         trace_ctx._opik_span = span
-                        logger.info(f"Chatbot trace created: span_id={span.span_id[:12] if hasattr(span, 'span_id') else 'N/A'}...")
+                        logger.info(
+                            f"Chatbot trace created: span_id={span.span_id[:12] if hasattr(span, 'span_id') else 'N/A'}..."
+                        )
                         yield trace_ctx
                         return
                 except Exception as e:
@@ -781,8 +790,7 @@ class ChatbotOpikTracer:
             yield trace_ctx
 
         except Exception as e:
-            error_occurred = True
-            error_info = {"type": type(e).__name__, "message": str(e)}
+            {"type": type(e).__name__, "message": str(e)}
             raise
 
         finally:
@@ -791,9 +799,7 @@ class ChatbotOpikTracer:
             trace_ctx.end_time = end_time
             trace_ctx.duration_ms = (end_time - start_time).total_seconds() * 1000
 
-            logger.debug(
-                f"Chatbot workflow trace completed in {trace_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"Chatbot workflow trace completed in {trace_ctx.duration_ms:.2f}ms")
 
 
 def trace_chatbot_workflow(

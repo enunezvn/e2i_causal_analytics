@@ -8,13 +8,11 @@ Tests cover:
 - Edge cases and error handling
 """
 
-from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
 from src.agents.experiment_monitor.nodes.alert_generator import AlertGeneratorNode
-from src.agents.experiment_monitor.state import ExperimentMonitorState
 
 
 class TestAlertGeneratorNodeInit:

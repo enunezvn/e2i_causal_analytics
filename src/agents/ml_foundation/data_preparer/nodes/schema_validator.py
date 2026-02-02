@@ -13,9 +13,7 @@ Integration Order:
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
-
-import pandas as pd
+from typing import Any, Dict, List
 
 from ..state import DataPreparerState
 
@@ -57,8 +55,8 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
         # Import here to avoid circular imports
         from src.mlops.pandera_schemas import (
             get_schema,
-            validate_dataframe,
             list_registered_schemas,
+            validate_dataframe,
         )
 
         # Get data source name
@@ -111,9 +109,8 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
                 "schema_validation_errors": [],
                 "schema_splits_validated": 0,
                 "schema_validation_time_ms": elapsed_ms,
-                "warnings": state.get("warnings", []) + [
-                    "No DataFrames available for schema validation"
-                ],
+                "warnings": state.get("warnings", [])
+                + ["No DataFrames available for schema validation"],
             }
 
         # Validate each split
@@ -165,9 +162,7 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
             # Build blocking issues
             blocking_issues = state.get("blocking_issues", []).copy()
             error_summary = _summarize_schema_errors(all_errors)
-            blocking_issues.append(
-                f"Schema validation failed: {error_summary}"
-            )
+            blocking_issues.append(f"Schema validation failed: {error_summary}")
 
             logger.warning(
                 f"Schema validation FAILED for {data_source}: "
@@ -215,9 +210,7 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         return {
             "schema_validation_status": "error",
-            "schema_validation_errors": [
-                {"message": str(e), "type": type(e).__name__}
-            ],
+            "schema_validation_errors": [{"message": str(e), "type": type(e).__name__}],
             "schema_splits_validated": 0,
             "schema_validation_time_ms": elapsed_ms,
             "error": str(e),

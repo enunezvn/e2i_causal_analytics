@@ -10,7 +10,6 @@ Provides data quality validation using Great Expectations framework:
 Version: 1.0.0
 """
 
-import asyncio
 import json
 import logging
 import uuid
@@ -18,15 +17,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import pandas as pd
 
 try:
     import great_expectations as gx
     from great_expectations.core.expectation_validation_result import (
-        ExpectationSuiteValidationResult,
+        ExpectationSuiteValidationResult,  # noqa: F401
     )
+
     GE_AVAILABLE = True
 except ImportError:
     gx = None
@@ -175,8 +175,8 @@ class WebhookAlertHandler(AlertHandler):
 
     def _send_sync(self, payload: Dict[str, Any], config: AlertConfig) -> bool:
         """Synchronous fallback for webhook."""
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         try:
             data = json.dumps(payload).encode("utf-8")
@@ -431,20 +431,24 @@ class ExpectationSuiteBuilder:
 
     def expect_column_to_exist(self, column: str) -> "ExpectationSuiteBuilder":
         """Expect column to exist in the dataset."""
-        self.expectations.append({
-            "expectation_type": "expect_column_to_exist",
-            "kwargs": {"column": column},
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_column_to_exist",
+                "kwargs": {"column": column},
+            }
+        )
         return self
 
     def expect_column_values_to_not_be_null(
         self, column: str, mostly: float = 1.0
     ) -> "ExpectationSuiteBuilder":
         """Expect column values to not be null."""
-        self.expectations.append({
-            "expectation_type": "expect_column_values_to_not_be_null",
-            "kwargs": {"column": column, "mostly": mostly},
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_column_values_to_not_be_null",
+                "kwargs": {"column": column, "mostly": mostly},
+            }
+        )
         return self
 
     def expect_column_values_to_be_between(
@@ -460,30 +464,36 @@ class ExpectationSuiteBuilder:
             kwargs["min_value"] = min_value
         if max_value is not None:
             kwargs["max_value"] = max_value
-        self.expectations.append({
-            "expectation_type": "expect_column_values_to_be_between",
-            "kwargs": kwargs,
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_column_values_to_be_between",
+                "kwargs": kwargs,
+            }
+        )
         return self
 
     def expect_column_values_to_be_in_set(
         self, column: str, value_set: List[Any], mostly: float = 1.0
     ) -> "ExpectationSuiteBuilder":
         """Expect column values to be in a set of allowed values."""
-        self.expectations.append({
-            "expectation_type": "expect_column_values_to_be_in_set",
-            "kwargs": {"column": column, "value_set": value_set, "mostly": mostly},
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_column_values_to_be_in_set",
+                "kwargs": {"column": column, "value_set": value_set, "mostly": mostly},
+            }
+        )
         return self
 
     def expect_column_values_to_be_unique(
         self, column: str, mostly: float = 1.0
     ) -> "ExpectationSuiteBuilder":
         """Expect column values to be unique."""
-        self.expectations.append({
-            "expectation_type": "expect_column_values_to_be_unique",
-            "kwargs": {"column": column, "mostly": mostly},
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_column_values_to_be_unique",
+                "kwargs": {"column": column, "mostly": mostly},
+            }
+        )
         return self
 
     def expect_table_row_count_to_be_between(
@@ -493,30 +503,36 @@ class ExpectationSuiteBuilder:
         kwargs = {"min_value": min_value}
         if max_value is not None:
             kwargs["max_value"] = max_value
-        self.expectations.append({
-            "expectation_type": "expect_table_row_count_to_be_between",
-            "kwargs": kwargs,
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_table_row_count_to_be_between",
+                "kwargs": kwargs,
+            }
+        )
         return self
 
     def expect_column_values_to_match_regex(
         self, column: str, regex: str, mostly: float = 1.0
     ) -> "ExpectationSuiteBuilder":
         """Expect column values to match a regex pattern."""
-        self.expectations.append({
-            "expectation_type": "expect_column_values_to_match_regex",
-            "kwargs": {"column": column, "regex": regex, "mostly": mostly},
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_column_values_to_match_regex",
+                "kwargs": {"column": column, "regex": regex, "mostly": mostly},
+            }
+        )
         return self
 
     def expect_column_pair_values_to_be_equal(
         self, column_A: str, column_B: str, mostly: float = 1.0
     ) -> "ExpectationSuiteBuilder":
         """Expect values in two columns to be equal."""
-        self.expectations.append({
-            "expectation_type": "expect_column_pair_values_to_be_equal",
-            "kwargs": {"column_A": column_A, "column_B": column_B, "mostly": mostly},
-        })
+        self.expectations.append(
+            {
+                "expectation_type": "expect_column_pair_values_to_be_equal",
+                "kwargs": {"column_A": column_A, "column_B": column_B, "mostly": mostly},
+            }
+        )
         return self
 
     def build(self) -> List[Dict[str, Any]]:
@@ -561,8 +577,7 @@ class DataQualityValidator:
         """
         if not GE_AVAILABLE:
             logger.warning(
-                "Great Expectations not available. "
-                "Install with: pip install great-expectations"
+                "Great Expectations not available. Install with: pip install great-expectations"
             )
         self._checkpoint_history: List[Dict[str, Any]] = []
         self._alerter = alerter
@@ -619,9 +634,7 @@ class DataQualityValidator:
             .expect_column_to_exist("trigger_type")
             .expect_column_to_exist("priority")
             .expect_column_values_to_not_be_null("trigger_type")
-            .expect_column_values_to_be_in_set(
-                "priority", ["high", "medium", "low"], mostly=0.95
-            )
+            .expect_column_values_to_be_in_set("priority", ["high", "medium", "low"], mostly=0.95)
             .build()
         )
 
@@ -667,9 +680,7 @@ class DataQualityValidator:
             .expect_column_to_exist("effect_strength")
             .expect_column_values_to_not_be_null("source_node")
             .expect_column_values_to_not_be_null("target_node")
-            .expect_column_values_to_be_between(
-                "effect_strength", min_value=-1, max_value=1
-            )
+            .expect_column_values_to_be_between("effect_strength", min_value=-1, max_value=1)
             .build()
         )
 
@@ -685,9 +696,7 @@ class DataQualityValidator:
             .build()
         )
 
-    def register_suite(
-        self, suite_name: str, expectations: List[Dict[str, Any]]
-    ) -> None:
+    def register_suite(self, suite_name: str, expectations: List[Dict[str, Any]]) -> None:
         """Register a custom expectation suite."""
         self.SUITES[suite_name] = expectations
         logger.info(f"Registered suite '{suite_name}' with {len(expectations)} expectations")
@@ -785,9 +794,7 @@ class DataQualityValidator:
             result.uniqueness_score = self._calc_uniqueness_score(df, validation_results)
 
             # Validation time
-            result.validation_time_ms = int(
-                (datetime.now() - start_time).total_seconds() * 1000
-            )
+            result.validation_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             logger.info(
                 f"Validation completed: suite={suite_name}, "
@@ -854,18 +861,14 @@ class DataQualityValidator:
 
             # Create validation definition
             validation_def = context.validation_definitions.add(
-                gx.ValidationDefinition(
-                    name=f"validation_{unique_id}",
-                    data=batch_def,
-                    suite=suite
-                )
+                gx.ValidationDefinition(name=f"validation_{unique_id}", data=batch_def, suite=suite)
             )
 
             # Run validation
             validation_result = validation_def.run(batch_parameters={"dataframe": df})
 
             # Extract individual expectation results
-            for i, exp in enumerate(expectations):
+            for _i, exp in enumerate(expectations):
                 exp_type = exp["expectation_type"]
                 kwargs = exp.get("kwargs", {})
 
@@ -884,23 +887,27 @@ class DataQualityValidator:
                                 result_data = dict(res.result) if res.result else {}
                                 break
 
-                results.append({
-                    "expectation_type": exp_type,
-                    "kwargs": kwargs,
-                    "success": success,
-                    "result": result_data,
-                })
+                results.append(
+                    {
+                        "expectation_type": exp_type,
+                        "kwargs": kwargs,
+                        "success": success,
+                        "result": result_data,
+                    }
+                )
 
         except Exception as e:
             logger.error(f"GE validation failed: {e}", exc_info=True)
             # Mark all expectations as failed
             for exp in expectations:
-                results.append({
-                    "expectation_type": exp["expectation_type"],
-                    "kwargs": exp.get("kwargs", {}),
-                    "success": False,
-                    "result": {"error": str(e)},
-                })
+                results.append(
+                    {
+                        "expectation_type": exp["expectation_type"],
+                        "kwargs": exp.get("kwargs", {}),
+                        "success": False,
+                        "result": {"error": str(e)},
+                    }
+                )
 
         return results
 
@@ -915,9 +922,7 @@ class DataQualityValidator:
         non_null_cells = df.notna().sum().sum()
         return float(non_null_cells / total_cells)
 
-    def _calc_validity_score(
-        self, validation_results: List[Dict[str, Any]]
-    ) -> float:
+    def _calc_validity_score(self, validation_results: List[Dict[str, Any]]) -> float:
         """Calculate validity score from type/range checks."""
         validity_types = [
             "expect_column_values_to_be_between",
@@ -925,8 +930,7 @@ class DataQualityValidator:
             "expect_column_values_to_match_regex",
         ]
         validity_results = [
-            r for r in validation_results
-            if r["expectation_type"] in validity_types
+            r for r in validation_results if r["expectation_type"] in validity_types
         ]
         if not validity_results:
             return 1.0
@@ -940,8 +944,7 @@ class DataQualityValidator:
             "expect_column_values_to_be_unique",
         ]
         uniqueness_results = [
-            r for r in validation_results
-            if r["expectation_type"] in uniqueness_types
+            r for r in validation_results if r["expectation_type"] in uniqueness_types
         ]
         if not uniqueness_results:
             # Default: check for duplicate rows
@@ -1062,11 +1065,13 @@ class DataQualityValidator:
 
         # Store checkpoint result
         if store_result:
-            self._checkpoint_history.append({
-                "checkpoint_name": checkpoint_name,
-                "result": result,
-                "timestamp": datetime.now(),
-            })
+            self._checkpoint_history.append(
+                {
+                    "checkpoint_name": checkpoint_name,
+                    "result": result,
+                    "timestamp": datetime.now(),
+                }
+            )
 
         # Send alerts if configured
         if send_alerts:
@@ -1090,9 +1095,7 @@ class DataQualityValidator:
 
         return result
 
-    async def alert_on_result(
-        self, result: DataQualityResult
-    ) -> Dict[str, bool]:
+    async def alert_on_result(self, result: DataQualityResult) -> Dict[str, bool]:
         """Send alerts based on validation result.
 
         Uses the configured alerter to send notifications through
@@ -1146,9 +1149,7 @@ class DataQualityValidator:
         await self.alert_on_result(result)
         return result
 
-    def get_checkpoint_history(
-        self, checkpoint_name: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    def get_checkpoint_history(self, checkpoint_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get checkpoint run history.
 
         Args:
@@ -1158,10 +1159,7 @@ class DataQualityValidator:
             List of checkpoint run records
         """
         if checkpoint_name:
-            return [
-                h for h in self._checkpoint_history
-                if h["checkpoint_name"] == checkpoint_name
-            ]
+            return [h for h in self._checkpoint_history if h["checkpoint_name"] == checkpoint_name]
         return list(self._checkpoint_history)
 
     def clear_checkpoint_history(self) -> None:

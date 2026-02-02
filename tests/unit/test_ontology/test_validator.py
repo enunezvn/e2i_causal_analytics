@@ -19,23 +19,21 @@ Test Classes:
 - TestReportGeneration: Report generation methods
 """
 
-import pytest
 from datetime import datetime
-from typing import Dict, Any
 
-from src.ontology.validator import (
-    OntologyValidator,
-    ValidationLevel,
-    ValidationIssue,
-    ValidationReport,
-)
 from src.ontology.schema_compiler import (
+    CardinalityType,
     CompiledSchema,
     EntitySchema,
-    RelationshipSchema,
     PropertySchema,
     PropertyType,
-    CardinalityType,
+    RelationshipSchema,
+)
+from src.ontology.validator import (
+    OntologyValidator,
+    ValidationIssue,
+    ValidationLevel,
+    ValidationReport,
 )
 
 
@@ -54,7 +52,7 @@ class TestEnumsAndDataclasses:
             level=ValidationLevel.ERROR,
             category="test",
             entity_or_rel="TestEntity",
-            message="Test message"
+            message="Test message",
         )
 
         assert issue.details is None
@@ -68,7 +66,7 @@ class TestEnumsAndDataclasses:
             entity_or_rel="BadEntity",
             message="Invalid naming",
             details={"current": "bad_name"},
-            fix_suggestion="Use PascalCase"
+            fix_suggestion="Use PascalCase",
         )
 
         assert issue.level == ValidationLevel.WARNING
@@ -90,7 +88,7 @@ class TestEnumsAndDataclasses:
             timestamp=datetime.now(),
             issues=issues,
             statistics={},
-            schema_version="1.0"
+            schema_version="1.0",
         )
 
         assert report.error_count == 2
@@ -104,7 +102,7 @@ class TestEnumsAndDataclasses:
             timestamp=datetime.now(),
             issues=[ValidationIssue(ValidationLevel.WARNING, "a", "x", "warn")],
             statistics={},
-            schema_version="1.0"
+            schema_version="1.0",
         )
 
         assert report.passed is True
@@ -123,9 +121,9 @@ class TestValidatorInit:
 
     def test_validator_reserved_properties(self):
         """Test validator has reserved properties defined."""
-        assert 'id' in OntologyValidator.RESERVED_PROPERTIES
-        assert 'uuid' in OntologyValidator.RESERVED_PROPERTIES
-        assert 'created_at' in OntologyValidator.RESERVED_PROPERTIES
+        assert "id" in OntologyValidator.RESERVED_PROPERTIES
+        assert "uuid" in OntologyValidator.RESERVED_PROPERTIES
+        assert "created_at" in OntologyValidator.RESERVED_PROPERTIES
 
 
 class TestEntityValidation:
@@ -138,8 +136,7 @@ class TestEntityValidation:
 
         # Valid schema should not have schema-level errors (may have warnings)
         schema_errors = [
-            i for i in report.issues
-            if i.level == ValidationLevel.ERROR and i.category == "schema"
+            i for i in report.issues if i.level == ValidationLevel.ERROR and i.category == "schema"
         ]
         assert len(schema_errors) == 0
 
@@ -152,67 +149,58 @@ class TestEntityValidation:
         assert report.error_count > 0
 
         pk_errors = [
-            i for i in report.issues
-            if 'Primary key' in i.message and i.level == ValidationLevel.ERROR
+            i
+            for i in report.issues
+            if "Primary key" in i.message and i.level == ValidationLevel.ERROR
         ]
         assert len(pk_errors) == 1
-        assert 'missing_pk' in pk_errors[0].message
+        assert "missing_pk" in pk_errors[0].message
 
     def test_duplicate_property_names_error(self):
         """Test validation fails for duplicate property names."""
         entity = EntitySchema(
-            label='DuplicateProps',
+            label="DuplicateProps",
             properties=[
-                PropertySchema(name='id', property_type=PropertyType.STRING),
-                PropertySchema(name='id', property_type=PropertyType.STRING),  # Duplicate
+                PropertySchema(name="id", property_type=PropertyType.STRING),
+                PropertySchema(name="id", property_type=PropertyType.STRING),  # Duplicate
             ],
-            primary_key='id'
+            primary_key="id",
         )
 
         schema = CompiledSchema(
-            entities={'DuplicateProps': entity},
+            entities={"DuplicateProps": entity},
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        dup_errors = [
-            i for i in report.issues
-            if 'Duplicate property' in i.message
-        ]
+        dup_errors = [i for i in report.issues if "Duplicate property" in i.message]
         assert len(dup_errors) == 1
 
     def test_empty_entity_warning(self):
         """Test validation warns for entity with no properties."""
-        entity = EntitySchema(
-            label='EmptyEntity',
-            properties=[],
-            primary_key='id'
-        )
+        entity = EntitySchema(label="EmptyEntity", properties=[], primary_key="id")
 
         schema = CompiledSchema(
-            entities={'EmptyEntity': entity},
+            entities={"EmptyEntity": entity},
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        empty_warnings = [
-            i for i in report.issues
-            if 'no properties' in i.message
-        ]
+        empty_warnings = [i for i in report.issues if "no properties" in i.message]
         assert len(empty_warnings) == 1
 
 
@@ -222,75 +210,69 @@ class TestRelationshipValidation:
     def test_self_referencing_relationship_info(self):
         """Test self-referencing relationship generates info message."""
         entity = EntitySchema(
-            label='Node',
-            properties=[PropertySchema(name='id', property_type=PropertyType.STRING)],
-            primary_key='id'
+            label="Node",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+            primary_key="id",
         )
 
         rel = RelationshipSchema(
-            type='RELATES_TO',
-            from_label='Node',
-            to_label='Node',  # Self-reference
+            type="RELATES_TO",
+            from_label="Node",
+            to_label="Node",  # Self-reference
             properties=[],
-            cardinality=CardinalityType.MANY_TO_MANY
+            cardinality=CardinalityType.MANY_TO_MANY,
         )
 
         schema = CompiledSchema(
-            entities={'Node': entity},
-            relationships={'RELATES_TO': rel},
+            entities={"Node": entity},
+            relationships={"RELATES_TO": rel},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        self_ref_info = [
-            i for i in report.issues
-            if 'Self-referencing' in i.message
-        ]
+        self_ref_info = [i for i in report.issues if "Self-referencing" in i.message]
         assert len(self_ref_info) == 1
         assert self_ref_info[0].level == ValidationLevel.INFO
 
     def test_relationship_duplicate_properties_error(self):
         """Test validation fails for relationships with duplicate properties."""
         entity = EntitySchema(
-            label='Entity',
-            properties=[PropertySchema(name='id', property_type=PropertyType.STRING)],
-            primary_key='id'
+            label="Entity",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+            primary_key="id",
         )
 
         rel = RelationshipSchema(
-            type='HAS_DUP',
-            from_label='Entity',
-            to_label='Entity',
+            type="HAS_DUP",
+            from_label="Entity",
+            to_label="Entity",
             properties=[
-                PropertySchema(name='weight', property_type=PropertyType.FLOAT),
-                PropertySchema(name='weight', property_type=PropertyType.FLOAT),  # Dup
+                PropertySchema(name="weight", property_type=PropertyType.FLOAT),
+                PropertySchema(name="weight", property_type=PropertyType.FLOAT),  # Dup
             ],
-            cardinality=CardinalityType.ONE_TO_MANY
+            cardinality=CardinalityType.ONE_TO_MANY,
         )
 
         schema = CompiledSchema(
-            entities={'Entity': entity},
-            relationships={'HAS_DUP': rel},
+            entities={"Entity": entity},
+            relationships={"HAS_DUP": rel},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        dup_errors = [
-            i for i in report.issues
-            if 'Duplicate property' in i.message
-        ]
+        dup_errors = [i for i in report.issues if "Duplicate property" in i.message]
         assert len(dup_errors) == 1
 
 
@@ -300,64 +282,61 @@ class TestReferenceValidation:
     def test_invalid_from_entity_error(self):
         """Test validation fails when relationship references nonexistent from entity."""
         entity = EntitySchema(
-            label='ValidEntity',
-            properties=[PropertySchema(name='id', property_type=PropertyType.STRING)],
-            primary_key='id'
+            label="ValidEntity",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+            primary_key="id",
         )
 
         rel = RelationshipSchema(
-            type='INVALID_REL',
-            from_label='NonExistent',  # Invalid reference
-            to_label='ValidEntity',
+            type="INVALID_REL",
+            from_label="NonExistent",  # Invalid reference
+            to_label="ValidEntity",
             properties=[],
-            cardinality=CardinalityType.ONE_TO_MANY
+            cardinality=CardinalityType.ONE_TO_MANY,
         )
 
         schema = CompiledSchema(
-            entities={'ValidEntity': entity},
-            relationships={'INVALID_REL': rel},
+            entities={"ValidEntity": entity},
+            relationships={"INVALID_REL": rel},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
         assert report.passed is False
-        ref_errors = [
-            i for i in report.issues
-            if 'non-existent entity' in i.message
-        ]
+        ref_errors = [i for i in report.issues if "non-existent entity" in i.message]
         assert len(ref_errors) == 1
-        assert 'NonExistent' in ref_errors[0].message
+        assert "NonExistent" in ref_errors[0].message
 
     def test_invalid_to_entity_error(self):
         """Test validation fails when relationship references nonexistent to entity."""
         entity = EntitySchema(
-            label='ValidEntity',
-            properties=[PropertySchema(name='id', property_type=PropertyType.STRING)],
-            primary_key='id'
+            label="ValidEntity",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+            primary_key="id",
         )
 
         rel = RelationshipSchema(
-            type='INVALID_REL',
-            from_label='ValidEntity',
-            to_label='NonExistent',  # Invalid reference
+            type="INVALID_REL",
+            from_label="ValidEntity",
+            to_label="NonExistent",  # Invalid reference
             properties=[],
-            cardinality=CardinalityType.ONE_TO_MANY
+            cardinality=CardinalityType.ONE_TO_MANY,
         )
 
         schema = CompiledSchema(
-            entities={'ValidEntity': entity},
-            relationships={'INVALID_REL': rel},
+            entities={"ValidEntity": entity},
+            relationships={"INVALID_REL": rel},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
@@ -374,52 +353,45 @@ class TestNamingValidation:
         validator = OntologyValidator(schema_with_invalid_naming)
         report = validator.validate()
 
-        naming_warnings = [
-            i for i in report.issues
-            if 'PascalCase' in i.message
-        ]
+        naming_warnings = [i for i in report.issues if "PascalCase" in i.message]
         assert len(naming_warnings) > 0
         assert naming_warnings[0].level == ValidationLevel.WARNING
 
-    def test_non_upper_snake_case_relationship_warning(self, schema_with_invalid_naming: CompiledSchema):
+    def test_non_upper_snake_case_relationship_warning(
+        self, schema_with_invalid_naming: CompiledSchema
+    ):
         """Test validation warns for non-UPPER_SNAKE_CASE relationship types."""
         validator = OntologyValidator(schema_with_invalid_naming)
         report = validator.validate()
 
-        naming_warnings = [
-            i for i in report.issues
-            if 'UPPER_SNAKE_CASE' in i.message
-        ]
+        naming_warnings = [i for i in report.issues if "UPPER_SNAKE_CASE" in i.message]
         assert len(naming_warnings) > 0
 
     def test_reserved_property_name_warning(self):
         """Test validation warns for reserved property names."""
         entity = EntitySchema(
-            label='TestEntity',
+            label="TestEntity",
             properties=[
-                PropertySchema(name='id', property_type=PropertyType.STRING),  # Reserved
-                PropertySchema(name='name', property_type=PropertyType.STRING),
+                PropertySchema(name="id", property_type=PropertyType.STRING),  # Reserved
+                PropertySchema(name="name", property_type=PropertyType.STRING),
             ],
-            primary_key='id'
+            primary_key="id",
         )
 
         schema = CompiledSchema(
-            entities={'TestEntity': entity},
+            entities={"TestEntity": entity},
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        reserved_warnings = [
-            i for i in report.issues
-            if 'reserved name' in i.message
-        ]
+        reserved_warnings = [i for i in report.issues if "reserved name" in i.message]
         assert len(reserved_warnings) == 1
 
 
@@ -429,62 +401,56 @@ class TestIndexValidation:
     def test_unindexed_primary_key_warning(self):
         """Test validation warns when primary key is not indexed."""
         entity = EntitySchema(
-            label='UnindexedPK',
-            properties=[
-                PropertySchema(name='pk', property_type=PropertyType.STRING)
-            ],
-            primary_key='pk'
+            label="UnindexedPK",
+            properties=[PropertySchema(name="pk", property_type=PropertyType.STRING)],
+            primary_key="pk",
         )
 
         schema = CompiledSchema(
-            entities={'UnindexedPK': entity},
+            entities={"UnindexedPK": entity},
             relationships={},
             constraints=[],
             indexes=[],  # No indexes
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
         pk_warnings = [
-            i for i in report.issues
-            if 'should be indexed' in i.message and 'Primary key' in i.message
+            i
+            for i in report.issues
+            if "should be indexed" in i.message and "Primary key" in i.message
         ]
         assert len(pk_warnings) == 1
 
     def test_duplicate_index_warning(self):
         """Test validation warns for duplicate indexes."""
         entity = EntitySchema(
-            label='Entity',
-            properties=[
-                PropertySchema(name='id', property_type=PropertyType.STRING, indexed=True)
-            ],
-            primary_key='id'
+            label="Entity",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING, indexed=True)],
+            primary_key="id",
         )
 
         schema = CompiledSchema(
-            entities={'Entity': entity},
+            entities={"Entity": entity},
             relationships={},
             constraints=[],
             indexes=[
-                {'entity': 'Entity', 'property': 'id', 'type': 'exact'},
-                {'entity': 'Entity', 'property': 'id', 'type': 'exact'},  # Duplicate
+                {"entity": "Entity", "property": "id", "type": "exact"},
+                {"entity": "Entity", "property": "id", "type": "exact"},  # Duplicate
             ],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        dup_warnings = [
-            i for i in report.issues
-            if 'Duplicate indexes' in i.message
-        ]
+        dup_warnings = [i for i in report.issues if "Duplicate indexes" in i.message]
         assert len(dup_warnings) == 1
 
 
@@ -494,99 +460,86 @@ class TestConstraintValidation:
     def test_unique_on_nonexistent_property_error(self):
         """Test validation fails for unique constraint on nonexistent property."""
         entity = EntitySchema(
-            label='Entity',
-            properties=[
-                PropertySchema(name='id', property_type=PropertyType.STRING)
-            ],
-            primary_key='id'
+            label="Entity",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+            primary_key="id",
         )
 
         schema = CompiledSchema(
-            entities={'Entity': entity},
+            entities={"Entity": entity},
             relationships={},
-            constraints=[
-                {'type': 'unique', 'entity': 'Entity', 'property': 'nonexistent'}
-            ],
+            constraints=[{"type": "unique", "entity": "Entity", "property": "nonexistent"}],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        constraint_errors = [
-            i for i in report.issues
-            if 'non-existent property' in i.message
-        ]
+        constraint_errors = [i for i in report.issues if "non-existent property" in i.message]
         assert len(constraint_errors) == 1
 
     def test_unique_not_indexed_warning(self):
         """Test validation warns when unique property is not indexed."""
         entity = EntitySchema(
-            label='Entity',
+            label="Entity",
             properties=[
                 PropertySchema(
-                    name='email',
+                    name="email",
                     property_type=PropertyType.STRING,
                     unique=True,
-                    indexed=False  # Should be indexed
+                    indexed=False,  # Should be indexed
                 )
             ],
-            primary_key='email'
+            primary_key="email",
         )
 
         schema = CompiledSchema(
-            entities={'Entity': entity},
+            entities={"Entity": entity},
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        perf_warnings = [
-            i for i in report.issues
-            if 'unique but not indexed' in i.message
-        ]
+        perf_warnings = [i for i in report.issues if "unique but not indexed" in i.message]
         assert len(perf_warnings) == 1
 
     def test_invalid_min_max_constraint_error(self):
         """Test validation fails when min > max in constraints."""
         entity = EntitySchema(
-            label='Entity',
+            label="Entity",
             properties=[
                 PropertySchema(
-                    name='score',
+                    name="score",
                     property_type=PropertyType.FLOAT,
-                    constraints={'min': 100, 'max': 0}  # Invalid: min > max
+                    constraints={"min": 100, "max": 0},  # Invalid: min > max
                 )
             ],
-            primary_key='score'
+            primary_key="score",
         )
 
         schema = CompiledSchema(
-            entities={'Entity': entity},
+            entities={"Entity": entity},
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        constraint_errors = [
-            i for i in report.issues
-            if 'min > max' in i.message
-        ]
+        constraint_errors = [i for i in report.issues if "min > max" in i.message]
         assert len(constraint_errors) == 1
 
 
@@ -596,48 +549,45 @@ class TestCardinalityValidation:
     def test_multiple_one_to_one_warning(self):
         """Test validation warns for multiple 1:1 relationships to same target."""
         entity_a = EntitySchema(
-            label='EntityA',
-            properties=[PropertySchema(name='id', property_type=PropertyType.STRING)],
-            primary_key='id'
+            label="EntityA",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+            primary_key="id",
         )
         entity_b = EntitySchema(
-            label='EntityB',
-            properties=[PropertySchema(name='id', property_type=PropertyType.STRING)],
-            primary_key='id'
+            label="EntityB",
+            properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+            primary_key="id",
         )
 
         rel1 = RelationshipSchema(
-            type='REL_ONE',
-            from_label='EntityA',
-            to_label='EntityB',
+            type="REL_ONE",
+            from_label="EntityA",
+            to_label="EntityB",
             properties=[],
-            cardinality=CardinalityType.ONE_TO_ONE
+            cardinality=CardinalityType.ONE_TO_ONE,
         )
         rel2 = RelationshipSchema(
-            type='REL_TWO',
-            from_label='EntityA',
-            to_label='EntityB',
+            type="REL_TWO",
+            from_label="EntityA",
+            to_label="EntityB",
             properties=[],
-            cardinality=CardinalityType.ONE_TO_ONE
+            cardinality=CardinalityType.ONE_TO_ONE,
         )
 
         schema = CompiledSchema(
-            entities={'EntityA': entity_a, 'EntityB': entity_b},
-            relationships={'REL_ONE': rel1, 'REL_TWO': rel2},
+            entities={"EntityA": entity_a, "EntityB": entity_b},
+            relationships={"REL_ONE": rel1, "REL_TWO": rel2},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        card_warnings = [
-            i for i in report.issues
-            if 'Multiple 1:1' in i.message
-        ]
+        card_warnings = [i for i in report.issues if "Multiple 1:1" in i.message]
         assert len(card_warnings) == 1
 
 
@@ -647,39 +597,36 @@ class TestPropertyTypeValidation:
     def test_inconsistent_property_types_info(self):
         """Test validation reports inconsistent types for same property name."""
         entity_a = EntitySchema(
-            label='EntityA',
+            label="EntityA",
             properties=[
-                PropertySchema(name='id', property_type=PropertyType.STRING),
-                PropertySchema(name='value', property_type=PropertyType.STRING)
+                PropertySchema(name="id", property_type=PropertyType.STRING),
+                PropertySchema(name="value", property_type=PropertyType.STRING),
             ],
-            primary_key='id'
+            primary_key="id",
         )
         entity_b = EntitySchema(
-            label='EntityB',
+            label="EntityB",
             properties=[
-                PropertySchema(name='id', property_type=PropertyType.STRING),
-                PropertySchema(name='value', property_type=PropertyType.INTEGER)  # Different type
+                PropertySchema(name="id", property_type=PropertyType.STRING),
+                PropertySchema(name="value", property_type=PropertyType.INTEGER),  # Different type
             ],
-            primary_key='id'
+            primary_key="id",
         )
 
         schema = CompiledSchema(
-            entities={'EntityA': entity_a, 'EntityB': entity_b},
+            entities={"EntityA": entity_a, "EntityB": entity_b},
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
-        type_info = [
-            i for i in report.issues
-            if 'inconsistent types' in i.message
-        ]
+        type_info = [i for i in report.issues if "inconsistent types" in i.message]
         assert len(type_info) == 1
         assert type_info[0].level == ValidationLevel.INFO
 
@@ -694,17 +641,16 @@ class TestGraphityValidation:
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
         graphity_info = [
-            i for i in report.issues
-            if 'Graphity optimization is disabled' in i.message
+            i for i in report.issues if "Graphity optimization is disabled" in i.message
         ]
         assert len(graphity_info) == 1
 
@@ -715,20 +661,16 @@ class TestGraphityValidation:
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={
-                'enabled': True,
-                'hub_entities': ['NonExistentHub']
-            },
+            graphity_config={"enabled": True, "hub_entities": ["NonExistentHub"]},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
 
         hub_warnings = [
-            i for i in report.issues
-            if 'Hub entity' in i.message and 'not found' in i.message
+            i for i in report.issues if "Hub entity" in i.message and "not found" in i.message
         ]
         assert len(hub_warnings) == 1
 
@@ -741,12 +683,12 @@ class TestStatistics:
         validator = OntologyValidator(compiled_schema_for_validation)
         report = validator.validate()
 
-        assert 'entity_count' in report.statistics
-        assert 'relationship_count' in report.statistics
-        assert 'total_properties' in report.statistics
-        assert 'index_count' in report.statistics
-        assert 'constraint_count' in report.statistics
-        assert 'graphity_enabled' in report.statistics
+        assert "entity_count" in report.statistics
+        assert "relationship_count" in report.statistics
+        assert "total_properties" in report.statistics
+        assert "index_count" in report.statistics
+        assert "constraint_count" in report.statistics
+        assert "graphity_enabled" in report.statistics
 
     def test_statistics_values(self, compiled_schema_for_validation: CompiledSchema):
         """Test statistics have correct values."""
@@ -754,8 +696,8 @@ class TestStatistics:
         report = validator.validate()
 
         # Based on mock_ontology_dir fixture: 3 entities, 3 relationships
-        assert report.statistics['entity_count'] == 3
-        assert report.statistics['relationship_count'] == 3
+        assert report.statistics["entity_count"] == 3
+        assert report.statistics["relationship_count"] == 3
 
 
 class TestReportGeneration:
@@ -766,7 +708,7 @@ class TestReportGeneration:
         validator = OntologyValidator(compiled_schema_for_validation)
         report = validator.validate()
 
-        text_report = validator.generate_report(report, format='text')
+        text_report = validator.generate_report(report, format="text")
 
         assert isinstance(text_report, str)
         assert "E2I ONTOLOGY VALIDATION REPORT" in text_report
@@ -779,7 +721,7 @@ class TestReportGeneration:
         validator = OntologyValidator(compiled_schema_for_validation)
         report = validator.validate()
 
-        md_report = validator.generate_report(report, format='markdown')
+        md_report = validator.generate_report(report, format="markdown")
 
         assert isinstance(md_report, str)
         assert "# E2I Ontology Validation Report" in md_report
@@ -791,22 +733,22 @@ class TestReportGeneration:
         """Test report includes error messages."""
         # Create schema with known error
         schema = CompiledSchema(
-            entities={'BadEntity': EntitySchema(
-                label='BadEntity',
-                properties=[],
-                primary_key='missing_pk'
-            )},
+            entities={
+                "BadEntity": EntitySchema(
+                    label="BadEntity", properties=[], primary_key="missing_pk"
+                )
+            },
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
-        text_report = validator.generate_report(report, format='text')
+        text_report = validator.generate_report(report, format="text")
 
         assert "ERRORS:" in text_report or "Error" in text_report.lower()
 
@@ -814,22 +756,22 @@ class TestReportGeneration:
         """Test report includes fix suggestions."""
         # Create schema with issue that has fix suggestion
         schema = CompiledSchema(
-            entities={'BadEntity': EntitySchema(
-                label='BadEntity',
-                properties=[],
-                primary_key='missing_pk'
-            )},
+            entities={
+                "BadEntity": EntitySchema(
+                    label="BadEntity", properties=[], primary_key="missing_pk"
+                )
+            },
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
         report = validator.validate()
-        text_report = validator.generate_report(report, format='text')
+        text_report = validator.generate_report(report, format="text")
 
         assert "Fix:" in text_report
 
@@ -844,9 +786,9 @@ class TestValidatorEdgeCases:
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
@@ -860,12 +802,10 @@ class TestValidatorEdgeCases:
         # Create schema with many entities
         entities = {}
         for i in range(20):
-            entities[f'Entity{i}'] = EntitySchema(
-                label=f'Entity{i}',
-                properties=[
-                    PropertySchema(name='id', property_type=PropertyType.STRING)
-                ],
-                primary_key='id'
+            entities[f"Entity{i}"] = EntitySchema(
+                label=f"Entity{i}",
+                properties=[PropertySchema(name="id", property_type=PropertyType.STRING)],
+                primary_key="id",
             )
 
         schema = CompiledSchema(
@@ -873,9 +813,9 @@ class TestValidatorEdgeCases:
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': False},
+            graphity_config={"enabled": False},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         validator = OntologyValidator(schema)
@@ -883,4 +823,4 @@ class TestValidatorEdgeCases:
 
         # Should complete without error
         assert isinstance(report, ValidationReport)
-        assert report.statistics['entity_count'] == 20
+        assert report.statistics["entity_count"] == 20

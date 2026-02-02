@@ -9,8 +9,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pandas as pd
-
 
 class Tier0OutputMapper:
     """Maps tier0 state dictionary to agent-specific inputs.
@@ -146,7 +144,9 @@ class Tier0OutputMapper:
         features = self._get_top_features(5)
 
         # Use actual columns from the DataFrame
-        treatment_var = "hcp_visits" if "hcp_visits" in df.columns else features[0] if features else "treatment"
+        treatment_var = (
+            "hcp_visits" if "hcp_visits" in df.columns else features[0] if features else "treatment"
+        )
         outcome_var = "discontinuation_flag" if "discontinuation_flag" in df.columns else "outcome"
 
         confounders = [f for f in features if f not in {treatment_var, outcome_var}]
@@ -269,12 +269,15 @@ class Tier0OutputMapper:
         # These are NOT used as the W (confounders) parameter in CausalForestDML — that is
         # decoupled in cate_estimator.py. segment_vars only drive the _calculate_cate_by_segment
         # loop which computes per-segment CATE estimates after model fitting.
-        segment_vars = [c for c in categorical_cols if c not in {"patient_journey_id", "patient_id", "brand"}][:3]
+        segment_vars = [
+            c for c in categorical_cols if c not in {"patient_journey_id", "patient_id", "brand"}
+        ][:3]
 
         # Effect modifiers: numeric columns that aren't treatment/outcome
         # For CATE, effect_modifiers determine heterogeneity - use all available numeric covariates
         effect_modifiers = [
-            c for c in numeric_cols
+            c
+            for c in numeric_cols
             if c not in {treatment_var, outcome_var, "patient_journey_id", "patient_id"}
         ][:5]
         # If no effect modifiers available, CATE estimation will fail - raise informative error
@@ -458,19 +461,21 @@ class Tier0OutputMapper:
         if "geographic_region" in df.columns:
             regions = df["geographic_region"].unique()[:5]
             for i, region in enumerate(regions):
-                region_df = df[df["geographic_region"] == region]
+                df[df["geographic_region"] == region]
                 # expected_response must be a response coefficient > 1.0 to produce
                 # meaningful ROI. Using data-derived values: base 1.5 + spread by region
                 # so the optimizer can differentiate territories.
                 expected_response = 1.5 + 0.4 * (i % len(regions))
-                allocation_targets.append({
-                    "entity_id": f"territory_{region}",
-                    "entity_type": "territory",
-                    "current_allocation": 50000.0,
-                    "expected_response": expected_response,
-                    "min_allocation": 25000.0,
-                    "max_allocation": 100000.0,
-                })
+                allocation_targets.append(
+                    {
+                        "entity_id": f"territory_{region}",
+                        "entity_type": "territory",
+                        "current_allocation": 50000.0,
+                        "expected_response": expected_response,
+                        "min_allocation": 25000.0,
+                        "max_allocation": 100000.0,
+                    }
+                )
         else:
             # Default allocation targets
             allocation_targets = [
@@ -569,7 +574,10 @@ class Tier0OutputMapper:
                     f"Precision: {_fmt(validation_metrics.get('precision', 'N/A'))}, Recall: {_fmt(validation_metrics.get('recall', 'N/A'))}",
                     f"F1 score: {_fmt(validation_metrics.get('f1_score', 'N/A'))}",
                 ],
-                **{k: round(v, 4) if isinstance(v, float) else v for k, v in validation_metrics.items()},
+                **{
+                    k: round(v, 4) if isinstance(v, float) else v
+                    for k, v in validation_metrics.items()
+                },
             },
             {
                 "agent": "feature_analyzer",
@@ -664,5 +672,7 @@ class Tier0OutputMapper:
         """
         method_name = f"map_to_{agent_name}"
         if not hasattr(self, method_name):
-            raise ValueError(f"Unknown agent: {agent_name}. Supported: {list(self.get_all_mappings().keys())}")
+            raise ValueError(
+                f"Unknown agent: {agent_name}. Supported: {list(self.get_all_mappings().keys())}"
+            )
         return getattr(self, method_name)()

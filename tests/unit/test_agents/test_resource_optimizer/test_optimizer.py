@@ -249,9 +249,7 @@ class TestMILPBinary:
 
         # Get selected project IDs
         selected_ids = [
-            a["entity_id"]
-            for a in result["optimal_allocations"]
-            if a["optimized_allocation"] > 0.5
+            a["entity_id"] for a in result["optimal_allocations"] if a["optimized_allocation"] > 0.5
         ]
 
         # With budget of 3 and net values (response - fixed_cost):
@@ -280,9 +278,7 @@ class TestMILPCardinality:
         # Count entities with non-zero allocation (above minimum)
         min_alloc = min(milp_cardinality_state["_problem"]["lb"])
         active_entities = sum(
-            1
-            for a in result["optimal_allocations"]
-            if a["optimized_allocation"] > min_alloc + 0.01
+            1 for a in result["optimal_allocations"] if a["optimized_allocation"] > min_alloc + 0.01
         )
 
         max_entities = milp_cardinality_state["_problem"]["max_entities"]
@@ -306,7 +302,9 @@ class TestMILPCardinality:
         if len(allocations) >= 2:
             top_two_ids = {allocations[0]["entity_id"], allocations[1]["entity_id"]}
             # Top two should include the highest response entities
-            assert "territory_northeast" in top_two_ids or allocations[0]["optimized_allocation"] > 0
+            assert (
+                "territory_northeast" in top_two_ids or allocations[0]["optimized_allocation"] > 0
+            )
 
 
 class TestMILPSolverDirect:

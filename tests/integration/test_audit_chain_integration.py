@@ -8,15 +8,15 @@ Tests verify:
 4. Graceful degradation when audit service unavailable
 """
 
-import pytest
 from datetime import datetime
 from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from unittest.mock import MagicMock
+from uuid import uuid4
+
+import pytest
 
 from src.agents.base.audit_chain_mixin import (
     create_workflow_initializer,
-    get_audit_chain_service,
     set_audit_chain_service,
 )
 from src.utils.audit_chain import (
@@ -24,7 +24,6 @@ from src.utils.audit_chain import (
     AuditChainEntry,
     AuditChainService,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -104,11 +103,9 @@ class TestTier1CoordinationIntegration:
         audit_service.start_workflow = MagicMock(return_value=sample_entry)
         set_audit_chain_service(audit_service)
 
-        initializer = create_workflow_initializer(
-            "orchestrator", AgentTier.COORDINATION
-        )
+        initializer = create_workflow_initializer("orchestrator", AgentTier.COORDINATION)
         state = {"query": "test", "session_id": "test-123"}
-        result = initializer(state)
+        initializer(state)
 
         # Verify workflow was started with correct tier
         call_kwargs = audit_service.start_workflow.call_args.kwargs
@@ -152,11 +149,9 @@ class TestTier2CausalIntegration:
         audit_service.start_workflow = MagicMock(return_value=sample_entry)
         set_audit_chain_service(audit_service)
 
-        initializer = create_workflow_initializer(
-            "causal_impact", AgentTier.CAUSAL_ANALYTICS
-        )
+        initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {"query": "test", "treatment_var": "x", "outcome_var": "y"}
-        result = initializer(state)
+        initializer(state)
 
         call_kwargs = audit_service.start_workflow.call_args.kwargs
         assert call_kwargs["agent_tier"] == AgentTier.CAUSAL_ANALYTICS
@@ -197,11 +192,9 @@ class TestTier3MonitoringIntegration:
         audit_service.start_workflow = MagicMock(return_value=sample_entry)
         set_audit_chain_service(audit_service)
 
-        initializer = create_workflow_initializer(
-            "drift_monitor", AgentTier.MONITORING
-        )
+        initializer = create_workflow_initializer("drift_monitor", AgentTier.MONITORING)
         state = {"model_id": "test-model"}
-        result = initializer(state)
+        initializer(state)
 
         call_kwargs = audit_service.start_workflow.call_args.kwargs
         assert call_kwargs["agent_tier"] == AgentTier.MONITORING
@@ -239,7 +232,7 @@ class TestTier4MLPredictionsIntegration:
             "prediction_synthesizer", AgentTier.ML_PREDICTIONS
         )
         state = {"entity_id": "test-entity"}
-        result = initializer(state)
+        initializer(state)
 
         call_kwargs = audit_service.start_workflow.call_args.kwargs
         assert call_kwargs["agent_tier"] == AgentTier.ML_PREDICTIONS
@@ -271,11 +264,9 @@ class TestTier5SelfImprovementIntegration:
         audit_service.start_workflow = MagicMock(return_value=sample_entry)
         set_audit_chain_service(audit_service)
 
-        initializer = create_workflow_initializer(
-            "explainer", AgentTier.SELF_IMPROVEMENT
-        )
+        initializer = create_workflow_initializer("explainer", AgentTier.SELF_IMPROVEMENT)
         state = {"analysis_results": {}}
-        result = initializer(state)
+        initializer(state)
 
         call_kwargs = audit_service.start_workflow.call_args.kwargs
         assert call_kwargs["agent_tier"] == AgentTier.SELF_IMPROVEMENT
@@ -345,16 +336,12 @@ class TestTier0MLFoundationIntegration:
 class TestCrossTierWorkflow:
     """Tests for audit chain across multiple tiers."""
 
-    def test_workflow_id_propagates_through_initializer(
-        self, audit_service, sample_entry
-    ):
+    def test_workflow_id_propagates_through_initializer(self, audit_service, sample_entry):
         """Verify workflow_id is added to state by initializer."""
         audit_service.start_workflow = MagicMock(return_value=sample_entry)
         set_audit_chain_service(audit_service)
 
-        initializer = create_workflow_initializer(
-            "orchestrator", AgentTier.COORDINATION
-        )
+        initializer = create_workflow_initializer("orchestrator", AgentTier.COORDINATION)
         state: Dict[str, Any] = {"query": "test"}
         result = initializer(state)
 
@@ -366,9 +353,7 @@ class TestCrossTierWorkflow:
         audit_service.start_workflow = MagicMock(return_value=sample_entry)
         set_audit_chain_service(audit_service)
 
-        initializer = create_workflow_initializer(
-            "causal_impact", AgentTier.CAUSAL_ANALYTICS
-        )
+        initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {
             "query": "original query",
             "treatment_var": "treatment",
@@ -393,9 +378,7 @@ class TestGracefulDegradation:
     def test_initializer_returns_original_state_when_service_unavailable(self):
         """Initializer should return original state when service not available."""
         # Service is None (not set)
-        initializer = create_workflow_initializer(
-            "orchestrator", AgentTier.COORDINATION
-        )
+        initializer = create_workflow_initializer("orchestrator", AgentTier.COORDINATION)
         state = {"query": "test"}
         result = initializer(state)
 
@@ -410,9 +393,7 @@ class TestGracefulDegradation:
         )
         set_audit_chain_service(audit_service)
 
-        initializer = create_workflow_initializer(
-            "causal_impact", AgentTier.CAUSAL_ANALYTICS
-        )
+        initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {"query": "test"}
         result = initializer(state)
 
@@ -446,25 +427,28 @@ class TestAllTiersCoverage:
     def test_all_langgraph_agents_have_audit_init(self):
         """Verify all LangGraph-based agents have audit_init node."""
         # Tier 1 - Coordination (note: tool_composer uses different architecture)
-        from src.agents.orchestrator.graph import create_orchestrator_graph
         # Tier 2 - Causal Analytics
         from src.agents.causal_impact.graph import create_causal_impact_graph
-        from src.agents.gap_analyzer.graph import create_gap_analyzer_graph
-        from src.agents.heterogeneous_optimizer.graph import (
-            create_heterogeneous_optimizer_graph,
-        )
+
         # Tier 3 - Monitoring
         from src.agents.drift_monitor.graph import create_drift_monitor_graph
         from src.agents.experiment_designer.graph import create_experiment_designer_graph
+
+        # Tier 5 - Self-Improvement
+        from src.agents.explainer.graph import build_explainer_graph
+        from src.agents.feedback_learner.graph import build_feedback_learner_graph
+        from src.agents.gap_analyzer.graph import create_gap_analyzer_graph
         from src.agents.health_score.graph import build_health_score_graph
+        from src.agents.heterogeneous_optimizer.graph import (
+            create_heterogeneous_optimizer_graph,
+        )
+        from src.agents.orchestrator.graph import create_orchestrator_graph
+
         # Tier 4 - ML Predictions
         from src.agents.prediction_synthesizer.graph import (
             build_prediction_synthesizer_graph,
         )
         from src.agents.resource_optimizer.graph import build_resource_optimizer_graph
-        # Tier 5 - Self-Improvement
-        from src.agents.explainer.graph import build_explainer_graph
-        from src.agents.feedback_learner.graph import build_feedback_learner_graph
 
         agents = {
             # Tier 1 - Coordination (tool_composer uses composer.py, not LangGraph)
@@ -513,9 +497,7 @@ class TestAllTiersCoverage:
         ]
         missing = [attr for attr in required if not hasattr(pipeline, attr)]
 
-        assert not missing, (
-            f"MLFoundationPipeline missing audit attributes: {missing}"
-        )
+        assert not missing, f"MLFoundationPipeline missing audit attributes: {missing}"
 
         # Check PipelineResult has audit_workflow_id
         result = PipelineResult(

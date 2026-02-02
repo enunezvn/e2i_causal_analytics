@@ -1,16 +1,14 @@
 """Tests for CohortConstructorAgent wrapper."""
 
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pandas as pd
-from unittest.mock import MagicMock, patch, AsyncMock
+import pytest
 
 from src.agents.cohort_constructor import (
-    CohortConstructorAgent,
     CohortConfig,
+    CohortConstructorAgent,
     CohortExecutionResult,
-    Criterion,
-    CriterionType,
-    Operator,
 )
 from src.agents.cohort_constructor.agent import create_cohort_constructor_agent
 
@@ -248,9 +246,7 @@ class TestCohortConstructorAgentValidation:
 
     @pytest.mark.asyncio
     @patch("src.agents.cohort_constructor.agent._get_supabase_client")
-    async def test_validate_config_with_explicit_config(
-        self, mock_supabase, sample_config
-    ):
+    async def test_validate_config_with_explicit_config(self, mock_supabase, sample_config):
         """Test validating explicit configuration."""
         mock_supabase.return_value = MagicMock()
 
@@ -290,7 +286,9 @@ class TestCohortConstructorAgentFactory:
         """Test creating agent with defaults."""
         mock_supabase.return_value = MagicMock()
 
-        with patch("src.agents.cohort_constructor.agent.create_cohort_constructor_graph") as mock_graph:
+        with patch(
+            "src.agents.cohort_constructor.agent.create_cohort_constructor_graph"
+        ) as mock_graph:
             mock_graph.return_value = MagicMock()
             agent = create_cohort_constructor_agent()
 
@@ -311,10 +309,7 @@ class TestCohortConstructorAgentFactory:
         """Test creating agent without observability."""
         mock_supabase.return_value = MagicMock()
 
-        agent = create_cohort_constructor_agent(
-            use_graph=False,
-            enable_observability=False
-        )
+        agent = create_cohort_constructor_agent(use_graph=False, enable_observability=False)
 
         assert agent.enable_observability is False
         assert agent._mlflow_logger is None
@@ -338,19 +333,21 @@ class TestCohortConstructorAgentGraphExecution:
 
         # Mock the graph
         mock_graph = MagicMock()
-        mock_graph.ainvoke = AsyncMock(return_value={
-            "cohort_id": "test_cohort",
-            "eligible_patient_ids": ["P001", "P002"],
-            "eligibility_stats": {
-                "total_input_patients": 5,
-                "eligible_patient_count": 2,
-            },
-            "execution_metadata": {
-                "execution_id": "exec_test",
-                "execution_time_ms": 100,
-            },
-            "status": "success",
-        })
+        mock_graph.ainvoke = AsyncMock(
+            return_value={
+                "cohort_id": "test_cohort",
+                "eligible_patient_ids": ["P001", "P002"],
+                "eligibility_stats": {
+                    "total_input_patients": 5,
+                    "eligible_patient_count": 2,
+                },
+                "execution_metadata": {
+                    "execution_id": "exec_test",
+                    "execution_time_ms": 100,
+                },
+                "status": "success",
+            }
+        )
         mock_graph_fn.return_value = mock_graph
 
         agent = CohortConstructorAgent(use_graph=True, enable_observability=False)
@@ -404,17 +401,12 @@ class TestCohortConstructorAgentIntegration:
     """Integration tests for agent with brand configurations."""
 
     @patch("src.agents.cohort_constructor.agent._get_supabase_client")
-    def test_remibrutinib_cohort_construction(
-        self, mock_supabase, remibrutinib_patient_df
-    ):
+    def test_remibrutinib_cohort_construction(self, mock_supabase, remibrutinib_patient_df):
         """Test cohort construction with Remibrutinib configuration."""
         mock_supabase.return_value = MagicMock()
 
         agent = CohortConstructorAgent(use_graph=False, enable_observability=False)
-        eligible_df, result = agent.run_sync(
-            remibrutinib_patient_df,
-            brand="remibrutinib"
-        )
+        eligible_df, result = agent.run_sync(remibrutinib_patient_df, brand="remibrutinib")
 
         assert result.status == "success"
         # Should filter based on UAS7, antihistamine status, age
@@ -426,10 +418,7 @@ class TestCohortConstructorAgentIntegration:
         mock_supabase.return_value = MagicMock()
 
         agent = CohortConstructorAgent(use_graph=False, enable_observability=False)
-        eligible_df, result = agent.run_sync(
-            kisqali_patient_df,
-            brand="kisqali"
-        )
+        eligible_df, result = agent.run_sync(kisqali_patient_df, brand="kisqali")
 
         assert result.status == "success"
         # Should filter based on HR status, HER2 status, ECOG

@@ -9,23 +9,22 @@ Tests cover:
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.routes.kpi import router, get_kpi_calculator
+from src.api.routes.kpi import get_kpi_calculator, router
 from src.kpi.models import (
-    CausalLibrary,
     CalculationType,
+    CausalLibrary,
     KPIMetadata,
     KPIResult,
     KPIStatus,
     KPIThreshold,
     Workstream,
 )
-
 
 # =============================================================================
 # FIXTURES

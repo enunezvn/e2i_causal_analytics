@@ -366,7 +366,9 @@ async def create_episodic_memory(
 
     except Exception as e:
         logger.error(f"Episodic memory insertion failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create episodic memory: {str(e)}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create episodic memory: {str(e)}"
+        ) from e
 
 
 @router.get("/episodic/{memory_id}", response_model=EpisodicMemoryResponse)
@@ -525,12 +527,8 @@ async def get_memory_stats() -> Dict[str, Any]:
 
         # Calculate average success rate from daily breakdown
         daily_stats = proc_stats.get("daily_breakdown", [])
-        success_rates = [
-            s.get("success_rate", 0.0) for s in daily_stats if s.get("success_rate")
-        ]
-        avg_success_rate = (
-            sum(success_rates) / len(success_rates) if success_rates else 0.0
-        )
+        success_rates = [s.get("success_rate", 0.0) for s in daily_stats if s.get("success_rate")]
+        avg_success_rate = sum(success_rates) / len(success_rates) if success_rates else 0.0
 
         # Get semantic memory stats from FalkorDB
         semantic = get_semantic_memory()

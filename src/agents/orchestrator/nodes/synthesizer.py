@@ -112,10 +112,10 @@ class SynthesizerNode:
             enhanced_response = f"""{raw_response}
 
 **Strategic Implications:**
-{interpretation['strategic_summary']}
+{interpretation["strategic_summary"]}
 
 **Recommended Actions:**
-{chr(10).join(f'- {r}' for r in interpretation['actions'][:3])}"""
+{chr(10).join(f"- {r}" for r in interpretation["actions"][:3])}"""
         else:
             enhanced_response = raw_response
 
@@ -129,7 +129,9 @@ class SynthesizerNode:
             "follow_ups": follow_ups,
         }
 
-    def _build_strategic_interpretation(self, agent_name: str, output: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_strategic_interpretation(
+        self, agent_name: str, output: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Build strategic interpretation from agent output metrics.
 
         Args:
@@ -152,7 +154,11 @@ class SynthesizerNode:
             if ate is not None:
                 interpretation["has_metrics"] = True
                 effect_direction = "positive" if ate > 0 else "negative"
-                significance = "statistically significant" if p_value and p_value < 0.05 else "not statistically significant"
+                significance = (
+                    "statistically significant"
+                    if p_value and p_value < 0.05
+                    else "not statistically significant"
+                )
                 interpretation["strategic_summary"] = (
                     f"The intervention shows a {effect_direction} effect of {abs(ate):.1%} on the outcome. "
                     f"This effect is {significance}. "
@@ -209,7 +215,9 @@ class SynthesizerNode:
             confidence = output.get("ensemble_prediction", {}).get("confidence_level")
             if prediction is not None:
                 interpretation["has_metrics"] = True
-                risk_level = "high" if prediction > 0.7 else "moderate" if prediction > 0.4 else "low"
+                risk_level = (
+                    "high" if prediction > 0.7 else "moderate" if prediction > 0.4 else "low"
+                )
                 interpretation["strategic_summary"] = (
                     f"Predicted risk level: {risk_level} ({prediction:.0%}). "
                     + (f"Confidence: {confidence:.0%}. " if confidence else "")
@@ -339,7 +347,9 @@ Be specific and quantitative. Avoid generic statements."""
 
             if opik and opik.is_enabled:
                 # Trace the LLM call with dynamic provider info
-                model_name = "gpt-4o-mini" if self._provider == "openai" else "claude-haiku-4-20250414"
+                model_name = (
+                    "gpt-4o-mini" if self._provider == "openai" else "claude-haiku-4-20250414"
+                )
                 async with opik.trace_llm_call(
                     model=model_name,
                     provider=self._provider,
@@ -367,7 +377,9 @@ Be specific and quantitative. Avoid generic statements."""
             return {
                 "response": response.content,
                 "confidence": avg_confidence,
-                "recommendations": all_recommendations[:5] if all_recommendations else self._extract_recommendations_from_response(response.content),
+                "recommendations": all_recommendations[:5]
+                if all_recommendations
+                else self._extract_recommendations_from_response(response.content),
                 "follow_ups": follow_ups,
             }
         except Exception as e:
@@ -414,7 +426,9 @@ Be specific and quantitative. Avoid generic statements."""
 
         return ", ".join(metrics)
 
-    def _generate_multi_agent_follow_ups(self, agent_names: List[str], results: List[AgentResult]) -> List[str]:
+    def _generate_multi_agent_follow_ups(
+        self, agent_names: List[str], results: List[AgentResult]
+    ) -> List[str]:
         """Generate follow-ups based on multiple agent results.
 
         Args:
@@ -430,7 +444,9 @@ Be specific and quantitative. Avoid generic statements."""
         if "causal_impact" in agent_names and "heterogeneous_optimizer" in agent_names:
             follow_ups.append("Apply optimal allocation to maximize causal impact")
         if "gap_analyzer" in agent_names and "causal_impact" in agent_names:
-            follow_ups.append("Design intervention to close identified gaps based on causal drivers")
+            follow_ups.append(
+                "Design intervention to close identified gaps based on causal drivers"
+            )
         if "prediction_synthesizer" in agent_names:
             follow_ups.append("Validate predictions with prospective monitoring")
         if "drift_monitor" in agent_names:

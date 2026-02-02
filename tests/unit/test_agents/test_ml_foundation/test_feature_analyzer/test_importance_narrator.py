@@ -298,7 +298,7 @@ class TestInterpretInteractions:
 
     def test_limits_to_top_3_interactions(self):
         """Should limit to top 3 interactions."""
-        top_interactions_raw = [(f"feat_{i}", f"feat_{i+1}", 0.5 - i * 0.1) for i in range(10)]
+        top_interactions_raw = [(f"feat_{i}", f"feat_{i + 1}", 0.5 - i * 0.1) for i in range(10)]
         feature_explanations = {}
 
         interpretations = _interpret_interactions(top_interactions_raw, feature_explanations)

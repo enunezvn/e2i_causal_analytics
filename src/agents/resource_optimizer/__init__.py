@@ -15,15 +15,17 @@ from .graph import (
     build_simple_optimizer_graph,
 )
 from .mlflow_tracker import (
-    ResourceOptimizerMLflowTracker,
-    ResourceOptimizerMetrics,
     OptimizationContext,
+    ResourceOptimizerMetrics,
+    ResourceOptimizerMLflowTracker,
+)
+from .mlflow_tracker import (
     create_tracker as create_mlflow_tracker,
 )
 from .opik_tracer import (
-    ResourceOptimizerOpikTracer,
-    OptimizationTraceContext,
     NodeSpanContext,
+    OptimizationTraceContext,
+    ResourceOptimizerOpikTracer,
     get_resource_optimizer_tracer,
 )
 from .state import (

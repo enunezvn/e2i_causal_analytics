@@ -240,7 +240,7 @@ class TestDGPConfigs:
 
     def test_all_configs_have_descriptions(self):
         """Test that all DGP configs have descriptions."""
-        for dgp_type, config in DGP_CONFIGS.items():
+        for _dgp_type, config in DGP_CONFIGS.items():
             assert config.description != ""
             assert isinstance(config.description, str)
 
@@ -473,7 +473,7 @@ class TestConfigConsistency:
 
     def test_all_dgp_configs_have_valid_ates(self):
         """Test all DGP configs have valid ATE values."""
-        for dgp_type, config in DGP_CONFIGS.items():
+        for _dgp_type, config in DGP_CONFIGS.items():
             assert 0 <= config.true_ate <= 1
             assert 0 < config.tolerance < 1
 

@@ -8,18 +8,18 @@ Tests the complete Tier 0 pipeline orchestration:
 - Error handling and recovery
 """
 
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from src.agents.tier_0 import MLFoundationPipeline, PipelineConfig, PipelineStage
 from src.agents.tier_0.handoff_protocols import (
-    validate_scope_to_data_handoff,
     validate_data_to_selector_handoff,
+    validate_scope_to_data_handoff,
     validate_selector_to_trainer_handoff,
     validate_trainer_to_deployer_handoff,
 )
-
 
 # =============================================================================
 # TEST FIXTURES
@@ -241,9 +241,7 @@ def mock_feature_analyzer_output():
                 {"feature": "visit_count", "importance": 0.25, "rank": 2},
                 {"feature": "territory", "importance": 0.15, "rank": 3},
             ],
-            "interactions": [
-                {"features": ["engagement_score", "visit_count"], "strength": 0.12}
-            ],
+            "interactions": [{"features": ["engagement_score", "visit_count"], "strength": 0.12}],
             "top_features": ["engagement_score", "visit_count", "territory"],
             "interpretation": "Engagement score is the strongest predictor of HCP conversion",
             "executive_summary": "Model relies primarily on HCP engagement metrics",
@@ -325,9 +323,7 @@ class TestMLFoundationPipelineExecution:
         mock_model_deployer_output,
     ):
         """Test successful execution of complete pipeline."""
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             # Configure mock agents
             mock_get_agent.side_effect = lambda name: {
                 "scope_definer": create_mock_agent(mock_scope_definer_output),
@@ -372,9 +368,7 @@ class TestMLFoundationPipelineExecution:
         mock_feature_analyzer_output,
     ):
         """Test pipeline with deployment skipped."""
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             mock_get_agent.side_effect = lambda name: {
                 "scope_definer": create_mock_agent(mock_scope_definer_output),
                 "data_preparer": create_mock_agent(mock_data_preparer_output_passed),
@@ -407,9 +401,7 @@ class TestQCGateEnforcement:
         mock_data_preparer_output_failed,
     ):
         """Test that pipeline stops when QC fails."""
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             mock_get_agent.side_effect = lambda name: {
                 "scope_definer": create_mock_agent(mock_scope_definer_output),
                 "data_preparer": create_mock_agent(mock_data_preparer_output_failed),
@@ -439,9 +431,7 @@ class TestQCGateEnforcement:
         mock_model_deployer_output,
     ):
         """Test that pipeline continues when QC passes."""
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             mock_get_agent.side_effect = lambda name: {
                 "scope_definer": create_mock_agent(mock_scope_definer_output),
                 "data_preparer": create_mock_agent(mock_data_preparer_output_passed),
@@ -478,9 +468,7 @@ class TestResumeFromStage:
         mock_model_deployer_output,
     ):
         """Test resuming pipeline from model training stage."""
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             mock_get_agent.side_effect = lambda name: {
                 "model_trainer": create_mock_agent(mock_model_trainer_output),
                 "feature_analyzer": create_mock_agent(mock_feature_analyzer_output),
@@ -531,9 +519,7 @@ class TestResumeFromStage:
         mock_model_deployer_output,
     ):
         """Test resuming pipeline from feature analysis stage."""
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             mock_get_agent.side_effect = lambda name: {
                 "feature_analyzer": create_mock_agent(mock_feature_analyzer_output),
                 "model_deployer": create_mock_agent(mock_model_deployer_output),
@@ -550,7 +536,12 @@ class TestResumeFromStage:
                 qc_report=mock_data_preparer_output_passed["qc_report"],
                 model_candidate=mock_model_selector_output["model_candidate"],
                 training_result=mock_model_trainer_output,
-                stages_completed=["scope_definition", "data_preparation", "model_selection", "model_training"],
+                stages_completed=[
+                    "scope_definition",
+                    "data_preparation",
+                    "model_selection",
+                    "model_training",
+                ],
             )
 
             pipeline = MLFoundationPipeline()
@@ -586,9 +577,7 @@ class TestHandoffProtocolValidation:
         assert is_valid is True
         assert len(errors) == 0
 
-    def test_validate_scope_to_data_handoff_invalid_problem_type(
-        self, mock_scope_definer_output
-    ):
+    def test_validate_scope_to_data_handoff_invalid_problem_type(self, mock_scope_definer_output):
         """Test invalid problem type in scope spec."""
         scope_spec = mock_scope_definer_output["scope_spec"].copy()
         scope_spec["problem_type"] = "invalid_type"
@@ -692,9 +681,7 @@ class TestHandoffProtocolValidation:
         assert is_valid is False
         assert any("algorithm_name" in e for e in errors)
 
-    def test_validate_trainer_to_deployer_handoff_staging(
-        self, mock_model_trainer_output
-    ):
+    def test_validate_trainer_to_deployer_handoff_staging(self, mock_model_trainer_output):
         """Test valid trainer to deployer handoff for staging."""
         handoff_data = {
             "model_uri": mock_model_trainer_output["model_uri"],
@@ -729,9 +716,7 @@ class TestHandoffProtocolValidation:
         assert any("shadow_mode_duration_hours" in e for e in errors)
         assert any("shadow_mode_requests" in e for e in errors)
 
-    def test_validate_trainer_to_deployer_handoff_production_valid(
-        self, mock_model_trainer_output
-    ):
+    def test_validate_trainer_to_deployer_handoff_production_valid(self, mock_model_trainer_output):
         """Test valid production deployment with sufficient shadow mode."""
         handoff_data = {
             "model_uri": mock_model_trainer_output["model_uri"],
@@ -764,9 +749,7 @@ class TestErrorHandling:
         The pipeline catches exceptions internally and returns a failed result
         with error details in the errors list.
         """
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             failed_agent = MagicMock()
             failed_agent.run = AsyncMock(side_effect=ValueError("Invalid problem description"))
             mock_get_agent.return_value = failed_agent
@@ -799,9 +782,7 @@ class TestErrorHandling:
         When trainer fails, pipeline should preserve partial results from
         earlier stages while recording the error.
         """
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             failed_trainer = MagicMock()
             failed_trainer.run = AsyncMock(side_effect=RuntimeError("Training failed"))
 
@@ -882,9 +863,7 @@ class TestPipelineConfiguration:
         mock_model_deployer_output,
     ):
         """Test pipeline with HPO disabled."""
-        with patch(
-            "src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent"
-        ) as mock_get_agent:
+        with patch("src.agents.tier_0.pipeline.MLFoundationPipeline._get_agent") as mock_get_agent:
             mock_trainer = create_mock_agent(mock_model_trainer_output)
 
             mock_get_agent.side_effect = lambda name: {

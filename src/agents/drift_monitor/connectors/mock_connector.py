@@ -14,7 +14,6 @@ Example:
     )
 """
 
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -178,7 +177,9 @@ class MockDataConnector(BaseDataConnector):
 
         # Generate scores based on actual labels with noise
         scores = np.clip(
-            actual_labels * 0.8 + (1 - actual_labels) * 0.2 + self._rng.normal(0, noise_level, self.sample_size),
+            actual_labels * 0.8
+            + (1 - actual_labels) * 0.2
+            + self._rng.normal(0, noise_level, self.sample_size),
             0,
             1,
         )

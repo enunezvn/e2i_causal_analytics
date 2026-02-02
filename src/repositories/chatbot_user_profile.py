@@ -136,13 +136,9 @@ class ChatbotUserProfileRepository(BaseRepository):
                     "last_active_at": datetime.now(timezone.utc).isoformat(),
                 }
                 if new_conversation:
-                    updates["total_conversations"] = (
-                        profile.get("total_conversations", 0) + 1
-                    )
+                    updates["total_conversations"] = profile.get("total_conversations", 0) + 1
                 if new_messages > 0:
-                    updates["total_messages"] = (
-                        profile.get("total_messages", 0) + new_messages
-                    )
+                    updates["total_messages"] = profile.get("total_messages", 0) + new_messages
                 return await self.update(user_id, updates)
 
         return await self.get_by_id(user_id)

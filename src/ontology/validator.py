@@ -3,15 +3,17 @@ E2I Causal Analytics - Ontology Validator
 Validates ontology schema consistency, relationship integrity, and data quality
 """
 
-from typing import Dict, List, Set, Optional, Any, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.ontology.schema_compiler import (
-    CompiledSchema, EntitySchema, RelationshipSchema,
-    PropertySchema, PropertyType, CardinalityType
+    CardinalityType,
+    CompiledSchema,
+    PropertySchema,
+    PropertyType,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,14 +21,16 @@ logger = logging.getLogger(__name__)
 
 class ValidationLevel(Enum):
     """Validation severity levels"""
-    ERROR = "error"      # Must be fixed
+
+    ERROR = "error"  # Must be fixed
     WARNING = "warning"  # Should be reviewed
-    INFO = "info"        # Informational only
+    INFO = "info"  # Informational only
 
 
 @dataclass
 class ValidationIssue:
     """Single validation issue"""
+
     level: ValidationLevel
     category: str
     entity_or_rel: str
@@ -38,6 +42,7 @@ class ValidationIssue:
 @dataclass
 class ValidationReport:
     """Complete validation report"""
+
     passed: bool
     timestamp: datetime
     issues: List[ValidationIssue]
@@ -65,14 +70,19 @@ class OntologyValidator:
 
     # Reserved property names that shouldn't be used
     RESERVED_PROPERTIES = {
-        'id', 'uuid', 'created_at', 'updated_at',
-        'deleted_at', 'version', '_type'
+        "id",
+        "uuid",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "version",
+        "_type",
     }
 
     # Recommended naming conventions
-    ENTITY_LABEL_PATTERN = r'^[A-Z][a-zA-Z0-9]*$'  # PascalCase
-    RELATIONSHIP_TYPE_PATTERN = r'^[A-Z_]+$'       # UPPER_SNAKE_CASE
-    PROPERTY_NAME_PATTERN = r'^[a-z][a-z0-9_]*$'  # snake_case
+    ENTITY_LABEL_PATTERN = r"^[A-Z][a-zA-Z0-9]*$"  # PascalCase
+    RELATIONSHIP_TYPE_PATTERN = r"^[A-Z_]+$"  # UPPER_SNAKE_CASE
+    PROPERTY_NAME_PATTERN = r"^[a-z][a-z0-9_]*$"  # snake_case
 
     def __init__(self, compiled_schema: CompiledSchema):
         """
@@ -117,11 +127,12 @@ class OntologyValidator:
             timestamp=datetime.now(),
             issues=self.issues,
             statistics=statistics,
-            schema_version=self.schema.version
+            schema_version=self.schema.version,
         )
 
-        logger.info(f"Validation complete: {self.error_count} errors, "
-                   f"{self.warning_count} warnings")
+        logger.info(
+            f"Validation complete: {self.error_count} errors, {self.warning_count} warnings"
+        )
 
         return report
 
@@ -140,7 +151,7 @@ class OntologyValidator:
         entity_or_rel: str,
         message: str,
         details: Optional[Dict[str, Any]] = None,
-        fix_suggestion: Optional[str] = None
+        fix_suggestion: Optional[str] = None,
     ) -> None:
         """Add validation issue to report"""
         issue = ValidationIssue(
@@ -149,7 +160,7 @@ class OntologyValidator:
             entity_or_rel=entity_or_rel,
             message=message,
             details=details,
-            fix_suggestion=fix_suggestion
+            fix_suggestion=fix_suggestion,
         )
         self.issues.append(issue)
 
@@ -166,19 +177,19 @@ class OntologyValidator:
                     "schema",
                     label,
                     f"Primary key '{entity.primary_key}' not found in properties",
-                    fix_suggestion=f"Add property '{entity.primary_key}' to entity"
+                    fix_suggestion=f"Add property '{entity.primary_key}' to entity",
                 )
 
             # Check for duplicate property names
             prop_names = [p.name for p in entity.properties]
-            duplicates = set([p for p in prop_names if prop_names.count(p) > 1])
+            duplicates = {p for p in prop_names if prop_names.count(p) > 1}
             if duplicates:
                 self._add_issue(
                     ValidationLevel.ERROR,
                     "schema",
                     label,
                     f"Duplicate property names: {duplicates}",
-                    details={"duplicates": list(duplicates)}
+                    details={"duplicates": list(duplicates)},
                 )
 
             # Check for empty entity (no properties)
@@ -187,7 +198,7 @@ class OntologyValidator:
                     ValidationLevel.WARNING,
                     "completeness",
                     label,
-                    "Entity has no properties defined"
+                    "Entity has no properties defined",
                 )
 
             # Validate individual properties
@@ -206,31 +217,26 @@ class OntologyValidator:
                     "design",
                     rel_type,
                     f"Self-referencing relationship: {rel.from_label} -> {rel.from_label}",
-                    details={"pattern": "recursive"}
+                    details={"pattern": "recursive"},
                 )
 
             # Check for duplicate properties
             if rel.properties:
                 prop_names = [p.name for p in rel.properties]
-                duplicates = set([p for p in prop_names if prop_names.count(p) > 1])
+                duplicates = {p for p in prop_names if prop_names.count(p) > 1}
                 if duplicates:
                     self._add_issue(
                         ValidationLevel.ERROR,
                         "schema",
                         rel_type,
-                        f"Duplicate property names: {duplicates}"
+                        f"Duplicate property names: {duplicates}",
                     )
 
             # Validate relationship properties
             for prop in rel.properties:
                 self._validate_property(rel_type, prop, is_entity=False)
 
-    def _validate_property(
-        self,
-        parent_name: str,
-        prop: PropertySchema,
-        is_entity: bool
-    ) -> None:
+    def _validate_property(self, parent_name: str, prop: PropertySchema, is_entity: bool) -> None:
         """Validate individual property definition"""
         # Check for reserved property names
         if prop.name in self.RESERVED_PROPERTIES:
@@ -239,18 +245,18 @@ class OntologyValidator:
                 "naming",
                 parent_name,
                 f"Property '{prop.name}' uses reserved name",
-                fix_suggestion="Consider renaming to avoid conflicts"
+                fix_suggestion="Consider renaming to avoid conflicts",
             )
 
         # Validate constraints
         if prop.constraints:
-            if 'min' in prop.constraints and 'max' in prop.constraints:
-                if prop.constraints['min'] > prop.constraints['max']:
+            if "min" in prop.constraints and "max" in prop.constraints:
+                if prop.constraints["min"] > prop.constraints["max"]:
                     self._add_issue(
                         ValidationLevel.ERROR,
                         "constraints",
                         parent_name,
-                        f"Property '{prop.name}': min > max in constraints"
+                        f"Property '{prop.name}': min > max in constraints",
                     )
 
         # Check unique on non-indexed properties
@@ -260,7 +266,7 @@ class OntologyValidator:
                 "performance",
                 parent_name,
                 f"Property '{prop.name}' is unique but not indexed",
-                fix_suggestion="Add indexed: true for better performance"
+                fix_suggestion="Add indexed: true for better performance",
             )
 
     def _validate_references(self) -> None:
@@ -275,7 +281,7 @@ class OntologyValidator:
                     "references",
                     rel_type,
                     f"References non-existent entity '{rel.from_label}'",
-                    fix_suggestion=f"Add entity '{rel.from_label}' or fix reference"
+                    fix_suggestion=f"Add entity '{rel.from_label}' or fix reference",
                 )
 
             # Check to_label exists
@@ -285,7 +291,7 @@ class OntologyValidator:
                     "references",
                     rel_type,
                     f"References non-existent entity '{rel.to_label}'",
-                    fix_suggestion=f"Add entity '{rel.to_label}' or fix reference"
+                    fix_suggestion=f"Add entity '{rel.to_label}' or fix reference",
                 )
 
     def _validate_naming_conventions(self) -> None:
@@ -301,9 +307,9 @@ class OntologyValidator:
                     ValidationLevel.WARNING,
                     "naming",
                     label,
-                    f"Entity label should be PascalCase",
+                    "Entity label should be PascalCase",
                     details={"current": label},
-                    fix_suggestion="Use PascalCase (e.g., CausalEstimate)"
+                    fix_suggestion="Use PascalCase (e.g., CausalEstimate)",
                 )
 
         # Relationship types (UPPER_SNAKE_CASE recommended)
@@ -313,9 +319,9 @@ class OntologyValidator:
                     ValidationLevel.WARNING,
                     "naming",
                     rel_type,
-                    f"Relationship type should be UPPER_SNAKE_CASE",
+                    "Relationship type should be UPPER_SNAKE_CASE",
                     details={"current": rel_type},
-                    fix_suggestion="Use UPPER_SNAKE_CASE (e.g., HAS_IMPACT_ON)"
+                    fix_suggestion="Use UPPER_SNAKE_CASE (e.g., HAS_IMPACT_ON)",
                 )
 
         # Property names (snake_case recommended)
@@ -326,7 +332,7 @@ class OntologyValidator:
                         ValidationLevel.INFO,
                         "naming",
                         f"{label}.{prop.name}",
-                        f"Property name should be snake_case"
+                        "Property name should be snake_case",
                     )
 
     def _validate_indexes(self) -> None:
@@ -336,7 +342,7 @@ class OntologyValidator:
         # Check for indexed primary keys
         for entity in self.schema.entities.values():
             pk_indexed = any(
-                idx['entity'] == entity.label and idx['property'] == entity.primary_key
+                idx["entity"] == entity.label and idx["property"] == entity.primary_key
                 for idx in self.schema.indexes
             )
             if not pk_indexed:
@@ -345,19 +351,19 @@ class OntologyValidator:
                     "performance",
                     entity.label,
                     f"Primary key '{entity.primary_key}' should be indexed",
-                    fix_suggestion="Add index on primary key"
+                    fix_suggestion="Add index on primary key",
                 )
 
         # Check for duplicate indexes
-        index_keys = [(idx['entity'], idx['property']) for idx in self.schema.indexes]
-        duplicates = set([k for k in index_keys if index_keys.count(k) > 1])
+        index_keys = [(idx["entity"], idx["property"]) for idx in self.schema.indexes]
+        duplicates = {k for k in index_keys if index_keys.count(k) > 1}
         if duplicates:
             self._add_issue(
                 ValidationLevel.WARNING,
                 "optimization",
                 "indexes",
                 f"Duplicate indexes found: {duplicates}",
-                fix_suggestion="Remove duplicate index definitions"
+                fix_suggestion="Remove duplicate index definitions",
             )
 
     def _validate_constraints(self) -> None:
@@ -366,9 +372,9 @@ class OntologyValidator:
 
         # Check for conflicting constraints
         for constraint in self.schema.constraints:
-            if constraint['type'] == 'unique':
-                entity = constraint['entity']
-                prop = constraint['property']
+            if constraint["type"] == "unique":
+                entity = constraint["entity"]
+                prop = constraint["property"]
 
                 # Check if property exists
                 if entity in self.schema.entities:
@@ -379,7 +385,7 @@ class OntologyValidator:
                             ValidationLevel.ERROR,
                             "constraints",
                             entity,
-                            f"Unique constraint on non-existent property '{prop}'"
+                            f"Unique constraint on non-existent property '{prop}'",
                         )
 
     def _validate_cardinality(self) -> None:
@@ -393,9 +399,7 @@ class OntologyValidator:
             # Track outgoing relationships
             if rel.from_label not in entity_relationships:
                 entity_relationships[rel.from_label] = []
-            entity_relationships[rel.from_label].append(
-                (rel_type, rel.to_label, rel.cardinality)
-            )
+            entity_relationships[rel.from_label].append((rel_type, rel.to_label, rel.cardinality))
 
         # Check for potential cardinality conflicts
         for entity, rels in entity_relationships.items():
@@ -409,9 +413,7 @@ class OntologyValidator:
                             "cardinality",
                             entity,
                             f"Multiple 1:1 relationships to {target}",
-                            details={
-                                "relationships": [targets[target], rel_type]
-                            }
+                            details={"relationships": [targets[target], rel_type]},
                         )
                     targets[target] = rel_type
 
@@ -437,7 +439,7 @@ class OntologyValidator:
                     prop_name,
                     f"Property '{prop_name}' has inconsistent types: {types}",
                     details={"types": [t.value for t in types]},
-                    fix_suggestion="Consider using consistent type or renaming"
+                    fix_suggestion="Consider using consistent type or renaming",
                 )
 
     def _validate_required_patterns(self) -> None:
@@ -445,25 +447,24 @@ class OntologyValidator:
         logger.debug("Validating E2I required patterns")
 
         # Check for temporal properties
-        required_temporal_entities = ['CausalEstimate', 'Experiment', 'AgentActivity']
+        required_temporal_entities = ["CausalEstimate", "Experiment", "AgentActivity"]
         for entity_label in required_temporal_entities:
             if entity_label in self.schema.entities:
                 entity = self.schema.entities[entity_label]
                 has_timestamp = any(
-                    'time' in p.name.lower() or 'date' in p.name.lower()
-                    for p in entity.properties
+                    "time" in p.name.lower() or "date" in p.name.lower() for p in entity.properties
                 )
                 if not has_timestamp:
                     self._add_issue(
                         ValidationLevel.WARNING,
                         "completeness",
                         entity_label,
-                        f"Temporal entity missing timestamp property",
-                        fix_suggestion="Add created_at or timestamp property"
+                        "Temporal entity missing timestamp property",
+                        fix_suggestion="Add created_at or timestamp property",
                     )
 
         # Check for required causal entities
-        required_entities = ['HCP', 'Patient', 'Intervention', 'Outcome']
+        required_entities = ["HCP", "Patient", "Intervention", "Outcome"]
         for required in required_entities:
             if required not in self.schema.entities:
                 self._add_issue(
@@ -471,7 +472,7 @@ class OntologyValidator:
                     "completeness",
                     "schema",
                     f"Missing recommended entity: {required}",
-                    fix_suggestion=f"Add {required} entity for complete causal model"
+                    fix_suggestion=f"Add {required} entity for complete causal model",
                 )
 
     def _validate_graphity_config(self) -> None:
@@ -480,45 +481,38 @@ class OntologyValidator:
 
         config = self.schema.graphity_config
 
-        if not config.get('enabled'):
+        if not config.get("enabled"):
             self._add_issue(
-                ValidationLevel.INFO,
-                "performance",
-                "graphity",
-                "Graphity optimization is disabled"
+                ValidationLevel.INFO, "performance", "graphity", "Graphity optimization is disabled"
             )
             return
 
         # Check hub entities exist
-        for hub in config.get('hub_entities', []):
+        for hub in config.get("hub_entities", []):
             if hub not in self.schema.entities:
                 self._add_issue(
                     ValidationLevel.WARNING,
                     "configuration",
                     "graphity",
-                    f"Hub entity '{hub}' not found in schema"
+                    f"Hub entity '{hub}' not found in schema",
                 )
 
     def _compute_statistics(self) -> Dict[str, Any]:
         """Compute schema statistics"""
-        total_properties = sum(
-            len(e.properties) for e in self.schema.entities.values()
-        )
-        total_rel_properties = sum(
-            len(r.properties) for r in self.schema.relationships.values()
-        )
+        total_properties = sum(len(e.properties) for e in self.schema.entities.values())
+        total_rel_properties = sum(len(r.properties) for r in self.schema.relationships.values())
 
         return {
-            'entity_count': len(self.schema.entities),
-            'relationship_count': len(self.schema.relationships),
-            'total_properties': total_properties,
-            'total_relationship_properties': total_rel_properties,
-            'index_count': len(self.schema.indexes),
-            'constraint_count': len(self.schema.constraints),
-            'graphity_enabled': self.schema.graphity_config.get('enabled', False)
+            "entity_count": len(self.schema.entities),
+            "relationship_count": len(self.schema.relationships),
+            "total_properties": total_properties,
+            "total_relationship_properties": total_rel_properties,
+            "index_count": len(self.schema.indexes),
+            "constraint_count": len(self.schema.constraints),
+            "graphity_enabled": self.schema.graphity_config.get("enabled", False),
         }
 
-    def generate_report(self, report: ValidationReport, format: str = 'text') -> str:
+    def generate_report(self, report: ValidationReport, format: str = "text") -> str:
         """
         Generate human-readable validation report
 
@@ -529,7 +523,7 @@ class OntologyValidator:
         Returns:
             Formatted report string
         """
-        if format == 'markdown':
+        if format == "markdown":
             return self._generate_markdown_report(report)
         else:
             return self._generate_text_report(report)
@@ -544,7 +538,7 @@ class OntologyValidator:
         lines.append(f"Schema Version: {report.schema_version}")
         lines.append(f"Status: {'PASSED' if report.passed else 'FAILED'}")
         lines.append("")
-        lines.append(f"Summary:")
+        lines.append("Summary:")
         lines.append(f"  Errors:   {report.error_count}")
         lines.append(f"  Warnings: {report.warning_count}")
         lines.append(f"  Info:     {report.info_count}")
@@ -603,7 +597,13 @@ class OntologyValidator:
             for level in [ValidationLevel.ERROR, ValidationLevel.WARNING, ValidationLevel.INFO]:
                 level_issues = [i for i in report.issues if i.level == level]
                 if level_issues:
-                    icon = "X" if level == ValidationLevel.ERROR else "!" if level == ValidationLevel.WARNING else "i"
+                    icon = (
+                        "X"
+                        if level == ValidationLevel.ERROR
+                        else "!"
+                        if level == ValidationLevel.WARNING
+                        else "i"
+                    )
                     lines.append(f"### [{icon}] {level.value.upper()}S")
                     lines.append("")
                     for issue in level_issues:
@@ -620,6 +620,7 @@ class OntologyValidator:
 if __name__ == "__main__":
     import sys
     from pathlib import Path
+
     from src.ontology.schema_compiler import SchemaCompiler
 
     if len(sys.argv) < 2:
@@ -627,9 +628,9 @@ if __name__ == "__main__":
         sys.exit(1)
 
     ontology_dir = Path(sys.argv[1])
-    output_format = 'text'
-    if len(sys.argv) > 2 and sys.argv[2] == '--format':
-        output_format = sys.argv[3] if len(sys.argv) > 3 else 'text'
+    output_format = "text"
+    if len(sys.argv) > 2 and sys.argv[2] == "--format":
+        output_format = sys.argv[3] if len(sys.argv) > 3 else "text"
 
     # Compile schema
     compiler = SchemaCompiler(ontology_dir)

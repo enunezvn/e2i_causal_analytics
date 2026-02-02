@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 from uuid import UUID
 
 import networkx as nx
@@ -346,6 +346,6 @@ class BaseDiscoveryAlgorithm(ABC):
         """
         edges = []
         rows, cols = np.where(adj_matrix != 0)
-        for i, j in zip(rows, cols):
+        for i, j in zip(rows, cols, strict=False):
             edges.append((node_names[i], node_names[j]))
         return edges

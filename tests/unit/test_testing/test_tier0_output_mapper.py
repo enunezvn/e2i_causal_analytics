@@ -4,7 +4,7 @@ Tests the mapping of tier0 synthetic data outputs to agent-specific inputs.
 """
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 import pytest
@@ -28,7 +28,18 @@ def sample_tier0_state():
             "hcp_visits": [2, 5, 3, 6, 4, 7, 2, 8, 3, 5],
             "prior_treatments": [1, 2, 1, 3, 2, 1, 2, 3, 1, 2],
             "days_on_therapy": [30, 60, 45, 90, 50, 100, 35, 110, 40, 70],
-            "age_group": ["50-60", "60-70", "50-60", "70+", "60-70", "50-60", "60-70", "70+", "50-60", "60-70"],
+            "age_group": [
+                "50-60",
+                "60-70",
+                "50-60",
+                "70+",
+                "60-70",
+                "50-60",
+                "60-70",
+                "70+",
+                "50-60",
+                "60-70",
+            ],
             "geographic_region": ["NE", "SE", "MW", "W", "NE", "SE", "MW", "W", "NE", "SE"],
             "feature_1": [0.5, 0.6, 0.7, 0.8, 0.5, 0.6, 0.7, 0.8, 0.5, 0.6],
             "feature_2": [1.0, 1.1, 1.2, 1.3, 1.0, 1.1, 1.2, 1.3, 1.0, 1.1],
@@ -520,7 +531,12 @@ class TestDataFrameColumnHandling:
         # Should fall back to available feature
         assert "treatment_var" in result
         # Should use prior_treatments or another available feature
-        assert result["treatment_var"] in ["prior_treatments", "days_on_therapy", "feature_1", "feature_2"]
+        assert result["treatment_var"] in [
+            "prior_treatments",
+            "days_on_therapy",
+            "feature_1",
+            "feature_2",
+        ]
 
     def test_gap_analyzer_without_geographic_region(self, sample_tier0_state):
         """Test gap analyzer without geographic_region column."""

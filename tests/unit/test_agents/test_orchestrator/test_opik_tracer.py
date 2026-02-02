@@ -4,21 +4,18 @@ Version: 1.0.0
 Tests the Opik observability integration for Orchestrator agent.
 """
 
-import asyncio
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.agents.orchestrator.opik_tracer import (
+    ORCHESTRATION_PHASES,
+    PIPELINE_NODES,
     NodeSpanContext,
     OrchestrationTraceContext,
     OrchestratorOpikTracer,
-    ORCHESTRATION_PHASES,
-    PIPELINE_NODES,
     get_orchestrator_tracer,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -30,6 +27,7 @@ def reset_singleton():
     """Reset the tracer singleton before each test."""
     # Reset the module-level singleton
     import src.agents.orchestrator.opik_tracer as tracer_module
+
     tracer_module._tracer_instance = None
     # Reset class-level singleton
     OrchestratorOpikTracer._instance = None
@@ -404,7 +402,7 @@ class TestOrchestratorOpikTracer:
 
     def test_get_client_lazy_init(self):
         """Test client is lazily initialized."""
-        opik = pytest.importorskip("opik", reason="opik not installed")
+        pytest.importorskip("opik", reason="opik not installed")
 
         with patch("opik.Opik") as mock_opik_class:
             mock_client = MagicMock()
@@ -426,7 +424,7 @@ class TestOrchestratorOpikTracer:
 
     def test_get_client_handles_import_error(self):
         """Test _get_client handles ImportError gracefully."""
-        opik = pytest.importorskip("opik", reason="opik not installed")
+        pytest.importorskip("opik", reason="opik not installed")
 
         with patch("opik.Opik") as mock_opik_class:
             mock_opik_class.side_effect = ImportError("opik not installed")
@@ -493,7 +491,9 @@ class TestOrchestratorOpikTracer:
             session_id="sess-789",
         ) as ctx:
             # Simulate full orchestration pipeline
-            ctx.log_orchestration_started("What is the causal impact of rep visits?", "user-456", "sess-789")
+            ctx.log_orchestration_started(
+                "What is the causal impact of rep visits?", "user-456", "sess-789"
+            )
 
             node = ctx.start_node_span("classify", {"query": "test"})
             node.add_metadata("intent", "CAUSAL")
@@ -547,7 +547,7 @@ class TestOrchestratorOpikTracer:
 
     def test_flush_with_client(self):
         """Test flush calls client flush."""
-        opik = pytest.importorskip("opik", reason="opik not installed")
+        pytest.importorskip("opik", reason="opik not installed")
 
         with patch("opik.Opik") as mock_opik_class:
             mock_client = MagicMock()
@@ -614,7 +614,7 @@ class TestOpikIntegration:
     @pytest.mark.asyncio
     async def test_full_trace_with_opik(self):
         """Test full trace with Opik client."""
-        opik = pytest.importorskip("opik", reason="opik not installed")
+        pytest.importorskip("opik", reason="opik not installed")
 
         with patch("opik.Opik") as mock_opik_class:
             mock_client = MagicMock()
@@ -630,7 +630,7 @@ class TestOpikIntegration:
                 query_id="q-123",
                 query="Test query",
             ) as ctx:
-                node_ctx = ctx.start_node_span("classify")
+                ctx.start_node_span("classify")
                 ctx.end_node_span("classify")
 
             mock_client.trace.assert_called_once()
@@ -639,7 +639,7 @@ class TestOpikIntegration:
     @pytest.mark.asyncio
     async def test_graceful_degradation_on_trace_error(self):
         """Test graceful degradation when trace creation fails."""
-        opik = pytest.importorskip("opik", reason="opik not installed")
+        pytest.importorskip("opik", reason="opik not installed")
 
         with patch("opik.Opik") as mock_opik_class:
             mock_client = MagicMock()

@@ -16,9 +16,10 @@ Architecture:
 import logging
 import time
 import uuid
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.agents.base import SkillsMixin
+
 from .graph import create_gap_analyzer_graph
 from .state import GapAnalyzerState
 
@@ -531,9 +532,7 @@ class GapAnalyzerAgent(SkillsMixin):
                 f"${sum(qw.get('roi_estimate', {}).get('expected_value', 0) for qw in quick_wins):,.0f}"
             )
         if strategic_bets:
-            suggestions.append(
-                f"Evaluate {len(strategic_bets)} strategic bets for long-term value"
-            )
+            suggestions.append(f"Evaluate {len(strategic_bets)} strategic bets for long-term value")
         if output.get("suggested_next_agent") == "causal_impact":
             suggestions.append("Validate high-ROI opportunities with causal analysis")
         if output.get("suggested_next_agent") == "heterogeneous_optimizer":
@@ -557,7 +556,9 @@ class GapAnalyzerAgent(SkillsMixin):
                 "opportunities": "available" if opportunities else "unavailable",
                 "quick_wins": len(quick_wins),
                 "strategic_bets": len(strategic_bets),
-                "executive_summary": "available" if output.get("executive_summary") else "unavailable",
+                "executive_summary": "available"
+                if output.get("executive_summary")
+                else "unavailable",
                 "key_insights": len(output.get("key_insights", [])),
             },
             "requires_further_analysis": output.get("requires_further_analysis", False),

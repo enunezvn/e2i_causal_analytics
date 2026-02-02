@@ -7,18 +7,20 @@ NOTE: Uses direct module imports to avoid triggering LLM initialization
 in the experiment_designer package __init__.py.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
+
+import pytest
 
 
 # Direct module import to avoid package __init__.py side effects
 def _import_tool_module():
     """Import tool module directly, bypassing package __init__."""
     import importlib.util
+
     spec = importlib.util.spec_from_file_location(
         "validate_twin_fidelity_tool",
-        "src/agents/experiment_designer/tools/validate_twin_fidelity_tool.py"
+        "src/agents/experiment_designer/tools/validate_twin_fidelity_tool.py",
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -26,7 +28,7 @@ def _import_tool_module():
 
 
 # Import models that don't trigger LLM init
-from src.digital_twin.models.simulation_models import FidelityGrade, FidelityRecord
+from src.digital_twin.models.simulation_models import FidelityGrade
 
 
 # Lazy import the actual tool module
@@ -119,10 +121,12 @@ class TestValidateTwinFidelity:
         validate_twin_fidelity = tool_module.validate_twin_fidelity
         sim_id = str(uuid4())
 
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": sim_id,
-            "actual_ate": 0.08,
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": sim_id,
+                "actual_ate": 0.08,
+            }
+        )
 
         # Check all required fields
         required_fields = [
@@ -144,15 +148,19 @@ class TestValidateTwinFidelity:
     def test_handles_invalid_simulation_id_format(self, tool_module):
         """Test handling of invalid simulation ID format."""
         validate_twin_fidelity = tool_module.validate_twin_fidelity
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": "not-a-valid-uuid",
-            "actual_ate": 0.08,
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": "not-a-valid-uuid",
+                "actual_ate": 0.08,
+            }
+        )
 
         # Should return error response
         assert result["tracking_id"] == "error"
-        assert "validation failed" in result["assessment_message"].lower() or \
-               "invalid" in result["assessment_message"].lower()
+        assert (
+            "validation failed" in result["assessment_message"].lower()
+            or "invalid" in result["assessment_message"].lower()
+        )
 
     def test_handles_missing_simulation(self, tool_module):
         """Test handling of simulation not found in tracker."""
@@ -160,10 +168,12 @@ class TestValidateTwinFidelity:
         # Use a valid but non-existent UUID
         sim_id = str(uuid4())
 
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": sim_id,
-            "actual_ate": 0.075,
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": sim_id,
+                "actual_ate": 0.075,
+            }
+        )
 
         # Should create new validation record
         assert "tracking_id" in result
@@ -177,10 +187,12 @@ class TestValidateTwinFidelity:
         sim_id = str(uuid4())
         expected_ate = 0.092
 
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": sim_id,
-            "actual_ate": expected_ate,
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": sim_id,
+                "actual_ate": expected_ate,
+            }
+        )
 
         assert result["actual_ate"] == expected_ate
 
@@ -290,8 +302,10 @@ class TestCICoverageCheck:
 
         assessment = _generate_assessment(record)
 
-        assert "fell outside predicted" in assessment["message"].lower() or \
-               "outside" in assessment["message"].lower()
+        assert (
+            "fell outside predicted" in assessment["message"].lower()
+            or "outside" in assessment["message"].lower()
+        )
         # Should recommend update when CI coverage fails
         assert assessment["update_recommended"] is True
 
@@ -356,9 +370,11 @@ class TestGetModelFidelityReport:
         get_model_fidelity_report = tool_module.get_model_fidelity_report
         model_id = str(uuid4())
 
-        result = get_model_fidelity_report.invoke({
-            "model_id": model_id,
-        })
+        result = get_model_fidelity_report.invoke(
+            {
+                "model_id": model_id,
+            }
+        )
 
         expected_fields = [
             "model_id",
@@ -373,10 +389,12 @@ class TestGetModelFidelityReport:
         get_model_fidelity_report = tool_module.get_model_fidelity_report
         model_id = str(uuid4())
 
-        result = get_model_fidelity_report.invoke({
-            "model_id": model_id,
-            "lookback_days": 30,
-        })
+        result = get_model_fidelity_report.invoke(
+            {
+                "model_id": model_id,
+                "lookback_days": 30,
+            }
+        )
 
         assert "model_id" in result
         # Should return result (may have 0 validations)
@@ -387,10 +405,12 @@ class TestGetModelFidelityReport:
         get_model_fidelity_report = tool_module.get_model_fidelity_report
         model_id = str(uuid4())
 
-        result = get_model_fidelity_report.invoke({
-            "model_id": model_id,
-            "lookback_days": 90,
-        })
+        result = get_model_fidelity_report.invoke(
+            {
+                "model_id": model_id,
+                "lookback_days": 90,
+            }
+        )
 
         assert result["validation_count"] == 0
 
@@ -527,10 +547,12 @@ class TestValidateTwinFidelityEdgeCases:
         validate_twin_fidelity = tool_module.validate_twin_fidelity
         sim_id = str(uuid4())
 
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": sim_id,
-            "actual_ate": -0.05,  # Negative effect
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": sim_id,
+                "actual_ate": -0.05,  # Negative effect
+            }
+        )
 
         assert result["actual_ate"] == -0.05
 
@@ -539,10 +561,12 @@ class TestValidateTwinFidelityEdgeCases:
         validate_twin_fidelity = tool_module.validate_twin_fidelity
         sim_id = str(uuid4())
 
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": sim_id,
-            "actual_ate": 0.0,
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": sim_id,
+                "actual_ate": 0.0,
+            }
+        )
 
         assert result["actual_ate"] == 0.0
 
@@ -551,10 +575,12 @@ class TestValidateTwinFidelityEdgeCases:
         validate_twin_fidelity = tool_module.validate_twin_fidelity
         sim_id = str(uuid4())
 
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": sim_id,
-            "actual_ate": 0.50,  # 50% effect - unusually high
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": sim_id,
+                "actual_ate": 0.50,  # 50% effect - unusually high
+            }
+        )
 
         assert result["actual_ate"] == 0.50
 
@@ -564,16 +590,18 @@ class TestValidateTwinFidelityEdgeCases:
         sim_id = str(uuid4())
         exp_id = str(uuid4())
 
-        result = validate_twin_fidelity.invoke({
-            "simulation_id": sim_id,
-            "actual_ate": 0.082,
-            "actual_ci_lower": 0.065,
-            "actual_ci_upper": 0.099,
-            "actual_sample_size": 2500,
-            "actual_experiment_id": exp_id,
-            "validation_notes": "Full validation test",
-            "confounding_factors": ["factor_a", "factor_b"],
-        })
+        result = validate_twin_fidelity.invoke(
+            {
+                "simulation_id": sim_id,
+                "actual_ate": 0.082,
+                "actual_ci_lower": 0.065,
+                "actual_ci_upper": 0.099,
+                "actual_sample_size": 2500,
+                "actual_experiment_id": exp_id,
+                "validation_notes": "Full validation test",
+                "confounding_factors": ["factor_a", "factor_b"],
+            }
+        )
 
         assert "tracking_id" in result
         assert result["actual_ate"] == 0.082

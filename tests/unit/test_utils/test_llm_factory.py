@@ -23,7 +23,6 @@ from src.utils.llm_factory import (
     get_standard_llm,
 )
 
-
 # =============================================================================
 # get_llm_provider Tests
 # =============================================================================
@@ -220,7 +219,9 @@ class TestCreateAnthropicLLM:
         """Test raises ValueError if ANTHROPIC_API_KEY not set."""
         # Mock the ChatAnthropic import
         mock_chat_anthropic = MagicMock()
-        with patch.dict("sys.modules", {"langchain_anthropic": MagicMock(ChatAnthropic=mock_chat_anthropic)}):
+        with patch.dict(
+            "sys.modules", {"langchain_anthropic": MagicMock(ChatAnthropic=mock_chat_anthropic)}
+        ):
             with patch.dict(os.environ, {}, clear=True):
                 # Remove API key if it exists
                 os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -297,16 +298,16 @@ class TestCreateOpenAILLM:
     def test_raises_import_error_if_package_missing(self):
         """Test raises ImportError if langchain-openai not installed."""
         with patch("src.utils.llm_factory._create_openai_llm") as mock_create:
-            mock_create.side_effect = ImportError(
-                "langchain-openai is required for OpenAI LLMs"
-            )
+            mock_create.side_effect = ImportError("langchain-openai is required for OpenAI LLMs")
             with pytest.raises(ImportError, match="langchain-openai is required"):
                 mock_create("gpt-4o", 1024, 0.3, None)
 
     def test_raises_value_error_if_api_key_missing(self):
         """Test raises ValueError if OPENAI_API_KEY not set."""
         mock_chat_openai = MagicMock()
-        with patch.dict("sys.modules", {"langchain_openai": MagicMock(ChatOpenAI=mock_chat_openai)}):
+        with patch.dict(
+            "sys.modules", {"langchain_openai": MagicMock(ChatOpenAI=mock_chat_openai)}
+        ):
             with patch.dict(os.environ, {}, clear=True):
                 os.environ.pop("OPENAI_API_KEY", None)
 

@@ -17,16 +17,15 @@ import asyncio
 import os
 import time
 import uuid
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 # =============================================================================
 # Import observability components
 # =============================================================================
-
 from src.agents.ml_foundation.observability_connector import (
     AgentNameEnum,
     AgentTierEnum,
@@ -34,7 +33,6 @@ from src.agents.ml_foundation.observability_connector import (
     BatchProcessor,
     CacheBackend,
     CacheConfig,
-    MetricsCache,
     ObservabilitySpan,
     SpanStatusEnum,
     create_span,
@@ -48,7 +46,6 @@ from src.agents.ml_foundation.observability_connector.self_monitor import (
     HealthStatus,
     LatencyContext,
     MetricType,
-    SelfMonitor,
     SelfMonitorConfig,
     get_self_monitor,
     reset_self_monitor,
@@ -56,9 +53,7 @@ from src.agents.ml_foundation.observability_connector.self_monitor import (
 from src.mlops.opik_connector import (
     CircuitBreaker,
     CircuitBreakerConfig,
-    CircuitBreakerMetrics,
     CircuitState,
-    OpikConnector,
     get_opik_connector,
     reset_opik_connector,
 )
@@ -144,7 +139,9 @@ def multiple_spans(trace_id: str) -> list[ObservabilitySpan]:
             agent_name=agents[i % 2],
             agent_tier=tiers[i % 2],
             operation_type=f"test_operation_{i}",
-            started_at=datetime.now(UTC),  # Use timezone-aware datetime for complete() compatibility
+            started_at=datetime.now(
+                UTC
+            ),  # Use timezone-aware datetime for complete() compatibility
             status=SpanStatusEnum.SUCCESS if i % 3 != 0 else SpanStatusEnum.ERROR,
             duration_ms=50 + i * 10,
             attributes={"index": i, "test": True},
@@ -351,7 +348,9 @@ class TestMetricsComputation:
 
     @requires_supabase
     @pytest.mark.asyncio
-    async def test_aggregate_metrics_from_database(self, multiple_spans: list[ObservabilitySpan], supabase_repo):
+    async def test_aggregate_metrics_from_database(
+        self, multiple_spans: list[ObservabilitySpan], supabase_repo
+    ):
         """Test computing metrics from database spans."""
         from src.agents.ml_foundation.observability_connector.nodes.metrics_aggregator import (
             aggregate_metrics,
@@ -374,7 +373,11 @@ class TestMetricsComputation:
         # Should return dict with metrics keys
         assert isinstance(result, dict)
         # Result should have at least aggregated_metrics key
-        assert "aggregated_metrics" in result or "latency_by_agent" in result or "error_rates" in result
+        assert (
+            "aggregated_metrics" in result
+            or "latency_by_agent" in result
+            or "error_rates" in result
+        )
 
     @pytest.mark.asyncio
     async def test_metrics_cache_integration(self):

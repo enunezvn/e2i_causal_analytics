@@ -117,14 +117,9 @@ class NetworkXToDoWhyValidator(StageValidator):
 
         # Check for path from treatment to outcome
         if treatment and outcome and edges:
-            has_path = any(
-                e.get("from") == treatment and e.get("to") == outcome
-                for e in edges
-            )
+            has_path = any(e.get("from") == treatment and e.get("to") == outcome for e in edges)
             if not has_path:
-                suggestions.append(
-                    f"Consider adding direct edge from {treatment} to {outcome}"
-                )
+                suggestions.append(f"Consider adding direct edge from {treatment} to {outcome}")
 
         is_valid = len(errors) == 0
         return ValidationResult(is_valid, errors, warnings, suggestions)
@@ -186,9 +181,7 @@ class DoWhyToEconMLValidator(StageValidator):
         # Check for effect modifiers (needed for heterogeneity)
         if not state.get("effect_modifiers"):
             warnings.append("No effect modifiers specified")
-            suggestions.append(
-                "Specify effect modifiers for meaningful CATE estimation"
-            )
+            suggestions.append("Specify effect modifiers for meaningful CATE estimation")
 
         is_valid = len(errors) == 0
         return ValidationResult(is_valid, errors, warnings, suggestions)
@@ -227,12 +220,8 @@ class EconMLToCausalMLValidator(StageValidator):
         # Check heterogeneity score
         het_score = state.get("heterogeneity_score")
         if het_score is not None and het_score < 0.1:
-            warnings.append(
-                f"Low heterogeneity score ({het_score:.3f}) suggests uniform effects"
-            )
-            suggestions.append(
-                "CausalML uplift modeling may provide limited additional value"
-            )
+            warnings.append(f"Low heterogeneity score ({het_score:.3f}) suggests uniform effects")
+            suggestions.append("CausalML uplift modeling may provide limited additional value")
 
         # Check CATE by segment
         cate_by_segment = state.get("cate_by_segment")
@@ -244,9 +233,7 @@ class EconMLToCausalMLValidator(StageValidator):
                 if isinstance(cate, (int, float)) and cate < 0
             ]
             if negative_segments:
-                warnings.append(
-                    f"Negative CATE found in segments: {negative_segments}"
-                )
+                warnings.append(f"Negative CATE found in segments: {negative_segments}")
                 suggestions.append(
                     "CausalML can help identify optimal targeting to avoid negative effects"
                 )
@@ -312,9 +299,7 @@ class PipelineValidator:
             # No specific validator - return valid with warning
             return ValidationResult(
                 True,
-                warnings=[
-                    f"No validator for {from_library.value} → {to_library.value}"
-                ],
+                warnings=[f"No validator for {from_library.value} → {to_library.value}"],
             )
 
         return validator.validate(state)
@@ -340,15 +325,11 @@ class PipelineValidator:
             to_lib = libraries[i + 1]
             transition_name = f"{from_lib.value}_to_{to_lib.value}"
 
-            results[transition_name] = self.validate_transition(
-                state, from_lib, to_lib
-            )
+            results[transition_name] = self.validate_transition(state, from_lib, to_lib)
 
         return results
 
-    def get_all_warnings(
-        self, validation_results: Dict[str, ValidationResult]
-    ) -> List[str]:
+    def get_all_warnings(self, validation_results: Dict[str, ValidationResult]) -> List[str]:
         """Extract all warnings from validation results.
 
         Args:
@@ -363,9 +344,7 @@ class PipelineValidator:
                 warnings.append(f"[{transition}] {warning}")
         return warnings
 
-    def get_all_suggestions(
-        self, validation_results: Dict[str, ValidationResult]
-    ) -> List[str]:
+    def get_all_suggestions(self, validation_results: Dict[str, ValidationResult]) -> List[str]:
         """Extract all suggestions from validation results.
 
         Args:

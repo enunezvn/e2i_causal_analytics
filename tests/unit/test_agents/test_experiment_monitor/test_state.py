@@ -7,21 +7,16 @@ Tests cover:
 - State field groups (input, config, outputs, metadata)
 """
 
-import pytest
 from datetime import datetime, timezone
 
 from src.agents.experiment_monitor.state import (
-    AlertSeverity,
-    AlertType,
     EnrollmentIssue,
     ErrorDetails,
     ExperimentMonitorState,
     ExperimentSummary,
     FidelityIssue,
-    HealthStatus,
     InterimTrigger,
     MonitorAlert,
-    MonitorStatus,
     SRMIssue,
 )
 
@@ -258,7 +253,9 @@ class TestErrorDetails:
         nodes = ["health_checker", "srm_detector", "interim_analyzer", "alert_generator"]
         for node in nodes:
             error = ErrorDetails(
-                node=node, error=f"Error in {node}", timestamp=datetime.now(timezone.utc).isoformat()
+                node=node,
+                error=f"Error in {node}",
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
             assert error["node"] == node
 
@@ -365,7 +362,9 @@ class TestStateHelpers:
 
     def test_create_experiment_summary_helper(self):
         """Test the create_experiment_summary helper."""
-        from tests.unit.test_agents.test_experiment_monitor.conftest import create_experiment_summary
+        from tests.unit.test_agents.test_experiment_monitor.conftest import (
+            create_experiment_summary,
+        )
 
         summary = create_experiment_summary(
             experiment_id="test-exp",
@@ -382,9 +381,7 @@ class TestStateHelpers:
         """Test the create_srm_issue helper."""
         from tests.unit.test_agents.test_experiment_monitor.conftest import create_srm_issue
 
-        issue = create_srm_issue(
-            experiment_id="test-exp", p_value=0.0005, severity="warning"
-        )
+        issue = create_srm_issue(experiment_id="test-exp", p_value=0.0005, severity="warning")
         assert issue["experiment_id"] == "test-exp"
         assert issue["p_value"] == 0.0005
         assert issue["severity"] == "warning"
@@ -392,8 +389,8 @@ class TestStateHelpers:
     def test_create_monitor_state_helper(self):
         """Test the create_monitor_state helper."""
         from tests.unit.test_agents.test_experiment_monitor.conftest import (
-            create_monitor_state,
             create_experiment_summary,
+            create_monitor_state,
         )
 
         summary = create_experiment_summary("exp-1")

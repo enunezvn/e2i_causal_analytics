@@ -69,7 +69,7 @@ class LIMLEstimator(BaseIVEstimator):
         treatment: NDArray[np.float64],
         instruments: NDArray[np.float64],
         covariates: Optional[NDArray[np.float64]] = None,
-        **kwargs
+        **kwargs,
     ) -> IVResult:
         """
         Fit LIML estimator.
@@ -152,18 +152,16 @@ class LIMLEstimator(BaseIVEstimator):
             # ============ Residuals and Standard Errors ============
             # Residuals using actual treatment
             if X is not None:
-                W = np.column_stack([D, X, np.ones(n)])
+                np.column_stack([D, X, np.ones(n)])
             else:
-                W = np.column_stack([D, np.ones(n)])
+                np.column_stack([D, np.ones(n)])
 
             # Full model coefficients
             residuals = Y_tilde - D_tilde * beta
             sigma_sq = np.sum(residuals**2) / (n - k - p - 1)
 
             # LIML variance (approximate)
-            std_error = self._compute_liml_std_error(
-                D_tilde, Z_tilde, sigma_sq, kappa, n, k, p
-            )
+            std_error = self._compute_liml_std_error(D_tilde, Z_tilde, sigma_sq, kappa, n, k, p)
 
             # t-statistic and p-value
             df = n - k - p - 1
@@ -187,16 +185,14 @@ class LIMLEstimator(BaseIVEstimator):
             diagnostics.partial_r_squared = self._partial_r_squared(D_tilde, Z_tilde, n)
 
             # Anderson-Rubin test
-            ar_stat, ar_pvalue = self._anderson_rubin_test(
-                Y_tilde, D_tilde, Z_tilde, n, k
-            )
+            ar_stat, ar_pvalue = self._anderson_rubin_test(Y_tilde, D_tilde, Z_tilde, n, k)
             diagnostics.anderson_rubin_stat = ar_stat
             diagnostics.anderson_rubin_pvalue = ar_pvalue
 
             # First-stage R-squared
             pi = np.linalg.lstsq(Z_tilde, D_tilde, rcond=None)[0]
             D_hat = Z_tilde @ pi
-            ss_res = np.sum((D_tilde - D_hat)**2)
+            ss_res = np.sum((D_tilde - D_hat) ** 2)
             ss_tot = np.sum(D_tilde**2)
             first_stage_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
@@ -341,7 +337,7 @@ class LIMLEstimator(BaseIVEstimator):
         denom = DtD - kappa * DtMzD
 
         if abs(denom) < 1e-10:
-            return float('inf')
+            return float("inf")
 
         var_beta = sigma_sq / denom
 
@@ -364,7 +360,7 @@ class LIMLEstimator(BaseIVEstimator):
         D_hat = Z @ coef
         residuals = D - D_hat
 
-        ss_reg = np.sum((D_hat - np.mean(D))**2)
+        ss_reg = np.sum((D_hat - np.mean(D)) ** 2)
         ss_res = np.sum(residuals**2)
 
         df1 = k
@@ -389,7 +385,7 @@ class LIMLEstimator(BaseIVEstimator):
         coef = np.linalg.lstsq(Z, D, rcond=None)[0]
         D_hat = Z @ coef
 
-        ss_res = np.sum((D - D_hat)**2)
+        ss_res = np.sum((D - D_hat) ** 2)
         ss_tot = np.sum(D**2)
 
         return 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
@@ -408,7 +404,7 @@ class LIMLEstimator(BaseIVEstimator):
         Y_hat = Z @ coef
         residuals = Y - Y_hat
 
-        ss_reg = np.sum((Y_hat - np.mean(Y))**2)
+        ss_reg = np.sum((Y_hat - np.mean(Y)) ** 2)
         ss_res = np.sum(residuals**2)
 
         df1 = k

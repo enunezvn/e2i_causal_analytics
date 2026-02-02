@@ -41,7 +41,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +132,7 @@ class LatencyStats:
             "p95_ms": round(self.p95_ms, 2),
             "p99_ms": round(self.p99_ms, 2),
             "last_ms": round(self.last_ms, 2),
-            "last_recorded": (
-                self.last_recorded.isoformat() if self.last_recorded else None
-            ),
+            "last_recorded": (self.last_recorded.isoformat() if self.last_recorded else None),
             "status": self.status.value,
         }
 
@@ -158,9 +156,7 @@ class ComponentHealth:
             "latency": self.latency_stats.to_dict(),
             "error_count": self.error_count,
             "last_error": self.last_error,
-            "last_error_time": (
-                self.last_error_time.isoformat() if self.last_error_time else None
-            ),
+            "last_error_time": (self.last_error_time.isoformat() if self.last_error_time else None),
         }
 
 
@@ -488,17 +484,12 @@ class SelfMonitor:
                 if total > 0:
                     error_rate = health.error_count / total
                     if error_rate > 0.1:  # More than 10% errors
-                        alerts.append(
-                            f"{metric_type.value}: High error rate "
-                            f"({error_rate:.1%})"
-                        )
+                        alerts.append(f"{metric_type.value}: High error rate ({error_rate:.1%})")
                         if worst_status != HealthStatus.UNHEALTHY:
                             worst_status = HealthStatus.DEGRADED
 
         # Check if we have enough data
-        total_samples = sum(
-            tracker.get_stats().count for tracker in self._trackers.values()
-        )
+        total_samples = sum(tracker.get_stats().count for tracker in self._trackers.values())
         if total_samples < self.config.min_samples_for_stats:
             worst_status = HealthStatus.UNKNOWN
 
@@ -548,8 +539,7 @@ class SelfMonitor:
         self._running = True
         self._health_task = asyncio.create_task(self._health_emission_loop())
         logger.info(
-            f"Started health emission (interval: "
-            f"{self.config.health_emission_interval_seconds}s)"
+            f"Started health emission (interval: {self.config.health_emission_interval_seconds}s)"
         )
 
     async def stop_health_emission(self) -> None:
@@ -590,10 +580,7 @@ class SelfMonitor:
 
         # Log if degraded
         if self.config.log_degraded_status and health.status != HealthStatus.HEALTHY:
-            logger.warning(
-                f"Observability health: {health.status.value}, "
-                f"alerts: {health.alerts}"
-            )
+            logger.warning(f"Observability health: {health.status.value}, alerts: {health.alerts}")
 
         # Emit span if emitter is configured
         if self._span_emitter:
@@ -608,9 +595,7 @@ class SelfMonitor:
                         "uptime_seconds": health.uptime_seconds,
                         "health_span_count": self._health_span_count,
                         "alerts": health.alerts,
-                        "components": {
-                            k: v.to_dict() for k, v in health.components.items()
-                        },
+                        "components": {k: v.to_dict() for k, v in health.components.items()},
                     },
                 }
                 await self._span_emitter(span_data)

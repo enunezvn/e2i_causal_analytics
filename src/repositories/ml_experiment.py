@@ -207,7 +207,9 @@ class MLTrainingRun:
         return cls(
             id=UUID(data["id"]) if data.get("id") else None,
             experiment_id=UUID(data["experiment_id"]) if data.get("experiment_id") else None,
-            model_registry_id=UUID(data["model_registry_id"]) if data.get("model_registry_id") else None,
+            model_registry_id=UUID(data["model_registry_id"])
+            if data.get("model_registry_id")
+            else None,
             run_name=data.get("run_name"),
             mlflow_run_id=data.get("mlflow_run_id"),
             algorithm=data.get("algorithm", ""),
@@ -423,7 +425,9 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
             region=region,
             created_by=created_by,
             minimum_auc=success_criteria.get("minimum_auc") if success_criteria else None,
-            minimum_precision_at_k=success_criteria.get("minimum_precision_at_k") if success_criteria else None,
+            minimum_precision_at_k=success_criteria.get("minimum_precision_at_k")
+            if success_criteria
+            else None,
             maximum_fpr=success_criteria.get("maximum_fpr") if success_criteria else None,
         )
 
@@ -568,12 +572,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
             updates["test_metrics"] = test_metrics
 
         if updates:
-            await (
-                self.client.table(self.table_name)
-                .update(updates)
-                .eq("id", str(run_id))
-                .execute()
-            )
+            await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
             return True
 
         return False
@@ -613,12 +612,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if error_message:
             updates["error_message"] = error_message
 
-        await (
-            self.client.table(self.table_name)
-            .update(updates)
-            .eq("id", str(run_id))
-            .execute()
-        )
+        await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
         return True
 
     async def get_runs_for_experiment(
@@ -643,7 +637,9 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
 
         return await self.get_many(filters=filters, limit=limit)
 
-    async def get_best_run(self, experiment_id: UUID, metric: str = "auc") -> Optional[MLTrainingRun]:
+    async def get_best_run(
+        self, experiment_id: UUID, metric: str = "auc"
+    ) -> Optional[MLTrainingRun]:
         """Get the best run for an experiment based on a metric.
 
         Args:
@@ -698,12 +694,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
             updates["optuna_trial_number"] = optuna_trial_number
         updates["is_best_trial"] = is_best_trial
 
-        await (
-            self.client.table(self.table_name)
-            .update(updates)
-            .eq("id", str(run_id))
-            .execute()
-        )
+        await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
         return True
 
     async def create_run_with_hpo(
@@ -781,9 +772,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         """Convert database row to model."""
         return MLModelRegistry.from_dict(data)
 
-    async def get_by_name_version(
-        self, model_name: str, version: str
-    ) -> Optional[MLModelRegistry]:
+    async def get_by_name_version(self, model_name: str, version: str) -> Optional[MLModelRegistry]:
         """Get model by name and version.
 
         Args:
@@ -820,11 +809,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return None
 
-        query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("is_champion", True)
-        )
+        query = self.client.table(self.table_name).select("*").eq("is_champion", True)
 
         if experiment_id:
             query = query.eq("experiment_id", str(experiment_id))
@@ -926,12 +911,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if new_stage == "production":
             updates["is_champion"] = True
 
-        await (
-            self.client.table(self.table_name)
-            .update(updates)
-            .eq("id", str(model_id))
-            .execute()
-        )
+        await self.client.table(self.table_name).update(updates).eq("id", str(model_id)).execute()
 
         return True
 
@@ -1031,9 +1011,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         }
 
         try:
-            result = await (
-                self.client.table(self.table_name).insert(data).execute()
-            )
+            result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
             return None

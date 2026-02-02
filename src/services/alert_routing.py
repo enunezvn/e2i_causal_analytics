@@ -191,9 +191,7 @@ class SlackNotificationProvider(NotificationProvider):
 
         if alert.recommended_actions:
             actions_text = "\n".join(f"• {a}" for a in alert.recommended_actions[:3])
-            fields.append(
-                {"title": "Recommended Actions", "value": actions_text, "short": False}
-            )
+            fields.append({"title": "Recommended Actions", "value": actions_text, "short": False})
 
         return {
             "channel": self.config.slack_channel,
@@ -279,7 +277,7 @@ class EmailNotificationProvider(NotificationProvider):
                 <p><strong>Model:</strong> {alert.model_id}</p>
                 <p><strong>Alert Type:</strong> {alert.alert_type}</p>
                 <p><strong>Triggered:</strong> {alert.triggered_at.isoformat()}</p>
-                {f'<p><strong>Drift Score:</strong> {alert.drift_score:.2f}</p>' if alert.drift_score else ''}
+                {f"<p><strong>Drift Score:</strong> {alert.drift_score:.2f}</p>" if alert.drift_score else ""}
 
                 <h4>Description</h4>
                 <p>{alert.description}</p>
@@ -316,13 +314,13 @@ Model: {alert.model_id}
 Severity: {alert.severity.upper()}
 Alert Type: {alert.alert_type}
 Triggered: {alert.triggered_at.isoformat()}
-{f'Drift Score: {alert.drift_score:.2f}' if alert.drift_score else ''}
+{f"Drift Score: {alert.drift_score:.2f}" if alert.drift_score else ""}
 
 {alert.description}
 
-{'Affected Features: ' + ', '.join(alert.features_affected) if alert.features_affected else ''}
+{"Affected Features: " + ", ".join(alert.features_affected) if alert.features_affected else ""}
 
-{'Recommended Actions:' + chr(10) + chr(10).join(f'- {a}' for a in alert.recommended_actions) if alert.recommended_actions else ''}
+{"Recommended Actions:" + chr(10) + chr(10).join(f"- {a}" for a in alert.recommended_actions) if alert.recommended_actions else ""}
 
 ---
 E2I Causal Analytics - Model Monitoring
@@ -476,9 +474,7 @@ class AlertRouter:
 
         # Clean old dedup entries
         cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-        self._dedup_cache = {
-            k: v for k, v in self._dedup_cache.items() if v > cutoff
-        }
+        self._dedup_cache = {k: v for k, v in self._dedup_cache.items() if v > cutoff}
 
     async def route_alert(self, alert: AlertPayload) -> Dict[str, Any]:
         """Route an alert to appropriate channels.
@@ -703,11 +699,7 @@ async def route_concept_drift_alerts(
     router = get_alert_router()
 
     # Build a lookup for drift results by prediction type
-    drift_by_type = {
-        r.get("prediction_type"): r
-        for r in drift_results
-        if r.get("prediction_type")
-    }
+    drift_by_type = {r.get("prediction_type"): r for r in drift_results if r.get("prediction_type")}
 
     alert_payloads = []
     for alert_def in alerts:
@@ -718,9 +710,7 @@ async def route_concept_drift_alerts(
 
         # Skip low-severity alerts unless explicitly configured
         if severity == "low":
-            logger.debug(
-                f"Skipping low-severity concept drift alert for {prediction_type}"
-            )
+            logger.debug(f"Skipping low-severity concept drift alert for {prediction_type}")
             continue
 
         # Get drift details for this prediction type

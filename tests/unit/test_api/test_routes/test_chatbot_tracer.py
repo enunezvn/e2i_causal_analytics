@@ -5,9 +5,8 @@ Tests the Opik integration for chatbot LangGraph workflow tracing.
 """
 
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -404,10 +403,12 @@ class TestNodeSpanContext:
             span_id="span-456",
             node_name="custom",
         )
-        ctx.log_metadata({
-            "custom_metric": 42,
-            "custom_flag": True,
-        })
+        ctx.log_metadata(
+            {
+                "custom_metric": 42,
+                "custom_flag": True,
+            }
+        )
         assert ctx.metadata["custom_metric"] == 42
         assert ctx.metadata["custom_flag"] is True
 
@@ -653,7 +654,7 @@ class TestChatbotOpikTracer:
         """ChatbotOpikTracer respects CHATBOT_OPIK_TRACING env var."""
         # Need to reload the module to pick up new env var
         # For testing purposes, we create a new tracer with flag check
-        tracer = ChatbotOpikTracer(enabled=True)
+        ChatbotOpikTracer(enabled=True)
         # The actual CHATBOT_OPIK_TRACING_ENABLED was set at import time
         # so we check the logic pattern
         # tracer.enabled = enabled AND CHATBOT_OPIK_TRACING_ENABLED
@@ -808,6 +809,7 @@ class TestTraceChatbotWorkflowDecorator:
     @pytest.mark.asyncio
     async def test_decorator_basic_usage(self):
         """trace_chatbot_workflow decorator creates trace context."""
+
         @trace_chatbot_workflow()
         async def my_workflow(trace: ChatbotTraceContext, query: str):
             assert isinstance(trace, ChatbotTraceContext)
@@ -820,6 +822,7 @@ class TestTraceChatbotWorkflowDecorator:
     @pytest.mark.asyncio
     async def test_decorator_with_session_id(self):
         """trace_chatbot_workflow decorator handles session_id."""
+
         @trace_chatbot_workflow()
         async def my_workflow(trace: ChatbotTraceContext, query: str, session_id=None):
             assert trace.session_id == session_id
@@ -830,6 +833,7 @@ class TestTraceChatbotWorkflowDecorator:
     @pytest.mark.asyncio
     async def test_decorator_custom_params(self):
         """trace_chatbot_workflow decorator accepts custom param names."""
+
         @trace_chatbot_workflow(query_param="q", session_id_param="sid")
         async def my_workflow(trace: ChatbotTraceContext, q: str, sid=None):
             assert trace.query == q
@@ -841,6 +845,7 @@ class TestTraceChatbotWorkflowDecorator:
     @pytest.mark.asyncio
     async def test_decorator_with_node_tracing(self):
         """trace_chatbot_workflow decorator supports node tracing."""
+
         @trace_chatbot_workflow()
         async def my_workflow(trace: ChatbotTraceContext, query: str):
             async with trace.trace_node("init") as node:
@@ -940,8 +945,14 @@ class TestIntegrationScenarios:
         assert len(trace.node_spans) == 6
         assert all(
             name in trace.node_spans
-            for name in ["init", "load_context", "classify_intent",
-                        "retrieve_rag", "generate", "finalize"]
+            for name in [
+                "init",
+                "load_context",
+                "classify_intent",
+                "retrieve_rag",
+                "generate",
+                "finalize",
+            ]
         )
         assert trace.node_spans["classify_intent"].metadata["intent"] == "kpi_query"
         assert trace.node_spans["generate"].metadata["total_tokens"] == 700
@@ -968,10 +979,12 @@ class TestIntegrationScenarios:
                     success=True,
                     result_size=2048,
                 )
-                node.log_metadata({
-                    "additional_tool": "gap_analyzer",
-                    "gap_score": 0.75,
-                })
+                node.log_metadata(
+                    {
+                        "additional_tool": "gap_analyzer",
+                        "gap_score": 0.75,
+                    }
+                )
 
             trace.log_workflow_complete(
                 status="success",

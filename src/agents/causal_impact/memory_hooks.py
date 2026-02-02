@@ -602,7 +602,8 @@ class CausalImpactMemoryHooks:
 
             # Filter by confidence
             filtered = [
-                r for r in results
+                r
+                for r in results
                 if r.get("raw_content", {}).get("confidence", 0) >= min_confidence
             ]
 

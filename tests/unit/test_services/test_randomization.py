@@ -11,9 +11,7 @@ Tests cover:
 """
 
 from collections import Counter
-from datetime import datetime, timezone
 from typing import Any, Dict, List
-from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -26,7 +24,6 @@ from src.services.randomization import (
     UnitType,
     get_randomization_service,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -88,11 +85,13 @@ def stratified_units() -> List[Dict[str, Any]]:
     """Create units with stratification attributes."""
     units = []
     for i in range(100):
-        units.append({
-            "id": f"unit_{i}",
-            "region": ["north", "south", "east", "west"][i % 4],
-            "tier": ["high", "medium", "low"][i % 3],
-        })
+        units.append(
+            {
+                "id": f"unit_{i}",
+                "region": ["north", "south", "east", "west"][i % 4],
+                "tier": ["high", "medium", "low"][i % 3],
+            }
+        )
     return units
 
 
@@ -163,9 +162,7 @@ class TestRandomizationConfig:
 
     def test_custom_allocation_ratio(self):
         """Test custom allocation ratio."""
-        config = RandomizationConfig(
-            allocation_ratio={"control": 0.3, "treatment": 0.7}
-        )
+        config = RandomizationConfig(allocation_ratio={"control": 0.3, "treatment": 0.7})
         assert config.allocation_ratio["control"] == 0.3
         assert config.allocation_ratio["treatment"] == 0.7
 
@@ -237,7 +234,7 @@ class TestSimpleRandomization:
             units=sample_units,
         )
 
-        for r1, r2 in zip(results1, results2):
+        for r1, r2 in zip(results1, results2, strict=False):
             assert r1.variant == r2.variant
             assert r1.assignment_hash == r2.assignment_hash
 
@@ -362,10 +359,12 @@ class TestStratifiedRandomization:
         # Create units with known strata distribution
         units = []
         for i in range(400):
-            units.append({
-                "id": f"unit_{i}",
-                "region": ["north", "south"][i % 2],
-            })
+            units.append(
+                {
+                    "id": f"unit_{i}",
+                    "region": ["north", "south"][i % 2],
+                }
+            )
 
         results = await service.stratified_randomize(
             experiment_id=experiment_id,
@@ -485,7 +484,7 @@ class TestBlockRandomization:
             blocks[result.block_id].append(result)
 
         # Each complete block should have exactly 5 control and 5 treatment
-        for block_id, block_results in blocks.items():
+        for _block_id, block_results in blocks.items():
             if len(block_results) == 10:  # Complete block
                 counts = Counter(r.variant for r in block_results)
                 assert counts["control"] == 5
@@ -506,7 +505,7 @@ class TestBlockRandomization:
         )
 
         # Count unique blocks
-        block_ids = set(r.block_id for r in results)
+        block_ids = {r.block_id for r in results}
         expected_blocks = (len(sample_units) + 19) // 20
         assert len(block_ids) == expected_blocks
 
@@ -626,7 +625,7 @@ class TestMultiArmAllocation:
 
         assert len(results) == 100
         # Check all arms are represented
-        variants = set(r.variant for r in results)
+        variants = {r.variant for r in results}
         assert len(variants) >= 2  # At least 2 arms should be present
 
 
@@ -873,9 +872,7 @@ class TestFactoryFunction:
 
     def test_get_randomization_service_custom_config(self):
         """Test factory creates service with custom config."""
-        config = RandomizationConfig(
-            allocation_ratio={"control": 0.3, "treatment": 0.7}
-        )
+        config = RandomizationConfig(allocation_ratio={"control": 0.3, "treatment": 0.7})
 
         service = get_randomization_service(config=config)
 

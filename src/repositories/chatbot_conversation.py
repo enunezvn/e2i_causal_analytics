@@ -5,7 +5,6 @@ Handles conversation sessions for E2I chatbot with brand/region context.
 """
 
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.repositories.base import BaseRepository

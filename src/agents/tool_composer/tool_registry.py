@@ -226,8 +226,14 @@ def create_default_tools() -> list[ToolSchema]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "brand": {"type": "string", "description": "Brand name (Remibrutinib, Fabhalta, Kisqali)"},
-                    "indication": {"type": "string", "description": "Disease indication (CSU, PNH, etc.)"},
+                    "brand": {
+                        "type": "string",
+                        "description": "Brand name (Remibrutinib, Fabhalta, Kisqali)",
+                    },
+                    "indication": {
+                        "type": "string",
+                        "description": "Disease indication (CSU, PNH, etc.)",
+                    },
                     "inclusion_criteria": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -269,7 +275,10 @@ def create_default_tools() -> list[ToolSchema]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "cohort_result": {"type": "object", "description": "Output from cohort_builder"},
+                    "cohort_result": {
+                        "type": "object",
+                        "description": "Output from cohort_builder",
+                    },
                     "min_cohort_size": {"type": "integer", "default": 100},
                     "required_completeness": {"type": "number", "default": 0.8},
                 },
@@ -297,7 +306,10 @@ def create_default_tools() -> list[ToolSchema]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "cohort_result": {"type": "object", "description": "Output from cohort_builder"},
+                    "cohort_result": {
+                        "type": "object",
+                        "description": "Output from cohort_builder",
+                    },
                     "include_demographics": {"type": "boolean", "default": True},
                     "include_clinical": {"type": "boolean", "default": True},
                 },

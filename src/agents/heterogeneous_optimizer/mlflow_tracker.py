@@ -29,7 +29,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
@@ -298,8 +298,6 @@ class HeterogeneousOptimizerMLflowTracker:
             logger.debug("MLflow not available, skipping metric logging")
             return
 
-        import mlflow
-
         try:
             # Extract and log metrics
             metrics = self._extract_metrics(output, state)
@@ -447,7 +445,9 @@ class HeterogeneousOptimizerMLflowTracker:
                 mlflow.log_param("primary_library", state["primary_library"])
 
         # Result parameters
-        mlflow.log_param("requires_further_analysis", output.get("requires_further_analysis", False))
+        mlflow.log_param(
+            "requires_further_analysis", output.get("requires_further_analysis", False)
+        )
         if output.get("suggested_next_agent"):
             mlflow.log_param("suggested_next_agent", output["suggested_next_agent"])
 
@@ -461,37 +461,28 @@ class HeterogeneousOptimizerMLflowTracker:
         state: Optional["HeterogeneousOptimizerState"] = None,
     ) -> None:
         """Log artifacts to MLflow."""
-        import mlflow
 
         # Log high responders
         high_responders = output.get("high_responders", [])
         if high_responders:
-            await self._log_json_artifact(
-                high_responders, "high_responders.json", "segments"
-            )
+            await self._log_json_artifact(high_responders, "high_responders.json", "segments")
 
         # Log low responders
         low_responders = output.get("low_responders", [])
         if low_responders:
-            await self._log_json_artifact(
-                low_responders, "low_responders.json", "segments"
-            )
+            await self._log_json_artifact(low_responders, "low_responders.json", "segments")
 
         # Log policy recommendations
         policy = output.get("policy_recommendations", [])
         if policy:
-            await self._log_json_artifact(
-                policy, "policy_recommendations.json", "policy"
-            )
+            await self._log_json_artifact(policy, "policy_recommendations.json", "policy")
 
         # Log detailed state if available
         if state:
             # Log CATE by segment
             cate_by_segment = state.get("cate_by_segment", {})
             if cate_by_segment:
-                await self._log_json_artifact(
-                    cate_by_segment, "cate_by_segment.json", "analysis"
-                )
+                await self._log_json_artifact(cate_by_segment, "cate_by_segment.json", "analysis")
 
             # Log feature importance
             feature_importance = state.get("feature_importance", {})
@@ -503,9 +494,7 @@ class HeterogeneousOptimizerMLflowTracker:
             # Log uplift by segment
             uplift_by_segment = state.get("uplift_by_segment", {})
             if uplift_by_segment:
-                await self._log_json_artifact(
-                    uplift_by_segment, "uplift_by_segment.json", "uplift"
-                )
+                await self._log_json_artifact(uplift_by_segment, "uplift_by_segment.json", "uplift")
 
     async def _log_json_artifact(
         self,
@@ -517,9 +506,7 @@ class HeterogeneousOptimizerMLflowTracker:
         import mlflow
 
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                 json.dump(data, f, indent=2, default=str)
                 temp_path = f.name
 
@@ -632,23 +619,29 @@ class HeterogeneousOptimizerMLflowTracker:
             }
 
         total = len(history)
-        heterogeneity_scores = [h["heterogeneity_score"] for h in history if h.get("heterogeneity_score")]
-        targeting_efficiencies = [h["targeting_efficiency"] for h in history if h.get("targeting_efficiency")]
+        heterogeneity_scores = [
+            h["heterogeneity_score"] for h in history if h.get("heterogeneity_score")
+        ]
+        targeting_efficiencies = [
+            h["targeting_efficiency"] for h in history if h.get("targeting_efficiency")
+        ]
         latencies = [h["latency_ms"] for h in history if h.get("latency_ms")]
         segments = [h["n_segments_analyzed"] for h in history if h.get("n_segments_analyzed")]
 
         return {
             "total_analyses": total,
-            "avg_heterogeneity_score": sum(heterogeneity_scores) / len(heterogeneity_scores) if heterogeneity_scores else 0.0,
-            "avg_targeting_efficiency": sum(targeting_efficiencies) / len(targeting_efficiencies) if targeting_efficiencies else 0.0,
+            "avg_heterogeneity_score": sum(heterogeneity_scores) / len(heterogeneity_scores)
+            if heterogeneity_scores
+            else 0.0,
+            "avg_targeting_efficiency": sum(targeting_efficiencies) / len(targeting_efficiencies)
+            if targeting_efficiencies
+            else 0.0,
             "avg_segments_analyzed": sum(segments) / len(segments) if segments else 0.0,
             "avg_latency_ms": sum(latencies) / len(latencies) if latencies else 0.0,
             "analyses_by_brand": self._count_by_field(history, "brand"),
         }
 
-    def _count_by_field(
-        self, history: list[dict[str, Any]], field: str
-    ) -> dict[str, int]:
+    def _count_by_field(self, history: list[dict[str, Any]], field: str) -> dict[str, int]:
         """Count analyses by a specific field."""
         counts: dict[str, int] = {}
         for h in history:

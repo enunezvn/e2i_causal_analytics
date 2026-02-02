@@ -257,9 +257,7 @@ async def test_check_feature_freshness_helper():
 async def test_check_feature_freshness_handles_exception():
     """Test that freshness check handles exceptions gracefully."""
     adapter = MagicMock()
-    adapter.check_feature_freshness = AsyncMock(
-        side_effect=Exception("Feast not responding")
-    )
+    adapter.check_feature_freshness = AsyncMock(side_effect=Exception("Feast not responding"))
 
     result = await _check_feature_freshness(
         adapter=adapter,

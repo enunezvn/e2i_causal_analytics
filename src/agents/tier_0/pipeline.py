@@ -380,7 +380,7 @@ class MLFoundationPipeline:
             "target_outcome",
             "data_source",
         ]
-        for field in required_fields:
+        for field in required_fields:  # noqa: F402
             if field not in input_data:
                 raise ValueError(f"Missing required input: {field}")
 
@@ -454,9 +454,7 @@ class MLFoundationPipeline:
                 if training_output.get("success_criteria_met", False):
                     await self._run_model_deployment(input_data, result, obs_context)
                 else:
-                    result.warnings.append(
-                        "Skipping deployment: success criteria not met"
-                    )
+                    result.warnings.append("Skipping deployment: success criteria not met")
                     logger.warning(
                         f"Pipeline {pipeline_run_id}: Skipping deployment - "
                         "success criteria not met"
@@ -468,11 +466,13 @@ class MLFoundationPipeline:
 
         except Exception as e:
             result.status = "failed"
-            result.errors.append({
-                "stage": result.current_stage.value,
-                "error": str(e),
-                "error_type": type(e).__name__,
-            })
+            result.errors.append(
+                {
+                    "stage": result.current_stage.value,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                }
+            )
             logger.exception(f"Pipeline {pipeline_run_id} failed at {result.current_stage}")
 
             if self.config.on_error:
@@ -619,9 +619,7 @@ class MLFoundationPipeline:
         # Add sample data config if enabled
         if self.config.use_sample_data:
             data_prep_input["scope_spec"]["use_sample_data"] = True
-            data_prep_input["scope_spec"]["sample_size"] = input_data.get(
-                "sample_size", 1000
-            )
+            data_prep_input["scope_spec"]["sample_size"] = input_data.get("sample_size", 1000)
 
         # Execute data_preparer
         data_preparer = self._get_agent("data_preparer")
@@ -629,11 +627,13 @@ class MLFoundationPipeline:
             data_output = await data_preparer.run(data_prep_input)
         except RuntimeError as e:
             # data_preparer raises RuntimeError on failure
-            result.errors.append({
-                "stage": "data_preparation",
-                "error": str(e),
-                "error_type": "RuntimeError",
-            })
+            result.errors.append(
+                {
+                    "stage": "data_preparation",
+                    "error": str(e),
+                    "error_type": "RuntimeError",
+                }
+            )
             return False
 
         # Store outputs
@@ -667,12 +667,14 @@ class MLFoundationPipeline:
             self.config.on_stage_complete(PipelineStage.DATA_PREPARATION, data_output)
 
         if not gate_passed:
-            result.errors.append({
-                "stage": "data_preparation",
-                "error": "QC Gate failed - data quality below threshold",
-                "error_type": "QCGateError",
-                "blocking_issues": result.qc_report.get("blocking_issues", []),
-            })
+            result.errors.append(
+                {
+                    "stage": "data_preparation",
+                    "error": "QC Gate failed - data quality below threshold",
+                    "error_type": "QCGateError",
+                    "blocking_issues": result.qc_report.get("blocking_issues", []),
+                }
+            )
 
         # Add warning for stale features (non-blocking by default)
         if result.feature_freshness and not result.feature_freshness.get("fresh", True):
@@ -828,10 +830,7 @@ class MLFoundationPipeline:
         success = trainer_output.get("success_criteria_met", False)
         test_metrics = trainer_output.get("test_metrics", {})
         primary_metric = (
-            test_metrics.get("auc_roc") or
-            test_metrics.get("rmse") or
-            test_metrics.get("r2") or
-            0.0
+            test_metrics.get("auc_roc") or test_metrics.get("rmse") or test_metrics.get("r2") or 0.0
         )
 
         feature_refs_info = ""
@@ -912,8 +911,7 @@ class MLFoundationPipeline:
 
         top_features = analyzer_output.get("top_features", [])[:3]
         logger.info(
-            f"Stage 5 complete: top_features={top_features}, "
-            f"duration={stage_duration:.2f}s"
+            f"Stage 5 complete: top_features={top_features}, duration={stage_duration:.2f}s"
         )
 
         # Record audit entry
@@ -970,16 +968,14 @@ class MLFoundationPipeline:
 
         # Add shadow mode metrics if deploying to production
         if target_env == "production":
-            deployer_input.update({
-                "shadow_mode_duration_hours": input_data.get(
-                    "shadow_mode_duration_hours", 24
-                ),
-                "shadow_mode_requests": input_data.get("shadow_mode_requests", 1000),
-                "shadow_mode_error_rate": input_data.get("shadow_mode_error_rate", 0.01),
-                "shadow_mode_latency_p99_ms": input_data.get(
-                    "shadow_mode_latency_p99_ms", 200
-                ),
-            })
+            deployer_input.update(
+                {
+                    "shadow_mode_duration_hours": input_data.get("shadow_mode_duration_hours", 24),
+                    "shadow_mode_requests": input_data.get("shadow_mode_requests", 1000),
+                    "shadow_mode_error_rate": input_data.get("shadow_mode_error_rate", 0.01),
+                    "shadow_mode_latency_p99_ms": input_data.get("shadow_mode_latency_p99_ms", 200),
+                }
+            )
 
         # Execute model_deployer
         model_deployer = self._get_agent("model_deployer")
@@ -989,11 +985,13 @@ class MLFoundationPipeline:
         except RuntimeError as e:
             # Deployment failures are not fatal to the pipeline
             logger.error(f"Deployment failed: {e}")
-            result.errors.append({
-                "stage": "model_deployment",
-                "error": str(e),
-                "error_type": "DeploymentError",
-            })
+            result.errors.append(
+                {
+                    "stage": "model_deployment",
+                    "error": str(e),
+                    "error_type": "DeploymentError",
+                }
+            )
             deployer_output = {"deployment_successful": False, "error": str(e)}
 
         # Record timing
@@ -1074,9 +1072,7 @@ class MLFoundationPipeline:
                 if current_stage == PipelineStage.SCOPE_DEFINITION:
                     await self._run_scope_definition(input_data, result, obs_context)
                 elif current_stage == PipelineStage.DATA_PREPARATION:
-                    gate_passed = await self._run_data_preparation(
-                        input_data, result, obs_context
-                    )
+                    gate_passed = await self._run_data_preparation(input_data, result, obs_context)
                     if not gate_passed:
                         result.status = "failed"
                         return result
@@ -1096,10 +1092,12 @@ class MLFoundationPipeline:
 
         except Exception as e:
             result.status = "failed"
-            result.errors.append({
-                "stage": result.current_stage.value,
-                "error": str(e),
-                "error_type": type(e).__name__,
-            })
+            result.errors.append(
+                {
+                    "stage": result.current_stage.value,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                }
+            )
 
         return result

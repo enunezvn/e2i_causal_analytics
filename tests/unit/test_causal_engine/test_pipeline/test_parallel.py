@@ -8,11 +8,9 @@ import pytest
 
 from src.causal_engine.pipeline import (
     CausalLibrary,
-    LibraryExecutionResult,
-    PipelineInput,
-    PipelineStage,
     ParallelPipeline,
     ParallelPipelineBuilder,
+    PipelineInput,
     create_parallel_pipeline,
 )
 
@@ -47,12 +45,7 @@ class TestParallelPipelineCreation:
 
     def test_builder_pattern(self):
         """Test ParallelPipelineBuilder."""
-        pipeline = (
-            ParallelPipelineBuilder()
-            .with_max_parallel(2)
-            .with_fail_fast(True)
-            .build()
-        )
+        pipeline = ParallelPipelineBuilder().with_max_parallel(2).with_fail_fast(True).build()
         assert isinstance(pipeline, ParallelPipeline)
         assert pipeline.max_parallel == 2
         assert pipeline.fail_fast is True
@@ -147,9 +140,7 @@ class TestParallelPipelineExecution:
         assert output["status"] in ["completed", "partial"]
 
     @pytest.mark.asyncio
-    async def test_mode_is_parallel(
-        self, pipeline: ParallelPipeline, basic_input: PipelineInput
-    ):
+    async def test_mode_is_parallel(self, pipeline: ParallelPipeline, basic_input: PipelineInput):
         """Test that mode is set to parallel."""
         # This verifies the mode is correctly set during execution
         output = await pipeline.execute(basic_input)

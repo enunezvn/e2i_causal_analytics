@@ -92,7 +92,9 @@ class CrossEncoderReranker:
         scores = self._batch_score(pairs)
 
         # Combine scores with results
-        scored_results: List[Tuple[float, RetrievalResult]] = list(zip(scores, results, strict=False))
+        scored_results: List[Tuple[float, RetrievalResult]] = list(
+            zip(scores, results, strict=False)
+        )
 
         # Sort by score descending
         scored_results.sort(key=lambda x: x[0], reverse=True)

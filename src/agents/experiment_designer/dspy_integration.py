@@ -222,7 +222,9 @@ try:
             desc="RCT, quasi_experiment, difference_in_differences, etc."
         )
         design_rationale: str = dspy.OutputField(desc="Reasoning for chosen design")
-        randomization_unit: str = dspy.OutputField(desc="individual, cluster, time_period, geography")
+        randomization_unit: str = dspy.OutputField(
+            desc="individual, cluster, time_period, geography"
+        )
         key_assumptions: list = dspy.OutputField(desc="Assumptions required for causal inference")
 
     class InvestigationPlanSignature(dspy.Signature):
@@ -398,11 +400,7 @@ class ExperimentDesignerSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def get_approved_examples(

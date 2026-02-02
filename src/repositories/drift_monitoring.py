@@ -394,7 +394,10 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
             ("data", "warning"): "Monitor closely: Schedule retraining if drift persists",
             ("model", "critical"): "Immediate action required: Investigate model degradation",
             ("model", "warning"): "Monitor closely: Check prediction accuracy",
-            ("concept", "critical"): "Immediate action required: Review feature-target relationships",
+            (
+                "concept",
+                "critical",
+            ): "Immediate action required: Review feature-target relationships",
             ("concept", "warning"): "Monitor closely: Validate model on current data",
         }
         return recommendations.get((drift_type, severity), "Review drift detection results")

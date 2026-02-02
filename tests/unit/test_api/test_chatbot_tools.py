@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.api.routes.chatbot_graph import _is_multi_faceted_query, classify_intent
+from src.api.routes.chatbot_state import IntentType
 from src.api.routes.chatbot_tools import (
     E2I_CHATBOT_TOOLS,
     E2IQueryType,
-    TimeRange,
     agent_routing_tool,
     causal_analysis_tool,
     conversation_memory_tool,
@@ -21,8 +22,6 @@ from src.api.routes.chatbot_tools import (
     orchestrator_tool,
     tool_composer_tool,
 )
-from src.api.routes.chatbot_graph import _is_multi_faceted_query, classify_intent
-from src.api.routes.chatbot_state import IntentType
 
 
 class TestE2IDataQueryTool:
@@ -203,9 +202,7 @@ class TestCausalAnalysisTool:
         """Test that search errors are handled gracefully."""
         mock_hybrid_search.side_effect = Exception("Search failed")
 
-        result = await causal_analysis_tool.ainvoke(
-            {"kpi_name": "TRx", "min_confidence": 0.7}
-        )
+        result = await causal_analysis_tool.ainvoke({"kpi_name": "TRx", "min_confidence": 0.7})
 
         assert result["success"] is False
         assert "error" in result
@@ -229,9 +226,7 @@ class TestCausalAnalysisTool:
 
         mock_hybrid_search.return_value = [high_conf, low_conf]
 
-        result = await causal_analysis_tool.ainvoke(
-            {"kpi_name": "TRx", "min_confidence": 0.8}
-        )
+        result = await causal_analysis_tool.ainvoke({"kpi_name": "TRx", "min_confidence": 0.8})
 
         assert result["success"] is True
         # Only high confidence result should be included
@@ -265,9 +260,7 @@ class TestAgentRoutingTool:
     @pytest.mark.asyncio
     async def test_routes_to_prediction_agent(self):
         """Test routing a prediction query."""
-        result = await agent_routing_tool.ainvoke(
-            {"query": "What is the forecast for Q3 sales?"}
-        )
+        result = await agent_routing_tool.ainvoke({"query": "What is the forecast for Q3 sales?"})
 
         assert result["success"] is True
         assert result["routed_to"] == "prediction_synthesizer"
@@ -335,7 +328,11 @@ class TestConversationMemoryTool:
         mock_msg_repo.get_recent_messages = AsyncMock(
             return_value=[
                 {"role": "user", "content": "What is TRx?", "agent_name": None},
-                {"role": "assistant", "content": "TRx is total prescriptions...", "agent_name": "chatbot"},
+                {
+                    "role": "assistant",
+                    "content": "TRx is total prescriptions...",
+                    "agent_name": "chatbot",
+                },
             ]
         )
         mock_get_msg_repo.return_value = mock_msg_repo
@@ -386,9 +383,7 @@ class TestDocumentRetrievalTool:
         mock_result.metadata = {}
         mock_hybrid_search.return_value = [mock_result]
 
-        result = await document_retrieval_tool.ainvoke(
-            {"query": "Kisqali market analysis", "k": 5}
-        )
+        result = await document_retrieval_tool.ainvoke({"query": "Kisqali market analysis", "k": 5})
 
         assert result["success"] is True
         assert result["document_count"] == 1
@@ -421,9 +416,7 @@ class TestDocumentRetrievalTool:
         """Test that retrieval errors are handled gracefully."""
         mock_hybrid_search.side_effect = Exception("Retrieval failed")
 
-        result = await document_retrieval_tool.ainvoke(
-            {"query": "Test query", "k": 5}
-        )
+        result = await document_retrieval_tool.ainvoke({"query": "Test query", "k": 5})
 
         assert result["success"] is False
         assert "error" in result
@@ -442,7 +435,9 @@ class TestOrchestratorTool:
                 "response_text": "TRx is primarily driven by HCP engagement...",
                 "response_confidence": 0.92,
                 "agents_dispatched": ["causal_impact"],
-                "analysis_results": {"causal_chains": [{"source": "HCP_engagement", "target": "TRx"}]},
+                "analysis_results": {
+                    "causal_chains": [{"source": "HCP_engagement", "target": "TRx"}]
+                },
             }
         )
         mock_get_orchestrator.return_value = mock_orchestrator
@@ -521,9 +516,7 @@ class TestOrchestratorTool:
         mock_orchestrator.run = AsyncMock(side_effect=Exception("Orchestrator failed"))
         mock_get_orchestrator.return_value = mock_orchestrator
 
-        result = await orchestrator_tool.ainvoke(
-            {"query": "Test query"}
-        )
+        result = await orchestrator_tool.ainvoke({"query": "Test query"})
 
         assert result["success"] is False
         assert "error" in result
@@ -544,9 +537,7 @@ class TestOrchestratorTool:
         )
         mock_get_orchestrator.return_value = mock_orchestrator
 
-        result = await orchestrator_tool.ainvoke(
-            {"query": "Test query"}
-        )
+        result = await orchestrator_tool.ainvoke({"query": "Test query"})
 
         assert result["success"] is True
         assert result["context"]["session_id"].startswith("chatbot-")
@@ -592,9 +583,7 @@ class TestOrchestratorTool:
         )
         mock_get_orchestrator.return_value = mock_orchestrator
 
-        result = await orchestrator_tool.ainvoke(
-            {"query": "Full analysis of Kisqali performance"}
-        )
+        result = await orchestrator_tool.ainvoke({"query": "Full analysis of Kisqali performance"})
 
         assert result["success"] is True
         assert len(result["agents_dispatched"]) == 3
@@ -627,11 +616,21 @@ class TestToolComposerTool:
         mock_sub_question3.intent = "causal_query"
 
         mock_result = MagicMock()
-        mock_result.decomposition.sub_questions = [mock_sub_question, mock_sub_question2, mock_sub_question3]
-        mock_result.execution.tools_executed = ["e2i_data_query_tool", "e2i_data_query_tool", "causal_analysis_tool"]
+        mock_result.decomposition.sub_questions = [
+            mock_sub_question,
+            mock_sub_question2,
+            mock_sub_question3,
+        ]
+        mock_result.execution.tools_executed = [
+            "e2i_data_query_tool",
+            "e2i_data_query_tool",
+            "causal_analysis_tool",
+        ]
         mock_result.plan.get_execution_order.return_value = [1, 2, 3]
         mock_result.plan.parallel_groups = [[1, 2], [3]]
-        mock_result.response.answer = "Kisqali shows 15% TRx growth while Fabhalta shows 8% growth..."
+        mock_result.response.answer = (
+            "Kisqali shows 15% TRx growth while Fabhalta shows 8% growth..."
+        )
         mock_result.response.confidence = 0.88
         mock_result.execution.get_all_outputs.return_value = {"causal_impact": {"effect": 0.15}}
 
@@ -700,9 +699,7 @@ class TestToolComposerTool:
         )
         mock_get_orchestrator.return_value = mock_orchestrator
 
-        result = await tool_composer_tool.ainvoke(
-            {"query": "Complex multi-faceted query"}
-        )
+        result = await tool_composer_tool.ainvoke({"query": "Complex multi-faceted query"})
 
         assert result["success"] is True
         assert result["fallback"] is True
@@ -712,16 +709,12 @@ class TestToolComposerTool:
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.get_orchestrator")
     @patch("src.api.routes.chatbot_tools.compose_query")
-    async def test_handles_complete_failure(
-        self, mock_compose_query, mock_get_orchestrator
-    ):
+    async def test_handles_complete_failure(self, mock_compose_query, mock_get_orchestrator):
         """Test handling when both Tool Composer and orchestrator fail."""
         mock_compose_query.side_effect = Exception("Composition failed")
         mock_get_orchestrator.return_value = None
 
-        result = await tool_composer_tool.ainvoke(
-            {"query": "Complex multi-faceted query"}
-        )
+        result = await tool_composer_tool.ainvoke({"query": "Complex multi-faceted query"})
 
         assert result["success"] is False
         assert "error" in result
@@ -742,9 +735,7 @@ class TestToolComposerTool:
 
         mock_compose_query.return_value = mock_result
 
-        result = await tool_composer_tool.ainvoke(
-            {"query": "Test query"}
-        )
+        result = await tool_composer_tool.ainvoke({"query": "Test query"})
 
         assert result["success"] is True
         assert result["context"]["session_id"].startswith("composer-")
@@ -787,7 +778,9 @@ class TestMultiFacetedQueryDetection:
 
     def test_classify_intent_returns_multi_faceted(self):
         """Test that classify_intent returns MULTI_FACETED for complex queries."""
-        query = "Compare TRx and NRx trends across Kisqali and Fabhalta and explain the causal factors"
+        query = (
+            "Compare TRx and NRx trends across Kisqali and Fabhalta and explain the causal factors"
+        )
         intent = classify_intent(query)
         assert intent == IntentType.MULTI_FACETED
 

@@ -496,9 +496,7 @@ class OrchestratorMemoryHooks:
             response_snippet = result.get("response_text", "")[:200]
 
             description = (
-                f"Orchestration: intent={intent}, "
-                f"agents={','.join(agents)}, "
-                f"query: {query[:100]}"
+                f"Orchestration: intent={intent}, agents={','.join(agents)}, query: {query[:100]}"
             )
 
             # Create episodic memory input
@@ -733,7 +731,7 @@ async def contribute_to_memory(
         counts["episodic_stored"] = 1
 
     # 4. Track routing decision for DSPy optimization
-    dispatch_plan = state.get("dispatch_plan", [])
+    state.get("dispatch_plan", [])
     execution_mode = "parallel" if state.get("parallel_groups") else "sequential"
 
     tracked = await memory_hooks.track_routing_decision(

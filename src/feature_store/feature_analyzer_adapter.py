@@ -14,14 +14,14 @@ Also integrates with Feast for:
 
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from .client import FeatureStoreClient
-from .feast_client import FeastClient, FeastConfig
-from .models import Feature, FeatureGroup, FeatureValueType
+from .feast_client import FeastClient
+from .models import FeatureGroup, FeatureValueType
 
 logger = logging.getLogger(__name__)
 
@@ -164,9 +164,7 @@ class FeatureAnalyzerAdapter:
                     # Determine value type
                     if X_selected is not None and feature_name in X_selected.columns:
                         dtype = str(X_selected[feature_name].dtype)
-                        value_type = PYTHON_TO_FEATURE_TYPE.get(
-                            dtype, FeatureValueType.STRING
-                        )
+                        value_type = PYTHON_TO_FEATURE_TYPE.get(dtype, FeatureValueType.STRING)
                     else:
                         value_type = FeatureValueType.FLOAT64
 
@@ -181,9 +179,7 @@ class FeatureAnalyzerAdapter:
                     if feature_meta.get("source"):
                         description_parts.append(f"Source: {feature_meta['source']}")
                     if feature_meta.get("sources"):
-                        description_parts.append(
-                            f"Sources: {', '.join(feature_meta['sources'])}"
-                        )
+                        description_parts.append(f"Sources: {', '.join(feature_meta['sources'])}")
 
                     # Add importance score
                     importance = feature_importance.get(feature_name)
@@ -207,10 +203,12 @@ class FeatureAnalyzerAdapter:
                     results["features_registered"] += 1
 
                 except Exception as e:
-                    results["errors"].append({
-                        "feature": feature_name,
-                        "error": str(e),
-                    })
+                    results["errors"].append(
+                        {
+                            "feature": feature_name,
+                            "error": str(e),
+                        }
+                    )
                     logger.warning(f"Failed to register feature {feature_name}: {e}")
 
             logger.info(
@@ -283,13 +281,17 @@ class FeatureAnalyzerAdapter:
                     if pd.isna(value):
                         continue
 
-                    batch_values.append({
-                        "feature_name": feature_name,
-                        "entity_values": {entity_key: str(entity_id)},
-                        "value": value if not isinstance(value, (pd.Timestamp, datetime)) else value.isoformat(),
-                        "event_timestamp": timestamp,
-                        "feature_group": group_name,
-                    })
+                    batch_values.append(
+                        {
+                            "feature_name": feature_name,
+                            "entity_values": {entity_key: str(entity_id)},
+                            "value": value
+                            if not isinstance(value, (pd.Timestamp, datetime))
+                            else value.isoformat(),
+                            "event_timestamp": timestamp,
+                            "feature_group": group_name,
+                        }
+                    )
 
             # Write in batches
             if batch_values:
@@ -299,7 +301,9 @@ class FeatureAnalyzerAdapter:
                 )
                 results["values_written"] = written
 
-            logger.info(f"Wrote {results['values_written']} feature values for experiment {experiment_id}")
+            logger.info(
+                f"Wrote {results['values_written']} feature values for experiment {experiment_id}"
+            )
 
         except Exception as e:
             logger.exception("Feature value writing failed")
@@ -478,9 +482,7 @@ class FeatureAnalyzerAdapter:
                 # Fall through to custom store
 
         # Fallback to custom store (without point-in-time joins)
-        logger.warning(
-            "Falling back to custom store - point-in-time joins not available"
-        )
+        logger.warning("Falling back to custom store - point-in-time joins not available")
         return await self._get_features_from_custom_store(
             entity_df=entity_df,
             feature_refs=feature_refs,
@@ -589,16 +591,18 @@ class FeatureAnalyzerAdapter:
 
                     # Extract features from view
                     for field in fv.get("schema", []):
-                        discovered.append({
-                            "feature_view": fv.get("name"),
-                            "feature_name": field.get("name"),
-                            "dtype": field.get("dtype"),
-                            "entities": fv.get("entities", []),
-                            "tags": fv.get("tags", {}),
-                            "description": field.get("description", ""),
-                            "online": fv.get("online", False),
-                            "ttl_days": fv.get("ttl_days"),
-                        })
+                        discovered.append(
+                            {
+                                "feature_view": fv.get("name"),
+                                "feature_name": field.get("name"),
+                                "dtype": field.get("dtype"),
+                                "entities": fv.get("entities", []),
+                                "tags": fv.get("tags", {}),
+                                "description": field.get("description", ""),
+                                "online": fv.get("online", False),
+                                "ttl_days": fv.get("ttl_days"),
+                            }
+                        )
 
                 logger.info(f"Discovered {len(discovered)} features from Feast registry")
 
@@ -611,16 +615,18 @@ class FeatureAnalyzerAdapter:
             for group in groups:
                 features = self.fs_client.list_features(feature_group_name=group.name)
                 for feature in features:
-                    discovered.append({
-                        "feature_view": group.name,
-                        "feature_name": feature.name,
-                        "dtype": feature.value_type,
-                        "entities": feature.entity_keys or [],
-                        "tags": {"source": "custom_store"},
-                        "description": feature.description or "",
-                        "online": True,
-                        "ttl_days": None,
-                    })
+                    discovered.append(
+                        {
+                            "feature_view": group.name,
+                            "feature_name": feature.name,
+                            "dtype": feature.value_type,
+                            "entities": feature.entity_keys or [],
+                            "tags": {"source": "custom_store"},
+                            "description": feature.description or "",
+                            "online": True,
+                            "ttl_days": None,
+                        }
+                    )
 
         except Exception as e:
             logger.warning(f"Feature discovery from custom store failed: {e}")
@@ -704,9 +710,7 @@ class FeatureAnalyzerAdapter:
                         )
                 else:
                     result["feature_ages"][feature_ref] = None
-                    result["recommendations"].append(
-                        f"No statistics available for {feature_ref}"
-                    )
+                    result["recommendations"].append(f"No statistics available for {feature_ref}")
 
             except Exception as e:
                 logger.warning(f"Failed to check freshness for {feature_ref}: {e}")
@@ -765,9 +769,7 @@ class FeatureAnalyzerAdapter:
 
             # Note: Actual sync would require Feast feature definitions
             # This is a placeholder for the migration pattern
-            logger.info(
-                f"Would sync {len(features)} features from {group_name} to Feast"
-            )
+            logger.info(f"Would sync {len(features)} features from {group_name} to Feast")
             result["features_synced"] = len(features)
             result["synced"] = True
 

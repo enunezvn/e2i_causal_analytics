@@ -7,7 +7,7 @@ internal observability metrics and health status.
 import asyncio
 import time
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -26,7 +26,6 @@ from src.agents.ml_foundation.observability_connector.self_monitor import (
     get_self_monitor,
     reset_self_monitor,
 )
-
 
 # ============================================================================
 # LATENCY THRESHOLDS TESTS
@@ -283,9 +282,7 @@ class TestSelfMonitorConfig:
     def test_custom_thresholds(self):
         """Test custom threshold configuration."""
         custom_thresholds = {
-            MetricType.SPAN_EMISSION: LatencyThresholds(
-                warning_ms=50.0, critical_ms=200.0
-            ),
+            MetricType.SPAN_EMISSION: LatencyThresholds(warning_ms=50.0, critical_ms=200.0),
         }
         config = SelfMonitorConfig(thresholds=custom_thresholds)
         assert config.thresholds[MetricType.SPAN_EMISSION].warning_ms == 50.0
@@ -371,7 +368,7 @@ class TestSelfMonitor:
         monitor.record_cache_error("Cache error")
 
         health = monitor.get_health_status()
-        for component_name, component in health.components.items():
+        for _component_name, component in health.components.items():
             assert component.error_count == 1
 
     def test_get_health_status_healthy(self):
@@ -418,9 +415,7 @@ class TestSelfMonitor:
         config = SelfMonitorConfig(
             min_samples_for_stats=2,
             thresholds={
-                MetricType.DATABASE_WRITE: LatencyThresholds(
-                    warning_ms=50.0, critical_ms=100.0
-                ),
+                MetricType.DATABASE_WRITE: LatencyThresholds(warning_ms=50.0, critical_ms=100.0),
                 MetricType.SPAN_EMISSION: LatencyThresholds(),
                 MetricType.OPIK_API: LatencyThresholds(),
                 MetricType.BATCH_FLUSH: LatencyThresholds(),
@@ -828,15 +823,9 @@ class TestIntegration:
         config = SelfMonitorConfig(
             min_samples_for_stats=3,
             thresholds={
-                MetricType.SPAN_EMISSION: LatencyThresholds(
-                    warning_ms=50.0, critical_ms=100.0
-                ),
-                MetricType.OPIK_API: LatencyThresholds(
-                    warning_ms=100.0, critical_ms=500.0
-                ),
-                MetricType.DATABASE_WRITE: LatencyThresholds(
-                    warning_ms=25.0, critical_ms=100.0
-                ),
+                MetricType.SPAN_EMISSION: LatencyThresholds(warning_ms=50.0, critical_ms=100.0),
+                MetricType.OPIK_API: LatencyThresholds(warning_ms=100.0, critical_ms=500.0),
+                MetricType.DATABASE_WRITE: LatencyThresholds(warning_ms=25.0, critical_ms=100.0),
                 MetricType.BATCH_FLUSH: LatencyThresholds(),
                 MetricType.CACHE_OPERATION: LatencyThresholds(),
             },

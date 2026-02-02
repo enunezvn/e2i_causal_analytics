@@ -219,7 +219,8 @@ class TestExperimentDesignerInput:
         """Test invalid max redesign iterations too high."""
         with pytest.raises(ValidationError):
             ExperimentDesignerInput(
-                business_question="Valid question here", max_redesign_iterations=10  # > 5
+                business_question="Valid question here",
+                max_redesign_iterations=10,  # > 5
             )
 
     def test_invalid_max_iterations_negative(self):

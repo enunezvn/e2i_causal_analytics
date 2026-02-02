@@ -7,7 +7,7 @@ It uses the DataQualityValidator from src/mlops/data_quality.py.
 import logging
 from typing import Any, Dict
 
-from src.mlops.data_quality import DataQualityResult, get_data_quality_validator
+from src.mlops.data_quality import get_data_quality_validator
 
 from ..state import DataPreparerState
 
@@ -46,9 +46,7 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
 
         # Determine suite name from data source
         scope_spec = state.get("scope_spec", {})
-        data_source = state.get("data_source") or scope_spec.get(
-            "data_source", "business_metrics"
-        )
+        data_source = state.get("data_source") or scope_spec.get("data_source", "business_metrics")
 
         # Get the validator
         validator = get_data_quality_validator()
@@ -65,9 +63,7 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
             )
             has_event_cols = "event_type" in train_df.columns
             if has_ml_patient_cols and not has_event_cols:
-                logger.info(
-                    "Detected ML patient data format, using 'ml_patients' suite"
-                )
+                logger.info("Detected ML patient data format, using 'ml_patients' suite")
                 data_source = "ml_patients"
 
         if data_source not in available_suites:
@@ -117,9 +113,7 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
                     blocking_issues.append(f"  - {exp_type} on {col}")
 
         # Calculate overall success rate
-        overall_success_rate = (
-            total_passed / total_expectations if total_expectations > 0 else 1.0
-        )
+        overall_success_rate = total_passed / total_expectations if total_expectations > 0 else 1.0
 
         # Determine overall status
         if all_passed:

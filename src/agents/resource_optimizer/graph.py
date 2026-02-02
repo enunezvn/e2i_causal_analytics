@@ -64,9 +64,7 @@ def build_resource_optimizer_graph() -> Any:
         Compiled LangGraph workflow
     """
     # Create audit workflow initializer
-    audit_initializer = create_workflow_initializer(
-        "resource_optimizer", AgentTier.ML_PREDICTIONS
-    )
+    audit_initializer = create_workflow_initializer("resource_optimizer", AgentTier.ML_PREDICTIONS)
 
     # Initialize nodes
     formulator = ProblemFormulatorNode()

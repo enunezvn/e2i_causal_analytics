@@ -14,9 +14,6 @@ import os
 import pytest
 import requests
 
-from .conftest import requires_supabase
-
-
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -87,9 +84,10 @@ class TestPostgRESTAPI:
         except Exception as e:
             error_str = str(e).lower()
             # May fail with RLS policies or authentication - this is OK for self-hosted
-            if any(keyword in error_str for keyword in [
-                "policy", "permission", "authentication", "credentials", "401"
-            ]):
+            if any(
+                keyword in error_str
+                for keyword in ["policy", "permission", "authentication", "credentials", "401"]
+            ):
                 pytest.skip(f"Access blocked (RLS/auth): {e}")
             raise
 
@@ -207,9 +205,7 @@ class TestAPIDocumentation:
             if response.status_code == 200:
                 # Should be valid JSON
                 data = response.json()
-                assert "openapi" in data or "swagger" in data, (
-                    "Response is not OpenAPI spec"
-                )
+                assert "openapi" in data or "swagger" in data, "Response is not OpenAPI spec"
         except requests.exceptions.ConnectionError:
             pytest.skip(f"E2I API not available at {E2I_API_URL}")
         except requests.exceptions.Timeout:

@@ -5,7 +5,6 @@ optimization patterns, including storage, retrieval, and warm-starting.
 """
 
 import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +20,6 @@ from src.mlops.hpo_pattern_memory import (
     record_warmstart_outcome,
     store_hpo_pattern,
 )
-
 
 # ============================================================================
 # DATA CLASS TESTS
@@ -127,9 +125,7 @@ class TestStoreHpoPattern:
     @pytest.mark.asyncio
     async def test_returns_none_when_supabase_unavailable(self):
         """Should return None when Supabase is not available."""
-        with patch(
-            "src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None
-        ):
+        with patch("src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None):
             pattern = HPOPatternInput(
                 algorithm_name="XGBoost",
                 problem_type="binary_classification",
@@ -149,9 +145,7 @@ class TestStoreHpoPattern:
     async def test_stores_pattern_successfully(self):
         """Should store pattern and return pattern ID."""
         mock_client = MagicMock()
-        mock_client.table.return_value.insert.return_value.execute.return_value = (
-            MagicMock()
-        )
+        mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock()
 
         with patch(
             "src.mlops.hpo_pattern_memory._get_supabase_client",
@@ -211,9 +205,7 @@ class TestFindSimilarPatterns:
     @pytest.mark.asyncio
     async def test_returns_empty_when_supabase_unavailable(self):
         """Should return empty list when Supabase is not available."""
-        with patch(
-            "src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None
-        ):
+        with patch("src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None):
             result = await find_similar_patterns(
                 algorithm_name="XGBoost",
                 problem_type="binary_classification",
@@ -401,9 +393,7 @@ class TestRecordWarmstartOutcome:
     @pytest.mark.asyncio
     async def test_does_nothing_when_supabase_unavailable(self):
         """Should silently return when Supabase is not available."""
-        with patch(
-            "src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None
-        ):
+        with patch("src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None):
             # Should not raise
             await record_warmstart_outcome(
                 pattern_id="abc-123",
@@ -463,9 +453,7 @@ class TestGetPatternStats:
     @pytest.mark.asyncio
     async def test_returns_unavailable_when_no_client(self):
         """Should return unavailable status when Supabase not available."""
-        with patch(
-            "src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None
-        ):
+        with patch("src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None):
             result = await get_pattern_stats()
 
             assert result["available"] is False
@@ -474,9 +462,7 @@ class TestGetPatternStats:
     async def test_returns_empty_stats_when_no_patterns(self):
         """Should return empty stats when no patterns exist."""
         mock_client = MagicMock()
-        mock_client.table.return_value.select.return_value.execute.return_value = (
-            MagicMock(data=[])
-        )
+        mock_client.table.return_value.select.return_value.execute.return_value = MagicMock(data=[])
 
         with patch(
             "src.mlops.hpo_pattern_memory._get_supabase_client",
@@ -491,29 +477,27 @@ class TestGetPatternStats:
     async def test_aggregates_stats_by_algorithm(self):
         """Should aggregate statistics by algorithm."""
         mock_client = MagicMock()
-        mock_client.table.return_value.select.return_value.execute.return_value = (
-            MagicMock(
-                data=[
-                    {
-                        "algorithm_name": "XGBoost",
-                        "problem_type": "binary_classification",
-                        "best_value": 0.9,
-                        "times_used_as_warmstart": 5,
-                    },
-                    {
-                        "algorithm_name": "XGBoost",
-                        "problem_type": "regression",
-                        "best_value": 0.8,
-                        "times_used_as_warmstart": 3,
-                    },
-                    {
-                        "algorithm_name": "LightGBM",
-                        "problem_type": "binary_classification",
-                        "best_value": 0.85,
-                        "times_used_as_warmstart": 2,
-                    },
-                ]
-            )
+        mock_client.table.return_value.select.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "algorithm_name": "XGBoost",
+                    "problem_type": "binary_classification",
+                    "best_value": 0.9,
+                    "times_used_as_warmstart": 5,
+                },
+                {
+                    "algorithm_name": "XGBoost",
+                    "problem_type": "regression",
+                    "best_value": 0.8,
+                    "times_used_as_warmstart": 3,
+                },
+                {
+                    "algorithm_name": "LightGBM",
+                    "problem_type": "binary_classification",
+                    "best_value": 0.85,
+                    "times_used_as_warmstart": 2,
+                },
+            ]
         )
 
         with patch(
@@ -536,9 +520,7 @@ class TestCleanupOldPatterns:
     @pytest.mark.asyncio
     async def test_returns_unavailable_when_no_client(self):
         """Should return unavailable when Supabase not available."""
-        with patch(
-            "src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None
-        ):
+        with patch("src.mlops.hpo_pattern_memory._get_supabase_client", return_value=None):
             result = await cleanup_old_patterns()
 
             assert result["cleaned"] == 0

@@ -13,7 +13,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .graph import create_orchestrator_graph
 from .state import OrchestratorState
@@ -227,11 +227,13 @@ class OrchestratorAgent:
         # Build failure details for failed agents
         failure_details = []
         for r in failed_results:
-            failure_details.append({
-                "agent_name": r["agent_name"],
-                "error": r.get("error", "Unknown error"),
-                "latency_ms": r.get("latency_ms", 0),
-            })
+            failure_details.append(
+                {
+                    "agent_name": r["agent_name"],
+                    "error": r.get("error", "Unknown error"),
+                    "latency_ms": r.get("latency_ms", 0),
+                }
+            )
 
         # Include orchestrator-level error if present
         orchestrator_error = state.get("error")

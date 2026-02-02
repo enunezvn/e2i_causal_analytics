@@ -8,13 +8,11 @@ Tests cover:
 - Edge cases and error handling
 """
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.agents.experiment_monitor.nodes.interim_analyzer import InterimAnalyzerNode
-from src.agents.experiment_monitor.state import ExperimentMonitorState
 
 
 class TestInterimAnalyzerNodeInit:

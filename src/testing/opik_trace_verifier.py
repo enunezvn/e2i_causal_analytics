@@ -5,7 +5,6 @@ Verifies that Opik traces are created correctly for agent executions.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,9 +76,7 @@ class OpikTraceVerifier:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 # Try the Opik API endpoint
-                resp = await client.get(
-                    f"{self.base_url}/api/v1/private/traces/{trace_id}"
-                )
+                resp = await client.get(f"{self.base_url}/api/v1/private/traces/{trace_id}")
                 return resp.status_code == 200
         except httpx.HTTPError:
             return False
@@ -97,9 +94,7 @@ class OpikTraceVerifier:
         """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(
-                    f"{self.base_url}/api/v1/private/traces/{trace_id}"
-                )
+                resp = await client.get(f"{self.base_url}/api/v1/private/traces/{trace_id}")
                 if resp.status_code == 200:
                     return resp.json()
         except Exception:
@@ -178,12 +173,8 @@ class OpikTraceVerifier:
                 # Parse ISO timestamps and calculate duration
                 from datetime import datetime
 
-                start = datetime.fromisoformat(
-                    trace_details["start_time"].replace("Z", "+00:00")
-                )
-                end = datetime.fromisoformat(
-                    trace_details["end_time"].replace("Z", "+00:00")
-                )
+                start = datetime.fromisoformat(trace_details["start_time"].replace("Z", "+00:00"))
+                end = datetime.fromisoformat(trace_details["end_time"].replace("Z", "+00:00"))
                 result.duration_ms = (end - start).total_seconds() * 1000
             except Exception:
                 pass
@@ -244,9 +235,7 @@ class OpikTraceVerifier:
             if actual_value is None:
                 metadata_errors.append(f"Missing: {key}")
             elif actual_value != expected_value:
-                metadata_errors.append(
-                    f"{key}: expected {expected_value!r}, got {actual_value!r}"
-                )
+                metadata_errors.append(f"{key}: expected {expected_value!r}, got {actual_value!r}")
 
         result.metadata_errors = metadata_errors
         result.metadata_valid = len(metadata_errors) == 0

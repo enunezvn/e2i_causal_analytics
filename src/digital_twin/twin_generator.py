@@ -204,7 +204,9 @@ class TwinGenerator:
         training_duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
         # Feature importances
-        importances = dict(zip(self.feature_columns, self.model.feature_importances_.tolist(), strict=False))
+        importances = dict(
+            zip(self.feature_columns, self.model.feature_importances_.tolist(), strict=False)
+        )
         sorted_features = sorted(importances.items(), key=lambda x: x[1], reverse=True)
 
         self.model_id = uuid4()

@@ -16,13 +16,10 @@ Part of CopilotKit-DSPy Observability Integration Plan - Phase 10.
 """
 
 import asyncio
-import os
 import statistics
 import time
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -66,8 +63,14 @@ def sample_queries() -> List[Dict[str, Any]]:
         {"query": "What agents are available?", "expected_intent": "agent_status"},
         {"query": "Check drift monitor status", "expected_intent": "agent_status"},
         # Multi-faceted
-        {"query": "Analyze Kisqali performance and suggest improvements", "expected_intent": "multi_faceted"},
-        {"query": "Compare TRx trends across regions and identify causes", "expected_intent": "multi_faceted"},
+        {
+            "query": "Analyze Kisqali performance and suggest improvements",
+            "expected_intent": "multi_faceted",
+        },
+        {
+            "query": "Compare TRx trends across regions and identify causes",
+            "expected_intent": "multi_faceted",
+        },
         # General
         {"query": "Tell me about the weather", "expected_intent": "general"},
     ]
@@ -77,14 +80,46 @@ def sample_queries() -> List[Dict[str, Any]]:
 def sample_routing_queries() -> List[Dict[str, Any]]:
     """Sample queries with expected agent routing."""
     return [
-        {"query": "Why did sales drop?", "intent": "causal_analysis", "expected_agent": "causal_impact"},
-        {"query": "Find growth opportunities", "intent": "recommendation", "expected_agent": "gap_analyzer"},
-        {"query": "Segment-level analysis", "intent": "causal_analysis", "expected_agent": "heterogeneous_optimizer"},
-        {"query": "Is there any data drift?", "intent": "agent_status", "expected_agent": "drift_monitor"},
-        {"query": "Design an A/B test", "intent": "recommendation", "expected_agent": "experiment_designer"},
-        {"query": "System health check", "intent": "agent_status", "expected_agent": "health_score"},
-        {"query": "Predict next quarter TRx", "intent": "kpi_query", "expected_agent": "prediction_synthesizer"},
-        {"query": "Optimize resource allocation", "intent": "recommendation", "expected_agent": "resource_optimizer"},
+        {
+            "query": "Why did sales drop?",
+            "intent": "causal_analysis",
+            "expected_agent": "causal_impact",
+        },
+        {
+            "query": "Find growth opportunities",
+            "intent": "recommendation",
+            "expected_agent": "gap_analyzer",
+        },
+        {
+            "query": "Segment-level analysis",
+            "intent": "causal_analysis",
+            "expected_agent": "heterogeneous_optimizer",
+        },
+        {
+            "query": "Is there any data drift?",
+            "intent": "agent_status",
+            "expected_agent": "drift_monitor",
+        },
+        {
+            "query": "Design an A/B test",
+            "intent": "recommendation",
+            "expected_agent": "experiment_designer",
+        },
+        {
+            "query": "System health check",
+            "intent": "agent_status",
+            "expected_agent": "health_score",
+        },
+        {
+            "query": "Predict next quarter TRx",
+            "intent": "kpi_query",
+            "expected_agent": "prediction_synthesizer",
+        },
+        {
+            "query": "Optimize resource allocation",
+            "intent": "recommendation",
+            "expected_agent": "resource_optimizer",
+        },
         {"query": "Explain this result", "intent": "general", "expected_agent": "explainer"},
     ]
 
@@ -136,24 +171,28 @@ class TestDSPyIntentClassificationAccuracy:
                 is_correct = intent == expected
                 if is_correct:
                     correct += 1
-                results.append({
-                    "query": query,
-                    "expected": expected,
-                    "actual": intent,
-                    "confidence": confidence,
-                    "correct": is_correct,
-                    "method": method,
-                })
+                results.append(
+                    {
+                        "query": query,
+                        "expected": expected,
+                        "actual": intent,
+                        "confidence": confidence,
+                        "correct": is_correct,
+                        "method": method,
+                    }
+                )
             except Exception as e:
-                results.append({
-                    "query": query,
-                    "expected": expected,
-                    "actual": "error",
-                    "confidence": 0.0,
-                    "correct": False,
-                    "method": "error",
-                    "error": str(e),
-                })
+                results.append(
+                    {
+                        "query": query,
+                        "expected": expected,
+                        "actual": "error",
+                        "confidence": 0.0,
+                        "correct": False,
+                        "method": "error",
+                        "error": str(e),
+                    }
+                )
 
         accuracy = correct / total if total > 0 else 0.0
 
@@ -163,7 +202,9 @@ class TestDSPyIntentClassificationAccuracy:
                 print(f"Mismatch: '{r['query']}' - expected={r['expected']}, got={r['actual']}")
 
         # Target: >90% accuracy
-        assert accuracy >= 0.90, f"Intent classification accuracy {accuracy:.2%} < 90% target. Correct: {correct}/{total}"
+        assert accuracy >= 0.90, (
+            f"Intent classification accuracy {accuracy:.2%} < 90% target. Correct: {correct}/{total}"
+        )
 
     @pytest.mark.asyncio
     async def test_intent_classification_confidence_scores(self, sample_queries):
@@ -203,8 +244,9 @@ class TestDSPyIntentClassificationAccuracy:
 
             # Both methods should agree on clear-cut queries
             if hardcoded_conf >= 0.9:  # High confidence hardcoded
-                assert dspy_intent == hardcoded_intent or dspy_method == "hardcoded", \
+                assert dspy_intent == hardcoded_intent or dspy_method == "hardcoded", (
                     f"DSPy ({dspy_intent}) disagrees with hardcoded ({hardcoded_intent}) for '{query}'"
+                )
 
 
 # =============================================================================
@@ -281,7 +323,7 @@ class TestCognitiveRAGQuality:
             ("northeast region", ["territory", "HCP"]),
         ]
 
-        for query, expected_terms in test_queries:
+        for query, _expected_terms in test_queries:
             rewritten, keywords, entities = rewrite_query_hardcoded(query)
             # Rewritten query should be different or contain domain terms
             assert len(rewritten) >= len(query), "Rewritten query should not be shorter"
@@ -298,7 +340,7 @@ class TestCognitiveRAGQuality:
             evidence=[{"content": "test", "score": 0.8}],
             hop_count=1,
             avg_relevance_score=0.8,
-            retrieval_method="cognitive"
+            retrieval_method="cognitive",
         )
 
         assert result.rewritten_query is not None
@@ -321,6 +363,7 @@ class TestOpikTraceCompleteness:
         """Test that Opik tracer can be imported."""
         try:
             from src.api.routes.chatbot_tracer import ChatbotTracer, NodeSpanContext
+
             assert ChatbotTracer is not None
             assert NodeSpanContext is not None
         except ImportError as e:
@@ -356,7 +399,7 @@ class TestMLflowMetricsAccuracy:
             import mlflow
 
             # Check if experiment exists
-            experiment = mlflow.get_experiment_by_name("e2i_chatbot_interactions")
+            mlflow.get_experiment_by_name("e2i_chatbot_interactions")
             # Experiment may or may not exist in test environment
             # Just verify MLflow is accessible
             assert mlflow is not None
@@ -439,7 +482,7 @@ class TestTrainingSignalCollection:
             thread_id="test-thread",
             query="What is TRx?",
             user_id="test-user",
-            brand_context="Kisqali"
+            brand_context="Kisqali",
         )
 
         # Verify session was started
@@ -453,7 +496,7 @@ class TestTrainingSignalCollection:
             intent="kpi_query",
             confidence=0.95,
             method="dspy",
-            reasoning="Test intent classification"
+            reasoning="Test intent classification",
         )
 
         # Verify collector tracks pending sessions
@@ -534,7 +577,7 @@ class TestLoadPerformance:
 
         # Count successes and failures
         successes = sum(1 for r in results if not isinstance(r, Exception))
-        failures = sum(1 for r in results if isinstance(r, Exception))
+        sum(1 for r in results if isinstance(r, Exception))
 
         # At least 95% should succeed
         success_rate = successes / len(queries)
@@ -542,7 +585,9 @@ class TestLoadPerformance:
 
         # Total time should be reasonable (not sequential)
         # With concurrency, 100 requests should complete faster than 100 * avg_time
-        print(f"Processed {len(queries)} requests in {total_time:.2f}s ({len(queries)/total_time:.1f} req/s)")
+        print(
+            f"Processed {len(queries)} requests in {total_time:.2f}s ({len(queries) / total_time:.1f} req/s)"
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.slow
@@ -666,7 +711,7 @@ class TestPerformanceBenchmarks:
                 intent, conf, _, _ = await classify_intent_dspy(query)
                 agent, _, _, _, _ = await route_agent_dspy(query, intent)
                 # Synthesis (using hardcoded for speed in test)
-                result = synthesize_response_hardcoded(
+                synthesize_response_hardcoded(
                     query=query,
                     intent=intent,
                     evidence=[{"content": "Test evidence", "score": 0.8}],
@@ -696,6 +741,7 @@ class TestFeatureFlags:
     def test_dspy_intent_feature_flag(self):
         """Test CHATBOT_DSPY_INTENT feature flag."""
         from src.api.routes.chatbot_dspy import CHATBOT_DSPY_INTENT_ENABLED
+
         # Flag should be readable
         assert isinstance(CHATBOT_DSPY_INTENT_ENABLED, bool)
 
@@ -730,7 +776,9 @@ class TestEndToEndIntegration:
         assert intent_conf > 0.5
 
         # Step 2: Route to agent
-        agent, secondary, route_conf, rationale, route_method = await route_agent_dspy(query, intent)
+        agent, secondary, route_conf, rationale, route_method = await route_agent_dspy(
+            query, intent
+        )
         assert agent is not None
         assert route_conf > 0.5
 
@@ -745,19 +793,18 @@ class TestEndToEndIntegration:
         from src.api.routes.chatbot_dspy import (
             ChatbotSignalCollector,
             classify_intent_dspy,
-            route_agent_dspy,
         )
 
         collector = ChatbotSignalCollector()
         query = "What is TRx for Kisqali?"
 
         # Start session with required parameters
-        signal = collector.start_session(
+        collector.start_session(
             session_id="integration-test",
             thread_id="test-thread",
             query=query,
             user_id="test-user",
-            brand_context="Kisqali"
+            brand_context="Kisqali",
         )
 
         # Run through pipeline
@@ -769,7 +816,7 @@ class TestEndToEndIntegration:
             intent=intent,
             confidence=conf,
             method=method,
-            reasoning="Integration test classification"
+            reasoning="Integration test classification",
         )
 
         # Verify session tracking

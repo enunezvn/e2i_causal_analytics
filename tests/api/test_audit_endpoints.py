@@ -11,7 +11,7 @@ Endpoints covered:
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -104,7 +104,7 @@ def mock_audit_service(mock_audit_entry_row, mock_verification_result):
     mock_order = MagicMock()
     mock_range = MagicMock()
     mock_limit = MagicMock()
-    mock_execute = MagicMock()
+    MagicMock()
 
     mock_db.table.return_value = mock_table
     mock_table.select.return_value = mock_select
@@ -310,7 +310,9 @@ class TestGetWorkflowSummary:
         error_text = data.get("detail", str(data)).lower()
         assert "not found" in error_text
 
-    def test_get_summary_includes_brand(self, mock_audit_service, mock_workflow_id, mock_audit_entry_row):
+    def test_get_summary_includes_brand(
+        self, mock_audit_service, mock_workflow_id, mock_audit_entry_row
+    ):
         """Should include brand from first entry."""
         mock_audit_entry_row["brand"] = "Fabhalta"
         mock_audit_service.db.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = MagicMock(

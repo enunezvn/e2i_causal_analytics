@@ -17,7 +17,7 @@ Date: January 2026
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -654,9 +654,7 @@ class SecurityAuditService:
 
         if min_severity:
             min_order = self._severity_order[min_severity]
-            events = [
-                e for e in events if self._severity_order[e.severity] >= min_order
-            ]
+            events = [e for e in events if self._severity_order[e.severity] >= min_order]
 
         # Return most recent first
         return sorted(events, key=lambda e: e.timestamp, reverse=True)[:limit]

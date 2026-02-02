@@ -4,12 +4,10 @@ Unit tests for src/ml/data_generator.py
 Tests the E2IDataGenerator class and helper functions for synthetic data generation.
 """
 
-import json
 import uuid
-from datetime import date, datetime, timedelta
-from unittest.mock import MagicMock, Mock, patch
+from datetime import date, datetime
+from unittest.mock import patch
 
-import numpy as np
 import pytest
 
 from src.ml.data_generator import (
@@ -281,7 +279,9 @@ class TestE2IDataGenerator:
         assert len(hcp_records) == 72
 
         # Check patient universe records
-        patient_records = [r for r in generator.reference_universe if r["universe_type"] == "patient"]
+        patient_records = [
+            r for r in generator.reference_universe if r["universe_type"] == "patient"
+        ]
         assert len(patient_records) == 12
 
         # Verify record structure
@@ -343,13 +343,17 @@ class TestE2IDataGenerator:
 
         # Verify split tracking
         assert len(generator.patient_splits) == 200
-        assert all(split in ["train", "validation", "test", "holdout"]
-                   for split in generator.patient_splits.values())
+        assert all(
+            split in ["train", "validation", "test", "holdout"]
+            for split in generator.patient_splits.values()
+        )
 
     def test_print_summary(self, capsys):
         """Test summary printing."""
         generator = E2IDataGenerator()
-        generator.patient_journeys = [{"patient_id": f"p{i}", "data_split": "train"} for i in range(100)]
+        generator.patient_journeys = [
+            {"patient_id": f"p{i}", "data_split": "train"} for i in range(100)
+        ]
         generator.hcp_profiles = [{"hcp_id": f"h{i}"} for i in range(50)]
         generator.treatment_events = [{"event_id": f"e{i}"} for i in range(300)]
 
@@ -370,6 +374,7 @@ class TestE2IDataGenerator:
 
             # Reduce volume for faster test
             import src.ml.data_generator as dgm
+
             original_patients = dgm.NUM_PATIENTS
             original_hcps = dgm.NUM_HCPS
 
@@ -399,6 +404,7 @@ class TestE2IDataGenerator:
 
             # Reduce volume for faster test
             import src.ml.data_generator as dgm
+
             original_patients = dgm.NUM_PATIENTS
 
             try:
@@ -432,6 +438,7 @@ class TestE2IDataGenerator:
             generator = E2IDataGenerator(config)
 
             import src.ml.data_generator as dgm
+
             original_patients = dgm.NUM_PATIENTS
 
             try:
@@ -479,6 +486,7 @@ class TestE2IDataGenerator:
             generator = E2IDataGenerator(config)
 
             import src.ml.data_generator as dgm
+
             original_patients = dgm.NUM_PATIENTS
 
             try:

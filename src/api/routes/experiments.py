@@ -114,7 +114,8 @@ class RandomizeRequest(BaseModel):
     """Request to randomize units to experiment variants."""
 
     units: List[Dict[str, Any]] = Field(
-        ..., description="List of units to randomize (each with unit_id, unit_type, and optional strata)"
+        ...,
+        description="List of units to randomize (each with unit_id, unit_type, and optional strata)",
     )
     method: RandomizationMethod = Field(
         default=RandomizationMethod.STRATIFIED, description="Randomization method"
@@ -125,9 +126,7 @@ class RandomizeRequest(BaseModel):
     allocation_ratio: Optional[Dict[str, float]] = Field(
         default={"control": 0.5, "treatment": 0.5}, description="Allocation ratio by variant"
     )
-    block_size: Optional[int] = Field(
-        default=4, description="Block size for block randomization"
-    )
+    block_size: Optional[int] = Field(default=4, description="Block size for block randomization")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -149,9 +148,7 @@ class EnrollUnitRequest(BaseModel):
 
     unit_id: str = Field(..., description="Unit identifier (HCP, patient, etc.)")
     unit_type: str = Field(..., description="Type of unit (hcp, patient, territory)")
-    consent_timestamp: Optional[datetime] = Field(
-        None, description="When consent was obtained"
-    )
+    consent_timestamp: Optional[datetime] = Field(None, description="When consent was obtained")
     eligibility_criteria_met: Optional[Dict[str, Any]] = Field(
         None, description="Eligibility criteria evaluation results"
     )
@@ -174,11 +171,7 @@ class WithdrawRequest(BaseModel):
     reason: str = Field(..., description="Reason for withdrawal")
 
     model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "reason": "Subject requested withdrawal from study"
-            }
-        }
+        json_schema_extra={"example": {"reason": "Subject requested withdrawal from study"}}
     )
 
 
@@ -188,9 +181,7 @@ class TriggerInterimAnalysisRequest(BaseModel):
     analysis_number: Optional[int] = Field(
         None, description="Specific analysis number (auto-detected if not provided)"
     )
-    force: bool = Field(
-        default=False, description="Force analysis even if milestone not reached"
-    )
+    force: bool = Field(default=False, description="Force analysis even if milestone not reached")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -1171,7 +1162,9 @@ async def trigger_experiment_monitoring(
                 message=alert.get("message", ""),
                 details=alert.get("details", {}),
                 recommended_action=alert.get("recommended_action", ""),
-                timestamp=datetime.fromisoformat(alert.get("timestamp", datetime.now(timezone.utc).isoformat())),
+                timestamp=datetime.fromisoformat(
+                    alert.get("timestamp", datetime.now(timezone.utc).isoformat())
+                ),
             )
             for alert in result.alerts
         ]
@@ -1230,7 +1223,9 @@ async def get_experiment_health(
             enrollment_rate_per_day=exp.get("enrollment_rate_per_day", 0.0),
             current_information_fraction=exp.get("current_information_fraction", 0.0),
             has_srm=exp.get("has_srm", False),
-            active_alerts=len([a for a in result.alerts if a.get("experiment_id") == experiment_id]),
+            active_alerts=len(
+                [a for a in result.alerts if a.get("experiment_id") == experiment_id]
+            ),
             last_checked=datetime.now(timezone.utc),
         )
 

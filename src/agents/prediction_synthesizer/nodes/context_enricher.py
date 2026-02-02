@@ -264,9 +264,7 @@ class ContextEnricherNode:
         else:
             return "stable"
 
-    async def _get_online_features(
-        self, state: PredictionSynthesizerState
-    ) -> Dict[str, Any]:
+    async def _get_online_features(self, state: PredictionSynthesizerState) -> Dict[str, Any]:
         """Get online features from Feast for the entity.
 
         Fetches real-time features from Feast online store and validates

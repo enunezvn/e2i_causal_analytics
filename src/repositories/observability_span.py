@@ -77,12 +77,11 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         except Exception as e:
             # Log error and return None for graceful degradation
             import logging
+
             logging.getLogger(__name__).warning(f"insert_span failed: {e}")
             return None
 
-    async def insert_spans_batch(
-        self, spans: List[ObservabilitySpan]
-    ) -> Dict[str, Any]:
+    async def insert_spans_batch(self, spans: List[ObservabilitySpan]) -> Dict[str, Any]:
         """
         Insert multiple spans in a batch operation.
 
@@ -122,6 +121,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
             }
         except Exception as e:
             import logging
+
             logging.getLogger(__name__).warning(f"insert_spans_batch failed: {e}")
             return {
                 "success": False,
@@ -207,9 +207,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
     # TRACE QUERIES
     # =========================================================================
 
-    async def get_spans_by_trace_id(
-        self, trace_id: str
-    ) -> List[ObservabilitySpan]:
+    async def get_spans_by_trace_id(self, trace_id: str) -> List[ObservabilitySpan]:
         """
         Get all spans for a trace.
 
@@ -452,7 +450,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         Returns:
             QualityMetrics instance
         """
-        hours = self._parse_time_window(time_window)
+        self._parse_time_window(time_window)
         spans = await self.get_spans_by_time_window(window=time_window, limit=10000)
 
         if not spans:

@@ -5,8 +5,7 @@ Version: 4.3
 Tests graceful degradation when memory backends are unavailable.
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,12 +17,8 @@ class TestFeedbackStoreFailures:
     def failing_feedback_store(self):
         """Create a feedback store that fails."""
         store = MagicMock()
-        store.get_feedback = AsyncMock(
-            side_effect=ConnectionError("Store connection refused")
-        )
-        store.count_pending = AsyncMock(
-            side_effect=ConnectionError("Store connection refused")
-        )
+        store.get_feedback = AsyncMock(side_effect=ConnectionError("Store connection refused"))
+        store.count_pending = AsyncMock(side_effect=ConnectionError("Store connection refused"))
         return store
 
     @pytest.mark.asyncio
@@ -189,9 +184,7 @@ class TestSchedulerMemoryFailures:
 
         # Agent with failing store
         failing_store = MagicMock()
-        failing_store.get_feedback = AsyncMock(
-            side_effect=ConnectionError("Store down")
-        )
+        failing_store.get_feedback = AsyncMock(side_effect=ConnectionError("Store down"))
 
         agent = FeedbackLearnerAgent(feedback_store=failing_store)
 
@@ -284,9 +277,7 @@ class TestDSPyIntegrationFailures:
 
         assert result is not None
         # Training reward may be None if signal collection failed
-        assert result.training_reward is None or isinstance(
-            result.training_reward, float
-        )
+        assert result.training_reward is None or isinstance(result.training_reward, float)
 
 
 class TestGracefulDegradation:

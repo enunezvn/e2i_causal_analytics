@@ -552,9 +552,7 @@ class TestCausalPrioritizationIntegration:
         gap = self._create_test_gap(metric="trx")
         roi = self._create_test_roi(gap["gap_id"], roi=3.0)
 
-        causal_rankings = [
-            {"feature_name": "trx", "causal_score": 0.9, "is_direct_cause": True}
-        ]
+        causal_rankings = [{"feature_name": "trx", "causal_score": 0.9, "is_direct_cause": True}]
 
         state = self._create_test_state_with_causal(
             gaps=[gap],

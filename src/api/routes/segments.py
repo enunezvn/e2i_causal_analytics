@@ -25,7 +25,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -92,29 +92,19 @@ class RunSegmentAnalysisRequest(BaseModel):
     treatment_var: str = Field(
         ..., description="Treatment variable name (e.g., 'rep_visits', 'email_campaigns')"
     )
-    outcome_var: str = Field(
-        ..., description="Outcome variable name (e.g., 'trx', 'conversion')"
-    )
+    outcome_var: str = Field(..., description="Outcome variable name (e.g., 'trx', 'conversion')")
     segment_vars: List[str] = Field(
         ..., description="Variables to segment by (e.g., ['region', 'specialty'])"
     )
     effect_modifiers: Optional[List[str]] = Field(
         default=None, description="Variables that modify treatment effect"
     )
-    data_source: str = Field(
-        default="hcp_data", description="Data source identifier"
-    )
-    filters: Optional[Dict[str, Any]] = Field(
-        default=None, description="Additional filters"
-    )
+    data_source: str = Field(default="hcp_data", description="Data source identifier")
+    filters: Optional[Dict[str, Any]] = Field(default=None, description="Additional filters")
 
     # Configuration
-    n_estimators: int = Field(
-        default=100, description="Causal Forest trees", ge=10, le=1000
-    )
-    min_samples_leaf: int = Field(
-        default=10, description="Minimum samples per leaf", ge=1, le=100
-    )
+    n_estimators: int = Field(default=100, description="Causal Forest trees", ge=10, le=1000)
+    min_samples_leaf: int = Field(default=10, description="Minimum samples per leaf", ge=1, le=100)
     significance_level: float = Field(
         default=0.05, description="For CI calculation", gt=0.0, lt=0.5
     )
@@ -178,12 +168,8 @@ class PolicyRecommendation(BaseModel):
     """Treatment allocation recommendation."""
 
     segment: str = Field(..., description="Segment identifier")
-    current_treatment_rate: float = Field(
-        ..., description="Current treatment rate (0-1)"
-    )
-    recommended_treatment_rate: float = Field(
-        ..., description="Recommended treatment rate (0-1)"
-    )
+    current_treatment_rate: float = Field(..., description="Current treatment rate (0-1)")
+    recommended_treatment_rate: float = Field(..., description="Recommended treatment rate (0-1)")
     expected_incremental_outcome: float = Field(
         ..., description="Expected incremental outcome from change"
     )
@@ -195,12 +181,8 @@ class UpliftMetrics(BaseModel):
 
     overall_auuc: float = Field(..., description="Area Under Uplift Curve (0-1)")
     overall_qini: float = Field(..., description="Qini coefficient")
-    targeting_efficiency: float = Field(
-        ..., description="How well model targets responders (0-1)"
-    )
-    model_type_used: str = Field(
-        ..., description="Model type (random_forest, gradient_boosting)"
-    )
+    targeting_efficiency: float = Field(..., description="How well model targets responders (0-1)")
+    model_type_used: str = Field(..., description="Model type (random_forest, gradient_boosting)")
 
 
 class SegmentAnalysisResponse(BaseModel):
@@ -251,15 +233,11 @@ class SegmentAnalysisResponse(BaseModel):
     )
 
     # Summary
-    executive_summary: Optional[str] = Field(
-        default=None, description="Executive-level summary"
-    )
+    executive_summary: Optional[str] = Field(default=None, description="Executive-level summary")
     key_insights: List[str] = Field(default_factory=list, description="Key findings")
 
     # Multi-library support
-    libraries_used: Optional[List[str]] = Field(
-        default=None, description="Causal libraries used"
-    )
+    libraries_used: Optional[List[str]] = Field(default=None, description="Causal libraries used")
     library_agreement_score: Optional[float] = Field(
         default=None, description="Agreement between libraries (0-1)"
     )
@@ -295,9 +273,7 @@ class PolicyListResponse(BaseModel):
     """Response for listing policy recommendations."""
 
     total_count: int = Field(..., description="Total recommendations")
-    recommendations: List[PolicyRecommendation] = Field(
-        ..., description="Policy recommendations"
-    )
+    recommendations: List[PolicyRecommendation] = Field(..., description="Policy recommendations")
     expected_total_lift: float = Field(
         ..., description="Total expected lift if all policies adopted"
     )
@@ -307,14 +283,10 @@ class SegmentHealthResponse(BaseModel):
     """Health check response for segment analysis service."""
 
     status: str = Field(..., description="Service status")
-    agent_available: bool = Field(
-        ..., description="Heterogeneous Optimizer agent status"
-    )
+    agent_available: bool = Field(..., description="Heterogeneous Optimizer agent status")
     econml_available: bool = Field(default=True, description="EconML availability")
     causalml_available: bool = Field(default=True, description="CausalML availability")
-    last_analysis: Optional[datetime] = Field(
-        default=None, description="Last analysis timestamp"
-    )
+    last_analysis: Optional[datetime] = Field(default=None, description="Last analysis timestamp")
     analyses_24h: int = Field(default=0, description="Analyses in last 24 hours")
 
 
@@ -433,9 +405,7 @@ async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
     description="List all targeting policy recommendations.",
 )
 async def list_policies(
-    min_lift: Optional[float] = Query(
-        default=None, description="Minimum expected lift threshold"
-    ),
+    min_lift: Optional[float] = Query(default=None, description="Minimum expected lift threshold"),
     min_confidence: Optional[float] = Query(
         default=None, description="Minimum confidence threshold"
     ),
@@ -470,9 +440,7 @@ async def list_policies(
             total_lift += rec.expected_incremental_outcome
 
     # Sort by expected outcome and limit
-    all_recommendations.sort(
-        key=lambda x: x.expected_incremental_outcome, reverse=True
-    )
+    all_recommendations.sort(key=lambda x: x.expected_incremental_outcome, reverse=True)
     all_recommendations = all_recommendations[:limit]
 
     return PolicyListResponse(
@@ -498,7 +466,7 @@ async def get_segment_health() -> SegmentHealthResponse:
     # Check agent availability
     agent_available = True
     try:
-        from src.agents.heterogeneous_optimizer import HeterogeneousOptimizerAgent
+        from src.agents.heterogeneous_optimizer import HeterogeneousOptimizerAgent  # noqa: F401
 
         agent_available = True
     except ImportError:
@@ -520,9 +488,7 @@ async def get_segment_health() -> SegmentHealthResponse:
     # Count recent analyses
     now = datetime.now(timezone.utc)
     analyses_24h = sum(
-        1
-        for a in _analyses_store.values()
-        if (now - a.timestamp).total_seconds() < 86400
+        1 for a in _analyses_store.values() if (now - a.timestamp).total_seconds() < 86400
     )
 
     # Get last analysis
@@ -641,13 +607,9 @@ async def _execute_segment_analysis(
             heterogeneity_score=result.get("heterogeneity_score"),
             feature_importance=result.get("feature_importance"),
             uplift_metrics=_convert_uplift_metrics(result),
-            high_responders=_convert_segment_profiles(
-                result.get("high_responders", [])
-            ),
+            high_responders=_convert_segment_profiles(result.get("high_responders", [])),
             low_responders=_convert_segment_profiles(result.get("low_responders", [])),
-            policy_recommendations=_convert_policies(
-                result.get("policy_recommendations", [])
-            ),
+            policy_recommendations=_convert_policies(result.get("policy_recommendations", [])),
             expected_total_lift=result.get("expected_total_lift"),
             optimal_allocation_summary=result.get("optimal_allocation_summary"),
             executive_summary=result.get("executive_summary"),
@@ -663,9 +625,7 @@ async def _execute_segment_analysis(
         )
 
     except ImportError as e:
-        logger.warning(
-            f"Heterogeneous Optimizer agent not available: {e}, using mock data"
-        )
+        logger.warning(f"Heterogeneous Optimizer agent not available: {e}, using mock data")
         return _generate_mock_response(request, start_time)
 
     except Exception as e:
@@ -690,9 +650,7 @@ def _convert_cate_results(
                         cate_ci_lower=cate.get("cate_ci_lower", 0.0),
                         cate_ci_upper=cate.get("cate_ci_upper", 0.0),
                         sample_size=cate.get("sample_size", 0),
-                        statistical_significance=cate.get(
-                            "statistical_significance", False
-                        ),
+                        statistical_significance=cate.get("statistical_significance", False),
                     )
                 )
             except Exception as e:
@@ -723,9 +681,7 @@ def _convert_segment_profiles(
             result.append(
                 SegmentProfile(
                     segment_id=profile.get("segment_id", ""),
-                    responder_type=ResponderType(
-                        profile.get("responder_type", "average")
-                    ),
+                    responder_type=ResponderType(profile.get("responder_type", "average")),
                     cate_estimate=profile.get("cate_estimate", 0.0),
                     defining_features=profile.get("defining_features", []),
                     size=profile.get("size", 0),
@@ -749,12 +705,8 @@ def _convert_policies(
                 PolicyRecommendation(
                     segment=policy.get("segment", ""),
                     current_treatment_rate=policy.get("current_treatment_rate", 0.0),
-                    recommended_treatment_rate=policy.get(
-                        "recommended_treatment_rate", 0.0
-                    ),
-                    expected_incremental_outcome=policy.get(
-                        "expected_incremental_outcome", 0.0
-                    ),
+                    recommended_treatment_rate=policy.get("recommended_treatment_rate", 0.0),
+                    expected_incremental_outcome=policy.get("expected_incremental_outcome", 0.0),
                     confidence=policy.get("confidence", 0.0),
                 )
             )

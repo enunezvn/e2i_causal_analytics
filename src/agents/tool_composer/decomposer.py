@@ -189,7 +189,7 @@ class QueryDecomposer:
         for i, sq in enumerate(raw_questions):
             sub_questions.append(
                 SubQuestion(
-                    id=sq.get("id", f"sq_{i+1}"),
+                    id=sq.get("id", f"sq_{i + 1}"),
                     question=sq["question"],
                     intent=sq.get("intent", "DESCRIPTIVE"),
                     entities=sq.get("entities", []),

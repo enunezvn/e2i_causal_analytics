@@ -5,8 +5,8 @@ Seeds feature groups and features for the feature store.
 Supports drift detection and feature monitoring.
 """
 
-from typing import Dict, List, Optional, Tuple
 import uuid
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -233,16 +233,20 @@ class FeatureStoreSeeder(BaseGenerator[pd.DataFrame]):
             group_id = str(uuid.uuid4())
             group_id_map[group_name] = group_id
 
-            feature_groups_records.append({
-                "id": group_id,
-                "name": group_name,
-                "description": group_config["description"],
-                "owner": group_config["owner"],
-                "tags": group_config["tags"],
-                "source_table": group_config["source_table"],
-                "expected_update_frequency_hours": group_config["expected_update_frequency_hours"],
-                "max_age_hours": group_config["max_age_hours"],
-            })
+            feature_groups_records.append(
+                {
+                    "id": group_id,
+                    "name": group_name,
+                    "description": group_config["description"],
+                    "owner": group_config["owner"],
+                    "tags": group_config["tags"],
+                    "source_table": group_config["source_table"],
+                    "expected_update_frequency_hours": group_config[
+                        "expected_update_frequency_hours"
+                    ],
+                    "max_age_hours": group_config["max_age_hours"],
+                }
+            )
 
         feature_groups_df = pd.DataFrame(feature_groups_records)
 
@@ -253,17 +257,19 @@ class FeatureStoreSeeder(BaseGenerator[pd.DataFrame]):
             group_id = group_id_map[group_name]
 
             for feature_config in features:
-                features_records.append({
-                    "id": str(uuid.uuid4()),
-                    "feature_group_id": group_id,
-                    "name": feature_config["name"],
-                    "description": feature_config["description"],
-                    "value_type": feature_config["value_type"],
-                    "entity_keys": feature_config["entity_keys"],
-                    "owner": self.FEATURE_GROUPS[group_name]["owner"],
-                    "tags": feature_config["tags"],
-                    "drift_threshold": feature_config["drift_threshold"],
-                })
+                features_records.append(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "feature_group_id": group_id,
+                        "name": feature_config["name"],
+                        "description": feature_config["description"],
+                        "value_type": feature_config["value_type"],
+                        "entity_keys": feature_config["entity_keys"],
+                        "owner": self.FEATURE_GROUPS[group_name]["owner"],
+                        "tags": feature_config["tags"],
+                        "drift_threshold": feature_config["drift_threshold"],
+                    }
+                )
 
         features_df = pd.DataFrame(features_records)
 
@@ -278,4 +284,4 @@ class FeatureStoreSeeder(BaseGenerator[pd.DataFrame]):
             Dictionary mapping feature_name -> feature_id.
         """
         _, features_df = self.seed()
-        return dict(zip(features_df["name"], features_df["id"]))
+        return dict(zip(features_df["name"], features_df["id"], strict=False))

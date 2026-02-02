@@ -12,7 +12,7 @@ Tracks model performance metrics over time:
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -119,7 +119,9 @@ class PerformanceTracker:
             for segment_name, segment_mask in segments.items():
                 seg_preds = predictions[segment_mask]
                 seg_actuals = actuals[segment_mask]
-                seg_scores = prediction_scores[segment_mask] if prediction_scores is not None else None
+                seg_scores = (
+                    prediction_scores[segment_mask] if prediction_scores is not None else None
+                )
                 if len(seg_preds) >= self.config.min_samples:
                     segment_metrics[segment_name] = self._calculate_metrics(
                         seg_preds, seg_actuals, seg_scores
@@ -248,7 +250,7 @@ class PerformanceTracker:
         current_value = values[0] if values else 0.0
 
         # Baseline is average of older records
-        baseline_values = values[self.config.current_window_days:]
+        baseline_values = values[self.config.current_window_days :]
         baseline_value = np.mean(baseline_values) if baseline_values else current_value
 
         # Calculate change
@@ -303,16 +305,18 @@ class PerformanceTracker:
                 trend = await self.get_performance_trend(model_version, metric_name)
 
                 if trend.alert_threshold_breached:
-                    alerts.append({
-                        "model_version": model_version,
-                        "metric_name": metric_name,
-                        "current_value": trend.current_value,
-                        "baseline_value": trend.baseline_value,
-                        "change_percent": trend.change_percent,
-                        "trend": trend.trend,
-                        "severity": "high" if trend.change_percent < -20 else "medium",
-                        "message": f"{metric_name} degraded by {abs(trend.change_percent):.1f}%",
-                    })
+                    alerts.append(
+                        {
+                            "model_version": model_version,
+                            "metric_name": metric_name,
+                            "current_value": trend.current_value,
+                            "baseline_value": trend.baseline_value,
+                            "change_percent": trend.change_percent,
+                            "trend": trend.trend,
+                            "severity": "high" if trend.change_percent < -20 else "medium",
+                            "message": f"{metric_name} degraded by {abs(trend.change_percent):.1f}%",
+                        }
+                    )
             except Exception as e:
                 logger.warning(f"Failed to check performance for {metric_name}: {e}")
 

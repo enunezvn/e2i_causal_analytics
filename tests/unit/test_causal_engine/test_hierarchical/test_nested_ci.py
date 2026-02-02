@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 
 from src.causal_engine.hierarchical import (
-    NestedConfidenceInterval,
+    AggregationMethod,
     NestedCIConfig,
     NestedCIResult,
-    AggregationMethod,
+    NestedConfidenceInterval,
 )
 from src.causal_engine.hierarchical.nested_ci import SegmentEstimate
 
@@ -239,7 +239,7 @@ class TestNestedConfidenceInterval:
 
         # All weights should be equal
         for weight in result.segment_contributions.values():
-            assert abs(weight - 1/3) < 0.001
+            assert abs(weight - 1 / 3) < 0.001
 
         # Simple average
         expected_ate = (0.10 + 0.15 + 0.25) / 3
@@ -338,7 +338,7 @@ class TestNestedConfidenceInterval:
         assert result.n_segments_included == 3
 
         # Random effects should produce wider CI than fixed effects
-        fe_result = calculator.compute(heterogeneous_segments)
+        calculator.compute(heterogeneous_segments)
 
         # Aggregate should be between segment extremes
         effects = [s.ate for s in heterogeneous_segments]

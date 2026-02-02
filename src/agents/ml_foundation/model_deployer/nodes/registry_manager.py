@@ -61,7 +61,6 @@ async def _register_model_mlflow(
             return None, None, None
 
         # Use MLflowConnector's async register_model method
-        from src.mlops.mlflow_connector import ModelStage
 
         model_version = await connector.register_model(
             run_id=run_id,
@@ -82,9 +81,7 @@ async def _register_model_mlflow(
         return None, None, None
 
 
-async def _transition_stage_mlflow(
-    model_name: str, version: int, target_stage: str
-) -> bool:
+async def _transition_stage_mlflow(model_name: str, version: int, target_stage: str) -> bool:
     """Transition model stage via MLflowConnector.
 
     Args:

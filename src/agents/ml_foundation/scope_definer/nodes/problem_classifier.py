@@ -45,7 +45,9 @@ async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _infer_problem_type(business_objective: str, target_outcome: str) -> Literal[
+def _infer_problem_type(
+    business_objective: str, target_outcome: str
+) -> Literal[
     "binary_classification",
     "multiclass_classification",
     "regression",

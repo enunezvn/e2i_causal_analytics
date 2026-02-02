@@ -46,9 +46,11 @@ from .graph import (
     create_shap_analysis_graph,
 )
 from .mlflow_tracker import (
-    FeatureAnalyzerMLflowTracker,
-    FeatureAnalyzerMetrics,
     FeatureAnalysisContext,
+    FeatureAnalyzerMetrics,
+    FeatureAnalyzerMLflowTracker,
+)
+from .mlflow_tracker import (
     create_tracker as create_mlflow_tracker,
 )
 from .nodes import (

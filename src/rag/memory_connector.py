@@ -282,7 +282,7 @@ class MemoryConnector:
             results.append(
                 RetrievalResult(
                     source_id=chain.get("start_entity_id", f"chain_{i}"),
-                    content=content or f"Causal chain {i+1}",
+                    content=content or f"Causal chain {i + 1}",
                     source=RetrievalSource.GRAPH,
                     score=chain.get("confidence", 0.8),
                     retrieval_method="graph",
@@ -356,7 +356,7 @@ class MemoryConnector:
             results.append(
                 RetrievalResult(
                     source_id=path.get("path_id", f"path_{i}"),
-                    content=content or f"Path {i+1}",
+                    content=content or f"Path {i + 1}",
                     source=RetrievalSource.GRAPH,
                     score=path.get("confidence", 0.7),
                     retrieval_method="graph",

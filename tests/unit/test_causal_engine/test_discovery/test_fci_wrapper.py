@@ -4,10 +4,11 @@ Version: 1.0.0
 Tests the FCI algorithm wrapper for causal discovery with latent confounders.
 """
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock, patch
 
 from src.causal_engine.discovery.algorithms.fci_wrapper import FCIAlgorithm
 from src.causal_engine.discovery.base import (
@@ -233,11 +234,13 @@ class TestFCIAdjacencyConversion:
         # Create mock graph
         mock_graph = MagicMock()
         # 3x3 graph with one directed edge (0 -> 1)
-        mock_graph.graph = np.array([
-            [0, -1, 0],  # Row 0: tail at 1
-            [1, 0, 0],   # Row 1: arrow at 0
-            [0, 0, 0],   # Row 2
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],  # Row 0: tail at 1
+                [1, 0, 0],  # Row 1: arrow at 0
+                [0, 0, 0],  # Row 2
+            ]
+        )
 
         adj, edge_types = fci._graph_to_adjacency_with_types(mock_graph, 3)
 
@@ -249,11 +252,13 @@ class TestFCIAdjacencyConversion:
         # Directed edge 0 -> 1 in PAG encoding:
         # - graph[0,1] = 1 (arrow at node 1 end)
         # - graph[1,0] = -1 (tail at node 0 end)
-        mock_graph.graph = np.array([
-            [0, 1, 0],   # graph[0,1] = 1 (arrow at j=1)
-            [-1, 0, 0],  # graph[1,0] = -1 (tail at i=0)
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, 1, 0],  # graph[0,1] = 1 (arrow at j=1)
+                [-1, 0, 0],  # graph[1,0] = -1 (tail at i=0)
+                [0, 0, 0],
+            ]
+        )
 
         adj, edge_types = fci._graph_to_adjacency_with_types(mock_graph, 3)
 
@@ -264,11 +269,13 @@ class TestFCIAdjacencyConversion:
         """Test detection of bidirected edges (latent confounders)."""
         mock_graph = MagicMock()
         # Bidirected edge 0 <-> 1: graph[0,1] = 1 (arrow), graph[1,0] = 1 (arrow)
-        mock_graph.graph = np.array([
-            [0, 1, 0],
-            [1, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, 1, 0],
+                [1, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj, edge_types = fci._graph_to_adjacency_with_types(mock_graph, 3)
 
@@ -280,11 +287,13 @@ class TestFCIAdjacencyConversion:
         """Test detection of undirected edges."""
         mock_graph = MagicMock()
         # Undirected edge 0 - 1: graph[0,1] = -1 (tail), graph[1,0] = -1 (tail)
-        mock_graph.graph = np.array([
-            [0, -1, 0],
-            [-1, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],
+                [-1, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj, edge_types = fci._graph_to_adjacency_with_types(mock_graph, 3)
 

@@ -12,11 +12,9 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # =============================================================================
 # FIXTURES
@@ -30,11 +28,13 @@ def mock_supabase_client():
 
     # Mock RPC call for run_feedback_loop
     rpc_result = MagicMock()
-    rpc_result.data = [{
-        "run_id": "run-123",
-        "predictions_labeled": 50,
-        "predictions_skipped": 5,
-    }]
+    rpc_result.data = [
+        {
+            "run_id": "run-123",
+            "predictions_labeled": 50,
+            "predictions_skipped": 5,
+        }
+    ]
     rpc_execute = AsyncMock(return_value=rpc_result)
     rpc_mock = MagicMock(return_value=MagicMock(execute=rpc_execute))
     client.rpc = rpc_mock
@@ -43,10 +43,12 @@ def mock_supabase_client():
     table_result = MagicMock()
     table_result.data = []
     table_execute = AsyncMock(return_value=table_result)
-    select_mock = MagicMock(return_value=MagicMock(
-        eq=MagicMock(return_value=MagicMock(execute=table_execute)),
-        execute=table_execute,
-    ))
+    select_mock = MagicMock(
+        return_value=MagicMock(
+            eq=MagicMock(return_value=MagicMock(execute=table_execute)),
+            execute=table_execute,
+        )
+    )
     table_mock = MagicMock(return_value=MagicMock(select=select_mock))
     client.table = table_mock
 
@@ -373,7 +375,7 @@ class TestAnalyzeConceptDriftFromTruth:
 
         metrics_result = MagicMock()
         metrics_result.data = []
-        metrics_execute = AsyncMock(return_value=metrics_result)
+        AsyncMock(return_value=metrics_result)
 
         mock_select = MagicMock()
         mock_select.return_value = MagicMock(
@@ -402,7 +404,7 @@ class TestAnalyzeConceptDriftFromTruth:
 
         metrics_result = MagicMock()
         metrics_result.data = []
-        metrics_execute = AsyncMock(return_value=metrics_result)
+        AsyncMock(return_value=metrics_result)
 
         mock_select = MagicMock()
         mock_select.return_value = MagicMock(
@@ -477,7 +479,9 @@ class TestRunFullFeedbackLoop:
 
     @patch("src.tasks.feedback_loop_tasks.analyze_concept_drift_from_truth")
     @patch("src.memory.services.factories.get_supabase_client")
-    def test_task_triggers_drift_analysis(self, mock_get_client, mock_drift_task, mock_supabase_client):
+    def test_task_triggers_drift_analysis(
+        self, mock_get_client, mock_drift_task, mock_supabase_client
+    ):
         """Test that task triggers drift analysis when include_drift_analysis=True."""
         from src.tasks.feedback_loop_tasks import run_full_feedback_loop
 
@@ -518,10 +522,10 @@ class TestTaskConfiguration:
     def test_all_tasks_exported(self):
         """Test that all tasks are exported from module."""
         from src.tasks import (
-            run_feedback_loop_short_window,
-            run_feedback_loop_medium_window,
-            run_feedback_loop_long_window,
             analyze_concept_drift_from_truth,
+            run_feedback_loop_long_window,
+            run_feedback_loop_medium_window,
+            run_feedback_loop_short_window,
             run_full_feedback_loop,
         )
 
@@ -534,10 +538,10 @@ class TestTaskConfiguration:
     def test_tasks_have_names(self):
         """Test that tasks have proper names."""
         from src.tasks.feedback_loop_tasks import (
-            run_feedback_loop_short_window,
-            run_feedback_loop_medium_window,
-            run_feedback_loop_long_window,
             analyze_concept_drift_from_truth,
+            run_feedback_loop_long_window,
+            run_feedback_loop_medium_window,
+            run_feedback_loop_short_window,
             run_full_feedback_loop,
         )
 
@@ -619,12 +623,16 @@ class TestTaskErrorHandling:
 
         mock_client = MagicMock()
         mock_execute = AsyncMock(side_effect=Exception("Query failed"))
-        mock_client.table = MagicMock(return_value=MagicMock(
-            select=MagicMock(return_value=MagicMock(
-                eq=MagicMock(return_value=MagicMock(execute=mock_execute)),
-                execute=mock_execute,
-            ))
-        ))
+        mock_client.table = MagicMock(
+            return_value=MagicMock(
+                select=MagicMock(
+                    return_value=MagicMock(
+                        eq=MagicMock(return_value=MagicMock(execute=mock_execute)),
+                        execute=mock_execute,
+                    )
+                )
+            )
+        )
         mock_get_client.side_effect = AsyncMock(return_value=mock_client)
 
         result = analyze_concept_drift_from_truth()
@@ -680,9 +688,9 @@ class TestConfigurationLoading:
         drift = config.get("drift_integration", {})
 
         # Config may have concept_drift at top level or nested under drift_monitor_agent
-        concept_drift = drift.get("concept_drift") or drift.get(
-            "drift_monitor_agent", {}
-        ).get("concept_drift")
+        concept_drift = drift.get("concept_drift") or drift.get("drift_monitor_agent", {}).get(
+            "concept_drift"
+        )
         assert concept_drift is not None, "concept_drift settings not found"
         assert "comparison_windows" in concept_drift
         assert "alert_thresholds" in concept_drift

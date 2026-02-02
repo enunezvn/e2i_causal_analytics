@@ -764,11 +764,14 @@ async def get_stats(
                 "p95_latency_ms": stats.get("p95_latency_ms", 0),
                 "avg_results": stats.get("avg_results", 0),
                 "error_rate": stats.get("error_rate", 0.0),
-                "backend_usage": stats.get("backend_usage", {
-                    "vector": 0,
-                    "fulltext": 0,
-                    "graph": 0,
-                }),
+                "backend_usage": stats.get(
+                    "backend_usage",
+                    {
+                        "vector": 0,
+                        "fulltext": 0,
+                        "graph": 0,
+                    },
+                ),
                 "top_queries": stats.get("top_queries", []),
             }
 

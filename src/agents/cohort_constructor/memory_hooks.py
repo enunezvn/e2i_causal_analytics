@@ -362,7 +362,8 @@ class CohortConstructorMemoryHooks:
                 "total_patients": stats.get("total_input_patients", 0),
                 "eligible_patients": stats.get("eligible_patient_count", 0),
                 "eligibility_rate": 1.0 - stats.get("exclusion_rate", 0),
-                "criteria_count": len(config.get("inclusion_criteria", [])) + len(config.get("exclusion_criteria", [])),
+                "criteria_count": len(config.get("inclusion_criteria", []))
+                + len(config.get("exclusion_criteria", [])),
                 "execution_time_ms": metadata.get("execution_time_ms", 0),
                 "status": result.get("status", "unknown"),
             }
@@ -593,7 +594,8 @@ class CohortConstructorMemoryHooks:
 
             # Filter by eligibility rate
             filtered = [
-                r for r in results
+                r
+                for r in results
                 if r.get("raw_content", {}).get("eligibility_rate", 0) >= min_eligibility_rate
                 and r.get("raw_content", {}).get("status") == "success"
             ]
@@ -723,7 +725,9 @@ async def contribute_to_memory(
             counts["semantic_stored"] = 1
 
         # 4. Store effective eligibility rules in semantic memory
-        for criterion in config.get("inclusion_criteria", []) + config.get("exclusion_criteria", []):
+        for criterion in config.get("inclusion_criteria", []) + config.get(
+            "exclusion_criteria", []
+        ):
             # Calculate effectiveness based on removal count in log
             effectiveness = 0.5  # Default moderate effectiveness
             rule_stored = await memory_hooks.store_eligibility_rule(

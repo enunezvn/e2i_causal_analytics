@@ -83,14 +83,24 @@ class SupabaseDataConnector:
                 for record in records:
                     row = {
                         "metric": metric,
-                        "value": record.get("value") if isinstance(record, dict) else getattr(record, "value", None),
-                        "target": record.get("target") if isinstance(record, dict) else getattr(record, "target", None),
-                        "date": record.get("metric_date") if isinstance(record, dict) else getattr(record, "metric_date", None),
+                        "value": record.get("value")
+                        if isinstance(record, dict)
+                        else getattr(record, "value", None),
+                        "target": record.get("target")
+                        if isinstance(record, dict)
+                        else getattr(record, "target", None),
+                        "date": record.get("metric_date")
+                        if isinstance(record, dict)
+                        else getattr(record, "metric_date", None),
                     }
 
                     # Add segment columns if available
                     for segment in segments:
-                        seg_value = record.get(segment) if isinstance(record, dict) else getattr(record, segment, None)
+                        seg_value = (
+                            record.get(segment)
+                            if isinstance(record, dict)
+                            else getattr(record, segment, None)
+                        )
                         if seg_value:
                             row[segment] = seg_value
 
@@ -175,7 +185,7 @@ class SupabaseDataConnector:
         """
         try:
             # Try to get a simple snapshot to verify connectivity
-            result = await self.repository.get_latest_snapshot("Remibrutinib")
+            await self.repository.get_latest_snapshot("Remibrutinib")
             return True  # If no exception, we're connected
         except Exception as e:
             logger.warning(f"Health check failed: {e}")

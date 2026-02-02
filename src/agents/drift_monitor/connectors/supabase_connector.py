@@ -23,7 +23,7 @@ Example:
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -64,7 +64,9 @@ class SupabaseDataConnector(BaseDataConnector):
             supabase_key: Supabase API key (defaults to env var)
         """
         self.supabase_url = supabase_url or os.getenv("SUPABASE_URL")
-        self.supabase_key = supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+        self.supabase_key = (
+            supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+        )
 
         self._client = None
         self._initialized = False
@@ -132,9 +134,14 @@ class SupabaseDataConnector(BaseDataConnector):
                 if response.data:
                     values = np.array([self._extract_value(row["value"]) for row in response.data])
                     timestamps = np.array(
-                        [datetime.fromisoformat(row["event_timestamp"].replace("Z", "+00:00")) for row in response.data]
+                        [
+                            datetime.fromisoformat(row["event_timestamp"].replace("Z", "+00:00"))
+                            for row in response.data
+                        ]
                     )
-                    entity_ids = np.array([str(row.get("entity_values", {})) for row in response.data])
+                    entity_ids = np.array(
+                        [str(row.get("entity_values", {})) for row in response.data]
+                    )
 
                     result[feature_name] = FeatureData(
                         feature_name=feature_name,
@@ -204,9 +211,17 @@ class SupabaseDataConnector(BaseDataConnector):
 
             if response.data:
                 scores = np.array([row.get("confidence_score", 0.5) for row in response.data])
-                labels = np.array([self._prediction_to_label(row.get("prediction_value")) for row in response.data])
+                labels = np.array(
+                    [
+                        self._prediction_to_label(row.get("prediction_value"))
+                        for row in response.data
+                    ]
+                )
                 timestamps = np.array(
-                    [datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")) for row in response.data]
+                    [
+                        datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+                        for row in response.data
+                    ]
                 )
                 entity_ids = np.array([row.get("entity_id", "") for row in response.data])
 
@@ -276,10 +291,20 @@ class SupabaseDataConnector(BaseDataConnector):
 
             if response.data:
                 scores = np.array([row.get("confidence_score", 0.5) for row in response.data])
-                labels = np.array([self._prediction_to_label(row.get("prediction_value")) for row in response.data])
-                actual_labels = np.array([self._prediction_to_label(row.get("actual_outcome")) for row in response.data])
+                labels = np.array(
+                    [
+                        self._prediction_to_label(row.get("prediction_value"))
+                        for row in response.data
+                    ]
+                )
+                actual_labels = np.array(
+                    [self._prediction_to_label(row.get("actual_outcome")) for row in response.data]
+                )
                 timestamps = np.array(
-                    [datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")) for row in response.data]
+                    [
+                        datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+                        for row in response.data
+                    ]
                 )
                 entity_ids = np.array([row.get("entity_id", "") for row in response.data])
 
@@ -358,7 +383,9 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
-            query = self._client.table("ml_model_registry").select("id, name, version, stage, metrics, created_at")
+            query = self._client.table("ml_model_registry").select(
+                "id, name, version, stage, metrics, created_at"
+            )
 
             if stage:
                 query = query.eq("stage", stage)

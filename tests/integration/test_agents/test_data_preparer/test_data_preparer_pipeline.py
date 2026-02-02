@@ -3,19 +3,19 @@
 Tests the full data preparation pipeline using sample data.
 """
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from src.agents.ml_foundation.data_preparer.graph import create_data_preparer_graph
-from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 from src.agents.ml_foundation.data_preparer.nodes import (
+    compute_baseline_metrics,
+    detect_leakage,
     load_data,
     run_quality_checks,
-    detect_leakage,
     transform_data,
-    compute_baseline_metrics,
 )
+from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 from src.repositories import SampleDataGenerator, get_data_splitter
 
 
@@ -152,8 +152,9 @@ class TestQualityCheckerNode:
         result = await run_quality_checks(state)
 
         # Should have blocking issues due to nulls in required column
-        assert len(result.get("blocking_issues", [])) > 0 or \
-               any("null" in str(w).lower() for w in result.get("warnings", []))
+        assert len(result.get("blocking_issues", [])) > 0 or any(
+            "null" in str(w).lower() for w in result.get("warnings", [])
+        )
 
 
 class TestLeakageDetectorNode:
@@ -191,10 +192,13 @@ class TestLeakageDetectorNode:
         splits = splitter.random_split(df)
 
         # Create contamination by making test overlap with train
-        contaminated_test = pd.concat([
-            splits.test,
-            splits.train.head(10),  # Add train samples to test
-        ], ignore_index=True)
+        contaminated_test = pd.concat(
+            [
+                splits.test,
+                splits.train.head(10),  # Add train samples to test
+            ],
+            ignore_index=True,
+        )
 
         state: DataPreparerState = {
             "experiment_id": "exp_test_123",
@@ -243,8 +247,7 @@ class TestDataTransformerNode:
 
         # Check that scaling was applied
         scaling_transformations = [
-            t for t in result["transformations_applied"]
-            if t.get("type") == "scaling"
+            t for t in result["transformations_applied"] if t.get("type") == "scaling"
         ]
         assert len(scaling_transformations) > 0
 
@@ -271,8 +274,7 @@ class TestDataTransformerNode:
 
         # Check encoding was applied
         encoding_transformations = [
-            t for t in result["transformations_applied"]
-            if t.get("type") == "encoding"
+            t for t in result["transformations_applied"] if t.get("type") == "encoding"
         ]
         assert len(encoding_transformations) > 0
 
@@ -381,9 +383,9 @@ class TestFullPipeline:
 
             # All columns should be numeric after transformation
             for col in X_train.columns:
-                assert pd.api.types.is_numeric_dtype(X_train[col]) or \
-                       X_train[col].dtype == object, \
-                       f"Column {col} has unexpected dtype {X_train[col].dtype}"
+                assert (
+                    pd.api.types.is_numeric_dtype(X_train[col]) or X_train[col].dtype == object
+                ), f"Column {col} has unexpected dtype {X_train[col].dtype}"
 
     @pytest.mark.asyncio
     async def test_pipeline_gate_decision(self, sample_scope_spec):
@@ -404,6 +406,5 @@ class TestFullPipeline:
         assert isinstance(final_state["gate_passed"], bool)
 
         # If QC passed and score >= 0.80, gate should pass
-        if final_state.get("qc_status") == "passed" and \
-           final_state.get("overall_score", 0) >= 0.80:
+        if final_state.get("qc_status") == "passed" and final_state.get("overall_score", 0) >= 0.80:
             assert final_state["gate_passed"] is True

@@ -8,32 +8,32 @@ Phase 3 - Type Safety Enhancement
 """
 
 import pytest
+
 from src.api.errors import (
-    E2IError,
-    ErrorCategory,
-    ErrorSeverity,
-    ValidationError,
-    SchemaValidationError,
-    AuthenticationError,
-    TokenExpiredError,
-    InvalidTokenError,
-    AuthorizationError,
-    NotFoundError,
-    EndpointNotFoundError,
-    RateLimitError,
+    AgentConfigurationError,
     AgentError,
     AgentTimeoutError,
-    AgentConfigurationError,
-    OrchestratorError,
-    DependencyError,
-    DatabaseError,
+    AuthenticationError,
+    AuthorizationError,
     CacheError,
+    DatabaseError,
+    DependencyError,
+    E2IError,
+    EndpointNotFoundError,
+    ErrorCategory,
+    ErrorSeverity,
     ExternalServiceError,
+    InvalidTokenError,
+    NotFoundError,
+    OrchestratorError,
+    RateLimitError,
+    SchemaValidationError,
     TimeoutError,
+    TokenExpiredError,
+    ValidationError,
     error_response,
     wrap_exception,
 )
-
 
 # =============================================================================
 # BASE E2I ERROR TESTS
@@ -509,7 +509,7 @@ class TestWrapException:
             raise ValueError("With trace")
         except ValueError as e:
             wrapped = wrap_exception(e, include_trace=True)
-            result = wrapped.to_dict(include_debug=True)
+            wrapped.to_dict(include_debug=True)
             # Trace is captured when there's an original error
             assert wrapped.original_error is not None
 
@@ -546,7 +546,9 @@ class TestErrorHierarchy:
         ]
 
         for error_class in error_classes:
-            assert issubclass(error_class, E2IError), f"{error_class.__name__} should inherit from E2IError"
+            assert issubclass(error_class, E2IError), (
+                f"{error_class.__name__} should inherit from E2IError"
+            )
 
     def test_catching_all_errors(self):
         """Test that all errors can be caught with E2IError."""

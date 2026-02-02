@@ -318,7 +318,8 @@ class TestRequestValidation:
     def test_top_k_out_of_range(self, client):
         """Test that top_k out of valid range returns validation error."""
         response = client.post(
-            "/api/v1/rag/search", json={"query": "Valid query", "top_k": 1000}  # Too high
+            "/api/v1/rag/search",
+            json={"query": "Valid query", "top_k": 1000},  # Too high
         )
 
         assert response.status_code == 422

@@ -10,7 +10,7 @@ Latency: Up to 150s
 
 import logging
 import uuid
-from typing import Any, Dict, Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from .graph import create_heterogeneous_optimizer_graph
 from .memory_hooks import (

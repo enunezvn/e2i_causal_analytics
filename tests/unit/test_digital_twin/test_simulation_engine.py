@@ -20,7 +20,6 @@ import pytest
 from pydantic import ValidationError
 
 from src.digital_twin.models.simulation_models import (
-    EffectHeterogeneity,
     InterventionConfig,
     PopulationFilter,
     SimulationRecommendation,
@@ -34,7 +33,6 @@ from src.digital_twin.models.twin_models import (
     TwinType,
 )
 from src.digital_twin.simulation_engine import SimulationEngine
-
 
 # =============================================================================
 # FIXTURES
@@ -334,7 +332,7 @@ class TestHeterogeneousEffects:
         result = engine.simulate(email_campaign_config, calculate_heterogeneity=True)
 
         assert len(result.effect_heterogeneity.by_specialty) > 0
-        for specialty, stats in result.effect_heterogeneity.by_specialty.items():
+        for _specialty, stats in result.effect_heterogeneity.by_specialty.items():
             assert "ate" in stats
             assert "n" in stats
             assert stats["n"] >= 10
@@ -713,7 +711,7 @@ class TestEffectModifierEdgeCases:
     def edge_case_population(self):
         """Create population with edge case feature values."""
         twins = []
-        for i in range(200):
+        for _i in range(200):
             twin = DigitalTwin(
                 twin_type=TwinType.HCP,
                 brand=Brand.REMIBRUTINIB,

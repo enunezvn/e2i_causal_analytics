@@ -5,7 +5,7 @@ Tests the monitoring endpoints for drift detection, alerting, model health,
 performance tracking, and retraining triggers.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,13 +13,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes.monitoring import (
-    router,
     AlertAction,
     AlertStatus,
     DriftSeverity,
     DriftType,
+    router,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -109,9 +108,7 @@ class TestTriggerDriftDetection:
         mock_task = MagicMock()
         mock_task.id = "task-abc123"
 
-        with patch(
-            "src.tasks.drift_monitoring_tasks.run_drift_detection"
-        ) as mock_run:
+        with patch("src.tasks.drift_monitoring_tasks.run_drift_detection") as mock_run:
             mock_run.delay.return_value = mock_task
 
             response = client.post(
@@ -188,9 +185,7 @@ class TestTriggerDriftDetection:
         mock_task = MagicMock()
         mock_task.id = "task-filtered"
 
-        with patch(
-            "src.tasks.drift_monitoring_tasks.run_drift_detection"
-        ) as mock_run:
+        with patch("src.tasks.drift_monitoring_tasks.run_drift_detection") as mock_run:
             mock_run.delay.return_value = mock_task
 
             response = client.post(
@@ -281,9 +276,7 @@ class TestGetLatestDriftStatus:
 
     def test_get_latest_drift_with_results(self, client, mock_drift_record):
         """Test getting latest drift status with results."""
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_latest_drift_status.return_value = [mock_drift_record]
             MockRepo.return_value = mock_repo
@@ -303,9 +296,7 @@ class TestGetLatestDriftStatus:
 
     def test_get_latest_drift_empty(self, client):
         """Test getting latest drift status when no records exist."""
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_latest_drift_status.return_value = []
             MockRepo.return_value = mock_repo
@@ -319,9 +310,7 @@ class TestGetLatestDriftStatus:
 
     def test_get_latest_drift_server_error(self, client):
         """Test server error handling."""
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_latest_drift_status.side_effect = RuntimeError("DB error")
             MockRepo.return_value = mock_repo
@@ -336,9 +325,7 @@ class TestGetDriftHistory:
 
     def test_get_drift_history_success(self, client, mock_drift_record):
         """Test getting drift history successfully."""
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_latest_drift_status.return_value = [mock_drift_record]
             MockRepo.return_value = mock_repo
@@ -356,9 +343,7 @@ class TestGetDriftHistory:
 
     def test_get_drift_history_with_feature_filter(self, client, mock_drift_record):
         """Test getting drift history filtered by feature."""
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_drift_trend.return_value = [mock_drift_record]
             MockRepo.return_value = mock_repo
@@ -384,9 +369,7 @@ class TestListAlerts:
 
     def test_list_alerts_success(self, client, mock_alert_record):
         """Test listing alerts successfully."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = [mock_alert_record]
             MockRepo.return_value = mock_repo
@@ -402,9 +385,7 @@ class TestListAlerts:
 
     def test_list_alerts_with_model_filter(self, client, mock_alert_record):
         """Test listing alerts filtered by model."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = [mock_alert_record]
             MockRepo.return_value = mock_repo
@@ -415,15 +396,11 @@ class TestListAlerts:
             )
 
         assert response.status_code == 200
-        mock_repo.get_active_alerts.assert_called_with(
-            "propensity_v2.1.0", limit=50
-        )
+        mock_repo.get_active_alerts.assert_called_with("propensity_v2.1.0", limit=50)
 
     def test_list_alerts_with_status_filter(self, client, mock_alert_record):
         """Test listing alerts filtered by status."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = [mock_alert_record]
             MockRepo.return_value = mock_repo
@@ -439,9 +416,7 @@ class TestListAlerts:
 
     def test_list_alerts_empty(self, client):
         """Test listing alerts when none exist."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = []
             MockRepo.return_value = mock_repo
@@ -460,9 +435,7 @@ class TestGetAlert:
 
     def test_get_alert_success(self, client, mock_alert_record):
         """Test getting a specific alert."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_by_id.return_value = mock_alert_record
             MockRepo.return_value = mock_repo
@@ -477,9 +450,7 @@ class TestGetAlert:
 
     def test_get_alert_not_found(self, client):
         """Test getting a non-existent alert."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_by_id.return_value = None
             MockRepo.return_value = mock_repo
@@ -499,9 +470,7 @@ class TestUpdateAlert:
         mock_alert_record.acknowledged_at = datetime.now(timezone.utc)
         mock_alert_record.acknowledged_by = "user_123"
 
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.acknowledge_alert.return_value = mock_alert_record
             MockRepo.return_value = mock_repo
@@ -525,9 +494,7 @@ class TestUpdateAlert:
         mock_alert_record.resolved_at = datetime.now(timezone.utc)
         mock_alert_record.resolved_by = "user_456"
 
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.resolve_alert.return_value = mock_alert_record
             MockRepo.return_value = mock_repo
@@ -548,9 +515,7 @@ class TestUpdateAlert:
         """Test snoozing an alert."""
         mock_alert_record.status = "acknowledged"
 
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.acknowledge_alert.return_value = mock_alert_record
             MockRepo.return_value = mock_repo
@@ -568,9 +533,7 @@ class TestUpdateAlert:
 
     def test_update_alert_not_found(self, client):
         """Test updating a non-existent alert."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringAlertRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.acknowledge_alert.return_value = None
             MockRepo.return_value = mock_repo
@@ -595,9 +558,7 @@ class TestListMonitoringRuns:
 
     def test_list_runs_success(self, client, mock_run_record):
         """Test listing monitoring runs."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringRunRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringRunRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_recent_runs.return_value = [mock_run_record]
             MockRepo.return_value = mock_repo
@@ -613,9 +574,7 @@ class TestListMonitoringRuns:
 
     def test_list_runs_with_model_filter(self, client, mock_run_record):
         """Test listing runs filtered by model."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringRunRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringRunRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_recent_runs.return_value = [mock_run_record]
             MockRepo.return_value = mock_repo
@@ -631,9 +590,7 @@ class TestListMonitoringRuns:
 
     def test_list_runs_empty(self, client):
         """Test listing runs when none exist."""
-        with patch(
-            "src.repositories.drift_monitoring.MonitoringRunRepository"
-        ) as MockRepo:
+        with patch("src.repositories.drift_monitoring.MonitoringRunRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_recent_runs.return_value = []
             MockRepo.return_value = mock_repo
@@ -659,9 +616,7 @@ class TestGetModelHealth:
         mock_drift_record.drift_score = 0.1
         mock_drift_record.severity = "low"
 
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockDriftRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockDriftRepo:
             with patch(
                 "src.repositories.drift_monitoring.MonitoringAlertRepository"
             ) as MockAlertRepo:
@@ -693,9 +648,7 @@ class TestGetModelHealth:
         mock_drift_record.drift_score = 0.5
         mock_alert_record.status = "active"
 
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockDriftRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockDriftRepo:
             with patch(
                 "src.repositories.drift_monitoring.MonitoringAlertRepository"
             ) as MockAlertRepo:
@@ -726,9 +679,7 @@ class TestGetModelHealth:
         """Test getting health of a critical model."""
         mock_drift_record.drift_score = 0.85
 
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as MockDriftRepo:
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockDriftRepo:
             with patch(
                 "src.repositories.drift_monitoring.MonitoringAlertRepository"
             ) as MockAlertRepo:
@@ -768,9 +719,7 @@ class TestRecordPerformance:
         mock_task = MagicMock()
         mock_task.id = "perf-task-123"
 
-        with patch(
-            "src.tasks.drift_monitoring_tasks.track_model_performance"
-        ) as mock_track:
+        with patch("src.tasks.drift_monitoring_tasks.track_model_performance") as mock_track:
             mock_track.delay.return_value = mock_task
 
             response = client.post(
@@ -841,12 +790,8 @@ class TestGetPerformanceTrend:
         mock_metric_record.metric_value = 0.85
         mock_metric_record.recorded_at = datetime.now(timezone.utc)
 
-        with patch(
-            "src.services.performance_tracking.get_performance_tracker"
-        ) as mock_get_tracker:
-            with patch(
-                "src.repositories.drift_monitoring.PerformanceMetricRepository"
-            ) as MockRepo:
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as MockRepo:
                 tracker = AsyncMock()
                 tracker.get_performance_trend.return_value = mock_trend
                 mock_get_tracker.return_value = tracker
@@ -885,16 +830,12 @@ class TestGetPerformanceAlerts:
             }
         ]
 
-        with patch(
-            "src.services.performance_tracking.get_performance_tracker"
-        ) as mock_get_tracker:
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
             tracker = AsyncMock()
             tracker.check_performance_alerts.return_value = mock_alerts
             mock_get_tracker.return_value = tracker
 
-            response = client.get(
-                "/monitoring/performance/propensity_v2.1.0/alerts"
-            )
+            response = client.get("/monitoring/performance/propensity_v2.1.0/alerts")
 
         assert response.status_code == 200
         data = response.json()
@@ -918,9 +859,7 @@ class TestCompareModelPerformance:
             "winner": "propensity_v2.1.0",
         }
 
-        with patch(
-            "src.services.performance_tracking.get_performance_tracker"
-        ) as mock_get_tracker:
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
             tracker = AsyncMock()
             tracker.compare_model_versions.return_value = mock_result
             mock_get_tracker.return_value = tracker
@@ -949,9 +888,7 @@ class TestProductionSweep:
         mock_task = MagicMock()
         mock_task.id = "sweep-task-123"
 
-        with patch(
-            "src.tasks.drift_monitoring_tasks.check_all_production_models"
-        ) as mock_check:
+        with patch("src.tasks.drift_monitoring_tasks.check_all_production_models") as mock_check:
             mock_check.delay.return_value = mock_task
 
             response = client.post(
@@ -992,9 +929,7 @@ class TestEvaluateRetrainingNeed:
             service.evaluate_retraining_need.return_value = mock_decision
             mock_get_service.return_value = service
 
-            response = client.post(
-                "/monitoring/retraining/evaluate/propensity_v2.1.0"
-            )
+            response = client.post("/monitoring/retraining/evaluate/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -1021,9 +956,7 @@ class TestEvaluateRetrainingNeed:
             service.evaluate_retraining_need.return_value = mock_decision
             mock_get_service.return_value = service
 
-            response = client.post(
-                "/monitoring/retraining/evaluate/propensity_v2.1.0"
-            )
+            response = client.post("/monitoring/retraining/evaluate/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()

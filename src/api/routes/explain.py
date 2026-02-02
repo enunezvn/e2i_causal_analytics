@@ -25,10 +25,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_auth
-from src.api.utils.data_masking import mask_identifier
 
 # Real implementations
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
+from src.api.utils.data_masking import mask_identifier
 from src.feature_store.feast_client import FeastClient, get_feast_client
 from src.mlops.shap_explainer_realtime import RealTimeSHAPExplainer, SHAPResult
 from src.repositories.shap_analysis import ShapAnalysisRepository, get_shap_analysis_repository
@@ -346,12 +346,18 @@ class RealTimeSHAPService:
                 # Extract prediction from BentoML response
                 prediction_proba = result.get("predictions", [[0.5]])[0]
                 if isinstance(prediction_proba, list):
-                    prediction_proba = prediction_proba[1] if len(prediction_proba) > 1 else prediction_proba[0]
+                    prediction_proba = (
+                        prediction_proba[1] if len(prediction_proba) > 1 else prediction_proba[0]
+                    )
 
                 return {
-                    "prediction_class": "high_propensity" if prediction_proba > 0.5 else "low_propensity",
+                    "prediction_class": "high_propensity"
+                    if prediction_proba > 0.5
+                    else "low_propensity",
                     "prediction_probability": float(prediction_proba),
-                    "model_version_id": result.get("_metadata", {}).get("model_name", model_version_id or "v2.3.1-prod"),
+                    "model_version_id": result.get("_metadata", {}).get(
+                        "model_name", model_version_id or "v2.3.1-prod"
+                    ),
                 }
 
             except Exception as e:
@@ -405,9 +411,7 @@ class RealTimeSHAPService:
             # Convert SHAPResult to API response format
             contributions = []
             sorted_shap = sorted(
-                shap_result.shap_values.items(),
-                key=lambda x: abs(x[1]),
-                reverse=True
+                shap_result.shap_values.items(), key=lambda x: abs(x[1]), reverse=True
             )[:top_k]
 
             for rank, (feature_name, shap_value) in enumerate(sorted_shap, 1):
@@ -433,10 +437,7 @@ class RealTimeSHAPService:
 
         except Exception as e:
             logger.error(f"SHAP computation failed: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"SHAP computation failed: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"SHAP computation failed: {str(e)}")
 
     async def generate_narrative(
         self, patient_id: str, prediction: Dict[str, Any], contributions: List[FeatureContribution]
@@ -482,9 +483,7 @@ class RealTimeSHAPService:
                 "feature_importance": [
                     {"feature": name, "importance": abs(value)}
                     for name, value in sorted(
-                        shap_values.items(),
-                        key=lambda x: abs(x[1]),
-                        reverse=True
+                        shap_values.items(), key=lambda x: abs(x[1]), reverse=True
                     )
                 ],
                 "interactions": [],  # Local explanations don't compute interactions
@@ -773,7 +772,10 @@ async def list_explainable_models() -> Dict[str, Any]:
         "supported_models": [
             {
                 "model_type": mt.value,
-                "explainer_type": "TreeExplainer" if mt in [ModelType.PROPENSITY, ModelType.RISK_STRATIFICATION, ModelType.CHURN_PREDICTION] else "KernelExplainer",
+                "explainer_type": "TreeExplainer"
+                if mt
+                in [ModelType.PROPENSITY, ModelType.RISK_STRATIFICATION, ModelType.CHURN_PREDICTION]
+                else "KernelExplainer",
                 "description": f"SHAP explanations for {mt.value.replace('_', ' ')} predictions",
             }
             for mt in ModelType

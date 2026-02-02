@@ -11,14 +11,11 @@ This module implements the 4-phase cognitive cycle:
 Version: 1.1
 """
 
-import hashlib
 import logging
 import operator
-import os
-import time
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -32,11 +29,9 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Moved to src/memory/evidence_cache.py for proper module imports
 from src.memory.evidence_cache import (
-    EvidenceEvaluationCache,
     get_evidence_cache,
     is_evidence_cache_enabled,
 )
-
 
 # ============================================================================
 # STATE DEFINITIONS
@@ -283,9 +278,9 @@ async def investigator_node(state: CognitiveState) -> CognitiveState:
 
     # Set investigation goal
     llm = get_llm_service()
-    goal_prompt = f"""Given this user query: "{state['user_query']}"
-    And detected intent: {state['detected_intent']}
-    And entities: {state['detected_entities']}
+    goal_prompt = f"""Given this user query: "{state["user_query"]}"
+    And detected intent: {state["detected_intent"]}
+    And entities: {state["detected_entities"]}
 
     What specific information do we need to find to answer this query?
     Be specific about what facts, relationships, or historical events are needed.
@@ -450,7 +445,7 @@ async def evaluate_evidence(state: CognitiveState, new_evidence: List[EvidenceIt
     Evidence collected so far:
     {evidence_summary}
 
-    Is this evidence sufficient to answer the original query: "{state['user_query']}"?
+    Is this evidence sufficient to answer the original query: "{state["user_query"]}"?
 
     Answer only: SUFFICIENT, NEED_MORE, or NO_RELEVANT_DATA"""
 
@@ -546,7 +541,7 @@ async def agent_node(state: CognitiveState) -> CognitiveState:
 
     synthesis_prompt = f"""You are synthesizing a response for the E2I Causal Analytics Dashboard.
 
-User Query: {state['user_query']}
+User Query: {state["user_query"]}
 
 Context from investigation:
 {evidence_context}
@@ -632,10 +627,10 @@ async def reflector_node(state: CognitiveState) -> CognitiveState:
     # === Selective Attention: Is this worth remembering? ===
     evaluation_prompt = f"""Evaluate this interaction for learning potential.
 
-User Query: {state['user_query']}
-Response Confidence: {state['confidence_score']:.2f}
-Evidence Items: {len(state['evidence_trail'])}
-Agents Used: {state['agents_to_invoke']}
+User Query: {state["user_query"]}
+Response Confidence: {state["confidence_score"]:.2f}
+Evidence Items: {len(state["evidence_trail"])}
+Agents Used: {state["agents_to_invoke"]}
 
 Is this interaction worth remembering? Consider:
 - Did we discover new causal relationships?
@@ -656,9 +651,9 @@ Answer: REMEMBER or SKIP, followed by a brief reason."""
     # === Extract New Facts (Triplets) ===
     fact_extraction_prompt = f"""Extract factual relationships discovered in this interaction.
 
-Query: {state['user_query']}
-Evidence: {[e.content for e in state['evidence_trail'] if e.selected]}
-Agent Outputs: {state['agent_outputs']}
+Query: {state["user_query"]}
+Evidence: {[e.content for e in state["evidence_trail"] if e.selected]}
+Agent Outputs: {state["agent_outputs"]}
 
 Format as triplets: (Subject, Predicate, Object)
 Only include NEW facts that we learned, not general knowledge.

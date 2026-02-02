@@ -17,15 +17,10 @@ Tests cover:
 
 import importlib
 import json
-import sys
-import uuid
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import yaml
 
 # Mock config BEFORE importing the module (config file may not exist locally)
 MOCK_CONFIG = {
@@ -110,18 +105,20 @@ record_learning_signal = memory_backends.record_learning_signal
 get_training_examples_for_agent = memory_backends.get_training_examples_for_agent
 get_memory_statistics = memory_backends.get_memory_statistics
 
+
 @pytest.fixture(autouse=True)
 def mock_config():
     """Mock configuration loading for all tests."""
-    module_path = "src.memory.006_memory_backends_v1_3"
     with patch.object(memory_backends, "load_config", return_value=MOCK_CONFIG):
         with patch.object(memory_backends, "CONFIG", MOCK_CONFIG):
             with patch.object(memory_backends, "ENVIRONMENT", "local_pilot"):
                 yield MOCK_CONFIG
 
+
 # =============================================================================
 # Configuration Loading Tests
 # =============================================================================
+
 
 def test_config_structure():
     """Test that config has expected structure."""
@@ -130,15 +127,18 @@ def test_config_structure():
     assert "llm" in MOCK_CONFIG
     assert "memory_backends" in MOCK_CONFIG
 
+
 def test_environment_config():
     """Test environment-specific config."""
     assert MOCK_CONFIG["environment"] == "local_pilot"
     assert "local_pilot" in MOCK_CONFIG["embeddings"]
     assert "aws_production" in MOCK_CONFIG["embeddings"]
 
+
 # =============================================================================
 # Entity Type Enum Tests
 # =============================================================================
+
 
 def test_e2i_entity_type_enum():
     """Test E2IEntityType enum values."""
@@ -151,6 +151,7 @@ def test_e2i_entity_type_enum():
     assert E2IEntityType.EXPERIMENT.value == "experiment"
     assert E2IEntityType.AGENT_ACTIVITY.value == "agent_activity"
 
+
 def test_e2i_brand_enum():
     """Test E2IBrand enum values."""
 
@@ -158,6 +159,7 @@ def test_e2i_brand_enum():
     assert E2IBrand.FABHALTA.value == "Fabhalta"
     assert E2IBrand.KISQALI.value == "Kisqali"
     assert E2IBrand.ALL.value == "all"
+
 
 def test_e2i_region_enum():
     """Test E2IRegion enum values."""
@@ -167,6 +169,7 @@ def test_e2i_region_enum():
     assert E2IRegion.MIDWEST.value == "midwest"
     assert E2IRegion.WEST.value == "west"
     assert E2IRegion.ALL.value == "all"
+
 
 def test_e2i_agent_name_enum():
     """Test E2IAgentName enum includes all agents."""
@@ -183,9 +186,11 @@ def test_e2i_agent_name_enum():
     assert E2IAgentName.FEEDBACK_LEARNER.value == "feedback_learner"
     assert E2IAgentName.EXPLAINER.value == "explainer"
 
+
 # =============================================================================
 # Data Class Tests
 # =============================================================================
+
 
 def test_e2i_entity_context_creation():
     """Test E2IEntityContext dataclass."""
@@ -199,6 +204,7 @@ def test_e2i_entity_context_creation():
     assert context.hcp["id"] == "HCP456"
     assert context.trigger is None
     assert context.causal_path is None
+
 
 def test_e2i_entity_references_creation():
     """Test E2IEntityReferences dataclass."""
@@ -216,6 +222,7 @@ def test_e2i_entity_references_creation():
     assert refs.hcp_id == "HCP456"
     assert refs.brand == "Kisqali"
     assert refs.region == "northeast"
+
 
 def test_episodic_memory_input_creation():
     """Test EpisodicMemoryInput dataclass."""
@@ -236,9 +243,11 @@ def test_episodic_memory_input_creation():
     assert memory_input.importance_score == 0.8
     assert memory_input.e2i_refs.patient_id == "PAT123"
 
+
 # =============================================================================
 # Service Factory Tests
 # =============================================================================
+
 
 def test_get_embedding_service_local_pilot():
     """Test get_embedding_service for local_pilot environment."""
@@ -250,6 +259,7 @@ def test_get_embedding_service_local_pilot():
 
         mock_openai_service.assert_called_once()
         assert service == mock_instance
+
 
 def test_get_embedding_service_aws_production():
     """Test get_embedding_service for aws_production environment."""
@@ -263,6 +273,7 @@ def test_get_embedding_service_aws_production():
             mock_bedrock_service.assert_called_once()
             assert service == mock_instance
 
+
 def test_get_llm_service_local_pilot():
     """Test get_llm_service for local_pilot environment."""
     with patch.object(memory_backends, "AnthropicLLMService") as mock_anthropic_service:
@@ -274,6 +285,7 @@ def test_get_llm_service_local_pilot():
         mock_anthropic_service.assert_called_once()
         assert service == mock_instance
 
+
 def test_get_redis_client():
     """Test get_redis_client."""
     with patch.dict("os.environ", {"REDIS_URL": "redis://test:6382"}):
@@ -283,10 +295,9 @@ def test_get_redis_client():
 
             client = get_redis_client()
 
-            mock_from_url.assert_called_once_with(
-                "redis://test:6382", decode_responses=True
-            )
+            mock_from_url.assert_called_once_with("redis://test:6382", decode_responses=True)
             assert client == mock_client
+
 
 def test_get_supabase_client():
     """Test get_supabase_client."""
@@ -300,12 +311,14 @@ def test_get_supabase_client():
             mock_create_client.assert_called_once_with("http://test", "test-key")
             assert client == mock_client
 
+
 def test_get_supabase_client_missing_env_vars():
     """Test get_supabase_client raises when env vars missing."""
 
     with patch.dict("os.environ", {}, clear=True):
         with pytest.raises(ValueError, match="SUPABASE_URL and SUPABASE_ANON_KEY must be set"):
             get_supabase_client()
+
 
 def test_get_falkordb_client():
     """Test get_falkordb_client."""
@@ -319,9 +332,11 @@ def test_get_falkordb_client():
             mock_falkordb.assert_called_once_with(host="test-host", port=6381)
             assert client == mock_client
 
+
 # =============================================================================
 # OpenAIEmbeddingService Tests
 # =============================================================================
+
 
 def test_openai_embedding_service_init():
     """Test OpenAIEmbeddingService initialization."""
@@ -334,6 +349,7 @@ def test_openai_embedding_service_init():
         assert service.client == mock_client
         assert service.model == "text-embedding-3-small"
         assert service._cache == {}
+
 
 @pytest.mark.asyncio
 async def test_openai_embedding_service_embed():
@@ -352,6 +368,7 @@ async def test_openai_embedding_service_embed():
         mock_client.embeddings.create.assert_called_once_with(
             model="text-embedding-3-small", input="test text"
         )
+
 
 @pytest.mark.asyncio
 async def test_openai_embedding_service_embed_caching():
@@ -374,6 +391,7 @@ async def test_openai_embedding_service_embed_caching():
         # Should only call API once due to caching
         assert mock_client.embeddings.create.call_count == 1
 
+
 @pytest.mark.asyncio
 async def test_openai_embedding_service_embed_batch():
     """Test OpenAIEmbeddingService.embed_batch()."""
@@ -392,9 +410,11 @@ async def test_openai_embedding_service_embed_batch():
 
         assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
 
+
 # =============================================================================
 # RedisWorkingMemory Tests
 # =============================================================================
+
 
 @pytest.fixture
 def mock_redis_client():
@@ -410,6 +430,7 @@ def mock_redis_client():
     mock.delete = AsyncMock()
     return mock
 
+
 @pytest.mark.asyncio
 async def test_redis_working_memory_create_session(mock_redis_client):
     """Test RedisWorkingMemory.create_session()."""
@@ -424,6 +445,7 @@ async def test_redis_working_memory_create_session(mock_redis_client):
         mock_redis_client.hset.assert_called_once()
         mock_redis_client.expire.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_redis_working_memory_create_session_with_id(mock_redis_client):
     """Test RedisWorkingMemory.create_session() with provided session_id."""
@@ -433,6 +455,7 @@ async def test_redis_working_memory_create_session_with_id(mock_redis_client):
         session_id = await memory.create_session(session_id=custom_id)
 
         assert session_id == custom_id
+
 
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_session():
@@ -458,6 +481,7 @@ async def test_redis_working_memory_get_session():
         assert session["user_preferences"] == {"theme": "dark"}
         assert session["active_filters"] == {"region": "northeast"}
 
+
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_session_not_found():
     """Test RedisWorkingMemory.get_session() when session not found."""
@@ -470,6 +494,7 @@ async def test_redis_working_memory_get_session_not_found():
 
         assert session is None
 
+
 @pytest.mark.asyncio
 async def test_redis_working_memory_update_session(mock_redis_client):
     """Test RedisWorkingMemory.update_session()."""
@@ -479,6 +504,7 @@ async def test_redis_working_memory_update_session(mock_redis_client):
 
         mock_redis_client.hset.assert_called_once()
         mock_redis_client.expire.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_redis_working_memory_set_e2i_context(mock_redis_client):
@@ -497,6 +523,7 @@ async def test_redis_working_memory_set_e2i_context(mock_redis_client):
         call_args = mock_redis_client.hset.call_args[1]["mapping"]
         assert call_args["active_brand"] == "Fabhalta"
         assert call_args["active_region"] == "south"
+
 
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_e2i_context():
@@ -520,6 +547,7 @@ async def test_redis_working_memory_get_e2i_context():
         assert context["patient_ids"] == ["PAT1", "PAT2"]
         assert context["hcp_ids"] == ["HCP1"]
 
+
 @pytest.mark.asyncio
 async def test_redis_working_memory_add_message(mock_redis_client):
     """Test RedisWorkingMemory.add_message()."""
@@ -533,13 +561,28 @@ async def test_redis_working_memory_add_message(mock_redis_client):
         mock_redis_client.ltrim.assert_called_once()
         mock_redis_client.hincrby.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_redis_working_memory_get_messages():
     """Test RedisWorkingMemory.get_messages()."""
     mock_redis_client = AsyncMock()
     mock_messages = [
-        json.dumps({"role": "user", "content": "Hello", "timestamp": datetime.now(timezone.utc).isoformat(), "metadata": "{}"}),
-        json.dumps({"role": "assistant", "content": "Hi", "timestamp": datetime.now(timezone.utc).isoformat(), "metadata": "{}"}),
+        json.dumps(
+            {
+                "role": "user",
+                "content": "Hello",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "metadata": "{}",
+            }
+        ),
+        json.dumps(
+            {
+                "role": "assistant",
+                "content": "Hi",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "metadata": "{}",
+            }
+        ),
     ]
     mock_redis_client.lrange = AsyncMock(return_value=mock_messages)
 
@@ -550,6 +593,7 @@ async def test_redis_working_memory_get_messages():
         assert len(messages) == 2
         assert messages[0]["role"] == "user"
         assert messages[1]["role"] == "assistant"
+
 
 @pytest.mark.asyncio
 async def test_redis_working_memory_evidence_trail(mock_redis_client):
@@ -573,9 +617,11 @@ async def test_redis_working_memory_evidence_trail(mock_redis_client):
         await memory.clear_evidence("sess123")
         mock_redis_client.delete.assert_called_once()
 
+
 # =============================================================================
 # Episodic Memory Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_search_episodic_memory():
@@ -601,6 +647,7 @@ async def test_search_episodic_memory():
         assert memories[0]["memory_id"] == "mem123"
         mock_client.rpc.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_search_episodic_by_e2i_entity():
     """Test search_episodic_by_e2i_entity function."""
@@ -609,9 +656,7 @@ async def test_search_episodic_by_e2i_entity():
     mock_result = MagicMock()
     mock_result.data = [{"memory_id": "mem123", "description": "Patient memory"}]
 
-    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = (
-        mock_result
-    )
+    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_result
     mock_client.table.return_value = mock_table
 
     with patch.object(memory_backends, "get_supabase_client", return_value=mock_client):
@@ -623,6 +668,7 @@ async def test_search_episodic_by_e2i_entity():
 
         assert len(memories) == 1
         assert memories[0]["memory_id"] == "mem123"
+
 
 @pytest.mark.asyncio
 async def test_insert_episodic_memory():
@@ -649,6 +695,7 @@ async def test_insert_episodic_memory():
             assert isinstance(memory_id, str)
             mock_table.insert.assert_called_once()
             mock_stats.assert_called_once_with("episodic", "user_query")
+
 
 @pytest.mark.asyncio
 async def test_get_memory_entity_context():
@@ -679,6 +726,7 @@ async def test_get_memory_entity_context():
         assert context.hcp is not None
         assert context.hcp["id"] == "HCP456"
 
+
 @pytest.mark.asyncio
 async def test_get_enriched_episodic_memory():
     """Test get_enriched_episodic_memory function."""
@@ -694,9 +742,7 @@ async def test_get_enriched_episodic_memory():
         "agent_name": "causal_impact",
         "importance_score": 0.8,
     }
-    mock_client.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = (
-        mock_result
-    )
+    mock_client.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_result
 
     with patch.object(memory_backends, "get_supabase_client", return_value=mock_client):
         with patch.object(memory_backends, "get_memory_entity_context") as mock_context:
@@ -710,6 +756,7 @@ async def test_get_enriched_episodic_memory():
             assert enriched.memory_id == "mem123"
             assert enriched.event_type == "user_query"
             assert enriched.patient_context is not None
+
 
 @pytest.mark.asyncio
 async def test_bulk_insert_episodic_memories():
@@ -730,9 +777,11 @@ async def test_bulk_insert_episodic_memories():
         assert len(memory_ids) == 2
         mock_table.insert.assert_called_once()
 
+
 # =============================================================================
 # FalkorDBSemanticMemory Tests
 # =============================================================================
+
 
 def test_falkordb_semantic_memory_init():
     """Test FalkorDBSemanticMemory initialization."""
@@ -743,6 +792,7 @@ def test_falkordb_semantic_memory_init():
 
         assert memory._client is None
         assert memory._graph is None
+
 
 def test_falkordb_add_e2i_entity():
     """Test FalkorDBSemanticMemory.add_e2i_entity()."""
@@ -761,6 +811,7 @@ def test_falkordb_add_e2i_entity():
 
         assert result is True
         mock_graph.query.assert_called_once()
+
 
 def test_falkordb_add_e2i_relationship():
     """Test FalkorDBSemanticMemory.add_e2i_relationship()."""
@@ -784,6 +835,7 @@ def test_falkordb_add_e2i_relationship():
         # Should call query twice (once for each entity, once for relationship)
         assert mock_graph.query.call_count >= 1
 
+
 def test_falkordb_get_patient_network():
     """Test FalkorDBSemanticMemory.get_patient_network()."""
     mock_client = MagicMock()
@@ -802,6 +854,7 @@ def test_falkordb_get_patient_network():
         assert "hcps" in network
         assert "treatments" in network
 
+
 def test_falkordb_traverse_causal_chain():
     """Test FalkorDBSemanticMemory.traverse_causal_chain()."""
     mock_client = MagicMock()
@@ -817,9 +870,11 @@ def test_falkordb_traverse_causal_chain():
 
         assert isinstance(chains, list)
 
+
 # =============================================================================
 # GraphityExtractor Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_graphity_extractor_extract_and_store():
@@ -844,9 +899,11 @@ async def test_graphity_extractor_extract_and_store():
             assert result["entities_extracted"] >= 0
             assert result["relationships_extracted"] >= 0
 
+
 # =============================================================================
 # Procedural Memory Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_find_relevant_procedures():
@@ -873,6 +930,7 @@ async def test_find_relevant_procedures():
         assert len(procedures) == 1
         assert procedures[0]["procedure_id"] == "proc123"
 
+
 @pytest.mark.asyncio
 async def test_insert_procedural_memory():
     """Test insert_procedural_memory function."""
@@ -883,7 +941,7 @@ async def test_insert_procedural_memory():
 
     with patch.object(memory_backends, "get_supabase_client", return_value=mock_client):
         with patch.object(memory_backends, "find_relevant_procedures", return_value=[]):
-            with patch.object(memory_backends, "_increment_memory_stats") as mock_stats:
+            with patch.object(memory_backends, "_increment_memory_stats"):
                 procedure = ProceduralMemoryInput(
                     procedure_name="test_procedure",
                     tool_sequence=[{"tool": "causal_impact", "params": {}}],
@@ -897,9 +955,11 @@ async def test_insert_procedural_memory():
                 assert isinstance(procedure_id, str)
                 mock_table.insert.assert_called_once()
 
+
 # =============================================================================
 # Learning Signals Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_record_learning_signal():
@@ -921,6 +981,7 @@ async def test_record_learning_signal():
 
         mock_table.insert.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_get_training_examples_for_agent():
     """Test get_training_examples_for_agent function."""
@@ -934,9 +995,7 @@ async def test_get_training_examples_for_agent():
         }
     ]
     # The query chain is: table -> select -> eq -> eq -> gte -> order -> limit -> eq (brand) -> execute
-    mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.order.return_value.limit.return_value.eq.return_value.execute.return_value = (
-        mock_result
-    )
+    mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.order.return_value.limit.return_value.eq.return_value.execute.return_value = mock_result
 
     with patch.object(memory_backends, "get_supabase_client", return_value=mock_client):
         examples = await get_training_examples_for_agent(
@@ -946,9 +1005,11 @@ async def test_get_training_examples_for_agent():
         assert len(examples) == 1
         assert examples[0]["rated_agent"] == "causal_impact"
 
+
 # =============================================================================
 # Memory Statistics Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_get_memory_statistics():
@@ -969,9 +1030,7 @@ async def test_get_memory_statistics():
             "count": 5,
         },
     ]
-    mock_client.table.return_value.select.return_value.gte.return_value.order.return_value.execute.return_value = (
-        mock_result
-    )
+    mock_client.table.return_value.select.return_value.gte.return_value.order.return_value.execute.return_value = mock_result
 
     with patch.object(memory_backends, "get_supabase_client", return_value=mock_client):
         stats = await get_memory_statistics(days_back=30)
@@ -980,9 +1039,11 @@ async def test_get_memory_statistics():
         assert "episodic" in stats["totals_by_type"]
         assert stats["totals_by_type"]["episodic"] == 10
 
+
 # =============================================================================
 # Integration Tests
 # =============================================================================
+
 
 def test_get_working_memory_singleton():
     """Test get_working_memory singleton pattern."""
@@ -994,6 +1055,7 @@ def test_get_working_memory_singleton():
 
         # Should return the same instance
         assert memory1 is memory2
+
 
 def test_get_semantic_memory_singleton():
     """Test get_semantic_memory singleton pattern."""

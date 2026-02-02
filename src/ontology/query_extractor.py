@@ -21,12 +21,13 @@ Usage:
     agent = route_to_agent(result.entities)
 """
 
-import yaml
-import re
-from typing import List, Dict, Optional, Tuple, Any
-from dataclasses import dataclass, field
-from enum import Enum
 import logging
+import re
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,14 +35,16 @@ logger = logging.getLogger(__name__)
 
 class ExtractionContext(Enum):
     """Where extraction is used"""
-    QUERY_ROUTING = "query_routing"      # Route query to correct agent
+
+    QUERY_ROUTING = "query_routing"  # Route query to correct agent
     FILTER_CONSTRUCTION = "filter_construction"  # Build SQL WHERE clauses
-    VALIDATION = "validation"            # Validate user input
+    VALIDATION = "validation"  # Validate user input
 
 
 @dataclass
 class Entity:
     """Extracted entity for query routing"""
+
     text: str
     entity_type: str
     confidence: float
@@ -52,6 +55,7 @@ class Entity:
 @dataclass
 class QueryExtractionResult:
     """Result of query-time extraction"""
+
     entities: List[Entity]
     brand_filter: Optional[str] = None
     region_filter: Optional[str] = None
@@ -64,11 +68,11 @@ class QueryExtractionResult:
         filters = {}
 
         if self.brand_filter:
-            filters['brand'] = self.brand_filter
+            filters["brand"] = self.brand_filter
         if self.region_filter:
-            filters['region'] = self.region_filter
+            filters["region"] = self.region_filter
         if self.kpi_filter:
-            filters['kpi'] = self.kpi_filter
+            filters["kpi"] = self.kpi_filter
 
         return filters
 
@@ -96,7 +100,7 @@ class E2IQueryExtractor:
         Args:
             vocab_path: Path to domain_vocabulary.yaml
         """
-        with open(vocab_path, 'r') as f:
+        with open(vocab_path, "r") as f:
             self.vocab = yaml.safe_load(f)
 
         logger.info(f"Loaded vocabulary with {len(self.vocab)} categories")
@@ -115,6 +119,7 @@ class E2IQueryExtractor:
             QueryExtractionResult with entities and routing hints
         """
         import time
+
         start = time.time()
 
         entities = []
@@ -147,7 +152,7 @@ class E2IQueryExtractor:
             region_filter=region_entity.text if region_entity else None,
             kpi_filter=kpi_entities[0].text if kpi_entities else None,
             suggested_agent=suggested_agent,
-            suggested_tier=suggested_tier
+            suggested_tier=suggested_tier,
         )
 
         elapsed_ms = (time.time() - start) * 1000
@@ -160,29 +165,29 @@ class E2IQueryExtractor:
         query_lower = query.lower()
 
         # Check main brand names
-        for brand in self.vocab.get('brands', {}).get('values', []):
+        for brand in self.vocab.get("brands", {}).get("values", []):
             if brand.lower() in query_lower:
                 return Entity(
                     text=brand,
-                    entity_type='brand',
+                    entity_type="brand",
                     confidence=1.0,
                     vocabulary_match=True,
-                    routing_hint='brand_specific_analysis'
+                    routing_hint="brand_specific_analysis",
                 )
 
         # Check aliases
-        for canonical, aliases in self.vocab.get('aliases', {}).items():
+        for canonical, aliases in self.vocab.get("aliases", {}).items():
             if isinstance(aliases, list):
                 for alias in aliases:
                     if alias.lower() in query_lower:
                         # Determine if this is a brand
-                        if canonical in self.vocab.get('brands', {}).get('values', []):
+                        if canonical in self.vocab.get("brands", {}).get("values", []):
                             return Entity(
                                 text=canonical,  # Use canonical form
-                                entity_type='brand',
+                                entity_type="brand",
                                 confidence=0.95,
                                 vocabulary_match=True,
-                                routing_hint='brand_specific_analysis'
+                                routing_hint="brand_specific_analysis",
                             )
 
         return None
@@ -191,14 +196,14 @@ class E2IQueryExtractor:
         """Extract US region"""
         query_lower = query.lower()
 
-        for region in self.vocab.get('regions', {}).get('values', []):
+        for region in self.vocab.get("regions", {}).get("values", []):
             if region.lower() in query_lower:
                 return Entity(
                     text=region,
-                    entity_type='region',
+                    entity_type="region",
                     confidence=1.0,
                     vocabulary_match=True,
-                    routing_hint='regional_analysis'
+                    routing_hint="regional_analysis",
                 )
 
         return None
@@ -209,50 +214,56 @@ class E2IQueryExtractor:
         query_lower = query.lower()
 
         # Check KPI vocabulary
-        for kpi_name, kpi_data in self.vocab.get('kpis', {}).items():
+        for kpi_name, kpi_data in self.vocab.get("kpis", {}).items():
             if isinstance(kpi_data, dict):
                 # Check display name
-                display_name = kpi_data.get('display_name', kpi_name)
+                display_name = kpi_data.get("display_name", kpi_name)
                 if display_name.lower() in query_lower:
-                    entities.append(Entity(
-                        text=display_name,
-                        entity_type='kpi',
-                        confidence=1.0,
-                        vocabulary_match=True,
-                        routing_hint='kpi_analysis'
-                    ))
+                    entities.append(
+                        Entity(
+                            text=display_name,
+                            entity_type="kpi",
+                            confidence=1.0,
+                            vocabulary_match=True,
+                            routing_hint="kpi_analysis",
+                        )
+                    )
                     continue
 
                 # Check aliases
-                aliases = kpi_data.get('aliases', [])
+                aliases = kpi_data.get("aliases", [])
                 for alias in aliases:
                     if alias.lower() in query_lower:
-                        entities.append(Entity(
-                            text=display_name,  # Use display name, not alias
-                            entity_type='kpi',
-                            confidence=0.95,
-                            vocabulary_match=True,
-                            routing_hint='kpi_analysis'
-                        ))
+                        entities.append(
+                            Entity(
+                                text=display_name,  # Use display name, not alias
+                                entity_type="kpi",
+                                confidence=0.95,
+                                vocabulary_match=True,
+                                routing_hint="kpi_analysis",
+                            )
+                        )
                         break
 
         # Detect common KPI patterns
         kpi_patterns = {
-            r'adoption\s+rate': 'adoption_rate',
-            r'market\s+share': 'market_share',
-            r'patient\s+count': 'patient_count',
-            r'prescription\s+volume': 'prescription_volume'
+            r"adoption\s+rate": "adoption_rate",
+            r"market\s+share": "market_share",
+            r"patient\s+count": "patient_count",
+            r"prescription\s+volume": "prescription_volume",
         }
 
         for pattern, kpi_type in kpi_patterns.items():
             if re.search(pattern, query_lower):
-                entities.append(Entity(
-                    text=kpi_type.replace('_', ' ').title(),
-                    entity_type='kpi',
-                    confidence=0.8,
-                    vocabulary_match=False,  # Inferred from pattern
-                    routing_hint='kpi_analysis'
-                ))
+                entities.append(
+                    Entity(
+                        text=kpi_type.replace("_", " ").title(),
+                        entity_type="kpi",
+                        confidence=0.8,
+                        vocabulary_match=False,  # Inferred from pattern
+                        routing_hint="kpi_analysis",
+                    )
+                )
 
         return entities
 
@@ -261,25 +272,25 @@ class E2IQueryExtractor:
         entities = []
 
         # ICD-10 pattern: Letter followed by 2 digits, optional decimal and more digits
-        icd10_pattern = self.vocab.get('diagnosis_codes', {}).get('pattern', '')
+        icd10_pattern = self.vocab.get("diagnosis_codes", {}).get("pattern", "")
 
         if icd10_pattern:
             matches = re.findall(icd10_pattern, query)
             for match in matches:
-                entities.append(Entity(
-                    text=match,
-                    entity_type='diagnosis_code',
-                    confidence=1.0,
-                    vocabulary_match=True,
-                    routing_hint='clinical_analysis'
-                ))
+                entities.append(
+                    Entity(
+                        text=match,
+                        entity_type="diagnosis_code",
+                        confidence=1.0,
+                        vocabulary_match=True,
+                        routing_hint="clinical_analysis",
+                    )
+                )
 
         return entities
 
     def _determine_routing(
-        self,
-        entities: List[Entity],
-        query: str
+        self, entities: List[Entity], query: str
     ) -> Tuple[Optional[str], Optional[int]]:
         """
         Determine which agent and tier to route query to
@@ -290,32 +301,33 @@ class E2IQueryExtractor:
         query_lower = query.lower()
 
         # Tier 0: ML Foundation
-        if any(term in query_lower for term in ['drift', 'model', 'training', 'feature']):
-            return ('drift_monitor', 0)
+        if any(term in query_lower for term in ["drift", "model", "training", "feature"]):
+            return ("drift_monitor", 0)
 
         # Tier 1: Causal Inference
-        if any(term in query_lower for term in ['causal', 'cause', 'effect', 'impact']):
-            return ('causal_impact', 1)
+        if any(term in query_lower for term in ["causal", "cause", "effect", "impact"]):
+            return ("causal_impact", 1)
 
         # Tier 2: Prediction
-        if any(term in query_lower for term in ['predict', 'forecast', 'future', 'trend']):
-            return ('prediction_synthesizer', 2)
+        if any(term in query_lower for term in ["predict", "forecast", "future", "trend"]):
+            return ("prediction_synthesizer", 2)
 
         # Tier 3: Monitoring
-        if any(term in query_lower for term in ['monitor', 'track', 'alert']):
-            return ('drift_monitor', 3)
+        if any(term in query_lower for term in ["monitor", "track", "alert"]):
+            return ("drift_monitor", 3)
 
         # Tier 4: Explanation
-        if any(term in query_lower for term in ['explain', 'why', 'how', 'interpret']):
-            return ('explainer', 5)
+        if any(term in query_lower for term in ["explain", "why", "how", "interpret"]):
+            return ("explainer", 5)
 
         # Default: Orchestrator
-        return ('orchestrator', None)
+        return ("orchestrator", None)
 
 
 # ============================================
 # VOCABULARY-GRAPHITI BRIDGE
 # ============================================
+
 
 class VocabularyEnrichedGraphiti:
     """
@@ -337,11 +349,7 @@ class VocabularyEnrichedGraphiti:
         self.extractor = query_extractor
 
     async def add_episode_with_vocab_hints(
-        self,
-        content: str,
-        name: str,
-        source_description: str,
-        group_id: Optional[str] = None
+        self, content: str, name: str, source_description: str, group_id: Optional[str] = None
     ):
         """
         Add episode to Graphiti with vocabulary entity hints
@@ -361,16 +369,12 @@ class VocabularyEnrichedGraphiti:
         enriched_content = self._annotate_content(content, extraction.entities)
 
         # Step 3: Build metadata with vocabulary entities
-        metadata = {
-            'vocabulary_entities': [
-                {
-                    'text': e.text,
-                    'type': e.entity_type,
-                    'vocabulary_match': e.vocabulary_match
-                }
+        {
+            "vocabulary_entities": [
+                {"text": e.text, "type": e.entity_type, "vocabulary_match": e.vocabulary_match}
                 for e in extraction.entities
             ],
-            'source_agent': self._infer_source_agent(source_description)
+            "source_agent": self._infer_source_agent(source_description),
         }
 
         # Step 4: Send to Graphiti
@@ -410,35 +414,35 @@ class VocabularyEnrichedGraphiti:
         """Infer which E2I agent produced this content"""
         source_lower = source_description.lower()
 
-        if 'causal' in source_lower:
-            return 'causal_impact'
-        elif 'predict' in source_lower:
-            return 'prediction_synthesizer'
-        elif 'explain' in source_lower:
-            return 'explainer'
-        elif 'drift' in source_lower:
-            return 'drift_monitor'
+        if "causal" in source_lower:
+            return "causal_impact"
+        elif "predict" in source_lower:
+            return "prediction_synthesizer"
+        elif "explain" in source_lower:
+            return "explainer"
+        elif "drift" in source_lower:
+            return "drift_monitor"
         else:
-            return 'unknown'
+            return "unknown"
 
 
 # ============================================
 # EXAMPLE USAGE
 # ============================================
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     """
     Example usage demonstrating query-time extraction
     """
 
     # Initialize query extractor
-    extractor = E2IQueryExtractor('config/domain_vocabulary.yaml')
+    extractor = E2IQueryExtractor("config/domain_vocabulary.yaml")
 
     # Test query 1: Brand + Region
     query1 = "What's the efficacy of remi in the northeast?"
     result1 = extractor.extract_for_routing(query1)
 
-    print("="*60)
+    print("=" * 60)
     print(f"Query: {query1}")
     print(f"Entities: {len(result1.entities)}")
     for entity in result1.entities:
@@ -450,7 +454,7 @@ if __name__ == '__main__':
     query2 = "Show me the adoption rate trend for Remibrutinib"
     result2 = extractor.extract_for_routing(query2)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print(f"Query: {query2}")
     print(f"Entities: {len(result2.entities)}")
     for entity in result2.entities:
@@ -461,7 +465,7 @@ if __name__ == '__main__':
     query3 = "What caused the increase in CSU diagnoses?"
     result3 = extractor.extract_for_routing(query3)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print(f"Query: {query3}")
     print(f"Entities: {len(result3.entities)}")
     for entity in result3.entities:
@@ -470,14 +474,14 @@ if __name__ == '__main__':
     print(f"Suggested tier: {result3.suggested_tier}")
 
     # Example: Vocabulary-Graphiti Bridge
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("VOCABULARY-GRAPHITI BRIDGE EXAMPLE")
-    print("="*60)
+    print("=" * 60)
 
     # Simulated Graphiti client (would be real in production)
     class MockGraphiti:
         async def add_episode(self, **kwargs):
-            print(f"\nEpisode added to Graphiti:")
+            print("\nEpisode added to Graphiti:")
             print(f"  Name: {kwargs['name']}")
             print(f"  Content: {kwargs['content'][:100]}...")
             print(f"  Source: {kwargs['source_description']}")
@@ -493,7 +497,7 @@ if __name__ == '__main__':
             content="Analysis shows Remibrutinib adoption increased 40% in northeast among oncologists",
             name="causal_impact_001",
             source_description="Causal Impact Agent - Treatment Adoption Analysis",
-            group_id="remibrutinib_csu"
+            group_id="remibrutinib_csu",
         )
 
     asyncio.run(demo_bridge())

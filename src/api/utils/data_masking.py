@@ -21,7 +21,6 @@ Usage:
 import re
 from typing import Any, Dict, List, Optional, Union
 
-
 # Default PII fields to mask in responses
 DEFAULT_PII_FIELDS = frozenset(["patient_id", "hcp_id"])
 
@@ -65,7 +64,7 @@ def mask_identifier(value: str, preserve_end: int = 4) -> str:
 
     if prefix_match:
         prefix = prefix_match.group(1) + "-"
-        rest = value[len(prefix):]
+        rest = value[len(prefix) :]
 
         # Preserve last N characters of the rest
         if len(rest) <= preserve_end:
@@ -81,7 +80,7 @@ def mask_identifier(value: str, preserve_end: int = 4) -> str:
         if masked_len <= 0:
             # Just mask middle char
             mid = len(value) // 2
-            return value[:mid] + MASK_CHAR + value[mid + 1:]
+            return value[:mid] + MASK_CHAR + value[mid + 1 :]
         return value[:MIN_PRESERVE_START] + MASK_CHAR * masked_len + value[-preserve_end:]
 
 

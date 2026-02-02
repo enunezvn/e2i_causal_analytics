@@ -17,13 +17,12 @@ import pytest
 
 from src.services.performance_tracking import (
     PerformanceSnapshot,
-    PerformanceTrend,
     PerformanceTracker,
     PerformanceTrackingConfig,
+    PerformanceTrend,
     get_performance_tracker,
     record_model_performance,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -236,7 +235,9 @@ class TestPerformanceTracker:
         assert 0 <= metrics["accuracy"] <= 1
         assert 0 <= metrics["precision"] <= 1
 
-    def test_calculate_metrics_without_scores(self, performance_tracker: PerformanceTracker, sample_predictions):
+    def test_calculate_metrics_without_scores(
+        self, performance_tracker: PerformanceTracker, sample_predictions
+    ):
         """Test metric calculation without probability scores."""
         metrics = performance_tracker._calculate_metrics(
             predictions=sample_predictions["predictions"],
@@ -248,9 +249,13 @@ class TestPerformanceTracker:
         assert "auc_roc" not in metrics or metrics.get("auc_roc", 0) == 0
 
     @pytest.mark.asyncio
-    async def test_record_performance(self, performance_tracker: PerformanceTracker, sample_predictions):
+    async def test_record_performance(
+        self, performance_tracker: PerformanceTracker, sample_predictions
+    ):
         """Test recording performance snapshot."""
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.record_metrics = AsyncMock()
             mock_repo_class.return_value = mock_repo
@@ -281,7 +286,9 @@ class TestPerformanceTracker:
             "low_value": np.array([False if i < 100 else True for i in range(200)]),
         }
 
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.record_metrics = AsyncMock()
             mock_repo_class.return_value = mock_repo
@@ -309,7 +316,9 @@ class TestPerformanceTracker:
             MagicMock(metric_value=0.78),
         ]
 
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.get_metric_trend = AsyncMock(return_value=mock_records)
             mock_repo_class.return_value = mock_repo
@@ -326,7 +335,9 @@ class TestPerformanceTracker:
     @pytest.mark.asyncio
     async def test_get_performance_trend_no_data(self, performance_tracker: PerformanceTracker):
         """Test getting performance trend with no historical data."""
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.get_metric_trend = AsyncMock(return_value=[])
             mock_repo_class.return_value = mock_repo
@@ -350,14 +361,14 @@ class TestPerformanceTracker:
             MagicMock(metric_value=0.84),
         ]
 
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.get_metric_trend = AsyncMock(return_value=mock_records_degraded)
             mock_repo_class.return_value = mock_repo
 
-            alerts = await performance_tracker.check_performance_alerts(
-                model_version="test_v1.0"
-            )
+            alerts = await performance_tracker.check_performance_alerts(model_version="test_v1.0")
 
             # Should have alerts for degraded metrics
             assert isinstance(alerts, list)
@@ -382,7 +393,9 @@ class TestPerformanceTracker:
                 return mock_records_a
             return mock_records_b
 
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.get_metric_trend = mock_get_trend
             mock_repo_class.return_value = mock_repo
@@ -490,7 +503,9 @@ class TestEdgeCases:
         assert metrics["accuracy"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_record_performance_with_window_times(self, performance_tracker: PerformanceTracker):
+    async def test_record_performance_with_window_times(
+        self, performance_tracker: PerformanceTracker
+    ):
         """Test recording performance with explicit window times."""
         window_start = datetime.now(timezone.utc) - timedelta(hours=6)
         window_end = datetime.now(timezone.utc)
@@ -498,7 +513,9 @@ class TestEdgeCases:
         predictions = np.array([1, 0, 1, 1, 0])
         actuals = np.array([1, 0, 1, 0, 0])
 
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.record_metrics = AsyncMock()
             mock_repo_class.return_value = mock_repo
@@ -532,13 +549,17 @@ class TestPerformanceTrackingWorkflow:
         actuals = np.random.randint(0, 2, 200)
         scores = np.random.random(200)
 
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.record_metrics = AsyncMock()
-            mock_repo.get_metric_trend = AsyncMock(return_value=[
-                MagicMock(metric_value=0.85),
-                MagicMock(metric_value=0.84),
-            ])
+            mock_repo.get_metric_trend = AsyncMock(
+                return_value=[
+                    MagicMock(metric_value=0.85),
+                    MagicMock(metric_value=0.84),
+                ]
+            )
             mock_repo_class.return_value = mock_repo
 
             # Step 1: Record performance
@@ -578,7 +599,9 @@ class TestPerformanceTrackingWorkflow:
                 return [MagicMock(metric_value=0.75)]
             return [MagicMock(metric_value=0.82)]  # Second model check
 
-        with patch("src.repositories.drift_monitoring.PerformanceMetricRepository") as mock_repo_class:
+        with patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository"
+        ) as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo.get_metric_trend = mock_get_trend
             mock_repo_class.return_value = mock_repo

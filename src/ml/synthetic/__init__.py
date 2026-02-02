@@ -12,11 +12,11 @@ Key Features:
 """
 
 from .config import (
-    SyntheticDataConfig,
-    DGPConfig,
-    SplitBoundaries,
     BRANDS,
     DGP_TYPES,
+    DGPConfig,
+    SplitBoundaries,
+    SyntheticDataConfig,
 )
 
 __all__ = [

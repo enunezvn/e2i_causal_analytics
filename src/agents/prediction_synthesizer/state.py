@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
-from typing_extensions import NotRequired
 from uuid import UUID
+
+from typing_extensions import NotRequired
 
 
 class ModelPrediction(TypedDict):
@@ -74,7 +75,9 @@ class PredictionSynthesizerState(TypedDict):
     prediction_context: NotRequired[Optional[PredictionContext]]
 
     # === INTERPRETATION (P2 enhancement) ===
-    prediction_interpretation: NotRequired[Optional[Dict[str, Any]]]  # Risk assessment, anomalies, recommendations
+    prediction_interpretation: NotRequired[
+        Optional[Dict[str, Any]]
+    ]  # Risk assessment, anomalies, recommendations
 
     # === EXECUTION METADATA ===
     orchestration_latency_ms: NotRequired[int]

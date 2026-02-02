@@ -11,13 +11,11 @@ Tests cover:
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from langgraph.graph import END, StateGraph
 
 from src.agents.experiment_monitor.graph import (
     create_experiment_monitor_graph,
     experiment_monitor_graph,
 )
-from src.agents.experiment_monitor.state import ExperimentMonitorState
 
 
 class TestGraphCreation:
@@ -86,19 +84,24 @@ class TestGraphExecution:
     @pytest.fixture
     def mock_all_nodes(self):
         """Mock all node execution methods."""
-        with patch(
-            "src.agents.experiment_monitor.nodes.HealthCheckerNode.execute",
-            new_callable=AsyncMock,
-        ) as mock_health, patch(
-            "src.agents.experiment_monitor.nodes.SRMDetectorNode.execute",
-            new_callable=AsyncMock,
-        ) as mock_srm, patch(
-            "src.agents.experiment_monitor.nodes.InterimAnalyzerNode.execute",
-            new_callable=AsyncMock,
-        ) as mock_interim, patch(
-            "src.agents.experiment_monitor.nodes.AlertGeneratorNode.execute",
-            new_callable=AsyncMock,
-        ) as mock_alert:
+        with (
+            patch(
+                "src.agents.experiment_monitor.nodes.HealthCheckerNode.execute",
+                new_callable=AsyncMock,
+            ) as mock_health,
+            patch(
+                "src.agents.experiment_monitor.nodes.SRMDetectorNode.execute",
+                new_callable=AsyncMock,
+            ) as mock_srm,
+            patch(
+                "src.agents.experiment_monitor.nodes.InterimAnalyzerNode.execute",
+                new_callable=AsyncMock,
+            ) as mock_interim,
+            patch(
+                "src.agents.experiment_monitor.nodes.AlertGeneratorNode.execute",
+                new_callable=AsyncMock,
+            ) as mock_alert,
+        ):
             yield {
                 "health": mock_health,
                 "srm": mock_srm,
@@ -129,15 +132,12 @@ class TestGraphExecution:
             state["status"] = "completed"
             return state
 
-        with patch(
-            "src.agents.experiment_monitor.graph.HealthCheckerNode"
-        ) as MockHealth, patch(
-            "src.agents.experiment_monitor.graph.SRMDetectorNode"
-        ) as MockSRM, patch(
-            "src.agents.experiment_monitor.graph.InterimAnalyzerNode"
-        ) as MockInterim, patch(
-            "src.agents.experiment_monitor.graph.AlertGeneratorNode"
-        ) as MockAlert:
+        with (
+            patch("src.agents.experiment_monitor.graph.HealthCheckerNode") as MockHealth,
+            patch("src.agents.experiment_monitor.graph.SRMDetectorNode") as MockSRM,
+            patch("src.agents.experiment_monitor.graph.InterimAnalyzerNode") as MockInterim,
+            patch("src.agents.experiment_monitor.graph.AlertGeneratorNode") as MockAlert,
+        ):
             MockHealth.return_value.execute = track_health
             MockSRM.return_value.execute = track_srm
             MockInterim.return_value.execute = track_interim
@@ -183,15 +183,12 @@ class TestGraphExecution:
             state["monitor_summary"] = "Test complete"
             return state
 
-        with patch(
-            "src.agents.experiment_monitor.graph.HealthCheckerNode"
-        ) as MockHealth, patch(
-            "src.agents.experiment_monitor.graph.SRMDetectorNode"
-        ) as MockSRM, patch(
-            "src.agents.experiment_monitor.graph.InterimAnalyzerNode"
-        ) as MockInterim, patch(
-            "src.agents.experiment_monitor.graph.AlertGeneratorNode"
-        ) as MockAlert:
+        with (
+            patch("src.agents.experiment_monitor.graph.HealthCheckerNode") as MockHealth,
+            patch("src.agents.experiment_monitor.graph.SRMDetectorNode") as MockSRM,
+            patch("src.agents.experiment_monitor.graph.InterimAnalyzerNode") as MockInterim,
+            patch("src.agents.experiment_monitor.graph.AlertGeneratorNode") as MockAlert,
+        ):
             MockHealth.return_value.execute = modify_health
             MockSRM.return_value.execute = modify_srm
             MockInterim.return_value.execute = modify_interim

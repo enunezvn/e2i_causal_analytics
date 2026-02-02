@@ -23,9 +23,8 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
 import logging
-import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -42,10 +41,12 @@ def _get_opik_connector():
     """Get OpikConnector (lazy import to avoid circular deps)."""
     try:
         from src.mlops.opik_connector import get_opik_connector
+
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
         return None
+
 
 # ===== INPUT/OUTPUT MODELS =====
 
@@ -78,8 +79,7 @@ class DriftMonitorInput(BaseModel):
 
     # Tier0 data passthrough for testing
     tier0_data: Optional[Any] = Field(
-        None,
-        description="Tier0 DataFrame for testing drift detection with real synthetic data"
+        None, description="Tier0 DataFrame for testing drift detection with real synthetic data"
     )
 
     @field_validator("time_window")
@@ -245,12 +245,14 @@ class DriftMonitorAgent:
                     final_state = await self.graph.ainvoke(initial_state)
                     # Set output on span
                     if span and final_state.get("status") != "failed":
-                        span.set_output({
-                            "overall_drift_score": final_state.get("overall_drift_score", 0.0),
-                            "features_with_drift": final_state.get("features_with_drift", []),
-                            "alert_count": len(final_state.get("alerts", [])),
-                            "total_latency_ms": final_state.get("total_latency_ms", 0),
-                        })
+                        span.set_output(
+                            {
+                                "overall_drift_score": final_state.get("overall_drift_score", 0.0),
+                                "features_with_drift": final_state.get("features_with_drift", []),
+                                "alert_count": len(final_state.get("alerts", [])),
+                                "total_latency_ms": final_state.get("total_latency_ms", 0),
+                            }
+                        )
                     return final_state
             else:
                 return await self.graph.ainvoke(initial_state)
@@ -265,7 +267,7 @@ class DriftMonitorAgent:
                     brand=input_data.brand,
                     model_id=input_data.model_id,
                     time_window=input_data.time_window,
-                ) as ctx:
+                ):
                     final_state = await execute_workflow()
 
                     # Convert to output model
@@ -306,8 +308,7 @@ class DriftMonitorAgent:
 
         if duration > self.sla_seconds:
             logger.warning(
-                f"SLA violation: {duration:.2f}s > {self.sla_seconds}s "
-                f"for {feature_count} features"
+                f"SLA violation: {duration:.2f}s > {self.sla_seconds}s for {feature_count} features"
             )
 
         return output

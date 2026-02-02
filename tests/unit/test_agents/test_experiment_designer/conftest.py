@@ -64,9 +64,7 @@ class MockLLMResponse:
 
     def __init__(self, content: str = MOCK_DESIGN_JSON):
         self.content = content
-        self.response_metadata = {
-            "usage": {"input_tokens": 500, "output_tokens": 300}
-        }
+        self.response_metadata = {"usage": {"input_tokens": 500, "output_tokens": 300}}
 
 
 def make_mock_llm(content: str = MOCK_DESIGN_JSON) -> AsyncMock:
@@ -78,9 +76,7 @@ def make_mock_llm(content: str = MOCK_DESIGN_JSON) -> AsyncMock:
 
 # Register custom marker
 def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "requires_llm_api: mark test as requiring real LLM API key"
-    )
+    config.addinivalue_line("markers", "requires_llm_api: mark test as requiring real LLM API key")
 
 
 @pytest.fixture(autouse=True)

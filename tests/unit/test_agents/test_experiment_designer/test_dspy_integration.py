@@ -12,17 +12,16 @@ the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
-from datetime import datetime, timezone
 
 # Mark entire module to run on same worker - prevents import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.experiment_designer.dspy_integration import (
-    ExperimentDesignTrainingSignal,
+    DSPY_AVAILABLE,
     ExperimentDesignerSignalCollector,
+    ExperimentDesignTrainingSignal,
     get_experiment_designer_signal_collector,
     reset_dspy_integration,
-    DSPY_AVAILABLE,
 )
 
 
@@ -463,25 +462,28 @@ class TestDSPySignatures:
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_design_reasoning_signature(self):
         """Test DesignReasoningSignature exists."""
+        import dspy
+
         from src.agents.experiment_designer.dspy_integration import DesignReasoningSignature
 
-        import dspy
         assert issubclass(DesignReasoningSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_investigation_plan_signature(self):
         """Test InvestigationPlanSignature exists."""
+        import dspy
+
         from src.agents.experiment_designer.dspy_integration import InvestigationPlanSignature
 
-        import dspy
         assert issubclass(InvestigationPlanSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_validity_assessment_signature(self):
         """Test ValidityAssessmentSignature exists."""
+        import dspy
+
         from src.agents.experiment_designer.dspy_integration import ValidityAssessmentSignature
 
-        import dspy
         assert issubclass(ValidityAssessmentSignature, dspy.Signature)
 
 

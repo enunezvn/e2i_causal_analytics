@@ -8,12 +8,11 @@ import pytest
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
-    evaluate_model,
+    _check_success_criteria,
     _compute_optimal_threshold,
     _compute_precision_at_k,
-    _check_success_criteria,
+    evaluate_model,
 )
-
 
 # ============================================================================
 # Test fixtures
@@ -319,10 +318,12 @@ class TestComputeOptimalThreshold:
         """Should compute optimal threshold with probabilities."""
         np.random.seed(42)
         y_true = np.array([0, 0, 1, 1, 1, 0, 1, 0])
-        y_proba = np.column_stack([
-            1 - np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-            np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-        ])
+        y_proba = np.column_stack(
+            [
+                1 - np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
+                np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
+            ]
+        )
 
         threshold = _compute_optimal_threshold(y_true, y_proba)
 
@@ -344,10 +345,12 @@ class TestComputePrecisionAtK:
         """Should compute precision at various k values."""
         np.random.seed(42)
         y_true = np.array([0, 0, 1, 1, 1, 0, 1, 0])
-        y_proba = np.column_stack([
-            1 - np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-            np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-        ])
+        y_proba = np.column_stack(
+            [
+                1 - np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
+                np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
+            ]
+        )
 
         result = _compute_precision_at_k(y_true, y_proba, k_values=[2, 4])
 
@@ -383,9 +386,7 @@ class TestCheckSuccessCriteria:
         test_metrics = {"accuracy": 0.85, "roc_auc": 0.90}
         success_criteria = {"accuracy": 0.80, "auc": 0.85}
 
-        result = _check_success_criteria(
-            test_metrics, success_criteria, "binary_classification"
-        )
+        result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
         assert result["success_criteria_met"] is True
 
@@ -394,9 +395,7 @@ class TestCheckSuccessCriteria:
         test_metrics = {"accuracy": 0.75, "roc_auc": 0.80}
         success_criteria = {"accuracy": 0.90}
 
-        result = _check_success_criteria(
-            test_metrics, success_criteria, "binary_classification"
-        )
+        result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
         assert result["success_criteria_met"] is False
         assert result["success_criteria_results"]["accuracy"] is False
@@ -421,9 +420,7 @@ class TestCheckSuccessCriteria:
         test_metrics = {"accuracy": 0.85}
         success_criteria = {"accuracy": 0.80, "nonexistent_metric": 0.5}
 
-        result = _check_success_criteria(
-            test_metrics, success_criteria, "binary_classification"
-        )
+        result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
         assert result["success_criteria_met"] is False
         assert result["success_criteria_results"]["nonexistent_metric"] is False

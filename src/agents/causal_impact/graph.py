@@ -123,9 +123,9 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     refutation_results = None
 
                     if node_name == "graph_builder":
-                        output_summary["graph_confidence"] = result.get(
-                            "causal_graph", {}
-                        ).get("confidence")
+                        output_summary["graph_confidence"] = result.get("causal_graph", {}).get(
+                            "confidence"
+                        )
                     elif node_name == "estimation":
                         est = result.get("estimation_result", {})
                         output_summary["ate"] = est.get("ate")
@@ -145,14 +145,10 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     elif node_name == "sensitivity":
                         sens = result.get("sensitivity_analysis", {})
                         output_summary["e_value"] = sens.get("e_value")
-                        output_summary["robust_to_confounding"] = sens.get(
-                            "robust_to_confounding"
-                        )
+                        output_summary["robust_to_confounding"] = sens.get("robust_to_confounding")
                     elif node_name == "interpretation":
                         interp = result.get("interpretation", {})
-                        output_summary["causal_confidence"] = interp.get(
-                            "causal_confidence"
-                        )
+                        output_summary["causal_confidence"] = interp.get("causal_confidence")
                         output_summary["depth_level"] = interp.get("depth_level")
                         confidence_score = interp.get("causal_confidence")
 
@@ -432,9 +428,7 @@ async def run_workflow_with_mlflow(
                 "outcome_var": initial_state.get("outcome_var", ""),
                 "confounders": ",".join(initial_state.get("confounders", [])),
                 "data_source": initial_state.get("data_source", ""),
-                "interpretation_depth": initial_state.get(
-                    "interpretation_depth", "standard"
-                ),
+                "interpretation_depth": initial_state.get("interpretation_depth", "standard"),
             }
             await run.log_params(params)
 
@@ -456,9 +450,7 @@ async def run_workflow_with_mlflow(
             dag_dot = final_state.get("causal_graph", {}).get("dag_dot")
             if dag_dot:
                 # Write DOT to temp file and log as artifact
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".dot", delete=False
-                ) as f:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".dot", delete=False) as f:
                     f.write(dag_dot)
                     temp_path = f.name
                 await run.log_artifact(temp_path, "causal_dag.dot")
@@ -480,9 +472,7 @@ async def run_workflow_with_mlflow(
     return final_state
 
 
-def _extract_mlflow_metrics(
-    state: Dict[str, Any], total_latency_ms: float
-) -> Dict[str, float]:
+def _extract_mlflow_metrics(state: Dict[str, Any], total_latency_ms: float) -> Dict[str, float]:
     """Extract metrics from workflow state for MLflow logging.
 
     Args:

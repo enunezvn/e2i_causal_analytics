@@ -136,14 +136,13 @@ def _validate_criteria(criteria: Dict[str, Any], state: Dict[str, Any]) -> Dict[
     min_auc = criteria.get("minimum_auc")
     if min_auc and min_auc > 0.95:
         warnings.append(
-            f"Minimum AUC ({min_auc}) is very high. " "May be difficult to achieve in production."
+            f"Minimum AUC ({min_auc}) is very high. May be difficult to achieve in production."
         )
 
     min_r2 = criteria.get("minimum_r2")
     if min_r2 and min_r2 > 0.90:
         warnings.append(
-            f"Minimum R² ({min_r2}) is very high. "
-            "May be difficult to achieve in real-world data."
+            f"Minimum R² ({min_r2}) is very high. May be difficult to achieve in real-world data."
         )
 
     # Check for conflicting constraints

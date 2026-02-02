@@ -148,9 +148,9 @@ def scheduled_interim_analysis(
     start_time = time.time()
 
     async def execute_analysis():
-        from src.services.interim_analysis import InterimAnalysisService
-        from src.services.enrollment import EnrollmentService
         from src.repositories.ab_experiment import ABExperimentRepository
+        from src.services.enrollment import EnrollmentService
+        from src.services.interim_analysis import InterimAnalysisService
 
         try:
             exp_repo = ABExperimentRepository()
@@ -217,7 +217,8 @@ def scheduled_interim_analysis(
             # Get metric data for analysis
             # This would normally come from experiment metrics collection
             from src.services.results_analysis import ResultsAnalysisService
-            results_service = ResultsAnalysisService()
+
+            ResultsAnalysisService()
 
             # Placeholder: Get control and treatment data
             # In production, this would query actual experiment metrics
@@ -281,8 +282,8 @@ def enrollment_health_check(
     start_time = time.time()
 
     async def execute_check():
-        from src.services.enrollment import EnrollmentService
         from src.memory.services.factories import get_supabase_client
+        from src.services.enrollment import EnrollmentService
 
         try:
             client = await get_supabase_client()
@@ -322,18 +323,21 @@ def enrollment_health_check(
                     stats = await enrollment_service.get_enrollment_stats(exp_id)
 
                     if not stats:
-                        health_results.append({
-                            "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
-                            "status": "no_data",
-                        })
+                        health_results.append(
+                            {
+                                "experiment_id": str(exp_id),
+                                "name": exp.get("name", "Unknown"),
+                                "status": "no_data",
+                            }
+                        )
                         continue
 
                     # Calculate daily enrollment rate
                     days_running = max(
                         1,
                         (datetime.now(timezone.utc) - stats.enrollment_start).days
-                        if stats.enrollment_start else 1
+                        if stats.enrollment_start
+                        else 1,
                     )
                     daily_rate = stats.total_enrolled / days_running
 
@@ -341,43 +345,51 @@ def enrollment_health_check(
                     if daily_rate < min_daily_rate:
                         if days_running >= critical_days:
                             health_status = "critical"
-                            alerts.append({
-                                "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
-                                "severity": "critical",
-                                "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
-                                "daily_rate": daily_rate,
-                                "days_below_threshold": days_running,
-                            })
+                            alerts.append(
+                                {
+                                    "experiment_id": str(exp_id),
+                                    "name": exp.get("name", "Unknown"),
+                                    "severity": "critical",
+                                    "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
+                                    "daily_rate": daily_rate,
+                                    "days_below_threshold": days_running,
+                                }
+                            )
                         elif days_running >= warning_days:
                             health_status = "warning"
-                            alerts.append({
-                                "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
-                                "severity": "warning",
-                                "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
-                                "daily_rate": daily_rate,
-                                "days_below_threshold": days_running,
-                            })
+                            alerts.append(
+                                {
+                                    "experiment_id": str(exp_id),
+                                    "name": exp.get("name", "Unknown"),
+                                    "severity": "warning",
+                                    "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
+                                    "daily_rate": daily_rate,
+                                    "days_below_threshold": days_running,
+                                }
+                            )
 
-                    health_results.append({
-                        "experiment_id": str(exp_id),
-                        "name": exp.get("name", "Unknown"),
-                        "status": health_status,
-                        "total_enrolled": stats.total_enrolled,
-                        "daily_rate": daily_rate,
-                        "days_running": days_running,
-                        "enrollment_by_variant": stats.enrollment_by_variant,
-                    })
+                    health_results.append(
+                        {
+                            "experiment_id": str(exp_id),
+                            "name": exp.get("name", "Unknown"),
+                            "status": health_status,
+                            "total_enrolled": stats.total_enrolled,
+                            "daily_rate": daily_rate,
+                            "days_running": days_running,
+                            "enrollment_by_variant": stats.enrollment_by_variant,
+                        }
+                    )
 
                 except Exception as e:
                     logger.warning(f"Failed to check enrollment for {exp_id}: {e}")
-                    health_results.append({
-                        "experiment_id": str(exp_id),
-                        "name": exp.get("name", "Unknown"),
-                        "status": "error",
-                        "error": str(e),
-                    })
+                    health_results.append(
+                        {
+                            "experiment_id": str(exp_id),
+                            "name": exp.get("name", "Unknown"),
+                            "status": "error",
+                            "error": str(e),
+                        }
+                    )
 
             # Send alerts if any
             if alerts:
@@ -414,8 +426,7 @@ async def _send_enrollment_alerts(alerts: List[Dict], config: Dict) -> None:
     # Placeholder for actual alert sending
     for alert in alerts:
         logger.warning(
-            f"ENROLLMENT ALERT [{alert['severity'].upper()}]: "
-            f"{alert['name']} - {alert['message']}"
+            f"ENROLLMENT ALERT [{alert['severity'].upper()}]: {alert['name']} - {alert['message']}"
         )
 
     # Email alerts
@@ -448,9 +459,9 @@ def srm_detection_sweep(
     start_time = time.time()
 
     async def execute_sweep():
-        from src.services.results_analysis import ResultsAnalysisService
-        from src.repositories.ab_experiment import ABExperimentRepository
         from src.memory.services.factories import get_supabase_client
+        from src.repositories.ab_experiment import ABExperimentRepository
+        from src.services.results_analysis import ResultsAnalysisService
 
         try:
             client = await get_supabase_client()
@@ -478,7 +489,7 @@ def srm_detection_sweep(
             results_service = ResultsAnalysisService()
             exp_repo = ABExperimentRepository()
             min_sample_size = srm_config.get("min_sample_size", 100)
-            detection_threshold = srm_config.get("detection_threshold", 0.001)
+            srm_config.get("detection_threshold", 0.001)
 
             srm_results = []
             srm_detected = []
@@ -492,13 +503,15 @@ def srm_detection_sweep(
                     assignments = await exp_repo.get_assignments(exp_id)
 
                     if len(assignments) < min_sample_size:
-                        srm_results.append({
-                            "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
-                            "status": "insufficient_data",
-                            "sample_size": len(assignments),
-                            "min_required": min_sample_size,
-                        })
+                        srm_results.append(
+                            {
+                                "experiment_id": str(exp_id),
+                                "name": exp.get("name", "Unknown"),
+                                "status": "insufficient_data",
+                                "sample_size": len(assignments),
+                                "min_required": min_sample_size,
+                            }
+                        )
                         continue
 
                     # Count by variant
@@ -508,7 +521,9 @@ def srm_detection_sweep(
                         variant_counts[variant] = variant_counts.get(variant, 0) + 1
 
                     # Get expected ratio from config
-                    expected_ratio = exp_config.get("allocation_ratio", {"control": 0.5, "treatment": 0.5})
+                    expected_ratio = exp_config.get(
+                        "allocation_ratio", {"control": 0.5, "treatment": 0.5}
+                    )
 
                     # Check SRM
                     srm_result = await results_service.check_sample_ratio_mismatch(
@@ -520,32 +535,38 @@ def srm_detection_sweep(
                     status = "ok"
                     if srm_result.is_srm_detected:
                         status = "srm_detected"
-                        srm_detected.append({
+                        srm_detected.append(
+                            {
+                                "experiment_id": str(exp_id),
+                                "name": exp.get("name", "Unknown"),
+                                "p_value": srm_result.p_value,
+                                "expected_ratio": expected_ratio,
+                                "actual_counts": variant_counts,
+                                "chi_squared": srm_result.chi_squared_statistic,
+                            }
+                        )
+
+                    srm_results.append(
+                        {
                             "experiment_id": str(exp_id),
                             "name": exp.get("name", "Unknown"),
+                            "status": status,
                             "p_value": srm_result.p_value,
-                            "expected_ratio": expected_ratio,
-                            "actual_counts": variant_counts,
                             "chi_squared": srm_result.chi_squared_statistic,
-                        })
-
-                    srm_results.append({
-                        "experiment_id": str(exp_id),
-                        "name": exp.get("name", "Unknown"),
-                        "status": status,
-                        "p_value": srm_result.p_value,
-                        "chi_squared": srm_result.chi_squared_statistic,
-                        "actual_counts": variant_counts,
-                    })
+                            "actual_counts": variant_counts,
+                        }
+                    )
 
                 except Exception as e:
                     logger.warning(f"SRM check failed for {exp_id}: {e}")
-                    srm_results.append({
-                        "experiment_id": str(exp_id),
-                        "name": exp.get("name", "Unknown"),
-                        "status": "error",
-                        "error": str(e),
-                    })
+                    srm_results.append(
+                        {
+                            "experiment_id": str(exp_id),
+                            "name": exp.get("name", "Unknown"),
+                            "status": "error",
+                            "error": str(e),
+                        }
+                    )
 
             # Send alerts for detected SRM issues
             if srm_detected:
@@ -614,19 +635,18 @@ def compute_experiment_results(
         Computed experiment results
     """
     logger.info(
-        f"Computing {analysis_type} results for experiment {experiment_id}: "
-        f"task {self.request.id}"
+        f"Computing {analysis_type} results for experiment {experiment_id}: task {self.request.id}"
     )
 
     start_time = time.time()
 
     async def execute_computation():
-        from src.services.results_analysis import ResultsAnalysisService
         from src.repositories.ab_results import ABResultsRepository
+        from src.services.results_analysis import ResultsAnalysisService
 
         try:
             results_service = ResultsAnalysisService()
-            results_repo = ABResultsRepository()
+            ABResultsRepository()
             exp_uuid = UUID(experiment_id)
 
             # Placeholder: Get control and treatment data from experiment
@@ -671,7 +691,9 @@ def compute_experiment_results(
                 "per_protocol_results": {
                     "effect_estimate": per_protocol_results.effect_estimate,
                     "p_value": per_protocol_results.p_value,
-                } if per_protocol_results else None,
+                }
+                if per_protocol_results
+                else None,
                 "duration_ms": duration_ms,
             }
 
@@ -705,8 +727,7 @@ def fidelity_tracking_update(
         Fidelity comparison results
     """
     logger.info(
-        f"Updating fidelity tracking for experiment {experiment_id}: "
-        f"task {self.request.id}"
+        f"Updating fidelity tracking for experiment {experiment_id}: task {self.request.id}"
     )
 
     config = load_config()
@@ -714,9 +735,9 @@ def fidelity_tracking_update(
     start_time = time.time()
 
     async def execute_update():
-        from src.services.results_analysis import ResultsAnalysisService
-        from src.repositories.ab_results import ABResultsRepository
         from src.memory.services.factories import get_supabase_client
+        from src.repositories.ab_results import ABResultsRepository
+        from src.services.results_analysis import ResultsAnalysisService
 
         try:
             results_service = ResultsAnalysisService()
@@ -780,7 +801,7 @@ def fidelity_tracking_update(
             )
 
             # Check if calibration is needed
-            acceptable_error = fidelity_config.get("acceptable_error", 0.2)
+            fidelity_config.get("acceptable_error", 0.2)
             calibration_trigger = fidelity_config.get("calibration_trigger_error", 0.3)
 
             calibration_needed = abs(comparison.prediction_error) > calibration_trigger
@@ -845,10 +866,7 @@ def check_all_active_experiments(
 
             # Get all running experiments
             result = await (
-                client.table("ml_experiments")
-                .select("id, name")
-                .eq("status", "running")
-                .execute()
+                client.table("ml_experiments").select("id, name").eq("status", "running").execute()
             )
 
             if not result.data:
@@ -868,16 +886,20 @@ def check_all_active_experiments(
                         experiment_id=exp["id"],
                         force=False,
                     )
-                    tasks_queued.append({
-                        "experiment_id": exp["id"],
-                        "name": exp.get("name", "Unknown"),
-                        "task_id": task.id,
-                    })
+                    tasks_queued.append(
+                        {
+                            "experiment_id": exp["id"],
+                            "name": exp.get("name", "Unknown"),
+                            "task_id": task.id,
+                        }
+                    )
                 except Exception as e:
-                    errors.append({
-                        "experiment_id": exp["id"],
-                        "error": str(e),
-                    })
+                    errors.append(
+                        {
+                            "experiment_id": exp["id"],
+                            "error": str(e),
+                        }
+                    )
 
             return {
                 "status": "completed",
@@ -931,10 +953,7 @@ def cleanup_old_ab_results(
 
             # Delete old SRM checks (for completed experiments only)
             srm_result = await (
-                client.table("ab_srm_checks")
-                .delete()
-                .lt("checked_at", cutoff_iso)
-                .execute()
+                client.table("ab_srm_checks").delete().lt("checked_at", cutoff_iso).execute()
             )
             srm_deleted = len(srm_result.data) if srm_result.data else 0
 

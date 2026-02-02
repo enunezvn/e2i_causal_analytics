@@ -138,9 +138,7 @@ class MLDeployment:
             shadow_metrics=data.get("shadow_metrics", {}),
             production_metrics=data.get("production_metrics", {}),
             previous_deployment_id=(
-                UUID(data["previous_deployment_id"])
-                if data.get("previous_deployment_id")
-                else None
+                UUID(data["previous_deployment_id"]) if data.get("previous_deployment_id") else None
             ),
             rollback_reason=data.get("rollback_reason"),
             rolled_back_at=data.get("rolled_back_at"),
@@ -391,9 +389,7 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
             return None
 
         query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("deployment_name", deployment_name)
+            self.client.table(self.table_name).select("*").eq("deployment_name", deployment_name)
         )
 
         if environment:
@@ -595,10 +591,12 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
 
         result = await (
             self.client.table(self.table_name)
-            .update({
-                "status": DeploymentStatus.DRAINING.value,
-                "deactivated_at": now,
-            })
+            .update(
+                {
+                    "status": DeploymentStatus.DRAINING.value,
+                    "deactivated_at": now,
+                }
+            )
             .eq("environment", environment)
             .eq("status", DeploymentStatus.ACTIVE.value)
             .neq("id", str(current_deployment_id))

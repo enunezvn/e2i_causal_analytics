@@ -172,9 +172,7 @@ class TestHTTPModelClient:
             },
         )
 
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
 
             await client.initialize()
@@ -205,9 +203,7 @@ class TestHTTPModelClient:
             },
         )
 
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
 
             await client.initialize()
@@ -307,9 +303,7 @@ class TestHTTPModelClient:
         request = httpx.Request("GET", "http://test/healthz")
         mock_response = httpx.Response(200, json={"status": "ok"}, request=request)
 
-        with patch.object(
-            httpx.AsyncClient, "get", new_callable=AsyncMock
-        ) as mock_get:
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_response
 
             await client.initialize()

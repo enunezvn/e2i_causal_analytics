@@ -1,8 +1,13 @@
 """Tests for WS2, WS3, Brand-Specific, and Causal Metrics KPI Calculators."""
 
-import pytest
 from unittest.mock import Mock
 
+import pytest
+
+from src.kpi.calculators.brand_specific import BrandSpecificCalculator
+from src.kpi.calculators.business_impact import BusinessImpactCalculator
+from src.kpi.calculators.causal_metrics import CausalMetricsCalculator
+from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
 from src.kpi.models import (
     CalculationType,
     KPIMetadata,
@@ -10,10 +15,6 @@ from src.kpi.models import (
     KPIThreshold,
     Workstream,
 )
-from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
-from src.kpi.calculators.business_impact import BusinessImpactCalculator
-from src.kpi.calculators.brand_specific import BrandSpecificCalculator
-from src.kpi.calculators.causal_metrics import CausalMetricsCalculator
 
 
 class TestTriggerPerformanceCalculator:
@@ -343,9 +344,24 @@ class TestCausalMetricsCalculator:
         """Test CATE calculation returns segment breakdown."""
         calculator._execute_query = Mock(
             return_value=[
-                {"segment_assignment": "high_risk", "cate": 0.25, "cate_std": 0.08, "n_samples": 300},
-                {"segment_assignment": "medium_risk", "cate": 0.12, "cate_std": 0.05, "n_samples": 500},
-                {"segment_assignment": "low_risk", "cate": 0.05, "cate_std": 0.02, "n_samples": 200},
+                {
+                    "segment_assignment": "high_risk",
+                    "cate": 0.25,
+                    "cate_std": 0.08,
+                    "n_samples": 300,
+                },
+                {
+                    "segment_assignment": "medium_risk",
+                    "cate": 0.12,
+                    "cate_std": 0.05,
+                    "n_samples": 500,
+                },
+                {
+                    "segment_assignment": "low_risk",
+                    "cate": 0.05,
+                    "cate_std": 0.02,
+                    "n_samples": 200,
+                },
             ]
         )
 
@@ -359,7 +375,12 @@ class TestCausalMetricsCalculator:
         """Test CATE calculation for specific segment."""
         calculator._execute_query = Mock(
             return_value=[
-                {"segment_assignment": "high_risk", "cate": 0.25, "cate_std": 0.08, "n_samples": 300}
+                {
+                    "segment_assignment": "high_risk",
+                    "cate": 0.25,
+                    "cate_std": 0.08,
+                    "n_samples": 300,
+                }
             ]
         )
 

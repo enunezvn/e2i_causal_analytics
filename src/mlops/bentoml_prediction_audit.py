@@ -33,14 +33,12 @@ def _check_opik_available() -> bool:
     global _OPIK_AVAILABLE
     if _OPIK_AVAILABLE is None:
         try:
-            from src.mlops.opik_connector import OpikConnector
+            from src.mlops.opik_connector import OpikConnector  # noqa: F401
 
             _OPIK_AVAILABLE = True
         except ImportError:
             _OPIK_AVAILABLE = False
-            logger.warning(
-                "OpikConnector not available - prediction audit trail disabled"
-            )
+            logger.warning("OpikConnector not available - prediction audit trail disabled")
     return _OPIK_AVAILABLE
 
 

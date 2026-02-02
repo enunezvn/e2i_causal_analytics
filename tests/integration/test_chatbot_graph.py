@@ -10,20 +10,20 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
 
 from src.api.routes.chatbot_graph import (
     classify_intent,
     create_e2i_chatbot_graph,
     run_chatbot,
 )
-from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
+from src.api.routes.chatbot_state import IntentType, create_initial_state
 
 
 # Mock CognitiveRAGResult for testing (mirrors chatbot_dspy.CognitiveRAGResult)
 @dataclass
 class MockCognitiveRAGResult:
     """Mock result of cognitive RAG retrieval."""
+
     rewritten_query: str
     search_keywords: List[str]
     graph_entities: List[str]
@@ -163,9 +163,7 @@ class TestChatbotWorkflow:
         mock_conv_result = MagicMock()
         mock_conv_result.data = []
         mock_execute = AsyncMock(return_value=mock_conv_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.single.return_value.execute = (
-            mock_execute
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.single.return_value.execute = mock_execute
         mock_client.table.return_value.insert.return_value.execute = mock_execute
 
         # Mock RAG search
@@ -204,7 +202,10 @@ class TestChatbotWorkflow:
         assert "response_text" in result
         # Fallback greeting response should mention pharmaceutical analytics or assistance
         response_lower = result["response_text"].lower()
-        assert any(keyword in response_lower for keyword in ["pharmaceutical", "analytics", "assist", "help"])
+        assert any(
+            keyword in response_lower
+            for keyword in ["pharmaceutical", "analytics", "assist", "help"]
+        )
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_graph.get_async_supabase_client", new_callable=AsyncMock)
@@ -239,7 +240,12 @@ class TestMessagePersistence:
     @patch("src.api.routes.chatbot_graph.cognitive_rag_retrieve", new_callable=AsyncMock)
     @patch("src.api.routes.chatbot_graph.get_chat_llm")
     async def test_persists_messages_on_completion(
-        self, mock_get_chat_llm, mock_cognitive_rag, mock_get_conv_repo, mock_get_msg_repo, mock_get_client
+        self,
+        mock_get_chat_llm,
+        mock_cognitive_rag,
+        mock_get_conv_repo,
+        mock_get_msg_repo,
+        mock_get_client,
     ):
         """Test that messages are persisted when workflow completes."""
         # Setup mocks

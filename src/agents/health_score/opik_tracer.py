@@ -26,7 +26,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from opik import Opik, Trace
@@ -110,11 +110,13 @@ class HealthCheckTraceContext:
         """Log that a health check has started."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "check_scope": check_scope,
-                    "query": query or "",
-                    "check_started_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "check_scope": check_scope,
+                        "query": query or "",
+                        "check_started_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log check started: {e}")
@@ -177,12 +179,14 @@ class HealthCheckTraceContext:
         """Log component health check results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "component_health_score": score,
-                    "component_statuses": statuses,
-                    "component_issues": issues,
-                    "component_duration_ms": duration_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "component_health_score": score,
+                        "component_statuses": statuses,
+                        "component_issues": issues,
+                        "component_duration_ms": duration_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log component health: {e}")
@@ -197,12 +201,14 @@ class HealthCheckTraceContext:
         """Log model health check results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "model_health_score": score,
-                    "model_count": model_count,
-                    "degraded_models": degraded_models,
-                    "model_duration_ms": duration_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "model_health_score": score,
+                        "model_count": model_count,
+                        "degraded_models": degraded_models,
+                        "model_duration_ms": duration_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log model health: {e}")
@@ -217,12 +223,14 @@ class HealthCheckTraceContext:
         """Log pipeline health check results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "pipeline_health_score": score,
-                    "pipeline_count": pipeline_count,
-                    "stale_pipelines": stale_pipelines,
-                    "pipeline_duration_ms": duration_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "pipeline_health_score": score,
+                        "pipeline_count": pipeline_count,
+                        "stale_pipelines": stale_pipelines,
+                        "pipeline_duration_ms": duration_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log pipeline health: {e}")
@@ -237,12 +245,14 @@ class HealthCheckTraceContext:
         """Log agent health check results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "agent_health_score": score,
-                    "agent_count": agent_count,
-                    "unavailable_agents": unavailable_agents,
-                    "agent_duration_ms": duration_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "agent_health_score": score,
+                        "agent_count": agent_count,
+                        "unavailable_agents": unavailable_agents,
+                        "agent_duration_ms": duration_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log agent health: {e}")
@@ -265,23 +275,25 @@ class HealthCheckTraceContext:
         if self.trace:
             try:
                 elapsed_ms = int((time.time() - self.start_time) * 1000)
-                self.trace_metadata.update({
-                    "status": status,
-                    "success": success,
-                    "total_duration_ms": total_duration_ms,
-                    "trace_duration_ms": elapsed_ms,
-                    "overall_health_score": overall_score,
-                    "health_grade": health_grade,
-                    "component_health_score": component_score,
-                    "model_health_score": model_score,
-                    "pipeline_health_score": pipeline_score,
-                    "agent_health_score": agent_score,
-                    "critical_issues_count": len(critical_issues),
-                    "critical_issues": critical_issues[:10],  # Limit for trace size
-                    "warnings_count": len(warnings),
-                    "warnings": warnings[:10],  # Limit for trace size
-                    "check_completed_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "status": status,
+                        "success": success,
+                        "total_duration_ms": total_duration_ms,
+                        "trace_duration_ms": elapsed_ms,
+                        "overall_health_score": overall_score,
+                        "health_grade": health_grade,
+                        "component_health_score": component_score,
+                        "model_health_score": model_score,
+                        "pipeline_health_score": pipeline_score,
+                        "agent_health_score": agent_score,
+                        "critical_issues_count": len(critical_issues),
+                        "critical_issues": critical_issues[:10],  # Limit for trace size
+                        "warnings_count": len(warnings),
+                        "warnings": warnings[:10],  # Limit for trace size
+                        "check_completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(
                     metadata=self.trace_metadata,
                     output={

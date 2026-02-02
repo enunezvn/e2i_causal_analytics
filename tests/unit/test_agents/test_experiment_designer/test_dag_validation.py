@@ -289,7 +289,9 @@ class TestIdentifyInstrumentCandidates:
 
         assert "var1" not in candidates
 
-    def test_handles_missing_treatment_variable(self, validity_audit, sample_dag_adjacency, sample_dag_nodes):
+    def test_handles_missing_treatment_variable(
+        self, validity_audit, sample_dag_adjacency, sample_dag_nodes
+    ):
         """Should return empty list when treatment variable is missing."""
         state = {
             "discovered_dag_adjacency": sample_dag_adjacency,
@@ -300,7 +302,9 @@ class TestIdentifyInstrumentCandidates:
         candidates = validity_audit._identify_instrument_candidates(state)
         assert len(candidates) == 0
 
-    def test_handles_treatment_not_in_dag(self, validity_audit, sample_dag_adjacency, sample_dag_nodes):
+    def test_handles_treatment_not_in_dag(
+        self, validity_audit, sample_dag_adjacency, sample_dag_nodes
+    ):
         """Should return empty list when treatment not in DAG."""
         state = {
             "discovered_dag_adjacency": sample_dag_adjacency,
@@ -360,7 +364,9 @@ class TestIdentifyEffectModifiers:
         # instrument only points to treatment, not outcome
         assert "instrument" not in modifiers
 
-    def test_handles_missing_variables(self, validity_audit, sample_dag_adjacency, sample_dag_nodes):
+    def test_handles_missing_variables(
+        self, validity_audit, sample_dag_adjacency, sample_dag_nodes
+    ):
         """Should handle missing treatment/outcome variables."""
         state = {
             "discovered_dag_adjacency": sample_dag_adjacency,
@@ -375,9 +381,7 @@ class TestIdentifyEffectModifiers:
 class TestPerformDagValidation:
     """Tests for _perform_dag_validation method."""
 
-    def test_comprehensive_validation(
-        self, validity_audit, sample_dag_adjacency, sample_dag_nodes
-    ):
+    def test_comprehensive_validation(self, validity_audit, sample_dag_adjacency, sample_dag_nodes):
         """Should perform comprehensive DAG validation."""
         state = {
             "discovered_dag_adjacency": sample_dag_adjacency,
@@ -406,7 +410,9 @@ class TestPerformDagValidation:
         # Confounder should be identified as effect modifier
         assert "confounder" in results["effect_modifiers"]
 
-    def test_validation_with_latent_confounders(self, validity_audit, sample_dag_adjacency, sample_dag_nodes):
+    def test_validation_with_latent_confounders(
+        self, validity_audit, sample_dag_adjacency, sample_dag_nodes
+    ):
         """Should warn about latent confounders."""
         state = {
             "discovered_dag_adjacency": sample_dag_adjacency,

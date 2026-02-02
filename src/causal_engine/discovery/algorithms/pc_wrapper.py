@@ -16,7 +16,7 @@ Author: E2I Causal Analytics Team
 """
 
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -75,11 +75,11 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
             # Import causal-learn PC
             from causallearn.search.ConstraintBased.PC import pc
             from causallearn.utils.cit import (
-                chisq,
-                fisherz,
-                gsq,
-                kci,
-                mv_fisherz,
+                chisq,  # noqa: F401
+                fisherz,  # noqa: F401
+                gsq,  # noqa: F401
+                kci,  # noqa: F401
+                mv_fisherz,  # noqa: F401
             )
 
             # Prepare data as numpy array
@@ -154,8 +154,7 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
         """
         # Check if data is continuous or discrete
         is_continuous = all(
-            data[col].dtype in [np.float64, np.float32, np.int64, np.int32]
-            for col in data.columns
+            data[col].dtype in [np.float64, np.float32, np.int64, np.int32] for col in data.columns
         )
 
         # Check for categorical columns

@@ -127,20 +127,22 @@ class MockLLMClient:
         system_content = ""
         user_content = ""
         for msg in messages:
-            if hasattr(msg, 'content'):
+            if hasattr(msg, "content"):
                 # Check message type by class name
                 msg_type = type(msg).__name__
-                if 'System' in msg_type:
+                if "System" in msg_type:
                     system_content = msg.content
-                elif 'Human' in msg_type:
+                elif "Human" in msg_type:
                     user_content = msg.content
 
         # Store full content for test verification (not truncated)
-        self.call_history.append({
-            "system": system_content,
-            "user": user_content,
-            "messages": messages,  # Store full message objects
-        })
+        self.call_history.append(
+            {
+                "system": system_content,
+                "user": user_content,
+                "messages": messages,  # Store full message objects
+            }
+        )
 
         response_text = self.get_response_for_phase(system_content)
         return MockAIMessage(response_text)

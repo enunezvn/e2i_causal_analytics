@@ -300,7 +300,9 @@ class ExperimentDesignState(TypedDict):
     # Discovered DAG from causal discovery module
     discovered_dag_adjacency: NotRequired[list[list[int]]]  # Adjacency matrix
     discovered_dag_nodes: NotRequired[list[str]]  # Node names
-    discovered_dag_edge_types: NotRequired[dict[str, str]]  # Edge types (DIRECTED, BIDIRECTED, UNDIRECTED)
+    discovered_dag_edge_types: NotRequired[
+        dict[str, str]
+    ]  # Edge types (DIRECTED, BIDIRECTED, UNDIRECTED)
 
     # Discovery gate decision
     discovery_gate_decision: NotRequired[Literal["accept", "review", "reject", "augment"]]

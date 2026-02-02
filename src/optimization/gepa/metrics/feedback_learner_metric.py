@@ -37,7 +37,9 @@ class FeedbackLearnerGEPAMetric:
     """
 
     name: str = "feedback_learner_gepa"
-    description: str = "GEPA metric for Tier 5 Feedback Learner agent - extraction, storage, application"
+    description: str = (
+        "GEPA metric for Tier 5 Feedback Learner agent - extraction, storage, application"
+    )
 
     extraction_weight: float = 0.40
     storage_weight: float = 0.20
@@ -107,11 +109,7 @@ class FeedbackLearnerGEPAMetric:
         if not expected:
             return 0.7, f"Extracted {len(learnings)} learnings (no ground truth)"
 
-        matched = sum(
-            1
-            for e in expected
-            if any(self._pattern_match(e, l) for l in learnings)
-        )
+        matched = sum(1 for e in expected if any(self._pattern_match(e, l) for l in learnings))
 
         recall = matched / len(expected)
         spurious = max(0, len(learnings) - matched)
@@ -162,7 +160,9 @@ class FeedbackLearnerGEPAMetric:
         if storage.get("indexed"):
             score += 0.2
 
-        return min(1.0, score), f"compressed={storage.get('compressed', False)}, indexed={storage.get('indexed', False)}"
+        return min(
+            1.0, score
+        ), f"compressed={storage.get('compressed', False)}, indexed={storage.get('indexed', False)}"
 
     def _score_application(self, pred: Prediction, gold: Example) -> tuple[float, str]:
         """Score downstream application success.

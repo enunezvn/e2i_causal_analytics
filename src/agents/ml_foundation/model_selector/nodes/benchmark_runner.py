@@ -70,9 +70,7 @@ async def run_benchmarks(state: Dict[str, Any]) -> Dict[str, Any]:
     benchmark_time = time.time() - benchmark_start_time
 
     # Re-rank based on benchmark results
-    benchmark_rankings = _rerank_by_benchmarks(
-        candidates_to_benchmark, benchmark_results
-    )
+    benchmark_rankings = _rerank_by_benchmarks(candidates_to_benchmark, benchmark_results)
 
     # Add remaining candidates that weren't benchmarked
     benchmarked_names = {c["name"] for c in benchmark_rankings}
@@ -125,9 +123,7 @@ async def _benchmark_algorithm(
         }
 
     # Run cross-validation
-    cv_scores, cv_metrics = _run_cross_validation(
-        model, X, y, problem_type, cv_folds
-    )
+    cv_scores, cv_metrics = _run_cross_validation(model, X, y, problem_type, cv_folds)
 
     training_time = time.time() - start_time
 
@@ -247,9 +243,7 @@ def _run_cross_validation(
             y = y.values
 
         # Run CV
-        cv_scores = cross_val_score(
-            model, X, y, cv=cv_folds, scoring=scoring, n_jobs=-1
-        )
+        cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring=scoring, n_jobs=-1)
 
         # For regression, convert negative MSE to RMSE
         if scoring == "neg_mean_squared_error":

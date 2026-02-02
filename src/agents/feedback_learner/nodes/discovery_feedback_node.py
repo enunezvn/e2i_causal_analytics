@@ -89,15 +89,11 @@ class DiscoveryFeedbackNode:
             accuracy_tracking = self._compute_accuracy_tracking(discovery_items)
 
             # Generate parameter recommendations
-            recommendations = self._generate_recommendations(
-                discovery_items, accuracy_tracking
-            )
+            recommendations = self._generate_recommendations(discovery_items, accuracy_tracking)
 
             # Update patterns with discovery-specific issues
             existing_patterns = state.get("detected_patterns") or []
-            discovery_patterns = self._detect_discovery_patterns(
-                discovery_items, accuracy_tracking
-            )
+            discovery_patterns = self._detect_discovery_patterns(discovery_items, accuracy_tracking)
             all_patterns = existing_patterns + discovery_patterns
 
             # Update state
@@ -161,16 +157,11 @@ class DiscoveryFeedbackNode:
                     and item.get("original_gate_decision") == "accept"
                 )
             )
-            rejected = sum(
-                1
-                for item in algo_items
-                if item.get("user_decision") == "reject"
-            )
+            rejected = sum(1 for item in algo_items if item.get("user_decision") == "reject")
             modified = sum(
                 1
                 for item in algo_items
-                if item.get("user_decision") == "modify"
-                or item.get("edge_corrections")
+                if item.get("user_decision") == "modify" or item.get("edge_corrections")
             )
 
             # Calculate accuracy scores
@@ -179,11 +170,7 @@ class DiscoveryFeedbackNode:
                 for item in algo_items
                 if item.get("accuracy_score") is not None
             ]
-            avg_accuracy = (
-                sum(accuracy_scores) / len(accuracy_scores)
-                if accuracy_scores
-                else 0.0
-            )
+            avg_accuracy = sum(accuracy_scores) / len(accuracy_scores) if accuracy_scores else 0.0
 
             # Calculate edge precision/recall from corrections
             total_predicted_edges = 0
@@ -195,7 +182,7 @@ class DiscoveryFeedbackNode:
                 dag = item.get("dag_adjacency") or {}
 
                 # Count predicted edges
-                for source, targets in dag.items():
+                for _source, targets in dag.items():
                     total_predicted_edges += len(targets)
 
                 # Process corrections
@@ -212,18 +199,12 @@ class DiscoveryFeedbackNode:
 
                 # If no corrections, assume all edges correct
                 if not corrections and item.get("user_decision") == "accept":
-                    for source, targets in dag.items():
+                    for _source, targets in dag.items():
                         correct_edges += len(targets)
                         total_true_edges += len(targets)
 
-            precision = (
-                correct_edges / total_predicted_edges
-                if total_predicted_edges > 0
-                else 0.0
-            )
-            recall = (
-                correct_edges / total_true_edges if total_true_edges > 0 else 0.0
-            )
+            precision = correct_edges / total_predicted_edges if total_predicted_edges > 0 else 0.0
+            recall = correct_edges / total_true_edges if total_true_edges > 0 else 0.0
 
             tracking[algorithm] = DiscoveryAccuracyTracking(
                 algorithm=algorithm,
@@ -376,9 +357,7 @@ class DiscoveryFeedbackNode:
                     )
 
         # Check for gate override patterns
-        overrides = [
-            item for item in items if item.get("feedback_type") == "gate_override"
-        ]
+        overrides = [item for item in items if item.get("feedback_type") == "gate_override"]
         if len(overrides) >= 5:
             override_rate = len(overrides) / len(items)
             if override_rate > 0.2:

@@ -5,11 +5,10 @@ Redis-based caching layer for expensive KPI calculations.
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +148,9 @@ class KPICache:
             result_dict = {
                 "kpi_id": result.kpi_id,
                 "value": result.value,
-                "status": result.status.value if isinstance(result.status, KPIStatus) else result.status,
+                "status": result.status.value
+                if isinstance(result.status, KPIStatus)
+                else result.status,
                 "calculated_at": result.calculated_at.isoformat(),
                 "cache_expires_at": expires_at.isoformat(),
                 "error": result.error,

@@ -29,7 +29,6 @@ Version: 1.0.0
 """
 
 import logging
-import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -40,9 +39,7 @@ from uuid_utils import uuid7 as uuid7_func
 
 from .base import (
     AlgorithmResult,
-    DiscoveryAlgorithmType,
     DiscoveryConfig,
-    DiscoveryResult,
     GateDecision,
 )
 
@@ -121,11 +118,13 @@ class DiscoverySpan:
                 # Events are added to metadata
                 current_metadata = getattr(self._opik_span, "_metadata", {}) or {}
                 events = current_metadata.get("events", [])
-                events.append({
-                    "name": name,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "attributes": attributes or {},
-                })
+                events.append(
+                    {
+                        "name": name,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "attributes": attributes or {},
+                    }
+                )
                 current_metadata["events"] = events
                 self._opik_span.update(metadata=current_metadata)
             except Exception as e:
@@ -260,7 +259,6 @@ class DiscoveryTracer:
             _tracer=self,
         )
 
-        opik_span = None
         error_occurred = False
         error_message = None
 
@@ -410,9 +408,7 @@ class DiscoveryTracer:
             except Exception as e:
                 logger.debug(f"Failed to log gate decision metric: {e}")
 
-        logger.info(
-            f"Gate decision: {decision.value} (confidence: {confidence:.2%})"
-        )
+        logger.info(f"Gate decision: {decision.value} (confidence: {confidence:.2%})")
 
     async def log_cache_event(
         self,
@@ -455,9 +451,7 @@ class DiscoveryTracer:
             except Exception as e:
                 logger.debug(f"Failed to log cache event metric: {e}")
 
-        logger.debug(
-            f"Cache {'hit' if hit else 'miss'} in {latency_ms:.2f}ms"
-        )
+        logger.debug(f"Cache {'hit' if hit else 'miss'} in {latency_ms:.2f}ms")
 
     async def log_ensemble_result(
         self,

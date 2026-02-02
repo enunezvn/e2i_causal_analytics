@@ -15,7 +15,6 @@ from typing import Any
 from src.testing.agent_quality_gates import (
     AGENT_QUALITY_GATES,
     AgentQualityGate,
-    DataQualityCheck,
 )
 
 
@@ -158,22 +157,26 @@ class QualityGateValidator:
         for field_name in required_fields:
             if field_name in output and output[field_name] is not None:
                 result.required_output_fields_present.append(field_name)
-                result.passed_checks.append(QualityCheckResult(
-                    check_name="required_output_field",
-                    field_name=field_name,
-                    passed=True,
-                    message=f"Required field '{field_name}' is present",
-                ))
+                result.passed_checks.append(
+                    QualityCheckResult(
+                        check_name="required_output_field",
+                        field_name=field_name,
+                        passed=True,
+                        message=f"Required field '{field_name}' is present",
+                    )
+                )
             else:
                 result.required_output_fields_missing.append(field_name)
-                result.failed_checks.append(QualityCheckResult(
-                    check_name="required_output_field",
-                    field_name=field_name,
-                    passed=False,
-                    message=f"Required field '{field_name}' is missing or null",
-                    expected="present and non-null",
-                    actual="missing" if field_name not in output else "null",
-                ))
+                result.failed_checks.append(
+                    QualityCheckResult(
+                        check_name="required_output_field",
+                        field_name=field_name,
+                        passed=False,
+                        message=f"Required field '{field_name}' is missing or null",
+                        expected="present and non-null",
+                        actual="missing" if field_name not in output else "null",
+                    )
+                )
 
     def _check_min_required_fields_pct(
         self,
@@ -191,30 +194,36 @@ class QualityGateValidator:
 
         # If there are no required fields (total=False TypedDict), auto-pass
         if required_total == 0:
-            result.passed_checks.append(QualityCheckResult(
-                check_name="min_required_fields_pct",
-                field_name="(contract)",
-                passed=True,
-                message="No required fields in contract (total=False) - check skipped",
-            ))
+            result.passed_checks.append(
+                QualityCheckResult(
+                    check_name="min_required_fields_pct",
+                    field_name="(contract)",
+                    passed=True,
+                    message="No required fields in contract (total=False) - check skipped",
+                )
+            )
             return
 
         if actual_pct >= min_pct:
-            result.passed_checks.append(QualityCheckResult(
-                check_name="min_required_fields_pct",
-                field_name="(contract)",
-                passed=True,
-                message=f"Required fields percentage ({actual_pct:.1%}) >= minimum ({min_pct:.1%})",
-            ))
+            result.passed_checks.append(
+                QualityCheckResult(
+                    check_name="min_required_fields_pct",
+                    field_name="(contract)",
+                    passed=True,
+                    message=f"Required fields percentage ({actual_pct:.1%}) >= minimum ({min_pct:.1%})",
+                )
+            )
         else:
-            result.failed_checks.append(QualityCheckResult(
-                check_name="min_required_fields_pct",
-                field_name="(contract)",
-                passed=False,
-                message=f"Required fields percentage ({actual_pct:.1%}) < minimum ({min_pct:.1%})",
-                expected=f">= {min_pct:.1%}",
-                actual=f"{actual_pct:.1%}",
-            ))
+            result.failed_checks.append(
+                QualityCheckResult(
+                    check_name="min_required_fields_pct",
+                    field_name="(contract)",
+                    passed=False,
+                    message=f"Required fields percentage ({actual_pct:.1%}) < minimum ({min_pct:.1%})",
+                    expected=f">= {min_pct:.1%}",
+                    actual=f"{actual_pct:.1%}",
+                )
+            )
 
     def _run_data_quality_checks(
         self,
@@ -231,14 +240,16 @@ class QualityGateValidator:
             # Check not_null
             if check.get("not_null", False):
                 if value is None:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="not_null",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' is null but not_null=True",
-                        expected="non-null value",
-                        actual="null",
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="not_null",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' is null but not_null=True",
+                            expected="non-null value",
+                            actual="null",
+                        )
+                    )
                     continue  # Skip other checks if null
 
             # Skip remaining checks if value is None
@@ -258,143 +269,171 @@ class QualityGateValidator:
             if "must_be" in check:
                 expected = check["must_be"]
                 if value == expected:
-                    result.passed_checks.append(QualityCheckResult(
-                        check_name="must_be",
-                        field_name=field_name,
-                        passed=True,
-                        message=f"Field '{field_name}' equals expected value",
-                    ))
+                    result.passed_checks.append(
+                        QualityCheckResult(
+                            check_name="must_be",
+                            field_name=field_name,
+                            passed=True,
+                            message=f"Field '{field_name}' equals expected value",
+                        )
+                    )
                 else:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="must_be",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' must be {expected!r} but is {value!r}",
-                        expected=repr(expected),
-                        actual=repr(value),
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="must_be",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' must be {expected!r} but is {value!r}",
+                            expected=repr(expected),
+                            actual=repr(value),
+                        )
+                    )
 
             # Check must_not_be
             if "must_not_be" in check:
                 forbidden = check["must_not_be"]
                 if value != forbidden:
-                    result.passed_checks.append(QualityCheckResult(
-                        check_name="must_not_be",
-                        field_name=field_name,
-                        passed=True,
-                        message=f"Field '{field_name}' does not equal forbidden value",
-                    ))
+                    result.passed_checks.append(
+                        QualityCheckResult(
+                            check_name="must_not_be",
+                            field_name=field_name,
+                            passed=True,
+                            message=f"Field '{field_name}' does not equal forbidden value",
+                        )
+                    )
                 else:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="must_not_be",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' must not be {forbidden!r}",
-                        expected=f"not {forbidden!r}",
-                        actual=repr(value),
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="must_not_be",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' must not be {forbidden!r}",
+                            expected=f"not {forbidden!r}",
+                            actual=repr(value),
+                        )
+                    )
 
             # Check in_set
             if "in_set" in check:
                 allowed = check["in_set"]
                 if value in allowed:
-                    result.passed_checks.append(QualityCheckResult(
-                        check_name="in_set",
-                        field_name=field_name,
-                        passed=True,
-                        message=f"Field '{field_name}' is in allowed set",
-                    ))
+                    result.passed_checks.append(
+                        QualityCheckResult(
+                            check_name="in_set",
+                            field_name=field_name,
+                            passed=True,
+                            message=f"Field '{field_name}' is in allowed set",
+                        )
+                    )
                 else:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="in_set",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' value {value!r} not in allowed set {allowed}",
-                        expected=f"one of {allowed}",
-                        actual=repr(value),
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="in_set",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' value {value!r} not in allowed set {allowed}",
+                            expected=f"one of {allowed}",
+                            actual=repr(value),
+                        )
+                    )
 
             # Check not_contains (for strings)
             if "not_contains" in check and isinstance(value, str):
                 forbidden_substrings = check["not_contains"]
                 found = [s for s in forbidden_substrings if s in value]
                 if not found:
-                    result.passed_checks.append(QualityCheckResult(
-                        check_name="not_contains",
-                        field_name=field_name,
-                        passed=True,
-                        message=f"Field '{field_name}' does not contain forbidden substrings",
-                    ))
+                    result.passed_checks.append(
+                        QualityCheckResult(
+                            check_name="not_contains",
+                            field_name=field_name,
+                            passed=True,
+                            message=f"Field '{field_name}' does not contain forbidden substrings",
+                        )
+                    )
                 else:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="not_contains",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' contains error indicators: {found}",
-                        expected=f"no substrings from {forbidden_substrings}",
-                        actual=f"contains {found}",
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="not_contains",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' contains error indicators: {found}",
+                            expected=f"no substrings from {forbidden_substrings}",
+                            actual=f"contains {found}",
+                        )
+                    )
 
             # Check min_value
             if "min_value" in check and isinstance(value, (int, float)):
                 min_val = check["min_value"]
                 if value >= min_val:
-                    result.passed_checks.append(QualityCheckResult(
-                        check_name="min_value",
-                        field_name=field_name,
-                        passed=True,
-                        message=f"Field '{field_name}' >= {min_val}",
-                    ))
+                    result.passed_checks.append(
+                        QualityCheckResult(
+                            check_name="min_value",
+                            field_name=field_name,
+                            passed=True,
+                            message=f"Field '{field_name}' >= {min_val}",
+                        )
+                    )
                 else:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="min_value",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' is {value} but min is {min_val}",
-                        expected=f">= {min_val}",
-                        actual=str(value),
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="min_value",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' is {value} but min is {min_val}",
+                            expected=f">= {min_val}",
+                            actual=str(value),
+                        )
+                    )
 
             # Check max_value
             if "max_value" in check and isinstance(value, (int, float)):
                 max_val = check["max_value"]
                 if value <= max_val:
-                    result.passed_checks.append(QualityCheckResult(
-                        check_name="max_value",
-                        field_name=field_name,
-                        passed=True,
-                        message=f"Field '{field_name}' <= {max_val}",
-                    ))
+                    result.passed_checks.append(
+                        QualityCheckResult(
+                            check_name="max_value",
+                            field_name=field_name,
+                            passed=True,
+                            message=f"Field '{field_name}' <= {max_val}",
+                        )
+                    )
                 else:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="max_value",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' is {value} but max is {max_val}",
-                        expected=f"<= {max_val}",
-                        actual=str(value),
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="max_value",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' is {value} but max is {max_val}",
+                            expected=f"<= {max_val}",
+                            actual=str(value),
+                        )
+                    )
 
             # Check min_length
             if "min_length" in check and hasattr(value, "__len__"):
                 min_len = check["min_length"]
                 actual_len = len(value)
                 if actual_len >= min_len:
-                    result.passed_checks.append(QualityCheckResult(
-                        check_name="min_length",
-                        field_name=field_name,
-                        passed=True,
-                        message=f"Field '{field_name}' length ({actual_len}) >= {min_len}",
-                    ))
+                    result.passed_checks.append(
+                        QualityCheckResult(
+                            check_name="min_length",
+                            field_name=field_name,
+                            passed=True,
+                            message=f"Field '{field_name}' length ({actual_len}) >= {min_len}",
+                        )
+                    )
                 else:
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="min_length",
-                        field_name=field_name,
-                        passed=False,
-                        message=f"Field '{field_name}' length ({actual_len}) < min ({min_len})",
-                        expected=f">= {min_len}",
-                        actual=str(actual_len),
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="min_length",
+                            field_name=field_name,
+                            passed=False,
+                            message=f"Field '{field_name}' length ({actual_len}) < min ({min_len})",
+                            expected=f">= {min_len}",
+                            actual=str(actual_len),
+                        )
+                    )
 
     def _check_value_type(
         self,
@@ -464,14 +503,16 @@ class QualityGateValidator:
                     if fail_status.lower() == status_lower:
                         result.status_failure = True
                         result.status_value = value
-                        result.failed_checks.append(QualityCheckResult(
-                            check_name="status_failure",
-                            field_name=field_name,
-                            passed=False,
-                            message=f"Agent returned failure status: {value}",
-                            expected=f"not in {fail_statuses}",
-                            actual=value,
-                        ))
+                        result.failed_checks.append(
+                            QualityCheckResult(
+                                check_name="status_failure",
+                                field_name=field_name,
+                                passed=False,
+                                message=f"Agent returned failure status: {value}",
+                                expected=f"not in {fail_statuses}",
+                                actual=value,
+                            )
+                        )
                         return
 
             # Boolean success check
@@ -479,23 +520,27 @@ class QualityGateValidator:
                 if not value and "failed" in fail_statuses:
                     result.status_failure = True
                     result.status_value = "success=False"
-                    result.failed_checks.append(QualityCheckResult(
-                        check_name="status_failure",
-                        field_name=field_name,
-                        passed=False,
-                        message="Agent returned success=False",
-                        expected="success=True",
-                        actual="success=False",
-                    ))
+                    result.failed_checks.append(
+                        QualityCheckResult(
+                            check_name="status_failure",
+                            field_name=field_name,
+                            passed=False,
+                            message="Agent returned success=False",
+                            expected="success=True",
+                            actual="success=False",
+                        )
+                    )
                     return
 
         # No status failure detected
-        result.passed_checks.append(QualityCheckResult(
-            check_name="status_failure",
-            field_name="(status fields)",
-            passed=True,
-            message="No failure status detected",
-        ))
+        result.passed_checks.append(
+            QualityCheckResult(
+                check_name="status_failure",
+                field_name="(status fields)",
+                passed=True,
+                message="No failure status detected",
+            )
+        )
 
     def _run_semantic_validation(
         self,
@@ -518,25 +563,31 @@ class QualityGateValidator:
             is_valid, reason = validator(output)
 
             if is_valid:
-                result.passed_checks.append(QualityCheckResult(
-                    check_name="semantic_validation",
-                    field_name="(output)",
-                    passed=True,
-                    message=reason,
-                ))
+                result.passed_checks.append(
+                    QualityCheckResult(
+                        check_name="semantic_validation",
+                        field_name="(output)",
+                        passed=True,
+                        message=reason,
+                    )
+                )
             else:
-                result.failed_checks.append(QualityCheckResult(
+                result.failed_checks.append(
+                    QualityCheckResult(
+                        check_name="semantic_validation",
+                        field_name="(output)",
+                        passed=False,
+                        message=f"Semantic validation failed: {reason}",
+                        expected="meaningful, actionable output",
+                        actual="invalid or dangerous output",
+                    )
+                )
+        except Exception as e:
+            result.failed_checks.append(
+                QualityCheckResult(
                     check_name="semantic_validation",
                     field_name="(output)",
                     passed=False,
-                    message=f"Semantic validation failed: {reason}",
-                    expected="meaningful, actionable output",
-                    actual="invalid or dangerous output",
-                ))
-        except Exception as e:
-            result.failed_checks.append(QualityCheckResult(
-                check_name="semantic_validation",
-                field_name="(output)",
-                passed=False,
-                message=f"Semantic validation error: {e}",
-            ))
+                    message=f"Semantic validation error: {e}",
+                )
+            )

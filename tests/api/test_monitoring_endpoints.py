@@ -274,9 +274,7 @@ class TestGetLatestDriftStatus:
     def test_get_latest_drift_success(self, sample_drift_record):
         """Should return latest drift status for model."""
         mock_repo = MagicMock()
-        mock_repo.get_latest_drift_status = AsyncMock(
-            return_value=[sample_drift_record]
-        )
+        mock_repo.get_latest_drift_status = AsyncMock(return_value=[sample_drift_record])
 
         with patch(
             "src.repositories.drift_monitoring.DriftHistoryRepository",
@@ -309,9 +307,7 @@ class TestGetLatestDriftStatus:
     def test_get_latest_drift_with_limit(self, sample_drift_record):
         """Should respect limit parameter."""
         mock_repo = MagicMock()
-        mock_repo.get_latest_drift_status = AsyncMock(
-            return_value=[sample_drift_record]
-        )
+        mock_repo.get_latest_drift_status = AsyncMock(return_value=[sample_drift_record])
 
         with patch(
             "src.repositories.drift_monitoring.DriftHistoryRepository",
@@ -326,9 +322,7 @@ class TestGetLatestDriftStatus:
     def test_get_latest_drift_service_error(self):
         """Should return 500 on service error."""
         mock_repo = MagicMock()
-        mock_repo.get_latest_drift_status = AsyncMock(
-            side_effect=Exception("Database error")
-        )
+        mock_repo.get_latest_drift_status = AsyncMock(side_effect=Exception("Database error"))
 
         with patch(
             "src.repositories.drift_monitoring.DriftHistoryRepository",
@@ -350,9 +344,7 @@ class TestGetDriftHistory:
     def test_get_drift_history_success(self, sample_drift_record):
         """Should return drift history for model."""
         mock_repo = MagicMock()
-        mock_repo.get_latest_drift_status = AsyncMock(
-            return_value=[sample_drift_record]
-        )
+        mock_repo.get_latest_drift_status = AsyncMock(return_value=[sample_drift_record])
 
         with patch(
             "src.repositories.drift_monitoring.DriftHistoryRepository",
@@ -376,8 +368,7 @@ class TestGetDriftHistory:
             return_value=mock_repo,
         ):
             response = client.get(
-                "/api/monitoring/drift/history/propensity_v2.1.0"
-                "?feature_name=days_since_last_visit"
+                "/api/monitoring/drift/history/propensity_v2.1.0?feature_name=days_since_last_visit"
             )
 
         assert response.status_code == 200
@@ -606,17 +597,13 @@ class TestListMonitoringRuns:
 class TestGetModelHealth:
     """Tests for GET /monitoring/health/{model_id}."""
 
-    def test_get_model_health_healthy(
-        self, sample_drift_record, sample_run_record
-    ):
+    def test_get_model_health_healthy(self, sample_drift_record, sample_run_record):
         """Should return healthy status for model without issues."""
         sample_drift_record.drift_score = 0.2  # Low drift
         sample_drift_record.severity = "low"
 
         mock_drift_repo = MagicMock()
-        mock_drift_repo.get_latest_drift_status = AsyncMock(
-            return_value=[sample_drift_record]
-        )
+        mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=[sample_drift_record])
 
         mock_alert_repo = MagicMock()
         mock_alert_repo.get_active_alerts = AsyncMock(return_value=[])
@@ -651,9 +638,7 @@ class TestGetModelHealth:
         sample_drift_record.severity = "critical"
 
         mock_drift_repo = MagicMock()
-        mock_drift_repo.get_latest_drift_status = AsyncMock(
-            return_value=[sample_drift_record]
-        )
+        mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=[sample_drift_record])
 
         mock_alert_repo = MagicMock()
         mock_alert_repo.get_active_alerts = AsyncMock(
@@ -736,9 +721,7 @@ class TestRecordPerformance:
         mock_task = MagicMock()
         mock_task.id = "perf_task_001"
 
-        with patch(
-            "src.tasks.drift_monitoring_tasks.track_model_performance"
-        ) as mock_tracker:
+        with patch("src.tasks.drift_monitoring_tasks.track_model_performance") as mock_tracker:
             mock_tracker.delay = MagicMock(return_value=mock_task)
             response = client.post(
                 "/api/monitoring/performance/record",
@@ -774,9 +757,7 @@ class TestGetPerformanceTrend:
     def test_get_performance_trend_success(self, sample_performance_trend):
         """Should return performance trend."""
         mock_tracker = MagicMock()
-        mock_tracker.get_performance_trend = AsyncMock(
-            return_value=sample_performance_trend
-        )
+        mock_tracker.get_performance_trend = AsyncMock(return_value=sample_performance_trend)
 
         mock_repo = MagicMock()
         mock_repo.get_metric_trend = AsyncMock(return_value=[])
@@ -802,9 +783,7 @@ class TestGetPerformanceTrend:
     def test_get_performance_trend_service_error(self):
         """Should return 500 on service error."""
         mock_tracker = MagicMock()
-        mock_tracker.get_performance_trend = AsyncMock(
-            side_effect=Exception("Service unavailable")
-        )
+        mock_tracker.get_performance_trend = AsyncMock(side_effect=Exception("Service unavailable"))
 
         with patch(
             "src.services.performance_tracking.get_performance_tracker",
@@ -836,9 +815,7 @@ class TestEvaluateRetraining:
             "src.services.retraining_trigger.get_retraining_trigger_service",
             return_value=mock_service,
         ):
-            response = client.post(
-                "/api/monitoring/retraining/evaluate/propensity_v2.1.0"
-            )
+            response = client.post("/api/monitoring/retraining/evaluate/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -864,9 +841,7 @@ class TestEvaluateRetraining:
             "src.services.retraining_trigger.get_retraining_trigger_service",
             return_value=mock_service,
         ):
-            response = client.post(
-                "/api/monitoring/retraining/evaluate/propensity_v2.1.0"
-            )
+            response = client.post("/api/monitoring/retraining/evaluate/propensity_v2.1.0")
 
         assert response.status_code == 200
         data = response.json()
@@ -907,9 +882,7 @@ class TestGetRetrainingStatus:
     def test_get_retraining_status_success(self, sample_retraining_job):
         """Should return retraining job status."""
         mock_service = MagicMock()
-        mock_service.get_retraining_status = AsyncMock(
-            return_value=sample_retraining_job
-        )
+        mock_service.get_retraining_status = AsyncMock(return_value=sample_retraining_job)
 
         with patch(
             "src.services.retraining_trigger.get_retraining_trigger_service",

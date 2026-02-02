@@ -46,6 +46,7 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0 (Phase 5 - Initial Implementation)
 """
 
+import asyncio
 import logging
 import os
 import threading
@@ -55,9 +56,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
-import asyncio
-from functools import wraps
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -150,9 +149,7 @@ class CircuitBreakerMetrics:
             "state_changes": self.state_changes,
             "times_opened": self.times_opened,
             "success_rate": (
-                self.successful_calls / self.total_calls
-                if self.total_calls > 0
-                else 1.0
+                self.successful_calls / self.total_calls if self.total_calls > 0 else 1.0
             ),
         }
 
@@ -285,9 +282,7 @@ class MLflowRun:
         """
         await self.log_params({key: value})
 
-    async def log_metrics(
-        self, metrics: Dict[str, float], step: Optional[int] = None
-    ) -> None:
+    async def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
         """Log metrics.
 
         Args:
@@ -297,9 +292,7 @@ class MLflowRun:
         await self.connector._log_metrics(self.run_id, metrics, step)
         self._metrics.update(metrics)
 
-    async def log_metric(
-        self, key: str, value: float, step: Optional[int] = None
-    ) -> None:
+    async def log_metric(self, key: str, value: float, step: Optional[int] = None) -> None:
         """Log a single metric.
 
         Args:
@@ -574,9 +567,7 @@ class MLflowConnector:
             logger.error(f"Failed to get/create experiment: {e}")
             raise
 
-    async def list_experiments(
-        self, view_type: str = "ACTIVE_ONLY"
-    ) -> List[Dict[str, Any]]:
+    async def list_experiments(self, view_type: str = "ACTIVE_ONLY") -> List[Dict[str, Any]]:
         """List all experiments.
 
         Args:

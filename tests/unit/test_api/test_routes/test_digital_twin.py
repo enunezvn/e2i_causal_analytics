@@ -9,13 +9,12 @@ Tests all endpoints in src/api/routes/digital_twin.py including:
 - Fidelity reporting
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock, patch
-from uuid import uuid4, UUID
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
+import pytest
 from fastapi import HTTPException
-
 
 # =============================================================================
 # FIXTURES
@@ -74,7 +73,9 @@ def mock_simulation_engine():
         mock_result.intervention_config = MagicMock()
         mock_result.intervention_config.intervention_type = "email_campaign"
         mock_result.intervention_config.extra_params = {"brand": "Remibrutinib", "twin_type": "hcp"}
-        mock_result.intervention_config.model_dump.return_value = {"intervention_type": "email_campaign"}
+        mock_result.intervention_config.model_dump.return_value = {
+            "intervention_type": "email_campaign"
+        }
         mock_result.effect_heterogeneity = MagicMock()
         mock_result.effect_heterogeneity.by_specialty = {}
         mock_result.effect_heterogeneity.by_decile = {}
@@ -120,7 +121,9 @@ def mock_twin_repository():
         mock_result.intervention_config = MagicMock()
         mock_result.intervention_config.intervention_type = "email_campaign"
         mock_result.intervention_config.extra_params = {"brand": "Remibrutinib", "twin_type": "hcp"}
-        mock_result.intervention_config.model_dump.return_value = {"intervention_type": "email_campaign"}
+        mock_result.intervention_config.model_dump.return_value = {
+            "intervention_type": "email_campaign"
+        }
         mock_result.twin_count = 1000
         mock_result.simulated_ate = 0.075
         mock_result.simulated_ci_lower = 0.050
@@ -281,9 +284,17 @@ async def test_digital_twin_health():
 
 
 @pytest.mark.asyncio
-async def test_run_simulation_success(mock_twin_generator, mock_simulation_engine, mock_twin_repository):
+async def test_run_simulation_success(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
     """Test running a successful simulation."""
-    from src.api.routes.digital_twin import run_simulation, SimulateRequest, InterventionConfigRequest, BrandEnum, TwinTypeEnum
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
 
     request = SimulateRequest(
         intervention=InterventionConfigRequest(
@@ -308,9 +319,17 @@ async def test_run_simulation_success(mock_twin_generator, mock_simulation_engin
 
 
 @pytest.mark.asyncio
-async def test_run_simulation_with_filters(mock_twin_generator, mock_simulation_engine, mock_twin_repository):
+async def test_run_simulation_with_filters(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
     """Test simulation with population filters."""
-    from src.api.routes.digital_twin import run_simulation, SimulateRequest, InterventionConfigRequest, PopulationFilterRequest, BrandEnum
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        PopulationFilterRequest,
+        SimulateRequest,
+        run_simulation,
+    )
 
     request = SimulateRequest(
         intervention=InterventionConfigRequest(
@@ -333,9 +352,16 @@ async def test_run_simulation_with_filters(mock_twin_generator, mock_simulation_
 
 
 @pytest.mark.asyncio
-async def test_run_simulation_with_specific_model(mock_twin_generator, mock_simulation_engine, mock_twin_repository):
+async def test_run_simulation_with_specific_model(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
     """Test simulation with specific model ID."""
-    from src.api.routes.digital_twin import run_simulation, SimulateRequest, InterventionConfigRequest, BrandEnum
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        run_simulation,
+    )
 
     model_id = str(uuid4())
     request = SimulateRequest(
@@ -355,9 +381,16 @@ async def test_run_simulation_with_specific_model(mock_twin_generator, mock_simu
 
 
 @pytest.mark.asyncio
-async def test_run_simulation_validation_error(mock_twin_generator, mock_simulation_engine, mock_twin_repository):
+async def test_run_simulation_validation_error(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
     """Test simulation with validation error."""
-    from src.api.routes.digital_twin import run_simulation, SimulateRequest, InterventionConfigRequest, BrandEnum
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        run_simulation,
+    )
 
     mock_twin_generator.generate.side_effect = ValueError("Invalid parameters")
 
@@ -378,9 +411,16 @@ async def test_run_simulation_validation_error(mock_twin_generator, mock_simulat
 
 
 @pytest.mark.asyncio
-async def test_run_simulation_general_error(mock_twin_generator, mock_simulation_engine, mock_twin_repository):
+async def test_run_simulation_general_error(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
     """Test simulation with general error."""
-    from src.api.routes.digital_twin import run_simulation, SimulateRequest, InterventionConfigRequest, BrandEnum
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        run_simulation,
+    )
 
     mock_simulation_engine.simulate.side_effect = Exception("Simulation failed")
 
@@ -421,9 +461,11 @@ async def test_list_simulations_all(mock_twin_repository):
 @pytest.mark.asyncio
 async def test_list_simulations_filtered_by_brand(mock_twin_repository):
     """Test listing simulations filtered by brand."""
-    from src.api.routes.digital_twin import list_simulations, BrandEnum
+    from src.api.routes.digital_twin import BrandEnum, list_simulations
 
-    result = await list_simulations(brand=BrandEnum.REMIBRUTINIB, model_id=None, status=None, page=1, page_size=20)
+    result = await list_simulations(
+        brand=BrandEnum.REMIBRUTINIB, model_id=None, status=None, page=1, page_size=20
+    )
 
     assert result.total_count >= 0
 
@@ -434,7 +476,9 @@ async def test_list_simulations_filtered_by_model(mock_twin_repository):
     from src.api.routes.digital_twin import list_simulations
 
     model_id = str(uuid4())
-    result = await list_simulations(brand=None, model_id=model_id, status=None, page=1, page_size=20)
+    result = await list_simulations(
+        brand=None, model_id=model_id, status=None, page=1, page_size=20
+    )
 
     assert result.total_count >= 0
 
@@ -442,9 +486,11 @@ async def test_list_simulations_filtered_by_model(mock_twin_repository):
 @pytest.mark.asyncio
 async def test_list_simulations_filtered_by_status(mock_twin_repository):
     """Test listing simulations filtered by status."""
-    from src.api.routes.digital_twin import list_simulations, SimulationStatusEnum
+    from src.api.routes.digital_twin import SimulationStatusEnum, list_simulations
 
-    result = await list_simulations(brand=None, model_id=None, status=SimulationStatusEnum.COMPLETED, page=1, page_size=20)
+    result = await list_simulations(
+        brand=None, model_id=None, status=SimulationStatusEnum.COMPLETED, page=1, page_size=20
+    )
 
     assert result.total_count >= 0
 
@@ -456,18 +502,20 @@ async def test_list_simulations_pagination(mock_twin_repository):
 
     # Create multiple mock simulations
     sims = []
-    for i in range(5):
-        sims.append({
-            "simulation_id": str(uuid4()),
-            "intervention_type": "email_campaign",
-            "brand": "Remibrutinib",
-            "twin_type": "hcp",
-            "twin_count": 1000,
-            "simulated_ate": 0.075,
-            "recommendation": "deploy",
-            "simulation_status": "completed",
-            "created_at": datetime.now(timezone.utc),
-        })
+    for _i in range(5):
+        sims.append(
+            {
+                "simulation_id": str(uuid4()),
+                "intervention_type": "email_campaign",
+                "brand": "Remibrutinib",
+                "twin_type": "hcp",
+                "twin_count": 1000,
+                "simulated_ate": 0.075,
+                "recommendation": "deploy",
+                "simulation_status": "completed",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
     mock_twin_repository.list_simulations.return_value = sims
 
     result = await list_simulations(brand=None, model_id=None, status=None, page=2, page_size=2)
@@ -533,7 +581,7 @@ async def test_get_simulation_error(mock_twin_repository):
 @pytest.mark.asyncio
 async def test_validate_simulation_success(mock_fidelity_tracker, mock_twin_repository):
     """Test validating simulation against actual results."""
-    from src.api.routes.digital_twin import validate_simulation, ValidateFidelityRequest
+    from src.api.routes.digital_twin import ValidateFidelityRequest, validate_simulation
 
     # Mock simulation exists
     mock_sim = {"model_id": str(uuid4()), "simulated_ate": 0.075}
@@ -559,7 +607,7 @@ async def test_validate_simulation_success(mock_fidelity_tracker, mock_twin_repo
 @pytest.mark.asyncio
 async def test_validate_simulation_existing_record(mock_fidelity_tracker, mock_twin_repository):
     """Test validating simulation with existing fidelity record."""
-    from src.api.routes.digital_twin import validate_simulation, ValidateFidelityRequest
+    from src.api.routes.digital_twin import ValidateFidelityRequest, validate_simulation
 
     # Mock existing record
     existing_record = MagicMock()
@@ -584,7 +632,7 @@ async def test_validate_simulation_existing_record(mock_fidelity_tracker, mock_t
 @pytest.mark.asyncio
 async def test_validate_simulation_not_found(mock_fidelity_tracker, mock_twin_repository):
     """Test validating non-existent simulation."""
-    from src.api.routes.digital_twin import validate_simulation, ValidateFidelityRequest
+    from src.api.routes.digital_twin import ValidateFidelityRequest, validate_simulation
 
     mock_twin_repository.get_simulation.return_value = None
 
@@ -604,7 +652,7 @@ async def test_validate_simulation_not_found(mock_fidelity_tracker, mock_twin_re
 @pytest.mark.asyncio
 async def test_validate_simulation_error(mock_fidelity_tracker, mock_twin_repository):
     """Test validation with error."""
-    from src.api.routes.digital_twin import validate_simulation, ValidateFidelityRequest
+    from src.api.routes.digital_twin import ValidateFidelityRequest, validate_simulation
 
     mock_sim = {"model_id": str(uuid4()), "simulated_ate": 0.075}
     mock_twin_repository.get_simulation.return_value = mock_sim
@@ -643,7 +691,7 @@ async def test_list_models_all(mock_twin_repository):
 @pytest.mark.asyncio
 async def test_list_models_filtered_by_brand(mock_twin_repository):
     """Test listing models filtered by brand."""
-    from src.api.routes.digital_twin import list_models, BrandEnum
+    from src.api.routes.digital_twin import BrandEnum, list_models
 
     result = await list_models(brand=BrandEnum.REMIBRUTINIB, twin_type=None)
 
@@ -653,7 +701,7 @@ async def test_list_models_filtered_by_brand(mock_twin_repository):
 @pytest.mark.asyncio
 async def test_list_models_filtered_by_type(mock_twin_repository):
     """Test listing models filtered by twin type."""
-    from src.api.routes.digital_twin import list_models, TwinTypeEnum
+    from src.api.routes.digital_twin import TwinTypeEnum, list_models
 
     result = await list_models(brand=None, twin_type=TwinTypeEnum.HCP)
 
@@ -833,9 +881,16 @@ async def test_get_fidelity_report_poor_performance(mock_fidelity_tracker, mock_
 
 
 @pytest.mark.asyncio
-async def test_simulation_with_all_intervention_params(mock_twin_generator, mock_simulation_engine, mock_twin_repository):
+async def test_simulation_with_all_intervention_params(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
     """Test simulation with all intervention parameters."""
-    from src.api.routes.digital_twin import run_simulation, SimulateRequest, InterventionConfigRequest, BrandEnum
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        run_simulation,
+    )
 
     request = SimulateRequest(
         intervention=InterventionConfigRequest(

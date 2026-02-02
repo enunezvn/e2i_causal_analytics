@@ -16,39 +16,38 @@ import pytest
 from pydantic import ValidationError
 
 from src.api.routes.chatbot_tools import (
-    # Enums
-    E2IQueryType,
-    TimeRange,
-    # Pydantic models
-    E2IDataQueryInput,
-    CausalAnalysisInput,
-    AgentRoutingInput,
-    ConversationMemoryInput,
-    DocumentRetrievalInput,
-    OrchestratorToolInput,
-    ToolComposerToolInput,
-    # Helper functions
-    _get_time_filter,
-    _query_kpis,
-    _query_causal_chains,
-    _query_agent_analysis,
-    _query_triggers,
-    _query_via_rag,
-    # Tools
-    e2i_data_query_tool,
-    causal_analysis_tool,
-    agent_routing_tool,
-    conversation_memory_tool,
-    document_retrieval_tool,
-    orchestrator_tool,
-    tool_composer_tool,
     # Exports
     E2I_CHATBOT_TOOLS,
     E2I_TOOL_MAP,
+    AgentRoutingInput,
+    CausalAnalysisInput,
+    ConversationMemoryInput,
+    DocumentRetrievalInput,
+    # Pydantic models
+    E2IDataQueryInput,
+    # Enums
+    E2IQueryType,
+    OrchestratorToolInput,
+    TimeRange,
+    ToolComposerToolInput,
+    # Helper functions
+    _get_time_filter,
+    _query_agent_analysis,
+    _query_causal_chains,
+    _query_kpis,
+    _query_triggers,
+    _query_via_rag,
+    agent_routing_tool,
+    causal_analysis_tool,
+    conversation_memory_tool,
+    document_retrieval_tool,
+    # Tools
+    e2i_data_query_tool,
     get_e2i_chatbot_tools,
     get_tool_by_name,
+    orchestrator_tool,
+    tool_composer_tool,
 )
-
 
 # =============================================================================
 # E2IQueryType Enum Tests
@@ -412,9 +411,7 @@ class TestQueryKpis:
             {"metric_name": "TRx", "value": 150, "brand": "Kisqali"},
         ]
 
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
             mock_repo.get_many.return_value = mock_metrics
             mock_client.return_value = MagicMock()
@@ -439,9 +436,7 @@ class TestQueryKpis:
     @pytest.mark.asyncio
     async def test_query_kpis_with_filters(self):
         """Test KPI query applies filters correctly."""
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
             mock_repo.get_many.return_value = []
             mock_client.return_value = MagicMock()
@@ -450,7 +445,7 @@ class TestQueryKpis:
                 "src.api.routes.chatbot_tools.BusinessMetricRepository",
                 return_value=mock_repo,
             ):
-                result = await _query_kpis(
+                await _query_kpis(
                     brand="Fabhalta",
                     region="EU",
                     kpi_name="NRx",
@@ -469,9 +464,7 @@ class TestQueryKpis:
     @pytest.mark.asyncio
     async def test_query_kpis_error_handling(self):
         """Test KPI query error handling."""
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_client.side_effect = Exception("Database connection failed")
 
             result = await _query_kpis(
@@ -526,9 +519,7 @@ class TestQueryCausalChains:
         """Test causal chains query without KPI uses repository."""
         mock_paths = [{"id": 1, "source": "A", "target": "B"}]
 
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
             mock_repo.get_many.return_value = mock_paths
             mock_client.return_value = MagicMock()
@@ -563,9 +554,7 @@ class TestQueryAgentAnalysis:
             {"agent_name": "causal_impact", "output": "Analysis result"},
         ]
 
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
             mock_repo.get_many.return_value = mock_activities
             mock_client.return_value = MagicMock()
@@ -599,9 +588,7 @@ class TestQueryTriggers:
         """Test successful triggers query."""
         mock_triggers = [{"id": 1, "type": "alert", "message": "TRx dropped"}]
 
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
             mock_repo.get_many.return_value = mock_triggers
             mock_client.return_value = MagicMock()
@@ -674,11 +661,13 @@ class TestE2IDataQueryTool:
         ) as mock_query:
             mock_query.return_value = {"success": True, "data": []}
 
-            result = await e2i_data_query_tool.ainvoke({
-                "query_type": E2IQueryType.KPI.value,
-                "brand": "Kisqali",
-                "kpi_name": "TRx",
-            })
+            result = await e2i_data_query_tool.ainvoke(
+                {
+                    "query_type": E2IQueryType.KPI.value,
+                    "brand": "Kisqali",
+                    "kpi_name": "TRx",
+                }
+            )
 
         mock_query.assert_called_once()
         assert result["success"] is True
@@ -691,10 +680,12 @@ class TestE2IDataQueryTool:
         ) as mock_query:
             mock_query.return_value = {"success": True, "data": []}
 
-            result = await e2i_data_query_tool.ainvoke({
-                "query_type": E2IQueryType.CAUSAL_CHAIN.value,
-                "kpi_name": "NRx",
-            })
+            await e2i_data_query_tool.ainvoke(
+                {
+                    "query_type": E2IQueryType.CAUSAL_CHAIN.value,
+                    "kpi_name": "NRx",
+                }
+            )
 
         mock_query.assert_called_once()
 
@@ -706,10 +697,12 @@ class TestE2IDataQueryTool:
         ) as mock_query:
             mock_query.return_value = {"success": True, "data": []}
 
-            result = await e2i_data_query_tool.ainvoke({
-                "query_type": E2IQueryType.AGENT_ANALYSIS.value,
-                "agent_name": "drift_monitor",
-            })
+            await e2i_data_query_tool.ainvoke(
+                {
+                    "query_type": E2IQueryType.AGENT_ANALYSIS.value,
+                    "agent_name": "drift_monitor",
+                }
+            )
 
         mock_query.assert_called_once()
 
@@ -721,9 +714,11 @@ class TestE2IDataQueryTool:
         ) as mock_query:
             mock_query.return_value = {"success": True, "data": []}
 
-            result = await e2i_data_query_tool.ainvoke({
-                "query_type": E2IQueryType.TRIGGERS.value,
-            })
+            await e2i_data_query_tool.ainvoke(
+                {
+                    "query_type": E2IQueryType.TRIGGERS.value,
+                }
+            )
 
         mock_query.assert_called_once()
 
@@ -735,10 +730,12 @@ class TestE2IDataQueryTool:
         ) as mock_rag:
             mock_rag.return_value = {"success": True, "data": []}
 
-            result = await e2i_data_query_tool.ainvoke({
-                "query_type": E2IQueryType.EXPERIMENTS.value,
-                "brand": "Kisqali",
-            })
+            await e2i_data_query_tool.ainvoke(
+                {
+                    "query_type": E2IQueryType.EXPERIMENTS.value,
+                    "brand": "Kisqali",
+                }
+            )
 
         mock_rag.assert_called_once()
 
@@ -765,11 +762,13 @@ class TestCausalAnalysisTool:
         ) as mock_search:
             mock_search.return_value = [mock_result]
 
-            result = await causal_analysis_tool.ainvoke({
-                "kpi_name": "TRx",
-                "brand": "Kisqali",
-                "min_confidence": 0.7,
-            })
+            result = await causal_analysis_tool.ainvoke(
+                {
+                    "kpi_name": "TRx",
+                    "brand": "Kisqali",
+                    "min_confidence": 0.7,
+                }
+            )
 
         assert result["success"] is True
         assert result["kpi_analyzed"] == "TRx"
@@ -795,10 +794,12 @@ class TestCausalAnalysisTool:
         ) as mock_search:
             mock_search.return_value = [mock_low_conf, mock_high_conf]
 
-            result = await causal_analysis_tool.ainvoke({
-                "kpi_name": "TRx",
-                "min_confidence": 0.8,
-            })
+            result = await causal_analysis_tool.ainvoke(
+                {
+                    "kpi_name": "TRx",
+                    "min_confidence": 0.8,
+                }
+            )
 
         # Only high confidence result should be included
         assert result["causal_chains_found"] == 1
@@ -828,10 +829,12 @@ class TestAgentRoutingTool:
     @pytest.mark.asyncio
     async def test_explicit_agent_routing(self):
         """Test routing with explicit target agent."""
-        result = await agent_routing_tool.ainvoke({
-            "query": "Analyze causal factors",
-            "target_agent": "causal_impact",
-        })
+        result = await agent_routing_tool.ainvoke(
+            {
+                "query": "Analyze causal factors",
+                "target_agent": "causal_impact",
+            }
+        )
 
         assert result["success"] is True
         assert result["routed_to"] == "causal_impact"
@@ -841,10 +844,12 @@ class TestAgentRoutingTool:
     @pytest.mark.asyncio
     async def test_invalid_target_agent(self):
         """Test routing with invalid target agent."""
-        result = await agent_routing_tool.ainvoke({
-            "query": "Test query",
-            "target_agent": "invalid_agent",
-        })
+        result = await agent_routing_tool.ainvoke(
+            {
+                "query": "Test query",
+                "target_agent": "invalid_agent",
+            }
+        )
 
         assert result["success"] is False
         assert "Unknown agent" in result["error"]
@@ -864,10 +869,12 @@ class TestAgentRoutingTool:
                 "dspy",
             )
 
-            result = await agent_routing_tool.ainvoke({
-                "query": "Why did TRx drop?",
-                "context": {"intent": "causal_analysis"},
-            })
+            result = await agent_routing_tool.ainvoke(
+                {
+                    "query": "Why did TRx drop?",
+                    "context": {"intent": "causal_analysis"},
+                }
+            )
 
         assert result["success"] is True
         assert result["routed_to"] == "causal_impact"
@@ -881,9 +888,7 @@ class TestAgentRoutingTool:
         ) as mock_dspy:
             mock_dspy.side_effect = Exception("DSPy failed")
 
-            with patch(
-                "src.api.routes.chatbot_tools.route_agent_hardcoded"
-            ) as mock_hardcoded:
+            with patch("src.api.routes.chatbot_tools.route_agent_hardcoded") as mock_hardcoded:
                 mock_hardcoded.return_value = (
                     "explainer",
                     [],
@@ -924,9 +929,7 @@ class TestConversationMemoryTool:
             },
         ]
 
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_conv_repo = AsyncMock()
             mock_conv_repo.get_by_session_id.return_value = mock_conversation
             mock_msg_repo = AsyncMock()
@@ -941,10 +944,12 @@ class TestConversationMemoryTool:
                     "src.api.routes.chatbot_tools.get_chatbot_message_repository",
                     return_value=mock_msg_repo,
                 ):
-                    result = await conversation_memory_tool.ainvoke({
-                        "session_id": "session-123",
-                        "message_count": 10,
-                    })
+                    result = await conversation_memory_tool.ainvoke(
+                        {
+                            "session_id": "session-123",
+                            "message_count": 10,
+                        }
+                    )
 
         assert result["success"] is True
         assert result["session_id"] == "session-123"
@@ -954,9 +959,7 @@ class TestConversationMemoryTool:
     @pytest.mark.asyncio
     async def test_conversation_not_found(self):
         """Test handling of missing conversation."""
-        with patch(
-            "src.api.routes.chatbot_tools.get_async_supabase_client"
-        ) as mock_client:
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_conv_repo = AsyncMock()
             mock_conv_repo.get_by_session_id.return_value = None
             mock_client.return_value = MagicMock()
@@ -965,9 +968,7 @@ class TestConversationMemoryTool:
                 "src.api.routes.chatbot_tools.get_chatbot_conversation_repository",
                 return_value=mock_conv_repo,
             ):
-                result = await conversation_memory_tool.ainvoke({
-                    "session_id": "unknown-session"
-                })
+                result = await conversation_memory_tool.ainvoke({"session_id": "unknown-session"})
 
         assert result["success"] is False
         assert "Conversation not found" in result["error"]
@@ -997,11 +998,13 @@ class TestDocumentRetrievalTool:
         ) as mock_search:
             mock_search.return_value = [mock_result]
 
-            result = await document_retrieval_tool.ainvoke({
-                "query": "TRx trends",
-                "k": 5,
-                "brand": "Kisqali",
-            })
+            result = await document_retrieval_tool.ainvoke(
+                {
+                    "query": "TRx trends",
+                    "k": 5,
+                    "brand": "Kisqali",
+                }
+            )
 
         assert result["success"] is True
         assert result["document_count"] == 1
@@ -1041,13 +1044,13 @@ class TestOrchestratorTool:
             "analysis_results": {"key": "value"},
         }
 
-        with patch(
-            "src.api.routes.chatbot_tools.get_orchestrator", return_value=mock_orchestrator
-        ):
-            result = await orchestrator_tool.ainvoke({
-                "query": "Analyze TRx",
-                "brand": "Kisqali",
-            })
+        with patch("src.api.routes.chatbot_tools.get_orchestrator", return_value=mock_orchestrator):
+            result = await orchestrator_tool.ainvoke(
+                {
+                    "query": "Analyze TRx",
+                    "brand": "Kisqali",
+                }
+            )
 
         assert result["success"] is True
         assert result["fallback"] is False
@@ -1062,9 +1065,7 @@ class TestOrchestratorTool:
         mock_rag_result.score = 0.8
         mock_rag_result.source = "documents"
 
-        with patch(
-            "src.api.routes.chatbot_tools.get_orchestrator", return_value=None
-        ):
+        with patch("src.api.routes.chatbot_tools.get_orchestrator", return_value=None):
             with patch(
                 "src.api.routes.chatbot_tools.hybrid_search", new_callable=AsyncMock
             ) as mock_search:
@@ -1121,10 +1122,12 @@ class TestToolComposerTool:
             mock_compose.return_value = mock_result
 
             with patch("src.api.routes.chatbot_tools.get_chat_llm"):
-                result = await tool_composer_tool.ainvoke({
-                    "query": "What is TRx and why did it change?",
-                    "brand": "Kisqali",
-                })
+                result = await tool_composer_tool.ainvoke(
+                    {
+                        "query": "What is TRx and why did it change?",
+                        "brand": "Kisqali",
+                    }
+                )
 
         assert result["success"] is True
         assert result["synthesized_response"] == "TRx is 100"
@@ -1150,9 +1153,7 @@ class TestToolComposerTool:
                     "src.api.routes.chatbot_tools.get_orchestrator",
                     return_value=mock_orchestrator,
                 ):
-                    result = await tool_composer_tool.ainvoke({
-                        "query": "Multi-faceted query"
-                    })
+                    result = await tool_composer_tool.ainvoke({"query": "Multi-faceted query"})
 
         assert result["success"] is True
         assert result["fallback"] is True
@@ -1219,18 +1220,18 @@ class TestIntegration:
     async def test_data_query_to_causal_analysis_flow(self):
         """Test flow from data query to causal analysis."""
         # First query KPIs
-        with patch(
-            "src.api.routes.chatbot_tools._query_kpis", new_callable=AsyncMock
-        ) as mock_kpi:
+        with patch("src.api.routes.chatbot_tools._query_kpis", new_callable=AsyncMock) as mock_kpi:
             mock_kpi.return_value = {
                 "success": True,
                 "data": [{"metric_name": "TRx", "value": 100}],
             }
 
-            kpi_result = await e2i_data_query_tool.ainvoke({
-                "query_type": E2IQueryType.KPI.value,
-                "kpi_name": "TRx",
-            })
+            kpi_result = await e2i_data_query_tool.ainvoke(
+                {
+                    "query_type": E2IQueryType.KPI.value,
+                    "kpi_name": "TRx",
+                }
+            )
 
         assert kpi_result["success"] is True
 
@@ -1246,10 +1247,12 @@ class TestIntegration:
         ) as mock_search:
             mock_search.return_value = [mock_causal]
 
-            causal_result = await causal_analysis_tool.ainvoke({
-                "kpi_name": "TRx",
-                "min_confidence": 0.7,
-            })
+            causal_result = await causal_analysis_tool.ainvoke(
+                {
+                    "kpi_name": "TRx",
+                    "min_confidence": 0.7,
+                }
+            )
 
         assert causal_result["success"] is True
         assert causal_result["causal_chains_found"] == 1
@@ -1269,9 +1272,7 @@ class TestIntegration:
                 "dspy",
             )
 
-            routing_result = await agent_routing_tool.ainvoke({
-                "query": "Why did TRx drop?"
-            })
+            routing_result = await agent_routing_tool.ainvoke({"query": "Why did TRx drop?"})
 
         assert routing_result["routed_to"] == "causal_impact"
 
@@ -1288,10 +1289,12 @@ class TestIntegration:
             "src.api.routes.chatbot_tools.get_orchestrator",
             return_value=mock_orchestrator,
         ):
-            orch_result = await orchestrator_tool.ainvoke({
-                "query": "Why did TRx drop?",
-                "target_agent": "causal_impact",
-            })
+            orch_result = await orchestrator_tool.ainvoke(
+                {
+                    "query": "Why did TRx drop?",
+                    "target_agent": "causal_impact",
+                }
+            )
 
         assert orch_result["success"] is True
         assert "causal_impact" in orch_result["agents_dispatched"]

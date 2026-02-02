@@ -152,9 +152,7 @@ def create_experiment_designer_graph(
         Compiled StateGraph ready for execution
     """
     # Create audit workflow initializer
-    audit_initializer = create_workflow_initializer(
-        "experiment_designer", AgentTier.MONITORING
-    )
+    audit_initializer = create_workflow_initializer("experiment_designer", AgentTier.MONITORING)
 
     # Initialize nodes
     context_node = ContextLoaderNode(knowledge_store)

@@ -513,7 +513,9 @@ class ProceduralMemoryAdapter:
         elif hasattr(self._embedding_model, "encode_async"):
             return await self._embedding_model.encode_async(text)
         else:
-            raise ValueError("Embedding model must have 'embed', 'encode', or 'encode_async' method")
+            raise ValueError(
+                "Embedding model must have 'embed', 'encode', or 'encode_async' method"
+            )
 
     async def _execute_procedure_search(self, query: str, limit: int) -> List[Any]:
         """Execute procedure search via Supabase."""

@@ -106,9 +106,7 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = (
-            mock_query
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
 
         result = await repo.is_dag_approved("abc123")
 
@@ -120,9 +118,7 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=[]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = (
-            mock_query
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
 
         result = await repo.is_dag_approved("abc123")
 
@@ -152,9 +148,7 @@ class TestExpertReviewRepository:
         mock_query = MagicMock()
         mock_query.execute = mock_execute
         mock_query.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.order.return_value = (
-            mock_query
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.order.return_value = mock_query
 
         result = await repo.get_dag_approval("abc123")
 
@@ -210,9 +204,7 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=expiring_data))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value.lte.return_value.order.return_value = (
-            mock_query
-        )
+        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value.lte.return_value.order.return_value = mock_query
 
         result = await repo.get_expiring_reviews(days_until_expiry=14)
 
@@ -344,9 +336,7 @@ class TestExpertReviewRepositoryErrorHandling:
 
         mock_query = MagicMock()
         mock_query.execute = failing_execute
-        client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = (
-            mock_query
-        )
+        client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
         client.table.return_value.insert.return_value.execute = failing_execute
 
         repo.client = client

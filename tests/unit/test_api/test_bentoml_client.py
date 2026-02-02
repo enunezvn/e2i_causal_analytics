@@ -8,8 +8,7 @@ Tests cover:
 - Health checks
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -55,9 +54,7 @@ class TestBentoMLClientConfig:
 
     def test_get_endpoint_url_custom(self):
         """Test endpoint URL with custom mapping."""
-        config = BentoMLClientConfig(
-            model_endpoints={"churn_model": "http://churn-service:3000"}
-        )
+        config = BentoMLClientConfig(model_endpoints={"churn_model": "http://churn-service:3000"})
         assert config.get_endpoint_url("churn_model") == "http://churn-service:3000"
 
 
@@ -105,6 +102,7 @@ class TestCircuitBreaker:
 
         # Wait for reset timeout
         import time
+
         time.sleep(0.15)
 
         assert cb.can_execute()  # Should transition to HALF_OPEN
@@ -116,6 +114,7 @@ class TestCircuitBreaker:
 
         cb.record_failure()
         import time
+
         time.sleep(0.02)
         cb.can_execute()  # Transition to HALF_OPEN
 
@@ -182,9 +181,7 @@ class TestBentoMLClient:
             },
         )
 
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
 
             await client.initialize()
@@ -205,9 +202,7 @@ class TestBentoMLClient:
         """Test prediction adds metadata to response."""
         mock_response = make_response(200, {"prediction": 0.5})
 
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
 
             await client.initialize()
@@ -239,9 +234,7 @@ class TestBentoMLClient:
                 )
             return success_response
 
-        with patch.object(
-            httpx.AsyncClient, "post", side_effect=mock_post
-        ):
+        with patch.object(httpx.AsyncClient, "post", side_effect=mock_post):
             await client.initialize()
             result = await client.predict("test_model", {"features": []})
 
@@ -290,9 +283,7 @@ class TestBentoMLClient:
         request = httpx.Request("GET", "http://test/healthz")
         mock_response = httpx.Response(200, json={"status": "ok"}, request=request)
 
-        with patch.object(
-            httpx.AsyncClient, "get", new_callable=AsyncMock
-        ) as mock_get:
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_response
 
             await client.initialize()
@@ -331,9 +322,7 @@ class TestBentoMLClient:
             },
         )
 
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
 
             await client.initialize()
@@ -378,9 +367,7 @@ class TestDependencyInjection:
         with patch.object(BentoMLClient, "initialize", new_callable=AsyncMock):
             client = await get_bentoml_client()
 
-            configure_bentoml_endpoints({
-                "custom_model": "http://custom-service:3000"
-            })
+            configure_bentoml_endpoints({"custom_model": "http://custom-service:3000"})
 
             assert client.config.model_endpoints["custom_model"] == "http://custom-service:3000"
 
@@ -393,7 +380,7 @@ class TestDependencyInjection:
 
         with patch.object(BentoMLClient, "initialize", new_callable=AsyncMock):
             with patch.object(BentoMLClient, "close", new_callable=AsyncMock) as mock_close:
-                client = await get_bentoml_client()
+                await get_bentoml_client()
                 await close_bentoml_client()
 
                 mock_close.assert_called_once()

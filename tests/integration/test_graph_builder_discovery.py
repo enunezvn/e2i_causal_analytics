@@ -4,20 +4,20 @@ Version: 1.0.0
 Tests the integration between GraphBuilderNode and the discovery module.
 """
 
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
+
+import networkx as nx
 import numpy as np
 import pandas as pd
 import pytest
-import networkx as nx
-from uuid import uuid4
-from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode, build_causal_graph
 from src.agents.causal_impact.state import CausalImpactState
 from src.causal_engine.discovery import (
+    DiscoveredEdge,
     DiscoveryConfig,
     DiscoveryResult,
-    DiscoveryAlgorithmType,
-    DiscoveredEdge,
     GateDecision,
 )
 from src.causal_engine.discovery.gate import GateEvaluation
@@ -99,12 +99,14 @@ class TestGraphBuilderNodeDiscoveryIntegration:
         b = 0.7 * a + 0.3 * np.random.randn(n)
         outcome = 0.5 * treatment + 0.3 * b + 0.2 * np.random.randn(n)
 
-        return pd.DataFrame({
-            "hcp_engagement_level": treatment,
-            "marketing_spend": a,
-            "hcp_meeting_frequency": b,
-            "patient_conversion_rate": outcome,
-        })
+        return pd.DataFrame(
+            {
+                "hcp_engagement_level": treatment,
+                "marketing_spend": a,
+                "hcp_meeting_frequency": b,
+                "patient_conversion_rate": outcome,
+            }
+        )
 
     @pytest.fixture
     def discovery_state(self, synthetic_data) -> CausalImpactState:

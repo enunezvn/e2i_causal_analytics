@@ -19,7 +19,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
 import logging
-from typing import Any, Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -204,8 +204,12 @@ class ExperimentDesignerOutput(BaseModel):
     status: str = Field("completed", description="Agent execution status")
 
     # Top-level power analysis fields (v4.3: exposed for quality gates)
-    required_sample_size: Optional[int] = Field(None, description="Required sample size from power analysis")
-    statistical_power: Optional[float] = Field(None, description="Statistical power from power analysis")
+    required_sample_size: Optional[int] = Field(
+        None, description="Required sample size from power analysis"
+    )
+    statistical_power: Optional[float] = Field(
+        None, description="Statistical power from power analysis"
+    )
 
 
 # ===== MAIN AGENT =====
@@ -352,7 +356,7 @@ class ExperimentDesignerAgent(SkillsMixin):
                 brand=input_data.brand,
                 business_question=input_data.business_question,
                 design_type=None,  # Will be determined during execution
-            ) as ctx:
+            ):
                 # Execute graph asynchronously
                 final_state = await self.graph.ainvoke(initial_state)
 
@@ -367,9 +371,7 @@ class ExperimentDesignerAgent(SkillsMixin):
                     error_messages = [
                         e.get("error", "Unknown") for e in final_state.get("errors", [])
                     ]
-                    raise RuntimeError(
-                        f"Experiment design failed: {'; '.join(error_messages)}"
-                    )
+                    raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
 
                 return output
         else:
@@ -381,9 +383,7 @@ class ExperimentDesignerAgent(SkillsMixin):
 
             # Check for failures
             if final_state.get("status") == "failed":
-                error_messages = [
-                    e.get("error", "Unknown") for e in final_state.get("errors", [])
-                ]
+                error_messages = [e.get("error", "Unknown") for e in final_state.get("errors", [])]
                 raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
 
             return output

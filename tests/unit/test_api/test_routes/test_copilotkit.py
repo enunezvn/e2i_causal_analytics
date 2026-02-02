@@ -17,8 +17,7 @@ Covers:
 - FeedbackResponse model validation
 """
 
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,7 +31,6 @@ from src.api.routes.copilotkit import (
     FeedbackResponse,
     router,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -50,11 +48,12 @@ def test_client():
 @pytest.fixture
 def mock_llm_provider():
     """Mock the LLM provider lookup."""
-    with patch(
-        "src.api.routes.copilotkit.get_llm_provider"
-    ) as mock_provider, patch(
-        "src.api.routes.copilotkit.MODEL_MAPPINGS",
-        {"anthropic": {"standard": "claude-3-sonnet"}},
+    with (
+        patch("src.api.routes.copilotkit.get_llm_provider") as mock_provider,
+        patch(
+            "src.api.routes.copilotkit.MODEL_MAPPINGS",
+            {"anthropic": {"standard": "claude-3-sonnet"}},
+        ),
     ):
         mock_provider.return_value = "anthropic"
         yield mock_provider
@@ -65,9 +64,7 @@ def mock_copilot_actions():
     """Mock the COPILOT_ACTIONS list."""
     mock_action = MagicMock()
     mock_action.name = "test_action"
-    with patch(
-        "src.api.routes.copilotkit.COPILOT_ACTIONS", [mock_action]
-    ):
+    with patch("src.api.routes.copilotkit.COPILOT_ACTIONS", [mock_action]):
         yield [mock_action]
 
 
@@ -350,24 +347,16 @@ class TestFeedbackResponse:
 class TestGetStatusEndpoint:
     """Tests for GET /copilotkit/status endpoint."""
 
-    def test_get_status_success(
-        self, test_client, mock_llm_provider, mock_copilot_actions
-    ):
+    def test_get_status_success(self, test_client, mock_llm_provider, mock_copilot_actions):
         """Test successful status retrieval."""
-        with patch.dict(
-            "os.environ", {"ANTHROPIC_API_KEY": "test-key"}
-        ):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
             response = test_client.get("/copilotkit/status")
 
         assert response.status_code == 200
 
-    def test_status_has_required_fields(
-        self, test_client, mock_llm_provider, mock_copilot_actions
-    ):
+    def test_status_has_required_fields(self, test_client, mock_llm_provider, mock_copilot_actions):
         """Test that status response has all required fields."""
-        with patch.dict(
-            "os.environ", {"ANTHROPIC_API_KEY": "test-key"}
-        ):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
             response = test_client.get("/copilotkit/status")
             data = response.json()
 
@@ -382,13 +371,9 @@ class TestGetStatusEndpoint:
         assert "llm_configured" in data
         assert "timestamp" in data
 
-    def test_status_values(
-        self, test_client, mock_llm_provider, mock_copilot_actions
-    ):
+    def test_status_values(self, test_client, mock_llm_provider, mock_copilot_actions):
         """Test status response values."""
-        with patch.dict(
-            "os.environ", {"ANTHROPIC_API_KEY": "test-key"}
-        ):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
             response = test_client.get("/copilotkit/status")
             data = response.json()
 
@@ -397,9 +382,7 @@ class TestGetStatusEndpoint:
         assert data["llm_model"] == "claude-3-sonnet"
         assert data["llm_configured"] is True
 
-    def test_status_without_api_key(
-        self, test_client, mock_llm_provider, mock_copilot_actions
-    ):
+    def test_status_without_api_key(self, test_client, mock_llm_provider, mock_copilot_actions):
         """Test status when no API key is configured."""
         with patch.dict(
             "os.environ",
@@ -411,13 +394,9 @@ class TestGetStatusEndpoint:
 
         assert data["llm_configured"] is False
 
-    def test_status_timestamp_format(
-        self, test_client, mock_llm_provider, mock_copilot_actions
-    ):
+    def test_status_timestamp_format(self, test_client, mock_llm_provider, mock_copilot_actions):
         """Test that timestamp is valid ISO format."""
-        with patch.dict(
-            "os.environ", {"ANTHROPIC_API_KEY": "test-key"}
-        ):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
             response = test_client.get("/copilotkit/status")
             data = response.json()
 
@@ -625,7 +604,7 @@ class TestChatEndpoint:
             new_callable=AsyncMock,
             return_value=mock_result,
         ) as mock_run:
-            response = test_client.post(
+            test_client.post(
                 "/copilotkit/chat",
                 json={
                     "query": "Show metrics",
@@ -681,22 +660,23 @@ class TestFeedbackEndpoint:
         """Test that only thumbs_up or thumbs_down are valid."""
         # Valid thumbs_up
         for rating in ["thumbs_up", "thumbs_down"]:
-            with patch.dict(
-                "os.environ",
-                {
-                    "SUPABASE_URL": "https://test.supabase.co",
-                    "SUPABASE_SERVICE_KEY": "test-key",
-                },
-            ), patch(
-                "supabase.create_client"
-            ) as mock_create:
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "SUPABASE_URL": "https://test.supabase.co",
+                        "SUPABASE_SERVICE_KEY": "test-key",
+                    },
+                ),
+                patch("supabase.create_client") as mock_create,
+            ):
                 # Mock message lookup
                 mock_client = MagicMock()
                 mock_table = MagicMock()
                 mock_select = MagicMock()
                 mock_eq = MagicMock()
                 mock_limit = MagicMock()
-                mock_execute = MagicMock()
+                MagicMock()
 
                 mock_create.return_value = mock_client
                 mock_client.table.return_value = mock_table
@@ -707,16 +687,15 @@ class TestFeedbackEndpoint:
                     data=[{"id": 123, "session_id": "session-123"}]
                 )
 
-                with patch(
-                    "src.memory.services.factories.get_async_supabase_client",
-                    new_callable=AsyncMock,
-                ), patch(
-                    "src.repositories.get_chatbot_feedback_repository"
-                ) as mock_repo:
+                with (
+                    patch(
+                        "src.memory.services.factories.get_async_supabase_client",
+                        new_callable=AsyncMock,
+                    ),
+                    patch("src.repositories.get_chatbot_feedback_repository") as mock_repo,
+                ):
                     mock_repo_instance = MagicMock()
-                    mock_repo_instance.add_feedback = AsyncMock(
-                        return_value={"id": 1}
-                    )
+                    mock_repo_instance.add_feedback = AsyncMock(return_value={"id": 1})
                     mock_repo.return_value = mock_repo_instance
 
                     response = test_client.post(
@@ -761,24 +740,19 @@ class TestFeedbackStatsEndpoint:
 
     def test_feedback_stats_success(self, test_client):
         """Test successful feedback stats retrieval."""
-        mock_agent_stats = [
-            {"agent_name": "tool_composer", "thumbs_up": 10, "thumbs_down": 2}
-        ]
+        mock_agent_stats = [{"agent_name": "tool_composer", "thumbs_up": 10, "thumbs_down": 2}]
         mock_summary = {"total": 12, "positive_rate": 0.83}
 
-        with patch(
-            "src.memory.services.factories.get_async_supabase_client",
-            new_callable=AsyncMock,
-        ), patch(
-            "src.repositories.get_chatbot_feedback_repository"
-        ) as mock_repo:
+        with (
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new_callable=AsyncMock,
+            ),
+            patch("src.repositories.get_chatbot_feedback_repository") as mock_repo,
+        ):
             mock_repo_instance = MagicMock()
-            mock_repo_instance.get_agent_stats = AsyncMock(
-                return_value=mock_agent_stats
-            )
-            mock_repo_instance.get_feedback_summary = AsyncMock(
-                return_value=mock_summary
-            )
+            mock_repo_instance.get_agent_stats = AsyncMock(return_value=mock_agent_stats)
+            mock_repo_instance.get_feedback_summary = AsyncMock(return_value=mock_summary)
             mock_repo.return_value = mock_repo_instance
 
             response = test_client.get("/copilotkit/feedback/stats")
@@ -791,20 +765,19 @@ class TestFeedbackStatsEndpoint:
 
     def test_feedback_stats_with_filter(self, test_client):
         """Test feedback stats with agent filter."""
-        with patch(
-            "src.memory.services.factories.get_async_supabase_client",
-            new_callable=AsyncMock,
-        ), patch(
-            "src.repositories.get_chatbot_feedback_repository"
-        ) as mock_repo:
+        with (
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new_callable=AsyncMock,
+            ),
+            patch("src.repositories.get_chatbot_feedback_repository") as mock_repo,
+        ):
             mock_repo_instance = MagicMock()
             mock_repo_instance.get_agent_stats = AsyncMock(return_value=[])
             mock_repo_instance.get_feedback_summary = AsyncMock(return_value={})
             mock_repo.return_value = mock_repo_instance
 
-            response = test_client.get(
-                "/copilotkit/feedback/stats?agent_name=causal_impact&days=7"
-            )
+            response = test_client.get("/copilotkit/feedback/stats?agent_name=causal_impact&days=7")
 
         assert response.status_code == 200
 
@@ -837,19 +810,13 @@ class TestUsageAnalyticsEndpoint:
         mock_query_types = [{"type": "kpi_query", "count": 50}]
         mock_tool_usage = [{"tool": "query_kpi", "count": 75}]
 
-        with patch(
-            "src.repositories.get_chatbot_analytics_repository"
-        ) as mock_repo:
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
             mock_repo_instance = MagicMock()
-            mock_repo_instance.get_usage_summary = AsyncMock(
-                return_value=mock_summary
-            )
+            mock_repo_instance.get_usage_summary = AsyncMock(return_value=mock_summary)
             mock_repo_instance.get_query_type_distribution = AsyncMock(
                 return_value=mock_query_types
             )
-            mock_repo_instance.get_tool_usage_stats = AsyncMock(
-                return_value=mock_tool_usage
-            )
+            mock_repo_instance.get_tool_usage_stats = AsyncMock(return_value=mock_tool_usage)
             mock_repo.return_value = mock_repo_instance
 
             response = test_client.get("/copilotkit/analytics/usage?days=7")
@@ -864,14 +831,10 @@ class TestUsageAnalyticsEndpoint:
 
     def test_usage_analytics_default_days(self, test_client):
         """Test usage analytics with default days parameter."""
-        with patch(
-            "src.repositories.get_chatbot_analytics_repository"
-        ) as mock_repo:
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
             mock_repo_instance = MagicMock()
             mock_repo_instance.get_usage_summary = AsyncMock(return_value={})
-            mock_repo_instance.get_query_type_distribution = AsyncMock(
-                return_value=[]
-            )
+            mock_repo_instance.get_query_type_distribution = AsyncMock(return_value=[])
             mock_repo_instance.get_tool_usage_stats = AsyncMock(return_value=[])
             mock_repo.return_value = mock_repo_instance
 
@@ -912,13 +875,9 @@ class TestAgentAnalyticsEndpoint:
             }
         ]
 
-        with patch(
-            "src.repositories.get_chatbot_analytics_repository"
-        ) as mock_repo:
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
             mock_repo_instance = MagicMock()
-            mock_repo_instance.get_agent_performance = AsyncMock(
-                return_value=mock_stats
-            )
+            mock_repo_instance.get_agent_performance = AsyncMock(return_value=mock_stats)
             mock_repo.return_value = mock_repo_instance
 
             response = test_client.get("/copilotkit/analytics/agents")
@@ -930,9 +889,7 @@ class TestAgentAnalyticsEndpoint:
 
     def test_agent_analytics_with_filter(self, test_client):
         """Test agent analytics with agent name filter."""
-        with patch(
-            "src.repositories.get_chatbot_analytics_repository"
-        ) as mock_repo:
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
             mock_repo_instance = MagicMock()
             mock_repo_instance.get_agent_performance = AsyncMock(return_value=[])
             mock_repo.return_value = mock_repo_instance
@@ -965,13 +922,9 @@ class TestErrorAnalyticsEndpoint:
             }
         ]
 
-        with patch(
-            "src.repositories.get_chatbot_analytics_repository"
-        ) as mock_repo:
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
             mock_repo_instance = MagicMock()
-            mock_repo_instance.get_recent_errors = AsyncMock(
-                return_value=mock_errors
-            )
+            mock_repo_instance.get_recent_errors = AsyncMock(return_value=mock_errors)
             mock_repo.return_value = mock_repo_instance
 
             response = test_client.get("/copilotkit/analytics/errors?limit=10")
@@ -984,9 +937,7 @@ class TestErrorAnalyticsEndpoint:
 
     def test_error_analytics_default_limit(self, test_client):
         """Test error analytics with default limit."""
-        with patch(
-            "src.repositories.get_chatbot_analytics_repository"
-        ) as mock_repo:
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
             mock_repo_instance = MagicMock()
             mock_repo_instance.get_recent_errors = AsyncMock(return_value=[])
             mock_repo.return_value = mock_repo_instance
@@ -1013,13 +964,9 @@ class TestHourlyAnalyticsEndpoint:
             {"hour": 14, "count": 100},
         ]
 
-        with patch(
-            "src.repositories.get_chatbot_analytics_repository"
-        ) as mock_repo:
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
             mock_repo_instance = MagicMock()
-            mock_repo_instance.get_hourly_pattern = AsyncMock(
-                return_value=mock_pattern
-            )
+            mock_repo_instance.get_hourly_pattern = AsyncMock(return_value=mock_pattern)
             mock_repo.return_value = mock_repo_instance
 
             response = test_client.get("/copilotkit/analytics/hourly?days=7")
@@ -1055,13 +1002,13 @@ class TestCopilotKitIntegration:
     def test_multiple_endpoints_available(self, test_client):
         """Test that all endpoints are accessible."""
         # Status endpoint - should work without mocks
-        with patch(
-            "src.api.routes.copilotkit.get_llm_provider", return_value="anthropic"
-        ), patch(
-            "src.api.routes.copilotkit.MODEL_MAPPINGS",
-            {"anthropic": {"standard": "claude-3-sonnet"}},
-        ), patch(
-            "src.api.routes.copilotkit.COPILOT_ACTIONS", []
+        with (
+            patch("src.api.routes.copilotkit.get_llm_provider", return_value="anthropic"),
+            patch(
+                "src.api.routes.copilotkit.MODEL_MAPPINGS",
+                {"anthropic": {"standard": "claude-3-sonnet"}},
+            ),
+            patch("src.api.routes.copilotkit.COPILOT_ACTIONS", []),
         ):
             status_response = test_client.get("/copilotkit/status")
             assert status_response.status_code == 200

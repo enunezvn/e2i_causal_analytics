@@ -55,19 +55,17 @@ class EntityVocabulary:
         """
         try:
             from src.ontology import VocabularyRegistry
+
             vocab = VocabularyRegistry.load()
             canonical_brands = vocab.get_brands()
             canonical_regions = vocab.get_regions()
-            canonical_agents = vocab.get_agent_names()
-            canonical_journey = vocab.get_journey_stages()
-            canonical_hcp = vocab.get_hcp_segments()
+            vocab.get_agent_names()
+            vocab.get_journey_stages()
+            vocab.get_hcp_segments()
         except Exception:
             # Fallback if VocabularyRegistry unavailable
             canonical_brands = ["Remibrutinib", "Fabhalta", "Kisqali"]
             canonical_regions = ["northeast", "south", "midwest", "west"]
-            canonical_agents = []
-            canonical_journey = []
-            canonical_hcp = []
 
         # Build brands with extraction-friendly aliases
         # Canonical names from VocabularyRegistry, aliases for NLP matching

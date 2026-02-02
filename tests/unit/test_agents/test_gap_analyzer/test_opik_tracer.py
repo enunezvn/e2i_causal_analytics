@@ -4,9 +4,8 @@ Version: 1.0.0
 Tests the Opik observability integration for Gap Analyzer agent's 4-node pipeline.
 """
 
-import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,7 +17,6 @@ from src.agents.gap_analyzer.opik_tracer import (
     get_gap_analyzer_tracer,
     reset_gap_analyzer_tracer,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -449,9 +447,7 @@ class TestOpikIntegration:
         """Test full tracing with mocked Opik connector."""
         mock_connector = MagicMock()
         mock_span_context = MagicMock()
-        mock_connector.start_span.return_value.__enter__ = MagicMock(
-            return_value=mock_span_context
-        )
+        mock_connector.start_span.return_value.__enter__ = MagicMock(return_value=mock_span_context)
         mock_connector.start_span.return_value.__exit__ = MagicMock(return_value=None)
 
         tracer = GapAnalyzerOpikTracer()

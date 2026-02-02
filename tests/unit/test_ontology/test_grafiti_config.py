@@ -9,24 +9,22 @@ Tests for Graphity configuration for FalkorDB including:
 - Factory function create_e2i_graphity_config
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from datetime import datetime
-from typing import Dict, Any
-from unittest.mock import MagicMock, patch
 
 from src.ontology.grafiti_config import (
-    EdgeGroupingStrategy,
+    E2I_TRAVERSAL_PATTERNS,
+    CacheConfig,
     CacheEvictionPolicy,
     EdgeGroupConfig,
-    CacheConfig,
-    HubDetectionConfig,
+    EdgeGroupingStrategy,
     GraphityConfig,
     GraphityConfigBuilder,
     GraphityOptimizer,
-    E2I_TRAVERSAL_PATTERNS,
+    HubDetectionConfig,
     create_e2i_graphity_config,
 )
-
 
 # =============================================================================
 # ENUM TESTS
@@ -58,7 +56,7 @@ class TestEdgeGroupingStrategyEnum:
 
     def test_all_enum_members_exist(self):
         """Test that all expected enum members exist."""
-        expected = {'BY_TYPE', 'BY_SOURCE', 'BY_TARGET', 'BY_FREQUENCY', 'HYBRID'}
+        expected = {"BY_TYPE", "BY_SOURCE", "BY_TARGET", "BY_FREQUENCY", "HYBRID"}
         actual = {m.name for m in EdgeGroupingStrategy}
         assert expected == actual
 
@@ -84,7 +82,7 @@ class TestCacheEvictionPolicyEnum:
 
     def test_all_eviction_policies_exist(self):
         """Test that all expected eviction policies exist."""
-        expected = {'LRU', 'LFU', 'TTL', 'ADAPTIVE'}
+        expected = {"LRU", "LFU", "TTL", "ADAPTIVE"}
         actual = {m.name for m in CacheEvictionPolicy}
         assert expected == actual
 
@@ -112,7 +110,7 @@ class TestEdgeGroupConfigDataclass:
             strategy=EdgeGroupingStrategy.HYBRID,
             chunk_size=500,
             min_edges_for_grouping=50,
-            rebalance_threshold=0.5
+            rebalance_threshold=0.5,
         )
 
         assert config.strategy == EdgeGroupingStrategy.HYBRID
@@ -143,7 +141,7 @@ class TestCacheConfigDataclass:
             max_cache_size_mb=512,
             ttl_seconds=7200,
             hot_path_caching=False,
-            prefetch_depth=3
+            prefetch_depth=3,
         )
 
         assert config.enabled is False
@@ -170,7 +168,7 @@ class TestHubDetectionConfigDataclass:
             enabled=False,
             min_degree_threshold=50,
             detection_method="betweenness",
-            update_interval_seconds=1800
+            update_interval_seconds=1800,
         )
 
         assert config.enabled is False
@@ -197,42 +195,48 @@ class TestGraphityConfigDataclass:
         """Test to_dict serialization."""
         config_dict = default_graphity_config.to_dict()
 
-        assert 'enabled' in config_dict
-        assert 'edge_grouping' in config_dict
-        assert 'caching' in config_dict
-        assert 'hub_detection' in config_dict
-        assert 'traversal_patterns' in config_dict
-        assert 'index_hints' in config_dict
-        assert 'metadata' in config_dict
+        assert "enabled" in config_dict
+        assert "edge_grouping" in config_dict
+        assert "caching" in config_dict
+        assert "hub_detection" in config_dict
+        assert "traversal_patterns" in config_dict
+        assert "index_hints" in config_dict
+        assert "metadata" in config_dict
 
     def test_to_dict_edge_grouping_values(self, default_graphity_config):
         """Test edge grouping values in serialized dict."""
         config_dict = default_graphity_config.to_dict()
 
-        assert config_dict['edge_grouping']['strategy'] == 'by_type'
-        assert config_dict['edge_grouping']['chunk_size'] == 1000
+        assert config_dict["edge_grouping"]["strategy"] == "by_type"
+        assert config_dict["edge_grouping"]["chunk_size"] == 1000
 
     def test_to_dict_caching_values(self, default_graphity_config):
         """Test caching values in serialized dict."""
         config_dict = default_graphity_config.to_dict()
 
-        assert config_dict['caching']['enabled'] is True
-        assert config_dict['caching']['eviction_policy'] == 'lru'
-        assert config_dict['caching']['ttl_seconds'] == 3600
+        assert config_dict["caching"]["enabled"] is True
+        assert config_dict["caching"]["eviction_policy"] == "lru"
+        assert config_dict["caching"]["ttl_seconds"] == 3600
 
     def test_from_dict_roundtrip(self, graphity_config_dict):
         """Test from_dict/to_dict roundtrip."""
         config = GraphityConfig.from_dict(graphity_config_dict)
         result_dict = config.to_dict()
 
-        assert result_dict['enabled'] == graphity_config_dict['enabled']
-        assert result_dict['edge_grouping']['strategy'] == graphity_config_dict['edge_grouping']['strategy']
-        assert result_dict['caching']['enabled'] == graphity_config_dict['caching']['enabled']
-        assert result_dict['hub_detection']['enabled'] == graphity_config_dict['hub_detection']['enabled']
+        assert result_dict["enabled"] == graphity_config_dict["enabled"]
+        assert (
+            result_dict["edge_grouping"]["strategy"]
+            == graphity_config_dict["edge_grouping"]["strategy"]
+        )
+        assert result_dict["caching"]["enabled"] == graphity_config_dict["caching"]["enabled"]
+        assert (
+            result_dict["hub_detection"]["enabled"]
+            == graphity_config_dict["hub_detection"]["enabled"]
+        )
 
     def test_from_dict_with_defaults(self):
         """Test from_dict with minimal data uses defaults."""
-        minimal_dict = {'enabled': True}
+        minimal_dict = {"enabled": True}
         config = GraphityConfig.from_dict(minimal_dict)
 
         assert config.enabled is True
@@ -296,14 +300,13 @@ class TestGraphityConfigBuilder:
 
     def test_builder_edge_grouping_config(self):
         """Test with_edge_grouping configuration."""
-        config = (GraphityConfigBuilder()
+        config = (
+            GraphityConfigBuilder()
             .with_edge_grouping(
-                strategy='by_source',
-                chunk_size=500,
-                min_edges=50,
-                rebalance_threshold=0.4
+                strategy="by_source", chunk_size=500, min_edges=50, rebalance_threshold=0.4
             )
-            .build())
+            .build()
+        )
 
         assert config.edge_grouping.strategy == EdgeGroupingStrategy.BY_SOURCE
         assert config.edge_grouping.chunk_size == 500
@@ -312,16 +315,18 @@ class TestGraphityConfigBuilder:
 
     def test_builder_caching_config(self):
         """Test with_caching configuration."""
-        config = (GraphityConfigBuilder()
+        config = (
+            GraphityConfigBuilder()
             .with_caching(
                 enabled=True,
-                eviction_policy='lfu',
+                eviction_policy="lfu",
                 max_size_mb=512,
                 ttl_seconds=1800,
                 hot_path_caching=False,
-                prefetch_depth=3
+                prefetch_depth=3,
             )
-            .build())
+            .build()
+        )
 
         assert config.caching.enabled is True
         assert config.caching.eviction_policy == CacheEvictionPolicy.LFU
@@ -332,57 +337,56 @@ class TestGraphityConfigBuilder:
 
     def test_builder_hub_detection_config(self):
         """Test with_hub_detection configuration."""
-        config = (GraphityConfigBuilder()
+        config = (
+            GraphityConfigBuilder()
             .with_hub_detection(
-                enabled=True,
-                threshold=50,
-                method='betweenness',
-                update_interval=1800
+                enabled=True, threshold=50, method="betweenness", update_interval=1800
             )
-            .build())
+            .build()
+        )
 
         assert config.hub_detection.enabled is True
         assert config.hub_detection.min_degree_threshold == 50
-        assert config.hub_detection.detection_method == 'betweenness'
+        assert config.hub_detection.detection_method == "betweenness"
         assert config.hub_detection.update_interval_seconds == 1800
 
     def test_builder_with_e2i_patterns(self):
         """Test with_e2i_patterns adds E2I patterns."""
-        config = (GraphityConfigBuilder()
-            .with_e2i_patterns()
-            .build())
+        config = GraphityConfigBuilder().with_e2i_patterns().build()
 
         assert len(config.traversal_patterns) == len(E2I_TRAVERSAL_PATTERNS)
         # Check for specific E2I patterns
-        pattern_names = [p['name'] for p in config.traversal_patterns]
-        assert 'patient_journey' in pattern_names
-        assert 'causal_chain' in pattern_names
+        pattern_names = [p["name"] for p in config.traversal_patterns]
+        assert "patient_journey" in pattern_names
+        assert "causal_chain" in pattern_names
 
     def test_builder_with_custom_pattern(self):
         """Test with_custom_pattern adds custom pattern."""
-        config = (GraphityConfigBuilder()
+        config = (
+            GraphityConfigBuilder()
             .with_custom_pattern(
-                name='custom_pattern',
-                pattern='(a)-[:CUSTOM]->(b)',
-                frequency='high',
-                description='Custom pattern'
+                name="custom_pattern",
+                pattern="(a)-[:CUSTOM]->(b)",
+                frequency="high",
+                description="Custom pattern",
             )
-            .build())
+            .build()
+        )
 
-        custom_patterns = [p for p in config.traversal_patterns if p['name'] == 'custom_pattern']
+        custom_patterns = [p for p in config.traversal_patterns if p["name"] == "custom_pattern"]
         assert len(custom_patterns) == 1
-        assert custom_patterns[0]['pattern'] == '(a)-[:CUSTOM]->(b)'
+        assert custom_patterns[0]["pattern"] == "(a)-[:CUSTOM]->(b)"
 
     def test_builder_with_index_hints(self):
         """Test with_index_hints configuration."""
-        hints = {'Patient': ['patient_id', 'region']}
+        hints = {"Patient": ["patient_id", "region"]}
         config = GraphityConfigBuilder().with_index_hints(hints).build()
 
         assert config.index_hints == hints
 
     def test_builder_with_metadata(self):
         """Test with_metadata configuration."""
-        metadata = {'version': '1.0', 'author': 'test'}
+        metadata = {"version": "1.0", "author": "test"}
         config = GraphityConfigBuilder().with_metadata(metadata).build()
 
         assert config.metadata == metadata
@@ -474,9 +478,9 @@ class TestGraphityOptimizer:
         """Test auto_optimize returns report dict."""
         report = optimizer.auto_optimize()
 
-        assert 'timestamp' in report
-        assert 'patterns_analyzed' in report
-        assert 'optimizations_applied' in report
+        assert "timestamp" in report
+        assert "patterns_analyzed" in report
+        assert "optimizations_applied" in report
 
     def test_auto_optimize_adds_hot_patterns(self, optimizer):
         """Test auto_optimize adds hot patterns to config."""
@@ -485,28 +489,28 @@ class TestGraphityOptimizer:
         for _ in range(1500):
             optimizer.record_query(query, 10.0)
 
-        initial_patterns = len(optimizer.config.traversal_patterns)
+        len(optimizer.config.traversal_patterns)
         report = optimizer.auto_optimize(threshold=1000)
 
         # May have added new patterns
-        assert report['patterns_analyzed'] >= 1
+        assert report["patterns_analyzed"] >= 1
 
     def test_get_stats_returns_dict(self, optimizer):
         """Test get_stats returns statistics dict."""
         stats = optimizer.get_stats()
 
-        assert 'patterns_tracked' in stats
-        assert 'total_queries' in stats
-        assert 'top_patterns' in stats
-        assert 'optimizations_count' in stats
+        assert "patterns_tracked" in stats
+        assert "total_queries" in stats
+        assert "top_patterns" in stats
+        assert "optimizations_count" in stats
 
     def test_get_stats_empty_initial(self, optimizer):
         """Test get_stats for fresh optimizer."""
         stats = optimizer.get_stats()
 
-        assert stats['patterns_tracked'] == 0
-        assert stats['total_queries'] == 0
-        assert stats['optimizations_count'] == 0
+        assert stats["patterns_tracked"] == 0
+        assert stats["total_queries"] == 0
+        assert stats["optimizations_count"] == 0
 
     def test_get_stats_after_queries(self, optimizer):
         """Test get_stats after recording queries."""
@@ -515,8 +519,8 @@ class TestGraphityOptimizer:
 
         stats = optimizer.get_stats()
 
-        assert stats['patterns_tracked'] >= 1
-        assert stats['total_queries'] >= 2
+        assert stats["patterns_tracked"] >= 1
+        assert stats["total_queries"] >= 2
 
 
 # =============================================================================
@@ -543,11 +547,7 @@ class TestCreateE2IGraphityConfig:
 
     def test_factory_custom_values(self):
         """Test factory with custom values."""
-        config = create_e2i_graphity_config(
-            edge_chunk_size=500,
-            cache_ttl=1800,
-            hub_threshold=50
-        )
+        config = create_e2i_graphity_config(edge_chunk_size=500, cache_ttl=1800, hub_threshold=50)
 
         assert config.edge_grouping.chunk_size == 500
         assert config.caching.ttl_seconds == 1800
@@ -563,9 +563,9 @@ class TestCreateE2IGraphityConfig:
         """Test factory includes metadata."""
         config = create_e2i_graphity_config()
 
-        assert 'created_at' in config.metadata
-        assert 'version' in config.metadata
-        assert config.metadata['environment'] == 'e2i_causal_analytics'
+        assert "created_at" in config.metadata
+        assert "version" in config.metadata
+        assert config.metadata["environment"] == "e2i_causal_analytics"
 
     def test_factory_hot_path_caching_enabled(self):
         """Test factory enables hot path caching."""
@@ -592,32 +592,32 @@ class TestE2ITraversalPatterns:
 
     def test_pattern_structure(self):
         """Test each pattern has required keys."""
-        required_keys = {'name', 'pattern', 'frequency', 'description'}
+        required_keys = {"name", "pattern", "frequency", "description"}
 
         for pattern in E2I_TRAVERSAL_PATTERNS:
             assert all(key in pattern for key in required_keys)
 
     def test_pattern_frequencies_valid(self):
         """Test pattern frequencies are valid values."""
-        valid_frequencies = {'high', 'medium', 'low'}
+        valid_frequencies = {"high", "medium", "low"}
 
         for pattern in E2I_TRAVERSAL_PATTERNS:
-            assert pattern['frequency'] in valid_frequencies
+            assert pattern["frequency"] in valid_frequencies
 
     def test_patient_journey_pattern_exists(self):
         """Test patient_journey pattern exists."""
-        pattern_names = [p['name'] for p in E2I_TRAVERSAL_PATTERNS]
-        assert 'patient_journey' in pattern_names
+        pattern_names = [p["name"] for p in E2I_TRAVERSAL_PATTERNS]
+        assert "patient_journey" in pattern_names
 
     def test_causal_chain_pattern_exists(self):
         """Test causal_chain pattern exists."""
-        pattern_names = [p['name'] for p in E2I_TRAVERSAL_PATTERNS]
-        assert 'causal_chain' in pattern_names
+        pattern_names = [p["name"] for p in E2I_TRAVERSAL_PATTERNS]
+        assert "causal_chain" in pattern_names
 
     def test_brand_analysis_pattern_exists(self):
         """Test brand_analysis pattern exists."""
-        pattern_names = [p['name'] for p in E2I_TRAVERSAL_PATTERNS]
-        assert 'brand_analysis' in pattern_names
+        pattern_names = [p["name"] for p in E2I_TRAVERSAL_PATTERNS]
+        assert "brand_analysis" in pattern_names
 
 
 # =============================================================================
@@ -630,12 +630,7 @@ class TestGraphityConfigEdgeCases:
 
     def test_from_dict_empty_nested_dicts(self):
         """Test from_dict with empty nested dictionaries."""
-        data = {
-            'enabled': True,
-            'edge_grouping': {},
-            'caching': {},
-            'hub_detection': {}
-        }
+        data = {"enabled": True, "edge_grouping": {}, "caching": {}, "hub_detection": {}}
 
         config = GraphityConfig.from_dict(data)
 
@@ -645,14 +640,15 @@ class TestGraphityConfigEdgeCases:
 
     def test_builder_multiple_custom_patterns(self):
         """Test builder with multiple custom patterns."""
-        config = (GraphityConfigBuilder()
-            .with_custom_pattern('pattern1', '(a)-[:R1]->(b)', 'high', 'First')
-            .with_custom_pattern('pattern2', '(c)-[:R2]->(d)', 'medium', 'Second')
-            .with_custom_pattern('pattern3', '(e)-[:R3]->(f)', 'low', 'Third')
-            .build())
+        config = (
+            GraphityConfigBuilder()
+            .with_custom_pattern("pattern1", "(a)-[:R1]->(b)", "high", "First")
+            .with_custom_pattern("pattern2", "(c)-[:R2]->(d)", "medium", "Second")
+            .with_custom_pattern("pattern3", "(e)-[:R3]->(f)", "low", "Third")
+            .build()
+        )
 
-        custom_patterns = [p for p in config.traversal_patterns
-                         if p['name'].startswith('pattern')]
+        custom_patterns = [p for p in config.traversal_patterns if p["name"].startswith("pattern")]
         assert len(custom_patterns) == 3
 
     def test_optimizer_query_without_match(self, default_graphity_config):
@@ -666,7 +662,7 @@ class TestGraphityConfigEdgeCases:
 
         # Should handle gracefully
         stats = optimizer.get_stats()
-        assert stats['patterns_tracked'] == 0
+        assert stats["patterns_tracked"] == 0
 
     def test_config_disabled_skips_apply(self):
         """Test that disabled config skips application."""

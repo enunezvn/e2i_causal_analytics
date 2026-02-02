@@ -113,9 +113,7 @@ class TestFeastFeatureStoreGetImportance:
     @pytest.mark.asyncio
     async def test_get_importance_adapter_error(self, mock_adapter):
         """Test graceful handling of adapter errors."""
-        mock_adapter.get_feature_importance = AsyncMock(
-            side_effect=Exception("Feast error")
-        )
+        mock_adapter.get_feature_importance = AsyncMock(side_effect=Exception("Feast error"))
         store = FeastFeatureStore(adapter=mock_adapter)
 
         importance = await store.get_importance("model_1")
@@ -191,9 +189,7 @@ class TestFeastFeatureStoreGetOnlineFeatures:
     @pytest.mark.asyncio
     async def test_get_online_features_error(self, mock_adapter):
         """Test graceful error handling."""
-        mock_adapter.get_online_features = AsyncMock(
-            side_effect=Exception("Connection error")
-        )
+        mock_adapter.get_online_features = AsyncMock(side_effect=Exception("Connection error"))
         store = FeastFeatureStore(adapter=mock_adapter)
 
         features = await store.get_online_features("hcp_123")

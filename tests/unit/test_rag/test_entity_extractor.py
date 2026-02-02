@@ -7,7 +7,6 @@ fixed E2I domain vocabularies.
 All tests use vocabulary-based matching with no medical NER.
 """
 
-
 import pytest
 
 from src.rag.entity_extractor import EntityExtractor, EntityVocabulary

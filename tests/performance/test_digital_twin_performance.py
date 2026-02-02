@@ -33,7 +33,6 @@ from src.digital_twin.models.twin_models import (
 from src.digital_twin.simulation_engine import SimulationEngine
 from src.digital_twin.twin_generator import TwinGenerator
 
-
 # Mark all tests as slow and group them
 pytestmark = [
     pytest.mark.slow,
@@ -92,22 +91,22 @@ def create_training_data(n: int, seed: int = 42) -> pd.DataFrame:
     """Create training data for twin generator."""
     np.random.seed(seed)
 
-    return pd.DataFrame({
-        "specialty": np.random.choice(
-            ["rheumatology", "dermatology", "allergy", "immunology"], n
-        ),
-        "decile": np.random.randint(1, 11, n),
-        "region": np.random.choice(
-            ["northeast", "south", "midwest", "west"], n
-        ),
-        "digital_engagement_score": np.random.uniform(0.1, 0.9, n),
-        "adoption_stage": np.random.choice(
-            ["innovator", "early_adopter", "early_majority", "late_majority", "laggard"],
-            n,
-        ),
-        "patient_volume": np.random.randint(50, 500, n),
-        "prescribing_change": np.random.uniform(-0.1, 0.3, n),
-    })
+    return pd.DataFrame(
+        {
+            "specialty": np.random.choice(
+                ["rheumatology", "dermatology", "allergy", "immunology"], n
+            ),
+            "decile": np.random.randint(1, 11, n),
+            "region": np.random.choice(["northeast", "south", "midwest", "west"], n),
+            "digital_engagement_score": np.random.uniform(0.1, 0.9, n),
+            "adoption_stage": np.random.choice(
+                ["innovator", "early_adopter", "early_majority", "late_majority", "laggard"],
+                n,
+            ),
+            "patient_volume": np.random.randint(50, 500, n),
+            "prescribing_change": np.random.uniform(-0.1, 0.3, n),
+        }
+    )
 
 
 # =============================================================================
@@ -237,9 +236,7 @@ class Test50kTwinsSimulation:
         assert result.status == SimulationStatus.COMPLETED
         assert elapsed < 120, f"Simulation took {elapsed:.2f}s, expected < 120s"
 
-    def test_50k_twins_execution_time_recorded(
-        self, population_50k, email_campaign_config
-    ):
+    def test_50k_twins_execution_time_recorded(self, population_50k, email_campaign_config):
         """Test that execution time is properly recorded."""
         engine = SimulationEngine(population_50k)
 
@@ -255,7 +252,9 @@ class Test50kTwinsSimulation:
 # =============================================================================
 
 
-@pytest.mark.skip(reason="Stress test: 100K twins exceeds CI timeout. Run manually with: pytest -k Test100kTwinsGeneration --run-stress -n 0 --timeout=600")
+@pytest.mark.skip(
+    reason="Stress test: 100K twins exceeds CI timeout. Run manually with: pytest -k Test100kTwinsGeneration --run-stress -n 0 --timeout=600"
+)
 @pytest.mark.timeout(600)  # 10 minute timeout for stress tests
 class Test100kTwinsGeneration:
     """Performance tests for 100,000 twin generation.
@@ -334,8 +333,8 @@ class TestScalingBehavior:
         # Time for 10K should be roughly 10x time for 1K (allowing 3x tolerance)
         ratio_1k_to_10k = times[2] / times[0] if times[0] > 0 else float("inf")
 
-        print(f"\nScaling analysis:")
-        for size, t in zip(sizes, times):
+        print("\nScaling analysis:")
+        for size, t in zip(sizes, times, strict=False):
             print(f"  {size:,} twins: {t:.3f}s")
         print(f"  Ratio (10K/1K): {ratio_1k_to_10k:.2f}x (expected ~10x)")
 
@@ -360,7 +359,7 @@ class TestScalingBehavior:
         overhead = time_with - time_without
         overhead_percent = (overhead / time_without) * 100 if time_without > 0 else 0
 
-        print(f"\nHeterogeneity overhead:")
+        print("\nHeterogeneity overhead:")
         print(f"  Without: {time_without:.3f}s")
         print(f"  With: {time_with:.3f}s")
         print(f"  Overhead: {overhead:.3f}s ({overhead_percent:.1f}%)")
@@ -403,10 +402,24 @@ class TestThroughput:
         engine = SimulationEngine(population)
 
         interventions = [
-            ("email_campaign", InterventionConfig(intervention_type="email_campaign", duration_weeks=8)),
-            ("call_frequency", InterventionConfig(intervention_type="call_frequency_increase", duration_weeks=4)),
-            ("speaker_program", InterventionConfig(intervention_type="speaker_program_invitation", duration_weeks=12)),
-            ("sample_distribution", InterventionConfig(intervention_type="sample_distribution", duration_weeks=6)),
+            (
+                "email_campaign",
+                InterventionConfig(intervention_type="email_campaign", duration_weeks=8),
+            ),
+            (
+                "call_frequency",
+                InterventionConfig(intervention_type="call_frequency_increase", duration_weeks=4),
+            ),
+            (
+                "speaker_program",
+                InterventionConfig(
+                    intervention_type="speaker_program_invitation", duration_weeks=12
+                ),
+            ),
+            (
+                "sample_distribution",
+                InterventionConfig(intervention_type="sample_distribution", duration_weeks=6),
+            ),
         ]
 
         print("\nIntervention type performance:")
@@ -471,8 +484,8 @@ class TestStress:
         result = engine.simulate(config, population_filter=complex_filter)
         elapsed = time.time() - start
 
-        print(f"\nComplex filter simulation:")
-        print(f"  Original: 20,000 twins")
+        print("\nComplex filter simulation:")
+        print("  Original: 20,000 twins")
         print(f"  After filter: {result.twin_count} twins")
         print(f"  Time: {elapsed:.3f}s")
 

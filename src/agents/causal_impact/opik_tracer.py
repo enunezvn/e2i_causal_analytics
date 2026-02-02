@@ -104,14 +104,16 @@ class NodeSpanContext:
             discovery_enabled: Whether causal discovery was used
             discovery_algorithms: Algorithms used for discovery
         """
-        self.metadata.update({
-            "graph_nodes": num_nodes,
-            "graph_edges": num_edges,
-            "graph_confidence": confidence,
-            "adjustment_sets": adjustment_sets,
-            "discovery_enabled": discovery_enabled,
-            "discovery_algorithms": discovery_algorithms or [],
-        })
+        self.metadata.update(
+            {
+                "graph_nodes": num_nodes,
+                "graph_edges": num_edges,
+                "graph_confidence": confidence,
+                "adjustment_sets": adjustment_sets,
+                "discovery_enabled": discovery_enabled,
+                "discovery_algorithms": discovery_algorithms or [],
+            }
+        )
         logger.debug(
             f"Graph construction: {num_nodes} nodes, {num_edges} edges, "
             f"confidence={confidence:.3f}, discovery={discovery_enabled}"
@@ -140,17 +142,19 @@ class NodeSpanContext:
             selection_strategy: How estimator was selected
             n_estimators_evaluated: Number of estimators tried
         """
-        self.metadata.update({
-            "ate": ate,
-            "ci_lower": ci_lower,
-            "ci_upper": ci_upper,
-            "ci_width": ci_upper - ci_lower,
-            "method": method,
-            "sample_size": sample_size,
-            "energy_score": energy_score,
-            "selection_strategy": selection_strategy,
-            "n_estimators_evaluated": n_estimators_evaluated,
-        })
+        self.metadata.update(
+            {
+                "ate": ate,
+                "ci_lower": ci_lower,
+                "ci_upper": ci_upper,
+                "ci_width": ci_upper - ci_lower,
+                "method": method,
+                "sample_size": sample_size,
+                "energy_score": energy_score,
+                "selection_strategy": selection_strategy,
+                "n_estimators_evaluated": n_estimators_evaluated,
+            }
+        )
         logger.debug(
             f"Estimation: ATE={ate:.4f} [{ci_lower:.4f}, {ci_upper:.4f}], "
             f"method={method}, energy_score={energy_score}"
@@ -171,15 +175,15 @@ class NodeSpanContext:
             refutation_rate: Pass rate (0-1)
             individual_tests: Results for each test type
         """
-        self.metadata.update({
-            "refutation_tests_passed": tests_passed,
-            "refutation_tests_total": tests_total,
-            "refutation_rate": refutation_rate,
-            "individual_tests": individual_tests or {},
-        })
-        logger.debug(
-            f"Refutation: {tests_passed}/{tests_total} passed ({refutation_rate:.1%})"
+        self.metadata.update(
+            {
+                "refutation_tests_passed": tests_passed,
+                "refutation_tests_total": tests_total,
+                "refutation_rate": refutation_rate,
+                "individual_tests": individual_tests or {},
+            }
         )
+        logger.debug(f"Refutation: {tests_passed}/{tests_total} passed ({refutation_rate:.1%})")
 
     def log_sensitivity(
         self,
@@ -196,12 +200,14 @@ class NodeSpanContext:
             sensitivity_passed: Whether analysis passed thresholds
             unmeasured_confounding_threshold: Threshold for confounding detection
         """
-        self.metadata.update({
-            "e_value": e_value,
-            "robustness_score": robustness_score,
-            "sensitivity_passed": sensitivity_passed,
-            "unmeasured_confounding_threshold": unmeasured_confounding_threshold,
-        })
+        self.metadata.update(
+            {
+                "e_value": e_value,
+                "robustness_score": robustness_score,
+                "sensitivity_passed": sensitivity_passed,
+                "unmeasured_confounding_threshold": unmeasured_confounding_threshold,
+            }
+        )
         logger.debug(
             f"Sensitivity: e_value={e_value}, robustness={robustness_score}, passed={sensitivity_passed}"
         )
@@ -219,14 +225,14 @@ class NodeSpanContext:
             summary_length: Length of generated summary
             confidence_level: Confidence level (high/medium/low)
         """
-        self.metadata.update({
-            "summary_generated": summary_generated,
-            "summary_length": summary_length,
-            "confidence_level": confidence_level,
-        })
-        logger.debug(
-            f"Interpretation: generated={summary_generated}, length={summary_length}"
+        self.metadata.update(
+            {
+                "summary_generated": summary_generated,
+                "summary_length": summary_length,
+                "confidence_level": confidence_level,
+            }
         )
+        logger.debug(f"Interpretation: generated={summary_generated}, length={summary_length}")
 
     def set_error(self, error: str, error_type: Optional[str] = None) -> None:
         """Mark this node as having an error.
@@ -530,11 +536,13 @@ class CausalImpactOpikTracer:
                         result = await func(state)
                         # Set output summary
                         if span:
-                            span.set_output({
-                                "current_phase": result.get("current_phase"),
-                                "status": result.get("status"),
-                                "has_error": bool(result.get(f"{node_name}_error")),
-                            })
+                            span.set_output(
+                                {
+                                    "current_phase": result.get("current_phase"),
+                                    "status": result.get("status"),
+                                    "has_error": bool(result.get(f"{node_name}_error")),
+                                }
+                            )
                         return result
                 else:
                     return await func(state)

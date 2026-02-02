@@ -118,9 +118,7 @@ class HierarchicalAnalyzerNode:
         self.aggregation_method = aggregation_method
         self.timeout_seconds = timeout_seconds
 
-    async def execute(
-        self, state: HeterogeneousOptimizerState
-    ) -> Dict[str, Any]:
+    async def execute(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Execute hierarchical analysis.
 
         Uses the HierarchicalAnalyzer to compute segment-level CATE estimates
@@ -171,9 +169,7 @@ class HierarchicalAnalyzerNode:
             uplift_scores = self._get_uplift_scores(state, len(df))
 
             # Run hierarchical analysis
-            result = await self._run_hierarchical_analysis(
-                X, treatment, y, uplift_scores
-            )
+            result = await self._run_hierarchical_analysis(X, treatment, y, uplift_scores)
 
             hierarchical_latency_ms = int((time.time() - start_time) * 1000)
 
@@ -361,11 +357,11 @@ class HierarchicalAnalyzerNode:
             Dictionary with hierarchical analysis results
         """
         from src.causal_engine.hierarchical import (
+            AggregationMethod,
             HierarchicalAnalyzer,
             HierarchicalConfig,
             NestedCIConfig,
             NestedConfidenceInterval,
-            AggregationMethod,
         )
         from src.causal_engine.hierarchical.analyzer import SegmentationMethod
         from src.causal_engine.hierarchical.nested_ci import SegmentEstimate

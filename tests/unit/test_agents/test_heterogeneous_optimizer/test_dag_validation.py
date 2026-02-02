@@ -10,7 +10,6 @@ Tests the segment_analyzer's DAG validation methods:
 import pytest
 
 from src.agents.heterogeneous_optimizer.nodes.segment_analyzer import (
-    LATENT_CONFOUNDER_WARNING_THRESHOLD,
     SegmentAnalyzerNode,
 )
 
@@ -111,9 +110,7 @@ class TestHasDagEvidence:
         }
         assert segment_analyzer._has_dag_evidence(state) is False
 
-    def test_has_dag_evidence_without_adjacency(
-        self, segment_analyzer, sample_dag_nodes
-    ):
+    def test_has_dag_evidence_without_adjacency(self, segment_analyzer, sample_dag_nodes):
         """Should return False when adjacency matrix is missing."""
         state = {
             "discovered_dag_adjacency": None,
@@ -122,9 +119,7 @@ class TestHasDagEvidence:
         }
         assert segment_analyzer._has_dag_evidence(state) is False
 
-    def test_has_dag_evidence_with_empty_adjacency(
-        self, segment_analyzer, sample_dag_nodes
-    ):
+    def test_has_dag_evidence_with_empty_adjacency(self, segment_analyzer, sample_dag_nodes):
         """Should return False when adjacency matrix is empty."""
         state = {
             "discovered_dag_adjacency": [],
@@ -137,9 +132,7 @@ class TestHasDagEvidence:
 class TestHasCausalPath:
     """Tests for _has_causal_path method."""
 
-    def test_direct_path_exists(
-        self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes
-    ):
+    def test_direct_path_exists(self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes):
         """Should find direct path from treatment to segment."""
         node_to_idx = {node: idx for idx, node in enumerate(sample_dag_nodes)}
         result = segment_analyzer._has_causal_path(
@@ -147,9 +140,7 @@ class TestHasCausalPath:
         )
         assert result is True
 
-    def test_indirect_path_exists(
-        self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes
-    ):
+    def test_indirect_path_exists(self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes):
         """Should find indirect path from treatment to outcome via segment."""
         node_to_idx = {node: idx for idx, node in enumerate(sample_dag_nodes)}
         result = segment_analyzer._has_causal_path(
@@ -157,9 +148,7 @@ class TestHasCausalPath:
         )
         assert result is True
 
-    def test_no_path_reverse(
-        self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes
-    ):
+    def test_no_path_reverse(self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes):
         """Should not find path in reverse direction."""
         node_to_idx = {node: idx for idx, node in enumerate(sample_dag_nodes)}
         result = segment_analyzer._has_causal_path(
@@ -167,9 +156,7 @@ class TestHasCausalPath:
         )
         assert result is False
 
-    def test_path_to_self(
-        self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes
-    ):
+    def test_path_to_self(self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes):
         """Should return True for path to self."""
         node_to_idx = {node: idx for idx, node in enumerate(sample_dag_nodes)}
         result = segment_analyzer._has_causal_path(
@@ -177,9 +164,7 @@ class TestHasCausalPath:
         )
         assert result is True
 
-    def test_node_not_in_dag(
-        self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes
-    ):
+    def test_node_not_in_dag(self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes):
         """Should return False if node not in DAG."""
         node_to_idx = {node: idx for idx, node in enumerate(sample_dag_nodes)}
         result = segment_analyzer._has_causal_path(
@@ -320,7 +305,9 @@ class TestValidateSegmentEffects:
         assert len(latent) == 2  # Both segments have latent confounder
         assert any("latent confounder" in w.lower() for w in warnings)
 
-    def test_segment_not_in_dag_warning(self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes):
+    def test_segment_not_in_dag_warning(
+        self, segment_analyzer, sample_dag_adjacency, sample_dag_nodes
+    ):
         """Should warn when segment variable not in DAG."""
         segments = [
             {

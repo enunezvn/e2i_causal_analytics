@@ -7,7 +7,7 @@ Tests async scheduling of feedback learning cycles.
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -264,9 +264,7 @@ class TestFeedbackLearnerScheduler:
         assert scheduler.metrics.skipped_cycles == 1
 
     @pytest.mark.asyncio
-    async def test_run_cycle_now_forced_ignores_threshold(
-        self, scheduler_with_threshold
-    ):
+    async def test_run_cycle_now_forced_ignores_threshold(self, scheduler_with_threshold):
         """Test forced cycle ignores threshold."""
         scheduler_with_threshold._feedback_count_fn = lambda: 5  # Below 100 threshold
 
@@ -289,6 +287,7 @@ class TestFeedbackLearnerScheduler:
     @pytest.mark.asyncio
     async def test_cycle_timeout(self, mock_agent):
         """Test cycle timeout handling."""
+
         # Make agent.learn hang
         async def slow_learn(*args, **kwargs):
             await asyncio.sleep(10)  # Longer than timeout
@@ -363,9 +362,7 @@ class TestFeedbackLearnerScheduler:
             callback_results.append(result)
 
         config = SchedulerConfig(initial_delay_seconds=0, min_feedback_threshold=0)
-        scheduler = FeedbackLearnerScheduler(
-            mock_agent, config, on_cycle_complete=callback
-        )
+        scheduler = FeedbackLearnerScheduler(mock_agent, config, on_cycle_complete=callback)
 
         await scheduler.run_cycle_now(force=True)
 
@@ -380,9 +377,7 @@ class TestFeedbackLearnerScheduler:
             raise ValueError("Callback error")
 
         config = SchedulerConfig(initial_delay_seconds=0, min_feedback_threshold=0)
-        scheduler = FeedbackLearnerScheduler(
-            mock_agent, config, on_cycle_complete=bad_callback
-        )
+        scheduler = FeedbackLearnerScheduler(mock_agent, config, on_cycle_complete=bad_callback)
 
         # Should not raise
         result = await scheduler.run_cycle_now(force=True)
@@ -402,9 +397,7 @@ class TestFeedbackLearnerScheduler:
             initial_delay_seconds=0,
             min_feedback_threshold=10,
         )
-        scheduler = FeedbackLearnerScheduler(
-            mock_agent, config, feedback_count_fn=count_fn
-        )
+        scheduler = FeedbackLearnerScheduler(mock_agent, config, feedback_count_fn=count_fn)
 
         await scheduler.run_cycle_now(force=False)
 
@@ -422,9 +415,7 @@ class TestFeedbackLearnerScheduler:
             initial_delay_seconds=0,
             min_feedback_threshold=10,
         )
-        scheduler = FeedbackLearnerScheduler(
-            mock_agent, config, feedback_count_fn=async_count_fn
-        )
+        scheduler = FeedbackLearnerScheduler(mock_agent, config, feedback_count_fn=async_count_fn)
 
         result = await scheduler.run_cycle_now(force=False)
 

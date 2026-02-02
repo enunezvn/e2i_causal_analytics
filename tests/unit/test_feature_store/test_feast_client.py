@@ -8,10 +8,11 @@ Tests cover:
 - Feature statistics
 """
 
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pandas as pd
+import pytest
 
 from src.feature_store.feast_client import (
     FeastClient,
@@ -76,7 +77,7 @@ class TestFeastClientInitialization:
         assert client._initialized is False
 
         # Calling methods should trigger initialization
-        with patch.object(client, 'initialize', new_callable=AsyncMock) as mock_init:
+        with patch.object(client, "initialize", new_callable=AsyncMock) as mock_init:
             mock_init.return_value = None
             client._initialized = True  # Simulate successful init
 
@@ -163,10 +164,12 @@ class TestHistoricalFeatures:
             )
 
         # Empty feature_refs
-        df = pd.DataFrame({
-            "hcp_id": ["123"],
-            "event_timestamp": [datetime.now()],
-        })
+        df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime.now()],
+            }
+        )
         with pytest.raises(ValueError, match="feature_refs cannot be empty"):
             await client.get_historical_features(
                 entity_df=df,
@@ -180,11 +183,13 @@ class TestHistoricalFeatures:
         client._initialized = True
 
         # Prepare test data
-        entity_df = pd.DataFrame({
-            "hcp_id": ["123", "456"],
-            "brand_id": ["remibrutinib", "remibrutinib"],
-            "event_timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 15)],
-        })
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123", "456"],
+                "brand_id": ["remibrutinib", "remibrutinib"],
+                "event_timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 15)],
+            }
+        )
 
         result_df = entity_df.copy()
         result_df["hcp_conversion_features__engagement_score"] = [0.85, 0.72]
@@ -287,7 +292,7 @@ class TestFallback:
         client._custom_store = mock_custom
 
         # Should fall back to custom store
-        result = await client.get_online_features(
+        await client.get_online_features(
             entity_rows=[{"hcp_id": "123"}],
             feature_refs=["hcp_conversion_features:engagement_score"],
         )
@@ -411,9 +416,10 @@ class TestSingletonClient:
         """Test that get_feast_client returns singleton."""
         # Reset singleton
         import src.feature_store.feast_client as module
+
         module._client = None
 
-        with patch.object(FeastClient, 'initialize', new_callable=AsyncMock):
+        with patch.object(FeastClient, "initialize", new_callable=AsyncMock):
             client1 = await get_feast_client()
             client2 = await get_feast_client()
 

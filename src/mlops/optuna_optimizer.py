@@ -12,13 +12,13 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import optuna
 import yaml
 from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPruner
-from optuna.samplers import CmaEsSampler, GridSampler, RandomSampler, TPESampler
+from optuna.samplers import CmaEsSampler, RandomSampler, TPESampler
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -332,7 +332,9 @@ class OptunaOptimizer:
             "best_value": study.best_value,
             "best_trial_number": study.best_trial.number,
             "n_trials": len(study.trials),
-            "n_completed": len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
+            "n_completed": len(
+                [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+            ),
             "n_pruned": len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]),
             "duration_seconds": duration,
             "study_name": study.study_name,
@@ -357,7 +359,9 @@ class OptunaOptimizer:
                 # Log trial metrics
                 metrics = {
                     f"trial_{trial.number}_value": trial.value or 0.0,
-                    f"trial_{trial.number}_duration": trial.duration.total_seconds() if trial.duration else 0.0,
+                    f"trial_{trial.number}_duration": trial.duration.total_seconds()
+                    if trial.duration
+                    else 0.0,
                 }
 
                 # Log best value so far
@@ -570,9 +574,7 @@ class OptunaOptimizer:
                     model.fit(X_train, y_train)
 
                 # Evaluate on validation set
-                score = OptunaOptimizer._evaluate_model(
-                    model, X_val, y_val, problem_type, metric
-                )
+                score = OptunaOptimizer._evaluate_model(model, X_val, y_val, problem_type, metric)
 
                 # Report for pruning
                 trial.report(score, step=0)
@@ -632,11 +634,23 @@ class OptunaOptimizer:
             elif metric == "accuracy":
                 return accuracy_score(y, y_pred)
             elif metric == "f1":
-                return f1_score(y, y_pred, average="weighted" if problem_type == "multiclass_classification" else "binary")
+                return f1_score(
+                    y,
+                    y_pred,
+                    average="weighted" if problem_type == "multiclass_classification" else "binary",
+                )
             elif metric == "precision":
-                return precision_score(y, y_pred, average="weighted" if problem_type == "multiclass_classification" else "binary")
+                return precision_score(
+                    y,
+                    y_pred,
+                    average="weighted" if problem_type == "multiclass_classification" else "binary",
+                )
             elif metric == "recall":
-                return recall_score(y, y_pred, average="weighted" if problem_type == "multiclass_classification" else "binary")
+                return recall_score(
+                    y,
+                    y_pred,
+                    average="weighted" if problem_type == "multiclass_classification" else "binary",
+                )
             else:
                 return accuracy_score(y, y_pred)
         else:  # Regression
@@ -672,8 +686,12 @@ class OptunaOptimizer:
                 "state": trial.state.name,
                 "value": trial.value,
                 "params": trial.params,
-                "datetime_start": trial.datetime_start.isoformat() if trial.datetime_start else None,
-                "datetime_complete": trial.datetime_complete.isoformat() if trial.datetime_complete else None,
+                "datetime_start": trial.datetime_start.isoformat()
+                if trial.datetime_start
+                else None,
+                "datetime_complete": trial.datetime_complete.isoformat()
+                if trial.datetime_complete
+                else None,
                 "duration_seconds": trial.duration.total_seconds() if trial.duration else None,
                 "user_attrs": trial.user_attrs,
                 "system_attrs": trial.system_attrs,
@@ -728,9 +746,13 @@ class OptunaOptimizer:
                 "n_trials": optimization_results["n_trials"],
                 "n_completed": optimization_results["n_completed"],
                 "n_pruned": optimization_results["n_pruned"],
-                "n_failed": optimization_results["n_trials"] - optimization_results["n_completed"] - optimization_results["n_pruned"],
+                "n_failed": optimization_results["n_trials"]
+                - optimization_results["n_completed"]
+                - optimization_results["n_pruned"],
                 "best_trial_number": optimization_results["best_trial_number"],
-                "best_value": float(optimization_results["best_value"]) if optimization_results["best_value"] is not None else None,
+                "best_value": float(optimization_results["best_value"])
+                if optimization_results["best_value"] is not None
+                else None,
                 "best_params": optimization_results["best_params"],
                 "duration_seconds": optimization_results["duration_seconds"],
                 "status": "completed",
@@ -748,9 +770,7 @@ class OptunaOptimizer:
             logger.info(f"Saved HPO study {study.study_name} with ID {study_id}")
 
             # Save individual trials
-            trials_saved = await self._save_trials_to_database(
-                client, study_id, study.trials
-            )
+            trials_saved = await self._save_trials_to_database(client, study_id, study.trials)
 
             return {
                 "success": True,
@@ -794,9 +814,15 @@ class OptunaOptimizer:
                     "value": float(trial.value) if trial.value is not None else None,
                     "intermediate_values": {
                         str(k): float(v) for k, v in trial.intermediate_values.items()
-                    } if trial.intermediate_values else {},
-                    "datetime_start": trial.datetime_start.isoformat() if trial.datetime_start else None,
-                    "datetime_complete": trial.datetime_complete.isoformat() if trial.datetime_complete else None,
+                    }
+                    if trial.intermediate_values
+                    else {},
+                    "datetime_start": trial.datetime_start.isoformat()
+                    if trial.datetime_start
+                    else None,
+                    "datetime_complete": trial.datetime_complete.isoformat()
+                    if trial.datetime_complete
+                    else None,
                     "duration_seconds": trial.duration.total_seconds() if trial.duration else None,
                     "user_attrs": trial.user_attrs or {},
                     "system_attrs": trial.system_attrs or {},
@@ -912,58 +938,72 @@ def get_model_class(algorithm_name: str, problem_type: str) -> Optional[type]:
     try:
         if algorithm_name == "XGBoost":
             from xgboost import XGBClassifier, XGBRegressor
+
             return XGBClassifier if is_classification else XGBRegressor
 
         elif algorithm_name == "LightGBM":
             from lightgbm import LGBMClassifier, LGBMRegressor
+
             return LGBMClassifier if is_classification else LGBMRegressor
 
         elif algorithm_name == "RandomForest":
             from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+
             return RandomForestClassifier if is_classification else RandomForestRegressor
 
         elif algorithm_name == "LogisticRegression":
             from sklearn.linear_model import LogisticRegression
+
             return LogisticRegression
 
         elif algorithm_name == "Ridge":
             from sklearn.linear_model import Ridge
+
             return Ridge
 
         elif algorithm_name == "Lasso":
             from sklearn.linear_model import Lasso
+
             return Lasso
 
         elif algorithm_name == "GradientBoosting":
             from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+
             return GradientBoostingClassifier if is_classification else GradientBoostingRegressor
 
         elif algorithm_name == "ExtraTrees":
             from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
+
             return ExtraTreesClassifier if is_classification else ExtraTreesRegressor
 
         elif algorithm_name == "CausalForest":
             from econml.dml import CausalForestDML
+
             return CausalForestDML
 
         elif algorithm_name == "LinearDML":
             from econml.dml import LinearDML
+
             return LinearDML
 
         elif algorithm_name == "DRLearner":
             from econml.dr import DRLearner
+
             return DRLearner
 
         elif algorithm_name == "SLearner":
             from econml.metalearners import SLearner
+
             return SLearner
 
         elif algorithm_name == "TLearner":
             from econml.metalearners import TLearner
+
             return TLearner
 
         elif algorithm_name == "XLearner":
             from econml.metalearners import XLearner
+
             return XLearner
 
         else:

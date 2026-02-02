@@ -12,8 +12,6 @@ Tests:
 import time
 from unittest.mock import patch
 
-import pytest
-
 from src.memory.evidence_cache import (
     EvidenceEvaluationCache,
     get_evidence_cache,

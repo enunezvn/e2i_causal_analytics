@@ -44,14 +44,13 @@ import os
 import sys
 import threading
 import time
-import uuid
 from contextlib import asynccontextmanager
-
-from uuid_utils import uuid7 as uuid7_func  # For Opik-compatible UUID v7
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
+
+from uuid_utils import uuid7 as uuid7_func  # For Opik-compatible UUID v7
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +140,7 @@ class CircuitBreakerMetrics:
             "state_changes": self.state_changes,
             "times_opened": self.times_opened,
             "success_rate": (
-                self.successful_calls / self.total_calls
-                if self.total_calls > 0
-                else 1.0
+                self.successful_calls / self.total_calls if self.total_calls > 0 else 1.0
             ),
             "last_failure_time": self.last_failure_time,
             "last_success_time": self.last_success_time,
@@ -395,8 +392,7 @@ class OpikConfig:
             use_local=os.getenv("OPIK_USE_LOCAL", "false").lower() == "true",
             enabled=os.getenv("OPIK_ENABLED", "true").lower() == "true",
             sample_rate=float(os.getenv("OPIK_SAMPLE_RATE", "1.0")),
-            always_sample_errors=os.getenv("OPIK_ALWAYS_SAMPLE_ERRORS", "true").lower()
-            == "true",
+            always_sample_errors=os.getenv("OPIK_ALWAYS_SAMPLE_ERRORS", "true").lower() == "true",
         )
 
     @classmethod
@@ -642,9 +638,7 @@ class OpikConnector:
         if self.config.enabled:
             try:
                 self._init_opik_client()
-                logger.info(
-                    f"Opik connector initialized for project: {self.config.project_name}"
-                )
+                logger.info(f"Opik connector initialized for project: {self.config.project_name}")
             except Exception as e:
                 logger.warning(f"Failed to initialize Opik client: {e}")
                 logger.warning("Opik observability will be disabled for this session")
@@ -652,9 +646,7 @@ class OpikConnector:
 
         self._initialized = True
 
-    def _on_circuit_state_change(
-        self, old_state: CircuitState, new_state: CircuitState
-    ) -> None:
+    def _on_circuit_state_change(self, old_state: CircuitState, new_state: CircuitState) -> None:
         """Handle circuit breaker state changes."""
         if new_state == CircuitState.OPEN:
             logger.warning(
@@ -838,14 +830,16 @@ class OpikConnector:
                             )
                         else:
                             # Create orphan span (trace already ended or not found)
-                            logger.debug(
-                                f"Trace {trace_id} not found, creating standalone span"
-                            )
+                            logger.debug(f"Trace {trace_id} not found, creating standalone span")
 
                     span_ctx._opik_span = opik_span
 
                 except Exception as e:
-                    print(f"[OPIK_CONNECTOR] Failed to create Opik span: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                    print(
+                        f"[OPIK_CONNECTOR] Failed to create Opik span: {type(e).__name__}: {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     logger.warning(f"Failed to create Opik span: {e}")
 
             yield span_ctx
@@ -1123,9 +1117,7 @@ class OpikConnector:
                     value=score,
                     reason=reason,
                 )
-                logger.debug(
-                    f"Logged feedback {feedback_type}={score} to trace {trace_id}"
-                )
+                logger.debug(f"Logged feedback {feedback_type}={score} to trace {trace_id}")
             self._circuit_breaker.record_success()
         except Exception as e:
             self._circuit_breaker.record_failure()
@@ -1206,10 +1198,7 @@ class OpikConnector:
             # Record success
             self._circuit_breaker.record_success()
 
-            logger.debug(
-                f"Logged prediction for {model_name} "
-                f"[trace_id={trace_id}]"
-            )
+            logger.debug(f"Logged prediction for {model_name} [trace_id={trace_id}]")
             return trace_id
 
         except Exception as e:

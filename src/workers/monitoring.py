@@ -11,8 +11,6 @@ Version: 1.0.0
 """
 
 import logging
-import os
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -31,6 +29,7 @@ try:
         Gauge,
         Info,
     )
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -213,16 +212,16 @@ class CeleryQueueMonitor:
         # Fallback to Celery inspect (slower but more portable)
         try:
             inspect = self.app.control.inspect()
-            active = inspect.active() or {}
+            inspect.active() or {}
             reserved = inspect.reserved() or {}
-            scheduled = inspect.scheduled() or {}
+            inspect.scheduled() or {}
 
             # Aggregate by queue (approximation)
             for queue_name in self.QUEUE_NAMES:
                 depths[queue_name] = 0
 
             # Count reserved tasks as queue depth estimate
-            for worker, tasks in reserved.items():
+            for _worker, tasks in reserved.items():
                 for task in tasks:
                     queue = task.get("delivery_info", {}).get("routing_key", "default")
                     if queue in depths:
@@ -283,11 +282,13 @@ class CeleryQueueMonitor:
                         tier = "heavy"
 
                     stats["workers_by_tier"][tier] += 1
-                    stats["workers"].append({
-                        "hostname": hostname,
-                        "tier": tier,
-                        "status": "online",
-                    })
+                    stats["workers"].append(
+                        {
+                            "hostname": hostname,
+                            "tier": tier,
+                            "status": "online",
+                        }
+                    )
 
         except Exception as e:
             logger.warning(f"Failed to get worker stats: {e}")
@@ -306,7 +307,7 @@ class CeleryQueueMonitor:
             scheduled = inspect.scheduled() or {}
 
             count = 0
-            for worker, tasks in scheduled.items():
+            for _worker, tasks in scheduled.items():
                 count += len(tasks)
 
             return count
@@ -355,9 +356,7 @@ class CeleryQueueMonitor:
         for worker, count in reserved.items():
             queue_metrics.reserved_tasks.labels(worker=worker).set(count)
 
-        logger.debug(
-            f"Updated queue metrics: depths={depths}, scheduled={scheduled_count}"
-        )
+        logger.debug(f"Updated queue metrics: depths={depths}, scheduled={scheduled_count}")
 
     def get_monitoring_summary(self) -> Dict[str, Any]:
         """
@@ -510,14 +509,16 @@ class AutoscalerMetricsProvider:
                     recommended = current_workers
                     reason = f"Load balanced: {tasks_per_worker:.1f} tasks/worker"
 
-            recommendations.append(AutoscalerRecommendation(
-                tier=tier,
-                current_workers=current_workers,
-                recommended_workers=recommended,
-                reason=reason,
-                queue_depth=depth,
-                timestamp=timestamp,
-            ))
+            recommendations.append(
+                AutoscalerRecommendation(
+                    tier=tier,
+                    current_workers=current_workers,
+                    recommended_workers=recommended,
+                    reason=reason,
+                    queue_depth=depth,
+                    timestamp=timestamp,
+                )
+            )
 
         return recommendations
 
@@ -539,6 +540,7 @@ def get_queue_monitor(app: Optional[Celery] = None) -> CeleryQueueMonitor:
     """
     if app is None:
         from .celery_app import celery_app
+
         app = celery_app
 
     return CeleryQueueMonitor(app)

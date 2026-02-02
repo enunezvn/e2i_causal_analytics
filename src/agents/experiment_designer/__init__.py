@@ -60,9 +60,11 @@ from src.agents.experiment_designer.graph import (
     experiment_designer_graph,
 )
 from src.agents.experiment_designer.mlflow_tracker import (
-    ExperimentDesignerMLflowTracker,
-    ExperimentDesignerMetrics,
     DesignContext,
+    ExperimentDesignerMetrics,
+    ExperimentDesignerMLflowTracker,
+)
+from src.agents.experiment_designer.mlflow_tracker import (
     create_tracker as create_mlflow_tracker,
 )
 from src.agents.experiment_designer.state import (

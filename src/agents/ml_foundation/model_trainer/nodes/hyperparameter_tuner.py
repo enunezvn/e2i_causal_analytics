@@ -143,33 +143,23 @@ def validate_hyperparameter_types(
         # Validate type
         if param_type == "int":
             if not isinstance(value, (int, np.integer)):
-                errors.append(
-                    f"Parameter {param_name}: expected int, got {type(value).__name__}"
-                )
+                errors.append(f"Parameter {param_name}: expected int, got {type(value).__name__}")
         elif param_type == "float":
             if not isinstance(value, (int, float, np.floating)):
-                errors.append(
-                    f"Parameter {param_name}: expected float, got {type(value).__name__}"
-                )
+                errors.append(f"Parameter {param_name}: expected float, got {type(value).__name__}")
         elif param_type == "categorical":
             choices = param_def.get("choices", [])
             if choices and value not in choices:
-                errors.append(
-                    f"Parameter {param_name}: value {value} not in choices {choices}"
-                )
+                errors.append(f"Parameter {param_name}: value {value} not in choices {choices}")
 
         # Validate range for numeric types
         if param_type in ("int", "float") and value is not None:
             low = param_def.get("low")
             high = param_def.get("high")
             if low is not None and value < low:
-                errors.append(
-                    f"Parameter {param_name}: value {value} below minimum {low}"
-                )
+                errors.append(f"Parameter {param_name}: value {value} below minimum {low}")
             if high is not None and value > high:
-                errors.append(
-                    f"Parameter {param_name}: value {value} above maximum {high}"
-                )
+                errors.append(f"Parameter {param_name}: value {value} above maximum {high}")
 
     return (len(errors) == 0, errors)
 
@@ -275,8 +265,7 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         logger.info(
-            f"Starting HPO for {algorithm_name}: "
-            f"{hpo_trials} trials, {timeout_seconds}s timeout"
+            f"Starting HPO for {algorithm_name}: {hpo_trials} trials, {timeout_seconds}s timeout"
         )
 
         # Get model class
@@ -302,7 +291,9 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         if hpo_memory:
             try:
                 n_samples = len(X_train) if X_train is not None else None
-                n_features = X_train.shape[1] if X_train is not None and len(X_train.shape) > 1 else None
+                n_features = (
+                    X_train.shape[1] if X_train is not None and len(X_train.shape) > 1 else None
+                )
                 warmstart_config = await hpo_memory.get_warmstart_hyperparameters(
                     algorithm_name=algorithm_name,
                     problem_type=problem_type,
@@ -464,7 +455,9 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
                     duration_seconds=results["duration_seconds"],
                     study_name=results["study_name"],
                     n_samples=len(X_train) if X_train is not None else None,
-                    n_features=X_train.shape[1] if X_train is not None and len(X_train.shape) > 1 else None,
+                    n_features=X_train.shape[1]
+                    if X_train is not None and len(X_train.shape) > 1
+                    else None,
                     experiment_id=experiment_id,
                 )
 

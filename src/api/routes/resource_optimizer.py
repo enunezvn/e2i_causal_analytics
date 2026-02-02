@@ -24,7 +24,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -104,19 +104,11 @@ class AllocationTarget(BaseModel):
     """Target entity for resource allocation."""
 
     entity_id: str = Field(..., description="Entity identifier")
-    entity_type: str = Field(
-        ..., description="Entity type (hcp, territory, region)"
-    )
+    entity_type: str = Field(..., description="Entity type (hcp, territory, region)")
     current_allocation: float = Field(..., description="Current allocation amount")
-    min_allocation: Optional[float] = Field(
-        default=None, description="Minimum allowed allocation"
-    )
-    max_allocation: Optional[float] = Field(
-        default=None, description="Maximum allowed allocation"
-    )
-    expected_response: float = Field(
-        default=1.0, description="Response coefficient"
-    )
+    min_allocation: Optional[float] = Field(default=None, description="Minimum allowed allocation")
+    max_allocation: Optional[float] = Field(default=None, description="Maximum allowed allocation")
+    expected_response: float = Field(default=1.0, description="Response coefficient")
 
 
 class Constraint(BaseModel):
@@ -124,9 +116,7 @@ class Constraint(BaseModel):
 
     constraint_type: ConstraintType = Field(..., description="Type of constraint")
     value: float = Field(..., description="Constraint value")
-    scope: ConstraintScope = Field(
-        default=ConstraintScope.GLOBAL, description="Constraint scope"
-    )
+    scope: ConstraintScope = Field(default=ConstraintScope.GLOBAL, description="Constraint scope")
 
 
 class RunOptimizationRequest(BaseModel):
@@ -146,21 +136,11 @@ class RunOptimizationRequest(BaseModel):
     )
 
     # Configuration
-    solver_type: SolverType = Field(
-        default=SolverType.LINEAR, description="Solver type"
-    )
-    time_limit_seconds: int = Field(
-        default=60, description="Solver time limit", ge=1, le=300
-    )
-    gap_tolerance: float = Field(
-        default=0.01, description="MILP gap tolerance", gt=0.0, lt=1.0
-    )
-    run_scenarios: bool = Field(
-        default=False, description="Run what-if scenarios"
-    )
-    scenario_count: int = Field(
-        default=3, description="Number of scenarios", ge=1, le=10
-    )
+    solver_type: SolverType = Field(default=SolverType.LINEAR, description="Solver type")
+    time_limit_seconds: int = Field(default=60, description="Solver time limit", ge=1, le=300)
+    gap_tolerance: float = Field(default=0.01, description="MILP gap tolerance", gt=0.0, lt=1.0)
+    run_scenarios: bool = Field(default=False, description="Run what-if scenarios")
+    scenario_count: int = Field(default=3, description="Number of scenarios", ge=1, le=10)
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -177,9 +157,7 @@ class RunOptimizationRequest(BaseModel):
                         "expected_response": 1.3,
                     }
                 ],
-                "constraints": [
-                    {"constraint_type": "budget", "value": 200000, "scope": "global"}
-                ],
+                "constraints": [{"constraint_type": "budget", "value": 200000, "scope": "global"}],
                 "objective": "maximize_outcome",
             }
         }
@@ -227,12 +205,8 @@ class OptimizationResponse(BaseModel):
     optimal_allocations: List[AllocationResult] = Field(
         default_factory=list, description="Optimized allocations"
     )
-    objective_value: Optional[float] = Field(
-        default=None, description="Optimized objective value"
-    )
-    solver_status: Optional[str] = Field(
-        default=None, description="Solver termination status"
-    )
+    objective_value: Optional[float] = Field(default=None, description="Optimized objective value")
+    solver_status: Optional[str] = Field(default=None, description="Solver termination status")
     solve_time_ms: int = Field(default=0, description="Solver time (ms)")
 
     # Scenario results
@@ -247,17 +221,13 @@ class OptimizationResponse(BaseModel):
     projected_total_outcome: Optional[float] = Field(
         default=None, description="Total projected outcome"
     )
-    projected_roi: Optional[float] = Field(
-        default=None, description="Projected ROI"
-    )
+    projected_roi: Optional[float] = Field(default=None, description="Projected ROI")
     impact_by_segment: Optional[Dict[str, float]] = Field(
         default=None, description="Impact breakdown by segment"
     )
 
     # Summary
-    optimization_summary: Optional[str] = Field(
-        default=None, description="Executive summary"
-    )
+    optimization_summary: Optional[str] = Field(default=None, description="Executive summary")
     recommendations: List[str] = Field(
         default_factory=list, description="Actionable recommendations"
     )
@@ -295,16 +265,12 @@ class ResourceHealthResponse(BaseModel):
     """Health check response for resource optimization service."""
 
     status: str = Field(..., description="Service status")
-    agent_available: bool = Field(
-        ..., description="Resource Optimizer agent status"
-    )
+    agent_available: bool = Field(..., description="Resource Optimizer agent status")
     scipy_available: bool = Field(default=True, description="scipy availability")
     last_optimization: Optional[datetime] = Field(
         default=None, description="Last optimization timestamp"
     )
-    optimizations_24h: int = Field(
-        default=0, description="Optimizations in last 24 hours"
-    )
+    optimizations_24h: int = Field(default=0, description="Optimizations in last 24 hours")
 
 
 # =============================================================================
@@ -422,9 +388,7 @@ async def get_optimization(optimization_id: str) -> OptimizationResponse:
     description="List scenario analyses from all optimizations.",
 )
 async def list_scenarios(
-    min_roi: Optional[float] = Query(
-        default=None, description="Minimum ROI threshold"
-    ),
+    min_roi: Optional[float] = Query(default=None, description="Minimum ROI threshold"),
     limit: int = Query(default=20, description="Maximum results", ge=1, le=100),
 ) -> ScenarioListResponse:
     """
@@ -474,7 +438,7 @@ async def get_resource_health() -> ResourceHealthResponse:
     # Check agent availability
     agent_available = True
     try:
-        from src.agents.resource_optimizer import ResourceOptimizerAgent
+        from src.agents.resource_optimizer import ResourceOptimizerAgent  # noqa: F401
 
         agent_available = True
     except ImportError:
@@ -490,9 +454,7 @@ async def get_resource_health() -> ResourceHealthResponse:
     # Count recent optimizations
     now = datetime.now(timezone.utc)
     optimizations_24h = sum(
-        1
-        for o in _optimizations_store.values()
-        if (now - o.timestamp).total_seconds() < 86400
+        1 for o in _optimizations_store.values() if (now - o.timestamp).total_seconds() < 86400
     )
 
     # Get last optimization
@@ -628,9 +590,7 @@ async def _execute_optimization(
             else OptimizationStatus.FAILED,
             resource_type=request.resource_type,
             objective=request.objective,
-            optimal_allocations=_convert_allocations(
-                result.get("optimal_allocations", [])
-            ),
+            optimal_allocations=_convert_allocations(result.get("optimal_allocations", [])),
             objective_value=result.get("objective_value"),
             solver_status=result.get("solver_status"),
             solve_time_ms=result.get("solve_time_ms", 0),
@@ -648,9 +608,7 @@ async def _execute_optimization(
         )
 
     except ImportError as e:
-        logger.warning(
-            f"Resource Optimizer agent not available: {e}, using mock data"
-        )
+        logger.warning(f"Resource Optimizer agent not available: {e}, using mock data")
         return _generate_mock_response(request, start_time)
 
     except Exception as e:

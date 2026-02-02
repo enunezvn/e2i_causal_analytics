@@ -12,10 +12,9 @@ Author: E2I Causal Analytics Team
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 from numpy.typing import NDArray
 
 
@@ -147,8 +146,8 @@ def calculate_qini_curve(
     outcome_sorted = outcome[sorted_idx]
 
     # Calculate cumulative counts
-    n_treated_cum = np.cumsum(treatment_sorted)
-    n_control_cum = np.cumsum(1 - treatment_sorted)
+    np.cumsum(treatment_sorted)
+    np.cumsum(1 - treatment_sorted)
     outcome_treated_cum = np.cumsum(treatment_sorted * outcome_sorted)
     outcome_control_cum = np.cumsum((1 - treatment_sorted) * outcome_sorted)
 
@@ -255,9 +254,7 @@ def auuc(
     Returns:
         AUUC score (0-1 if normalized, unbounded otherwise)
     """
-    x_values, uplift_values = calculate_uplift_curve(
-        uplift_scores, treatment, outcome
-    )
+    x_values, uplift_values = calculate_uplift_curve(uplift_scores, treatment, outcome)
 
     # Calculate area using trapezoidal rule
     area = np.trapz(uplift_values, x_values)
@@ -302,9 +299,7 @@ def qini_coefficient(
     Returns:
         Qini coefficient (typically -1 to 1)
     """
-    x_values, qini_values = calculate_qini_curve(
-        uplift_scores, treatment, outcome
-    )
+    x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
 
     # Area under Qini curve
     qini_area = np.trapz(qini_values, x_values)
@@ -339,9 +334,7 @@ def qini_auc(
     Returns:
         Area under Qini curve
     """
-    x_values, qini_values = calculate_qini_curve(
-        uplift_scores, treatment, outcome
-    )
+    x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
     return float(np.trapz(qini_values, x_values))
 
 
@@ -360,9 +353,7 @@ def cumulative_gain_auc(
     Returns:
         Area under cumulative gain curve
     """
-    x_values, gain_values = calculate_cumulative_gain(
-        uplift_scores, treatment, outcome
-    )
+    x_values, gain_values = calculate_cumulative_gain(uplift_scores, treatment, outcome)
     return float(np.trapz(gain_values, x_values))
 
 
@@ -370,7 +361,7 @@ def uplift_at_k(
     uplift_scores: NDArray[np.float64],
     treatment: NDArray[np.int_],
     outcome: NDArray[np.float64],
-    k_percentiles: List[float] = [10, 20, 30, 40, 50],
+    k_percentiles: List[float] = None,
 ) -> Dict[str, float]:
     """Calculate uplift at various percentiles.
 
@@ -387,6 +378,8 @@ def uplift_at_k(
         Dictionary mapping percentile to observed uplift
     """
     # Ensure arrays
+    if k_percentiles is None:
+        k_percentiles = [10, 20, 30, 40, 50]
     uplift_scores = np.asarray(uplift_scores).flatten()
     treatment = np.asarray(treatment).flatten()
     outcome = np.asarray(outcome).flatten()
@@ -498,9 +491,9 @@ def treatment_effect_calibration(
 
     # Weighted mean calibration error
     if len(bin_sizes) > 0 and np.sum(bin_sizes) > 0:
-        calibration_error = np.sum(
-            bin_sizes * np.abs(predicted_means - observed_means)
-        ) / np.sum(bin_sizes)
+        calibration_error = np.sum(bin_sizes * np.abs(predicted_means - observed_means)) / np.sum(
+            bin_sizes
+        )
     else:
         calibration_error = 0.0
 
@@ -511,7 +504,7 @@ def evaluate_uplift_model(
     uplift_scores: NDArray[np.float64],
     treatment: NDArray[np.int_],
     outcome: NDArray[np.float64],
-    k_percentiles: List[float] = [10, 20, 30, 40, 50],
+    k_percentiles: List[float] = None,
 ) -> UpliftMetrics:
     """Comprehensive evaluation of uplift model.
 
@@ -527,6 +520,8 @@ def evaluate_uplift_model(
         UpliftMetrics containing all evaluation metrics
     """
     # Handle multi-dimensional scores
+    if k_percentiles is None:
+        k_percentiles = [10, 20, 30, 40, 50]
     if len(uplift_scores.shape) > 1:
         scores = uplift_scores[:, 0]
     else:

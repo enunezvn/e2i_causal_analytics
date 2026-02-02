@@ -6,14 +6,13 @@ Provides common functionality for all entity generators.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 
 import numpy as np
 import pandas as pd
 
-from ..config import SyntheticDataConfig, Brand, DGPType
-
+from ..config import Brand, DGPType, SyntheticDataConfig
 
 T = TypeVar("T", bound=pd.DataFrame)
 

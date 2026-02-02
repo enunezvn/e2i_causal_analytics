@@ -426,7 +426,9 @@ class ToolComposerMemoryHooks:
                     "total_duration_ms": result.get("total_duration_ms", 0),
                     "success": result.get("success", False),
                     "confidence": response.get("confidence", 0),
-                    "tool_sequence": [s.get("tool_name") for s in result.get("plan", {}).get("steps", [])],
+                    "tool_sequence": [
+                        s.get("tool_name") for s in result.get("plan", {}).get("steps", [])
+                    ],
                 },
                 entities=None,
                 outcome_type="composition_delivered",
@@ -560,10 +562,7 @@ class ToolComposerMemoryHooks:
             )
 
             # Filter to successful compositions only
-            successful = [
-                r for r in results
-                if r.get("raw_content", {}).get("success", False)
-            ]
+            successful = [r for r in results if r.get("raw_content", {}).get("success", False)]
 
             return successful[:limit]
         except Exception as e:

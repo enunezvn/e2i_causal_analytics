@@ -4,14 +4,15 @@ Tests the integration of DriverRanker for comparing causal vs predictive
 feature importance in the Feature Analyzer agent.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.ml_foundation.feature_analyzer.nodes.causal_ranker import (
-    rank_causal_drivers,
     _build_discovery_config,
+    rank_causal_drivers,
 )
 from src.causal_engine.discovery.base import (
     DiscoveryAlgorithmType,

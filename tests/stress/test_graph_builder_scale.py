@@ -15,7 +15,7 @@ Test scenarios:
 """
 
 import time
-from typing import Dict, Tuple, List
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -52,12 +52,12 @@ def generate_treatment_outcome_data(
     # Generate confounders
     confounders = {}
     for i in range(n_confounders):
-        confounders[f"X{i+1}"] = np.random.normal(0, 1, n_samples)
+        confounders[f"X{i + 1}"] = np.random.normal(0, 1, n_samples)
 
     # Treatment depends on confounders
     propensity = 0.5
     for i in range(min(3, n_confounders)):
-        propensity = propensity + 0.1 * confounders[f"X{i+1}"]
+        propensity = propensity + 0.1 * confounders[f"X{i + 1}"]
     propensity = np.clip(propensity, 0.1, 0.9)
     treatment = np.random.binomial(1, propensity)
 
@@ -65,7 +65,7 @@ def generate_treatment_outcome_data(
     outcome = true_ate * treatment
     for i in range(n_confounders):
         weight = 0.3 / (i + 1)  # Decreasing weights
-        outcome = outcome + weight * confounders[f"X{i+1}"]
+        outcome = outcome + weight * confounders[f"X{i + 1}"]
     outcome = outcome + np.random.normal(0, 0.5, n_samples)
 
     # Build DataFrame
@@ -165,7 +165,7 @@ class MockGraphBuilder:
             p = len(data.columns)
 
             # O(n * p^2) complexity simulation
-            complexity = n * (p ** 2) / 1e8
+            complexity = n * (p**2) / 1e8
             time.sleep(min(complexity, 5.0))  # Cap at 5 seconds for mock
 
             # Discover confounders (mock: use columns that correlate with both T and Y)
@@ -236,7 +236,7 @@ class MockGraphBuilder:
         nodes = [treatment_var, outcome_var] + (confounders or [])
         edges = []
 
-        for conf in (confounders or []):
+        for conf in confounders or []:
             edges.append((conf, treatment_var))
             edges.append((conf, outcome_var))
 

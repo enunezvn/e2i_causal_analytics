@@ -16,18 +16,14 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.services.alert_routing import (
-    AlertPayload,
-    AlertRouter,
     AlertRoutingConfig,
     route_concept_drift_alerts,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -72,10 +68,7 @@ def mock_alerts_high_severity():
             "metric": "accuracy_drop",
             "value": 0.08,
             "threshold": 0.05,
-            "message": (
-                "Accuracy dropped by 8.0% for trigger predictions "
-                "(threshold: 5.0%)"
-            ),
+            "message": ("Accuracy dropped by 8.0% for trigger predictions (threshold: 5.0%)"),
         },
     ]
 
@@ -91,10 +84,7 @@ def mock_alerts_critical_severity():
             "metric": "accuracy_drop",
             "value": 0.12,
             "threshold": 0.05,
-            "message": (
-                "Accuracy dropped by 12.0% for hcp_churn predictions "
-                "(threshold: 5.0%)"
-            ),
+            "message": ("Accuracy dropped by 12.0% for hcp_churn predictions (threshold: 5.0%)"),
         },
     ]
 
@@ -126,10 +116,7 @@ def mock_calibration_alerts():
             "metric": "calibration_error",
             "value": 0.12,
             "threshold": 0.10,
-            "message": (
-                "Calibration error of 12.0% for trigger predictions "
-                "(threshold: 10.0%)"
-            ),
+            "message": ("Calibration error of 12.0% for trigger predictions (threshold: 10.0%)"),
         },
     ]
 
@@ -186,13 +173,9 @@ class TestRouteConceptDriftAlertsBasic:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_skips_low_severity_alerts(
-        self, mock_drift_results, mock_alerts_low_severity
-    ):
+    async def test_skips_low_severity_alerts(self, mock_drift_results, mock_alerts_low_severity):
         """Test that low-severity alerts are skipped."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[])
             mock_get_router.return_value = mock_router
@@ -219,18 +202,14 @@ class TestAlertSeverity:
     """Tests for alert severity handling."""
 
     @pytest.mark.asyncio
-    async def test_high_severity_alert_routed(
-        self, mock_drift_results, mock_alerts_high_severity
-    ):
+    async def test_high_severity_alert_routed(self, mock_drift_results, mock_alerts_high_severity):
         """Test that high-severity alerts are routed correctly."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
 
-            result = await route_concept_drift_alerts(
+            await route_concept_drift_alerts(
                 drift_results=mock_drift_results,
                 alerts=mock_alerts_high_severity,
                 baseline_days=90,
@@ -248,14 +227,12 @@ class TestAlertSeverity:
         self, mock_drift_results, mock_alerts_critical_severity
     ):
         """Test that critical-severity alerts are routed correctly."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
 
-            result = await route_concept_drift_alerts(
+            await route_concept_drift_alerts(
                 drift_results=mock_drift_results,
                 alerts=mock_alerts_critical_severity,
                 baseline_days=90,
@@ -273,14 +250,12 @@ class TestAlertSeverity:
         self, mock_drift_results, mock_calibration_alerts
     ):
         """Test that medium-severity calibration alerts are routed."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
 
-            result = await route_concept_drift_alerts(
+            await route_concept_drift_alerts(
                 drift_results=mock_drift_results,
                 alerts=mock_calibration_alerts,
                 baseline_days=90,
@@ -306,9 +281,7 @@ class TestAlertPayloadContent:
         self, mock_drift_results, mock_alerts_high_severity
     ):
         """Test that alert payload has correct alert_type."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
@@ -327,9 +300,7 @@ class TestAlertPayloadContent:
         self, mock_drift_results, mock_alerts_high_severity
     ):
         """Test that alert payload includes recommended actions."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
@@ -350,9 +321,7 @@ class TestAlertPayloadContent:
         self, mock_drift_results, mock_calibration_alerts
     ):
         """Test that calibration alerts have appropriate recommended actions."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
@@ -365,17 +334,15 @@ class TestAlertPayloadContent:
             call_args = mock_router.route_batch.call_args[0][0]
             alert = call_args[0]
             # For calibration_drift, should mention class distribution
-            assert any("class" in action.lower() or "calibration" in action.lower()
-                      for action in alert.recommended_actions)
+            assert any(
+                "class" in action.lower() or "calibration" in action.lower()
+                for action in alert.recommended_actions
+            )
 
     @pytest.mark.asyncio
-    async def test_alert_payload_has_metadata(
-        self, mock_drift_results, mock_alerts_high_severity
-    ):
+    async def test_alert_payload_has_metadata(self, mock_drift_results, mock_alerts_high_severity):
         """Test that alert payload includes full metadata."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
@@ -403,9 +370,7 @@ class TestAlertPayloadContent:
         self, mock_drift_results, mock_alerts_high_severity
     ):
         """Test that alert description includes accuracy statistics."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
@@ -456,14 +421,14 @@ class TestMultipleAlerts:
             },
         ]
 
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
-            mock_router.route_batch = AsyncMock(return_value=[
-                {"status": "sent"},
-                {"status": "sent"},
-            ])
+            mock_router.route_batch = AsyncMock(
+                return_value=[
+                    {"status": "sent"},
+                    {"status": "sent"},
+                ]
+            )
             mock_get_router.return_value = mock_router
 
             await route_concept_drift_alerts(
@@ -499,9 +464,7 @@ class TestMultipleAlerts:
             },
         ]
 
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
@@ -546,15 +509,13 @@ class TestEdgeCases:
             },
         ]
 
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
 
             # Should not raise, but use default values
-            result = await route_concept_drift_alerts(
+            await route_concept_drift_alerts(
                 drift_results=drift_results,
                 alerts=alerts,
             )
@@ -568,15 +529,13 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_handles_empty_drift_results(self, mock_alerts_high_severity):
         """Test handling when drift_results is empty."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
 
             # Should not raise
-            result = await route_concept_drift_alerts(
+            await route_concept_drift_alerts(
                 drift_results=[],
                 alerts=mock_alerts_high_severity,
             )
@@ -590,9 +549,7 @@ class TestEdgeCases:
         self, mock_drift_results, mock_alerts_high_severity
     ):
         """Test that default values are used for baseline and current days."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router
@@ -613,9 +570,7 @@ class TestEdgeCases:
         self, mock_drift_results, mock_alerts_high_severity
     ):
         """Test that alert_id contains the prediction type."""
-        with patch(
-            "src.services.alert_routing.get_alert_router"
-        ) as mock_get_router:
+        with patch("src.services.alert_routing.get_alert_router") as mock_get_router:
             mock_router = MagicMock()
             mock_router.route_batch = AsyncMock(return_value=[{"status": "sent"}])
             mock_get_router.return_value = mock_router

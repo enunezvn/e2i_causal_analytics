@@ -10,8 +10,6 @@ Tests:
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.memory.semantic_memory import (
     FalkorDBSemanticMemory,
     reset_semantic_memory,
@@ -50,9 +48,7 @@ class TestPatientNetworkPagination:
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
 
-            result = memory.get_patient_network(
-                "patient-1", limit=50, offset=100
-            )
+            result = memory.get_patient_network("patient-1", limit=50, offset=100)
 
             assert result["pagination"]["limit"] == 50
             assert result["pagination"]["offset"] == 100

@@ -12,7 +12,7 @@ Tests cover:
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -31,7 +31,6 @@ from src.digital_twin.simulation_cache import (
     SimulationCacheConfig,
     get_simulation_cache,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -241,9 +240,7 @@ class TestCacheKeyGeneration:
 
         assert key1 != key2
 
-    def test_key_consistency(
-        self, cache, sample_intervention_config, sample_population_filter
-    ):
+    def test_key_consistency(self, cache, sample_intervention_config, sample_population_filter):
         """Test that same inputs produce same key."""
         model_id = uuid4()
 
@@ -350,9 +347,7 @@ class TestCacheWrite:
     """Tests for caching simulation results."""
 
     @pytest.mark.asyncio
-    async def test_cache_result_success(
-        self, cache, mock_redis_client, sample_simulation_result
-    ):
+    async def test_cache_result_success(self, cache, mock_redis_client, sample_simulation_result):
         """Test successfully caching a result."""
         success = await cache.cache_result(sample_simulation_result)
 
@@ -374,9 +369,7 @@ class TestCacheWrite:
         assert call_args[0][1] == custom_ttl
 
     @pytest.mark.asyncio
-    async def test_cache_disabled_no_write(
-        self, mock_redis_client, sample_simulation_result
-    ):
+    async def test_cache_disabled_no_write(self, mock_redis_client, sample_simulation_result):
         """Test that disabled cache doesn't write."""
         config = SimulationCacheConfig(enabled=False)
         cache = SimulationCache(redis_client=mock_redis_client, config=config)
@@ -387,9 +380,7 @@ class TestCacheWrite:
         mock_redis_client.setex.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cache_stores_metadata(
-        self, cache, mock_redis_client, sample_simulation_result
-    ):
+    async def test_cache_stores_metadata(self, cache, mock_redis_client, sample_simulation_result):
         """Test that caching stores metadata."""
         await cache.cache_result(sample_simulation_result)
 
@@ -422,9 +413,7 @@ class TestCacheInvalidation:
             yield "test_twin_sim:email_campaign:abc123:meta"
 
         mock_redis_client.scan_iter = mock_scan
-        mock_redis_client.hgetall = AsyncMock(
-            return_value={"model_id": str(model_id)}
-        )
+        mock_redis_client.hgetall = AsyncMock(return_value={"model_id": str(model_id)})
 
         count = await cache.invalidate_model_cache(model_id)
 
@@ -451,6 +440,7 @@ class TestCacheInvalidation:
     @pytest.mark.asyncio
     async def test_invalidate_all(self, cache, mock_redis_client):
         """Test invalidating all cached results."""
+
         async def mock_scan(match=None):
             yield "test_twin_sim:key1"
             yield "test_twin_sim:key2"
@@ -500,6 +490,7 @@ class TestCacheStatistics:
     @pytest.mark.asyncio
     async def test_get_stats_by_intervention(self, cache, mock_redis_client):
         """Test stats breakdown by intervention type."""
+
         async def mock_scan(match=None):
             yield "test_twin_sim:email:abc:meta"
             yield "test_twin_sim:call:def:meta"
@@ -545,9 +536,7 @@ class TestCacheErrorHandling:
 
         # Mock _get_client to return None
         with patch.object(cache, "_get_client", return_value=None):
-            result = await cache.get_cached_result(
-                sample_intervention_config, None, uuid4()
-            )
+            result = await cache.get_cached_result(sample_intervention_config, None, uuid4())
 
         assert result is None
 
@@ -561,9 +550,7 @@ class TestCacheErrorHandling:
         """Test handling Redis error on get."""
         mock_redis_client.get = AsyncMock(side_effect=Exception("Redis connection error"))
 
-        result = await cache.get_cached_result(
-            sample_intervention_config, None, uuid4()
-        )
+        result = await cache.get_cached_result(sample_intervention_config, None, uuid4())
 
         assert result is None
         assert cache._stats.errors == 1
@@ -576,9 +563,7 @@ class TestCacheErrorHandling:
         sample_simulation_result,
     ):
         """Test handling Redis error on set."""
-        mock_redis_client.setex = AsyncMock(
-            side_effect=Exception("Redis connection error")
-        )
+        mock_redis_client.setex = AsyncMock(side_effect=Exception("Redis connection error"))
 
         success = await cache.cache_result(sample_simulation_result)
 
@@ -595,9 +580,7 @@ class TestCacheErrorHandling:
         """Test handling of corrupted cached data."""
         mock_redis_client.get = AsyncMock(return_value="invalid_pickle_data")
 
-        result = await cache.get_cached_result(
-            sample_intervention_config, None, uuid4()
-        )
+        result = await cache.get_cached_result(sample_intervention_config, None, uuid4())
 
         assert result is None
         assert cache._stats.errors == 1

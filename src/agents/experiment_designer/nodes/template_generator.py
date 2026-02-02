@@ -360,7 +360,7 @@ print("Results saved to analysis_results.json")
         design_summary = (
             f"{state.get('design_type', 'RCT')} experiment with "
             f"n={power_analysis.get('required_sample_size', 'TBD')} "
-            f"to achieve {power_analysis.get('achieved_power', 0.8)*100:.0f}% power"
+            f"to achieve {power_analysis.get('achieved_power', 0.8) * 100:.0f}% power"
         )
 
         # Build monitoring checkpoints
@@ -467,14 +467,14 @@ print("Results saved to analysis_results.json")
         """Generate light pre-registration."""
         return f"""# Experiment Pre-Registration (Light)
 
-**Date:** {datetime.now().strftime('%Y-%m-%d')}
-**Design:** {state.get('design_type', 'RCT')}
+**Date:** {datetime.now().strftime("%Y-%m-%d")}
+**Design:** {state.get("design_type", "RCT")}
 
 ## Hypothesis
 Testing effect of {treatment} on {outcome}.
 
 ## Sample Size
-n = {power.get('required_sample_size', 'TBD')}
+n = {power.get("required_sample_size", "TBD")}
 
 ## Primary Analysis
 Comparison of {outcome} between treatment and control groups.
@@ -502,8 +502,8 @@ Comparison of {outcome} between treatment and control groups.
         return f"""# Experiment Pre-Registration
 
 ## Study Information
-- **Registration Date:** {datetime.now().strftime('%Y-%m-%d')}
-- **Design Type:** {state.get('design_type', 'RCT')}
+- **Registration Date:** {datetime.now().strftime("%Y-%m-%d")}
+- **Design Type:** {state.get("design_type", "RCT")}
 - **Validity Score:** {validity_score:.2f}
 
 ## Hypotheses
@@ -513,15 +513,15 @@ Comparison of {outcome} between treatment and control groups.
 ## Design
 - **Treatment:** {treatment} - {treatment_desc}
 - **Primary Outcome:** {outcome}
-- **Secondary Outcomes:** {', '.join(secondary) if secondary else 'None'}
-- **Sample Size:** {power.get('required_sample_size', 'TBD')} (Power: {power.get('achieved_power', 0.8)*100:.0f}%)
-- **Duration:** {state.get('duration_estimate_days', 'TBD')} days
-- **Randomization:** {state.get('randomization_method', 'simple')} at {state.get('randomization_unit', 'individual')} level
+- **Secondary Outcomes:** {", ".join(secondary) if secondary else "None"}
+- **Sample Size:** {power.get("required_sample_size", "TBD")} (Power: {power.get("achieved_power", 0.8) * 100:.0f}%)
+- **Duration:** {state.get("duration_estimate_days", "TBD")} days
+- **Randomization:** {state.get("randomization_method", "simple")} at {state.get("randomization_unit", "individual")} level
 
 ## Validity Considerations
 - **Identified Threats:** {threat_summary}
-- **Stratification Variables:** {', '.join(state.get('stratification_variables', [])) or 'None'}
-- **Blocking Variables:** {', '.join(state.get('blocking_variables', [])) or 'None'}
+- **Stratification Variables:** {", ".join(state.get("stratification_variables", [])) or "None"}
+- **Blocking Variables:** {", ".join(state.get("blocking_variables", [])) or "None"}
 
 ## Analysis Plan
 1. Primary: Comparison of {outcome} between arms
@@ -590,19 +590,19 @@ Comparison of {outcome} between treatment and control groups.
 {mitigation_details}
 
 ## Power Analysis Details
-- **Effect Size:** {power.get('minimum_detectable_effect', 'TBD')} ({power.get('effect_size_type', 'cohens_d')})
-- **Alpha:** {power.get('alpha', 0.05)}
-- **Power:** {power.get('achieved_power', 0.8)*100:.0f}%
-- **N per arm:** {power.get('required_sample_size_per_arm', 'TBD')}
+- **Effect Size:** {power.get("minimum_detectable_effect", "TBD")} ({power.get("effect_size_type", "cohens_d")})
+- **Alpha:** {power.get("alpha", 0.05)}
+- **Power:** {power.get("achieved_power", 0.8) * 100:.0f}%
+- **N per arm:** {power.get("required_sample_size_per_arm", "TBD")}
 
 ### Assumptions
-{chr(10).join(['- ' + a for a in power.get('assumptions', ['Standard assumptions'])])}
+{chr(10).join(["- " + a for a in power.get("assumptions", ["Standard assumptions"])])}
 
 {sensitivity_text}
 
 ## Causal Graph
 ```
-{state.get('causal_graph_dot', 'digraph { treatment -> outcome; }')}
+{state.get("causal_graph_dot", "digraph { treatment -> outcome; }")}
 ```
 
 ## Stopping Rules

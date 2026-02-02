@@ -205,13 +205,9 @@ try:
         available_tools: str = dspy.InputField(desc="Available tools with descriptions")
         past_mappings: str = dspy.InputField(desc="Similar past mappings (if any)")
 
-        tool_assignments: list = dspy.OutputField(
-            desc="Tool assignment for each sub-question"
-        )
+        tool_assignments: list = dspy.OutputField(desc="Tool assignment for each sub-question")
         execution_order: list = dspy.OutputField(desc="Ordered list of tool executions")
-        parallel_groups: list = dspy.OutputField(
-            desc="Groups of tools that can run in parallel"
-        )
+        parallel_groups: list = dspy.OutputField(desc="Groups of tools that can run in parallel")
 
     class ResponseSynthesisSignature(dspy.Signature):
         """
@@ -225,18 +221,10 @@ try:
         tool_outputs: str = dspy.InputField(desc="Outputs from executed tools")
         failed_tools: str = dspy.InputField(desc="Tools that failed (if any)")
 
-        response: str = dspy.OutputField(
-            desc="Coherent response addressing the original query"
-        )
-        key_insights: list = dspy.OutputField(
-            desc="Key insights extracted from tool outputs"
-        )
-        confidence: float = dspy.OutputField(
-            desc="Confidence in the synthesized response (0-1)"
-        )
-        caveats: list = dspy.OutputField(
-            desc="Limitations or caveats to mention"
-        )
+        response: str = dspy.OutputField(desc="Coherent response addressing the original query")
+        key_insights: list = dspy.OutputField(desc="Key insights extracted from tool outputs")
+        confidence: float = dspy.OutputField(desc="Confidence in the synthesized response (0-1)")
+        caveats: list = dspy.OutputField(desc="Limitations or caveats to mention")
 
     DSPY_AVAILABLE = True
     logger.info("DSPy signatures loaded for Tool Composer agent")
@@ -366,11 +354,7 @@ class ToolComposerSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def get_high_quality_examples(

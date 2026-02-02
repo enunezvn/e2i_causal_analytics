@@ -17,7 +17,6 @@ import pytest
 from src.causal_engine.uplift.base import UpliftConfig, UpliftModelType
 from src.causal_engine.uplift.random_forest import UpliftRandomForest, UpliftTree
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -29,11 +28,13 @@ def sample_data():
     np.random.seed(42)
     n = 200
 
-    X = pd.DataFrame({
-        "feature_1": np.random.randn(n),
-        "feature_2": np.random.randn(n),
-        "feature_3": np.random.randn(n),
-    })
+    X = pd.DataFrame(
+        {
+            "feature_1": np.random.randn(n),
+            "feature_2": np.random.randn(n),
+            "feature_3": np.random.randn(n),
+        }
+    )
     treatment = np.random.binomial(1, 0.5, n)
     y = np.random.binomial(1, 0.5, n).astype(float)
 
@@ -63,9 +64,9 @@ def mock_causalml_modules():
     mock_causalml.inference.tree = mock_causalml_inference_tree
 
     return {
-        'causalml': mock_causalml,
-        'causalml.inference': mock_causalml_inference,
-        'causalml.inference.tree': mock_causalml_inference_tree,
+        "causalml": mock_causalml,
+        "causalml.inference": mock_causalml_inference,
+        "causalml.inference.tree": mock_causalml_inference_tree,
     }
 
 
@@ -74,15 +75,13 @@ def mock_classifier(mock_causalml_modules):
     """Create mock UpliftRandomForestClassifier."""
     mock_clf = MagicMock()
     mock_clf.fit = MagicMock(return_value=mock_clf)
-    mock_clf.predict = MagicMock(
-        return_value={"treatment_1": np.random.randn(200)}
-    )
+    mock_clf.predict = MagicMock(return_value={"treatment_1": np.random.randn(200)})
     mock_clf.feature_importances_ = np.array([0.3, 0.5, 0.2])
 
-    mock_causalml_modules['causalml.inference.tree'].UpliftRandomForestClassifier = MagicMock(
+    mock_causalml_modules["causalml.inference.tree"].UpliftRandomForestClassifier = MagicMock(
         return_value=mock_clf
     )
-    mock_causalml_modules['causalml.inference.tree'].UpliftTreeClassifier = MagicMock(
+    mock_causalml_modules["causalml.inference.tree"].UpliftTreeClassifier = MagicMock(
         return_value=mock_clf
     )
 
@@ -175,31 +174,31 @@ class TestUpliftRandomForest:
         y_train, y_test = y[:150], y[150:]
 
         # Update mock to return correct size for test set
-        mock_classifier.predict = MagicMock(
-            return_value={"treatment_1": np.random.randn(50)}
-        )
+        mock_classifier.predict = MagicMock(return_value={"treatment_1": np.random.randn(50)})
 
         with patch.dict(sys.modules, mock_causalml_modules):
             model = UpliftRandomForest(default_config)
             result = model.estimate(
-                X_train, treatment_train, y_train,
-                X_test=X_test, treatment_test=treatment_test, y_test=y_test
+                X_train,
+                treatment_train,
+                y_train,
+                X_test=X_test,
+                treatment_test=treatment_test,
+                y_test=y_test,
             )
 
             assert result.success is True
             assert result.metadata["n_samples_train"] == 150
             assert result.metadata["n_samples_test"] == 50
 
-    def test_estimate_handles_errors(
-        self, sample_data, default_config, mock_causalml_modules
-    ):
+    def test_estimate_handles_errors(self, sample_data, default_config, mock_causalml_modules):
         """Test estimate handles fitting errors gracefully."""
         X, treatment, y = sample_data
 
         # Setup mock to raise error
         mock_clf = MagicMock()
         mock_clf.fit = MagicMock(side_effect=ValueError("Fitting failed"))
-        mock_causalml_modules['causalml.inference.tree'].UpliftRandomForestClassifier = MagicMock(
+        mock_causalml_modules["causalml.inference.tree"].UpliftRandomForestClassifier = MagicMock(
             return_value=mock_clf
         )
 

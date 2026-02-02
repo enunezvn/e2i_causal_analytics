@@ -17,6 +17,17 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
+from src.digital_twin.models.simulation_models import (
+    EffectHeterogeneity,
+    FidelityGrade,
+    FidelityRecord,
+    InterventionConfig,
+    PopulationFilter,
+    SimulationRecommendation,
+    SimulationRequest,
+    SimulationResult,
+    SimulationStatus,
+)
 from src.digital_twin.models.twin_models import (
     Brand,
     DigitalTwin,
@@ -29,18 +40,6 @@ from src.digital_twin.models.twin_models import (
     TwinPopulation,
     TwinType,
 )
-from src.digital_twin.models.simulation_models import (
-    EffectHeterogeneity,
-    FidelityGrade,
-    FidelityRecord,
-    InterventionConfig,
-    PopulationFilter,
-    SimulationRecommendation,
-    SimulationRequest,
-    SimulationResult,
-    SimulationStatus,
-)
-
 
 # =============================================================================
 # FIXTURES
@@ -363,7 +362,10 @@ class TestTwinPopulation:
             DigitalTwin(
                 twin_type=TwinType.HCP,
                 brand=Brand.REMIBRUTINIB,
-                features={**sample_hcp_features, "specialty": "rheumatology" if i % 2 == 0 else "dermatology"},
+                features={
+                    **sample_hcp_features,
+                    "specialty": "rheumatology" if i % 2 == 0 else "dermatology",
+                },
                 baseline_outcome=0.15,
                 baseline_propensity=0.5,
             )

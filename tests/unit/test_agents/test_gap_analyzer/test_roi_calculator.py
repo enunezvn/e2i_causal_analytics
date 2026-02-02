@@ -802,7 +802,10 @@ class TestROICalculatorUpliftIntegration:
         roi_with_uplift = node._calculate_roi(gap, uplift_context=uplift_context)
 
         # With uplift context, revenue impact should be higher
-        assert roi_with_uplift["estimated_revenue_impact"] >= roi_without_uplift["estimated_revenue_impact"]
+        assert (
+            roi_with_uplift["estimated_revenue_impact"]
+            >= roi_without_uplift["estimated_revenue_impact"]
+        )
 
     @pytest.mark.asyncio
     async def test_execute_with_uplift_state(self):

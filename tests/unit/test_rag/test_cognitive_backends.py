@@ -11,7 +11,6 @@ Tests cover:
 
 import asyncio
 import sys
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -29,7 +28,6 @@ from src.rag.cognitive_backends import (
     SignalCollector,
     get_cognitive_memory_backends,
 )
-
 
 # =============================================================================
 # Test EpisodicMemoryBackend
@@ -98,8 +96,10 @@ class TestEpisodicMemoryBackend:
     @pytest.mark.asyncio
     async def test_store_episode_success(self, backend):
         with patch("src.rag.cognitive_backends.insert_episodic_memory_with_text") as mock_insert:
+
             async def async_return():
                 return "episode_001"
+
             mock_insert.return_value = async_return()
 
             episode_id = await backend.store_episode(
@@ -118,8 +118,10 @@ class TestEpisodicMemoryBackend:
     @pytest.mark.asyncio
     async def test_store_episode_with_full_metadata(self, backend):
         with patch("src.rag.cognitive_backends.insert_episodic_memory_with_text") as mock_insert:
+
             async def async_return():
                 return "episode_002"
+
             mock_insert.return_value = async_return()
 
             metadata = {
@@ -148,9 +150,7 @@ class TestEpisodicMemoryBackend:
             "src.rag.cognitive_backends.insert_episodic_memory_with_text",
             side_effect=Exception("Insert failed"),
         ):
-            episode_id = await backend.store_episode(
-                content="test", episode_type="test"
-            )
+            episode_id = await backend.store_episode(content="test", episode_type="test")
 
             assert episode_id is None
 
@@ -219,10 +219,12 @@ class TestSemanticMemoryBackend:
         mock_connector.graph_traverse_kpi = Mock(return_value=[mock_result])
         mock_connector.graph_traverse = Mock(return_value=[])  # Entity search returns empty
 
-        results = await backend.graph_query("TRx trends analysis", max_depth=1)
+        await backend.graph_query("TRx trends analysis", max_depth=1)
 
         # Should call graph_traverse_kpi
-        assert mock_connector.graph_traverse_kpi.call_count >= 0  # May or may not be called based on entity extraction
+        assert (
+            mock_connector.graph_traverse_kpi.call_count >= 0
+        )  # May or may not be called based on entity extraction
 
     @pytest.mark.asyncio
     async def test_graph_query_no_match(self, backend, mock_connector):
@@ -364,9 +366,8 @@ class TestProceduralMemoryBackend:
 
     @pytest.mark.asyncio
     async def test_procedure_search_empty_tool_sequence(self):
-        with patch(
-            "src.rag.cognitive_backends.find_relevant_procedures_by_text"
-        ) as mock_find:
+        with patch("src.rag.cognitive_backends.find_relevant_procedures_by_text") as mock_find:
+
             async def async_return():
                 return [
                     {
@@ -375,6 +376,7 @@ class TestProceduralMemoryBackend:
                         "tool_sequence": [],
                     }
                 ]
+
             mock_find.return_value = async_return()
 
             backend = ProceduralMemoryBackend()
@@ -415,8 +417,10 @@ class TestProceduralMemoryBackend:
     @pytest.mark.asyncio
     async def test_store_procedure_with_embedding(self, backend):
         with patch("src.rag.cognitive_backends.insert_procedural_memory") as mock_insert:
+
             async def async_return():
                 return {"id": "proc_embed"}
+
             mock_insert.return_value = async_return()
 
             procedure_id = await backend.store_procedure(
@@ -434,9 +438,7 @@ class TestProceduralMemoryBackend:
             "src.rag.cognitive_backends.insert_procedural_memory",
             side_effect=Exception("Insert failed"),
         ):
-            procedure_id = await backend.store_procedure(
-                procedure_name="Test", tool_sequence=[]
-            )
+            procedure_id = await backend.store_procedure(procedure_name="Test", tool_sequence=[])
 
             assert procedure_id is None
 
@@ -457,8 +459,10 @@ class TestSignalCollector:
     @pytest.mark.asyncio
     async def test_collect_signals_success(self, collector):
         with patch("src.rag.cognitive_backends.record_learning_signal") as mock_record:
+
             async def async_return():
                 return None
+
             mock_record.return_value = async_return()
 
             signals = [
@@ -498,8 +502,7 @@ class TestSignalCollector:
     async def test_collect_multiple_signals(self, collector):
         with patch("src.rag.cognitive_backends.record_learning_signal"):
             signals = [
-                {"signature_name": f"Sig{i}", "input": "in", "output": "out"}
-                for i in range(5)
+                {"signature_name": f"Sig{i}", "input": "in", "output": "out"} for i in range(5)
             ]
 
             await collector.collect(signals)
@@ -515,8 +518,10 @@ class TestSignalCollector:
     @pytest.mark.asyncio
     async def test_flush_pending_success(self, collector):
         with patch("src.rag.cognitive_backends.record_learning_signal") as mock_record:
+
             async def async_return():
                 return None
+
             mock_record.return_value = async_return()
 
             # Add pending signals
@@ -641,9 +646,7 @@ class TestIntegrationAndEdgeCases:
             backend = SemanticMemoryBackend()
 
             # Query with multiple entities
-            results = await backend.graph_query(
-                "Kisqali TRx in Northeast region", max_depth=2
-            )
+            await backend.graph_query("Kisqali TRx in Northeast region", max_depth=2)
 
             # Should have called graph_traverse for Kisqali entity
             mock_connector.graph_traverse.assert_called()
@@ -652,9 +655,8 @@ class TestIntegrationAndEdgeCases:
     async def test_procedural_backend_tool_sequence_formatting(self):
         backend = ProceduralMemoryBackend()
 
-        with patch(
-            "src.rag.cognitive_backends.find_relevant_procedures_by_text"
-        ) as mock_find:
+        with patch("src.rag.cognitive_backends.find_relevant_procedures_by_text") as mock_find:
+
             async def async_return():
                 return [
                     {
@@ -669,6 +671,7 @@ class TestIntegrationAndEdgeCases:
                         "execution_count": 15,
                     }
                 ]
+
             mock_find.return_value = async_return()
 
             results = await backend.procedure_search("workflow", limit=1)
@@ -720,9 +723,7 @@ class TestIntegrationAndEdgeCases:
             backend = EpisodicMemoryBackend()
 
             # Run concurrent searches
-            tasks = [
-                backend.vector_search(f"query {i}", limit=5) for i in range(10)
-            ]
+            tasks = [backend.vector_search(f"query {i}", limit=5) for i in range(10)]
 
             results = await asyncio.gather(*tasks)
 

@@ -8,15 +8,13 @@ Validates ML-compliant data splits:
 - No data leakage
 """
 
-from dataclasses import dataclass, field
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Set
 import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
-import numpy as np
 
-from ..config import SplitBoundaries, DataSplit, SyntheticDataConfig
+from ..config import SyntheticDataConfig
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +97,7 @@ class SplitValidator:
         """Try to get the LeakageDetector from data_splitter module."""
         try:
             from src.repositories.data_splitter import LeakageDetector
+
             return LeakageDetector()
         except ImportError:
             logger.debug("LeakageDetector not available, using built-in checks")
@@ -156,9 +155,7 @@ class SplitValidator:
 
         # 4. Check for target leakage if target provided
         if target_column and target_column in df.columns:
-            self._validate_target_leakage(
-                df, entity_column, split_column, target_column, result
-            )
+            self._validate_target_leakage(df, entity_column, split_column, target_column, result)
 
         # 5. Use LeakageDetector if available
         if self._leakage_detector:
@@ -209,16 +206,18 @@ class SplitValidator:
             # Get sample of problematic entities
             sample_ids = multi_split_entities.head(5).index.tolist()
 
-            result.add_leakage(LeakageInfo(
-                leakage_type="entity_overlap",
-                severity="critical",
-                description=(
-                    f"{len(multi_split_entities)} entities appear in multiple splits. "
-                    "This violates patient-level isolation."
-                ),
-                affected_entities=len(multi_split_entities),
-                sample_ids=sample_ids,
-            ))
+            result.add_leakage(
+                LeakageInfo(
+                    leakage_type="entity_overlap",
+                    severity="critical",
+                    description=(
+                        f"{len(multi_split_entities)} entities appear in multiple splits. "
+                        "This violates patient-level isolation."
+                    ),
+                    affected_entities=len(multi_split_entities),
+                    sample_ids=sample_ids,
+                )
+            )
 
     def _validate_temporal_ordering(
         self,
@@ -248,23 +247,25 @@ class SplitValidator:
         for i, split1 in enumerate(splits_order[:-1]):
             if split1 not in split_dates:
                 continue
-            for split2 in splits_order[i + 1:]:
+            for split2 in splits_order[i + 1 :]:
                 if split2 not in split_dates:
                     continue
 
                 # Check if earlier split has dates after later split
                 if split_dates[split1]["max"] > split_dates[split2]["min"]:
                     violations += 1
-                    result.add_leakage(LeakageInfo(
-                        leakage_type="temporal_overlap",
-                        severity="warning",
-                        description=(
-                            f"Temporal overlap between '{split1}' "
-                            f"(max: {split_dates[split1]['max']}) and '{split2}' "
-                            f"(min: {split_dates[split2]['min']})"
-                        ),
-                        affected_splits=[split1, split2],
-                    ))
+                    result.add_leakage(
+                        LeakageInfo(
+                            leakage_type="temporal_overlap",
+                            severity="warning",
+                            description=(
+                                f"Temporal overlap between '{split1}' "
+                                f"(max: {split_dates[split1]['max']}) and '{split2}' "
+                                f"(min: {split_dates[split2]['min']})"
+                            ),
+                            affected_splits=[split1, split2],
+                        )
+                    )
 
         result.temporal_violations = violations
 
@@ -330,11 +331,13 @@ class SplitValidator:
             if hasattr(leakage_report, "has_leakage") and leakage_report.has_leakage:
                 if hasattr(leakage_report, "leakage_types"):
                     for lt in leakage_report.leakage_types:
-                        result.add_leakage(LeakageInfo(
-                            leakage_type=lt.get("type", "unknown"),
-                            severity="critical",
-                            description=lt.get("description", "Leakage detected"),
-                        ))
+                        result.add_leakage(
+                            LeakageInfo(
+                                leakage_type=lt.get("type", "unknown"),
+                                severity="critical",
+                                description=lt.get("description", "Leakage detected"),
+                            )
+                        )
 
         except Exception as e:
             result.warnings.append(f"LeakageDetector check failed: {str(e)}")
@@ -421,38 +424,38 @@ class SplitValidator:
                     inconsistent += 1
 
             if inconsistent > 0:
-                results[table_name].add_leakage(LeakageInfo(
-                    leakage_type="cross_dataset_inconsistency",
-                    severity="critical",
-                    description=(
-                        f"{inconsistent} entities have different splits in "
-                        f"{table_name} vs {source_table}"
-                    ),
-                    affected_entities=inconsistent,
-                ))
+                results[table_name].add_leakage(
+                    LeakageInfo(
+                        leakage_type="cross_dataset_inconsistency",
+                        severity="critical",
+                        description=(
+                            f"{inconsistent} entities have different splits in "
+                            f"{table_name} vs {source_table}"
+                        ),
+                        affected_entities=inconsistent,
+                    )
+                )
 
-    def get_validation_summary(
-        self, results: Dict[str, SplitValidationResult]
-    ) -> Dict[str, Any]:
+    def get_validation_summary(self, results: Dict[str, SplitValidationResult]) -> Dict[str, Any]:
         """Get a summary of split validation results."""
         all_leakages = []
         for name, result in results.items():
             for leakage in result.leakages:
-                all_leakages.append({
-                    "table": name,
-                    "type": leakage.leakage_type,
-                    "severity": leakage.severity,
-                    "description": leakage.description,
-                })
+                all_leakages.append(
+                    {
+                        "table": name,
+                        "type": leakage.leakage_type,
+                        "severity": leakage.severity,
+                        "description": leakage.description,
+                    }
+                )
 
         return {
             "all_valid": all(r.is_valid for r in results.values()),
             "total_tables": len(results),
             "valid_tables": sum(1 for r in results.values() if r.is_valid),
             "total_leakages": len(all_leakages),
-            "critical_leakages": sum(
-                1 for l in all_leakages if l["severity"] == "critical"
-            ),
+            "critical_leakages": sum(1 for l in all_leakages if l["severity"] == "critical"),
             "leakages": all_leakages,
             "tables": {
                 name: {

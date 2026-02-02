@@ -4,8 +4,8 @@ Version: 1.0.0
 Tests the gating logic for causal discovery results.
 """
 
-import numpy as np
 import networkx as nx
+import numpy as np
 import pytest
 
 from src.causal_engine.discovery.base import (
@@ -360,7 +360,9 @@ class TestDiscoveryGate:
         edges = [
             DiscoveredEdge(source="A", target="B", confidence=0.95, algorithm_votes=2),
             DiscoveredEdge(source="B", target="C", confidence=0.95, algorithm_votes=2),
-            DiscoveredEdge(source="C", target="A", confidence=0.95, algorithm_votes=2),  # Creates cycle
+            DiscoveredEdge(
+                source="C", target="A", confidence=0.95, algorithm_votes=2
+            ),  # Creates cycle
         ]
 
         algorithm_results = [
@@ -457,4 +459,7 @@ class TestDiscoveryGate:
         eval_disconnected = gate.evaluate(result_disconnected)
 
         # Structure score for connected should be higher
-        assert eval_connected.metadata["structure_score"] >= eval_disconnected.metadata["structure_score"]
+        assert (
+            eval_connected.metadata["structure_score"]
+            >= eval_disconnected.metadata["structure_score"]
+        )

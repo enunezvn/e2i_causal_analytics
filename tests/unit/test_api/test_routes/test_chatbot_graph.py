@@ -12,55 +12,52 @@ Covers:
 - MLflow metrics integration
 """
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
-from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
 from src.api.routes.chatbot_graph import (
     # Feature flags
     CHATBOT_MLFLOW_METRICS_ENABLED,
-    CHATBOT_SIGNAL_COLLECTION_ENABLED,
     CHATBOT_ORCHESTRATOR_ENABLED,
+    CHATBOT_SIGNAL_COLLECTION_ENABLED,
     # Constants
     E2I_CHATBOT_SYSTEM_PROMPT,
+    INTENT_TO_EVENT_TYPE,
     ORCHESTRATOR_ROUTED_INTENTS,
     SIGNIFICANCE_THRESHOLD,
     SIGNIFICANT_INTENTS,
     SIGNIFICANT_TOOLS,
-    INTENT_TO_EVENT_TYPE,
-    # Helper functions
-    _matches_pattern,
-    _is_multi_faceted_query,
-    classify_intent,
     _calculate_significance_score,
-    _get_confidence_level,
     _generate_fallback_response,
+    _get_confidence_level,
     _get_mlflow_connector,
     _get_or_create_chatbot_experiment,
-    # Conditional edges
-    should_use_tools,
+    _is_multi_faceted_query,
+    # Helper functions
+    _matches_pattern,
+    # Episodic memory
+    _save_to_episodic_memory,
     after_tools,
+    classify_intent,
+    classify_intent_node,
+    # Graph and entry points
+    create_e2i_chatbot_graph,
+    e2i_chatbot_graph,
+    finalize_node,
+    generate_node,
     # Nodes
     init_node,
     load_context_node,
-    classify_intent_node,
-    retrieve_rag_node,
     orchestrator_node,
-    generate_node,
-    finalize_node,
-    # Episodic memory
-    _save_to_episodic_memory,
-    # Graph and entry points
-    create_e2i_chatbot_graph,
+    retrieve_rag_node,
     run_chatbot,
+    # Conditional edges
+    should_use_tools,
     stream_chatbot,
-    e2i_chatbot_graph,
 )
-
+from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
 
 # =============================================================================
 # Fixtures
@@ -369,7 +366,10 @@ class TestClassifyIntent:
         """Test classification of cohort definition queries."""
         assert classify_intent("Build a cohort of high-value HCPs") == IntentType.COHORT_DEFINITION
         assert classify_intent("Define a patient population") == IntentType.COHORT_DEFINITION
-        assert classify_intent("Create a cohort with eligibility criteria") == IntentType.COHORT_DEFINITION
+        assert (
+            classify_intent("Create a cohort with eligibility criteria")
+            == IntentType.COHORT_DEFINITION
+        )
 
     def test_general_fallback(self):
         """Test that unclassified queries return GENERAL."""
@@ -537,9 +537,7 @@ class TestShouldUseTools:
         # Create AI message with tool calls
         ai_msg = AIMessage(
             content="",
-            tool_calls=[
-                {"id": "1", "name": "e2i_data_query_tool", "args": {"query_type": "kpi"}}
-            ],
+            tool_calls=[{"id": "1", "name": "e2i_data_query_tool", "args": {"query_type": "kpi"}}],
         )
         basic_state["messages"] = [ai_msg]
         assert should_use_tools(basic_state) == "tools"
@@ -613,7 +611,9 @@ class TestInitNode:
         mock_conv_repo.get_by_session_id.return_value = None  # No existing conv
         mock_conv_repo.create_conversation.return_value = {"id": "new-conv"}
 
-        with patch("src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client):
+        with patch(
+            "src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client
+        ):
             with patch(
                 "src.api.routes.chatbot_graph.get_chatbot_conversation_repository",
                 return_value=mock_conv_repo,
@@ -656,7 +656,9 @@ class TestLoadContextNode:
         mock_conv_repo = AsyncMock()
         mock_conv_repo.get_by_session_id.return_value = {"title": "Test Conv"}
 
-        with patch("src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client):
+        with patch(
+            "src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client
+        ):
             with patch(
                 "src.api.routes.chatbot_graph.get_chatbot_message_repository",
                 return_value=mock_msg_repo,
@@ -685,7 +687,12 @@ class TestClassifyIntentNode:
         """Test that classify_intent_node returns intent classification."""
         with patch("src.api.routes.chatbot_graph.classify_intent_dspy") as mock_classify:
             with patch("src.api.routes.chatbot_graph.route_agent_hardcoded") as mock_route:
-                mock_classify.return_value = (IntentType.KPI_QUERY, 0.85, "KPI keywords detected", "dspy")
+                mock_classify.return_value = (
+                    IntentType.KPI_QUERY,
+                    0.85,
+                    "KPI keywords detected",
+                    "dspy",
+                )
                 mock_route.return_value = ("gap-analyzer", [], 0.9, "KPI query")
 
                 result = await classify_intent_node(basic_state)
@@ -784,7 +791,9 @@ class TestOrchestratorNode:
         }
 
         with patch("src.api.routes.chatbot_graph.CHATBOT_ORCHESTRATOR_ENABLED", True):
-            with patch("src.api.routes.chatbot_graph.get_orchestrator", return_value=mock_orchestrator):
+            with patch(
+                "src.api.routes.chatbot_graph.get_orchestrator", return_value=mock_orchestrator
+            ):
                 result = await orchestrator_node(basic_state)
 
                 assert result["orchestrator_used"] is True
@@ -837,7 +846,9 @@ class TestGenerateNode:
 
         with patch("src.api.routes.chatbot_graph.CHATBOT_DSPY_SYNTHESIS_ENABLED", False):
             with patch("src.api.routes.chatbot_graph.get_chat_llm", return_value=mock_llm):
-                with patch("src.api.routes.chatbot_graph.get_llm_provider", return_value="anthropic"):
+                with patch(
+                    "src.api.routes.chatbot_graph.get_llm_provider", return_value="anthropic"
+                ):
                     result = await generate_node(basic_state)
 
                     assert "messages" in result
@@ -876,7 +887,9 @@ class TestFinalizeNode:
         mock_client = AsyncMock()
         mock_msg_repo = AsyncMock()
 
-        with patch("src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client):
+        with patch(
+            "src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client
+        ):
             with patch(
                 "src.api.routes.chatbot_graph.get_chatbot_message_repository",
                 return_value=mock_msg_repo,
@@ -895,14 +908,18 @@ class TestFinalizeNode:
         mock_client = AsyncMock()
         mock_msg_repo = AsyncMock()
 
-        with patch("src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client):
+        with patch(
+            "src.api.routes.chatbot_graph.get_async_supabase_client", return_value=mock_client
+        ):
             with patch(
                 "src.api.routes.chatbot_graph.get_chatbot_message_repository",
                 return_value=mock_msg_repo,
             ):
                 with patch("src.api.routes.chatbot_graph._save_to_episodic_memory") as mock_save:
                     mock_save.return_value = "mem-123"
-                    with patch("src.api.routes.chatbot_graph.CHATBOT_SIGNAL_COLLECTION_ENABLED", False):
+                    with patch(
+                        "src.api.routes.chatbot_graph.CHATBOT_SIGNAL_COLLECTION_ENABLED", False
+                    ):
                         await finalize_node(state_with_tool_results)
 
                         # Significance score should be high enough
@@ -993,7 +1010,7 @@ class TestRunChatbot:
             with patch("src.api.routes.chatbot_graph.e2i_chatbot_graph") as mock_graph:
                 mock_graph.ainvoke = AsyncMock(return_value=mock_result)
 
-                result = await run_chatbot(
+                await run_chatbot(
                     query="What is TRx?",
                     user_id="user-123",
                     request_id="req-123",
@@ -1119,6 +1136,7 @@ class TestMlflowConnector:
         with patch("src.api.routes.chatbot_graph.CHATBOT_MLFLOW_METRICS_ENABLED", False):
             # Clear the singleton
             import src.api.routes.chatbot_graph as module
+
             module._mlflow_connector = None
 
             result = _get_mlflow_connector()
@@ -1131,6 +1149,7 @@ class TestMlflowConnector:
                 mock_connector.return_value = MagicMock()
                 # Clear the singleton
                 import src.api.routes.chatbot_graph as module
+
                 module._mlflow_connector = None
 
                 result = _get_mlflow_connector()
@@ -1213,4 +1232,6 @@ class TestIntegration:
 
         for query, expected_intent in test_cases.items():
             result = classify_intent(query)
-            assert result == expected_intent, f"Query '{query}' expected {expected_intent}, got {result}"
+            assert result == expected_intent, (
+                f"Query '{query}' expected {expected_intent}, got {result}"
+            )

@@ -205,9 +205,7 @@ class TestPlanValidation:
         assert "unknown" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_missing_sub_question_mapping_raises_error(
-        self, mock_llm_client, empty_registry
-    ):
+    async def test_missing_sub_question_mapping_raises_error(self, mock_llm_client, empty_registry):
         """Test that missing sub-question mapping with empty registry raises error"""
         # Configure response that misses mapping for sq_2
         mock_llm_client.set_planning_response(
@@ -534,9 +532,7 @@ class TestMemoryIntegration:
         )
 
     @pytest.mark.asyncio
-    async def test_check_episodic_memory_disabled(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_check_episodic_memory_disabled(self, mock_llm_client, mock_tool_registry):
         """Test that episodic memory can be disabled"""
         mock_memory_hooks = AsyncMock()
 
@@ -553,9 +549,7 @@ class TestMemoryIntegration:
         mock_memory_hooks.find_similar_compositions.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_check_episodic_memory_handles_errors(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_check_episodic_memory_handles_errors(self, mock_llm_client, mock_tool_registry):
         """Test that episodic memory errors are handled gracefully"""
         mock_memory_hooks = AsyncMock()
         mock_memory_hooks.find_similar_compositions = AsyncMock(
@@ -574,9 +568,7 @@ class TestMemoryIntegration:
         assert similar == []
 
     @pytest.mark.asyncio
-    async def test_check_episodic_memory_no_hooks(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_check_episodic_memory_no_hooks(self, mock_llm_client, mock_tool_registry):
         """Test that episodic memory returns empty when hooks are None"""
         planner = ToolPlanner(
             llm_client=mock_llm_client,
@@ -590,9 +582,7 @@ class TestMemoryIntegration:
         similar = await planner._check_episodic_memory("Test query")
         assert similar == []
 
-    def test_format_episodic_context_with_compositions(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    def test_format_episodic_context_with_compositions(self, mock_llm_client, mock_tool_registry):
         """Test formatting of episodic context for LLM prompt"""
         planner = ToolPlanner(
             llm_client=mock_llm_client,

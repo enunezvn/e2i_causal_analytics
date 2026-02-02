@@ -79,7 +79,9 @@ async def main():
         ref = result.get("refutation_results", {})
         if ref:
             print("\n   Refutation Results:")
-            print(f"     - Tests Passed: {ref.get('tests_passed', 'N/A')}/{ref.get('total_tests', 'N/A')}")
+            print(
+                f"     - Tests Passed: {ref.get('tests_passed', 'N/A')}/{ref.get('total_tests', 'N/A')}"
+            )
             print(f"     - Overall Robust: {ref.get('overall_robust', 'N/A')}")
 
         # Show sensitivity results
@@ -94,7 +96,9 @@ async def main():
         print("=" * 60)
 
         if result.get("mlflow_run_id"):
-            print(f"\nView run at: mlflow ui (then navigate to experiment '{MLFLOW_EXPERIMENT_NAME}')")
+            print(
+                f"\nView run at: mlflow ui (then navigate to experiment '{MLFLOW_EXPERIMENT_NAME}')"
+            )
 
         return result
 

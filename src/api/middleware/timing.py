@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import metrics recording functions
 try:
-    from src.api.routes.metrics import record_request, record_error
+    from src.api.routes.metrics import record_error, record_request
 
     METRICS_AVAILABLE = True
 except ImportError:

@@ -13,7 +13,6 @@ import time
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 
 from src.causal_engine.validation.state import (
     CrossValidationResult,
@@ -393,8 +392,8 @@ class CrossValidator:
         overall_agreement = total_agreement / len(pairwise_results) if pairwise_results else 0.0
 
         # Count statuses
-        passed_count = sum(1 for p in pairwise_results if p.get("validation_status") == "passed")
-        warning_count = sum(1 for p in pairwise_results if p.get("validation_status") == "warning")
+        sum(1 for p in pairwise_results if p.get("validation_status") == "passed")
+        sum(1 for p in pairwise_results if p.get("validation_status") == "warning")
         failed_count = sum(1 for p in pairwise_results if p.get("validation_status") == "failed")
 
         # Determine overall status
@@ -462,7 +461,7 @@ class CrossValidator:
         if total_weight <= 0:
             return float(np.mean(effects)), 0.5
 
-        consensus_effect = sum(e * w for e, w in zip(effects, weights)) / total_weight
+        consensus_effect = sum(e * w for e, w in zip(effects, weights, strict=False)) / total_weight
 
         # Consensus confidence based on agreement
         effect_std = float(np.std(effects)) if len(effects) > 1 else 0.0
@@ -533,15 +532,23 @@ class CrossValidator:
         recommendations = []
 
         if overall_status == "passed":
-            recommendations.append("Effect estimates are consistent across libraries - high confidence in results.")
+            recommendations.append(
+                "Effect estimates are consistent across libraries - high confidence in results."
+            )
             recommendations.append("Consider using consensus effect for downstream analysis.")
         elif overall_status == "warning":
-            recommendations.append("Review effect estimates for potential methodological differences.")
+            recommendations.append(
+                "Review effect estimates for potential methodological differences."
+            )
             if any("significance" in d.lower() for d in discrepancies):
-                recommendations.append("Check sample sizes and power across library implementations.")
+                recommendations.append(
+                    "Check sample sizes and power across library implementations."
+                )
             recommendations.append("Consider running additional robustness tests.")
         else:
-            recommendations.append("Effect estimates show significant disagreement - investigate causes.")
+            recommendations.append(
+                "Effect estimates show significant disagreement - investigate causes."
+            )
 
             # Direction disagreement recommendations
             if any("direction" in d.lower() for d in discrepancies):
@@ -552,10 +559,16 @@ class CrossValidator:
 
             # Magnitude disagreement recommendations
             if any("magnitude" in d.lower() for d in discrepancies):
-                recommendations.append("Magnitude disagreement may indicate different effect definitions (ATE vs CATE).")
-                recommendations.append("Ensure all libraries use consistent treatment/outcome definitions.")
+                recommendations.append(
+                    "Magnitude disagreement may indicate different effect definitions (ATE vs CATE)."
+                )
+                recommendations.append(
+                    "Ensure all libraries use consistent treatment/outcome definitions."
+                )
 
-            recommendations.append("Consider collecting more data or running A/B experiment to validate.")
+            recommendations.append(
+                "Consider collecting more data or running A/B experiment to validate."
+            )
 
         return recommendations
 
@@ -630,7 +643,8 @@ class CrossValidator:
                     dowhy_new_effect=dowhy_subset.get("new_effect"),
                     causalml_consistent=causalml_subset_stable,
                     causalml_uplift_stable=causalml_stability.get("subset_uplift_std"),
-                    cross_validation_passed=dowhy_subset.get("passed", False) and causalml_subset_stable,
+                    cross_validation_passed=dowhy_subset.get("passed", False)
+                    and causalml_subset_stable,
                     discrepancy_reason=None
                     if dowhy_subset.get("passed") == causalml_subset_stable
                     else "Libraries disagree on data subset stability",

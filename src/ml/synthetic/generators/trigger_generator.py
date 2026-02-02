@@ -4,13 +4,13 @@ Trigger Generator.
 Generates synthetic triggers for patient/HCP targeting actions.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 
-from .base import BaseGenerator, GeneratorConfig
 from ..config import Brand
+from .base import BaseGenerator, GeneratorConfig
 
 
 class TriggerGenerator(BaseGenerator[pd.DataFrame]):
@@ -155,9 +155,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         outcome_value = None
         if outcome_tracked and acceptance_status == "accepted":
             # Positive outcome more likely with high engagement
-            outcome_value = round(
-                self._rng.beta(2 + engagement_score / 5, 3) * 1.0, 3
-            )
+            outcome_value = round(self._rng.beta(2 + engagement_score / 5, 3) * 1.0, 3)
 
         # Generate causal chain and evidence
         causal_chain = self._generate_causal_chain(trigger_type, engagement_score)
@@ -344,19 +342,19 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         # Generate trigger types
         trigger_types = [
             self._select_trigger_type(eng, treat)
-            for eng, treat in zip(engagement_scores, treatment_initiated)
+            for eng, treat in zip(engagement_scores, treatment_initiated, strict=False)
         ]
 
         # Generate priorities
         priorities = [
             self._select_priority(eng, treat)
-            for eng, treat in zip(engagement_scores, treatment_initiated)
+            for eng, treat in zip(engagement_scores, treatment_initiated, strict=False)
         ]
 
         # Confidence scores
         confidences = [
             self._calculate_confidence(eng, ttype)
-            for eng, ttype in zip(engagement_scores, trigger_types)
+            for eng, ttype in zip(engagement_scores, trigger_types, strict=False)
         ]
 
         # Timestamps and dates
@@ -364,7 +362,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         lead_times = self._rng.integers(3, 30, size=n)
         expiration_dates = [
             (pd.to_datetime(ts) + pd.Timedelta(days=int(lt))).strftime("%Y-%m-%d")
-            for ts, lt in zip(trigger_timestamps, lead_times)
+            for ts, lt in zip(trigger_timestamps, lead_times, strict=False)
         ]
 
         # Delivery information
@@ -389,7 +387,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         outcome_tracked = self._rng.random(n) < 0.40
         outcome_values = [
             round(self._rng.beta(3, 3) * 1.0, 3) if tracked and acc == "accepted" else None
-            for tracked, acc in zip(outcome_tracked, acceptance_statuses)
+            for tracked, acc in zip(outcome_tracked, acceptance_statuses, strict=False)
         ]
 
         # Brands
@@ -398,26 +396,32 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         else:
             brands = self._random_choice([b.value for b in Brand], n)
 
-        return pd.DataFrame({
-            "patient_id": patient_ids,
-            "hcp_id": self._random_choice(hcp_ids, n).tolist(),
-            "trigger_timestamp": trigger_timestamps,
-            "trigger_type": trigger_types,
-            "priority": priorities,
-            "confidence_score": np.round(confidences, 3),
-            "lead_time_days": lead_times,
-            "expiration_date": expiration_dates,
-            "delivery_channel": delivery_channels,
-            "delivery_status": delivery_statuses,
-            "acceptance_status": acceptance_statuses,
-            "outcome_tracked": outcome_tracked,
-            "outcome_value": outcome_values,
-            "trigger_reason": [self._generate_trigger_reason(tt) for tt in trigger_types],
-            "causal_chain": [
-                self._generate_causal_chain(tt, eng)
-                for tt, eng in zip(trigger_types, engagement_scores)
-            ],
-            "supporting_evidence": [self._generate_supporting_evidence(tt) for tt in trigger_types],
-            "recommended_action": [self._generate_recommended_action(tt) for tt in trigger_types],
-            "brand": brands,
-        })
+        return pd.DataFrame(
+            {
+                "patient_id": patient_ids,
+                "hcp_id": self._random_choice(hcp_ids, n).tolist(),
+                "trigger_timestamp": trigger_timestamps,
+                "trigger_type": trigger_types,
+                "priority": priorities,
+                "confidence_score": np.round(confidences, 3),
+                "lead_time_days": lead_times,
+                "expiration_date": expiration_dates,
+                "delivery_channel": delivery_channels,
+                "delivery_status": delivery_statuses,
+                "acceptance_status": acceptance_statuses,
+                "outcome_tracked": outcome_tracked,
+                "outcome_value": outcome_values,
+                "trigger_reason": [self._generate_trigger_reason(tt) for tt in trigger_types],
+                "causal_chain": [
+                    self._generate_causal_chain(tt, eng)
+                    for tt, eng in zip(trigger_types, engagement_scores, strict=False)
+                ],
+                "supporting_evidence": [
+                    self._generate_supporting_evidence(tt) for tt in trigger_types
+                ],
+                "recommended_action": [
+                    self._generate_recommended_action(tt) for tt in trigger_types
+                ],
+                "brand": brands,
+            }
+        )

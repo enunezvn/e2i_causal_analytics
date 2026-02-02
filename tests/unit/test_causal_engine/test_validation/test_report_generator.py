@@ -6,12 +6,12 @@ B8.3: Validation report generation tests.
 import pytest
 
 from src.causal_engine.validation import (
-    ValidationReportGenerator,
-    CrossValidationResult,
-    ABReconciliationResult,
     ABExperimentResult,
+    ABReconciliationResult,
+    CrossValidationResult,
     LibraryEffectEstimate,
     PairwiseValidation,
+    ValidationReportGenerator,
     ValidationSummary,
 )
 
@@ -155,7 +155,10 @@ class TestValidationReportGenerator:
         assert report["treatment_var"] == "marketing_spend"
         # Check for AB reconciliation section
         assert "ab_reconciliation_section" in report
-        assert "reconciliation" in report["executive_summary"].lower() or "experiment" in report["executive_summary"].lower()
+        assert (
+            "reconciliation" in report["executive_summary"].lower()
+            or "experiment" in report["executive_summary"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_generate_comprehensive_report(
@@ -195,9 +198,10 @@ class TestValidationReportGenerator:
         assert report["overall_status"] in ["failed", "critical"]  # Either indicates no data
         # Executive summary should indicate lack of validation
         summary_lower = report["executive_summary"].lower()
-        assert any(phrase in summary_lower for phrase in [
-            "no validation", "insufficient", "not validated", "failed"
-        ])
+        assert any(
+            phrase in summary_lower
+            for phrase in ["no validation", "insufficient", "not validated", "failed"]
+        )
 
     @pytest.mark.asyncio
     async def test_to_markdown(

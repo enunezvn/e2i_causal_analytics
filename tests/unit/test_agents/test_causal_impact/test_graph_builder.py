@@ -269,9 +269,9 @@ class TestVariableInference:
 
         for query, expected_treatment in queries_and_expected:
             treatment, _ = node._infer_variables_from_query(query)
-            assert (
-                expected_treatment in treatment or treatment == "hcp_engagement_level"
-            ), f"Failed for query: {query}"
+            assert expected_treatment in treatment or treatment == "hcp_engagement_level", (
+                f"Failed for query: {query}"
+            )
 
     def test_infer_outcome_from_keywords(self):
         """Test outcome variable inference."""
@@ -285,9 +285,9 @@ class TestVariableInference:
 
         for query, expected_outcome in queries_and_expected:
             _, outcome = node._infer_variables_from_query(query)
-            assert (
-                expected_outcome in outcome or outcome == "patient_conversion_rate"
-            ), f"Failed for query: {query}"
+            assert expected_outcome in outcome or outcome == "patient_conversion_rate", (
+                f"Failed for query: {query}"
+            )
 
     def test_default_variables(self):
         """Test that defaults are used when keywords not found."""

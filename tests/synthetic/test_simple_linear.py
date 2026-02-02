@@ -80,9 +80,9 @@ class TestSimpleLinearBenchmark:
         treated_prop = data[dataset.treatment_col].mean()
 
         # With n=10000 and p=0.5, expect ~0.50 with margin
-        assert (
-            0.48 < treated_prop < 0.52
-        ), f"Treatment proportion {treated_prop:.3f} indicates non-random assignment"
+        assert 0.48 < treated_prop < 0.52, (
+            f"Treatment proportion {treated_prop:.3f} indicates non-random assignment"
+        )
 
     def test_reproducibility(self):
         """Verify DGP is reproducible with same seed."""
@@ -177,9 +177,9 @@ class TestSimpleLinearDatasetProperties:
         treated_mean = Y[dataset.data["T"] == 1].mean()
 
         assert abs(control_mean) < 0.05, f"Control mean {control_mean:.4f} should be ~0"
-        assert (
-            abs(treated_mean - dataset.true_ate) < 0.05
-        ), f"Treated mean {treated_mean:.4f} should be ~{dataset.true_ate}"
+        assert abs(treated_mean - dataset.true_ate) < 0.05, (
+            f"Treated mean {treated_mean:.4f} should be ~{dataset.true_ate}"
+        )
 
     def test_to_dict_serialization(self, simple_linear_dataset: SyntheticDataset):
         """Verify dataset can be serialized."""

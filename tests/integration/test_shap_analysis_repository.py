@@ -7,12 +7,10 @@ Use pytest markers to skip when Supabase is not configured.
 
 import os
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 
-from src.repositories.shap_analysis import ShapAnalysisRepository, get_shap_analysis_repository
-
+from src.repositories.shap_analysis import get_shap_analysis_repository
 
 # =============================================================================
 # Test Configuration
@@ -301,10 +299,7 @@ class TestEndToEndFlow:
 
         # 2. Verify it exists in the table (via direct query)
         result = await (
-            repository.client.table(repository.table_name)
-            .select("*")
-            .eq("id", stored_id)
-            .execute()
+            repository.client.table(repository.table_name).select("*").eq("id", stored_id).execute()
         )
 
         assert len(result.data) == 1
@@ -339,7 +334,10 @@ class TestEndToEndFlow:
         assert stored["computation_duration_seconds"] == 45  # Integer, not float
         assert stored["computation_method"] == "TreeExplainer"
         assert stored["sample_size"] == 1000
-        assert stored["natural_language_explanation"] == "Key drivers are visit recency and therapy adherence."
+        assert (
+            stored["natural_language_explanation"]
+            == "Key drivers are visit recency and therapy adherence."
+        )
         assert len(stored["key_drivers"]) == 5
 
 

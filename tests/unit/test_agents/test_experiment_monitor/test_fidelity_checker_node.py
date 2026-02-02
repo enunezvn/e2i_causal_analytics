@@ -9,13 +9,12 @@ Tests cover:
 - Edge cases and error handling
 """
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.agents.experiment_monitor.nodes.fidelity_checker import FidelityCheckerNode
-from src.agents.experiment_monitor.state import ExperimentMonitorState, FidelityIssue
+from src.agents.experiment_monitor.state import FidelityIssue
 
 
 class TestFidelityCheckerNodeInit:
@@ -180,13 +179,15 @@ class TestFidelityCheckerExecute:
 
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "simulated_ate": 0.15,
-            "actual_ate": 0.08,
-            "prediction_error": 0.467,  # > 0.2 threshold
-            "fidelity_grade": "C",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "simulated_ate": 0.15,
+                "actual_ate": 0.08,
+                "prediction_error": 0.467,  # > 0.2 threshold
+                "fidelity_grade": "C",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -216,13 +217,15 @@ class TestFidelityCheckerExecute:
 
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "simulated_ate": 0.10,
-            "actual_ate": 0.09,
-            "prediction_error": 0.10,  # < 0.2 threshold
-            "fidelity_grade": "A",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "simulated_ate": 0.10,
+                "actual_ate": 0.09,
+                "prediction_error": 0.10,  # < 0.2 threshold
+                "fidelity_grade": "A",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -253,16 +256,19 @@ class TestCheckFidelity:
     @pytest.fixture
     def mock_client_with_data(self):
         """Create a mock client that returns fidelity data."""
+
         def create_mock(prediction_error, simulated_ate=0.15, actual_ate=0.08):
             mock_client = MagicMock()
             mock_result = MagicMock()
-            mock_result.data = [{
-                "simulation_id": "sim-001",
-                "simulated_ate": simulated_ate,
-                "actual_ate": actual_ate,
-                "prediction_error": prediction_error,
-                "fidelity_grade": "C" if prediction_error > 0.2 else "A",
-            }]
+            mock_result.data = [
+                {
+                    "simulation_id": "sim-001",
+                    "simulated_ate": simulated_ate,
+                    "actual_ate": actual_ate,
+                    "prediction_error": prediction_error,
+                    "fidelity_grade": "C" if prediction_error > 0.2 else "A",
+                }
+            ]
 
             mock_query = MagicMock()
             mock_query.select = MagicMock(return_value=mock_query)
@@ -273,6 +279,7 @@ class TestCheckFidelity:
             mock_client.table = MagicMock(return_value=mock_query)
 
             return mock_client
+
         return create_mock
 
     @pytest.mark.asyncio
@@ -394,16 +401,19 @@ class TestFidelityIssueSeverity:
     @pytest.fixture
     def create_mock_client(self):
         """Factory to create mock clients with specified prediction error."""
+
         def _create(prediction_error):
             mock_client = MagicMock()
             mock_result = MagicMock()
-            mock_result.data = [{
-                "simulation_id": "sim-001",
-                "simulated_ate": 0.10,
-                "actual_ate": 0.10 + prediction_error,
-                "prediction_error": prediction_error,
-                "fidelity_grade": "C",
-            }]
+            mock_result.data = [
+                {
+                    "simulation_id": "sim-001",
+                    "simulated_ate": 0.10,
+                    "actual_ate": 0.10 + prediction_error,
+                    "prediction_error": prediction_error,
+                    "fidelity_grade": "C",
+                }
+            ]
 
             mock_query = MagicMock()
             mock_query.select = MagicMock(return_value=mock_query)
@@ -414,6 +424,7 @@ class TestFidelityIssueSeverity:
             mock_client.table = MagicMock(return_value=mock_query)
 
             return mock_client
+
         return _create
 
     @pytest.mark.asyncio
@@ -459,13 +470,15 @@ class TestFidelityIssueStructure:
         """Test that FidelityIssue has all required fields."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-123",
-            "simulated_ate": 0.15,
-            "actual_ate": 0.08,
-            "prediction_error": 0.467,
-            "fidelity_grade": "C",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-123",
+                "simulated_ate": 0.15,
+                "actual_ate": 0.08,
+                "prediction_error": 0.467,
+                "fidelity_grade": "C",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -491,13 +504,15 @@ class TestFidelityIssueStructure:
         """Test that FidelityIssue fields have correct types."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-123",
-            "simulated_ate": 0.15,
-            "actual_ate": 0.08,
-            "prediction_error": 0.467,
-            "fidelity_grade": "C",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-123",
+                "simulated_ate": 0.15,
+                "actual_ate": 0.08,
+                "prediction_error": 0.467,
+                "fidelity_grade": "C",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -530,13 +545,15 @@ class TestEdgeCases:
         """Test with zero prediction error."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "simulated_ate": 0.10,
-            "actual_ate": 0.10,
-            "prediction_error": 0.0,
-            "fidelity_grade": "A+",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "simulated_ate": 0.10,
+                "actual_ate": 0.10,
+                "prediction_error": 0.0,
+                "fidelity_grade": "A+",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -555,12 +572,14 @@ class TestEdgeCases:
         """Test handling of missing prediction_error field."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "simulated_ate": 0.10,
-            "actual_ate": 0.15,
-            # Missing prediction_error
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "simulated_ate": 0.10,
+                "actual_ate": 0.15,
+                # Missing prediction_error
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -644,13 +663,15 @@ class TestEdgeCases:
         """Test with very high prediction error."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "simulated_ate": 0.50,
-            "actual_ate": 0.05,
-            "prediction_error": 9.0,  # 900% error
-            "fidelity_grade": "F",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "simulated_ate": 0.50,
+                "actual_ate": 0.05,
+                "prediction_error": 9.0,  # 900% error
+                "fidelity_grade": "F",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -672,13 +693,15 @@ class TestEdgeCases:
         """Test with custom fidelity threshold."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "simulated_ate": 0.10,
-            "actual_ate": 0.08,
-            "prediction_error": 0.25,
-            "fidelity_grade": "B",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "simulated_ate": 0.10,
+                "actual_ate": 0.08,
+                "prediction_error": 0.25,
+                "fidelity_grade": "B",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -719,9 +742,7 @@ class TestAlternativeFidelitySource:
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table = MagicMock(return_value=mock_query)
 
-        result = await node._get_fidelity_from_simulation_summary(
-            "exp-001", mock_client, 0.2
-        )
+        result = await node._get_fidelity_from_simulation_summary("exp-001", mock_client, 0.2)
 
         assert result is None
 
@@ -730,13 +751,15 @@ class TestAlternativeFidelitySource:
         """Test returns None when prediction_error is None in summary."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "experiment_design_id": "exp-001",
-            "simulated_ate": 0.10,
-            "prediction_error": None,
-            "fidelity_grade": None,
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "experiment_design_id": "exp-001",
+                "simulated_ate": 0.10,
+                "prediction_error": None,
+                "fidelity_grade": None,
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -746,9 +769,7 @@ class TestAlternativeFidelitySource:
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table = MagicMock(return_value=mock_query)
 
-        result = await node._get_fidelity_from_simulation_summary(
-            "exp-001", mock_client, 0.2
-        )
+        result = await node._get_fidelity_from_simulation_summary("exp-001", mock_client, 0.2)
 
         assert result is None
 
@@ -757,13 +778,15 @@ class TestAlternativeFidelitySource:
         """Test returns issue from simulation summary when error exceeds threshold."""
         mock_client = MagicMock()
         mock_result = MagicMock()
-        mock_result.data = [{
-            "simulation_id": "sim-001",
-            "experiment_design_id": "exp-001",
-            "simulated_ate": 0.15,
-            "prediction_error": 0.35,
-            "fidelity_grade": "C",
-        }]
+        mock_result.data = [
+            {
+                "simulation_id": "sim-001",
+                "experiment_design_id": "exp-001",
+                "simulated_ate": 0.15,
+                "prediction_error": 0.35,
+                "fidelity_grade": "C",
+            }
+        ]
 
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
@@ -773,9 +796,7 @@ class TestAlternativeFidelitySource:
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table = MagicMock(return_value=mock_query)
 
-        result = await node._get_fidelity_from_simulation_summary(
-            "exp-001", mock_client, 0.2
-        )
+        result = await node._get_fidelity_from_simulation_summary("exp-001", mock_client, 0.2)
 
         assert result is not None
         assert result["experiment_id"] == "exp-001"
@@ -812,9 +833,7 @@ class TestAlternativeFidelitySource:
         mock_query.execute = AsyncMock(side_effect=Exception("View not found"))
         mock_client.table = MagicMock(return_value=mock_query)
 
-        result = await node._get_fidelity_from_simulation_summary(
-            "exp-001", mock_client, 0.2
-        )
+        result = await node._get_fidelity_from_simulation_summary("exp-001", mock_client, 0.2)
 
         assert result is None
 

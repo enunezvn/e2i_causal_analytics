@@ -9,8 +9,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from src.kpi.models import CausalLibrary, KPIStatus, Workstream
-
 
 class KPICalculationContext(BaseModel):
     """Context for KPI calculation."""
@@ -98,15 +96,11 @@ class KPIResultResponse(BaseModel):
     )
     calculated_at: datetime = Field(..., description="Calculation timestamp")
     cached: bool = Field(False, description="Whether result was from cache")
-    cache_expires_at: datetime | None = Field(
-        None, description="When cache entry expires"
-    )
+    cache_expires_at: datetime | None = Field(None, description="When cache entry expires")
     error: str | None = Field(None, description="Error message if calculation failed")
 
     # Causal analysis details
-    causal_library_used: str | None = Field(
-        None, description="Causal library used for calculation"
-    )
+    causal_library_used: str | None = Field(None, description="Causal library used for calculation")
     confidence_interval: list[float] | None = Field(
         None,
         description="95% confidence interval [lower, upper]",
@@ -158,14 +152,10 @@ class KPIMetadataResponse(BaseModel):
     tables: list[str] = Field(default_factory=list, description="Source tables")
     columns: list[str] = Field(default_factory=list, description="Source columns")
     view: str | None = Field(None, description="Database view name if applicable")
-    threshold: KPIThresholdResponse | None = Field(
-        None, description="Threshold configuration"
-    )
+    threshold: KPIThresholdResponse | None = Field(None, description="Threshold configuration")
     unit: str | None = Field(None, description="Unit of measurement")
     frequency: str = Field("daily", description="Calculation frequency")
-    primary_causal_library: str = Field(
-        "none", description="Primary causal library for this KPI"
-    )
+    primary_causal_library: str = Field("none", description="Primary causal library for this KPI")
     brand: str | None = Field(None, description="Brand filter if applicable")
     note: str | None = Field(None, description="Additional notes")
 
@@ -178,9 +168,7 @@ class KPIListResponse(BaseModel):
     )
     total: int = Field(..., description="Total number of KPIs")
     workstream: str | None = Field(None, description="Filtered workstream if any")
-    causal_library: str | None = Field(
-        None, description="Filtered causal library if any"
-    )
+    causal_library: str | None = Field(None, description="Filtered causal library if any")
 
 
 class WorkstreamInfo(BaseModel):
@@ -204,23 +192,17 @@ class WorkstreamListResponse(BaseModel):
 class CacheInvalidationRequest(BaseModel):
     """Request schema for cache invalidation."""
 
-    kpi_id: str | None = Field(
-        None, description="Specific KPI ID to invalidate (optional)"
-    )
+    kpi_id: str | None = Field(None, description="Specific KPI ID to invalidate (optional)")
     workstream: str | None = Field(
         None, description="Invalidate all KPIs for this workstream (optional)"
     )
-    invalidate_all: bool = Field(
-        False, description="Invalidate all cached KPIs (use with caution)"
-    )
+    invalidate_all: bool = Field(False, description="Invalidate all cached KPIs (use with caution)")
 
 
 class CacheInvalidationResponse(BaseModel):
     """Response schema for cache invalidation."""
 
-    invalidated_count: int = Field(
-        ..., description="Number of cache entries invalidated"
-    )
+    invalidated_count: int = Field(..., description="Number of cache entries invalidated")
     message: str = Field(..., description="Status message")
 
 
@@ -232,19 +214,13 @@ class KPIHealthResponse(BaseModel):
         description="Overall health status",
         examples=["healthy", "degraded", "unhealthy"],
     )
-    registry_loaded: bool = Field(
-        ..., description="Whether KPI registry is loaded"
-    )
+    registry_loaded: bool = Field(..., description="Whether KPI registry is loaded")
     total_kpis: int = Field(..., description="Total KPIs in registry")
     cache_enabled: bool = Field(..., description="Whether caching is enabled")
     cache_size: int = Field(0, description="Current cache size")
-    database_connected: bool = Field(
-        ..., description="Whether database is connected"
-    )
+    database_connected: bool = Field(..., description="Whether database is connected")
     workstreams_available: list[str] = Field(
         default_factory=list, description="Available workstreams"
     )
-    last_calculation: datetime | None = Field(
-        None, description="Timestamp of last calculation"
-    )
+    last_calculation: datetime | None = Field(None, description="Timestamp of last calculation")
     error: str | None = Field(None, description="Error message if unhealthy")

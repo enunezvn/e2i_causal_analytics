@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, List, Optional, Union
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -133,9 +133,7 @@ class MockLLMClient:
     def _detect_phase(self, messages: List[Dict[str, Any]]) -> str:
         """Detect the workflow phase from message content."""
         # Combine all message content for pattern matching
-        text = " ".join(
-            str(m.get("content", "")) for m in messages
-        ).lower()
+        text = " ".join(str(m.get("content", "")) for m in messages).lower()
 
         # Check each phase's patterns
         for phase, patterns in self.PHASE_PATTERNS.items():
@@ -158,11 +156,13 @@ class MockLLMClient:
         self.phase_calls[phase] = self.phase_calls.get(phase, 0) + 1
 
         # Store call for inspection
-        self.calls.append({
-            "messages": messages,
-            "phase": phase,
-            "kwargs": kwargs,
-        })
+        self.calls.append(
+            {
+                "messages": messages,
+                "phase": phase,
+                "kwargs": kwargs,
+            }
+        )
 
         # Get response for detected phase
         response_content = self.responses.get(phase, self.default_response)
@@ -179,9 +179,8 @@ class MockLLMClient:
     ) -> Dict[str, Any]:
         """Sync invoke (wraps ainvoke for sync tests)."""
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            self.ainvoke(messages, **kwargs)
-        )
+
+        return asyncio.get_event_loop().run_until_complete(self.ainvoke(messages, **kwargs))
 
     def set_phase_response(self, phase: str, response: str) -> None:
         """Set response for a specific phase."""
@@ -214,22 +213,28 @@ def mock_advanced_llm() -> MockLLMClient:
     """Fixture providing an advanced mock LLM with phase detection."""
     return MockLLMClient(
         responses={
-            "decomposition": json.dumps({
-                "sub_questions": [
-                    {"id": "q1", "question": "Sub question 1"},
-                    {"id": "q2", "question": "Sub question 2"},
-                ],
-            }),
-            "planning": json.dumps({
-                "execution_plan": [
-                    {"step": 1, "tool": "tool_a", "question_id": "q1"},
-                    {"step": 2, "tool": "tool_b", "question_id": "q2"},
-                ],
-            }),
-            "synthesis": json.dumps({
-                "final_answer": "Synthesized answer from sub-question results.",
-                "confidence": 0.85,
-            }),
+            "decomposition": json.dumps(
+                {
+                    "sub_questions": [
+                        {"id": "q1", "question": "Sub question 1"},
+                        {"id": "q2", "question": "Sub question 2"},
+                    ],
+                }
+            ),
+            "planning": json.dumps(
+                {
+                    "execution_plan": [
+                        {"step": 1, "tool": "tool_a", "question_id": "q1"},
+                        {"step": 2, "tool": "tool_b", "question_id": "q2"},
+                    ],
+                }
+            ),
+            "synthesis": json.dumps(
+                {
+                    "final_answer": "Synthesized answer from sub-question results.",
+                    "confidence": 0.85,
+                }
+            ),
         }
     )
 

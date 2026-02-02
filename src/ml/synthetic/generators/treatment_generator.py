@@ -4,13 +4,13 @@ Treatment Event Generator.
 Generates synthetic treatment events linked to patient journeys.
 """
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
-from .base import BaseGenerator, GeneratorConfig
 from ..config import Brand
+from .base import BaseGenerator, GeneratorConfig
 
 
 class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
@@ -87,9 +87,7 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
         # Get patient data for referential integrity
         if self.patient_df is not None:
             # Only generate for patients who initiated treatment
-            eligible_patients = self.patient_df[
-                self.patient_df["treatment_initiated"] == 1
-            ].copy()
+            eligible_patients = self.patient_df[self.patient_df["treatment_initiated"] == 1].copy()
 
             if len(eligible_patients) == 0:
                 self._log("Warning: No eligible patients for treatment events")
@@ -139,20 +137,22 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
         efficacy_scores = self._random_normal(0.65, 0.20, n_actual, clip_min=0, clip_max=1)
 
         # Build DataFrame
-        df = pd.DataFrame({
-            "treatment_event_id": treatment_ids,
-            "patient_journey_id": journey_ids[:n_actual],
-            "patient_id": patient_ids[:n_actual],
-            "hcp_id": hcp_ids[:n_actual] if isinstance(hcp_ids, list) else hcp_ids,
-            "brand": brands[:n_actual] if isinstance(brands, list) else brands,
-            "treatment_date": treatment_dates,
-            "treatment_type": treatment_types,
-            "days_supply": days_supply,
-            "refill_number": refill_number,
-            "adherence_score": np.round(adherence_scores, 2),
-            "efficacy_score": np.round(efficacy_scores, 2),
-            "data_split": self._assign_splits(treatment_dates),
-        })
+        df = pd.DataFrame(
+            {
+                "treatment_event_id": treatment_ids,
+                "patient_journey_id": journey_ids[:n_actual],
+                "patient_id": patient_ids[:n_actual],
+                "hcp_id": hcp_ids[:n_actual] if isinstance(hcp_ids, list) else hcp_ids,
+                "brand": brands[:n_actual] if isinstance(brands, list) else brands,
+                "treatment_date": treatment_dates,
+                "treatment_type": treatment_types,
+                "days_supply": days_supply,
+                "refill_number": refill_number,
+                "adherence_score": np.round(adherence_scores, 2),
+                "efficacy_score": np.round(efficacy_scores, 2),
+                "data_split": self._assign_splits(treatment_dates),
+            }
+        )
 
         self._log(f"Generated {len(df)} treatment events")
         return df

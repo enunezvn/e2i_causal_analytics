@@ -13,12 +13,9 @@ Tests cover:
 - check_retraining_for_all_models task
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # =============================================================================
 # FIXTURES
@@ -751,14 +748,18 @@ class TestTaskWorkflows:
         mock_get_connector.return_value = mock_connector
 
         # Mock nodes to return updated state with high drift
-        mock_data_drift.return_value.execute = AsyncMock(return_value={
-            "data_drift_results": [{"feature": "f1", "drift_score": 0.75}],
-        })
+        mock_data_drift.return_value.execute = AsyncMock(
+            return_value={
+                "data_drift_results": [{"feature": "f1", "drift_score": 0.75}],
+            }
+        )
         mock_model_drift.return_value.execute = AsyncMock(return_value={})
         mock_concept_drift.return_value.execute = AsyncMock(return_value={})
-        mock_alert_agg.return_value.execute = AsyncMock(return_value={
-            "alerts": [{"id": "alert-1", "severity": "high"}],
-        })
+        mock_alert_agg.return_value.execute = AsyncMock(
+            return_value={
+                "alerts": [{"id": "alert-1", "severity": "high"}],
+            }
+        )
 
         # Mock repositories
         mock_run_record = MagicMock()

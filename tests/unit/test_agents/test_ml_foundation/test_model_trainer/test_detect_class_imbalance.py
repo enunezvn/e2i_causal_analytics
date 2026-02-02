@@ -3,19 +3,18 @@
 Tests the detect_class_imbalance function and its helper functions.
 """
 
-import numpy as np
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
+import pytest
+
 from src.agents.ml_foundation.model_trainer.nodes.detect_class_imbalance import (
-    detect_class_imbalance,
+    VALID_STRATEGIES,
     _calculate_imbalance_metrics,
     _get_llm_recommendation,
     _heuristic_strategy,
-    SEVERITY_THRESHOLDS,
-    VALID_STRATEGIES,
+    detect_class_imbalance,
 )
-
 
 # ============================================================================
 # Test fixtures
@@ -69,6 +68,7 @@ def extreme_imbalance_state():
 @pytest.fixture
 def mock_anthropic_client():
     """Factory for creating mock anthropic module with configurable response."""
+
     def _create(response_text):
         mock_module = MagicMock()
         mock_message = MagicMock()
@@ -193,9 +193,16 @@ class TestHeuristicStrategy:
         strategy, _ = _heuristic_strategy(metrics, "LogisticRegression")
         assert strategy == "class_weight"
 
-    @pytest.mark.parametrize("model_name", [
-        "XGBoost", "LightGBM", "RandomForest", "GradientBoosting", "CausalForest",
-    ])
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "XGBoost",
+            "LightGBM",
+            "RandomForest",
+            "GradientBoosting",
+            "CausalForest",
+        ],
+    )
     def test_all_tree_models_moderate(self, model_name):
         """Should return 'class_weight' for all tree models with moderate imbalance."""
         metrics = {"severity": "moderate", "minority_count": 25, "total_samples": 100}
@@ -228,9 +235,7 @@ class TestGetLLMRecommendation:
     async def test_falls_back_on_api_exception(self):
         """Should fall back to heuristic when API call fails."""
         mock_module = MagicMock()
-        mock_module.Anthropic.return_value.messages.create.side_effect = Exception(
-            "API error"
-        )
+        mock_module.Anthropic.return_value.messages.create.side_effect = Exception("API error")
         metrics = _calculate_imbalance_metrics(np.array([0] * 90 + [1] * 10))
 
         with patch.dict("sys.modules", {"anthropic": mock_module}):
@@ -242,9 +247,7 @@ class TestGetLLMRecommendation:
 
     async def test_falls_back_on_invalid_strategy(self, mock_anthropic_client):
         """Should fall back to heuristic when LLM returns invalid strategy."""
-        mock_module = mock_anthropic_client(
-            "STRATEGY: bogus\nRATIONALE: invalid strategy"
-        )
+        mock_module = mock_anthropic_client("STRATEGY: bogus\nRATIONALE: invalid strategy")
         metrics = _calculate_imbalance_metrics(np.array([0] * 90 + [1] * 10))
 
         with patch.dict("sys.modules", {"anthropic": mock_module}):

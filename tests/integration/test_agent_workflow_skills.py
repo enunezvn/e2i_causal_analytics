@@ -12,9 +12,9 @@ Test Coverage:
 - Brand-specific skills load conditionally
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from typing import Any, Dict
 
 
 class TestCausalImpactWorkflowSkills:
@@ -42,13 +42,15 @@ class TestCausalImpactWorkflowSkills:
             mock_invoke.return_value = mock_final_state
 
             # Execute the workflow
-            await agent.run({
-                "query": "test query",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["conf1"],
-                "data_source": "test_table",
-            })
+            await agent.run(
+                {
+                    "query": "test query",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "confounders": ["conf1"],
+                    "data_source": "test_table",
+                }
+            )
 
             # Verify core skills were loaded
             skill_names = agent.get_loaded_skill_names()
@@ -76,14 +78,16 @@ class TestCausalImpactWorkflowSkills:
             mock_invoke.return_value = mock_final_state
 
             # Execute with brand specified
-            await agent.run({
-                "query": "test query",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["conf1"],
-                "data_source": "test_table",
-                "brand": "Remibrutinib",
-            })
+            await agent.run(
+                {
+                    "query": "test query",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "confounders": ["conf1"],
+                    "data_source": "test_table",
+                    "brand": "Remibrutinib",
+                }
+            )
 
             # Verify brand skill was loaded
             skill_names = agent.get_loaded_skill_names()
@@ -110,13 +114,15 @@ class TestCausalImpactWorkflowSkills:
             mock_invoke.return_value = mock_final_state
 
             # Execute without brand
-            await agent.run({
-                "query": "test query",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["conf1"],
-                "data_source": "test_table",
-            })
+            await agent.run(
+                {
+                    "query": "test query",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "confounders": ["conf1"],
+                    "data_source": "test_table",
+                }
+            )
 
             # Verify brand skill was NOT loaded
             skill_names = agent.get_loaded_skill_names()
@@ -147,13 +153,15 @@ class TestCausalImpactWorkflowSkills:
             mock_invoke.return_value = mock_final_state
 
             # Execute workflow
-            await agent.run({
-                "query": "test query",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["conf1"],
-                "data_source": "test_table",
-            })
+            await agent.run(
+                {
+                    "query": "test query",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "confounders": ["conf1"],
+                    "data_source": "test_table",
+                }
+            )
 
             # Verify old skills were cleared and only causal skills remain
             skill_names = agent.get_loaded_skill_names()
@@ -194,13 +202,15 @@ class TestCausalImpactWorkflowSkills:
 
             mock_invoke.side_effect = mock_execution
 
-            await agent.run({
-                "query": "test query",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["conf1"],
-                "data_source": "test_table",
-            })
+            await agent.run(
+                {
+                    "query": "test query",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "confounders": ["conf1"],
+                    "data_source": "test_table",
+                }
+            )
 
             # Verify skill context was available during workflow
             assert skill_context_captured is not None
@@ -236,12 +246,14 @@ class TestGapAnalyzerWorkflowSkills:
         with patch.object(agent.graph, "ainvoke", new_callable=AsyncMock) as mock_invoke:
             mock_invoke.return_value = mock_final_state
 
-            await agent.run({
-                "query": "find ROI opportunities",
-                "metrics": ["TRx", "NRx"],
-                "segments": ["Northeast", "Southwest"],
-                "brand": "Kisqali",
-            })
+            await agent.run(
+                {
+                    "query": "find ROI opportunities",
+                    "metrics": ["TRx", "NRx"],
+                    "segments": ["Northeast", "Southwest"],
+                    "brand": "Kisqali",
+                }
+            )
 
             skill_names = agent.get_loaded_skill_names()
             assert "ROI Estimation Procedures" in skill_names
@@ -274,12 +286,14 @@ class TestGapAnalyzerWorkflowSkills:
         with patch.object(agent.graph, "ainvoke", new_callable=AsyncMock) as mock_invoke:
             mock_invoke.return_value = mock_final_state
 
-            await agent.run({
-                "query": "find ROI opportunities",
-                "metrics": ["TRx", "NRx"],
-                "segments": ["Northeast", "Southwest"],
-                "brand": "Kisqali",
-            })
+            await agent.run(
+                {
+                    "query": "find ROI opportunities",
+                    "metrics": ["TRx", "NRx"],
+                    "segments": ["Northeast", "Southwest"],
+                    "brand": "Kisqali",
+                }
+            )
 
             skill_names = agent.get_loaded_skill_names()
             assert "Brand-Specific Analytics" in skill_names
@@ -314,12 +328,14 @@ class TestGapAnalyzerWorkflowSkills:
         with patch.object(agent.graph, "ainvoke", new_callable=AsyncMock) as mock_invoke:
             mock_invoke.return_value = mock_final_state
 
-            await agent.run({
-                "query": "find ROI opportunities",
-                "metrics": ["TRx", "NRx"],
-                "segments": ["Northeast", "Southwest"],
-                "brand": "Kisqali",
-            })
+            await agent.run(
+                {
+                    "query": "find ROI opportunities",
+                    "metrics": ["TRx", "NRx"],
+                    "segments": ["Northeast", "Southwest"],
+                    "brand": "Kisqali",
+                }
+            )
 
             skill_names = agent.get_loaded_skill_names()
             # Old causal skill should be cleared
@@ -359,9 +375,7 @@ class TestExplainerWorkflowSkills:
 
         with patch.object(agent, "_get_graph", return_value=mock_graph):
             # Results with causal effect data
-            causal_results = [
-                {"treatment_effect": 0.5, "confidence": 0.9}
-            ]
+            causal_results = [{"treatment_effect": 0.5, "confidence": 0.9}]
 
             await agent.explain(
                 analysis_results=causal_results,
@@ -398,9 +412,7 @@ class TestExplainerWorkflowSkills:
 
         with patch.object(agent, "_get_graph", return_value=mock_graph):
             # Results without causal data
-            non_causal_results = [
-                {"metric": "TRx", "value": 1000}
-            ]
+            non_causal_results = [{"metric": "TRx", "value": 1000}]
 
             await agent.explain(
                 analysis_results=non_causal_results,
@@ -511,13 +523,15 @@ class TestSkillWorkflowRobustness:
             # Mock load_skill to raise an exception
             with patch.object(agent, "load_skill", side_effect=Exception("Skill loading failed")):
                 # Workflow should still complete
-                result = await agent.run({
-                    "query": "test query",
-                    "treatment_var": "treatment",
-                    "outcome_var": "outcome",
-                    "confounders": ["conf1"],
-                    "data_source": "test_table",
-                })
+                result = await agent.run(
+                    {
+                        "query": "test query",
+                        "treatment_var": "treatment",
+                        "outcome_var": "outcome",
+                        "confounders": ["conf1"],
+                        "data_source": "test_table",
+                    }
+                )
 
                 # Workflow should have completed
                 assert result["status"] == "completed"
@@ -543,26 +557,30 @@ class TestSkillWorkflowRobustness:
             mock_invoke.return_value = mock_final_state
 
             # First run with brand
-            await agent.run({
-                "query": "test query 1",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["conf1"],
-                "data_source": "test_table",
-                "brand": "Remibrutinib",
-            })
+            await agent.run(
+                {
+                    "query": "test query 1",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "confounders": ["conf1"],
+                    "data_source": "test_table",
+                    "brand": "Remibrutinib",
+                }
+            )
 
             skills_after_first = set(agent.get_loaded_skill_names())
             assert "Brand-Specific Analytics" in skills_after_first
 
             # Second run without brand
-            await agent.run({
-                "query": "test query 2",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["conf1"],
-                "data_source": "test_table",
-            })
+            await agent.run(
+                {
+                    "query": "test query 2",
+                    "treatment_var": "treatment",
+                    "outcome_var": "outcome",
+                    "confounders": ["conf1"],
+                    "data_source": "test_table",
+                }
+            )
 
             skills_after_second = set(agent.get_loaded_skill_names())
             # Brand skill should NOT be present in second run

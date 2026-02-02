@@ -8,9 +8,9 @@ Key scenarios:
 - User-friendly warning message generation
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List
 
 from src.agents.orchestrator.agent import OrchestratorAgent
 
@@ -136,9 +136,7 @@ class TestOrchestratorPartialFailure:
         assert output["failed_agents"] == []
         assert output["failure_details"] is None
 
-    def test_build_output_includes_all_latency_fields(
-        self, orchestrator: OrchestratorAgent
-    ):
+    def test_build_output_includes_all_latency_fields(self, orchestrator: OrchestratorAgent):
         """Test that _build_output includes all latency breakdown fields."""
         state = {
             "query_id": "q-latency",
@@ -168,9 +166,7 @@ class TestOrchestratorPartialFailure:
         assert output["intent_classified"] == "gap_analysis"
         assert output["intent_confidence"] == 0.92
 
-    def test_build_output_handles_missing_error_field(
-        self, orchestrator: OrchestratorAgent
-    ):
+    def test_build_output_handles_missing_error_field(self, orchestrator: OrchestratorAgent):
         """Test graceful handling when error field is missing from failed result."""
         state = {
             "query_id": "q-missing-error",
@@ -323,9 +319,7 @@ class TestOrchestratorRunNoRuntimeError:
         return orch
 
     @pytest.mark.asyncio
-    async def test_run_returns_result_on_partial_failure(
-        self, orchestrator: OrchestratorAgent
-    ):
+    async def test_run_returns_result_on_partial_failure(self, orchestrator: OrchestratorAgent):
         """Test that run() returns results even when some agents fail."""
         # Mock the graph to return a partial failure state
         mock_final_state = {
@@ -364,9 +358,7 @@ class TestOrchestratorRunNoRuntimeError:
         assert result["failed_agents"] == ["causal_impact"]
 
     @pytest.mark.asyncio
-    async def test_run_returns_result_on_complete_failure(
-        self, orchestrator: OrchestratorAgent
-    ):
+    async def test_run_returns_result_on_complete_failure(self, orchestrator: OrchestratorAgent):
         """Test that run() returns structured result even when all agents fail."""
         mock_final_state = {
             "query_id": "q-failed",

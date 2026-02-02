@@ -39,6 +39,14 @@ from src.api.dependencies.falkordb_client import (
     falkordb_health_check,
     init_falkordb,
 )
+
+# Import OpenTelemetry configuration (Phase 1 G02)
+from src.api.dependencies.opentelemetry_config import (
+    OTEL_ENABLED,
+    init_opentelemetry,
+    instrument_fastapi,
+    shutdown_opentelemetry,
+)
 from src.api.dependencies.redis_client import (
     close_redis,
     init_redis,
@@ -55,19 +63,6 @@ from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 from src.api.middleware.timing import TimingMiddleware
 from src.api.middleware.tracing import TracingMiddleware
 
-# Import MLOps connectors
-from src.feature_store.feast_client import FeastClient, get_feast_client
-from src.mlops.mlflow_connector import get_mlflow_connector
-from src.mlops.opik_connector import get_opik_connector, OpikConfig
-
-# Import OpenTelemetry configuration (Phase 1 G02)
-from src.api.dependencies.opentelemetry_config import (
-    init_opentelemetry,
-    shutdown_opentelemetry,
-    instrument_fastapi,
-    OTEL_ENABLED,
-)
-
 # Import routers
 from src.api.routes.agents import router as agents_router
 from src.api.routes.analytics import router as analytics_router
@@ -79,21 +74,26 @@ from src.api.routes.copilotkit import router as copilotkit_router
 from src.api.routes.digital_twin import router as digital_twin_router
 from src.api.routes.experiments import router as experiments_router
 from src.api.routes.explain import router as explain_router
+from src.api.routes.feedback import router as feedback_router
 from src.api.routes.gaps import router as gaps_router
 from src.api.routes.graph import router as graph_router
+from src.api.routes.health_score import router as health_score_router
 from src.api.routes.kpi import router as kpi_router
 from src.api.routes.memory import router as memory_router
+from src.api.routes.metrics import router as metrics_router
 from src.api.routes.monitoring import router as monitoring_router
 from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
-from src.api.routes.segments import router as segments_router
 from src.api.routes.resource_optimizer import router as resource_optimizer_router
-from src.api.routes.feedback import router as feedback_router
-from src.api.routes.health_score import router as health_score_router
-from src.api.routes.metrics import router as metrics_router
+from src.api.routes.segments import router as segments_router
+
+# Import MLOps connectors
+from src.feature_store.feast_client import FeastClient
+from src.mlops.mlflow_connector import get_mlflow_connector
+from src.mlops.opik_connector import get_opik_connector
 
 # Configure structured logging (G14 - Observability)
-from src.utils.logging_config import configure_logging, set_request_context
+from src.utils.logging_config import configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -107,8 +107,8 @@ logger = logging.getLogger(__name__)
 try:
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
-    from sentry_sdk.integrations.starlette import StarletteIntegration
     from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
 
     SENTRY_DSN = os.environ.get("SENTRY_DSN")
     SENTRY_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
@@ -192,15 +192,17 @@ async def lifespan(app: FastAPI):
 
     # Initialize BentoML client (optional - for ML model serving)
     try:
-        bentoml_client = await get_bentoml_client()
+        await get_bentoml_client()
         logger.info("BentoML client initialized successfully")
 
         # Configure model endpoints from environment or defaults
-        configure_bentoml_endpoints({
-            "churn_model": os.environ.get("CHURN_MODEL_URL", "http://localhost:3000"),
-            "conversion_model": os.environ.get("CONVERSION_MODEL_URL", "http://localhost:3001"),
-            "causal_model": os.environ.get("CAUSAL_MODEL_URL", "http://localhost:3002"),
-        })
+        configure_bentoml_endpoints(
+            {
+                "churn_model": os.environ.get("CHURN_MODEL_URL", "http://localhost:3000"),
+                "conversion_model": os.environ.get("CONVERSION_MODEL_URL", "http://localhost:3001"),
+                "causal_model": os.environ.get("CAUSAL_MODEL_URL", "http://localhost:3002"),
+            }
+        )
     except Exception as e:
         logger.warning(f"BentoML client initialization failed (non-critical): {e}")
 
@@ -387,24 +389,18 @@ _DEFAULT_ORIGINS = [
 _env_origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
 if _env_origins:
     if _env_origins == "*":
-        logger.warning(
-            "CORS: Wildcard origin (*) configured - this is insecure for production!"
-        )
+        logger.warning("CORS: Wildcard origin (*) configured - this is insecure for production!")
         ALLOWED_ORIGINS = ["*"]
     else:
         # Parse and validate origins from environment
         ALLOWED_ORIGINS = [
             origin.strip()
             for origin in _env_origins.split(",")
-            if origin.strip() and (
-                origin.strip().startswith("http://") or
-                origin.strip().startswith("https://")
-            )
+            if origin.strip()
+            and (origin.strip().startswith("http://") or origin.strip().startswith("https://"))
         ]
         if not ALLOWED_ORIGINS:
-            logger.warning(
-                "CORS: No valid origins in ALLOWED_ORIGINS env var, using defaults"
-            )
+            logger.warning("CORS: No valid origins in ALLOWED_ORIGINS env var, using defaults")
             ALLOWED_ORIGINS = _DEFAULT_ORIGINS
 else:
     ALLOWED_ORIGINS = _DEFAULT_ORIGINS
@@ -440,7 +436,9 @@ app.add_middleware(
 # JWT Authentication middleware (Supabase)
 # Protects all routes except public paths (health, docs, read-only endpoints)
 app.add_middleware(JWTAuthMiddleware)
-logger.info(f"JWT Authentication: {'ENABLED' if is_auth_enabled() else 'DISABLED (Supabase not configured)'}")
+logger.info(
+    f"JWT Authentication: {'ENABLED' if is_auth_enabled() else 'DISABLED (Supabase not configured)'}"
+)
 
 # Security Headers middleware
 # Adds X-Content-Type-Options, X-Frame-Options, CSP, etc.
@@ -520,8 +518,7 @@ async def health_check() -> Dict[str, Any]:
     # Add explanatory message when BentoML is not healthy
     if bentoml_status in ("unhealthy", "unavailable", "unknown"):
         bentoml_message = (
-            "BentoML model serving is not running. "
-            "Start with: sudo systemctl start e2i-bentoml"
+            "BentoML model serving is not running. Start with: sudo systemctl start e2i-bentoml"
         )
 
     # Build components dict
@@ -749,23 +746,23 @@ app.include_router(metrics_router)
 # =============================================================================
 
 # Import error handling module
-from src.api.errors import (
-    E2IError,
-    EndpointNotFoundError,
-    ValidationError,
-    AuthenticationError,
-    AuthorizationError,
-    AgentError,
-    DependencyError,
-    TimeoutError as E2ITimeoutError,
-    RateLimitError,
-    wrap_exception,
-    error_response,
-    ErrorSeverity,
-)
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.api.errors import (
+    AuthenticationError,
+    AuthorizationError,
+    DependencyError,
+    E2IError,
+    EndpointNotFoundError,
+    ErrorSeverity,
+    RateLimitError,
+    error_response,
+    wrap_exception,
+)
+from src.api.errors import (
+    TimeoutError as E2ITimeoutError,
+)
 
 # Determine if debug mode is enabled
 DEBUG_MODE = os.environ.get("E2I_DEBUG_MODE", "").lower() in ("true", "1", "yes")
@@ -790,12 +787,15 @@ async def e2i_error_handler(request, exc: E2IError):
         )
         # Capture critical errors to Sentry
         if sentry_sdk:
-            sentry_sdk.set_context("e2i_error", {
-                "error_id": exc.error_id,
-                "category": exc.category.value,
-                "severity": exc.severity.value,
-                "path": request.url.path,
-            })
+            sentry_sdk.set_context(
+                "e2i_error",
+                {
+                    "error_id": exc.error_id,
+                    "category": exc.category.value,
+                    "severity": exc.severity.value,
+                    "path": request.url.path,
+                },
+            )
             sentry_sdk.capture_exception(exc.original_error or exc)
     elif exc.severity == ErrorSeverity.HIGH:
         logger.error(
@@ -805,12 +805,15 @@ async def e2i_error_handler(request, exc: E2IError):
         )
         # Capture high severity errors to Sentry
         if sentry_sdk:
-            sentry_sdk.set_context("e2i_error", {
-                "error_id": exc.error_id,
-                "category": exc.category.value,
-                "severity": exc.severity.value,
-                "path": request.url.path,
-            })
+            sentry_sdk.set_context(
+                "e2i_error",
+                {
+                    "error_id": exc.error_id,
+                    "category": exc.category.value,
+                    "severity": exc.severity.value,
+                    "path": request.url.path,
+                },
+            )
             sentry_sdk.capture_exception(exc.original_error or exc)
     elif exc.severity == ErrorSeverity.MEDIUM:
         logger.warning(
@@ -837,13 +840,16 @@ async def validation_error_handler(request, exc: RequestValidationError):
     # Extract validation errors into structured format
     schema_errors = []
     for error in exc.errors():
-        schema_errors.append({
-            "field": ".".join(str(loc) for loc in error["loc"]),
-            "message": error["msg"],
-            "type": error["type"],
-        })
+        schema_errors.append(
+            {
+                "field": ".".join(str(loc) for loc in error["loc"]),
+                "message": error["msg"],
+                "type": error["type"],
+            }
+        )
 
     from src.api.errors import SchemaValidationError
+
     e2i_error = SchemaValidationError(
         "Request validation failed",
         schema_errors=schema_errors,
@@ -873,9 +879,7 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
             str(exc.detail) if exc.detail else "Authentication required"
         )
     elif exc.status_code == 403:
-        e2i_error = AuthorizationError(
-            str(exc.detail) if exc.detail else "Access denied"
-        )
+        e2i_error = AuthorizationError(str(exc.detail) if exc.detail else "Access denied")
     elif exc.status_code == 429:
         e2i_error = RateLimitError(
             limit=100,  # Default values since we don't have actual limits here
@@ -924,8 +928,12 @@ async def internal_error_handler(request, exc):
     Wraps unknown exceptions in E2IError with appropriate categorization.
     """
     # Try to extract agent context from request state if available
-    agent_name = getattr(request.state, "current_agent", None) if hasattr(request, "state") else None
-    operation = getattr(request.state, "current_operation", None) if hasattr(request, "state") else None
+    agent_name = (
+        getattr(request.state, "current_agent", None) if hasattr(request, "state") else None
+    )
+    operation = (
+        getattr(request.state, "current_operation", None) if hasattr(request, "state") else None
+    )
 
     # Wrap the exception with context
     e2i_error = wrap_exception(
@@ -966,8 +974,12 @@ async def generic_exception_handler(request, exc: Exception):
         return await e2i_error_handler(request, exc)
 
     # Extract any available context
-    agent_name = getattr(request.state, "current_agent", None) if hasattr(request, "state") else None
-    operation = getattr(request.state, "current_operation", None) if hasattr(request, "state") else None
+    agent_name = (
+        getattr(request.state, "current_agent", None) if hasattr(request, "state") else None
+    )
+    operation = (
+        getattr(request.state, "current_operation", None) if hasattr(request, "state") else None
+    )
 
     # Wrap with intelligent categorization
     e2i_error = wrap_exception(
@@ -989,14 +1001,17 @@ async def generic_exception_handler(request, exc: Exception):
 
     # Capture unhandled exceptions to Sentry (these are always important)
     if sentry_sdk:
-        sentry_sdk.set_context("e2i_error", {
-            "error_id": e2i_error.error_id,
-            "category": e2i_error.category.value,
-            "severity": e2i_error.severity.value,
-            "path": request.url.path,
-            "agent_name": agent_name,
-            "operation": operation,
-        })
+        sentry_sdk.set_context(
+            "e2i_error",
+            {
+                "error_id": e2i_error.error_id,
+                "category": e2i_error.category.value,
+                "severity": e2i_error.severity.value,
+                "path": request.url.path,
+                "agent_name": agent_name,
+                "operation": operation,
+            },
+        )
         sentry_sdk.capture_exception(exc)
 
     return JSONResponse(

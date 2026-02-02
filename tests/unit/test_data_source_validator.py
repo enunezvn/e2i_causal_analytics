@@ -6,9 +6,9 @@ Tests the detection of mock vs real data sources for agents.
 import pytest
 
 from src.testing.data_source_validator import (
-    DataSourceValidator,
-    DataSourceValidationResult,
     DataSourceType,
+    DataSourceValidationResult,
+    DataSourceValidator,
 )
 
 

@@ -466,8 +466,14 @@ class TestNarrativeGeneratorNode:
                 "rep_visits<->territory_size": "BIDIRECTED",
                 "pricing<->demand": "BIDIRECTED",
             },
-            "discovered_dag_nodes": ["marketing_spend", "sales", "rep_visits",
-                                      "territory_size", "pricing", "demand"],
+            "discovered_dag_nodes": [
+                "marketing_spend",
+                "sales",
+                "rep_visits",
+                "territory_size",
+                "pricing",
+                "demand",
+            ],
         }
 
         confounders = node._extract_latent_confounders(state)
@@ -537,9 +543,7 @@ class TestNarrativeGeneratorNode:
         assert "gate_decision" in section["supporting_data"]
 
     @pytest.mark.asyncio
-    async def test_causal_discovery_section_returns_none_without_data(
-        self, base_explainer_state
-    ):
+    async def test_causal_discovery_section_returns_none_without_data(self, base_explainer_state):
         """Test that causal discovery section returns None without discovery data."""
         node = NarrativeGeneratorNode(use_llm=False)
 
@@ -563,8 +567,7 @@ class TestNarrativeGeneratorNode:
 
         # Find causal discovery section
         causal_sections = [
-            s for s in result["narrative_sections"]
-            if s.get("section_type") == "causal_discovery"
+            s for s in result["narrative_sections"] if s.get("section_type") == "causal_discovery"
         ]
         assert len(causal_sections) == 1
         assert "Causal" in causal_sections[0]["title"]
