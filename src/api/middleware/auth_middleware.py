@@ -75,6 +75,8 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("POST", "/api/graph/causal-chains"),
     # Monitoring endpoints - public for dashboard widgets
     ("GET", "/api/monitoring/alerts"),
+    # Analytics dashboard - public for dashboard widgets
+    ("GET", "/api/analytics/dashboard"),
     # CopilotKit - All endpoints public for demo access (chat widget needs to work without login)
     ("*", "/api/copilotkit"),
     ("*", "/api/copilotkit/status"),
