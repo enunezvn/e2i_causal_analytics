@@ -483,20 +483,27 @@ sudo journalctl -u nginx -f
 
 ### SSH Keys
 
-**Registered Keys in DigitalOcean:**
+**Workstation Key (registered in DigitalOcean):**
 - **Name**: replit-ed25519
 - **ID**: 53352421
 - **Fingerprint**: 72:91:c9:d1:2e:e5:09:bd:f4:68:4d:7c:d5:5c:1a:b0
 - **Public Key**: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF7j9C0aZuxZ4YUXOW+IrosLczi/dTR1wBc38dgbWsyB enunez@PHUSEH-L88724`
 - **Private Key Location**: `~/.ssh/replit`
 
+**Deploy Key (GitHub Actions CD pipeline):**
+- **Purpose**: Dedicated key for automated deployments via GitHub Actions
+- **Location**: `~/.ssh/deploy_ed25519` (on droplet)
+- **Comment**: `github-actions-deploy`
+- **Added to**: `~/.ssh/authorized_keys` (entry 2 of 2)
+- **GitHub Secret**: Stored as `DEPLOY_SSH_KEY` in repository secrets
+
 **SSH Access:**
 ```bash
-# Connect as enunez user
+# Connect as enunez user (from workstation)
 ssh -i ~/.ssh/replit enunez@138.197.4.36
 ```
 
-**Status**: ✅ SSH key successfully configured on droplet
+**Status**: ✅ Both keys configured on droplet
 
 ### Corporate Proxy Configuration
 
@@ -609,10 +616,27 @@ swap:
 - Max 4 workers, 30s timeout per pyproject.toml
 
 **Docker CD** (`.github/workflows/deploy.yml`):
-- Triggers on merge to `main` touching `src/`, `config/`, `docker/fastapi/`
-- Builds Docker image → pushes to GHCR (`ghcr.io/enunezvn/e2i-api`)
-- Deploys via SSH → health check → auto-rollback on failure
+- Triggers on merge to `main` touching `src/`, `config/`, `docker/fastapi/`, `requirements.txt`, `pyproject.toml`
+- Also supports manual trigger via `workflow_dispatch`
+- Pipeline: test → build-and-push (GHCR) → deploy (SSH to droplet)
+- Auto-rollback if health check fails after deploy
 - Deployment script: `scripts/deploy-docker.sh`
+
+**CD Pipeline Configuration:**
+
+| Component | Details |
+|-----------|---------|
+| **Deploy SSH Key** | `~/.ssh/deploy_ed25519` (dedicated key for GitHub Actions, separate from workstation key) |
+| **GitHub Secrets** | `DEPLOY_SSH_KEY` (private key), `DEPLOY_HOST` (`138.197.4.36`), `DEPLOY_USER` (`enunez`) |
+| **GitHub Environment** | `production` (created 2026-02-02; reviewer gate requires paid plan) |
+| **Container Registry** | GHCR via `GITHUB_TOKEN` (no extra config needed) |
+| **SSH Action** | `appleboy/ssh-action@v1` |
+
+**Deploy Flow:**
+1. `test` job runs backend-tests (lint + unit + integration)
+2. `build-and-push` builds Docker image via `docker/fastapi/Dockerfile`, pushes to `ghcr.io/enunezvn/e2i-api:latest` and `:sha`
+3. `deploy` SSHes into droplet, pulls image, tags `current`/`previous`, restarts service, health check
+4. If health check fails after 60s, rolls back to `e2i-api:previous`
 
 **GHCR Images:**
 ```bash
@@ -621,6 +645,15 @@ docker pull ghcr.io/enunezvn/e2i-api:latest
 
 # View available tags
 docker image ls ghcr.io/enunezvn/e2i-api
+```
+
+**Trigger a deploy:**
+```bash
+# Manual trigger via GitHub Actions UI: Actions → "Deploy to Production" → "Run workflow"
+# Or via gh CLI:
+gh workflow run deploy.yml --repo enunezvn/e2i_causal_analytics
+
+# Automatic: push to main touching src/, config/, docker/fastapi/, requirements.txt, or pyproject.toml
 ```
 
 ### Completed Setup
@@ -638,6 +671,9 @@ docker image ls ghcr.io/enunezvn/e2i-api
 - [x] Configure domain/DNS (eznomics.site via Hostinger)
 - [x] Set up Backend CI pipeline (GitHub Actions)
 - [x] Set up Docker CD pipeline (GHCR + auto-deploy)
+- [x] Generate deploy SSH key for GitHub Actions (`~/.ssh/deploy_ed25519`)
+- [x] Configure GitHub repository secrets (`DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`)
+- [x] Create GitHub `production` environment
 
 ### Troubleshooting
 
