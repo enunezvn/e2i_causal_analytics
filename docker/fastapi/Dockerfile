@@ -21,8 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy requirements and local patches
 COPY requirements.txt .
+COPY patches/ ./patches/
 
 # Install Python dependencies
 # Use pip cache to speed up rebuilds
