@@ -1,8 +1,7 @@
 """Tests for BentoML service templates."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import numpy as np
 import pytest
 
 
@@ -291,9 +290,9 @@ class TestTemplateModuleInit:
     def test_exports_all_templates(self):
         """Should export all template classes."""
         from src.mlops.bentoml_templates import (
+            CausalInferenceServiceTemplate,
             ClassificationServiceTemplate,
             RegressionServiceTemplate,
-            CausalInferenceServiceTemplate,
         )
 
         assert ClassificationServiceTemplate is not None

@@ -21,10 +21,8 @@ from .state import CohortConstructorState
 from .types import (
     CohortConfig,
     Criterion,
-    CriterionType,
     EligibilityLogEntry,
     Operator,
-    PatientAssignment,
 )
 
 logger = logging.getLogger(__name__)
@@ -480,7 +478,9 @@ async def validate_temporal(state: CohortConstructorState) -> Dict[str, Any]:
         missing_temporal = [f for f in required_temporal if f not in eligible_df.columns]
 
         if missing_temporal:
-            logger.warning(f"Missing temporal fields: {missing_temporal}, skipping temporal validation")
+            logger.warning(
+                f"Missing temporal fields: {missing_temporal}, skipping temporal validation"
+            )
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             return {
                 "post_temporal_count": initial_count,
@@ -638,10 +638,10 @@ async def generate_metadata(state: CohortConstructorState) -> Dict[str, Any]:
         if eligible_patient_count == 0:
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             total_latency_ms = (
-                state.get("validate_config_ms", 0) +
-                state.get("apply_criteria_ms", 0) +
-                state.get("validate_temporal_ms", 0) +
-                elapsed_ms
+                state.get("validate_config_ms", 0)
+                + state.get("apply_criteria_ms", 0)
+                + state.get("validate_temporal_ms", 0)
+                + elapsed_ms
             )
 
             return {
@@ -671,9 +671,9 @@ async def generate_metadata(state: CohortConstructorState) -> Dict[str, Any]:
 
         # Combine all eligibility logs
         all_logs = (
-            state.get("inclusion_log", []) +
-            state.get("exclusion_log", []) +
-            state.get("temporal_log", [])
+            state.get("inclusion_log", [])
+            + state.get("exclusion_log", [])
+            + state.get("temporal_log", [])
         )
 
         eligibility_stats = {
@@ -692,10 +692,10 @@ async def generate_metadata(state: CohortConstructorState) -> Dict[str, Any]:
         # Timing
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         total_latency_ms = (
-            state.get("validate_config_ms", 0) +
-            state.get("apply_criteria_ms", 0) +
-            state.get("validate_temporal_ms", 0) +
-            elapsed_ms
+            state.get("validate_config_ms", 0)
+            + state.get("apply_criteria_ms", 0)
+            + state.get("validate_temporal_ms", 0)
+            + elapsed_ms
         )
 
         # SLA compliance check
@@ -703,9 +703,7 @@ async def generate_metadata(state: CohortConstructorState) -> Dict[str, Any]:
         sla_compliant = total_latency_ms <= sla_target_ms
 
         if not sla_compliant:
-            logger.warning(
-                f"SLA exceeded: {total_latency_ms}ms > {sla_target_ms}ms target"
-            )
+            logger.warning(f"SLA exceeded: {total_latency_ms}ms > {sla_target_ms}ms target")
 
         # Execution metadata
         execution_metadata = {

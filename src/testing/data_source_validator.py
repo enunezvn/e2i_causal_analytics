@@ -202,7 +202,9 @@ class DataSourceValidator:
             message = f"Mock data detected but reject_mock=True for {agent_name}"
         else:
             acceptable_names = [s.value for s in acceptable]
-            message = f"Data source '{detected.value}' not in acceptable sources: {acceptable_names}"
+            message = (
+                f"Data source '{detected.value}' not in acceptable sources: {acceptable_names}"
+            )
 
         return DataSourceValidationResult(
             agent_name=agent_name,
@@ -266,16 +268,14 @@ class DataSourceValidator:
 
         # Check for perfect scores (mock indicator)
         if overall_score == 100.0:
-            evidence.append(f"overall_health_score is exactly 100.0 (mock indicator)")
+            evidence.append("overall_health_score is exactly 100.0 (mock indicator)")
             return DataSourceType.MOCK, evidence
 
         if component_score == 1.0:
             # Check if all components are healthy (another mock indicator)
             component_statuses = agent_output.get("component_statuses", [])
             if component_statuses:
-                all_healthy = all(
-                    s.get("status") == "healthy" for s in component_statuses
-                )
+                all_healthy = all(s.get("status") == "healthy" for s in component_statuses)
                 if all_healthy and len(component_statuses) >= 3:
                     evidence.append(
                         f"All {len(component_statuses)} components report 'healthy' "

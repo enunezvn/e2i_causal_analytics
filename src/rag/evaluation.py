@@ -702,9 +702,7 @@ class RAGASEvaluator:
         """
         semaphore = asyncio.Semaphore(self.config.max_concurrent)
 
-        async def evaluate_with_semaphore(
-            sample: EvaluationSample, idx: int
-        ) -> EvaluationResult:
+        async def evaluate_with_semaphore(sample: EvaluationSample, idx: int) -> EvaluationResult:
             async with semaphore:
                 run_id = f"{batch_run_id}_{idx}" if batch_run_id else None
                 return await self.evaluate_sample(sample, run_id=run_id)
@@ -884,9 +882,7 @@ class RAGEvaluationPipeline:
         """
         self.config = config or EvaluationConfig()
         self.enable_opik_tracing = enable_opik_tracing and _OPIK_AVAILABLE
-        self.evaluator = RAGASEvaluator(
-            config=self.config, enable_opik_tracing=enable_opik_tracing
-        )
+        self.evaluator = RAGASEvaluator(config=self.config, enable_opik_tracing=enable_opik_tracing)
         self.dataset = load_evaluation_dataset(dataset_path)
 
     async def run_evaluation(

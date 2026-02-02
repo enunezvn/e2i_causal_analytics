@@ -313,7 +313,7 @@ class ScopeDefinerMemoryHooks:
             from src.memory.episodic_memory import store_episodic_memory
 
             # Build content from scope specification
-            scope_spec = result.get("scope_spec", {})
+            result.get("scope_spec", {})
             success_criteria = result.get("success_criteria", {})
 
             content = {
@@ -499,8 +499,7 @@ class ScopeDefinerMemoryHooks:
 
             # Filter by validation status
             filtered = [
-                r for r in results
-                if r.get("raw_content", {}).get("validation_passed", False)
+                r for r in results if r.get("raw_content", {}).get("validation_passed", False)
             ]
 
             return filtered[:limit]

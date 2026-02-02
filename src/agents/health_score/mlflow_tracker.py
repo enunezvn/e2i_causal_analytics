@@ -17,7 +17,7 @@ import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .agent import HealthScoreOutput
@@ -267,8 +267,8 @@ class HealthScoreMLflowTracker:
                 }
 
                 # Write artifact
-                import tempfile
                 import os
+                import tempfile
 
                 with tempfile.TemporaryDirectory() as tmpdir:
                     artifact_path = os.path.join(tmpdir, "health_check_results.json")
@@ -381,9 +381,7 @@ class HealthScoreMLflowTracker:
 
         # Calculate trend
         scores = [
-            h["overall_health_score"]
-            for h in recent
-            if h.get("overall_health_score") is not None
+            h["overall_health_score"] for h in recent if h.get("overall_health_score") is not None
         ]
 
         if not scores:

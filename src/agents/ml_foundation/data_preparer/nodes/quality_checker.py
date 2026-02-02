@@ -6,7 +6,7 @@ In Phase 3, this will integrate with Great Expectations.
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -66,9 +66,7 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         blocking_issues = []
 
         # === COMPLETENESS CHECKS ===
-        completeness_score, completeness_results = _check_completeness(
-            train_df, required_columns
-        )
+        completeness_score, completeness_results = _check_completeness(train_df, required_columns)
         expectation_results.extend(completeness_results)
         for result in completeness_results:
             if not result["success"]:
@@ -81,9 +79,7 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
                     warnings.append(result)
 
         # === VALIDITY CHECKS ===
-        validity_score, validity_results = _check_validity(
-            train_df, expected_dtypes
-        )
+        validity_score, validity_results = _check_validity(train_df, expected_dtypes)
         expectation_results.extend(validity_results)
         for result in validity_results:
             if not result["success"]:
@@ -104,9 +100,7 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
                 warnings.append(result)
 
         # === UNIQUENESS CHECKS ===
-        uniqueness_score, uniqueness_results = _check_uniqueness(
-            train_df, unique_columns
-        )
+        uniqueness_score, uniqueness_results = _check_uniqueness(train_df, unique_columns)
         expectation_results.extend(uniqueness_results)
         for result in uniqueness_results:
             if not result["success"]:
@@ -213,15 +207,17 @@ def _check_completeness(
     null_cells = df.isnull().sum().sum()
     overall_completeness = 1 - (null_cells / total_cells) if total_cells > 0 else 0
 
-    results.append({
-        "expectation_type": "expect_table_completeness",
-        "success": overall_completeness >= 0.90,
-        "result": {
-            "total_cells": total_cells,
-            "null_cells": int(null_cells),
-            "completeness_ratio": overall_completeness,
-        },
-    })
+    results.append(
+        {
+            "expectation_type": "expect_table_completeness",
+            "success": overall_completeness >= 0.90,
+            "result": {
+                "total_cells": total_cells,
+                "null_cells": int(null_cells),
+                "completeness_ratio": overall_completeness,
+            },
+        }
+    )
 
     # Check required columns have no nulls
     for col in required_columns:
@@ -230,33 +226,37 @@ def _check_completeness(
             col_completeness = 1 - (null_count / len(df)) if len(df) > 0 else 0
 
             success = null_count == 0
-            results.append({
-                "expectation_type": "expect_column_values_to_not_be_null",
-                "column": col,
-                "success": success,
-                "severity": "blocking" if not success else "info",
-                "result": {
-                    "element_count": len(df),
-                    "null_count": int(null_count),
-                    "completeness_ratio": col_completeness,
-                },
-            })
+            results.append(
+                {
+                    "expectation_type": "expect_column_values_to_not_be_null",
+                    "column": col,
+                    "success": success,
+                    "severity": "blocking" if not success else "info",
+                    "result": {
+                        "element_count": len(df),
+                        "null_count": int(null_count),
+                        "completeness_ratio": col_completeness,
+                    },
+                }
+            )
 
     # Per-column null percentages for non-required columns
     for col in df.columns:
         if col not in required_columns:
             null_pct = df[col].isnull().mean()
             if null_pct > 0.1:  # More than 10% nulls
-                results.append({
-                    "expectation_type": "expect_column_null_percentage",
-                    "column": col,
-                    "success": False,
-                    "severity": "warning",
-                    "result": {
-                        "null_percentage": null_pct,
-                        "threshold": 0.10,
-                    },
-                })
+                results.append(
+                    {
+                        "expectation_type": "expect_column_null_percentage",
+                        "column": col,
+                        "success": False,
+                        "severity": "warning",
+                        "result": {
+                            "null_percentage": null_pct,
+                            "threshold": 0.10,
+                        },
+                    }
+                )
 
     return overall_completeness, results
 
@@ -289,14 +289,16 @@ def _check_validity(
             if type_matches:
                 valid_columns += 1
 
-            results.append({
-                "expectation_type": "expect_column_values_to_be_of_type",
-                "column": col,
-                "success": type_matches,
-                "expected_dtype": expected_dtype,
-                "actual_dtype": actual_dtype,
-                "result": {"type_matches": type_matches},
-            })
+            results.append(
+                {
+                    "expectation_type": "expect_column_values_to_be_of_type",
+                    "column": col,
+                    "success": type_matches,
+                    "expected_dtype": expected_dtype,
+                    "actual_dtype": actual_dtype,
+                    "result": {"type_matches": type_matches},
+                }
+            )
 
     # Check for numeric columns with obvious issues
     numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -308,12 +310,14 @@ def _check_validity(
         if inf_count == 0:
             valid_columns += 1
         else:
-            results.append({
-                "expectation_type": "expect_column_values_to_be_finite",
-                "column": col,
-                "success": False,
-                "result": {"infinity_count": int(inf_count)},
-            })
+            results.append(
+                {
+                    "expectation_type": "expect_column_values_to_be_finite",
+                    "column": col,
+                    "success": False,
+                    "result": {"infinity_count": int(inf_count)},
+                }
+            )
 
     validity_score = valid_columns / total_checks if total_checks > 0 else 1.0
     return validity_score, results
@@ -385,15 +389,17 @@ def _check_consistency(
         if cols_match:
             consistent_checks += 1
 
-        results.append({
-            "expectation_type": "expect_column_set_to_match",
-            "comparison": "train_vs_validation",
-            "success": cols_match,
-            "result": {
-                "train_only": list(train_cols - val_cols),
-                "validation_only": list(val_cols - train_cols),
-            },
-        })
+        results.append(
+            {
+                "expectation_type": "expect_column_set_to_match",
+                "comparison": "train_vs_validation",
+                "success": cols_match,
+                "result": {
+                    "train_only": list(train_cols - val_cols),
+                    "validation_only": list(val_cols - train_cols),
+                },
+            }
+        )
 
     if test_df is not None:
         total_checks += 1
@@ -403,15 +409,17 @@ def _check_consistency(
         if cols_match:
             consistent_checks += 1
 
-        results.append({
-            "expectation_type": "expect_column_set_to_match",
-            "comparison": "train_vs_test",
-            "success": cols_match,
-            "result": {
-                "train_only": list(train_cols - test_cols),
-                "test_only": list(test_cols - train_cols),
-            },
-        })
+        results.append(
+            {
+                "expectation_type": "expect_column_set_to_match",
+                "comparison": "train_vs_test",
+                "success": cols_match,
+                "result": {
+                    "train_only": list(train_cols - test_cols),
+                    "test_only": list(test_cols - train_cols),
+                },
+            }
+        )
 
     # Check dtype consistency
     for col in train_df.columns:
@@ -423,13 +431,15 @@ def _check_consistency(
             if train_dtype == val_dtype:
                 consistent_checks += 1
             else:
-                results.append({
-                    "expectation_type": "expect_dtype_to_match",
-                    "column": col,
-                    "comparison": "train_vs_validation",
-                    "success": False,
-                    "result": {"train_dtype": train_dtype, "val_dtype": val_dtype},
-                })
+                results.append(
+                    {
+                        "expectation_type": "expect_dtype_to_match",
+                        "column": col,
+                        "comparison": "train_vs_validation",
+                        "success": False,
+                        "result": {"train_dtype": train_dtype, "val_dtype": val_dtype},
+                    }
+                )
 
         if test_df is not None and col in test_df.columns:
             total_checks += 1
@@ -437,13 +447,15 @@ def _check_consistency(
             if train_dtype == test_dtype:
                 consistent_checks += 1
             else:
-                results.append({
-                    "expectation_type": "expect_dtype_to_match",
-                    "column": col,
-                    "comparison": "train_vs_test",
-                    "success": False,
-                    "result": {"train_dtype": train_dtype, "test_dtype": test_dtype},
-                })
+                results.append(
+                    {
+                        "expectation_type": "expect_dtype_to_match",
+                        "column": col,
+                        "comparison": "train_vs_test",
+                        "success": False,
+                        "result": {"train_dtype": train_dtype, "test_dtype": test_dtype},
+                    }
+                )
 
     consistency_score = consistent_checks / total_checks if total_checks > 0 else 1.0
     return consistency_score, results
@@ -474,15 +486,17 @@ def _check_uniqueness(
     if rows_unique:
         unique_checks_passed += 1
 
-    results.append({
-        "expectation_type": "expect_table_row_uniqueness",
-        "success": rows_unique,
-        "result": {
-            "duplicate_count": int(duplicate_rows),
-            "duplicate_ratio": duplicate_ratio,
-            "threshold": 0.05,
-        },
-    })
+    results.append(
+        {
+            "expectation_type": "expect_table_row_uniqueness",
+            "success": rows_unique,
+            "result": {
+                "duplicate_count": int(duplicate_rows),
+                "duplicate_ratio": duplicate_ratio,
+                "threshold": 0.05,
+            },
+        }
+    )
 
     # Check specific columns for uniqueness
     for col in unique_columns:
@@ -494,13 +508,15 @@ def _check_uniqueness(
             if is_unique:
                 unique_checks_passed += 1
 
-            results.append({
-                "expectation_type": "expect_column_values_to_be_unique",
-                "column": col,
-                "success": is_unique,
-                "duplicate_count": int(duplicate_count),
-                "result": {"duplicate_count": int(duplicate_count)},
-            })
+            results.append(
+                {
+                    "expectation_type": "expect_column_values_to_be_unique",
+                    "column": col,
+                    "success": is_unique,
+                    "duplicate_count": int(duplicate_count),
+                    "result": {"duplicate_count": int(duplicate_count)},
+                }
+            )
 
     uniqueness_score = unique_checks_passed / total_checks if total_checks > 0 else 1.0
     return uniqueness_score, results
@@ -523,11 +539,13 @@ def _check_timeliness(
 
     if date_column not in df.columns:
         # No date column, assume fresh
-        results.append({
-            "expectation_type": "expect_data_timeliness",
-            "success": True,
-            "result": {"message": "No date column to check"},
-        })
+        results.append(
+            {
+                "expectation_type": "expect_data_timeliness",
+                "success": True,
+                "result": {"message": "No date column to check"},
+            }
+        )
         return 1.0, results
 
     try:
@@ -536,17 +554,23 @@ def _check_timeliness(
         valid_dates = dates.dropna()
 
         if len(valid_dates) == 0:
-            results.append({
-                "expectation_type": "expect_data_timeliness",
-                "success": False,
-                "result": {"message": "No valid dates found"},
-            })
+            results.append(
+                {
+                    "expectation_type": "expect_data_timeliness",
+                    "success": False,
+                    "result": {"message": "No valid dates found"},
+                }
+            )
             return 0.5, results
 
         # Calculate staleness
         max_date = valid_dates.max()
         now = datetime.now()
-        staleness_days = (now - max_date).days if hasattr(max_date, "days") else (now - max_date.to_pydatetime()).days
+        staleness_days = (
+            (now - max_date).days
+            if hasattr(max_date, "days")
+            else (now - max_date.to_pydatetime()).days
+        )
 
         is_fresh = staleness_days <= max_staleness_days
 
@@ -558,24 +582,28 @@ def _check_timeliness(
         else:
             timeliness_score = 0.4
 
-        results.append({
-            "expectation_type": "expect_data_timeliness",
-            "success": is_fresh,
-            "staleness_days": int(staleness_days),
-            "result": {
-                "max_date": str(max_date),
+        results.append(
+            {
+                "expectation_type": "expect_data_timeliness",
+                "success": is_fresh,
                 "staleness_days": int(staleness_days),
-                "max_allowed_days": max_staleness_days,
-            },
-        })
+                "result": {
+                    "max_date": str(max_date),
+                    "staleness_days": int(staleness_days),
+                    "max_allowed_days": max_staleness_days,
+                },
+            }
+        )
 
         return timeliness_score, results
 
     except Exception as e:
         logger.warning(f"Error checking timeliness: {e}")
-        results.append({
-            "expectation_type": "expect_data_timeliness",
-            "success": True,
-            "result": {"message": f"Could not check timeliness: {e}"},
-        })
+        results.append(
+            {
+                "expectation_type": "expect_data_timeliness",
+                "success": True,
+                "result": {"message": f"Could not check timeliness: {e}"},
+            }
+        )
         return 0.8, results

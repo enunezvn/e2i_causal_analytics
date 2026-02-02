@@ -26,8 +26,8 @@ from typing import Any, Dict, Optional, Type
 
 import pandas as pd
 import pandera.pandas as pa
-from pandera import Column, DataFrameModel, Field, Index
-from pandera.typing import DataFrame, Series
+from pandera import DataFrameModel, Field
+from pandera.typing import Series
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ E2I_AGENT_TIERS = ["coordination", "causal_analytics", "monitoring", "ml_predict
 # Schema 1: Business Metrics
 # =============================================================================
 
+
 class BusinessMetricsSchema(DataFrameModel):
     """Schema for business_metrics table data.
 
@@ -93,6 +94,7 @@ class BusinessMetricsSchema(DataFrameModel):
 # Schema 2: Predictions
 # =============================================================================
 
+
 class PredictionsSchema(DataFrameModel):
     """Schema for ml_predictions table data.
 
@@ -106,20 +108,13 @@ class PredictionsSchema(DataFrameModel):
     model_version: Optional[Series[str]] = Field(nullable=True)
     model_type: Optional[Series[str]] = Field(nullable=True)
     prediction_type: Optional[Series[str]] = Field(
-        nullable=True,
-        isin=E2I_PREDICTION_TYPES + [None]
+        nullable=True, isin=E2I_PREDICTION_TYPES + [None]
     )
     prediction_value: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=0.0,
-        le=1.0,
-        description="Prediction probability must be between 0 and 1"
+        nullable=True, ge=0.0, le=1.0, description="Prediction probability must be between 0 and 1"
     )
     confidence_score: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=0.0,
-        le=1.0,
-        description="Confidence score must be between 0 and 1"
+        nullable=True, ge=0.0, le=1.0, description="Confidence score must be between 0 and 1"
     )
     patient_id: Optional[Series[str]] = Field(nullable=True)
     hcp_id: Optional[Series[str]] = Field(nullable=True)
@@ -134,6 +129,7 @@ class PredictionsSchema(DataFrameModel):
 # Schema 3: Triggers
 # =============================================================================
 
+
 class TriggersSchema(DataFrameModel):
     """Schema for triggers table data.
 
@@ -147,15 +143,9 @@ class TriggersSchema(DataFrameModel):
     patient_id: Series[str] = Field(nullable=False)
     trigger_timestamp: Optional[Series[pd.Timestamp]] = Field(nullable=True, coerce=True)
     trigger_type: Optional[Series[str]] = Field(nullable=True)
-    priority: Optional[Series[str]] = Field(
-        nullable=True,
-        isin=E2I_PRIORITY_TYPES + [None]
-    )
+    priority: Optional[Series[str]] = Field(nullable=True, isin=E2I_PRIORITY_TYPES + [None])
     confidence_score: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=0.0,
-        le=1.0,
-        description="Confidence score must be between 0 and 1"
+        nullable=True, ge=0.0, le=1.0, description="Confidence score must be between 0 and 1"
     )
     lead_time_days: Optional[Series[int]] = Field(nullable=True, ge=0)
     hcp_id: Optional[Series[str]] = Field(nullable=True)
@@ -169,6 +159,7 @@ class TriggersSchema(DataFrameModel):
 # =============================================================================
 # Schema 4: Patient Journeys
 # =============================================================================
+
 
 class PatientJourneysSchema(DataFrameModel):
     """Schema for patient_journeys table data.
@@ -184,29 +175,13 @@ class PatientJourneysSchema(DataFrameModel):
     patient_id: Series[str] = Field(nullable=False)
     journey_start_date: Optional[Series[pd.Timestamp]] = Field(nullable=True, coerce=True)
     journey_end_date: Optional[Series[pd.Timestamp]] = Field(nullable=True, coerce=True)
-    current_stage: Optional[Series[str]] = Field(
-        nullable=True,
-        isin=E2I_JOURNEY_STAGES + [None]
-    )
-    journey_status: Optional[Series[str]] = Field(
-        nullable=True,
-        isin=E2I_JOURNEY_STATUSES + [None]
-    )
-    brand: Optional[Series[str]] = Field(
-        nullable=True,
-        isin=E2I_BRANDS + [None]
-    )
-    geographic_region: Optional[Series[str]] = Field(
-        nullable=True,
-        isin=E2I_REGIONS + [None]
-    )
+    current_stage: Optional[Series[str]] = Field(nullable=True, isin=E2I_JOURNEY_STAGES + [None])
+    journey_status: Optional[Series[str]] = Field(nullable=True, isin=E2I_JOURNEY_STATUSES + [None])
+    brand: Optional[Series[str]] = Field(nullable=True, isin=E2I_BRANDS + [None])
+    geographic_region: Optional[Series[str]] = Field(nullable=True, isin=E2I_REGIONS + [None])
     age_group: Optional[Series[str]] = Field(nullable=True)
     gender: Optional[Series[str]] = Field(nullable=True)
-    source_match_confidence: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=0.0,
-        le=1.0
-    )
+    source_match_confidence: Optional[Series[float]] = Field(nullable=True, ge=0.0, le=1.0)
 
     class Config:
         name = "patient_journeys"
@@ -217,6 +192,7 @@ class PatientJourneysSchema(DataFrameModel):
 # =============================================================================
 # Schema 5: Causal Paths
 # =============================================================================
+
 
 class CausalPathsSchema(DataFrameModel):
     """Schema for causal_paths table data.
@@ -233,23 +209,14 @@ class CausalPathsSchema(DataFrameModel):
     target_node: Optional[Series[str]] = Field(nullable=True)
     path_length: Optional[Series[int]] = Field(nullable=True, ge=1)
     causal_effect_size: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=-1.0,
-        le=1.0,
-        description="Causal effect size must be between -1 and 1"
+        nullable=True, ge=-1.0, le=1.0, description="Causal effect size must be between -1 and 1"
     )
     confidence_level: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=0.0,
-        le=1.0,
-        description="Confidence level must be between 0 and 1"
+        nullable=True, ge=0.0, le=1.0, description="Confidence level must be between 0 and 1"
     )
     method_used: Optional[Series[str]] = Field(nullable=True)
     p_value: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=0.0,
-        le=1.0,
-        description="P-value must be between 0 and 1"
+        nullable=True, ge=0.0, le=1.0, description="P-value must be between 0 and 1"
     )
 
     class Config:
@@ -262,6 +229,7 @@ class CausalPathsSchema(DataFrameModel):
 # Schema 6: Agent Activities
 # =============================================================================
 
+
 class AgentActivitiesSchema(DataFrameModel):
     """Schema for agent_activities table data.
 
@@ -273,17 +241,11 @@ class AgentActivitiesSchema(DataFrameModel):
 
     activity_id: Series[str] = Field(nullable=False, unique=True)
     agent_name: Optional[Series[str]] = Field(nullable=True)
-    agent_tier: Optional[Series[str]] = Field(
-        nullable=True,
-        isin=E2I_AGENT_TIERS + [None]
-    )
+    agent_tier: Optional[Series[str]] = Field(nullable=True, isin=E2I_AGENT_TIERS + [None])
     activity_timestamp: Optional[Series[pd.Timestamp]] = Field(nullable=True, coerce=True)
     activity_type: Optional[Series[str]] = Field(nullable=True)
     confidence_level: Optional[Series[float]] = Field(
-        nullable=True,
-        ge=0.0,
-        le=1.0,
-        description="Confidence level must be between 0 and 1"
+        nullable=True, ge=0.0, le=1.0, description="Confidence level must be between 0 and 1"
     )
     impact_estimate: Optional[Series[float]] = Field(nullable=True)
     execution_time_ms: Optional[Series[float]] = Field(nullable=True, ge=0.0)
@@ -326,11 +288,7 @@ def get_schema(data_source: str) -> Optional[Type[DataFrameModel]]:
     return PANDERA_SCHEMA_REGISTRY.get(data_source)
 
 
-def validate_dataframe(
-    df: pd.DataFrame,
-    data_source: str,
-    lazy: bool = True
-) -> Dict[str, Any]:
+def validate_dataframe(df: pd.DataFrame, data_source: str, lazy: bool = True) -> Dict[str, Any]:
     """Validate a DataFrame against its Pandera schema.
 
     Args:
@@ -378,16 +336,16 @@ def validate_dataframe(
         # Collect all schema errors
         errors = []
         for failure_case in e.failure_cases.to_dict(orient="records"):
-            errors.append({
-                "column": failure_case.get("column"),
-                "check": failure_case.get("check"),
-                "failure_case": str(failure_case.get("failure_case")),
-                "index": failure_case.get("index"),
-            })
+            errors.append(
+                {
+                    "column": failure_case.get("column"),
+                    "check": failure_case.get("check"),
+                    "failure_case": str(failure_case.get("failure_case")),
+                    "index": failure_case.get("index"),
+                }
+            )
 
-        logger.warning(
-            f"Schema validation failed for {data_source}: {len(errors)} errors"
-        )
+        logger.warning(f"Schema validation failed for {data_source}: {len(errors)} errors")
         return {
             "status": "failed",
             "errors": errors,
@@ -423,7 +381,4 @@ def list_registered_schemas() -> Dict[str, str]:
     Returns:
         Dict mapping data source names to schema class names
     """
-    return {
-        name: schema.__name__
-        for name, schema in PANDERA_SCHEMA_REGISTRY.items()
-    }
+    return {name: schema.__name__ for name, schema in PANDERA_SCHEMA_REGISTRY.items()}

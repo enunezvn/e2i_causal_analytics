@@ -24,7 +24,6 @@ from .models.simulation_models import (
     SimulationStatus,
 )
 from .models.twin_models import (
-    Brand,
     TwinModelConfig,
     TwinModelMetrics,
     TwinType,
@@ -230,11 +229,13 @@ class TwinModelRepository(BaseRepository):
         try:
             await (
                 self.client.table(self.table_name)
-                .update({
-                    "is_active": False,
-                    "deactivation_date": datetime.now(timezone.utc).isoformat(),
-                    "deactivation_reason": reason,
-                })
+                .update(
+                    {
+                        "is_active": False,
+                        "deactivation_date": datetime.now(timezone.utc).isoformat(),
+                        "deactivation_reason": reason,
+                    }
+                )
                 .eq("model_id", str(model_id))
                 .execute()
             )
@@ -272,11 +273,13 @@ class TwinModelRepository(BaseRepository):
         try:
             await (
                 self.client.table(self.table_name)
-                .update({
-                    "fidelity_score": fidelity_score,
-                    "fidelity_sample_count": sample_count,
-                    "last_fidelity_update": datetime.now(timezone.utc).isoformat(),
-                })
+                .update(
+                    {
+                        "fidelity_score": fidelity_score,
+                        "fidelity_sample_count": sample_count,
+                        "last_fidelity_update": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 .eq("model_id", str(model_id))
                 .execute()
             )
@@ -586,7 +589,9 @@ class FidelityRepository(BaseRepository):
             "actual_ci_lower": record.actual_ci_lower,
             "actual_ci_upper": record.actual_ci_upper,
             "actual_sample_size": record.actual_sample_size,
-            "actual_experiment_id": str(record.actual_experiment_id) if record.actual_experiment_id else None,
+            "actual_experiment_id": str(record.actual_experiment_id)
+            if record.actual_experiment_id
+            else None,
             "prediction_error": record.prediction_error,
             "absolute_error": record.absolute_error,
             "ci_coverage": record.ci_coverage,
@@ -755,9 +760,7 @@ class FidelityRepository(BaseRepository):
             return []
 
         try:
-            cutoff = datetime.now(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             # Note: actual filtering by date range would need to be adjusted
             # based on Supabase's date handling
 
@@ -787,7 +790,9 @@ class FidelityRepository(BaseRepository):
             actual_ci_lower=row.get("actual_ci_lower"),
             actual_ci_upper=row.get("actual_ci_upper"),
             actual_sample_size=row.get("actual_sample_size"),
-            actual_experiment_id=UUID(row["actual_experiment_id"]) if row.get("actual_experiment_id") else None,
+            actual_experiment_id=UUID(row["actual_experiment_id"])
+            if row.get("actual_experiment_id")
+            else None,
             prediction_error=row.get("prediction_error"),
             absolute_error=row.get("absolute_error"),
             ci_coverage=row.get("ci_coverage"),
@@ -795,7 +800,9 @@ class FidelityRepository(BaseRepository):
             validation_notes=row.get("validation_notes"),
             confounding_factors=row.get("confounding_factors", []),
             validated_by=row.get("validated_by"),
-            validated_at=datetime.fromisoformat(row["validated_at"]) if row.get("validated_at") else None,
+            validated_at=datetime.fromisoformat(row["validated_at"])
+            if row.get("validated_at")
+            else None,
         )
 
 

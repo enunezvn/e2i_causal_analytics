@@ -16,9 +16,8 @@ import asyncio
 import os
 import time
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -42,7 +41,6 @@ from src.api.dependencies.bentoml_client import (
     close_bentoml_client,
     get_bentoml_client,
 )
-
 
 # =============================================================================
 # Test Configuration
@@ -232,10 +230,7 @@ class TestMockClientPrediction:
                 time_horizon="30d",
             )
 
-        tasks = [
-            get_prediction(model_id, client)
-            for model_id, client in clients.items()
-        ]
+        tasks = [get_prediction(model_id, client) for model_id, client in clients.items()]
 
         results = await asyncio.gather(*tasks)
 
@@ -481,9 +476,7 @@ class TestEndToEndPredictionFlow:
     async def test_full_prediction_flow_with_mock(self, mock_factory, trace_id):
         """Test complete prediction flow from client to result."""
         # Get clients for multiple models
-        clients = await mock_factory.get_clients(
-            ["churn_model", "conversion_model"]
-        )
+        clients = await mock_factory.get_clients(["churn_model", "conversion_model"])
 
         # Simulate orchestrated prediction flow
         entity_id = "HCP001"
@@ -504,9 +497,7 @@ class TestEndToEndPredictionFlow:
         assert "conversion_model" in predictions
 
         # Ensemble calculation (simple average)
-        avg_prediction = sum(
-            p["prediction"] for p in predictions.values()
-        ) / len(predictions)
+        avg_prediction = sum(p["prediction"] for p in predictions.values()) / len(predictions)
 
         assert 0 <= avg_prediction <= 1
 
@@ -554,15 +545,17 @@ class TestEndToEndPredictionFlow:
     async def test_global_convenience_functions(self):
         """Test global convenience functions work correctly."""
         # Configure with mock
-        configure_model_endpoints({
-            "endpoints": {
-                "test_model": {
-                    "client_type": "mock",
-                    "enabled": True,
-                    "default_prediction": 0.65,
+        configure_model_endpoints(
+            {
+                "endpoints": {
+                    "test_model": {
+                        "client_type": "mock",
+                        "enabled": True,
+                        "default_prediction": 0.65,
+                    },
                 },
-            },
-        })
+            }
+        )
 
         # Get client through convenience function
         client = await get_model_client("test_model")

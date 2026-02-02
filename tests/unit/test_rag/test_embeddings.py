@@ -96,7 +96,6 @@ def embedding_client(embedding_config):
         patch("src.rag.embeddings.OpenAI") as mock_sync,
         patch("src.rag.embeddings.AsyncOpenAI") as mock_async,
     ):
-
         client = OpenAIEmbeddingClient(embedding_config)
         client._mock_sync = mock_sync
         client._mock_async = mock_async
@@ -207,7 +206,6 @@ class TestOpenAIEmbeddingClientInit:
     def test_init_with_config(self, embedding_config):
         """Test initialization with config object."""
         with patch("src.rag.embeddings.OpenAI"), patch("src.rag.embeddings.AsyncOpenAI"):
-
             client = OpenAIEmbeddingClient(embedding_config)
 
             assert client.model == "text-embedding-3-small"
@@ -219,7 +217,6 @@ class TestOpenAIEmbeddingClientInit:
         config = EmbeddingConfig(model_name="text-embedding-3-small", api_key="config-key")
 
         with patch("src.rag.embeddings.OpenAI"), patch("src.rag.embeddings.AsyncOpenAI"):
-
             client = OpenAIEmbeddingClient(
                 config=config, api_key="override-key", model="text-embedding-3-large"
             )
@@ -261,7 +258,6 @@ class TestSyncEncoding:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
             mock_openai.return_value = mock_client
@@ -281,7 +277,6 @@ class TestSyncEncoding:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(texts)
             mock_openai.return_value = mock_client
@@ -301,7 +296,6 @@ class TestSyncEncoding:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             # Return different responses for each batch
             mock_client.embeddings.create.side_effect = [
@@ -323,7 +317,6 @@ class TestSyncEncoding:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(
                 ["test"], dimension=512
@@ -353,7 +346,6 @@ class TestAsyncEncoding:
             patch("src.rag.embeddings.OpenAI"),
             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
         ):
-
             mock_client = AsyncMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
             mock_async_openai.return_value = mock_client
@@ -373,7 +365,6 @@ class TestAsyncEncoding:
             patch("src.rag.embeddings.OpenAI"),
             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
         ):
-
             mock_client = AsyncMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(texts)
             mock_async_openai.return_value = mock_client
@@ -392,7 +383,6 @@ class TestAsyncEncoding:
             patch("src.rag.embeddings.OpenAI"),
             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
         ):
-
             mock_client = AsyncMock()
             # Side effect to return correct number of embeddings per batch
             # With batch_size=10: batches of 10, 10, 5
@@ -438,7 +428,6 @@ class TestRetryLogic:
             patch("src.rag.embeddings.AsyncOpenAI"),
             patch("time.sleep"),
         ):  # Skip actual sleep
-
             mock_client = MagicMock()
             # First call raises rate limit, second succeeds
             mock_client.embeddings.create.side_effect = [
@@ -465,7 +454,6 @@ class TestRetryLogic:
             patch("src.rag.embeddings.AsyncOpenAI"),
             patch("time.sleep"),
         ):
-
             mock_client = MagicMock()
             # All calls raise rate limit
             mock_client.embeddings.create.side_effect = openai.RateLimitError(
@@ -490,7 +478,6 @@ class TestRetryLogic:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.side_effect = openai.APIError(
                 message="API error", request=MagicMock(), body={}
@@ -519,7 +506,6 @@ class TestUsageStatistics:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
             mock_openai.return_value = mock_client
@@ -541,7 +527,6 @@ class TestUsageStatistics:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
             mock_openai.return_value = mock_client
@@ -571,7 +556,6 @@ class TestConvenienceFunction:
             patch("src.rag.embeddings.OpenAI"),
             patch("src.rag.embeddings.AsyncOpenAI") as mock_async_openai,
         ):
-
             mock_client = AsyncMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["test"])
             mock_async_openai.return_value = mock_client
@@ -615,7 +599,6 @@ class TestEdgeCases:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response([])
             mock_openai.return_value = mock_client
@@ -631,7 +614,6 @@ class TestEdgeCases:
             patch("src.rag.embeddings.OpenAI") as mock_openai,
             patch("src.rag.embeddings.AsyncOpenAI"),
         ):
-
             mock_client = MagicMock()
             mock_client.embeddings.create.return_value = mock_embedding_response(["single"])
             mock_openai.return_value = mock_client

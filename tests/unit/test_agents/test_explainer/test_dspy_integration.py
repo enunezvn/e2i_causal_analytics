@@ -10,7 +10,6 @@ Tests the Recipient role implementation including:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
 
 # Mark all tests in this module as dspy_integration to group them
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
@@ -335,8 +334,8 @@ class TestDSPySignatures:
     def test_explanation_synthesis_signature(self):
         """Test ExplanationSynthesisSignature is valid DSPy signature."""
         from src.agents.explainer.dspy_integration import (
-            ExplanationSynthesisSignature,
             DSPY_AVAILABLE,
+            ExplanationSynthesisSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -353,8 +352,8 @@ class TestDSPySignatures:
     def test_insight_extraction_signature(self):
         """Test InsightExtractionSignature is valid DSPy signature."""
         from src.agents.explainer.dspy_integration import (
-            InsightExtractionSignature,
             DSPY_AVAILABLE,
+            InsightExtractionSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -371,8 +370,8 @@ class TestDSPySignatures:
     def test_narrative_structure_signature(self):
         """Test NarrativeStructureSignature is valid DSPy signature."""
         from src.agents.explainer.dspy_integration import (
-            NarrativeStructureSignature,
             DSPY_AVAILABLE,
+            NarrativeStructureSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -389,8 +388,8 @@ class TestDSPySignatures:
     def test_query_rewrite_signature(self):
         """Test QueryRewriteForExplanationSignature is valid DSPy signature."""
         from src.agents.explainer.dspy_integration import (
-            QueryRewriteForExplanationSignature,
             DSPY_AVAILABLE,
+            QueryRewriteForExplanationSignature,
         )
 
         if not DSPY_AVAILABLE:

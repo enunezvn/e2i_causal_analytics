@@ -253,14 +253,10 @@ class GEPAABTest:
         treatment_latencies = sorted([o.latency_ms for o in treatment_obs if o.latency_ms])
 
         baseline_latency_p50 = (
-            baseline_latencies[len(baseline_latencies) // 2]
-            if baseline_latencies
-            else None
+            baseline_latencies[len(baseline_latencies) // 2] if baseline_latencies else None
         )
         treatment_latency_p50 = (
-            treatment_latencies[len(treatment_latencies) // 2]
-            if treatment_latencies
-            else None
+            treatment_latencies[len(treatment_latencies) // 2] if treatment_latencies else None
         )
 
         # Statistical significance
@@ -274,10 +270,7 @@ class GEPAABTest:
 
             # 95% confidence interval for difference
             mean_diff = treatment_score_avg - baseline_score_avg
-            pooled_se = (
-                (stats.sem(baseline_scores) ** 2 + stats.sem(treatment_scores) ** 2)
-                ** 0.5
-            )
+            pooled_se = (stats.sem(baseline_scores) ** 2 + stats.sem(treatment_scores) ** 2) ** 0.5
             ci_margin = 1.96 * pooled_se
             confidence_interval = (mean_diff - ci_margin, mean_diff + ci_margin)
 
@@ -291,12 +284,16 @@ class GEPAABTest:
         if total_samples >= self.target_sample_size and is_significant:
             if score_delta > 0:
                 winner = "gepa"
-                recommendation = f"GEPA variant shows +{score_delta:.1%} improvement. Recommend rolling out."
+                recommendation = (
+                    f"GEPA variant shows +{score_delta:.1%} improvement. Recommend rolling out."
+                )
             else:
                 winner = "baseline"
                 recommendation = f"Baseline performs better by {-score_delta:.1%}. Keep baseline."
         elif total_samples >= self.target_sample_size:
-            recommendation = "No significant difference detected. Consider extending test or keeping baseline."
+            recommendation = (
+                "No significant difference detected. Consider extending test or keeping baseline."
+            )
         else:
             remaining = self.target_sample_size - total_samples
             recommendation = f"Need {remaining} more samples before analysis."

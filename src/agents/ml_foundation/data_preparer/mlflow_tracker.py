@@ -133,9 +133,7 @@ class DataPreparerMetrics:
             # Features
             "column_count": float(self.column_count),
             "available_features_count": float(self.available_features_count),
-            "missing_required_features_count": float(
-                self.missing_required_features_count
-            ),
+            "missing_required_features_count": float(self.missing_required_features_count),
             # Expectations
             "total_expectations": float(self.total_expectations),
             "failed_expectations_count": float(self.failed_expectations_count),
@@ -324,9 +322,7 @@ class DataPreparerMLflowTracker:
             qc_score=state.get("qc_score", 0.0),
             gate_passed=state.get("gate_passed", False),
             # Schema
-            schema_validation_status=state.get(
-                "schema_validation_status", "unknown"
-            ),
+            schema_validation_status=state.get("schema_validation_status", "unknown"),
             schema_splits_validated=state.get("schema_splits_validated", 0),
             schema_validation_time_ms=state.get("schema_validation_time_ms", 0),
             # Leakage
@@ -341,23 +337,17 @@ class DataPreparerMLflowTracker:
             # Features
             column_count=state.get("column_count", 0),
             available_features_count=len(state.get("available_features", [])),
-            missing_required_features_count=len(
-                state.get("missing_required_features", [])
-            ),
+            missing_required_features_count=len(state.get("missing_required_features", [])),
             # Expectations
             total_expectations=len(state.get("expectation_results", [])),
             failed_expectations_count=len(state.get("failed_expectations", [])),
             warnings_count=len(state.get("warnings", [])),
             blocking_issues_count=len(state.get("blocking_issues", [])),
             # Feast
-            feast_registration_status=state.get(
-                "feast_registration_status", "unknown"
-            ),
+            feast_registration_status=state.get("feast_registration_status", "unknown"),
             feast_features_registered=state.get("feast_features_registered", 0),
             # Timing
-            validation_duration_seconds=state.get(
-                "validation_duration_seconds", 0.0
-            ),
+            validation_duration_seconds=state.get("validation_duration_seconds", 0.0),
             # Ready
             is_ready=state.get("is_ready", False),
         )
@@ -521,13 +511,9 @@ class DataPreparerMLflowTracker:
                     {
                         "run_id": run.info.run_id,
                         "timestamp": run.info.start_time,
-                        "completeness_score": run.data.metrics.get(
-                            "completeness_score"
-                        ),
+                        "completeness_score": run.data.metrics.get("completeness_score"),
                         "validity_score": run.data.metrics.get("validity_score"),
-                        "consistency_score": run.data.metrics.get(
-                            "consistency_score"
-                        ),
+                        "consistency_score": run.data.metrics.get("consistency_score"),
                         "uniqueness_score": run.data.metrics.get("uniqueness_score"),
                         "timeliness_score": run.data.metrics.get("timeliness_score"),
                         "overall_score": run.data.metrics.get("overall_score"),
@@ -577,9 +563,7 @@ class DataPreparerMLflowTracker:
                         "timestamp": run.info.start_time,
                         "data_source": run.data.tags.get("data_source"),
                         "experiment_id": run.data.tags.get("experiment_id"),
-                        "leakage_issues_count": run.data.metrics.get(
-                            "leakage_issues_count"
-                        ),
+                        "leakage_issues_count": run.data.metrics.get("leakage_issues_count"),
                     }
                 )
 

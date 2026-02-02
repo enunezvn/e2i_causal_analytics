@@ -11,7 +11,6 @@ Performance Target: <2s per experiment
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 from src.agents.experiment_monitor.state import (
     EnrollmentIssue,
@@ -113,9 +112,7 @@ class HealthCheckerNode:
 
         return state
 
-    async def _get_experiments(
-        self, client: Any, state: ExperimentMonitorState
-    ) -> List[Dict]:
+    async def _get_experiments(self, client: Any, state: ExperimentMonitorState) -> List[Dict]:
         """Get experiments to check from database.
 
         Args:
@@ -150,9 +147,7 @@ class HealthCheckerNode:
         except Exception:
             return []
 
-    async def _get_mock_experiments(
-        self, state: ExperimentMonitorState
-    ) -> List[Dict]:
+    async def _get_mock_experiments(self, state: ExperimentMonitorState) -> List[Dict]:
         """Get mock experiments for testing.
 
         Args:
@@ -352,7 +347,9 @@ class HealthCheckerNode:
                     else:
                         created_time = created_at
 
-                    hours_since_creation = (datetime.now(timezone.utc) - created_time).total_seconds() / 3600
+                    hours_since_creation = (
+                        datetime.now(timezone.utc) - created_time
+                    ).total_seconds() / 3600
 
                     # If experiment is older than threshold and no data, it's stale
                     if hours_since_creation > threshold_hours:
@@ -373,7 +370,9 @@ class HealthCheckerNode:
                 last_timestamp = last_timestamp_str
 
             # Calculate hours since last update
-            hours_since_update = (datetime.now(timezone.utc) - last_timestamp).total_seconds() / 3600
+            hours_since_update = (
+                datetime.now(timezone.utc) - last_timestamp
+            ).total_seconds() / 3600
 
             if hours_since_update > threshold_hours:
                 # Determine severity based on staleness

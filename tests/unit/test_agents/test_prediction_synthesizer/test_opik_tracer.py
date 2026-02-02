@@ -4,10 +4,7 @@ Version: 1.0.0
 Tests the Opik observability integration for Prediction Synthesizer agent's synthesis pipeline.
 """
 
-import asyncio
-import time
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,12 +13,11 @@ from src.agents.prediction_synthesizer.opik_tracer import (
     ENTITY_TYPES,
     PIPELINE_NODES,
     NodeSpanContext,
-    SynthesisTraceContext,
     PredictionSynthesizerOpikTracer,
+    SynthesisTraceContext,
     get_prediction_synthesizer_tracer,
     reset_tracer,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -508,7 +504,7 @@ class TestPredictionSynthesizerOpikTracer:
                 include_context=True,
             )
 
-            node = ctx.start_node_span("orchestrate", {"models_requested": 3})
+            ctx.start_node_span("orchestrate", {"models_requested": 3})
             ctx.end_node_span("orchestrate", {"models_succeeded": 3})
             ctx.log_model_orchestration(
                 models_requested=3,

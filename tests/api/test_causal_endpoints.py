@@ -10,9 +10,7 @@ Endpoints covered:
 - Batch 1C.3: Pipeline Execution (POST /pipeline/sequential, POST /pipeline/parallel, GET /pipeline/{id})
 """
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -161,20 +159,27 @@ class TestRunHierarchicalAnalysis:
         mock_nested_ci.compute = MagicMock(return_value=mock_nested_ci_result)
 
         # Patch multiple imports in the causal engine
-        with patch(
-            "src.causal_engine.hierarchical.HierarchicalAnalyzer",
-            return_value=mock_analyzer,
-        ), patch(
-            "src.causal_engine.hierarchical.HierarchicalConfig",
-        ), patch(
-            "src.causal_engine.hierarchical.NestedCIConfig",
-        ), patch(
-            "src.causal_engine.hierarchical.NestedConfidenceInterval",
-            return_value=mock_nested_ci,
-        ), patch(
-            "src.causal_engine.hierarchical.analyzer.SegmentationMethod",
-        ), patch(
-            "src.causal_engine.hierarchical.nested_ci.SegmentEstimate",
+        with (
+            patch(
+                "src.causal_engine.hierarchical.HierarchicalAnalyzer",
+                return_value=mock_analyzer,
+            ),
+            patch(
+                "src.causal_engine.hierarchical.HierarchicalConfig",
+            ),
+            patch(
+                "src.causal_engine.hierarchical.NestedCIConfig",
+            ),
+            patch(
+                "src.causal_engine.hierarchical.NestedConfidenceInterval",
+                return_value=mock_nested_ci,
+            ),
+            patch(
+                "src.causal_engine.hierarchical.analyzer.SegmentationMethod",
+            ),
+            patch(
+                "src.causal_engine.hierarchical.nested_ci.SegmentEstimate",
+            ),
         ):
             response = client.post(
                 "/api/causal/hierarchical/analyze",

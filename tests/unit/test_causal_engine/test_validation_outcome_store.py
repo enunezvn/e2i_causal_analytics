@@ -8,30 +8,32 @@ Tests cover:
 - Global store functions
 """
 
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.causal_engine.validation_outcome_store import (
-    InMemoryValidationOutcomeStore,
-    SupabaseValidationOutcomeStore,
-    ExperimentKnowledgeStore,
-    get_validation_outcome_store,
-    reset_validation_outcome_store,
-    get_experiment_knowledge_store,
-    log_validation_outcome,
-    ValidationLearning,
-)
+
+import pytest
+
 from src.causal_engine.validation_outcome import (
-    ValidationOutcome,
-    ValidationOutcomeType,
     FailureCategory,
     ValidationFailurePattern,
+    ValidationOutcome,
+    ValidationOutcomeType,
 )
-
+from src.causal_engine.validation_outcome_store import (
+    ExperimentKnowledgeStore,
+    InMemoryValidationOutcomeStore,
+    SupabaseValidationOutcomeStore,
+    ValidationLearning,
+    get_experiment_knowledge_store,
+    get_validation_outcome_store,
+    log_validation_outcome,
+    reset_validation_outcome_store,
+)
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def sample_outcome():
@@ -102,6 +104,7 @@ def sample_passed_outcome():
 # InMemoryValidationOutcomeStore TESTS
 # ============================================================================
 
+
 class TestInMemoryValidationOutcomeStore:
     """Tests for InMemoryValidationOutcomeStore."""
 
@@ -153,19 +156,13 @@ class TestInMemoryValidationOutcomeStore:
         store = InMemoryValidationOutcomeStore()
         await store.store(sample_outcome)
 
-        failures = await store.query_failures(
-            treatment_variable="hcp_engagement",
-            limit=10
-        )
+        failures = await store.query_failures(treatment_variable="hcp_engagement", limit=10)
 
         assert len(failures) == 1
         assert failures[0].treatment_variable == "hcp_engagement"
 
         # Should return empty for different variable
-        failures = await store.query_failures(
-            treatment_variable="other_variable",
-            limit=10
-        )
+        failures = await store.query_failures(treatment_variable="other_variable", limit=10)
         assert len(failures) == 0
 
     @pytest.mark.asyncio
@@ -174,10 +171,7 @@ class TestInMemoryValidationOutcomeStore:
         store = InMemoryValidationOutcomeStore()
         await store.store(sample_outcome)
 
-        failures = await store.query_failures(
-            outcome_variable="conversion_rate",
-            limit=10
-        )
+        failures = await store.query_failures(outcome_variable="conversion_rate", limit=10)
 
         assert len(failures) == 1
         assert failures[0].outcome_variable == "conversion_rate"
@@ -200,12 +194,13 @@ class TestInMemoryValidationOutcomeStore:
         await store.store(sample_outcome)
 
         failures = await store.query_failures(
-            failure_category=FailureCategory.SPURIOUS_CORRELATION,
-            limit=10
+            failure_category=FailureCategory.SPURIOUS_CORRELATION, limit=10
         )
 
         assert len(failures) == 1
-        assert any(p.category == FailureCategory.SPURIOUS_CORRELATION for p in failures[0].failure_patterns)
+        assert any(
+            p.category == FailureCategory.SPURIOUS_CORRELATION for p in failures[0].failure_patterns
+        )
 
     @pytest.mark.asyncio
     async def test_query_failures_limit(self):
@@ -265,8 +260,7 @@ class TestInMemoryValidationOutcomeStore:
         await store.store(sample_outcome)
 
         patterns = await store.get_failure_patterns(
-            category=FailureCategory.SPURIOUS_CORRELATION,
-            limit=10
+            category=FailureCategory.SPURIOUS_CORRELATION, limit=10
         )
 
         assert len(patterns) > 0
@@ -289,9 +283,7 @@ class TestInMemoryValidationOutcomeStore:
         await store.store(similar_outcome)
 
         similar = await store.get_similar_failures(
-            treatment_variable="hcp_engagement",
-            outcome_variable="conversion_rate",
-            limit=5
+            treatment_variable="hcp_engagement", outcome_variable="conversion_rate", limit=5
         )
 
         assert len(similar) > 0
@@ -327,6 +319,7 @@ class TestInMemoryValidationOutcomeStore:
 # SupabaseValidationOutcomeStore TESTS
 # ============================================================================
 
+
 class TestSupabaseValidationOutcomeStore:
     """Tests for SupabaseValidationOutcomeStore."""
 
@@ -341,7 +334,7 @@ class TestSupabaseValidationOutcomeStore:
         mock_result.data = [{"outcome_id": sample_outcome.outcome_id}]
         mock_client.table().insert().execute.return_value = mock_result
 
-        with patch.object(store, '_get_client', return_value=mock_client):
+        with patch.object(store, "_get_client", return_value=mock_client):
             outcome_id = await store.store(sample_outcome)
 
             assert outcome_id == sample_outcome.outcome_id
@@ -353,7 +346,7 @@ class TestSupabaseValidationOutcomeStore:
         """Test fallback to in-memory store when Supabase fails."""
         store = SupabaseValidationOutcomeStore()
 
-        with patch.object(store, '_get_client', return_value=None):
+        with patch.object(store, "_get_client", return_value=None):
             outcome_id = await store.store(sample_outcome)
 
             assert outcome_id == sample_outcome.outcome_id
@@ -370,7 +363,7 @@ class TestSupabaseValidationOutcomeStore:
         mock_result.data = [store._outcome_to_row(sample_outcome)]
         mock_client.table().select().eq().execute.return_value = mock_result
 
-        with patch.object(store, '_get_client', return_value=mock_client):
+        with patch.object(store, "_get_client", return_value=mock_client):
             retrieved = await store.get(sample_outcome.outcome_id)
 
             assert retrieved is not None
@@ -386,7 +379,7 @@ class TestSupabaseValidationOutcomeStore:
         mock_result.data = []
         mock_client.table().select().eq().execute.return_value = mock_result
 
-        with patch.object(store, '_get_client', return_value=mock_client):
+        with patch.object(store, "_get_client", return_value=mock_client):
             retrieved = await store.get("nonexistent")
 
             assert retrieved is None
@@ -405,11 +398,8 @@ class TestSupabaseValidationOutcomeStore:
         mock_query.neq().eq().order().limit().execute.return_value = mock_result
         mock_client.table().select.return_value = mock_query
 
-        with patch.object(store, '_get_client', return_value=mock_client):
-            failures = await store.query_failures(
-                treatment_variable="hcp_engagement",
-                limit=10
-            )
+        with patch.object(store, "_get_client", return_value=mock_client):
+            failures = await store.query_failures(treatment_variable="hcp_engagement", limit=10)
 
             assert len(failures) == 1
 
@@ -441,6 +431,7 @@ class TestSupabaseValidationOutcomeStore:
 # ExperimentKnowledgeStore TESTS
 # ============================================================================
 
+
 class TestExperimentKnowledgeStore:
     """Tests for ExperimentKnowledgeStore."""
 
@@ -453,8 +444,7 @@ class TestExperimentKnowledgeStore:
         knowledge_store = ExperimentKnowledgeStore(store)
 
         experiments = await knowledge_store.get_similar_experiments(
-            business_question="What is the impact of hcp engagement on conversion?",
-            limit=5
+            business_question="What is the impact of hcp engagement on conversion?", limit=5
         )
 
         assert len(experiments) > 0
@@ -496,8 +486,7 @@ class TestExperimentKnowledgeStore:
         knowledge_store = ExperimentKnowledgeStore(store)
 
         learnings = await knowledge_store.get_validation_learnings(
-            category=FailureCategory.SPURIOUS_CORRELATION,
-            limit=10
+            category=FailureCategory.SPURIOUS_CORRELATION, limit=10
         )
 
         assert len(learnings) > 0
@@ -512,8 +501,7 @@ class TestExperimentKnowledgeStore:
         knowledge_store = ExperimentKnowledgeStore(store)
 
         warnings = await knowledge_store.should_warn_for_design(
-            treatment_variable="hcp_engagement",
-            outcome_variable="conversion_rate"
+            treatment_variable="hcp_engagement", outcome_variable="conversion_rate"
         )
 
         assert len(warnings) > 0
@@ -526,8 +514,7 @@ class TestExperimentKnowledgeStore:
         knowledge_store = ExperimentKnowledgeStore(store)
 
         warnings = await knowledge_store.should_warn_for_design(
-            treatment_variable="new_treatment",
-            outcome_variable="new_outcome"
+            treatment_variable="new_treatment", outcome_variable="new_outcome"
         )
 
         assert len(warnings) == 0
@@ -536,6 +523,7 @@ class TestExperimentKnowledgeStore:
 # ============================================================================
 # GLOBAL STORE FUNCTIONS TESTS
 # ============================================================================
+
 
 class TestGlobalStoreFunctions:
     """Tests for global store functions."""
@@ -546,7 +534,7 @@ class TestGlobalStoreFunctions:
 
     def test_get_validation_outcome_store_default(self):
         """Test getting validation outcome store with defaults."""
-        with patch.dict('os.environ', {'SUPABASE_URL': 'https://test.supabase.co'}):
+        with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co"}):
             store = get_validation_outcome_store(use_supabase=True)
             assert isinstance(store, SupabaseValidationOutcomeStore)
 
@@ -557,7 +545,7 @@ class TestGlobalStoreFunctions:
 
     def test_get_validation_outcome_store_no_supabase_url(self):
         """Test fallback to in-memory when SUPABASE_URL not set."""
-        with patch.dict('os.environ', {}, clear=True):
+        with patch.dict("os.environ", {}, clear=True):
             store = get_validation_outcome_store(use_supabase=True)
             assert isinstance(store, InMemoryValidationOutcomeStore)
 
@@ -591,7 +579,9 @@ class TestGlobalStoreFunctions:
     @pytest.mark.asyncio
     async def test_log_validation_outcome(self, sample_outcome):
         """Test convenience function for logging validation outcome."""
-        with patch('src.causal_engine.validation_outcome_store.get_validation_outcome_store') as mock_get_store:
+        with patch(
+            "src.causal_engine.validation_outcome_store.get_validation_outcome_store"
+        ) as mock_get_store:
             mock_store = AsyncMock()
             mock_store.store = AsyncMock(return_value=sample_outcome.outcome_id)
             mock_get_store.return_value = mock_store

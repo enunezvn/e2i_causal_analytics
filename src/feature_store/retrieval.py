@@ -157,7 +157,9 @@ class FeatureRetriever:
         Returns:
             List of historical feature records
         """
-        with track_retrieval(feature_group="historical", operation="get_historical_features") as metrics:
+        with track_retrieval(
+            feature_group="historical", operation="get_historical_features"
+        ) as metrics:
             with track_db_operation("query_historical", "historical") as db_ctx:
                 # Build query
                 query = (

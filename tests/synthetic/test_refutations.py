@@ -15,25 +15,24 @@ Reference: docs/E2I_Causal_Validation_Protocol.html
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
-import pandas as pd
 import pytest
 
 try:
-    import dowhy
+    import dowhy  # noqa: F401
     from dowhy import CausalModel
+
     DOWHY_AVAILABLE = True
 except ImportError:
     DOWHY_AVAILABLE = False
 
 from tests.synthetic.conftest import (
     SyntheticDataset,
-    generate_simple_linear,
     generate_confounded_moderate,
+    generate_simple_linear,
 )
-
 
 # Skip all tests if DoWhy not available
 pytestmark = pytest.mark.skipif(not DOWHY_AVAILABLE, reason="DoWhy not installed")
@@ -126,9 +125,7 @@ class TestRandomCommonCauseRefutation:
     should not significantly change the estimate.
     """
 
-    def test_random_common_cause_refutation(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_random_common_cause_refutation(self, refutation_dataset: SyntheticDataset):
         """Verify estimate stability when adding random confounder.
 
         Expected: New estimate within 10% of original estimate
@@ -161,14 +158,12 @@ class TestRandomCommonCauseRefutation:
         )
 
         # Also verify the refutation p-value if available
-        if hasattr(refutation, 'refutation_result') and refutation.refutation_result is not None:
+        if hasattr(refutation, "refutation_result") and refutation.refutation_result is not None:
             # Should not reject the null (estimate is robust)
             # p-value should be > 0.05
             pass  # DoWhy doesn't always provide p-values for this method
 
-    def test_random_common_cause_on_simple_linear(
-        self, simple_dataset: SyntheticDataset
-    ):
+    def test_random_common_cause_on_simple_linear(self, simple_dataset: SyntheticDataset):
         """Random common cause on unconfounded data should not change estimate."""
         model = build_causal_model(simple_dataset)
         estimate = estimate_ate_with_model(model)
@@ -204,9 +199,7 @@ class TestPlaceboTreatmentRefutation:
     to avoid this bug.
     """
 
-    def _manual_placebo_test(
-        self, dataset: SyntheticDataset, num_simulations: int = 5
-    ) -> float:
+    def _manual_placebo_test(self, dataset: SyntheticDataset, num_simulations: int = 5) -> float:
         """Manually compute placebo effect by permuting treatment.
 
         This avoids the DoWhy bug where identifier_method is None.
@@ -237,9 +230,7 @@ class TestPlaceboTreatmentRefutation:
 
         return np.mean(placebo_effects)
 
-    def test_placebo_treatment_refutation(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_placebo_treatment_refutation(self, refutation_dataset: SyntheticDataset):
         """Verify zero effect when treatment is permuted.
 
         Expected: Effect close to zero (< 0.10)
@@ -253,9 +244,7 @@ class TestPlaceboTreatmentRefutation:
             "This suggests the effect may be spurious."
         )
 
-    def test_placebo_treatment_vs_true_effect(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_placebo_treatment_vs_true_effect(self, refutation_dataset: SyntheticDataset):
         """Placebo effect should be much smaller than true effect."""
         model = build_causal_model(refutation_dataset)
         estimate = estimate_ate_with_model(model)
@@ -281,9 +270,7 @@ class TestSubsetDataRefutation:
     of the data.
     """
 
-    def test_subset_data_refutation(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_subset_data_refutation(self, refutation_dataset: SyntheticDataset):
         """Verify estimate stability across data subsets.
 
         Expected: Estimates across subsets should be within tolerance
@@ -313,9 +300,7 @@ class TestSubsetDataRefutation:
             f"change={relative_change:.1%}"
         )
 
-    def test_subset_50_percent(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_subset_50_percent(self, refutation_dataset: SyntheticDataset):
         """Test with 50% data subset (more challenging)."""
         model = build_causal_model(refutation_dataset)
         estimate = estimate_ate_with_model(model)
@@ -335,8 +320,7 @@ class TestSubsetDataRefutation:
         relative_change = abs(subset_value - original_value) / abs(original_value)
 
         assert relative_change < 0.35, (
-            f"Estimate too unstable with 50% subset: "
-            f"change={relative_change:.1%}"
+            f"Estimate too unstable with 50% subset: change={relative_change:.1%}"
         )
 
 
@@ -347,9 +331,7 @@ class TestBootstrapRefutation:
     the effect is significantly different from zero.
     """
 
-    def test_bootstrap_refutation(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_bootstrap_refutation(self, refutation_dataset: SyntheticDataset):
         """Verify effect is significant via bootstrap.
 
         Expected: Bootstrap CI excludes zero
@@ -377,9 +359,7 @@ class TestBootstrapRefutation:
             f"original={original_value:.4f}, bootstrap={bootstrap_value:.4f}"
         )
 
-    def test_bootstrap_significance(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_bootstrap_significance(self, refutation_dataset: SyntheticDataset):
         """Bootstrap effect should be significantly different from zero."""
         model = build_causal_model(refutation_dataset)
         estimate = estimate_ate_with_model(model)
@@ -412,9 +392,7 @@ class TestBootstrapRefutation:
 class TestRefutationSummary:
     """Aggregate test to verify overall refutation pass rate."""
 
-    def _manual_placebo_test(
-        self, dataset: SyntheticDataset, num_simulations: int = 3
-    ) -> float:
+    def _manual_placebo_test(self, dataset: SyntheticDataset, num_simulations: int = 3) -> float:
         """Manually compute placebo effect by permuting treatment."""
         np.random.seed(42)
         placebo_effects = []
@@ -437,9 +415,7 @@ class TestRefutationSummary:
 
         return np.mean(placebo_effects)
 
-    def test_refutation_pass_rate(
-        self, refutation_dataset: SyntheticDataset
-    ):
+    def test_refutation_pass_rate(self, refutation_dataset: SyntheticDataset):
         """At least 60% of refutations should pass.
 
         This is a meta-test that runs all refutation methods and
@@ -474,36 +450,44 @@ class TestRefutationSummary:
                 relative_change = abs(new_effect - original_value) / abs(original_value)
                 passed = relative_change < 0.30
 
-                results.append({
-                    "method": method_name,
-                    "passed": passed,
-                    "original": original_value,
-                    "refuted": new_effect,
-                })
+                results.append(
+                    {
+                        "method": method_name,
+                        "passed": passed,
+                        "original": original_value,
+                        "refuted": new_effect,
+                    }
+                )
 
             except Exception as e:
-                results.append({
-                    "method": method_name,
-                    "passed": False,
-                    "error": str(e),
-                })
+                results.append(
+                    {
+                        "method": method_name,
+                        "passed": False,
+                        "error": str(e),
+                    }
+                )
 
         # Add manual placebo test (avoids DoWhy bug)
         try:
             placebo_effect = self._manual_placebo_test(refutation_dataset)
             passed = abs(placebo_effect) < 0.10
-            results.append({
-                "method": "placebo_treatment (manual)",
-                "passed": passed,
-                "original": original_value,
-                "refuted": placebo_effect,
-            })
+            results.append(
+                {
+                    "method": "placebo_treatment (manual)",
+                    "passed": passed,
+                    "original": original_value,
+                    "refuted": placebo_effect,
+                }
+            )
         except Exception as e:
-            results.append({
-                "method": "placebo_treatment (manual)",
-                "passed": False,
-                "error": str(e),
-            })
+            results.append(
+                {
+                    "method": "placebo_treatment (manual)",
+                    "passed": False,
+                    "error": str(e),
+                }
+            )
 
         # Calculate pass rate
         passed = sum(1 for r in results if r.get("passed", False))
@@ -519,14 +503,15 @@ class TestRefutationSummary:
             if "error" in r:
                 print(f"  {r['method']}: {status} (error: {r['error']})")
             else:
-                print(f"  {r['method']}: {status} "
-                      f"(original={r['original']:.4f}, refuted={r['refuted']:.4f})")
+                print(
+                    f"  {r['method']}: {status} "
+                    f"(original={r['original']:.4f}, refuted={r['refuted']:.4f})"
+                )
         print("-" * 60)
         print(f"Pass Rate: {passed}/{total} ({pass_rate:.0%})")
         print("=" * 60)
 
         # Assert >= 60% pass rate
         assert pass_rate >= 0.60, (
-            f"Refutation pass rate below threshold: {pass_rate:.0%} < 60%. "
-            f"Passed: {passed}/{total}"
+            f"Refutation pass rate below threshold: {pass_rate:.0%} < 60%. Passed: {passed}/{total}"
         )

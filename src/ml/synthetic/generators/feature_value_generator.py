@@ -5,10 +5,9 @@ Generates time-series feature values for the feature store.
 Used by Drift Monitor agent for drift detection.
 """
 
-from typing import Dict, List, Optional
-from datetime import date, datetime, timedelta
 import uuid
-import json
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -237,7 +236,9 @@ class FeatureValueGenerator(BaseGenerator[pd.DataFrame]):
             List of feature value records.
         """
         records = []
-        value_config = self.VALUE_CONFIGS.get(feature_name, {"type": "float", "mean": 0.5, "std": 0.2})
+        value_config = self.VALUE_CONFIGS.get(
+            feature_name, {"type": "float", "mean": 0.5, "std": 0.2}
+        )
 
         # Generate timestamps across the date range
         timestamps = self._generate_timestamps(n_values)
@@ -259,14 +260,16 @@ class FeatureValueGenerator(BaseGenerator[pd.DataFrame]):
             else:
                 freshness = "expired"
 
-            records.append({
-                "id": str(uuid.uuid4()),
-                "feature_id": feature_id,
-                "entity_values": entity_values,
-                "value": {"value": value},  # JSONB format
-                "event_timestamp": ts.isoformat(),
-                "freshness_status": freshness,
-            })
+            records.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "feature_id": feature_id,
+                    "entity_values": entity_values,
+                    "value": {"value": value},  # JSONB format
+                    "event_timestamp": ts.isoformat(),
+                    "freshness_status": freshness,
+                }
+            )
 
         return records
 

@@ -59,8 +59,8 @@ class HeterogeneousOptimizerDataConnector:
             supabase_key: Supabase API key (defaults to env var)
         """
         self.supabase_url = supabase_url or os.getenv("SUPABASE_URL")
-        self.supabase_key = supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv(
-            "SUPABASE_ANON_KEY"
+        self.supabase_key = (
+            supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
         )
 
         self._loader = None
@@ -83,9 +83,7 @@ class HeterogeneousOptimizerDataConnector:
                 logger.info("HeterogeneousOptimizerDataConnector initialized successfully")
 
             except ImportError as e:
-                raise ImportError(
-                    f"Required package not installed: {e}. Run: pip install supabase"
-                )
+                raise ImportError(f"Required package not installed: {e}. Run: pip install supabase")
             except Exception as e:
                 logger.error(f"Failed to initialize Supabase client: {e}")
                 raise
@@ -163,8 +161,6 @@ class HeterogeneousOptimizerDataConnector:
         await self._ensure_initialized()
 
         try:
-            from src.repositories.ml_data_loader import MLDataset
-
             # Load with temporal splits
             dataset = await self._loader.load_for_training(
                 table=source,

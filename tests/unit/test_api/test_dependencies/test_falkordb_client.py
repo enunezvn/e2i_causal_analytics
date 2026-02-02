@@ -14,7 +14,7 @@ Version: 1.0.0
 """
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -27,6 +27,7 @@ class TestFalkorDBClient:
     def reset_client(self):
         """Reset global client before each test."""
         import src.api.dependencies.falkordb_client as falkordb_module
+
         falkordb_module._falkordb_client = None
         falkordb_module._graph = None
         yield
@@ -252,6 +253,7 @@ class TestFalkorDBClient:
 
             # Verify client and graph are cleared
             from src.api.dependencies.falkordb_client import _falkordb_client, _graph
+
             assert _falkordb_client is None
             assert _graph is None
 

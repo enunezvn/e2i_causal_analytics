@@ -27,6 +27,7 @@ class TestSupabaseClient:
     def reset_client(self):
         """Reset global client before each test."""
         import src.api.dependencies.supabase_client as supabase_module
+
         supabase_module._supabase_client = None
         yield
         supabase_module._supabase_client = None
@@ -47,7 +48,9 @@ class TestSupabaseClient:
                         client = init_supabase()
 
                         assert client is not None
-                        mock_create.assert_called_once_with("https://test.supabase.co", "test-anon-key")
+                        mock_create.assert_called_once_with(
+                            "https://test.supabase.co", "test-anon-key"
+                        )
 
     def test_init_supabase_uses_service_key_if_available(self):
         """Test Supabase initialization prefers service key over anon key."""
@@ -58,14 +61,18 @@ class TestSupabaseClient:
         # Patch module-level variables to simulate service key preference
         with patch("src.api.dependencies.supabase_client.SUPABASE_URL", "https://test.supabase.co"):
             with patch("src.api.dependencies.supabase_client.SUPABASE_KEY", "test-anon-key"):
-                with patch("src.api.dependencies.supabase_client.SUPABASE_SERVICE_KEY", "test-service-key"):
+                with patch(
+                    "src.api.dependencies.supabase_client.SUPABASE_SERVICE_KEY", "test-service-key"
+                ):
                     with patch("supabase.create_client") as mock_create:
                         mock_create.return_value = mock_client
 
-                        client = init_supabase()
+                        init_supabase()
 
                         # Should use service key, not anon key
-                        mock_create.assert_called_once_with("https://test.supabase.co", "test-service-key")
+                        mock_create.assert_called_once_with(
+                            "https://test.supabase.co", "test-service-key"
+                        )
 
     def test_init_supabase_missing_credentials(self):
         """Test Supabase initialization without credentials returns None."""
@@ -232,6 +239,7 @@ class TestSupabaseClient:
 
                 # Verify client is cleared (Supabase doesn't have explicit close)
                 from src.api.dependencies.supabase_client import _supabase_client
+
                 assert _supabase_client is None
 
     def test_close_supabase_when_not_initialized(self):
@@ -326,7 +334,9 @@ class TestSupabaseClient:
                     init_supabase()
 
                     assert any("Initializing Supabase connection" in msg for msg in caplog.messages)
-                    assert any("Supabase client initialized successfully" in msg for msg in caplog.messages)
+                    assert any(
+                        "Supabase client initialized successfully" in msg for msg in caplog.messages
+                    )
 
     def test_supabase_logging_missing_credentials(self, caplog):
         """Test Supabase client logs warning when credentials missing."""
@@ -338,7 +348,9 @@ class TestSupabaseClient:
                 with patch("src.api.dependencies.supabase_client.SUPABASE_KEY", ""):
                     init_supabase()
 
-                    assert any("Supabase credentials not configured" in msg for msg in caplog.messages)
+                    assert any(
+                        "Supabase credentials not configured" in msg for msg in caplog.messages
+                    )
 
     def test_supabase_logging_error(self, caplog):
         """Test Supabase client logs errors."""
@@ -368,7 +380,9 @@ class TestSupabaseClient:
 
         with patch("supabase.create_client") as mock_create:
             # Patch module-level variables to simulate ANON_KEY fallback scenario
-            with patch("src.api.dependencies.supabase_client.SUPABASE_URL", "https://test.supabase.co"):
+            with patch(
+                "src.api.dependencies.supabase_client.SUPABASE_URL", "https://test.supabase.co"
+            ):
                 with patch("src.api.dependencies.supabase_client.SUPABASE_KEY", "test-anon-key"):
                     with patch("src.api.dependencies.supabase_client.SUPABASE_SERVICE_KEY", ""):
                         mock_create.return_value = mock_client
@@ -377,4 +391,6 @@ class TestSupabaseClient:
 
                         assert client is not None
                         # Should use SUPABASE_KEY (which contains the fallback anon key value)
-                        mock_create.assert_called_once_with("https://test.supabase.co", "test-anon-key")
+                        mock_create.assert_called_once_with(
+                            "https://test.supabase.co", "test-anon-key"
+                        )

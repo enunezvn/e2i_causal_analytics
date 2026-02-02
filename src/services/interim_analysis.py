@@ -251,7 +251,9 @@ class InterimAnalysisService:
                 is_final,
             )
         elif self.config.spending_function == SpendingFunction.CUSTOM:
-            if self.config.custom_alpha_schedule and analysis_number <= len(self.config.custom_alpha_schedule):
+            if self.config.custom_alpha_schedule and analysis_number <= len(
+                self.config.custom_alpha_schedule
+            ):
                 return self.config.custom_alpha_schedule[analysis_number - 1]
             return self.config.total_alpha
 
@@ -286,12 +288,12 @@ class InterimAnalysisService:
         if current_n >= target_n or current_variance <= 0:
             return 0.0
 
-        remaining_n = target_n - current_n
+        target_n - current_n
         z_alpha = stats.norm.ppf(1 - alpha / 2)
 
         # Information proportion
         info_current = 1 / current_variance if current_variance > 0 else 0
-        info_total = info_current * (target_n / current_n)
+        info_current * (target_n / current_n)
 
         # Under the current trend (assumes effect remains same)
         # Z_final = sqrt(n_total/n_current) * Z_current + drift
@@ -302,7 +304,9 @@ class InterimAnalysisService:
 
             # Account for remaining data
             # Conditional power under observed trend
-            conditional_power = stats.norm.cdf(z_final_trend - z_alpha) + stats.norm.cdf(-z_final_trend - z_alpha)
+            conditional_power = stats.norm.cdf(z_final_trend - z_alpha) + stats.norm.cdf(
+                -z_final_trend - z_alpha
+            )
         else:
             conditional_power = 0.0
 
@@ -340,24 +344,30 @@ class InterimAnalysisService:
         z_alpha = stats.norm.ppf(1 - alpha / 2)
 
         # Remaining information
-        remaining_fraction = 1 - (current_n / target_n)
+        1 - (current_n / target_n)
 
         # Bayesian predictive probability
         # Posterior variance combining prior and data
         prior_variance = (target_effect / 2) ** 2 if target_effect != 0 else 1.0
-        data_variance = current_se ** 2
+        data_variance = current_se**2
 
-        posterior_variance = 1 / (1/prior_variance + 1/data_variance)
-        posterior_mean = posterior_variance * (target_effect/prior_variance + current_effect/data_variance)
+        posterior_variance = 1 / (1 / prior_variance + 1 / data_variance)
+        posterior_mean = posterior_variance * (
+            target_effect / prior_variance + current_effect / data_variance
+        )
 
         # Predictive variance for final estimate
         final_se = current_se * math.sqrt(current_n / target_n)
-        predictive_variance = posterior_variance + final_se ** 2
+        predictive_variance = posterior_variance + final_se**2
 
         # Probability that final estimate exceeds threshold
         threshold = z_alpha * final_se
-        predictive_prob = 1 - stats.norm.cdf(threshold, loc=posterior_mean, scale=math.sqrt(predictive_variance))
-        predictive_prob += stats.norm.cdf(-threshold, loc=posterior_mean, scale=math.sqrt(predictive_variance))
+        predictive_prob = 1 - stats.norm.cdf(
+            threshold, loc=posterior_mean, scale=math.sqrt(predictive_variance)
+        )
+        predictive_prob += stats.norm.cdf(
+            -threshold, loc=posterior_mean, scale=math.sqrt(predictive_variance)
+        )
 
         return max(0.0, min(1.0, predictive_prob))
 
@@ -405,11 +415,10 @@ class InterimAnalysisService:
 
         # Pooled variance and standard error
         pooled_var = (
-            (np.var(metric_data.control_values, ddof=1) * (n_control - 1) +
-             np.var(metric_data.treatment_values, ddof=1) * (n_treatment - 1)) /
-            (n_control + n_treatment - 2)
-        )
-        standard_error = float(np.sqrt(pooled_var * (1/n_control + 1/n_treatment)))
+            np.var(metric_data.control_values, ddof=1) * (n_control - 1)
+            + np.var(metric_data.treatment_values, ddof=1) * (n_treatment - 1)
+        ) / (n_control + n_treatment - 2)
+        standard_error = float(np.sqrt(pooled_var * (1 / n_control + 1 / n_treatment)))
 
         # Test statistic and p-value (two-sided t-test)
         if standard_error > 0:
@@ -440,7 +449,7 @@ class InterimAnalysisService:
         if target_sample_size and total_n < target_sample_size:
             conditional_power = self.calculate_conditional_power(
                 current_effect=effect_estimate,
-                current_variance=standard_error ** 2,
+                current_variance=standard_error**2,
                 target_effect=target_effect,
                 current_n=total_n,
                 target_n=target_sample_size,
@@ -495,7 +504,9 @@ class InterimAnalysisService:
                     "control_mean": control_mean,
                     "treatment_mean": treatment_mean,
                     "effect": effect_estimate,
-                    "relative_lift": (effect_estimate / control_mean * 100) if control_mean != 0 else 0,
+                    "relative_lift": (effect_estimate / control_mean * 100)
+                    if control_mean != 0
+                    else 0,
                 },
                 "sample_sizes": {
                     "control": n_control,
@@ -553,37 +564,33 @@ class InterimAnalysisService:
             if effect_estimate > 0:
                 return (
                     StoppingDecision.STOP_EFFICACY,
-                    f"Treatment effect significant (p={p_value:.4f} < {alpha_boundary:.4f}) with positive effect ({effect_estimate:.4f})"
+                    f"Treatment effect significant (p={p_value:.4f} < {alpha_boundary:.4f}) with positive effect ({effect_estimate:.4f})",
                 )
             else:
                 return (
                     StoppingDecision.STOP_EFFICACY,
-                    f"Significant result (p={p_value:.4f} < {alpha_boundary:.4f}) but effect is negative ({effect_estimate:.4f}) - treatment appears harmful"
+                    f"Significant result (p={p_value:.4f} < {alpha_boundary:.4f}) but effect is negative ({effect_estimate:.4f}) - treatment appears harmful",
                 )
 
         # Futility stopping (only if not final and enabled)
-        if (
-            self.config.enable_futility_stopping
-            and conditional_power is not None
-            and not is_final
-        ):
+        if self.config.enable_futility_stopping and conditional_power is not None and not is_final:
             if conditional_power < self.config.futility_threshold:
                 return (
                     StoppingDecision.STOP_FUTILITY,
-                    f"Low conditional power ({conditional_power:.2%} < {self.config.futility_threshold:.0%}) suggests futility of continuing"
+                    f"Low conditional power ({conditional_power:.2%} < {self.config.futility_threshold:.0%}) suggests futility of continuing",
                 )
 
         # Continue if final and not significant
         if is_final:
             return (
                 StoppingDecision.CONTINUE,
-                f"Final analysis: not significant (p={p_value:.4f} >= {alpha_boundary:.4f})"
+                f"Final analysis: not significant (p={p_value:.4f} >= {alpha_boundary:.4f})",
             )
 
         # Continue for more data
         return (
             StoppingDecision.CONTINUE,
-            f"Continue experiment: p={p_value:.4f} >= {alpha_boundary:.4f}, need more data"
+            f"Continue experiment: p={p_value:.4f} >= {alpha_boundary:.4f}, need more data",
         )
 
     async def _persist_analysis(self, result: InterimAnalysisResult) -> None:

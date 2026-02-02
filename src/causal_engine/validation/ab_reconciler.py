@@ -90,7 +90,9 @@ class ABReconciler:
 
         # Calculate reconciliation metrics
         gap = abs(observed_effect - estimated_effect)
-        ratio = observed_effect / estimated_effect if abs(estimated_effect) > 1e-10 else float("inf")
+        ratio = (
+            observed_effect / estimated_effect if abs(estimated_effect) > 1e-10 else float("inf")
+        )
         relative_gap = gap / max(abs(observed_effect), abs(estimated_effect), 1e-10)
 
         # Check if estimated is within observed CI
@@ -193,7 +195,7 @@ class ABReconciler:
         if total_weight <= 0:
             return float(np.mean(effects))
 
-        return sum(e * w for e, w in zip(effects, weights)) / total_weight
+        return sum(e * w for e, w in zip(effects, weights, strict=False)) / total_weight
 
     def _compute_aggregate_ci(
         self,
@@ -340,7 +342,9 @@ class ABReconciler:
 
         # Excellent: within CI and small gap
         if within_ci and relative_gap < self.excellent_threshold:
-            return "excellent", min(1.0, 0.95 + (0.05 * (1 - relative_gap / self.excellent_threshold)))
+            return "excellent", min(
+                1.0, 0.95 + (0.05 * (1 - relative_gap / self.excellent_threshold))
+            )
 
         # Good: within CI or small gap
         if within_ci or relative_gap < self.good_threshold:
@@ -389,7 +393,11 @@ class ABReconciler:
             )
 
         if status == "good":
-            ci_note = "The estimate falls within the experimental confidence interval. " if within_ci else ""
+            ci_note = (
+                "The estimate falls within the experimental confidence interval. "
+                if within_ci
+                else ""
+            )
             return (
                 f"Causal estimates ({estimated:.3f}) show good agreement with "
                 f"experimental results ({observed:.3f}). {ci_note}"
@@ -450,7 +458,9 @@ class ABReconciler:
             return adjustments
 
         if status == "good":
-            adjustments.append("Estimates are validated but monitor for drift in future experiments.")
+            adjustments.append(
+                "Estimates are validated but monitor for drift in future experiments."
+            )
             if not magnitude_match:
                 adjustments.append(
                     f"Consider applying {relative_gap:.0%} adjustment factor for conservative estimates."
@@ -458,7 +468,9 @@ class ABReconciler:
             return adjustments
 
         if status == "acceptable":
-            adjustments.append("Run additional robustness tests before relying on causal estimates.")
+            adjustments.append(
+                "Run additional robustness tests before relying on causal estimates."
+            )
             adjustments.append("Consider expanding confounder set or using instrumental variables.")
             adjustments.append(
                 f"Apply {relative_gap:.0%} uncertainty adjustment when using estimates for decisions."
@@ -478,7 +490,9 @@ class ABReconciler:
             adjustments.append(
                 "CRITICAL: Direction mismatch - completely review causal model and assumptions."
             )
-            adjustments.append("Check for confounders with opposite effects on treatment and outcome.")
+            adjustments.append(
+                "Check for confounders with opposite effects on treatment and outcome."
+            )
         else:
             adjustments.append("Large discrepancy suggests severe model misspecification.")
 

@@ -17,7 +17,6 @@ Version: 1.0.0
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +29,7 @@ OTEL_ENABLED = os.environ.get("OTEL_ENABLED", "true").lower() in ("1", "true", "
 OTEL_SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "e2i-causal-analytics")
 OTEL_SERVICE_VERSION = os.environ.get("OTEL_SERVICE_VERSION", "4.2.0")
 OTEL_EXPORTER_TYPE = os.environ.get("OTEL_EXPORTER_TYPE", "otlp")  # otlp, console, none
-OTEL_EXPORTER_ENDPOINT = os.environ.get(
-    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
-)
+OTEL_EXPORTER_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
 OTEL_SAMPLING_RATE = float(os.environ.get("OTEL_SAMPLING_RATE", "1.0"))
 
 
@@ -55,19 +52,19 @@ def init_opentelemetry() -> bool:
 
     try:
         from opentelemetry import trace
+        from opentelemetry.baggage.propagation import W3CBaggagePropagator
+        from opentelemetry.propagate import set_global_textmap
+        from opentelemetry.propagators.composite import CompositeHTTPPropagator
+        from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.sampling import (
-            ParentBasedTraceIdRatio,
-            ALWAYS_ON,
             ALWAYS_OFF,
+            ALWAYS_ON,
+            ParentBasedTraceIdRatio,
         )
-        from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
-        from opentelemetry.propagators.composite import CompositeHTTPPropagator
-        from opentelemetry.propagate import set_global_textmap
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
-        from opentelemetry.baggage.propagation import W3CBaggagePropagator
 
         # Configure sampler based on rate
         if OTEL_SAMPLING_RATE <= 0:
@@ -78,7 +75,7 @@ def init_opentelemetry() -> bool:
             logger.info("OpenTelemetry: Sampling ALL traces (rate=1.0)")
         else:
             sampler = ParentBasedTraceIdRatio(OTEL_SAMPLING_RATE)
-            logger.info(f"OpenTelemetry: Sampling {OTEL_SAMPLING_RATE*100:.1f}% of traces")
+            logger.info(f"OpenTelemetry: Sampling {OTEL_SAMPLING_RATE * 100:.1f}% of traces")
 
         # Create resource with service info
         resource = Resource.create(
@@ -115,8 +112,7 @@ def init_opentelemetry() -> bool:
 
         _otel_initialized = True
         logger.info(
-            f"OpenTelemetry: ENABLED "
-            f"(service={OTEL_SERVICE_NAME}, exporter={OTEL_EXPORTER_TYPE})"
+            f"OpenTelemetry: ENABLED (service={OTEL_SERVICE_NAME}, exporter={OTEL_EXPORTER_TYPE})"
         )
         return True
 
@@ -143,8 +139,8 @@ def _create_span_processor():
     if OTEL_EXPORTER_TYPE == "console":
         try:
             from opentelemetry.sdk.trace.export import (
-                SimpleSpanProcessor,
                 ConsoleSpanExporter,
+                SimpleSpanProcessor,
             )
 
             logger.info("OpenTelemetry: Using ConsoleSpanExporter")
@@ -155,22 +151,19 @@ def _create_span_processor():
 
     if OTEL_EXPORTER_TYPE == "otlp":
         try:
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                 OTLPSpanExporter,
             )
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
             exporter = OTLPSpanExporter(
                 endpoint=OTEL_EXPORTER_ENDPOINT,
-                insecure=os.environ.get("OTEL_EXPORTER_OTLP_INSECURE", "true").lower()
-                == "true",
+                insecure=os.environ.get("OTEL_EXPORTER_OTLP_INSECURE", "true").lower() == "true",
             )
             logger.info(f"OpenTelemetry: Using OTLP exporter ({OTEL_EXPORTER_ENDPOINT})")
             return BatchSpanProcessor(exporter)
         except ImportError:
-            logger.warning(
-                "OTLP exporter not available. Install opentelemetry-exporter-otlp"
-            )
+            logger.warning("OTLP exporter not available. Install opentelemetry-exporter-otlp")
             # Fall back to console
             return _create_console_processor()
 
@@ -182,8 +175,8 @@ def _create_console_processor():
     """Create console span processor as fallback."""
     try:
         from opentelemetry.sdk.trace.export import (
-            SimpleSpanProcessor,
             ConsoleSpanExporter,
+            SimpleSpanProcessor,
         )
 
         logger.info("OpenTelemetry: Falling back to ConsoleSpanExporter")

@@ -11,7 +11,7 @@ The metric optimizes for:
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 from dspy import Example, Prediction
 
@@ -114,7 +114,10 @@ class ExperimentDesignerGEPAMetric:
         if power >= self.target_power:
             expected_effect = getattr(gold, "expected_effect_size", 0.2)
             if self._sample_reasonable(n, expected_effect):
-                return 1.0, f"Power={power:.2f} with n={n} (appropriate for effect={expected_effect})"
+                return (
+                    1.0,
+                    f"Power={power:.2f} with n={n} (appropriate for effect={expected_effect})",
+                )
             return 0.7, f"Power={power:.2f} but n={n} may be over/under-estimated"
 
         return 0.3, f"UNDERPOWERED: {power:.2f} < {self.target_power}"
@@ -175,9 +178,7 @@ class ExperimentDesignerGEPAMetric:
             return score, f"Issues: {'; '.join(issues)}"
         return score, "Design validated"
 
-    def _score_learning(
-        self, pred: Prediction, trace: Optional[DSPyTrace]
-    ) -> tuple[float, str]:
+    def _score_learning(self, pred: Prediction, trace: Optional[DSPyTrace]) -> tuple[float, str]:
         """Score ExperimentKnowledgeStore integration.
 
         Args:

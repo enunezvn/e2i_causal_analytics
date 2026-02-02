@@ -520,7 +520,9 @@ class TestGetRoiSummary(TestBusinessMetricRepository):
 
         # ROI list: metric1 (2.5), metric3 (3.0), metric4 (1.5) - excludes metric2 (roi is None)
         expected_avg_roi = (2.5 + 3.0 + 1.5) / 3
-        assert abs(result["avg_roi"] - expected_avg_roi) < 0.01  # Allow small floating point differences
+        assert (
+            abs(result["avg_roi"] - expected_avg_roi) < 0.01
+        )  # Allow small floating point differences
 
         # Value list: metric1 (100), metric2 (200), metric4 (150) - excludes metric3 (value is None)
         # The function filters ROI and value independently

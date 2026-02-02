@@ -15,7 +15,6 @@ Memory Types Required (per CONTRACT_VALIDATION.md):
 """
 
 import hashlib
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -40,9 +39,7 @@ class ExperimentDesignContext:
     session_id: str
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     episodic_context: List[Dict[str, Any]] = field(default_factory=list)
-    retrieval_timestamp: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    retrieval_timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -453,17 +450,13 @@ class ExperimentDesignerMemoryHooks:
                 "result": result,
                 "cached_at": datetime.now(timezone.utc).isoformat(),
             }
-            await self.working_memory.set(
-                session_key, cache_data, ttl=self.CACHE_TTL_SECONDS
-            )
+            await self.working_memory.set(session_key, cache_data, ttl=self.CACHE_TTL_SECONDS)
 
             # Also cache by question hash for reuse
             if business_question:
                 question_hash = self._hash_question(business_question)
                 question_key = f"experiment_designer:question:{question_hash}"
-                await self.working_memory.set(
-                    question_key, cache_data, ttl=self.CACHE_TTL_SECONDS
-                )
+                await self.working_memory.set(question_key, cache_data, ttl=self.CACHE_TTL_SECONDS)
 
             logger.debug(f"Cached experiment design for session {session_id}")
             return True
@@ -472,9 +465,7 @@ class ExperimentDesignerMemoryHooks:
             logger.warning(f"Error caching experiment design: {e}")
             return False
 
-    async def get_cached_experiment_design(
-        self, session_id: str
-    ) -> Optional[Dict[str, Any]]:
+    async def get_cached_experiment_design(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve cached experiment design for session.
 
         Args:
@@ -627,9 +618,7 @@ class ExperimentDesignerMemoryHooks:
             }
 
             response = (
-                self.supabase_client.table("agent_activities")
-                .insert(activity_data)
-                .execute()
+                self.supabase_client.table("agent_activities").insert(activity_data).execute()
             )
 
             if response.data:
@@ -667,7 +656,7 @@ class ExperimentDesignerMemoryHooks:
 
         try:
             for threat in validity_threats:
-                threat_record = ValidityThreatRecord(
+                ValidityThreatRecord(
                     threat_id=self._generate_threat_id(experiment_record_id, threat),
                     experiment_record_id=experiment_record_id,
                     timestamp=datetime.now(timezone.utc),
@@ -701,18 +690,14 @@ class ExperimentDesignerMemoryHooks:
         normalized = question.lower().strip()
         return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
-    def _generate_record_id(
-        self, session_id: str, result: Dict[str, Any]
-    ) -> str:
+    def _generate_record_id(self, session_id: str, result: Dict[str, Any]) -> str:
         """Generate unique record ID for episodic memory."""
         content = f"{session_id}:{result.get('design_type', 'RCT')}"
         content += f":{result.get('overall_validity_score', 0)}"
         content += f":{datetime.now(timezone.utc).isoformat()}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    def _generate_threat_id(
-        self, experiment_id: str, threat: Dict[str, Any]
-    ) -> str:
+    def _generate_threat_id(self, experiment_id: str, threat: Dict[str, Any]) -> str:
         """Generate unique threat ID."""
         content = f"{experiment_id}:{threat.get('threat_type', '')}"
         content += f":{threat.get('threat_name', '')}"
@@ -722,17 +707,90 @@ class ExperimentDesignerMemoryHooks:
         """Extract keywords from business question for similarity matching."""
         # Simple keyword extraction (stopword removal)
         stopwords = {
-            "a", "an", "the", "is", "are", "was", "were", "be", "been",
-            "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "could", "should", "may", "might", "must", "shall",
-            "can", "to", "of", "in", "for", "on", "with", "at", "by",
-            "from", "as", "into", "through", "during", "before", "after",
-            "above", "below", "between", "under", "again", "further",
-            "then", "once", "here", "there", "when", "where", "why",
-            "how", "all", "each", "few", "more", "most", "other", "some",
-            "such", "no", "nor", "not", "only", "own", "same", "so",
-            "than", "too", "very", "just", "and", "but", "if", "or",
-            "because", "until", "while", "what", "which", "who", "whom",
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "shall",
+            "can",
+            "to",
+            "of",
+            "in",
+            "for",
+            "on",
+            "with",
+            "at",
+            "by",
+            "from",
+            "as",
+            "into",
+            "through",
+            "during",
+            "before",
+            "after",
+            "above",
+            "below",
+            "between",
+            "under",
+            "again",
+            "further",
+            "then",
+            "once",
+            "here",
+            "there",
+            "when",
+            "where",
+            "why",
+            "how",
+            "all",
+            "each",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "no",
+            "nor",
+            "not",
+            "only",
+            "own",
+            "same",
+            "so",
+            "than",
+            "too",
+            "very",
+            "just",
+            "and",
+            "but",
+            "if",
+            "or",
+            "because",
+            "until",
+            "while",
+            "what",
+            "which",
+            "who",
+            "whom",
         }
 
         words = question.lower().split()
@@ -801,8 +859,7 @@ async def contribute_to_memory(
             counts["episodic"] += threats_stored
 
     logger.info(
-        f"Contributed to memory: working={counts['working']}, "
-        f"episodic={counts['episodic']}"
+        f"Contributed to memory: working={counts['working']}, episodic={counts['episodic']}"
     )
 
     return counts

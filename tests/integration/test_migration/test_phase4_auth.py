@@ -12,9 +12,6 @@ from __future__ import annotations
 import pytest
 import requests
 
-from .conftest import requires_postgres
-
-
 # =============================================================================
 # AUTH SCHEMA TESTS
 # =============================================================================
@@ -63,9 +60,7 @@ class TestAuthUsers:
         count = pg_cursor.fetchone()[0]
 
         expected = expected_counts["auth_users"]
-        assert count == expected, (
-            f"Expected {expected} users in auth.users, got {count}"
-        )
+        assert count == expected, f"Expected {expected} users in auth.users, got {count}"
 
     def test_auth_users_have_email(self, pg_cursor):
         """Test that all auth users have email addresses."""
@@ -76,9 +71,7 @@ class TestAuthUsers:
         """)
         null_count = pg_cursor.fetchone()[0]
 
-        assert null_count == 0, (
-            f"{null_count} users have null or empty email addresses"
-        )
+        assert null_count == 0, f"{null_count} users have null or empty email addresses"
 
     def test_auth_users_email_format(self, pg_cursor):
         """Test that auth user emails have valid format."""

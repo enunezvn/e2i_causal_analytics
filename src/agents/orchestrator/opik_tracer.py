@@ -27,7 +27,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from opik import Opik, Trace
@@ -40,7 +40,13 @@ logger = logging.getLogger(__name__)
 # CONSTANTS
 # ============================================================================
 
-ORCHESTRATION_PHASES = ["classifying", "retrieving_context", "routing", "dispatching", "synthesizing"]
+ORCHESTRATION_PHASES = [
+    "classifying",
+    "retrieving_context",
+    "routing",
+    "dispatching",
+    "synthesizing",
+]
 PIPELINE_NODES = ["classify", "rag_context", "route", "dispatch", "synthesize"]
 
 
@@ -103,12 +109,14 @@ class OrchestrationTraceContext:
         """Log that an orchestration has started."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "query": query[:500],  # Truncate for trace size
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "orchestration_started_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "query": query[:500],  # Truncate for trace size
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "orchestration_started_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log orchestration started: {e}")
@@ -171,12 +179,14 @@ class OrchestrationTraceContext:
         """Log intent classification results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "primary_intent": primary_intent,
-                    "intent_confidence": confidence,
-                    "secondary_intents": secondary_intents[:3],
-                    "classification_latency_ms": classification_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "primary_intent": primary_intent,
+                        "intent_confidence": confidence,
+                        "secondary_intents": secondary_intents[:3],
+                        "classification_latency_ms": classification_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log intent classification: {e}")
@@ -190,11 +200,13 @@ class OrchestrationTraceContext:
         """Log RAG context retrieval results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "context_retrieved": context_retrieved,
-                    "rag_chunks_count": chunks_count,
-                    "rag_latency_ms": rag_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "context_retrieved": context_retrieved,
+                        "rag_chunks_count": chunks_count,
+                        "rag_latency_ms": rag_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log RAG retrieval: {e}")
@@ -208,12 +220,14 @@ class OrchestrationTraceContext:
         """Log agent routing results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "agents_selected": agents_selected,
-                    "agents_count": len(agents_selected),
-                    "routing_rationale": routing_rationale[:200] if routing_rationale else None,
-                    "routing_latency_ms": routing_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "agents_selected": agents_selected,
+                        "agents_count": len(agents_selected),
+                        "routing_rationale": routing_rationale[:200] if routing_rationale else None,
+                        "routing_latency_ms": routing_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log agent routing: {e}")
@@ -228,13 +242,16 @@ class OrchestrationTraceContext:
         """Log agent dispatch results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "agents_dispatched": agents_dispatched,
-                    "successful_agents": successful_agents,
-                    "failed_agents": failed_agents,
-                    "dispatch_success_rate": len(successful_agents) / max(len(agents_dispatched), 1),
-                    "dispatch_latency_ms": dispatch_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "agents_dispatched": agents_dispatched,
+                        "successful_agents": successful_agents,
+                        "failed_agents": failed_agents,
+                        "dispatch_success_rate": len(successful_agents)
+                        / max(len(agents_dispatched), 1),
+                        "dispatch_latency_ms": dispatch_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log agent dispatch: {e}")
@@ -248,11 +265,13 @@ class OrchestrationTraceContext:
         """Log response synthesis results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "response_length": response_length,
-                    "citations_count": citations_count,
-                    "synthesis_latency_ms": synthesis_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "response_length": response_length,
+                        "citations_count": citations_count,
+                        "synthesis_latency_ms": synthesis_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log response synthesis: {e}")
@@ -280,27 +299,29 @@ class OrchestrationTraceContext:
         if self.trace:
             try:
                 elapsed_ms = int((time.time() - self.start_time) * 1000)
-                self.trace_metadata.update({
-                    "status": status,
-                    "success": success,
-                    "total_duration_ms": total_duration_ms,
-                    "trace_duration_ms": elapsed_ms,
-                    "response_confidence": response_confidence,
-                    "agents_dispatched": agents_dispatched,
-                    "successful_agents": successful_agents,
-                    "failed_agents": failed_agents,
-                    "has_partial_failure": has_partial_failure,
-                    "primary_intent": primary_intent,
-                    "classification_latency_ms": classification_latency_ms,
-                    "rag_latency_ms": rag_latency_ms,
-                    "routing_latency_ms": routing_latency_ms,
-                    "dispatch_latency_ms": dispatch_latency_ms,
-                    "synthesis_latency_ms": synthesis_latency_ms,
-                    "errors_count": len(errors),
-                    "warnings_count": len(warnings),
-                    "warnings": warnings[:5],  # Limit for trace size
-                    "orchestration_completed_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "status": status,
+                        "success": success,
+                        "total_duration_ms": total_duration_ms,
+                        "trace_duration_ms": elapsed_ms,
+                        "response_confidence": response_confidence,
+                        "agents_dispatched": agents_dispatched,
+                        "successful_agents": successful_agents,
+                        "failed_agents": failed_agents,
+                        "has_partial_failure": has_partial_failure,
+                        "primary_intent": primary_intent,
+                        "classification_latency_ms": classification_latency_ms,
+                        "rag_latency_ms": rag_latency_ms,
+                        "routing_latency_ms": routing_latency_ms,
+                        "dispatch_latency_ms": dispatch_latency_ms,
+                        "synthesis_latency_ms": synthesis_latency_ms,
+                        "errors_count": len(errors),
+                        "warnings_count": len(warnings),
+                        "warnings": warnings[:5],  # Limit for trace size
+                        "orchestration_completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(
                     metadata=self.trace_metadata,
                     output={

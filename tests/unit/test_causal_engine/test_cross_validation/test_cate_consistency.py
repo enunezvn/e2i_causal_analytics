@@ -14,11 +14,12 @@ Assertions:
 - High responders identified consistently
 """
 
+from typing import Dict, Tuple
+
 import numpy as np
 import pandas as pd
 import pytest
 from scipy import stats
-from typing import Dict, Tuple, List
 
 # Mark all tests in this module for the dspy_integration xdist group
 pytestmark = pytest.mark.xdist_group(name="cross_validation")
@@ -58,13 +59,15 @@ def generate_homogeneous_treatment_data(
         + np.random.normal(0, 0.5, n_samples)
     )
 
-    data = pd.DataFrame({
-        "segment": segment,
-        "X1": X1,
-        "X2": X2,
-        "treatment": treatment,
-        "outcome": outcome,
-    })
+    data = pd.DataFrame(
+        {
+            "segment": segment,
+            "X1": X1,
+            "X2": X2,
+            "treatment": treatment,
+            "outcome": outcome,
+        }
+    )
 
     return data, {
         "true_ate": true_ate,
@@ -105,12 +108,14 @@ def generate_heterogeneous_treatment_data(
         + np.random.normal(0, 0.5, n_samples)
     )
 
-    data = pd.DataFrame({
-        "segment": segment,
-        "X1": X1,
-        "treatment": treatment,
-        "outcome": outcome,
-    })
+    data = pd.DataFrame(
+        {
+            "segment": segment,
+            "X1": X1,
+            "treatment": treatment,
+            "outcome": outcome,
+        }
+    )
 
     return data, {
         "overall_ate": sum(cate_by_segment.values()) / 3,
@@ -141,18 +146,16 @@ def generate_continuous_heterogeneity_data(
     # Continuous heterogeneity
     individual_cate = 0.5 + 0.8 * X1
 
-    outcome = (
-        individual_cate * treatment
-        + 0.2 * X2
-        + np.random.normal(0, 0.3, n_samples)
-    )
+    outcome = individual_cate * treatment + 0.2 * X2 + np.random.normal(0, 0.3, n_samples)
 
-    data = pd.DataFrame({
-        "X1": X1,
-        "X2": X2,
-        "treatment": treatment,
-        "outcome": outcome,
-    })
+    data = pd.DataFrame(
+        {
+            "X1": X1,
+            "X2": X2,
+            "treatment": treatment,
+            "outcome": outcome,
+        }
+    )
 
     return data, {
         "heterogeneity": "continuous",
@@ -362,9 +365,7 @@ class TestCATESignConsistency:
 
             if len(signs) >= 2:
                 # All signs should be the same
-                assert len(set(signs)) == 1, (
-                    f"Sign inconsistency for segment {segment}: {signs}"
-                )
+                assert len(set(signs)) == 1, f"Sign inconsistency for segment {segment}: {signs}"
 
 
 class TestSegmentRankingConsistency:
@@ -373,7 +374,7 @@ class TestSegmentRankingConsistency:
     def test_heterogeneous_ranking_correlation(self, heterogeneous_data):
         """Segment ranking should be consistent across methods (Spearman > 0.7)."""
         data, metadata = heterogeneous_data
-        expected_ranking = metadata["expected_ranking"]
+        metadata["expected_ranking"]
 
         cf_result = estimate_cate_with_causal_forest(data, segment_col="segment")
         dr_result = estimate_cate_with_drlearner(data, segment_col="segment")
@@ -405,7 +406,6 @@ class TestSegmentRankingConsistency:
     def test_high_responder_identification_consistency(self, heterogeneous_data):
         """High responders should be identified consistently."""
         data, metadata = heterogeneous_data
-        expected_high = "A"  # Highest CATE
 
         cf_result = estimate_cate_with_causal_forest(data, segment_col="segment")
         dr_result = estimate_cate_with_drlearner(data, segment_col="segment")
@@ -426,6 +426,7 @@ class TestSegmentRankingConsistency:
 
         # Majority should identify the same high responder
         from collections import Counter
+
         most_common = Counter(high_responders).most_common(1)[0]
         assert most_common[1] >= len(valid_results) / 2, (
             f"No consensus on high responder: {high_responders}"
@@ -456,9 +457,7 @@ class TestHomogeneousEffectRecovery:
 
         # Heterogeneity should be low (max - min < 0.5)
         cate_range = max(cate_by_segment.values()) - min(cate_by_segment.values())
-        assert cate_range < 0.5, (
-            f"CATE range {cate_range:.3f} too large for homogeneous effect"
-        )
+        assert cate_range < 0.5, f"CATE range {cate_range:.3f} too large for homogeneous effect"
 
 
 class TestContinuousHeterogeneityRecovery:
@@ -467,7 +466,7 @@ class TestContinuousHeterogeneityRecovery:
     def test_effect_modifier_detection(self, continuous_het_data):
         """Should detect that X1 is the effect modifier."""
         data, metadata = continuous_het_data
-        effect_modifier = metadata["effect_modifier"]
+        metadata["effect_modifier"]
 
         cf_result = estimate_cate_with_causal_forest(data)
 
@@ -480,9 +479,7 @@ class TestContinuousHeterogeneityRecovery:
         correlation, p_value = stats.pearsonr(data["X1"].values, cate_individual)
 
         # Strong positive correlation expected (effect_coefficient = 0.8)
-        assert correlation > 0.5, (
-            f"CATE-X1 correlation {correlation:.2f} should be > 0.5"
-        )
+        assert correlation > 0.5, f"CATE-X1 correlation {correlation:.2f} should be > 0.5"
         assert p_value < 0.05, "Correlation should be statistically significant"
 
 
@@ -501,8 +498,7 @@ class TestCrossMethodCATEAgreement:
 
         # Correlation of individual CATE estimates
         correlation, p_value = stats.pearsonr(
-            cf_result["cate_individual"],
-            dr_result["cate_individual"]
+            cf_result["cate_individual"], dr_result["cate_individual"]
         )
 
         # Should have moderate to strong correlation

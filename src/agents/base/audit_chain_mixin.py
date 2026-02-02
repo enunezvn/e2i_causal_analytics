@@ -203,9 +203,7 @@ class AuditChainMixin:
             logger.warning(f"Failed to add audit entry to {workflow_id}: {e}")
             return None
 
-    async def verify_audit_workflow(
-        self, workflow_id: UUID
-    ) -> Optional[ChainVerificationResult]:
+    async def verify_audit_workflow(self, workflow_id: UUID) -> Optional[ChainVerificationResult]:
         """
         Verify the integrity of a workflow's audit chain.
 
@@ -342,10 +340,7 @@ def audited_traced_node(
             }
 
             # Prepare input hash for audit
-            input_hash_data = {
-                k: v for k, v in sanitized_input.items()
-                if v is not None
-            }
+            input_hash_data = {k: v for k, v in sanitized_input.items() if v is not None}
 
             # Metadata for tracing
             metadata = {
@@ -395,10 +390,16 @@ def audited_traced_node(
                                 validation_passed = ref.get("overall_robust")
                                 individual = ref.get("individual_tests", {})
                                 refutation_results = RefutationResults(
-                                    placebo_treatment=individual.get("placebo_treatment", {}).get("passed"),
-                                    random_common_cause=individual.get("random_common_cause", {}).get("passed"),
+                                    placebo_treatment=individual.get("placebo_treatment", {}).get(
+                                        "passed"
+                                    ),
+                                    random_common_cause=individual.get(
+                                        "random_common_cause", {}
+                                    ).get("passed"),
                                     data_subset=individual.get("data_subset", {}).get("passed"),
-                                    unobserved_confound=individual.get("unobserved_common_cause", {}).get("passed"),
+                                    unobserved_confound=individual.get(
+                                        "unobserved_common_cause", {}
+                                    ).get("passed"),
                                 )
 
                             # Extract confidence from estimation

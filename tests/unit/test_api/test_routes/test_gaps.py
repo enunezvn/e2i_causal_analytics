@@ -7,28 +7,25 @@ Tests cover:
 - Mock all external dependencies (GapAnalyzerAgent, in-memory storage)
 """
 
-import pytest
-import sys
-from datetime import datetime, timezone
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import HTTPException, BackgroundTasks
+
+import pytest
+from fastapi import BackgroundTasks, HTTPException
 
 from src.api.routes.gaps import (
+    AnalysisStatus,
     GapType,
     ImplementationDifficulty,
-    AnalysisStatus,
     RunGapAnalysisRequest,
-    run_gap_analysis,
-    get_gap_analysis,
-    list_opportunities,
-    get_gap_health,
     _analyses_store,
-    _execute_gap_analysis,
     _convert_opportunities,
+    _execute_gap_analysis,
     _generate_mock_response,
+    get_gap_analysis,
+    get_gap_health,
+    list_opportunities,
+    run_gap_analysis,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -109,7 +106,9 @@ class TestRunGapAnalysisEndpoint:
     @pytest.mark.asyncio
     async def test_run_analysis_sync_mode_error(self, sample_gap_request, mock_user):
         """Test gap analysis error handling in sync mode."""
-        with patch("src.api.routes.gaps._execute_gap_analysis", side_effect=Exception("Analysis failed")):
+        with patch(
+            "src.api.routes.gaps._execute_gap_analysis", side_effect=Exception("Analysis failed")
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await run_gap_analysis(
                     sample_gap_request,
@@ -129,6 +128,7 @@ class TestGetGapAnalysisEndpoint:
         """Test retrieving gap analysis by ID."""
         # Add test analysis to store
         from src.api.routes.gaps import GapAnalysisResponse
+
         test_analysis = GapAnalysisResponse(
             analysis_id="test-id",
             status=AnalysisStatus.COMPLETED,
@@ -174,8 +174,8 @@ class TestListOpportunitiesEndpoint:
         # Add test analysis with opportunities
         from src.api.routes.gaps import (
             GapAnalysisResponse,
-            PrioritizedOpportunity,
             PerformanceGap,
+            PrioritizedOpportunity,
             ROIEstimate,
         )
 
@@ -246,6 +246,7 @@ class TestGetGapHealthEndpoint:
         """Test health check when agent is not available."""
         # Mock the import to fail by making the module unavailable
         import builtins
+
         real_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -323,6 +324,7 @@ class TestHelperFunctions:
     def test_generate_mock_response(self, sample_gap_request):
         """Test mock response generation."""
         import time
+
         start_time = time.time()
 
         response = _generate_mock_response(sample_gap_request, start_time)
@@ -340,22 +342,26 @@ class TestExecuteGapAnalysis:
     async def test_execute_with_agent(self, sample_gap_request):
         """Test execution with real Gap Analyzer agent."""
         mock_graph = AsyncMock()
-        mock_graph.ainvoke = AsyncMock(return_value={
-            "status": "completed",
-            "segments_analyzed": 4,
-            "prioritized_opportunities": [],
-            "quick_wins": [],
-            "strategic_bets": [],
-            "total_addressable_value": 0.0,
-            "total_gap_value": 0.0,
-            "executive_summary": "Test summary",
-            "key_insights": [],
-            "warnings": [],
-            "detection_latency_ms": 100,
-            "roi_latency_ms": 150,
-        })
+        mock_graph.ainvoke = AsyncMock(
+            return_value={
+                "status": "completed",
+                "segments_analyzed": 4,
+                "prioritized_opportunities": [],
+                "quick_wins": [],
+                "strategic_bets": [],
+                "total_addressable_value": 0.0,
+                "total_gap_value": 0.0,
+                "executive_summary": "Test summary",
+                "key_insights": [],
+                "warnings": [],
+                "detection_latency_ms": 100,
+                "roi_latency_ms": 150,
+            }
+        )
 
-        with patch("src.agents.gap_analyzer.graph.create_gap_analyzer_graph", return_value=mock_graph):
+        with patch(
+            "src.agents.gap_analyzer.graph.create_gap_analyzer_graph", return_value=mock_graph
+        ):
             response = await _execute_gap_analysis(sample_gap_request)
 
             assert response.status == AnalysisStatus.COMPLETED
@@ -364,7 +370,9 @@ class TestExecuteGapAnalysis:
     @pytest.mark.asyncio
     async def test_execute_without_agent(self, sample_gap_request):
         """Test execution falls back to mock when agent not available."""
-        with patch("src.agents.gap_analyzer.graph.create_gap_analyzer_graph", side_effect=ImportError):
+        with patch(
+            "src.agents.gap_analyzer.graph.create_gap_analyzer_graph", side_effect=ImportError
+        ):
             response = await _execute_gap_analysis(sample_gap_request)
 
             # Should use mock response
@@ -390,7 +398,13 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_run_analysis_all_gap_types(self, sample_gap_request, mock_user):
         """Test analysis with all gap types."""
-        for gap_type in [GapType.VS_TARGET, GapType.VS_BENCHMARK, GapType.VS_POTENTIAL, GapType.TEMPORAL, GapType.ALL]:
+        for gap_type in [
+            GapType.VS_TARGET,
+            GapType.VS_BENCHMARK,
+            GapType.VS_POTENTIAL,
+            GapType.TEMPORAL,
+            GapType.ALL,
+        ]:
             sample_gap_request.gap_type = gap_type
 
             response = await run_gap_analysis(

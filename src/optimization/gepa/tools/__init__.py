@@ -21,25 +21,25 @@ Available Tools:
 """
 
 from src.optimization.gepa.tools.causal_tools import (
-    # Data classes
-    GEPATool,
-    # Tool definitions
-    LINEAR_DML,
-    SPARSE_LINEAR_DML,
     CAUSAL_FOREST,
-    DOUBLE_ROBUST_LEARNER,
-    METALEARNER_T,
-    METALEARNER_S,
-    INSTRUMENTAL_VARIABLE,
-    REGRESSION_DISCONTINUITY,
-    DIFFERENCE_IN_DIFFERENCES,
     # Registry
     CAUSAL_TOOLS,
+    DIFFERENCE_IN_DIFFERENCES,
+    DOUBLE_ROBUST_LEARNER,
+    INSTRUMENTAL_VARIABLE,
+    # Tool definitions
+    LINEAR_DML,
+    METALEARNER_S,
+    METALEARNER_T,
+    REGRESSION_DISCONTINUITY,
+    SPARSE_LINEAR_DML,
     TOOL_REGISTRY,
-    # Functions
-    get_tools_for_agent,
+    # Data classes
+    GEPATool,
     get_tool_by_name,
     get_tools_by_category,
+    # Functions
+    get_tools_for_agent,
 )
 
 __all__ = [

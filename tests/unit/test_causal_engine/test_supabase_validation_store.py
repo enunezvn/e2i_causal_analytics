@@ -14,15 +14,12 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-import asyncio
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-
 
 # =============================================================================
 # Test Fixtures
@@ -237,9 +234,7 @@ class TestSupabaseValidationOutcomeStoreSerialization:
         assert recovered.outcome_id == sample_validation_outcome.outcome_id
         assert recovered.outcome_type == sample_validation_outcome.outcome_type
         assert recovered.treatment_variable == sample_validation_outcome.treatment_variable
-        assert len(recovered.failure_patterns) == len(
-            sample_validation_outcome.failure_patterns
-        )
+        assert len(recovered.failure_patterns) == len(sample_validation_outcome.failure_patterns)
 
 
 class TestSupabaseValidationOutcomeStoreOperations:
@@ -271,9 +266,7 @@ class TestSupabaseValidationOutcomeStoreOperations:
         table_mock.insert.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_store_fallback_when_supabase_unavailable(
-        self, sample_validation_outcome
-    ):
+    async def test_store_fallback_when_supabase_unavailable(self, sample_validation_outcome):
         """Test that store falls back to in-memory when Supabase unavailable."""
         from src.causal_engine.validation_outcome_store import (
             SupabaseValidationOutcomeStore,
@@ -290,9 +283,7 @@ class TestSupabaseValidationOutcomeStoreOperations:
         assert store._fallback_store.count == 1
 
     @pytest.mark.asyncio
-    async def test_get_with_supabase_available(
-        self, sample_outcome_row, mock_supabase_client
-    ):
+    async def test_get_with_supabase_available(self, sample_outcome_row, mock_supabase_client):
         """Test getting outcome when Supabase is available."""
         from src.causal_engine.validation_outcome_store import (
             SupabaseValidationOutcomeStore,
@@ -301,9 +292,7 @@ class TestSupabaseValidationOutcomeStoreOperations:
         client, table_mock = mock_supabase_client
 
         # Mock successful query
-        table_mock.execute = MagicMock(
-            return_value=MagicMock(data=[sample_outcome_row])
-        )
+        table_mock.execute = MagicMock(return_value=MagicMock(data=[sample_outcome_row]))
 
         store = SupabaseValidationOutcomeStore()
         store._client = client
@@ -410,9 +399,7 @@ class TestSupabaseValidationOutcomeStoreFallback:
     """Tests for fallback behavior when Supabase fails."""
 
     @pytest.mark.asyncio
-    async def test_fallback_on_insert_error(
-        self, sample_validation_outcome, mock_supabase_client
-    ):
+    async def test_fallback_on_insert_error(self, sample_validation_outcome, mock_supabase_client):
         """Test fallback to in-memory on insert error."""
         from src.causal_engine.validation_outcome_store import (
             SupabaseValidationOutcomeStore,
@@ -521,8 +508,6 @@ class TestValidationOutcomeStoreFactory:
     def test_reset_clears_global_stores(self):
         """Test that reset clears global store instances."""
         from src.causal_engine.validation_outcome_store import (
-            _global_knowledge_store,
-            _global_outcome_store,
             get_validation_outcome_store,
             reset_validation_outcome_store,
         )

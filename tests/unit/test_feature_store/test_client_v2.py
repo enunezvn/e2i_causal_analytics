@@ -13,8 +13,8 @@ Tests cover:
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
-from uuid import UUID, uuid4
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -26,7 +26,6 @@ from src.feature_store.models import (
     FeatureStatistics,
     FeatureValue,
 )
-
 
 # =============================================================================
 # Test Initialization
@@ -61,7 +60,9 @@ def test_client_init_without_redis(mock_supabase):
     mock_supabase_client = MagicMock()
     mock_supabase.return_value = mock_supabase_client
 
-    with patch("src.feature_store.client.redis.from_url", side_effect=Exception("Connection failed")):
+    with patch(
+        "src.feature_store.client.redis.from_url", side_effect=Exception("Connection failed")
+    ):
         client = FeatureStoreClient(
             supabase_url="http://test",
             supabase_key="test-key",
@@ -91,7 +92,7 @@ def test_client_init_from_env(mock_redis, mock_supabase):
     mock_redis_client.ping.return_value = True
     mock_redis.return_value = mock_redis_client
 
-    client = FeatureStoreClient()
+    FeatureStoreClient()
 
     mock_supabase.assert_called_once_with("http://test", "test-key")
 
@@ -292,7 +293,11 @@ def test_get_historical_features(mock_client):
     """Test getting historical features."""
     mock_retriever = MagicMock()
     mock_retriever.get_historical_features.return_value = [
-        {"feature_name": "specialty", "value": "Oncology", "event_timestamp": datetime.now(timezone.utc).isoformat()}
+        {
+            "feature_name": "specialty",
+            "value": "Oncology",
+            "event_timestamp": datetime.now(timezone.utc).isoformat(),
+        }
     ]
     mock_client.retriever = mock_retriever
 
@@ -389,9 +394,7 @@ def test_get_feature_statistics(mock_client):
         {"value": 20.3, "event_timestamp": datetime.now(timezone.utc).isoformat()},
         {"value": 15.7, "event_timestamp": datetime.now(timezone.utc).isoformat()},
     ]
-    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = (
-        mock_result
-    )
+    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_result
     mock_client.supabase.table = MagicMock(return_value=mock_table)
 
     stats = mock_client.get_feature_statistics("test_group", "test_feature")
@@ -418,9 +421,7 @@ def test_get_feature_statistics_no_data(mock_client):
     mock_table = MagicMock()
     mock_result = MagicMock()
     mock_result.data = []
-    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = (
-        mock_result
-    )
+    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_result
     mock_client.supabase.table = MagicMock(return_value=mock_table)
 
     stats = mock_client.get_feature_statistics("test_group", "test_feature")
@@ -470,7 +471,9 @@ def test_health_check_partial_failure(mock_client):
     mock_client.redis_client = None
 
     # MLflow fails
-    with patch("src.feature_store.client.mlflow.get_tracking_uri", side_effect=Exception("MLflow down")):
+    with patch(
+        "src.feature_store.client.mlflow.get_tracking_uri", side_effect=Exception("MLflow down")
+    ):
         health = mock_client.health_check()
 
     assert health["supabase"] is True

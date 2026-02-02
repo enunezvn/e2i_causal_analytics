@@ -6,16 +6,16 @@ Uses DiscoveryRunner for DAG learning and DriverRanker for comparison.
 This is a deterministic computation node with no LLM calls.
 """
 
+import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
-import logging
 
 logger = logging.getLogger(__name__)
 
-from src.causal_engine.discovery.base import DiscoveryConfig, DiscoveryAlgorithmType
+from src.causal_engine.discovery.base import DiscoveryAlgorithmType, DiscoveryConfig
 from src.causal_engine.discovery.driver_ranker import DriverRanker
 from src.causal_engine.discovery.gate import DiscoveryGate, GateConfig
 from src.causal_engine.discovery.runner import DiscoveryRunner
@@ -86,7 +86,7 @@ async def rank_causal_drivers(state: Dict[str, Any]) -> Dict[str, Any]:
         target = state.get("causal_target_variable")
         shap_values = state.get("shap_values")
         feature_names = state.get("feature_names", [])
-        global_importance = state.get("global_importance", {})
+        state.get("global_importance", {})
 
         # Validate inputs
         if X_sample is None:
@@ -160,12 +160,19 @@ async def rank_causal_drivers(state: Dict[str, Any]) -> Dict[str, Any]:
             ranking_features = [f for f in feature_names if f != target]
 
             # Filter SHAP values to match feature order
-            if isinstance(shap_values, np.ndarray) and len(ranking_features) == shap_values.shape[1]:
+            if (
+                isinstance(shap_values, np.ndarray)
+                and len(ranking_features) == shap_values.shape[1]
+            ):
                 filtered_shap = shap_values
             else:
                 # Reorder SHAP values to match ranking_features
-                shap_indices = [feature_names.index(f) for f in ranking_features if f in feature_names]
-                filtered_shap = shap_values[:, shap_indices] if len(shap_indices) > 0 else shap_values
+                shap_indices = [
+                    feature_names.index(f) for f in ranking_features if f in feature_names
+                ]
+                filtered_shap = (
+                    shap_values[:, shap_indices] if len(shap_indices) > 0 else shap_values
+                )
 
             ranking_result = ranker.rank_from_discovery_result(
                 result=discovery_result,

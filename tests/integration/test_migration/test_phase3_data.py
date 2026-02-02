@@ -11,11 +11,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
-from .conftest import requires_postgres
-
-
 # =============================================================================
 # ROW COUNT TESTS
 # =============================================================================
@@ -30,9 +25,7 @@ class TestRowCounts:
         count = pg_cursor.fetchone()[0]
 
         expected = expected_counts["agent_registry"]
-        assert count == expected, (
-            f"Expected {expected} rows in agent_registry, got {count}"
-        )
+        assert count == expected, f"Expected {expected} rows in agent_registry, got {count}"
 
     def test_agent_tier_mapping_count(self, pg_cursor, expected_counts):
         """Test that agent_tier_mapping has expected number of rows."""
@@ -40,9 +33,7 @@ class TestRowCounts:
         count = pg_cursor.fetchone()[0]
 
         expected = expected_counts["agent_tier_mapping"]
-        assert count == expected, (
-            f"Expected {expected} rows in agent_tier_mapping, got {count}"
-        )
+        assert count == expected, f"Expected {expected} rows in agent_tier_mapping, got {count}"
 
     def test_causal_paths_count(self, pg_cursor, expected_counts):
         """Test that causal_paths has at least expected number of rows."""
@@ -50,9 +41,7 @@ class TestRowCounts:
         count = pg_cursor.fetchone()[0]
 
         expected = expected_counts["causal_paths"]
-        assert count >= expected, (
-            f"Expected >= {expected} rows in causal_paths, got {count}"
-        )
+        assert count >= expected, f"Expected >= {expected} rows in causal_paths, got {count}"
 
 
 # =============================================================================
@@ -99,8 +88,7 @@ class TestDataContent:
                 found = bool(normalized_agents & normalized_expected)
 
             assert found, (
-                f"No agents found for {tier}. Expected one of: {expected_agents}, "
-                f"Found: {agents}"
+                f"No agents found for {tier}. Expected one of: {expected_agents}, Found: {agents}"
             )
 
     def test_tier_mapping_covers_all_tiers(self, pg_cursor):
@@ -165,17 +153,13 @@ class TestTimestamps:
             # Timestamps should not be in the future
             if max_ts.tzinfo is None:
                 max_ts = max_ts.replace(tzinfo=timezone.utc)
-            assert max_ts <= now + timedelta(hours=1), (
-                f"Future timestamp detected: {max_ts}"
-            )
+            assert max_ts <= now + timedelta(hours=1), f"Future timestamp detected: {max_ts}"
 
             # Timestamps should not be too old (before 2024)
             if min_ts.tzinfo is None:
                 min_ts = min_ts.replace(tzinfo=timezone.utc)
             earliest_valid = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            assert min_ts >= earliest_valid, (
-                f"Timestamp too old: {min_ts}"
-            )
+            assert min_ts >= earliest_valid, f"Timestamp too old: {min_ts}"
 
     def test_causal_paths_timestamps(self, pg_cursor):
         """Test that causal_paths have valid timestamps."""

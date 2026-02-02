@@ -108,9 +108,7 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # Prepare hyperparameters - filter out incompatible params
-    filtered_params = _filter_hyperparameters(
-        algorithm_name, best_hyperparameters
-    )
+    filtered_params = _filter_hyperparameters(algorithm_name, best_hyperparameters)
 
     # Instantiate model
     try:
@@ -150,8 +148,7 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
             early_stopped, final_epoch = _check_early_stopping(model, algorithm_name)
 
         logger.info(
-            f"Model training completed: early_stopped={early_stopped}, "
-            f"final_epoch={final_epoch}"
+            f"Model training completed: early_stopped={early_stopped}, final_epoch={final_epoch}"
         )
 
         # Set feature names on model for SHAP compatibility
@@ -209,6 +206,7 @@ def _get_model_class_dynamic(
     # Try to use optuna_optimizer's get_model_class
     try:
         from src.mlops.optuna_optimizer import get_model_class
+
         return get_model_class(algorithm_name, problem_type)
     except ImportError:
         pass
@@ -222,10 +220,12 @@ def _get_model_class_dynamic(
     try:
         if algorithm_name == "XGBoost":
             import xgboost as xgb
+
             return xgb.XGBClassifier if is_classification else xgb.XGBRegressor
 
         elif algorithm_name == "LightGBM":
             import lightgbm as lgb
+
             return lgb.LGBMClassifier if is_classification else lgb.LGBMRegressor
 
         elif algorithm_name == "RandomForest":
@@ -233,6 +233,7 @@ def _get_model_class_dynamic(
                 RandomForestClassifier,
                 RandomForestRegressor,
             )
+
             return RandomForestClassifier if is_classification else RandomForestRegressor
 
         elif algorithm_name == "ExtraTrees":
@@ -240,18 +241,22 @@ def _get_model_class_dynamic(
                 ExtraTreesClassifier,
                 ExtraTreesRegressor,
             )
+
             return ExtraTreesClassifier if is_classification else ExtraTreesRegressor
 
         elif algorithm_name == "LogisticRegression":
             from sklearn.linear_model import LogisticRegression
+
             return LogisticRegression
 
         elif algorithm_name == "Ridge":
             from sklearn.linear_model import Ridge
+
             return Ridge
 
         elif algorithm_name == "Lasso":
             from sklearn.linear_model import Lasso
+
             return Lasso
 
         elif algorithm_name == "GradientBoosting":
@@ -259,23 +264,28 @@ def _get_model_class_dynamic(
                 GradientBoostingClassifier,
                 GradientBoostingRegressor,
             )
+
             return GradientBoostingClassifier if is_classification else GradientBoostingRegressor
 
         elif algorithm_name == "SVM":
             from sklearn.svm import SVC, SVR
+
             return SVC if is_classification else SVR
 
         elif algorithm_name == "CausalForest":
             from econml.dml import CausalForestDML
+
             return CausalForestDML
 
         elif algorithm_name == "LinearDML":
             from econml.dml import LinearDML
+
             return LinearDML
 
         elif algorithm_name in ("DRLearner", "SLearner", "TLearner", "XLearner"):
             # Meta-learners share similar interface
-            from econml import metalearners, dr
+            from econml import dr, metalearners
+
             mapping = {
                 "DRLearner": dr.DRLearner,
                 "SLearner": metalearners.SLearner,
@@ -318,58 +328,149 @@ def _filter_hyperparameters(
     # Algorithm-specific allowed parameters
     allowed_params = {
         "XGBoost": {
-            "n_estimators", "max_depth", "learning_rate", "subsample",
-            "colsample_bytree", "min_child_weight", "reg_alpha", "reg_lambda",
-            "gamma", "scale_pos_weight", "random_state", "n_jobs", "verbosity",
-            "eval_metric", "early_stopping_rounds", "use_label_encoder",
+            "n_estimators",
+            "max_depth",
+            "learning_rate",
+            "subsample",
+            "colsample_bytree",
+            "min_child_weight",
+            "reg_alpha",
+            "reg_lambda",
+            "gamma",
+            "scale_pos_weight",
+            "random_state",
+            "n_jobs",
+            "verbosity",
+            "eval_metric",
+            "early_stopping_rounds",
+            "use_label_encoder",
         },
         "LightGBM": {
-            "n_estimators", "max_depth", "learning_rate", "subsample",
-            "colsample_bytree", "min_child_samples", "reg_alpha", "reg_lambda",
-            "num_leaves", "random_state", "n_jobs", "verbose", "importance_type",
-            "subsample_freq", "min_split_gain",
+            "n_estimators",
+            "max_depth",
+            "learning_rate",
+            "subsample",
+            "colsample_bytree",
+            "min_child_samples",
+            "reg_alpha",
+            "reg_lambda",
+            "num_leaves",
+            "random_state",
+            "n_jobs",
+            "verbose",
+            "importance_type",
+            "subsample_freq",
+            "min_split_gain",
         },
         "RandomForest": {
-            "n_estimators", "max_depth", "min_samples_split", "min_samples_leaf",
-            "max_features", "bootstrap", "random_state", "n_jobs", "class_weight",
-            "max_leaf_nodes", "min_impurity_decrease", "oob_score",
+            "n_estimators",
+            "max_depth",
+            "min_samples_split",
+            "min_samples_leaf",
+            "max_features",
+            "bootstrap",
+            "random_state",
+            "n_jobs",
+            "class_weight",
+            "max_leaf_nodes",
+            "min_impurity_decrease",
+            "oob_score",
         },
         "ExtraTrees": {
-            "n_estimators", "max_depth", "min_samples_split", "min_samples_leaf",
-            "max_features", "bootstrap", "random_state", "n_jobs", "class_weight",
+            "n_estimators",
+            "max_depth",
+            "min_samples_split",
+            "min_samples_leaf",
+            "max_features",
+            "bootstrap",
+            "random_state",
+            "n_jobs",
+            "class_weight",
         },
         "LogisticRegression": {
-            "C", "penalty", "solver", "max_iter", "random_state", "class_weight",
-            "l1_ratio", "tol", "warm_start",
+            "C",
+            "penalty",
+            "solver",
+            "max_iter",
+            "random_state",
+            "class_weight",
+            "l1_ratio",
+            "tol",
+            "warm_start",
         },
         "Ridge": {
-            "alpha", "fit_intercept", "solver", "random_state", "tol",
+            "alpha",
+            "fit_intercept",
+            "solver",
+            "random_state",
+            "tol",
         },
         "Lasso": {
-            "alpha", "fit_intercept", "max_iter", "random_state", "tol",
-            "warm_start", "selection",
+            "alpha",
+            "fit_intercept",
+            "max_iter",
+            "random_state",
+            "tol",
+            "warm_start",
+            "selection",
         },
         "GradientBoosting": {
-            "n_estimators", "max_depth", "learning_rate", "subsample",
-            "min_samples_split", "min_samples_leaf", "max_features",
-            "random_state", "validation_fraction", "n_iter_no_change", "tol",
+            "n_estimators",
+            "max_depth",
+            "learning_rate",
+            "subsample",
+            "min_samples_split",
+            "min_samples_leaf",
+            "max_features",
+            "random_state",
+            "validation_fraction",
+            "n_iter_no_change",
+            "tol",
         },
         "SVM": {
-            "C", "kernel", "degree", "gamma", "coef0", "shrinking",
-            "probability", "tol", "cache_size", "class_weight", "random_state",
+            "C",
+            "kernel",
+            "degree",
+            "gamma",
+            "coef0",
+            "shrinking",
+            "probability",
+            "tol",
+            "cache_size",
+            "class_weight",
+            "random_state",
         },
         "CausalForest": {
-            "n_estimators", "max_depth", "min_samples_leaf", "min_samples_split",
-            "max_features", "inference", "n_jobs", "random_state",
-            "model_y", "model_t", "discrete_treatment", "cv",
+            "n_estimators",
+            "max_depth",
+            "min_samples_leaf",
+            "min_samples_split",
+            "max_features",
+            "inference",
+            "n_jobs",
+            "random_state",
+            "model_y",
+            "model_t",
+            "discrete_treatment",
+            "cv",
         },
         "LinearDML": {
-            "model_y", "model_t", "discrete_treatment", "cv", "mc_iters",
-            "random_state", "linear_first_stages",
+            "model_y",
+            "model_t",
+            "discrete_treatment",
+            "cv",
+            "mc_iters",
+            "random_state",
+            "linear_first_stages",
         },
         "DRLearner": {
-            "model_propensity", "model_regression", "model_final",
-            "cv", "mc_iters", "random_state", "n_jobs",
+            "model_propensity",
+            "model_regression",
+            "model_final",
+            "cv",
+            "mc_iters",
+            "random_state",
+            "n_jobs",
         },
         "SLearner": {"overall_model", "cv", "random_state"},
         "TLearner": {"models", "cv", "random_state"},
@@ -447,9 +548,7 @@ def _prepare_fit_params(
 
     elif algorithm_name == "LightGBM":
         fit_params["eval_set"] = [(X_val_np, y_val_np)]
-        fit_params["callbacks"] = [
-            _get_lgbm_early_stopping_callback(early_stopping_patience)
-        ]
+        fit_params["callbacks"] = [_get_lgbm_early_stopping_callback(early_stopping_patience)]
 
     elif algorithm_name == "GradientBoosting":
         # sklearn GradientBoosting uses validation_fraction and n_iter_no_change
@@ -470,6 +569,7 @@ def _get_lgbm_early_stopping_callback(patience: int):
     """
     try:
         import lightgbm as lgb
+
         return lgb.early_stopping(stopping_rounds=patience, verbose=False)
     except (ImportError, AttributeError):
         return None
@@ -537,6 +637,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
     # Try pandas conversion
     try:
         import pandas as pd
+
         if isinstance(data, (pd.DataFrame, pd.Series)):
             return data.values
     except ImportError:

@@ -120,9 +120,7 @@ class TestAllMemoryUnavailable:
         analysis_results = [
             {
                 "agent": "prediction_synthesizer",
-                "predictions": [
-                    {"metric": "TRx", "value": 1500, "confidence": 0.85}
-                ],
+                "predictions": [{"metric": "TRx", "value": 1500, "confidence": 0.85}],
             }
         ]
 

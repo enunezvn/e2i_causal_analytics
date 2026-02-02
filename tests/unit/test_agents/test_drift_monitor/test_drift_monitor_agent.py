@@ -131,7 +131,9 @@ class TestDriftMonitorInput:
         """Test invalid time window without 'd'."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test", features_to_monitor=["f1"], time_window="7"  # Missing 'd'
+                query="test",
+                features_to_monitor=["f1"],
+                time_window="7",  # Missing 'd'
             )
 
     def test_invalid_time_window_too_large(self):
@@ -143,21 +145,27 @@ class TestDriftMonitorInput:
         """Test invalid significance level too low."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test", features_to_monitor=["f1"], significance_level=0.005  # < 0.01
+                query="test",
+                features_to_monitor=["f1"],
+                significance_level=0.005,  # < 0.01
             )
 
     def test_invalid_significance_level_too_high(self):
         """Test invalid significance level too high."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test", features_to_monitor=["f1"], significance_level=0.15  # > 0.10
+                query="test",
+                features_to_monitor=["f1"],
+                significance_level=0.15,  # > 0.10
             )
 
     def test_invalid_psi_threshold_negative(self):
         """Test invalid PSI threshold negative."""
         with pytest.raises(ValidationError):
             DriftMonitorInput(
-                query="test", features_to_monitor=["f1"], psi_threshold=-0.1  # Negative
+                query="test",
+                features_to_monitor=["f1"],
+                psi_threshold=-0.1,  # Negative
             )
 
 

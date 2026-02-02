@@ -5,14 +5,14 @@ Generates synthetic business metrics for Gap Analyzer agent.
 Produces time-series metrics per brand/region combination.
 """
 
+from datetime import date
 from typing import Dict, List, Optional
-from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
 
-from .base import BaseGenerator, GeneratorConfig
 from ..config import Brand, RegionEnum
+from .base import BaseGenerator, GeneratorConfig
 
 
 class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
@@ -224,9 +224,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         stat_sig = self._rng.uniform(0.001, 0.10)
 
         # Use seeded RNG for reproducible metric_id
-        metric_id_hex = "".join(
-            format(self._rng.integers(0, 256), "02x") for _ in range(6)
-        )
+        metric_id_hex = "".join(format(self._rng.integers(0, 256), "02x") for _ in range(6))
 
         # Round value and target first
         rounded_value = round(value, 2)

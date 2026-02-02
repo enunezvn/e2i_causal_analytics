@@ -708,10 +708,10 @@ class TestExponentialBackoff:
         backoff = ExponentialBackoff(base_delay=1.0, factor=2.0, jitter=0.0)
 
         # Without jitter, delays should be exact
-        assert backoff.get_delay(0) == 1.0   # 1 * 2^0 = 1
-        assert backoff.get_delay(1) == 2.0   # 1 * 2^1 = 2
-        assert backoff.get_delay(2) == 4.0   # 1 * 2^2 = 4
-        assert backoff.get_delay(3) == 8.0   # 1 * 2^3 = 8
+        assert backoff.get_delay(0) == 1.0  # 1 * 2^0 = 1
+        assert backoff.get_delay(1) == 2.0  # 1 * 2^1 = 2
+        assert backoff.get_delay(2) == 4.0  # 1 * 2^2 = 4
+        assert backoff.get_delay(3) == 8.0  # 1 * 2^3 = 8
 
     def test_backoff_max_delay_cap(self):
         """Test that delay is capped at max_delay"""
@@ -777,6 +777,7 @@ class TestCircuitBreaker:
     def test_circuit_transitions_to_half_open(self):
         """Test that open circuit transitions to half-open after timeout"""
         import time
+
         from src.agents.tool_composer.executor import CircuitBreaker, CircuitState
 
         cb = CircuitBreaker(failure_threshold=2, reset_timeout=0.1)
@@ -796,6 +797,7 @@ class TestCircuitBreaker:
     def test_half_open_success_closes_circuit(self):
         """Test that success in half-open state closes the circuit"""
         import time
+
         from src.agents.tool_composer.executor import CircuitBreaker, CircuitState
 
         cb = CircuitBreaker(failure_threshold=2, reset_timeout=0.1)
@@ -816,6 +818,7 @@ class TestCircuitBreaker:
     def test_half_open_failure_reopens_circuit(self):
         """Test that failure in half-open state reopens the circuit"""
         import time
+
         from src.agents.tool_composer.executor import CircuitBreaker, CircuitState
 
         cb = CircuitBreaker(failure_threshold=2, reset_timeout=0.1)
@@ -1127,7 +1130,7 @@ class TestToolFailureStatsG8:
         stats.record_result(False)
         stats.record_result(True)
         stats.record_result(False)  # Should trim first True
-        stats.record_result(True)   # Should trim first False
+        stats.record_result(True)  # Should trim first False
 
         assert len(stats.recent_results) == 3
         assert stats.recent_results == [True, False, True]
@@ -1223,7 +1226,7 @@ class TestUpdateToolPerformance:
         executor = PlanExecutor(tool_registry=mock_tool_registry)
 
         # Record fewer than min_calls
-        for i in range(5):
+        for _i in range(5):
             executor.failure_tracker.record_success("causal_effect_estimator", 100)
 
         results = executor.update_tool_performance(min_calls=10)

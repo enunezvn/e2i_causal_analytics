@@ -17,7 +17,7 @@ Memory target: <8GB for 100K row datasets
 import gc
 import time
 import tracemalloc
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -80,9 +80,7 @@ def generate_large_causal_data(
         if len(parents) == 0:
             data[:, j] = noise
         else:
-            parent_effect = sum(
-                adjacency[p, j] * data[:, p] for p in parents
-            )
+            parent_effect = sum(adjacency[p, j] * data[:, p] for p in parents)
             data[:, j] = parent_effect + noise
 
     # Create DataFrame
@@ -403,7 +401,7 @@ class TestEdgeRecovery:
         """GES should recover >50% of true edges on 10K rows."""
         data, metadata = small_scale_data
         true_adjacency = metadata["adjacency"]
-        true_edges = np.sum(true_adjacency != 0)
+        np.sum(true_adjacency != 0)
 
         result = run_ges_discovery(data)
 
@@ -411,7 +409,7 @@ class TestEdgeRecovery:
             pytest.skip(f"GES failed: {result.get('error')}")
 
         # Calculate edge recovery (simplified)
-        recovered_adjacency = result["adjacency"]
+        result["adjacency"]
         recovered_edges = result["n_edges"]
 
         # Should recover at least half the edges

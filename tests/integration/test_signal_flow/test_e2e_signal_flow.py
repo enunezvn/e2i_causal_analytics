@@ -12,13 +12,11 @@ This batch validates the full DSPy optimization pipeline:
 Run: pytest tests/integration/test_signal_flow/test_e2e_signal_flow.py -v
 """
 
-import pytest
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
-from dataclasses import dataclass, field
-from unittest.mock import Mock, AsyncMock, patch
 import json
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 
+import pytest
 
 # =============================================================================
 # END-TO-END SIGNAL FLOW TESTS
@@ -32,48 +30,54 @@ class TestFullSignalFlow:
     def sender_signals(self) -> List[Dict[str, Any]]:
         """Generate signals from all sender agents."""
         from src.agents.causal_impact.dspy_integration import CausalAnalysisTrainingSignal
-        from src.agents.gap_analyzer.dspy_integration import GapAnalysisTrainingSignal
-        from src.agents.heterogeneous_optimizer.dspy_integration import HeterogeneousOptimizationTrainingSignal
         from src.agents.drift_monitor.dspy_integration import DriftDetectionTrainingSignal
         from src.agents.experiment_designer.dspy_integration import ExperimentDesignTrainingSignal
-        from src.agents.prediction_synthesizer.dspy_integration import PredictionSynthesisTrainingSignal
+        from src.agents.gap_analyzer.dspy_integration import GapAnalysisTrainingSignal
+        from src.agents.heterogeneous_optimizer.dspy_integration import (
+            HeterogeneousOptimizationTrainingSignal,
+        )
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            PredictionSynthesisTrainingSignal,
+        )
 
         signals = []
 
         # High-quality signals from each sender
         for i in range(20):
-            signals.extend([
-                CausalAnalysisTrainingSignal(
-                    signal_id=f"ci_{i:03d}",
-                    refutation_tests_passed=3,
-                    statistical_significance=True,
-                ).to_dict(),
-                GapAnalysisTrainingSignal(
-                    signal_id=f"ga_{i:03d}",
-                    gaps_detected_count=5,
-                    roi_estimates_count=3,
-                ).to_dict(),
-                HeterogeneousOptimizationTrainingSignal(
-                    signal_id=f"ho_{i:03d}",
-                    cate_segments_count=10,
-                    significant_cate_count=8,
-                ).to_dict(),
-                DriftDetectionTrainingSignal(
-                    signal_id=f"dm_{i:03d}",
-                    data_drift_count=2,
-                    features_monitored=10,
-                ).to_dict(),
-                ExperimentDesignTrainingSignal(
-                    signal_id=f"ed_{i:03d}",
-                    design_type_chosen="RCT",
-                    treatments_count=3,
-                ).to_dict(),
-                PredictionSynthesisTrainingSignal(
-                    signal_id=f"ps_{i:03d}",
-                    models_requested=5,
-                    models_succeeded=4,
-                ).to_dict(),
-            ])
+            signals.extend(
+                [
+                    CausalAnalysisTrainingSignal(
+                        signal_id=f"ci_{i:03d}",
+                        refutation_tests_passed=3,
+                        statistical_significance=True,
+                    ).to_dict(),
+                    GapAnalysisTrainingSignal(
+                        signal_id=f"ga_{i:03d}",
+                        gaps_detected_count=5,
+                        roi_estimates_count=3,
+                    ).to_dict(),
+                    HeterogeneousOptimizationTrainingSignal(
+                        signal_id=f"ho_{i:03d}",
+                        cate_segments_count=10,
+                        significant_cate_count=8,
+                    ).to_dict(),
+                    DriftDetectionTrainingSignal(
+                        signal_id=f"dm_{i:03d}",
+                        data_drift_count=2,
+                        features_monitored=10,
+                    ).to_dict(),
+                    ExperimentDesignTrainingSignal(
+                        signal_id=f"ed_{i:03d}",
+                        design_type_chosen="RCT",
+                        treatments_count=3,
+                    ).to_dict(),
+                    PredictionSynthesisTrainingSignal(
+                        signal_id=f"ps_{i:03d}",
+                        models_requested=5,
+                        models_succeeded=4,
+                    ).to_dict(),
+                ]
+            )
 
         return signals
 
@@ -100,9 +104,9 @@ class TestFullSignalFlow:
 
     def test_hub_to_recipient_flow(self):
         """Test prompts flow from hub to recipients."""
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         # Simulate hub distributing optimized prompts
         optimized_prompts = {
@@ -143,7 +147,6 @@ class TestFullSignalFlow:
         """Test complete end-to-end signal flow."""
         from src.agents.feedback_learner.dspy_integration import (
             FeedbackLearnerTrainingSignal,
-            FeedbackLearnerOptimizer,
         )
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
 
@@ -190,8 +193,7 @@ class TestSignalFlowThresholds:
 
         # Generate signals at threshold
         signals = [
-            CausalAnalysisTrainingSignal(signal_id=f"ci_{i:03d}").to_dict()
-            for i in range(100)
+            CausalAnalysisTrainingSignal(signal_id=f"ci_{i:03d}").to_dict() for i in range(100)
         ]
 
         can_optimize = len(signals) >= MIN_SIGNALS
@@ -298,8 +300,8 @@ class TestMultiAgentCoordination:
     def test_concurrent_sender_signals(self):
         """Test handling concurrent signals from multiple senders."""
         from src.agents.causal_impact.dspy_integration import CausalAnalysisTrainingSignal
-        from src.agents.gap_analyzer.dspy_integration import GapAnalysisTrainingSignal
         from src.agents.drift_monitor.dspy_integration import DriftDetectionTrainingSignal
+        from src.agents.gap_analyzer.dspy_integration import GapAnalysisTrainingSignal
 
         # Simulate concurrent signal generation
         now = datetime.now(timezone.utc)
@@ -352,9 +354,9 @@ class TestMultiAgentCoordination:
 
     def test_batch_recipient_updates(self):
         """Test batch updates to multiple recipients."""
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         recipients = [
             HealthScoreDSPyIntegration(),
@@ -406,12 +408,8 @@ class TestSignalFlowPersistence:
         from src.agents.causal_impact.dspy_integration import CausalAnalysisTrainingSignal
         from src.agents.gap_analyzer.dspy_integration import GapAnalysisTrainingSignal
 
-        batch = [
-            CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict()
-            for i in range(50)
-        ] + [
-            GapAnalysisTrainingSignal(signal_id=f"ga_{i}").to_dict()
-            for i in range(50)
+        batch = [CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict() for i in range(50)] + [
+            GapAnalysisTrainingSignal(signal_id=f"ga_{i}").to_dict() for i in range(50)
         ]
 
         # Serialize batch
@@ -438,11 +436,15 @@ class TestSignalFlowContractCompliance:
         }
 
         from src.agents.causal_impact.dspy_integration import CausalAnalysisTrainingSignal
-        from src.agents.gap_analyzer.dspy_integration import GapAnalysisTrainingSignal
-        from src.agents.heterogeneous_optimizer.dspy_integration import HeterogeneousOptimizationTrainingSignal
         from src.agents.drift_monitor.dspy_integration import DriftDetectionTrainingSignal
         from src.agents.experiment_designer.dspy_integration import ExperimentDesignTrainingSignal
-        from src.agents.prediction_synthesizer.dspy_integration import PredictionSynthesisTrainingSignal
+        from src.agents.gap_analyzer.dspy_integration import GapAnalysisTrainingSignal
+        from src.agents.heterogeneous_optimizer.dspy_integration import (
+            HeterogeneousOptimizationTrainingSignal,
+        )
+        from src.agents.prediction_synthesizer.dspy_integration import (
+            PredictionSynthesisTrainingSignal,
+        )
 
         signals = [
             CausalAnalysisTrainingSignal().to_dict(),
@@ -464,9 +466,9 @@ class TestSignalFlowContractCompliance:
             "explainer",
         }
 
+        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
         from src.agents.health_score.dspy_integration import HealthScoreDSPyIntegration
         from src.agents.resource_optimizer.dspy_integration import ResourceOptimizerDSPyIntegration
-        from src.agents.explainer.dspy_integration import ExplainerDSPyIntegration
 
         recipients = {
             "health_score": HealthScoreDSPyIntegration(),
@@ -489,13 +491,9 @@ class TestSignalFlowContractCompliance:
 
     def test_hybrid_agents_represented(self):
         """Hybrid agents are represented."""
-        CONTRACT_HYBRIDS = {
-            "tool_composer",
-            "feedback_learner",
-        }
 
-        from src.agents.tool_composer.dspy_integration import ToolComposerDSPyIntegration
         from src.agents.feedback_learner.dspy_integration import FeedbackLearnerOptimizer
+        from src.agents.tool_composer.dspy_integration import ToolComposerDSPyIntegration
 
         # Both should exist
         tool_composer = ToolComposerDSPyIntegration()

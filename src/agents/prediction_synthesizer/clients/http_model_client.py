@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -88,9 +88,7 @@ class CircuitBreaker:
 
         if self.failure_count >= self.failure_threshold:
             self.state = CircuitState.OPEN
-            logger.warning(
-                f"Circuit breaker opened after {self.failure_count} failures"
-            )
+            logger.warning(f"Circuit breaker opened after {self.failure_count} failures")
 
     def can_execute(self) -> bool:
         """Check if a call can be executed."""
@@ -146,7 +144,8 @@ class HTTPModelClientConfig:
 
     # Enable Opik tracing
     enable_tracing: bool = field(
-        default_factory=lambda: os.environ.get("MODEL_CLIENT_ENABLE_TRACING", "true").lower() == "true"
+        default_factory=lambda: os.environ.get("MODEL_CLIENT_ENABLE_TRACING", "true").lower()
+        == "true"
     )
 
 
@@ -260,8 +259,7 @@ class HTTPModelClient:
 
         if not self._circuit_breaker.can_execute():
             raise RuntimeError(
-                f"Circuit breaker open for model '{self.model_id}'. "
-                f"Service may be unavailable."
+                f"Circuit breaker open for model '{self.model_id}'. Service may be unavailable."
             )
 
         start_time = time.time()

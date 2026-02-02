@@ -158,9 +158,7 @@ class TestGetKPIValue:
     def test_get_kpi_value_with_cache(self, mock_calculator):
         """Should use cached value when requested."""
         app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator
-        response = client.get(
-            "/api/kpis/data_freshness_lag", params={"use_cache": "true"}
-        )
+        response = client.get("/api/kpis/data_freshness_lag", params={"use_cache": "true"})
 
         assert response.status_code == 200
         mock_calculator.calculate.assert_called_with(
@@ -173,9 +171,7 @@ class TestGetKPIValue:
     def test_get_kpi_value_force_refresh(self, mock_calculator):
         """Should force recalculation when requested."""
         app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator
-        response = client.get(
-            "/api/kpis/data_freshness_lag", params={"force_refresh": "true"}
-        )
+        response = client.get("/api/kpis/data_freshness_lag", params={"force_refresh": "true"})
 
         assert response.status_code == 200
         mock_calculator.calculate.assert_called_with(
@@ -199,9 +195,7 @@ class TestGetKPIValue:
     def test_get_kpi_value_with_brand_filter(self, mock_calculator):
         """Should filter by brand when provided."""
         app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator
-        response = client.get(
-            "/api/kpis/data_freshness_lag", params={"brand": "Remibrutinib"}
-        )
+        response = client.get("/api/kpis/data_freshness_lag", params={"brand": "Remibrutinib"})
 
         assert response.status_code == 200
         mock_calculator.calculate.assert_called_with(

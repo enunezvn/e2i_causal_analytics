@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 # Graphiti integration for knowledge graph (mandatory)
 from src.memory.graphiti_service import get_graphiti_service
 
-
 # =============================================================================
 # SERVICE MODELS
 # =============================================================================
@@ -164,9 +163,7 @@ class ReflectorTaskManager:
                     self._timeout_count += 1
                     self._failed_count += 1
 
-                logger.warning(
-                    f"Reflector timeout after {self._timeout}s for cycle {cycle_id}"
-                )
+                logger.warning(f"Reflector timeout after {self._timeout}s for cycle {cycle_id}")
 
             except asyncio.CancelledError:
                 logger.debug(f"Reflector cancelled for cycle {cycle_id}")
@@ -316,7 +313,6 @@ class CognitiveService:
         Returns:
             Cognitive query output with response and metadata
         """
-        import time
         import uuid
 
         start_time = time.time()

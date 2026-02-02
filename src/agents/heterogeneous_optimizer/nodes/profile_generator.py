@@ -296,7 +296,9 @@ class ProfileGeneratorNode:
         expected_total_lift = state.get("expected_total_lift", 0)
 
         # Determine treatment effect direction
-        effect_direction = "positive" if overall_ate > 0 else "negative" if overall_ate < 0 else "neutral"
+        effect_direction = (
+            "positive" if overall_ate > 0 else "negative" if overall_ate < 0 else "neutral"
+        )
 
         if heterogeneity_score < 0.3:
             # Low heterogeneity - uniform approach recommended
@@ -310,7 +312,7 @@ A single intervention approach will work equally well across all segments. There
 Tactical Recommendation:
 - Deploy the treatment uniformly across all territories
 - Allocate budget proportionally to segment size
-- Expected effect: {abs(overall_ate):.1%} {'increase' if overall_ate > 0 else 'decrease'} across all segments
+- Expected effect: {abs(overall_ate):.1%} {"increase" if overall_ate > 0 else "decrease"} across all segments
 - Focus operational resources on execution quality, not segment selection"""
 
         elif heterogeneity_score < 0.6:
@@ -340,8 +342,8 @@ Tactical Recommendation:
             top_high = high_responders[0] if high_responders else None
             top_low = low_responders[0] if low_responders else None
 
-            high_cate = top_high['cate_estimate'] if top_high else 0
-            low_cate = top_low['cate_estimate'] if top_low else 0
+            high_cate = top_high["cate_estimate"] if top_high else 0
+            low_cate = top_low["cate_estimate"] if top_low else 0
             effect_spread = abs(high_cate - low_cate)
 
             interpretation = f"""STRATEGIC INSIGHT: HIGH TREATMENT HETEROGENEITY
@@ -354,8 +356,8 @@ Business Implication:
 The {effect_spread:.3f} effect spread between high and low responders means that treating all segments equally results in significant opportunity cost.
 
 Segment Analysis:
-- Top high-responder: {top_high['segment_id'] if top_high else 'N/A'} (CATE: {high_cate:.3f})
-- Top low-responder: {top_low['segment_id'] if top_low else 'N/A'} (CATE: {low_cate:.3f})
+- Top high-responder: {top_high["segment_id"] if top_high else "N/A"} (CATE: {high_cate:.3f})
+- Top low-responder: {top_low["segment_id"] if top_low else "N/A"} (CATE: {low_cate:.3f})
 
 Tactical Recommendation:
 1. IMMEDIATE: Reallocate resources from low-responder to high-responder segments
@@ -453,9 +455,7 @@ Tactical Recommendation:
 
             # Update with policy learning phase (final)
             policy_recommendations = state.get("policy_recommendations", [])
-            actionable_count = sum(
-                1 for p in policy_recommendations if p.get("actionable", True)
-            )
+            actionable_count = sum(1 for p in policy_recommendations if p.get("actionable", True))
 
             collector.update_policy_learning(
                 signal=signal,

@@ -152,6 +152,7 @@ def mock_supabase_client(event_loop_for_mocks):
         class Result:
             data = []
             error = None
+
         return Result()
 
     table_mock.execute = AsyncMock(side_effect=mock_execute)
@@ -182,9 +183,7 @@ class TestFeedbackLoopEndToEnd:
 
         # Setup mock
         rpc_mock = MagicMock()
-        rpc_mock.execute = AsyncMock(
-            return_value=MagicMock(data=mock_feedback_loop_result)
-        )
+        rpc_mock.execute = AsyncMock(return_value=MagicMock(data=mock_feedback_loop_result))
         mock_supabase_client.rpc = MagicMock(return_value=rpc_mock)
         mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
 
@@ -196,7 +195,9 @@ class TestFeedbackLoopEndToEnd:
         assert result.get("status") in ("completed", "partial", "skipped")
         assert "prediction_types" in result
         # Verify short window types are processed
-        assert "trigger" in result.get("prediction_types", []) or "next_best_action" in result.get("prediction_types", [])
+        assert "trigger" in result.get("prediction_types", []) or "next_best_action" in result.get(
+            "prediction_types", []
+        )
 
     @patch("src.memory.services.factories.get_supabase_client")
     def test_label_to_drift_detection(
@@ -209,9 +210,7 @@ class TestFeedbackLoopEndToEnd:
         table_mock = MagicMock()
         table_mock.select = MagicMock(return_value=table_mock)
         table_mock.eq = MagicMock(return_value=table_mock)
-        table_mock.execute = AsyncMock(
-            return_value=MagicMock(data=mock_drift_alert_data)
-        )
+        table_mock.execute = AsyncMock(return_value=MagicMock(data=mock_drift_alert_data))
         mock_supabase_client.table = MagicMock(return_value=table_mock)
         mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
 
@@ -226,9 +225,7 @@ class TestFeedbackLoopEndToEnd:
             assert "drift_results" in result
 
     @patch("src.memory.services.factories.get_supabase_client")
-    def test_drift_to_alert_routing(
-        self, mock_get_client, mock_supabase_client
-    ):
+    def test_drift_to_alert_routing(self, mock_get_client, mock_supabase_client):
         """Test flow from drift detection to alert generation.
 
         Note: Alert routing (route_concept_drift_alerts) is Phase 4 work.
@@ -253,9 +250,7 @@ class TestFeedbackLoopEndToEnd:
         table_mock = MagicMock()
         table_mock.select = MagicMock(return_value=table_mock)
         table_mock.eq = MagicMock(return_value=table_mock)
-        table_mock.execute = AsyncMock(
-            return_value=MagicMock(data=critical_drift_data)
-        )
+        table_mock.execute = AsyncMock(return_value=MagicMock(data=critical_drift_data))
         mock_supabase_client.table = MagicMock(return_value=table_mock)
         mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
 
@@ -268,10 +263,7 @@ class TestFeedbackLoopEndToEnd:
             drift_results = result.get("drift_results", [])
             assert len(drift_results) > 0
             # At least one should have ALERT status
-            alert_results = [
-                dr for dr in drift_results
-                if dr.get("accuracy_status") == "ALERT"
-            ]
+            alert_results = [dr for dr in drift_results if dr.get("accuracy_status") == "ALERT"]
             assert len(alert_results) > 0
 
 
@@ -285,9 +277,7 @@ class TestFeedbackLoopToConceptDrift:
     """Tests for concept drift detection integration."""
 
     @patch("src.memory.services.factories.get_supabase_client")
-    def test_concept_drift_uses_actual_outcomes(
-        self, mock_get_client, mock_supabase_client
-    ):
+    def test_concept_drift_uses_actual_outcomes(self, mock_get_client, mock_supabase_client):
         """Test that concept drift uses actual_outcome field for comparison."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
 
@@ -324,9 +314,7 @@ class TestFeedbackLoopToConceptDrift:
                 assert "accuracy_drop" in dr or "baseline_accuracy" in dr
 
     @patch("src.memory.services.factories.get_supabase_client")
-    def test_drift_severity_calculation(
-        self, mock_get_client, mock_supabase_client
-    ):
+    def test_drift_severity_calculation(self, mock_get_client, mock_supabase_client):
         """Test that drift severity is calculated correctly from thresholds."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
 
@@ -357,9 +345,7 @@ class TestFeedbackLoopToConceptDrift:
             table_mock.eq = MagicMock(return_value=table_mock)
             table_mock.execute = AsyncMock(return_value=MagicMock(data=drift_data))
             mock_supabase_client.table = MagicMock(return_value=table_mock)
-            mock_get_client.return_value = AsyncMock(
-                return_value=mock_supabase_client
-            )()
+            mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
 
             result = analyze_concept_drift_from_truth()
 
@@ -370,9 +356,7 @@ class TestFeedbackLoopToConceptDrift:
                 # Should have alert with correct severity
                 alerts = result.get("alerts", [])
                 if alerts:
-                    severity_alerts = [
-                        a for a in alerts if a.get("severity") == expected_severity
-                    ]
+                    severity_alerts = [a for a in alerts if a.get("severity") == expected_severity]
                     # At least one alert should match expected severity
                     assert len(severity_alerts) >= 0
 
@@ -476,16 +460,12 @@ class TestRunFullFeedbackLoop:
 
         # Setup mock
         rpc_mock = MagicMock()
-        rpc_mock.execute = AsyncMock(
-            return_value=MagicMock(data=mock_feedback_loop_result)
-        )
+        rpc_mock.execute = AsyncMock(return_value=MagicMock(data=mock_feedback_loop_result))
         mock_supabase_client.rpc = MagicMock(return_value=rpc_mock)
         mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
 
         # Mock drift task
-        mock_drift_task.delay = MagicMock(
-            return_value=MagicMock(id=str(uuid.uuid4()))
-        )
+        mock_drift_task.delay = MagicMock(return_value=MagicMock(id=str(uuid.uuid4())))
 
         # Execute
         result = run_full_feedback_loop(include_drift_analysis=True)
@@ -506,9 +486,7 @@ class TestRunFullFeedbackLoop:
 
         # Setup mock
         rpc_mock = MagicMock()
-        rpc_mock.execute = AsyncMock(
-            return_value=MagicMock(data=mock_feedback_loop_result)
-        )
+        rpc_mock.execute = AsyncMock(return_value=MagicMock(data=mock_feedback_loop_result))
         mock_supabase_client.rpc = MagicMock(return_value=rpc_mock)
         mock_get_client.return_value = AsyncMock(return_value=mock_supabase_client)()
 

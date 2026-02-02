@@ -7,14 +7,16 @@ optimal treatment allocation.
 from .agent import HeterogeneousOptimizerAgent
 from .graph import create_heterogeneous_optimizer_graph
 from .mlflow_tracker import (
-    HeterogeneousOptimizerMLflowTracker,
-    HeterogeneousOptimizerMetrics,
     HeterogeneousOptimizerContext,
+    HeterogeneousOptimizerMetrics,
+    HeterogeneousOptimizerMLflowTracker,
+)
+from .mlflow_tracker import (
     create_tracker as create_mlflow_tracker,
 )
 from .opik_tracer import (
-    HeterogeneousOptimizerOpikTracer,
     CATEAnalysisTraceContext,
+    HeterogeneousOptimizerOpikTracer,
     NodeSpanContext,
     get_heterogeneous_optimizer_tracer,
 )

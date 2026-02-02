@@ -12,11 +12,10 @@ for complete traceability between Optuna studies and training runs.
 Version: 1.1.0
 """
 
+import json
 import logging
 import tempfile
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -84,13 +83,13 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
     best_hyperparameters = state.get("best_hyperparameters", {})
 
     # Training metadata
-    training_duration = state.get("training_duration_seconds", 0)
+    state.get("training_duration_seconds", 0)
     early_stopped = state.get("early_stopped", False)
-    final_epoch = state.get("final_epoch")
+    state.get("final_epoch")
 
     # HPO metadata
     hpo_completed = state.get("hpo_completed", False)
-    hpo_best_value = state.get("hpo_best_value")
+    state.get("hpo_best_value")
     hpo_trials_run = state.get("hpo_trials_run", 0)
     hpo_study_name = state.get("hpo_study_name")  # Optuna study name for linkage
     hpo_best_trial = state.get("hpo_best_trial")  # Best trial number
@@ -154,14 +153,16 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
             await _log_hyperparameters(run, best_hyperparameters, algorithm_name)
 
             # Log training configuration
-            await run.log_params({
-                "algorithm_name": algorithm_name,
-                "problem_type": problem_type,
-                "framework": framework,
-                "hpo_enabled": hpo_completed,
-                "hpo_trials": hpo_trials_run,
-                "early_stopping_enabled": early_stopped,
-            })
+            await run.log_params(
+                {
+                    "algorithm_name": algorithm_name,
+                    "problem_type": problem_type,
+                    "framework": framework,
+                    "hpo_enabled": hpo_completed,
+                    "hpo_trials": hpo_trials_run,
+                    "early_stopping_enabled": early_stopped,
+                }
+            )
 
             # Log training metrics
             await _log_training_metrics(run, state)
@@ -174,9 +175,7 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 await _log_split_metrics(run, "holdout", holdout_metrics)
 
             # Log primary metric for easy comparison
-            primary_metric = _get_primary_metric(
-                test_metrics or validation_metrics, problem_type
-            )
+            primary_metric = _get_primary_metric(test_metrics or validation_metrics, problem_type)
             if primary_metric:
                 await run.log_metrics({"primary_metric": primary_metric})
 
@@ -185,9 +184,7 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"Logging model artifact: algorithm={algorithm_name}, "
                 f"framework={framework}, model_type={type(trained_model).__name__}"
             )
-            model_uri = await _log_model_artifact(
-                run, trained_model, algorithm_name, framework
-            )
+            model_uri = await _log_model_artifact(run, trained_model, algorithm_name, framework)
             logger.info(f"Model artifact logging result: model_uri={model_uri}")
 
             # Log additional artifacts
@@ -195,8 +192,7 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
 
             metric_str = f"{primary_metric:.4f}" if primary_metric else "N/A"
             logger.info(
-                f"Logged run to MLflow: run_id={mlflow_run_id}, "
-                f"primary_metric={metric_str}"
+                f"Logged run to MLflow: run_id={mlflow_run_id}, primary_metric={metric_str}"
             )
 
         # Register model if requested
@@ -214,9 +210,7 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 },
             )
             if model_version:
-                logger.info(
-                    f"Registered model: {model_name} v{model_version.version}"
-                )
+                logger.info(f"Registered model: {model_name} v{model_version.version}")
 
         # Persist training run to database with HPO linkage
         db_run_id = await _persist_training_run(
@@ -523,9 +517,7 @@ def _get_primary_metric(
         "regression": ["r2", "rmse", "mae"],
     }
 
-    primary_candidates = primary_metric_map.get(
-        problem_type, ["roc_auc", "f1", "r2"]
-    )
+    primary_candidates = primary_metric_map.get(problem_type, ["roc_auc", "f1", "r2"])
 
     for metric_name in primary_candidates:
         if metric_name in metrics and metrics[metric_name] is not None:
@@ -601,8 +593,7 @@ async def _persist_training_run(
         )
 
         logger.info(
-            f"Persisted training run to database: id={run.id}, "
-            f"hpo_study={hpo_study_name or 'None'}"
+            f"Persisted training run to database: id={run.id}, hpo_study={hpo_study_name or 'None'}"
         )
         return run.id
 

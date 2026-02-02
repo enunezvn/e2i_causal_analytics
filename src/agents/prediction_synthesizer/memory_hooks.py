@@ -17,7 +17,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,9 @@ class PredictionSynthesizerMemoryHooks:
 
         try:
             redis = await self.working_memory.get_client()
-            cache_key = f"prediction_synthesizer:entity:{entity_type}:{entity_id}:{prediction_target}"
+            cache_key = (
+                f"prediction_synthesizer:entity:{entity_type}:{entity_id}:{prediction_target}"
+            )
 
             cached = await redis.get(cache_key)
             if cached:
@@ -301,7 +303,9 @@ class PredictionSynthesizerMemoryHooks:
             redis = await self.working_memory.get_client()
 
             # Cache by entity for fast lookup
-            entity_key = f"prediction_synthesizer:entity:{entity_type}:{entity_id}:{prediction_target}"
+            entity_key = (
+                f"prediction_synthesizer:entity:{entity_type}:{entity_id}:{prediction_target}"
+            )
             await redis.setex(
                 entity_key,
                 self.PREDICTION_CACHE_TTL,
@@ -545,9 +549,7 @@ class PredictionSynthesizerMemoryHooks:
             )
 
             # Build query from features
-            feature_str = " ".join(
-                f"{k}:{v}" for k, v in list(features.items())[:5]
-            )
+            feature_str = " ".join(f"{k}:{v}" for k, v in list(features.items())[:5])
             query_text = f"prediction {entity_type} {prediction_target} {feature_str}"
 
             filters = EpisodicSearchFilters(

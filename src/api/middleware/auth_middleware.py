@@ -11,7 +11,7 @@ Version: 4.2.3
 import logging
 import os
 import re
-from typing import Callable, List, Set, Tuple
+from typing import Callable, List, Tuple
 
 from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
@@ -36,7 +36,7 @@ TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "
 # Get allowed origins for CORS headers on error responses
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:5174"
+    "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:5174",
 ).split(",")
 
 # Paths that don't require authentication

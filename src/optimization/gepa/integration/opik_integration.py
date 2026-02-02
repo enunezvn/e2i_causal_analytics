@@ -30,13 +30,11 @@ Version: 4.3.0 (Updated to use OpikConnector trace_agent API)
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
-from uuid import uuid4
 
 if TYPE_CHECKING:
-    from src.mlops.opik_connector import OpikConnector, SpanContext
+    from src.mlops.opik_connector import OpikConnector
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +303,7 @@ class GEPAOpikTracer:
                     **self.tags,
                     **kwargs,
                 },
-                tags=[f"gepa", agent_name, budget],
+                tags=["gepa", agent_name, budget],
                 input_data={
                     "agent_name": agent_name,
                     "budget": budget,

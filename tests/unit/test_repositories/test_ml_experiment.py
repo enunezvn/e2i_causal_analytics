@@ -202,7 +202,9 @@ class TestMLExperimentRepository:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_by_mlflow_id_returns_experiment(self, repo, mock_client, sample_experiment_data):
+    async def test_get_by_mlflow_id_returns_experiment(
+        self, repo, mock_client, sample_experiment_data
+    ):
         """Test that get_by_mlflow_id returns experiment when found."""
         mock_result = MagicMock()
         mock_result.data = [sample_experiment_data]
@@ -215,7 +217,9 @@ class TestMLExperimentRepository:
         assert result.mlflow_experiment_id == "mlflow-123"
 
     @pytest.mark.asyncio
-    async def test_create_experiment_inserts_and_returns(self, repo, mock_client, sample_experiment_data):
+    async def test_create_experiment_inserts_and_returns(
+        self, repo, mock_client, sample_experiment_data
+    ):
         """Test that create_experiment inserts and returns experiment."""
         mock_result = MagicMock()
         mock_result.data = [sample_experiment_data]
@@ -248,7 +252,9 @@ class TestMLExperimentRepository:
         assert len(result) == 2
 
     @pytest.mark.asyncio
-    async def test_list_experiments_filters_by_brand(self, repo, mock_client, sample_experiment_data):
+    async def test_list_experiments_filters_by_brand(
+        self, repo, mock_client, sample_experiment_data
+    ):
         """Test that list_experiments filters by brand."""
         mock_result = MagicMock()
         mock_result.data = [sample_experiment_data]
@@ -359,11 +365,13 @@ class TestMLTrainingRunRepository:
         mock_run = MLTrainingRun.from_dict(sample_run_data)
         mock_run.started_at = datetime.now(timezone.utc)
 
-        with patch.object(repo, 'get_by_id', new=AsyncMock(return_value=mock_run)):
+        with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_run)):
             mock_result = MagicMock()
             mock_result.data = [sample_run_data]
             mock_execute = AsyncMock(return_value=mock_result)
-            mock_client.table.return_value.update.return_value.eq.return_value.execute = mock_execute
+            mock_client.table.return_value.update.return_value.eq.return_value.execute = (
+                mock_execute
+            )
 
             run_id = UUID(sample_run_data["id"])
             result = await repo.complete_run(run_id=run_id, status="finished")
@@ -384,7 +392,9 @@ class TestMLTrainingRunRepository:
         assert len(result) == 2
 
     @pytest.mark.asyncio
-    async def test_get_runs_for_experiment_filters_by_status(self, repo, mock_client, sample_run_data):
+    async def test_get_runs_for_experiment_filters_by_status(
+        self, repo, mock_client, sample_run_data
+    ):
         """Test that get_runs_for_experiment filters by status."""
         mock_result = MagicMock()
         mock_result.data = [sample_run_data]
@@ -423,7 +433,7 @@ class TestMLTrainingRunRepository:
 
         runs = [MLTrainingRun.from_dict(run1_data), MLTrainingRun.from_dict(run2_data)]
 
-        with patch.object(repo, 'get_runs_for_experiment', new=AsyncMock(return_value=runs)):
+        with patch.object(repo, "get_runs_for_experiment", new=AsyncMock(return_value=runs)):
             experiment_id = UUID(run1_data["experiment_id"])
             result = await repo.get_best_run(experiment_id=experiment_id, metric="auc")
 
@@ -433,7 +443,7 @@ class TestMLTrainingRunRepository:
     @pytest.mark.asyncio
     async def test_get_best_run_returns_none_when_no_runs(self, repo, mock_client):
         """Test that get_best_run returns None when no runs exist."""
-        with patch.object(repo, 'get_runs_for_experiment', new=AsyncMock(return_value=[])):
+        with patch.object(repo, "get_runs_for_experiment", new=AsyncMock(return_value=[])):
             result = await repo.get_best_run(experiment_id=uuid4(), metric="auc")
             assert result is None
 
@@ -456,7 +466,9 @@ class TestMLTrainingRunRepository:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_create_run_with_hpo_includes_optuna_info(self, repo, mock_client, sample_run_data):
+    async def test_create_run_with_hpo_includes_optuna_info(
+        self, repo, mock_client, sample_run_data
+    ):
         """Test that create_run_with_hpo includes Optuna information."""
         # Add optuna fields to the mock data
         hpo_run_data = {
@@ -586,11 +598,13 @@ class TestMLModelRegistryRepository:
         # Mock get_by_id to return a model
         mock_model = MLModelRegistry.from_dict(sample_model_data)
 
-        with patch.object(repo, 'get_by_id', new=AsyncMock(return_value=mock_model)):
+        with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
             mock_result = MagicMock()
             mock_result.data = [sample_model_data]
             mock_execute = AsyncMock(return_value=mock_result)
-            mock_client.table.return_value.update.return_value.eq.return_value.execute = mock_execute
+            mock_client.table.return_value.update.return_value.eq.return_value.execute = (
+                mock_execute
+            )
 
             # Mock the archive query
             mock_archive_result = MagicMock()
@@ -695,7 +709,9 @@ class TestEnums:
 class TestRepositoryTableNames:
     """Tests for repository table names."""
 
-    def test_experiment_repository_table_name(self, ):
+    def test_experiment_repository_table_name(
+        self,
+    ):
         """Test that MLExperimentRepository has correct table name."""
         repo = MLExperimentRepository(supabase_client=None)
         assert repo.table_name == "ml_experiments"

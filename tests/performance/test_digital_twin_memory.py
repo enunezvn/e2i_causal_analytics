@@ -30,7 +30,6 @@ from src.digital_twin.models.twin_models import (
 )
 from src.digital_twin.simulation_engine import SimulationEngine
 
-
 # Mark all tests as slow performance tests
 pytestmark = [
     pytest.mark.slow,
@@ -75,7 +74,6 @@ def create_population(n: int, seed: int = 42) -> TwinPopulation:
 
 def get_memory_usage_mb() -> float:
     """Get current memory usage in MB."""
-    import sys
 
     # Force garbage collection before measuring
     gc.collect()
@@ -157,7 +155,7 @@ class TestMemoryGrowthLinear:
             gc.collect()
 
         print("\nMemory usage by population size:")
-        for size, mem in zip(sizes, memory_usages):
+        for size, mem in zip(sizes, memory_usages, strict=False):
             print(f"  {size:,} twins: {mem:.2f} MB")
 
         # Check approximate linearity
@@ -189,12 +187,12 @@ class TestMemoryGrowthLinear:
             gc.collect()
 
         print("\nPopulation creation memory:")
-        for size, mem in zip(sizes, memory_deltas):
+        for size, mem in zip(sizes, memory_deltas, strict=False):
             per_twin = (mem * 1024) / size  # KB per twin
             print(f"  {size:,} twins: {mem:.2f} MB ({per_twin:.2f} KB/twin)")
 
         # Memory per twin should be roughly constant
-        per_twin_kb = [(m * 1024) / s for m, s in zip(memory_deltas, sizes)]
+        per_twin_kb = [(m * 1024) / s for m, s in zip(memory_deltas, sizes, strict=False)]
         variance = max(per_twin_kb) - min(per_twin_kb)
         assert variance < 5, f"High variance in per-twin memory: {variance:.2f} KB"
 
@@ -229,7 +227,7 @@ class TestMemoryLeakDetection:
         print("\nMemory across iterations:")
         print(f"  Initial: {initial_memory:.2f} MB")
         for i, mem in enumerate(memory_readings):
-            print(f"  Iteration {i+1}: {mem:.2f} MB")
+            print(f"  Iteration {i + 1}: {mem:.2f} MB")
 
         # Memory should not grow significantly
         memory_growth = memory_readings[-1] - memory_readings[0]
@@ -291,7 +289,7 @@ class TestMemoryLeakDetection:
 
         print("\nMemory after engine recreation:")
         for i, mem in enumerate(memory_readings):
-            print(f"  Iteration {i+1}: {mem:.2f} MB")
+            print(f"  Iteration {i + 1}: {mem:.2f} MB")
 
         # Memory should not accumulate
         growth = memory_readings[-1] - memory_readings[0]
@@ -330,7 +328,7 @@ class TestGarbageCollection:
         released_mb = (after_create - after_gc) / 1024 / 1024
         retained_mb = (after_gc - before) / 1024 / 1024
 
-        print(f"\nGC release test:")
+        print("\nGC release test:")
         print(f"  Created: {created_mb:.2f} MB")
         print(f"  Released: {released_mb:.2f} MB")
         print(f"  Retained: {retained_mb:.2f} MB")
@@ -367,7 +365,7 @@ class TestGarbageCollection:
         results_mb = (after_results - before) / 1024 / 1024
         after_gc_mb = (after_gc - before) / 1024 / 1024
 
-        print(f"\nSimulation results GC:")
+        print("\nSimulation results GC:")
         print(f"  Results memory: {results_mb:.2f} MB")
         print(f"  After GC: {after_gc_mb:.2f} MB")
 
@@ -456,7 +454,7 @@ class TestPeakMemory:
         with_mb = peak_with / 1024 / 1024
         overhead_mb = with_mb - without_mb
 
-        print(f"\nHeterogeneity memory overhead:")
+        print("\nHeterogeneity memory overhead:")
         print(f"  Without: {without_mb:.2f} MB")
         print(f"  With: {with_mb:.2f} MB")
         print(f"  Overhead: {overhead_mb:.2f} MB")
@@ -482,14 +480,14 @@ class TestMemoryEfficiency:
         population = create_population(n_twins)
         engine = SimulationEngine(population)
 
-        result = engine.simulate(email_campaign_config)
+        engine.simulate(email_campaign_config)
 
         current, peak = tracemalloc.get_traced_memory()
         peak_kb = peak / 1024
         per_twin_kb = peak_kb / n_twins
 
-        print(f"\nMemory efficiency:")
-        print(f"  Total: {peak_kb/1024:.2f} MB for {n_twins:,} twins")
+        print("\nMemory efficiency:")
+        print(f"  Total: {peak_kb / 1024:.2f} MB for {n_twins:,} twins")
         print(f"  Per twin: {per_twin_kb:.2f} KB")
 
         # Should be under 50KB per twin
@@ -527,7 +525,7 @@ class TestMemoryEfficiency:
         total_size = get_total_size(result)
         total_kb = total_size / 1024
 
-        print(f"\nSimulation result size:")
+        print("\nSimulation result size:")
         print(f"  Direct: {result_size} bytes")
         print(f"  Total (nested): {total_kb:.2f} KB")
 

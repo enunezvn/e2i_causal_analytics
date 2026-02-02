@@ -289,10 +289,7 @@ class HeterogeneousOptimizerMemoryHooks:
             )
 
             # Filter paths involving the treatment variable
-            filtered = [
-                p for p in paths
-                if treatment_var.lower() in str(p).lower()
-            ]
+            filtered = [p for p in paths if treatment_var.lower() in str(p).lower()]
 
             return filtered
         except Exception as e:

@@ -8,24 +8,20 @@ Tests are organized into 3 batches:
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
 
 from src.mlops.data_quality import (
-    AlertConfig,
+    GE_AVAILABLE,
     AlertSeverity,
     DataQualityAlerter,
     DataQualityCheckpointError,
     DataQualityResult,
     DataQualityValidator,
     ExpectationSuiteBuilder,
-    GE_AVAILABLE,
-    LogAlertHandler,
     get_data_quality_validator,
 )
-
 
 # =============================================================================
 # BATCH 1: Core Validation Tests
@@ -43,22 +39,26 @@ class TestCoreValidation:
     @pytest.fixture
     def valid_business_metrics_df(self):
         """Create a valid business metrics DataFrame."""
-        return pd.DataFrame({
-            "id": ["BM001", "BM002", "BM003"],
-            "brand": ["Remibrutinib", "Fabhalta", "Kisqali"],
-            "metric_value": [100.5, 250.0, 75.3],
-            "created_at": [datetime.now()] * 3,
-        })
+        return pd.DataFrame(
+            {
+                "id": ["BM001", "BM002", "BM003"],
+                "brand": ["Remibrutinib", "Fabhalta", "Kisqali"],
+                "metric_value": [100.5, 250.0, 75.3],
+                "created_at": [datetime.now()] * 3,
+            }
+        )
 
     @pytest.fixture
     def invalid_business_metrics_df(self):
         """Create an invalid business metrics DataFrame (missing required columns)."""
-        return pd.DataFrame({
-            "id": ["BM001", "BM002"],
-            # missing 'brand' column
-            "metric_value": [-50.0, 100.0],  # negative value (invalid)
-            "created_at": [datetime.now()] * 2,
-        })
+        return pd.DataFrame(
+            {
+                "id": ["BM001", "BM002"],
+                # missing 'brand' column
+                "metric_value": [-50.0, 100.0],  # negative value (invalid)
+                "created_at": [datetime.now()] * 2,
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_validate_business_metrics_success(self, validator, valid_business_metrics_df):
@@ -101,11 +101,13 @@ class TestCoreValidation:
     @pytest.mark.asyncio
     async def test_validate_predictions_success(self, validator):
         """Should validate predictions data successfully."""
-        predictions_df = pd.DataFrame({
-            "id": ["P001", "P002", "P003"],
-            "prediction_value": [0.85, 0.92, 0.67],
-            "confidence": [0.95, 0.88, 0.72],
-        })
+        predictions_df = pd.DataFrame(
+            {
+                "id": ["P001", "P002", "P003"],
+                "prediction_value": [0.85, 0.92, 0.67],
+                "confidence": [0.95, 0.88, 0.72],
+            }
+        )
 
         result = await validator.validate(
             df=predictions_df,
@@ -123,11 +125,13 @@ class TestCoreValidation:
     @pytest.mark.asyncio
     async def test_validate_triggers_success(self, validator):
         """Should validate triggers data successfully."""
-        triggers_df = pd.DataFrame({
-            "id": ["T001", "T002", "T003"],
-            "trigger_type": ["threshold", "anomaly", "schedule"],
-            "priority": ["high", "medium", "low"],
-        })
+        triggers_df = pd.DataFrame(
+            {
+                "id": ["T001", "T002", "T003"],
+                "trigger_type": ["threshold", "anomaly", "schedule"],
+                "priority": ["high", "medium", "low"],
+            }
+        )
 
         result = await validator.validate(
             df=triggers_df,
@@ -234,7 +238,8 @@ class TestExpectationSuites:
 
         # Check confidence has range validation
         range_checks = [
-            e for e in suite
+            e
+            for e in suite
             if e["expectation_type"] == "expect_column_values_to_be_between"
             and e.get("kwargs", {}).get("column") == "confidence"
         ]
@@ -252,7 +257,8 @@ class TestExpectationSuites:
 
         # Check for priority value set validation
         set_checks = [
-            e for e in suite
+            e
+            for e in suite
             if e["expectation_type"] == "expect_column_values_to_be_in_set"
             and e.get("kwargs", {}).get("column") == "priority"
         ]
@@ -297,7 +303,8 @@ class TestExpectationSuites:
 
         # Check effect_strength range (-1 to 1)
         range_checks = [
-            e for e in suite
+            e
+            for e in suite
             if e["expectation_type"] == "expect_column_values_to_be_between"
             and e.get("kwargs", {}).get("column") == "effect_strength"
         ]
@@ -374,12 +381,14 @@ class TestAlertingAndIntegration:
         validator = DataQualityValidator()
 
         # Create invalid data that should fail validation
-        bad_df = pd.DataFrame({
-            "id": [None, None],  # null IDs
-            "brand": ["Invalid", "Brand"],  # invalid brand values
-            "metric_value": [-100, -200],  # negative values
-            "created_at": [datetime.now()] * 2,
-        })
+        bad_df = pd.DataFrame(
+            {
+                "id": [None, None],  # null IDs
+                "brand": ["Invalid", "Brand"],  # invalid brand values
+                "metric_value": [-100, -200],  # negative values
+                "created_at": [datetime.now()] * 2,
+            }
+        )
 
         # With fail_on_error=True and send_alerts=False (to avoid async issues)
         if GE_AVAILABLE:
@@ -413,12 +422,14 @@ class TestAlertingAndIntegration:
         # This test verifies the graceful degradation pattern
         validator = DataQualityValidator()
 
-        test_df = pd.DataFrame({
-            "id": ["1", "2"],
-            "brand": ["Remibrutinib", "Fabhalta"],
-            "metric_value": [100, 200],
-            "created_at": [datetime.now()] * 2,
-        })
+        test_df = pd.DataFrame(
+            {
+                "id": ["1", "2"],
+                "brand": ["Remibrutinib", "Fabhalta"],
+                "metric_value": [100, 200],
+                "created_at": [datetime.now()] * 2,
+            }
+        )
 
         result = await validator.validate(
             df=test_df,
@@ -442,24 +453,27 @@ class TestAlertingAndIntegration:
         # Import Pandera schemas
         try:
             from src.mlops.pandera_schemas import BusinessMetricSchema
+
             PANDERA_AVAILABLE = True
         except ImportError:
             PANDERA_AVAILABLE = False
 
         # Create test data
-        test_df = pd.DataFrame({
-            "id": ["BM001", "BM002"],
-            "brand": ["Remibrutinib", "Kisqali"],
-            "metric_value": [150.0, 200.0],
-            "created_at": [datetime.now()] * 2,
-        })
+        test_df = pd.DataFrame(
+            {
+                "id": ["BM001", "BM002"],
+                "brand": ["Remibrutinib", "Kisqali"],
+                "metric_value": [150.0, 200.0],
+                "created_at": [datetime.now()] * 2,
+            }
+        )
 
         validation_results = {"pandera": None, "ge": None}
 
         # Step 1: Pandera validation (schema-level)
         if PANDERA_AVAILABLE:
             try:
-                validated = BusinessMetricSchema.validate(test_df, lazy=True)
+                BusinessMetricSchema.validate(test_df, lazy=True)
                 validation_results["pandera"] = "passed"
             except Exception as e:
                 validation_results["pandera"] = f"failed: {e}"
@@ -493,8 +507,7 @@ class TestExpectationSuiteBuilder:
         builder = ExpectationSuiteBuilder("test_suite")
 
         result = (
-            builder
-            .expect_column_to_exist("col1")
+            builder.expect_column_to_exist("col1")
             .expect_column_values_to_not_be_null("col1")
             .expect_column_values_to_be_between("col2", min_value=0, max_value=100)
             .expect_column_values_to_be_in_set("col3", ["a", "b", "c"])
@@ -513,11 +526,9 @@ class TestExpectationSuiteBuilder:
         """Should correctly set kwargs for expectations."""
         builder = ExpectationSuiteBuilder("test_suite")
 
-        result = (
-            builder
-            .expect_column_values_to_be_between("value", min_value=10, max_value=90, mostly=0.95)
-            .build()
-        )
+        result = builder.expect_column_values_to_be_between(
+            "value", min_value=10, max_value=90, mostly=0.95
+        ).build()
 
         assert result[0]["kwargs"]["column"] == "value"
         assert result[0]["kwargs"]["min_value"] == 10

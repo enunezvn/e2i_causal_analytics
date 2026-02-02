@@ -19,7 +19,6 @@ from uuid import UUID, uuid4
 
 import numpy as np
 import pytest
-from scipy import stats
 
 from src.services.results_analysis import (
     AnalysisMethod,
@@ -32,7 +31,6 @@ from src.services.results_analysis import (
     SRMSeverity,
     get_results_analysis_service,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -308,7 +306,7 @@ class TestComputeITTResults:
             assert results.analysis_method == AnalysisMethod.ITT
             assert results.analysis_type == AnalysisType.FINAL
             assert results.effect_estimate > 0
-            assert results.is_significant == True  # Use == for numpy bool compatibility
+            assert results.is_significant  # Use == for numpy bool compatibility
             assert results.p_value < 0.05
 
     @pytest.mark.asyncio
@@ -416,7 +414,11 @@ class TestComputeITTResults:
             # CI should contain the effect estimate
             assert results.effect_ci_lower < results.effect_estimate < results.effect_ci_upper
             # Relative lift CI should contain the relative lift
-            assert results.relative_lift_ci_lower < results.relative_lift < results.relative_lift_ci_upper
+            assert (
+                results.relative_lift_ci_lower
+                < results.relative_lift
+                < results.relative_lift_ci_upper
+            )
 
 
 # =============================================================================
@@ -1167,8 +1169,10 @@ class TestCalibrationRecommendations:
             ci_coverage=False,
         )
 
-        assert any("uncertainty" in s.lower() or "widening" in s.lower()
-                   for s in recommendations["suggestions"])
+        assert any(
+            "uncertainty" in s.lower() or "widening" in s.lower()
+            for s in recommendations["suggestions"]
+        )
 
 
 # =============================================================================
@@ -1355,7 +1359,7 @@ class TestEdgeCases:
 
             assert results.effect_estimate == 0.0
             assert results.p_value == 1.0
-            assert results.is_significant == False  # Use == for numpy bool compatibility
+            assert not results.is_significant  # Use == for numpy bool compatibility
 
     @pytest.mark.asyncio
     async def test_hte_empty_segment_data(

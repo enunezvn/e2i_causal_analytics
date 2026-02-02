@@ -14,36 +14,31 @@ These tests verify that:
 5. Error handling propagates correctly
 """
 
+from typing import Any, Dict, List
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
-from uuid import uuid4
-from typing import Any, Dict, List
 
 from src.tool_registry.registry import ToolRegistry, get_registry
 from src.tool_registry.tools.causal_discovery import (
-    CausalDiscoveryTool,
     DiscoverDagInput,
     DiscoverDagOutput,
-    DriverRankerTool,
     RankDriversInput,
     RankDriversOutput,
     discover_dag,
-    rank_drivers,
     get_discovery_tool,
     get_ranker_tool,
+    rank_drivers,
     register_all_discovery_tools,
 )
 from src.tool_registry.tools.structural_drift import (
-    StructuralDriftTool,
     StructuralDriftInput,
     StructuralDriftOutput,
     detect_structural_drift,
     get_structural_drift_tool,
     register_structural_drift_tool,
 )
-
 
 # =============================================================================
 # TEST FIXTURES
@@ -66,12 +61,14 @@ def synthetic_data() -> pd.DataFrame:
     b = 0.7 * a + 0.3 * np.random.randn(n)
     outcome = 0.5 * treatment + 0.3 * b + 0.2 * np.random.randn(n)
 
-    return pd.DataFrame({
-        "treatment": treatment,
-        "feature_a": a,
-        "feature_b": b,
-        "outcome": outcome,
-    })
+    return pd.DataFrame(
+        {
+            "treatment": treatment,
+            "feature_a": a,
+            "feature_b": b,
+            "outcome": outcome,
+        }
+    )
 
 
 @pytest.fixture
@@ -294,15 +291,16 @@ class TestToolChaining:
         # Extract only source/target for RankDriversInput
         # (full edge_list has extra fields like confidence, type, algorithms)
         simplified_edges = [
-            {"source": e["source"], "target": e["target"]}
-            for e in discovery_result.edge_list
+            {"source": e["source"], "target": e["target"]} for e in discovery_result.edge_list
         ]
 
         ranker_tool = get_ranker_tool()
         ranker_input = RankDriversInput(
             dag_edge_list=simplified_edges,  # Chain: extract source/target from $step_1.edge_list
             target="outcome",
-            shap_values=shap_values[:len(feature_names)] if len(shap_values) > len(feature_names) else shap_values,
+            shap_values=shap_values[: len(feature_names)]
+            if len(shap_values) > len(feature_names)
+            else shap_values,
             feature_names=feature_names,
         )
 

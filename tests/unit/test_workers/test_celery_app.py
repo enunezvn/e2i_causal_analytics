@@ -11,11 +11,7 @@ Covers:
 """
 
 import os
-from unittest.mock import MagicMock, patch
-
-import pytest
-from kombu import Queue
-
+from unittest.mock import patch
 
 # =============================================================================
 # Celery App Configuration Tests
@@ -220,14 +216,20 @@ class TestTaskRouting:
         from src.workers.celery_app import celery_app
 
         assert celery_app.conf.task_routes.get("src.tasks.generate_twins") == {"queue": "twins"}
-        assert celery_app.conf.task_routes.get("src.tasks.simulate_population") == {"queue": "twins"}
+        assert celery_app.conf.task_routes.get("src.tasks.simulate_population") == {
+            "queue": "twins"
+        }
 
     def test_analytics_tasks_route_to_analytics_queue(self):
         """Test analytics tasks route to analytics queue."""
         from src.workers.celery_app import celery_app
 
-        assert celery_app.conf.task_routes.get("src.tasks.calculate_metrics") == {"queue": "analytics"}
-        assert celery_app.conf.task_routes.get("src.tasks.compute_statistics") == {"queue": "analytics"}
+        assert celery_app.conf.task_routes.get("src.tasks.calculate_metrics") == {
+            "queue": "analytics"
+        }
+        assert celery_app.conf.task_routes.get("src.tasks.compute_statistics") == {
+            "queue": "analytics"
+        }
 
     def test_report_tasks_route_to_reports_queue(self):
         """Test report tasks route to reports queue."""

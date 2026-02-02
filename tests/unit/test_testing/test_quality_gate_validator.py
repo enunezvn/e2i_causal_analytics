@@ -7,12 +7,12 @@ import os
 
 import pytest
 
+from src.testing.agent_quality_gates import AGENT_QUALITY_GATES
 from src.testing.quality_gate_validator import (
     QualityCheckResult,
     QualityGateResult,
     QualityGateValidator,
 )
-from src.testing.agent_quality_gates import AGENT_QUALITY_GATES
 
 # Set testing mode
 os.environ["E2I_TESTING_MODE"] = "true"
@@ -172,8 +172,7 @@ class TestMinRequiredFieldsPercentage:
 
         # Should pass minimum percentage check (0.8 >= 0.4)
         assert any(
-            c.check_name == "min_required_fields_pct" and c.passed
-            for c in result.passed_checks
+            c.check_name == "min_required_fields_pct" and c.passed for c in result.passed_checks
         )
 
     def test_below_minimum_percentage(self, validator):
@@ -187,8 +186,7 @@ class TestMinRequiredFieldsPercentage:
 
         # Should fail minimum percentage check
         assert any(
-            c.check_name == "min_required_fields_pct" and not c.passed
-            for c in result.failed_checks
+            c.check_name == "min_required_fields_pct" and not c.passed for c in result.failed_checks
         )
 
     def test_total_false_typeddict_skips_check(self, validator):
@@ -203,8 +201,7 @@ class TestMinRequiredFieldsPercentage:
 
         # Should auto-pass when no required fields
         assert any(
-            c.check_name == "min_required_fields_pct" and c.passed
-            for c in result.passed_checks
+            c.check_name == "min_required_fields_pct" and c.passed for c in result.passed_checks
         )
 
 
@@ -237,10 +234,7 @@ class TestDataQualityChecks:
         }
         result = validator.validate("causal_impact", output)
 
-        assert any(
-            c.check_name == "not_null" and not c.passed
-            for c in result.failed_checks
-        )
+        assert any(c.check_name == "not_null" and not c.passed for c in result.failed_checks)
 
     def test_must_be_check_pass(self, validator):
         """Test must_be check passes for correct value."""
@@ -251,10 +245,7 @@ class TestDataQualityChecks:
         result = validator.validate("tool_composer", output)
 
         # Should pass must_be check for success=True
-        assert any(
-            c.check_name == "must_be" and c.passed
-            for c in result.passed_checks
-        )
+        assert any(c.check_name == "must_be" and c.passed for c in result.passed_checks)
 
     def test_must_not_be_check_fail(self, validator):
         """Test must_not_be check fails for forbidden value."""
@@ -264,10 +255,7 @@ class TestDataQualityChecks:
         result = validator.validate("causal_impact", output)
 
         # Should fail must_not_be check
-        assert any(
-            c.check_name == "must_not_be" and not c.passed
-            for c in result.failed_checks
-        )
+        assert any(c.check_name == "must_not_be" and not c.passed for c in result.failed_checks)
 
     def test_in_set_check_pass(self, validator):
         """Test in_set check passes for allowed value."""
@@ -277,10 +265,7 @@ class TestDataQualityChecks:
         result = validator.validate("feedback_learner", output)
 
         # Should pass in_set check
-        assert any(
-            c.check_name == "in_set" and c.passed
-            for c in result.passed_checks
-        )
+        assert any(c.check_name == "in_set" and c.passed for c in result.passed_checks)
 
     def test_not_contains_check_fail(self, validator):
         """Test not_contains check fails for error indicators."""
@@ -290,10 +275,7 @@ class TestDataQualityChecks:
         result = validator.validate("gap_analyzer", output)
 
         # Should fail not_contains check
-        assert any(
-            c.check_name == "not_contains" and not c.passed
-            for c in result.failed_checks
-        )
+        assert any(c.check_name == "not_contains" and not c.passed for c in result.failed_checks)
 
     def test_min_value_check(self, validator):
         """Test min_value check."""
@@ -313,10 +295,7 @@ class TestDataQualityChecks:
         result = validator.validate("health_score", output)
 
         # Should pass max_value check
-        assert any(
-            c.check_name == "max_value" and c.passed
-            for c in result.passed_checks
-        )
+        assert any(c.check_name == "max_value" and c.passed for c in result.passed_checks)
 
     def test_min_length_check(self, validator):
         """Test min_length check."""
@@ -326,10 +305,7 @@ class TestDataQualityChecks:
         result = validator.validate("explainer", output)
 
         # Should pass min_length check
-        assert any(
-            c.check_name == "min_length" and c.passed
-            for c in result.passed_checks
-        )
+        assert any(c.check_name == "min_length" and c.passed for c in result.passed_checks)
 
 
 @pytest.mark.unit
@@ -389,10 +365,7 @@ class TestSemanticValidation:
         result = validator.validate("causal_impact", output)
 
         # Should have passing semantic validation
-        assert any(
-            c.check_name == "semantic_validation" and c.passed
-            for c in result.passed_checks
-        )
+        assert any(c.check_name == "semantic_validation" and c.passed for c in result.passed_checks)
 
     def test_semantic_validation_fail(self, validator):
         """Test semantic validation fails for invalid output."""
@@ -405,8 +378,7 @@ class TestSemanticValidation:
 
         # Should have failing semantic validation
         assert any(
-            c.check_name == "semantic_validation" and not c.passed
-            for c in result.failed_checks
+            c.check_name == "semantic_validation" and not c.passed for c in result.failed_checks
         )
 
 
@@ -485,10 +457,7 @@ class TestEdgeCases:
         result = custom_validator.validate("test_agent", output)
 
         # Should skip unknown type check
-        assert any(
-            c.check_name == "type" and c.passed
-            for c in result.passed_checks
-        )
+        assert any(c.check_name == "type" and c.passed for c in result.passed_checks)
 
     def test_float_accepts_int(self, validator):
         """Test that float type check accepts int values."""
@@ -555,8 +524,7 @@ class TestEdgeCases:
 
         # Should fail with semantic validation error
         assert any(
-            c.check_name == "semantic_validation" and not c.passed
-            for c in result.failed_checks
+            c.check_name == "semantic_validation" and not c.passed for c in result.failed_checks
         )
 
 

@@ -9,7 +9,6 @@ Tests cover:
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,17 +25,11 @@ from src.agents.experiment_monitor.nodes import (
     InterimAnalyzerNode,
     SRMDetectorNode,
 )
-from src.agents.experiment_monitor.state import (
-    ExperimentMonitorState,
-    ExperimentSummary,
-    HealthStatus,
-)
 
 # Import helper functions from conftest
 from .conftest import (
     create_enrollment_issue,
     create_experiment_summary,
-    create_monitor_state,
     create_srm_issue,
 )
 
@@ -63,7 +56,7 @@ class TestEndToEndWorkflows:
 
         # Mock balanced assignments (no SRM)
         balanced_assignments = []
-        for i in range(250):
+        for _i in range(250):
             balanced_assignments.append({"experiment_id": "exp-001", "variant": "control"})
             balanced_assignments.append({"experiment_id": "exp-001", "variant": "treatment"})
 
@@ -98,7 +91,9 @@ class TestEndToEndWorkflows:
 
         assert final_state["status"] == "completed"
         assert len(final_state["srm_issues"]) == 0
-        assert "healthy" in final_state["monitor_summary"].lower() or len(final_state["alerts"]) == 0
+        assert (
+            "healthy" in final_state["monitor_summary"].lower() or len(final_state["alerts"]) == 0
+        )
 
     @pytest.mark.asyncio
     async def test_full_workflow_with_srm_detected(self, base_monitor_state):
@@ -156,11 +151,13 @@ class TestEndToEndWorkflows:
             executed_nodes.append("fidelity_checker")
             return state_arg
 
-        with patch.object(HealthCheckerNode, "execute", track_health), \
-             patch.object(SRMDetectorNode, "execute", track_srm), \
-             patch.object(InterimAnalyzerNode, "execute", track_interim), \
-             patch.object(FidelityCheckerNode, "execute", track_fidelity), \
-             patch.object(AlertGeneratorNode, "execute", track_alert):
+        with (
+            patch.object(HealthCheckerNode, "execute", track_health),
+            patch.object(SRMDetectorNode, "execute", track_srm),
+            patch.object(InterimAnalyzerNode, "execute", track_interim),
+            patch.object(FidelityCheckerNode, "execute", track_fidelity),
+            patch.object(AlertGeneratorNode, "execute", track_alert),
+        ):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
 
@@ -204,8 +201,7 @@ class TestEndToEndWorkflows:
         assert final_state["status"] == "completed"
         # Should have at least one alert for enrollment
         enrollment_alerts = [
-            a for a in final_state.get("alerts", [])
-            if a.get("alert_type") == "enrollment"
+            a for a in final_state.get("alerts", []) if a.get("alert_type") == "enrollment"
         ]
         assert len(enrollment_alerts) >= 1
 
@@ -244,8 +240,7 @@ class TestEndToEndWorkflows:
         assert final_state["status"] == "completed"
         # Should have interim trigger alert
         interim_alerts = [
-            a for a in final_state.get("alerts", [])
-            if a.get("alert_type") == "interim_trigger"
+            a for a in final_state.get("alerts", []) if a.get("alert_type") == "interim_trigger"
         ]
         assert len(interim_alerts) >= 1
 
@@ -265,11 +260,13 @@ class TestEndToEndWorkflows:
             s["monitor_summary"] = "No experiments to monitor"
             return s
 
-        with patch.object(HealthCheckerNode, "execute", passthrough), \
-             patch.object(SRMDetectorNode, "execute", passthrough), \
-             patch.object(InterimAnalyzerNode, "execute", passthrough), \
-             patch.object(FidelityCheckerNode, "execute", passthrough), \
-             patch.object(AlertGeneratorNode, "execute", complete):
+        with (
+            patch.object(HealthCheckerNode, "execute", passthrough),
+            patch.object(SRMDetectorNode, "execute", passthrough),
+            patch.object(InterimAnalyzerNode, "execute", passthrough),
+            patch.object(FidelityCheckerNode, "execute", passthrough),
+            patch.object(AlertGeneratorNode, "execute", complete),
+        ):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
 
@@ -303,11 +300,13 @@ class TestEndToEndWorkflows:
             s["check_latency_ms"] = s.get("check_latency_ms", 0) + 25
             return s
 
-        with patch.object(HealthCheckerNode, "execute", add_latency_health), \
-             patch.object(SRMDetectorNode, "execute", add_latency_srm), \
-             patch.object(InterimAnalyzerNode, "execute", add_latency_interim), \
-             patch.object(FidelityCheckerNode, "execute", add_latency_fidelity), \
-             patch.object(AlertGeneratorNode, "execute", add_latency_alert):
+        with (
+            patch.object(HealthCheckerNode, "execute", add_latency_health),
+            patch.object(SRMDetectorNode, "execute", add_latency_srm),
+            patch.object(InterimAnalyzerNode, "execute", add_latency_interim),
+            patch.object(FidelityCheckerNode, "execute", add_latency_fidelity),
+            patch.object(AlertGeneratorNode, "execute", add_latency_alert),
+        ):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
 
@@ -327,7 +326,7 @@ class TestEndToEndWorkflows:
 
         assert final_state["status"] == "completed"
         # Should have multiple alerts
-        alert_types = {a.get("alert_type") for a in final_state.get("alerts", [])}
+        {a.get("alert_type") for a in final_state.get("alerts", [])}
         # At least some alerts should be generated
         assert len(final_state["alerts"]) >= 1
 
@@ -371,10 +370,12 @@ class TestContractCompliance:
             s["status"] = "completed"
             return s
 
-        with patch.object(HealthCheckerNode, "execute", complete), \
-             patch.object(SRMDetectorNode, "execute", complete), \
-             patch.object(InterimAnalyzerNode, "execute", complete), \
-             patch.object(AlertGeneratorNode, "execute", complete):
+        with (
+            patch.object(HealthCheckerNode, "execute", complete),
+            patch.object(SRMDetectorNode, "execute", complete),
+            patch.object(InterimAnalyzerNode, "execute", complete),
+            patch.object(AlertGeneratorNode, "execute", complete),
+        ):
             pass  # State should preserve fields after mocked execution
 
         # Check fields are still present and unchanged
@@ -399,16 +400,20 @@ class TestContractCompliance:
             "enrollment_rate",
             "current_information_fraction",
         ]
-        summary_dict = sample_summary_healthy if isinstance(sample_summary_healthy, dict) else {
-            "experiment_id": sample_summary_healthy.experiment_id,
-            "name": sample_summary_healthy.name,
-            "status": sample_summary_healthy.status,
-            "health_status": sample_summary_healthy.health_status,
-            "days_running": sample_summary_healthy.days_running,
-            "total_enrolled": sample_summary_healthy.total_enrolled,
-            "enrollment_rate": sample_summary_healthy.enrollment_rate,
-            "current_information_fraction": sample_summary_healthy.current_information_fraction,
-        }
+        summary_dict = (
+            sample_summary_healthy
+            if isinstance(sample_summary_healthy, dict)
+            else {
+                "experiment_id": sample_summary_healthy.experiment_id,
+                "name": sample_summary_healthy.name,
+                "status": sample_summary_healthy.status,
+                "health_status": sample_summary_healthy.health_status,
+                "days_running": sample_summary_healthy.days_running,
+                "total_enrolled": sample_summary_healthy.total_enrolled,
+                "enrollment_rate": sample_summary_healthy.enrollment_rate,
+                "current_information_fraction": sample_summary_healthy.current_information_fraction,
+            }
+        )
         for field in required_fields:
             assert field in summary_dict, f"Missing field: {field}"
 
@@ -421,13 +426,17 @@ class TestContractCompliance:
             "experiment_id",
             "message",
         ]
-        alert_dict = sample_alert_srm if isinstance(sample_alert_srm, dict) else {
-            "alert_id": sample_alert_srm.alert_id,
-            "alert_type": sample_alert_srm.alert_type,
-            "severity": sample_alert_srm.severity,
-            "experiment_id": sample_alert_srm.experiment_id,
-            "message": sample_alert_srm.message,
-        }
+        alert_dict = (
+            sample_alert_srm
+            if isinstance(sample_alert_srm, dict)
+            else {
+                "alert_id": sample_alert_srm.alert_id,
+                "alert_type": sample_alert_srm.alert_type,
+                "severity": sample_alert_srm.severity,
+                "experiment_id": sample_alert_srm.experiment_id,
+                "message": sample_alert_srm.message,
+            }
+        )
         for field in required_fields:
             assert field in alert_dict, f"Missing field: {field}"
 
@@ -441,9 +450,7 @@ class TestStatePropagation:
         received_experiments = []
 
         async def health_output(self_obj, s):
-            s["experiments"] = [
-                create_experiment_summary("exp-001", health_status="healthy")
-            ]
+            s["experiments"] = [create_experiment_summary("exp-001", health_status="healthy")]
             s["experiments_checked"] = 1
             return s
 
@@ -455,11 +462,13 @@ class TestStatePropagation:
             s["status"] = "completed"
             return s
 
-        with patch.object(HealthCheckerNode, "execute", health_output), \
-             patch.object(SRMDetectorNode, "execute", srm_capture), \
-             patch.object(InterimAnalyzerNode, "execute", passthrough), \
-             patch.object(FidelityCheckerNode, "execute", passthrough), \
-             patch.object(AlertGeneratorNode, "execute", passthrough):
+        with (
+            patch.object(HealthCheckerNode, "execute", health_output),
+            patch.object(SRMDetectorNode, "execute", srm_capture),
+            patch.object(InterimAnalyzerNode, "execute", passthrough),
+            patch.object(FidelityCheckerNode, "execute", passthrough),
+            patch.object(AlertGeneratorNode, "execute", passthrough),
+        ):
             graph = create_experiment_monitor_graph()
             await graph.ainvoke(base_monitor_state)
 
@@ -476,9 +485,7 @@ class TestStatePropagation:
             return s
 
         async def add_srm(self_obj, s):
-            s["srm_issues"] = [
-                create_srm_issue("exp-001", severity="critical")
-            ]
+            s["srm_issues"] = [create_srm_issue("exp-001", severity="critical")]
             return s
 
         async def capture_alerts(self_obj, s):
@@ -486,11 +493,13 @@ class TestStatePropagation:
             s["status"] = "completed"
             return s
 
-        with patch.object(HealthCheckerNode, "execute", passthrough), \
-             patch.object(SRMDetectorNode, "execute", add_srm), \
-             patch.object(InterimAnalyzerNode, "execute", passthrough), \
-             patch.object(FidelityCheckerNode, "execute", passthrough), \
-             patch.object(AlertGeneratorNode, "execute", capture_alerts):
+        with (
+            patch.object(HealthCheckerNode, "execute", passthrough),
+            patch.object(SRMDetectorNode, "execute", add_srm),
+            patch.object(InterimAnalyzerNode, "execute", passthrough),
+            patch.object(FidelityCheckerNode, "execute", passthrough),
+            patch.object(AlertGeneratorNode, "execute", capture_alerts),
+        ):
             graph = create_experiment_monitor_graph()
             await graph.ainvoke(base_monitor_state)
 
@@ -499,22 +508,17 @@ class TestStatePropagation:
     @pytest.mark.asyncio
     async def test_errors_accumulate_across_nodes(self, base_monitor_state):
         """Test that errors from each node are accumulated."""
+
         async def add_error_health(self_obj, s):
-            s["errors"] = s.get("errors", []) + [
-                {"node": "health_checker", "error": "Error 1"}
-            ]
+            s["errors"] = s.get("errors", []) + [{"node": "health_checker", "error": "Error 1"}]
             return s
 
         async def add_error_srm(self_obj, s):
-            s["errors"] = s.get("errors", []) + [
-                {"node": "srm_detector", "error": "Error 2"}
-            ]
+            s["errors"] = s.get("errors", []) + [{"node": "srm_detector", "error": "Error 2"}]
             return s
 
         async def add_error_fidelity(self_obj, s):
-            s["errors"] = s.get("errors", []) + [
-                {"node": "fidelity_checker", "error": "Error 3"}
-            ]
+            s["errors"] = s.get("errors", []) + [{"node": "fidelity_checker", "error": "Error 3"}]
             return s
 
         async def passthrough(self_obj, s):
@@ -524,11 +528,13 @@ class TestStatePropagation:
             s["status"] = "completed"
             return s
 
-        with patch.object(HealthCheckerNode, "execute", add_error_health), \
-             patch.object(SRMDetectorNode, "execute", add_error_srm), \
-             patch.object(InterimAnalyzerNode, "execute", passthrough), \
-             patch.object(FidelityCheckerNode, "execute", add_error_fidelity), \
-             patch.object(AlertGeneratorNode, "execute", complete):
+        with (
+            patch.object(HealthCheckerNode, "execute", add_error_health),
+            patch.object(SRMDetectorNode, "execute", add_error_srm),
+            patch.object(InterimAnalyzerNode, "execute", passthrough),
+            patch.object(FidelityCheckerNode, "execute", add_error_fidelity),
+            patch.object(AlertGeneratorNode, "execute", complete),
+        ):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(base_monitor_state)
 
@@ -567,11 +573,13 @@ class TestErrorHandling:
             executed.append("fidelity")
             return s
 
-        with patch.object(HealthCheckerNode, "execute", error_health), \
-             patch.object(SRMDetectorNode, "execute", continue_srm), \
-             patch.object(InterimAnalyzerNode, "execute", continue_interim), \
-             patch.object(FidelityCheckerNode, "execute", continue_fidelity), \
-             patch.object(AlertGeneratorNode, "execute", complete):
+        with (
+            patch.object(HealthCheckerNode, "execute", error_health),
+            patch.object(SRMDetectorNode, "execute", continue_srm),
+            patch.object(InterimAnalyzerNode, "execute", continue_interim),
+            patch.object(FidelityCheckerNode, "execute", continue_fidelity),
+            patch.object(AlertGeneratorNode, "execute", complete),
+        ):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(base_monitor_state)
 
@@ -583,6 +591,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_exception_in_node_sets_failed_status(self, base_monitor_state):
         """Test that exceptions in nodes result in failed status."""
+
         async def raise_error(self_obj, s):
             raise ValueError("Test error")
 
@@ -617,9 +626,7 @@ class TestEdgeCases:
     async def test_single_experiment(self, base_monitor_state):
         """Test workflow with single experiment."""
         state = base_monitor_state.copy()
-        state["experiments"] = [
-            create_experiment_summary("exp-single", health_status="healthy")
-        ]
+        state["experiments"] = [create_experiment_summary("exp-single", health_status="healthy")]
         state["experiments_checked"] = 1
 
         async def complete(self_obj, s):
@@ -627,11 +634,13 @@ class TestEdgeCases:
             s["monitor_summary"] = "1 experiment checked"
             return s
 
-        with patch.object(HealthCheckerNode, "execute", complete), \
-             patch.object(SRMDetectorNode, "execute", complete), \
-             patch.object(InterimAnalyzerNode, "execute", complete), \
-             patch.object(FidelityCheckerNode, "execute", complete), \
-             patch.object(AlertGeneratorNode, "execute", complete):
+        with (
+            patch.object(HealthCheckerNode, "execute", complete),
+            patch.object(SRMDetectorNode, "execute", complete),
+            patch.object(InterimAnalyzerNode, "execute", complete),
+            patch.object(FidelityCheckerNode, "execute", complete),
+            patch.object(AlertGeneratorNode, "execute", complete),
+        ):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
 
@@ -642,8 +651,7 @@ class TestEdgeCases:
         """Test workflow with many experiments."""
         state = base_monitor_state.copy()
         state["experiments"] = [
-            create_experiment_summary(f"exp-{i}", health_status="healthy")
-            for i in range(50)
+            create_experiment_summary(f"exp-{i}", health_status="healthy") for i in range(50)
         ]
         state["experiments_checked"] = 50
 
@@ -652,11 +660,13 @@ class TestEdgeCases:
             s["monitor_summary"] = f"{len(s['experiments'])} experiments checked"
             return s
 
-        with patch.object(HealthCheckerNode, "execute", complete), \
-             patch.object(SRMDetectorNode, "execute", complete), \
-             patch.object(InterimAnalyzerNode, "execute", complete), \
-             patch.object(FidelityCheckerNode, "execute", complete), \
-             patch.object(AlertGeneratorNode, "execute", complete):
+        with (
+            patch.object(HealthCheckerNode, "execute", complete),
+            patch.object(SRMDetectorNode, "execute", complete),
+            patch.object(InterimAnalyzerNode, "execute", complete),
+            patch.object(FidelityCheckerNode, "execute", complete),
+            patch.object(AlertGeneratorNode, "execute", complete),
+        ):
             graph = create_experiment_monitor_graph()
             final_state = await graph.ainvoke(state)
 
@@ -697,13 +707,9 @@ class TestEdgeCases:
         """Test SRM detection at threshold boundary."""
         state = base_monitor_state.copy()
         state["srm_threshold"] = 0.001
-        state["experiments"] = [
-            create_experiment_summary("exp-border", health_status="warning")
-        ]
+        state["experiments"] = [create_experiment_summary("exp-border", health_status="warning")]
         # p-value exactly at threshold
-        state["srm_issues"] = [
-            create_srm_issue("exp-border", p_value=0.001, severity="warning")
-        ]
+        state["srm_issues"] = [create_srm_issue("exp-border", p_value=0.001, severity="warning")]
 
         with patch(
             "src.memory.services.factories.get_supabase_client",
@@ -762,8 +768,7 @@ class TestEdgeCases:
         assert final_state["status"] == "completed"
         # Should handle multiple triggers
         interim_alerts = [
-            a for a in final_state.get("alerts", [])
-            if a.get("alert_type") == "interim_trigger"
+            a for a in final_state.get("alerts", []) if a.get("alert_type") == "interim_trigger"
         ]
         assert len(interim_alerts) >= 1
 

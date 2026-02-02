@@ -6,12 +6,12 @@ Applies transformations consistently across train/val/test splits.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, OneHotEncoder, StandardScaler
 
 from ..state import DataPreparerState
 
@@ -104,11 +104,13 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
 
             # Update column lists
             numeric_cols.extend(new_features)
-            transformations_applied.append({
-                "type": "datetime_extraction",
-                "columns": datetime_cols,
-                "new_features": new_features,
-            })
+            transformations_applied.append(
+                {
+                    "type": "datetime_extraction",
+                    "columns": datetime_cols,
+                    "new_features": new_features,
+                }
+            )
 
         # === MISSING VALUE IMPUTATION ===
         # Numeric imputation
@@ -127,19 +129,19 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                         validation_df[numeric_cols].values
                     )
                 if test_df is not None:
-                    test_df[numeric_cols] = numeric_imputer.transform(
-                        test_df[numeric_cols].values
-                    )
+                    test_df[numeric_cols] = numeric_imputer.transform(test_df[numeric_cols].values)
                 if holdout_df is not None:
                     holdout_df[numeric_cols] = numeric_imputer.transform(
                         holdout_df[numeric_cols].values
                     )
 
-                transformations_applied.append({
-                    "type": "imputation",
-                    "strategy": imputation_strategy,
-                    "columns": numeric_cols,
-                })
+                transformations_applied.append(
+                    {
+                        "type": "imputation",
+                        "strategy": imputation_strategy,
+                        "columns": numeric_cols,
+                    }
+                )
 
         # Categorical imputation (mode)
         if categorical_cols:
@@ -176,19 +178,17 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                             encoder, validation_df[col].astype(str)
                         )
                     if test_df is not None:
-                        test_df[col] = _safe_label_encode(
-                            encoder, test_df[col].astype(str)
-                        )
+                        test_df[col] = _safe_label_encode(encoder, test_df[col].astype(str))
                     if holdout_df is not None:
-                        holdout_df[col] = _safe_label_encode(
-                            encoder, holdout_df[col].astype(str)
-                        )
+                        holdout_df[col] = _safe_label_encode(encoder, holdout_df[col].astype(str))
 
-                transformations_applied.append({
-                    "type": "encoding",
-                    "method": "label",
-                    "columns": categorical_cols,
-                })
+                transformations_applied.append(
+                    {
+                        "type": "encoding",
+                        "method": "label",
+                        "columns": categorical_cols,
+                    }
+                )
 
             elif encoding_method == "onehot":
                 encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
@@ -234,12 +234,14 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                     holdout_df = holdout_df.drop(columns=categorical_cols)
                     holdout_df = pd.concat([holdout_df, holdout_encoded], axis=1)
 
-                transformations_applied.append({
-                    "type": "encoding",
-                    "method": "onehot",
-                    "original_columns": categorical_cols,
-                    "new_columns": list(new_cols),
-                })
+                transformations_applied.append(
+                    {
+                        "type": "encoding",
+                        "method": "onehot",
+                        "original_columns": categorical_cols,
+                        "new_columns": list(new_cols),
+                    }
+                )
 
         # === NUMERIC SCALING ===
         # Update numeric_cols after potential one-hot encoding
@@ -266,19 +268,19 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                         validation_df[current_numeric_cols]
                     )
                 if test_df is not None:
-                    test_df[current_numeric_cols] = scaler.transform(
-                        test_df[current_numeric_cols]
-                    )
+                    test_df[current_numeric_cols] = scaler.transform(test_df[current_numeric_cols])
                 if holdout_df is not None:
                     holdout_df[current_numeric_cols] = scaler.transform(
                         holdout_df[current_numeric_cols]
                     )
 
-                transformations_applied.append({
-                    "type": "scaling",
-                    "method": scaling_method,
-                    "columns": current_numeric_cols,
-                })
+                transformations_applied.append(
+                    {
+                        "type": "scaling",
+                        "method": scaling_method,
+                        "columns": current_numeric_cols,
+                    }
+                )
 
         # Calculate transformation duration
         transform_duration = (datetime.now() - start_time).total_seconds()
@@ -356,9 +358,7 @@ def _identify_column_types(
                 categorical_cols.append(col)
             else:
                 # Treat high cardinality as text, skip for now
-                logger.warning(
-                    f"Column {col} has high cardinality ({n_unique} unique), skipping"
-                )
+                logger.warning(f"Column {col} has high cardinality ({n_unique} unique), skipping")
 
     return numeric_cols, categorical_cols, datetime_cols
 
@@ -393,14 +393,16 @@ def _extract_datetime_features(
             df[f"{col}_hour"] = dt_col.dt.hour if dt_col.dt.hour.notna().any() else 0
             df[f"{col}_is_weekend"] = (dt_col.dt.dayofweek >= 5).astype(int)
 
-            new_features.extend([
-                f"{col}_year",
-                f"{col}_month",
-                f"{col}_day",
-                f"{col}_dayofweek",
-                f"{col}_hour",
-                f"{col}_is_weekend",
-            ])
+            new_features.extend(
+                [
+                    f"{col}_year",
+                    f"{col}_month",
+                    f"{col}_day",
+                    f"{col}_dayofweek",
+                    f"{col}_hour",
+                    f"{col}_is_weekend",
+                ]
+            )
 
             # Drop original datetime column
             df = df.drop(columns=[col])

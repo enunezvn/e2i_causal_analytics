@@ -10,10 +10,8 @@ Tests cover:
 - Factory function
 """
 
-import asyncio
 import sys
 from datetime import datetime
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -33,7 +31,6 @@ from src.rag.memory_adapters import (
     SignalCollectorProtocol,
     create_memory_adapters,
 )
-
 
 # =============================================================================
 # Test Protocols
@@ -121,7 +118,7 @@ class TestEpisodicMemoryAdapter:
         mock_result = {"content": "test", "score": 0.8}
         mock_connector.vector_search = AsyncMock(return_value=[mock_result])
 
-        results = await adapter.vector_search("test", limit=10)
+        await adapter.vector_search("test", limit=10)
 
         mock_embeddings.embed.assert_called_once_with("test")
         mock_connector.vector_search.assert_called_once()
@@ -145,9 +142,7 @@ class TestEpisodicMemoryAdapter:
 
     @pytest.mark.asyncio
     async def test_vector_search_exception(self, adapter, mock_connector):
-        mock_connector.vector_search_by_text = AsyncMock(
-            side_effect=Exception("DB error")
-        )
+        mock_connector.vector_search_by_text = AsyncMock(side_effect=Exception("DB error"))
 
         results = await adapter.vector_search("query")
 
@@ -159,9 +154,7 @@ class TestEpisodicMemoryAdapter:
         mock_model = Mock(spec=["encode"])
         mock_model.encode = Mock(return_value=[0.1, 0.2])
 
-        adapter = EpisodicMemoryAdapter(
-            memory_connector=mock_connector, embedding_model=mock_model
-        )
+        adapter = EpisodicMemoryAdapter(memory_connector=mock_connector, embedding_model=mock_model)
 
         embedding = await adapter._generate_embedding("test text")
 
@@ -172,9 +165,7 @@ class TestEpisodicMemoryAdapter:
     async def test_generate_embedding_no_method(self, mock_connector):
         mock_model = Mock(spec=[])  # No embed or encode method
 
-        adapter = EpisodicMemoryAdapter(
-            memory_connector=mock_connector, embedding_model=mock_model
-        )
+        adapter = EpisodicMemoryAdapter(memory_connector=mock_connector, embedding_model=mock_model)
 
         with pytest.raises(ValueError, match="embed.*encode"):
             await adapter._generate_embedding("test")
@@ -231,9 +222,7 @@ class TestSemanticMemoryAdapter:
 
     @pytest.fixture
     def adapter(self, mock_falkordb, mock_connector):
-        return SemanticMemoryAdapter(
-            falkordb_memory=mock_falkordb, memory_connector=mock_connector
-        )
+        return SemanticMemoryAdapter(falkordb_memory=mock_falkordb, memory_connector=mock_connector)
 
     def test_init(self, mock_falkordb, mock_connector):
         adapter = SemanticMemoryAdapter(
@@ -294,7 +283,7 @@ class TestSemanticMemoryAdapter:
         mock_result = {"id": "entity_1"}
         mock_connector.graph_traverse = AsyncMock(return_value=[mock_result])
 
-        results = await adapter._query_connector_graph("test", max_depth=2)
+        await adapter._query_connector_graph("test", max_depth=2)
 
         # Should return results for extracted entities
         mock_connector.graph_traverse.assert_called()
@@ -391,9 +380,11 @@ class TestProceduralMemoryAdapter:
             "tool_sequence": [{"tool": "query_episodic"}, {"tool": "analyze"}],
             "success_rate": 0.85,
         }
+
         # Return awaitable
         async def async_return():
             return [mock_procedure]
+
         mock_find.return_value = async_return()
 
         results = await adapter.procedure_search("adoption", limit=5)
@@ -427,8 +418,8 @@ class TestProceduralMemoryAdapter:
 
         mock_response = Mock()
         mock_response.data = [{"procedure_name": "Table Procedure"}]
-        mock_client.table.return_value.select.return_value.limit.return_value.execute = (
-            Mock(return_value=mock_response)
+        mock_client.table.return_value.select.return_value.limit.return_value.execute = Mock(
+            return_value=mock_response
         )
 
         results = await adapter.procedure_search("test", limit=3)
@@ -454,16 +445,13 @@ class TestProceduralMemoryAdapter:
         mock_model = Mock(spec=["encode"])
         mock_model.encode = Mock(return_value=[0.1, 0.2])
 
-        adapter = ProceduralMemoryAdapter(
-            supabase_client=mock_client, embedding_model=mock_model
-        )
+        adapter = ProceduralMemoryAdapter(supabase_client=mock_client, embedding_model=mock_model)
 
-        with patch(
-            "src.rag.memory_adapters.find_relevant_procedures"
-        ) as mock_find_embed:
+        with patch("src.rag.memory_adapters.find_relevant_procedures") as mock_find_embed:
             # Return awaitable
             async def async_return():
                 return []
+
             mock_find_embed.return_value = async_return()
 
             await adapter._semantic_procedure_search("test", limit=5)
@@ -476,9 +464,7 @@ class TestProceduralMemoryAdapter:
         mock_model = Mock(spec=["encode_async"])
         mock_model.encode_async = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
-        adapter = ProceduralMemoryAdapter(
-            supabase_client=mock_client, embedding_model=mock_model
-        )
+        adapter = ProceduralMemoryAdapter(supabase_client=mock_client, embedding_model=mock_model)
 
         result = await adapter._generate_embedding("test")
 
@@ -573,8 +559,7 @@ class TestSignalCollectorAdapter:
     async def test_collect_auto_flush(self, adapter, mock_client):
         # Buffer size is 3, so 3rd signal should trigger flush
         signals = [
-            {"type": f"sig_{i}", "query": "q", "response": "r", "reward": 0.5}
-            for i in range(3)
+            {"type": f"sig_{i}", "query": "q", "response": "r", "reward": 0.5} for i in range(3)
         ]
 
         mock_response = Mock()
@@ -618,9 +603,7 @@ class TestSignalCollectorAdapter:
     @pytest.mark.asyncio
     async def test_flush_no_client(self, adapter):
         adapter._client = None
-        adapter._signal_buffer = [
-            CollectedSignal(signal_type="test", query="q", response="r")
-        ]
+        adapter._signal_buffer = [CollectedSignal(signal_type="test", query="q", response="r")]
 
         count = await adapter.flush()
 
@@ -628,9 +611,7 @@ class TestSignalCollectorAdapter:
 
     @pytest.mark.asyncio
     async def test_flush_failure(self, adapter, mock_client):
-        adapter._signal_buffer = [
-            CollectedSignal(signal_type="test", query="q", response="r")
-        ]
+        adapter._signal_buffer = [CollectedSignal(signal_type="test", query="q", response="r")]
 
         mock_client.table.return_value.insert.return_value.execute = Mock(
             side_effect=Exception("DB error")
@@ -645,9 +626,7 @@ class TestSignalCollectorAdapter:
     @pytest.mark.asyncio
     async def test_get_signals_for_optimization(self, adapter, mock_client):
         mock_response = Mock()
-        mock_response.data = [
-            {"signal_type": "response", "query": "test", "reward": 0.9}
-        ]
+        mock_response.data = [{"signal_type": "response", "query": "test", "reward": 0.9}]
 
         mock_query = Mock()
         mock_query.execute = Mock(return_value=mock_response)

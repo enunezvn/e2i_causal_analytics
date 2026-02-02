@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from uuid import UUID
 
 import numpy as np
-import pandas as pd
 
 
 class FeatureAnalyzerState(TypedDict, total=False):

@@ -18,20 +18,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.api.dependencies.opentelemetry_config import (
-    init_opentelemetry,
-    get_tracer,
-    shutdown_opentelemetry,
-    get_opentelemetry_middleware,
-    instrument_fastapi,
-    create_span_from_trace_context,
-    _NoOpTracer,
-    _NoOpSpan,
-    _NoOpContextManager,
-    OTEL_ENABLED,
-    OTEL_SERVICE_NAME,
     OTEL_EXPORTER_TYPE,
+    OTEL_SERVICE_NAME,
+    _NoOpContextManager,
+    _NoOpSpan,
+    _NoOpTracer,
+    create_span_from_trace_context,
+    get_opentelemetry_middleware,
+    get_tracer,
+    init_opentelemetry,
+    instrument_fastapi,
+    shutdown_opentelemetry,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -66,17 +64,20 @@ def mock_otel_sdk():
     mock_trace.get_tracer_provider.return_value = mock_provider
     mock_trace.get_tracer.return_value = MagicMock()
 
-    with patch.dict("sys.modules", {
-        "opentelemetry": MagicMock(trace=mock_trace),
-        "opentelemetry.trace": mock_trace,
-        "opentelemetry.sdk.trace": MagicMock(TracerProvider=MagicMock),
-        "opentelemetry.sdk.trace.sampling": MagicMock(),
-        "opentelemetry.sdk.resources": MagicMock(),
-        "opentelemetry.propagators.composite": MagicMock(),
-        "opentelemetry.propagate": MagicMock(),
-        "opentelemetry.trace.propagation.tracecontext": MagicMock(),
-        "opentelemetry.baggage.propagation": MagicMock(),
-    }):
+    with patch.dict(
+        "sys.modules",
+        {
+            "opentelemetry": MagicMock(trace=mock_trace),
+            "opentelemetry.trace": mock_trace,
+            "opentelemetry.sdk.trace": MagicMock(TracerProvider=MagicMock),
+            "opentelemetry.sdk.trace.sampling": MagicMock(),
+            "opentelemetry.sdk.resources": MagicMock(),
+            "opentelemetry.propagators.composite": MagicMock(),
+            "opentelemetry.propagate": MagicMock(),
+            "opentelemetry.trace.propagation.tracecontext": MagicMock(),
+            "opentelemetry.baggage.propagation": MagicMock(),
+        },
+    ):
         yield mock_trace
 
 
@@ -113,11 +114,12 @@ class TestInitOpenTelemetry:
 
     def test_init_is_idempotent(self, reset_otel_state):
         """Test that multiple init calls are idempotent."""
-        result1 = init_opentelemetry()
-        result2 = init_opentelemetry()
+        init_opentelemetry()
+        init_opentelemetry()
 
         # Second call should not re-initialize
         import src.api.dependencies.opentelemetry_config as otel_module
+
         assert otel_module._otel_initialized is True
 
     @patch.dict(os.environ, {"OTEL_ENABLED": "false"})
@@ -129,7 +131,7 @@ class TestInitOpenTelemetry:
         otel_module._otel_initialized = False
         otel_module.OTEL_ENABLED = False
 
-        result = init_opentelemetry()
+        init_opentelemetry()
 
         # Should complete but return False (disabled)
         assert otel_module._otel_initialized is True
@@ -139,6 +141,7 @@ class TestInitOpenTelemetry:
         with patch.dict("sys.modules", {"opentelemetry": None}):
             with patch("src.api.dependencies.opentelemetry_config.OTEL_ENABLED", True):
                 import src.api.dependencies.opentelemetry_config as otel_module
+
                 otel_module._otel_initialized = False
 
                 # Should not raise, just return False
@@ -242,6 +245,7 @@ class TestShutdownOpenTelemetry:
     def test_shutdown_when_not_initialized(self, reset_otel_state):
         """Test shutdown doesn't error when not initialized."""
         import src.api.dependencies.opentelemetry_config as otel_module
+
         otel_module._otel_initialized = False
 
         # Should not raise
@@ -277,9 +281,7 @@ class TestGetOpenTelemetryMiddleware:
     def test_returns_none_when_import_fails(self, reset_otel_state):
         """Test returns None when middleware import fails."""
         with patch("src.api.dependencies.opentelemetry_config.OTEL_ENABLED", True):
-            with patch.dict("sys.modules", {
-                "opentelemetry.instrumentation.asgi": None
-            }):
+            with patch.dict("sys.modules", {"opentelemetry.instrumentation.asgi": None}):
                 # Force import error
                 result = get_opentelemetry_middleware()
                 # May return middleware or None depending on actual imports
@@ -299,6 +301,7 @@ class TestInstrumentFastAPI:
     def test_returns_false_when_not_initialized(self, reset_otel_state):
         """Test returns False when not initialized."""
         import src.api.dependencies.opentelemetry_config as otel_module
+
         otel_module._otel_initialized = False
 
         with patch("src.api.dependencies.opentelemetry_config.OTEL_ENABLED", True):

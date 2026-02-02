@@ -42,9 +42,7 @@ class BrandSpecificCalculator(KPICalculatorBase):
         """Check if this calculator supports the given KPI."""
         return kpi.workstream == Workstream.BRAND_SPECIFIC
 
-    def calculate(
-        self, kpi: KPIMetadata, context: dict[str, Any] | None = None
-    ) -> KPIResult:
+    def calculate(self, kpi: KPIMetadata, context: dict[str, Any] | None = None) -> KPIResult:
         """Calculate a brand-specific KPI.
 
         Args:
@@ -240,9 +238,7 @@ class BrandSpecificCalculator(KPICalculatorBase):
             return result[0]["reach"]
         return 0.0
 
-    def _execute_query(
-        self, query: str, params: list[Any]
-    ) -> list[dict[str, Any]] | None:
+    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()

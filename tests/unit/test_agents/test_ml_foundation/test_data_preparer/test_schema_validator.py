@@ -3,10 +3,10 @@
 Tests the Pandera schema validation node in the data_preparer LangGraph pipeline.
 """
 
+from datetime import datetime, timezone
+
 import pandas as pd
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
 
 from src.agents.ml_foundation.data_preparer.nodes.schema_validator import (
     run_schema_validation,
@@ -15,38 +15,44 @@ from src.agents.ml_foundation.data_preparer.nodes.schema_validator import (
 
 def create_valid_business_metrics_df():
     """Create a valid business_metrics DataFrame for testing."""
-    return pd.DataFrame({
-        "metric_id": ["M001", "M002", "M003"],
-        "metric_date": [datetime.now(timezone.utc)] * 3,
-        "metric_name": ["TRx", "NRx", "Share"],
-        "metric_value": [100.5, 200.0, 0.35],
-        "brand": ["Remibrutinib", "Fabhalta", "Kisqali"],
-        "region": ["northeast", "south", "midwest"],
-    })
+    return pd.DataFrame(
+        {
+            "metric_id": ["M001", "M002", "M003"],
+            "metric_date": [datetime.now(timezone.utc)] * 3,
+            "metric_name": ["TRx", "NRx", "Share"],
+            "metric_value": [100.5, 200.0, 0.35],
+            "brand": ["Remibrutinib", "Fabhalta", "Kisqali"],
+            "region": ["northeast", "south", "midwest"],
+        }
+    )
 
 
 def create_invalid_business_metrics_df():
     """Create an invalid business_metrics DataFrame for testing."""
-    return pd.DataFrame({
-        "metric_id": [None, "M002"],  # Null ID
-        "metric_date": [datetime.now(timezone.utc)] * 2,
-        "metric_name": ["TRx", "NRx"],
-        "metric_value": [100.5, 200.0],
-        "brand": ["InvalidBrand", "Fabhalta"],  # Invalid brand
-        "region": ["northeast", "invalid_region"],  # Invalid region
-    })
+    return pd.DataFrame(
+        {
+            "metric_id": [None, "M002"],  # Null ID
+            "metric_date": [datetime.now(timezone.utc)] * 2,
+            "metric_name": ["TRx", "NRx"],
+            "metric_value": [100.5, 200.0],
+            "brand": ["InvalidBrand", "Fabhalta"],  # Invalid brand
+            "region": ["northeast", "invalid_region"],  # Invalid region
+        }
+    )
 
 
 def create_valid_predictions_df():
     """Create a valid predictions DataFrame for testing."""
-    return pd.DataFrame({
-        "prediction_id": ["P001", "P002"],
-        "prediction_date": [datetime.now(timezone.utc)] * 2,
-        "model_id": ["model_v1", "model_v1"],
-        "predicted_value": [0.85, 0.72],
-        "confidence_score": [0.95, 0.88],
-        "brand": ["Kisqali", "Fabhalta"],
-    })
+    return pd.DataFrame(
+        {
+            "prediction_id": ["P001", "P002"],
+            "prediction_date": [datetime.now(timezone.utc)] * 2,
+            "model_id": ["model_v1", "model_v1"],
+            "predicted_value": [0.85, 0.72],
+            "confidence_score": [0.95, 0.88],
+            "brand": ["Kisqali", "Fabhalta"],
+        }
+    )
 
 
 class TestSchemaValidationPassed:
@@ -318,4 +324,7 @@ class TestSchemaValidationStatePreservation:
         # or if present, should not have added new issues
         if "blocking_issues" in result:
             # Only pre-existing issues
-            assert result["blocking_issues"] == ["pre_existing_issue"] or result["blocking_issues"] == []
+            assert (
+                result["blocking_issues"] == ["pre_existing_issue"]
+                or result["blocking_issues"] == []
+            )

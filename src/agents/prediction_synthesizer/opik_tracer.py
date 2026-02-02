@@ -25,7 +25,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from opik import Opik, Trace
@@ -107,16 +107,18 @@ class SynthesisTraceContext:
         """Log that a synthesis has started."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "entity_id": entity_id,
-                    "entity_type": entity_type,
-                    "prediction_target": prediction_target,
-                    "time_horizon": time_horizon,
-                    "models_requested": models_requested,
-                    "ensemble_method": ensemble_method,
-                    "include_context": include_context,
-                    "synthesis_started_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "entity_id": entity_id,
+                        "entity_type": entity_type,
+                        "prediction_target": prediction_target,
+                        "time_horizon": time_horizon,
+                        "models_requested": models_requested,
+                        "ensemble_method": ensemble_method,
+                        "include_context": include_context,
+                        "synthesis_started_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log synthesis started: {e}")
@@ -180,16 +182,17 @@ class SynthesisTraceContext:
         """Log model orchestration results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "models_requested": models_requested,
-                    "models_succeeded": models_succeeded,
-                    "models_failed": models_failed,
-                    "orchestration_latency_ms": orchestration_latency_ms,
-                    "model_success_rate": (
-                        models_succeeded / models_requested
-                        if models_requested > 0 else 0.0
-                    ),
-                })
+                self.trace_metadata.update(
+                    {
+                        "models_requested": models_requested,
+                        "models_succeeded": models_succeeded,
+                        "models_failed": models_failed,
+                        "orchestration_latency_ms": orchestration_latency_ms,
+                        "model_success_rate": (
+                            models_succeeded / models_requested if models_requested > 0 else 0.0
+                        ),
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log model orchestration: {e}")
@@ -207,18 +210,20 @@ class SynthesisTraceContext:
         """Log ensemble combination results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "ensemble_method": ensemble_method,
-                    "point_estimate": point_estimate,
-                    "prediction_interval_lower": prediction_interval_lower,
-                    "prediction_interval_upper": prediction_interval_upper,
-                    "prediction_interval_width": (
-                        prediction_interval_upper - prediction_interval_lower
-                    ),
-                    "confidence": confidence,
-                    "model_agreement": model_agreement,
-                    "ensemble_latency_ms": ensemble_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "ensemble_method": ensemble_method,
+                        "point_estimate": point_estimate,
+                        "prediction_interval_lower": prediction_interval_lower,
+                        "prediction_interval_upper": prediction_interval_upper,
+                        "prediction_interval_width": (
+                            prediction_interval_upper - prediction_interval_lower
+                        ),
+                        "confidence": confidence,
+                        "model_agreement": model_agreement,
+                        "ensemble_latency_ms": ensemble_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log ensemble combination: {e}")
@@ -234,13 +239,15 @@ class SynthesisTraceContext:
         """Log context enrichment results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "similar_cases_found": similar_cases_found,
-                    "feature_importance_calculated": feature_importance_calculated,
-                    "historical_accuracy": historical_accuracy,
-                    "trend_direction": trend_direction,
-                    "enrichment_latency_ms": enrichment_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "similar_cases_found": similar_cases_found,
+                        "feature_importance_calculated": feature_importance_calculated,
+                        "historical_accuracy": historical_accuracy,
+                        "trend_direction": trend_direction,
+                        "enrichment_latency_ms": enrichment_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log context enrichment: {e}")
@@ -263,22 +270,24 @@ class SynthesisTraceContext:
         if self.trace:
             try:
                 elapsed_ms = int((time.time() - self.start_time) * 1000)
-                self.trace_metadata.update({
-                    "status": status,
-                    "success": success,
-                    "total_duration_ms": total_duration_ms,
-                    "trace_duration_ms": elapsed_ms,
-                    "point_estimate": point_estimate,
-                    "confidence": confidence,
-                    "model_agreement": model_agreement,
-                    "models_succeeded": models_succeeded,
-                    "models_failed": models_failed,
-                    "prediction_summary_length": len(prediction_summary),
-                    "errors_count": len(errors),
-                    "warnings_count": len(warnings),
-                    "warnings": warnings[:5],  # Limit for trace size
-                    "synthesis_completed_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "status": status,
+                        "success": success,
+                        "total_duration_ms": total_duration_ms,
+                        "trace_duration_ms": elapsed_ms,
+                        "point_estimate": point_estimate,
+                        "confidence": confidence,
+                        "model_agreement": model_agreement,
+                        "models_succeeded": models_succeeded,
+                        "models_failed": models_failed,
+                        "prediction_summary_length": len(prediction_summary),
+                        "errors_count": len(errors),
+                        "warnings_count": len(warnings),
+                        "warnings": warnings[:5],  # Limit for trace size
+                        "synthesis_completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(
                     metadata=self.trace_metadata,
                     output={

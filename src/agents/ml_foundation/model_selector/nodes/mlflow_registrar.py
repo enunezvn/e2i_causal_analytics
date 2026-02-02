@@ -196,14 +196,12 @@ async def _log_selection_artifacts(
         alternatives: List of alternatives considered
     """
     import json
-    import tempfile
     import os
+    import tempfile
 
     # Log rationale as text artifact
     if rationale:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(rationale)
             rationale_path = f.name
 
@@ -214,9 +212,7 @@ async def _log_selection_artifacts(
 
     # Log alternatives as JSON artifact
     if alternatives:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(alternatives, f, indent=2, default=str)
             alternatives_path = f.name
 

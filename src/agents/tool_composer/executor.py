@@ -24,7 +24,6 @@ from src.tool_registry.registry import ToolRegistry
 # Import tool_registrations to ensure tools are registered before execution
 # The @composable_tool decorators register tools when the module is imported
 from . import tool_registrations as _tool_registrations  # noqa: F401
-
 from .cache import get_cache_manager
 from .models.composition_models import (
     ExecutionPlan,
@@ -62,7 +61,7 @@ class ExponentialBackoff:
         """Calculate delay for given attempt (0-indexed)."""
         import random
 
-        delay = min(self.max_delay, self.base_delay * (self.factor ** attempt))
+        delay = min(self.max_delay, self.base_delay * (self.factor**attempt))
 
         # Add jitter to prevent thundering herd
         if self.jitter > 0:
@@ -80,8 +79,8 @@ class ExponentialBackoff:
 class CircuitState(str, Enum):
     """State of the circuit breaker."""
 
-    CLOSED = "closed"       # Normal operation, requests allowed
-    OPEN = "open"           # Failing, requests blocked
+    CLOSED = "closed"  # Normal operation, requests allowed
+    OPEN = "open"  # Failing, requests blocked
     HALF_OPEN = "half_open"  # Testing if service recovered
 
 
@@ -95,9 +94,9 @@ class CircuitBreaker:
     half-open state to test recovery.
     """
 
-    failure_threshold: int = 3      # Failures before opening
-    reset_timeout: float = 60.0     # Seconds before half-open
-    half_open_max_calls: int = 1    # Max calls in half-open state
+    failure_threshold: int = 3  # Failures before opening
+    reset_timeout: float = 60.0  # Seconds before half-open
+    half_open_max_calls: int = 1  # Max calls in half-open state
 
     # Internal state
     state: CircuitState = field(default=CircuitState.CLOSED)
@@ -152,9 +151,7 @@ class CircuitBreaker:
         elif self.state == CircuitState.CLOSED:
             if self.failure_count >= self.failure_threshold:
                 self.state = CircuitState.OPEN
-                logger.warning(
-                    f"Circuit breaker OPENED after {self.failure_count} failures"
-                )
+                logger.warning(f"Circuit breaker OPENED after {self.failure_count} failures")
 
     def get_state_info(self) -> Dict[str, Any]:
         """Get current circuit breaker state for observability."""
@@ -234,7 +231,7 @@ class ToolFailureStats:
         self.recent_results.append(success)
         # Trim to window size
         if len(self.recent_results) > self.sliding_window_size:
-            self.recent_results = self.recent_results[-self.sliding_window_size:]
+            self.recent_results = self.recent_results[-self.sliding_window_size :]
 
 
 class ToolFailureTracker:
@@ -500,9 +497,7 @@ class PlanExecutor:
 
         # G6: Check cache for deterministic tool outputs
         if self._cache_manager:
-            cached_output = self._cache_manager.get_tool_output(
-                step.tool_name, resolved_inputs
-            )
+            cached_output = self._cache_manager.get_tool_output(step.tool_name, resolved_inputs)
             if cached_output is not None:
                 logger.debug(f"Cache hit for tool '{step.tool_name}'")
                 completed_at = datetime.now(timezone.utc)
@@ -526,9 +521,7 @@ class PlanExecutor:
 
         # Check circuit breaker before attempting execution
         if not self.failure_tracker.can_execute(step.tool_name):
-            logger.warning(
-                f"Circuit breaker OPEN for tool '{step.tool_name}', skipping execution"
-            )
+            logger.warning(f"Circuit breaker OPEN for tool '{step.tool_name}', skipping execution")
             return StepResult(
                 step_id=step.step_id,
                 sub_question_id=step.sub_question_id,
@@ -723,7 +716,7 @@ class PlanExecutor:
 
         # Navigate the field path
         current = source
-        for field in field_path:
+        for field in field_path:  # noqa: F402
             if isinstance(current, dict) and field in current:
                 current = current[field]
             elif hasattr(current, field):
@@ -789,9 +782,7 @@ class PlanExecutor:
 
             # Only update if we have enough observations
             if stats.total_calls < min_calls:
-                logger.debug(
-                    f"Skipping {name}: only {stats.total_calls} calls (need {min_calls})"
-                )
+                logger.debug(f"Skipping {name}: only {stats.total_calls} calls (need {min_calls})")
                 results[name] = False
                 continue
 

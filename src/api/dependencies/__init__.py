@@ -11,8 +11,8 @@ Available Dependencies:
 """
 
 from src.api.dependencies.auth import (
-    AuthError,
     ROLE_LEVELS,
+    AuthError,
     UserRole,
     get_current_user,
     get_user_role,

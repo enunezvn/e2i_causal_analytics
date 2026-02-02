@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.memory.services.factories import (
-    EmbeddingService,
     FallbackEmbeddingService,
     LocalEmbeddingService,
     OpenAIEmbeddingService,
@@ -109,9 +108,7 @@ class TestFallbackEmbeddingService:
         """Test fallback activation when primary fails."""
         service = FallbackEmbeddingService(environment="local_pilot")
 
-        with patch.object(
-            OpenAIEmbeddingService, "embed", new_callable=AsyncMock
-        ) as mock_primary:
+        with patch.object(OpenAIEmbeddingService, "embed", new_callable=AsyncMock) as mock_primary:
             mock_primary.side_effect = ServiceConnectionError("OpenAI", "API error")
 
             with patch.object(
@@ -131,9 +128,7 @@ class TestFallbackEmbeddingService:
         service._primary_retry_interval = 0.1  # Short interval for testing
 
         # First call fails, activates fallback
-        with patch.object(
-            OpenAIEmbeddingService, "embed", new_callable=AsyncMock
-        ) as mock_primary:
+        with patch.object(OpenAIEmbeddingService, "embed", new_callable=AsyncMock) as mock_primary:
             mock_primary.side_effect = ServiceConnectionError("OpenAI", "API error")
 
             with patch.object(
@@ -145,12 +140,11 @@ class TestFallbackEmbeddingService:
 
         # Wait for retry interval
         import asyncio
+
         await asyncio.sleep(0.15)
 
         # Second call should try primary again
-        with patch.object(
-            OpenAIEmbeddingService, "embed", new_callable=AsyncMock
-        ) as mock_primary:
+        with patch.object(OpenAIEmbeddingService, "embed", new_callable=AsyncMock) as mock_primary:
             mock_primary.return_value = [0.3, 0.4]
             result = await service.embed("test2")
 

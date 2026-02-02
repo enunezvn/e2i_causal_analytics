@@ -7,9 +7,9 @@ Tests deployment repository operations:
 - Metrics updates
 """
 
-import pytest
-from datetime import datetime, timezone
 from uuid import uuid4
+
+import pytest
 
 from src.repositories.deployment import (
     DeploymentEnvironment,

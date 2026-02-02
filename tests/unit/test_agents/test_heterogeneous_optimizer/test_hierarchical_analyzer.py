@@ -6,11 +6,9 @@ B9.4: Integration tests for hierarchical analysis in heterogeneous_optimizer age
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.heterogeneous_optimizer.nodes.hierarchical_analyzer import (
     HierarchicalAnalyzerNode,
-    HierarchicalAnalyzerOutput,
     HierarchicalCATEResult,
     NestedCIResult,
 )

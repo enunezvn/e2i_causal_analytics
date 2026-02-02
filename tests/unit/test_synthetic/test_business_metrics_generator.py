@@ -4,7 +4,7 @@ Tests metric generation per brand/region, achievement rate calculations,
 time-series continuity, and data split distribution.
 """
 
-from datetime import date, timedelta
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -254,7 +254,9 @@ class TestTimeSeriesContinuity:
 
         # Each major combination should have multiple entries (time series)
         major_combos = groups[groups > 5]
-        assert len(major_combos) > 5, "Should have time-series data for multiple brand/metric combos"
+        assert len(major_combos) > 5, (
+            "Should have time-series data for multiple brand/metric combos"
+        )
 
 
 class TestDataSplitDistribution:
@@ -411,7 +413,9 @@ class TestMetricIDUniqueness:
 
         for metric_id in df["metric_id"].head(10):
             # Format: metric_{12 hex characters}
-            assert metric_id.startswith("metric_"), f"metric_id should start with 'metric_': {metric_id}"
+            assert metric_id.startswith("metric_"), (
+                f"metric_id should start with 'metric_': {metric_id}"
+            )
             hex_part = metric_id[7:]  # Remove "metric_" prefix
             assert len(hex_part) == 12, f"hex part should be 12 chars: {hex_part}"
             # Verify it's valid hex

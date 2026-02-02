@@ -10,8 +10,6 @@ Tests cover:
 G13 from observability audit remediation plan.
 """
 
-import asyncio
-import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -21,21 +19,19 @@ import pytest
 pytestmark = pytest.mark.xdist_group(name="query_logger")
 
 from src.repositories.query_logger import (
+    QueryLogger,
     QueryMetrics,
-    SlowQueryRecord,
     SlowQueryConfig,
     SlowQueryDetector,
-    QueryLogger,
-    query_metrics,
-    query_logger,
-    slow_query_detector,
+    SlowQueryRecord,
+    configure_slow_query_thresholds,
+    get_query_stats,
     logged_query,
     logged_query_async,
-    get_query_stats,
-    configure_slow_query_thresholds,
-    PROMETHEUS_AVAILABLE,
+    query_logger,
+    query_metrics,
+    slow_query_detector,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -346,6 +342,7 @@ class TestExecute:
 
     def test_execute_error(self, logger_instance):
         """Test execute with failing query."""
+
         def failing_func():
             raise ValueError("Query failed")
 
@@ -363,6 +360,7 @@ class TestExecuteAsync:
     @pytest.mark.asyncio
     async def test_execute_async_success(self, logger_instance):
         """Test execute_async with successful query."""
+
         async def async_query():
             return "async_result"
 
@@ -376,6 +374,7 @@ class TestExecuteAsync:
     @pytest.mark.asyncio
     async def test_execute_async_error(self, logger_instance):
         """Test execute_async with failing query."""
+
         async def failing_async_query():
             raise ValueError("Async query failed")
 
@@ -438,6 +437,7 @@ class TestLoggedQueryDecorator:
 
     def test_logged_query_wraps_function(self):
         """Test logged_query decorator wraps function."""
+
         @logged_query("select", "test_table")
         def test_func():
             return "result"
@@ -447,6 +447,7 @@ class TestLoggedQueryDecorator:
 
     def test_logged_query_preserves_name(self):
         """Test logged_query preserves function name."""
+
         @logged_query("select", "test_table")
         def test_func():
             return "result"
@@ -460,6 +461,7 @@ class TestLoggedQueryAsyncDecorator:
     @pytest.mark.asyncio
     async def test_logged_query_async_wraps_function(self):
         """Test logged_query_async decorator wraps function."""
+
         @logged_query_async("select", "test_table")
         async def test_async_func():
             return "async_result"
@@ -469,6 +471,7 @@ class TestLoggedQueryAsyncDecorator:
 
     def test_logged_query_async_preserves_name(self):
         """Test logged_query_async preserves function name."""
+
         @logged_query_async("select", "test_table")
         async def test_async_func():
             return "async_result"

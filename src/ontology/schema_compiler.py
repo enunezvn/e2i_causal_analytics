@@ -3,18 +3,20 @@ E2I Causal Analytics - Ontology Schema Compiler
 Compiles YAML ontology definitions into FalkorDB schema with Graphity optimizations
 """
 
-from typing import Dict, List, Set, Optional, Any, Tuple
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
-import yaml
-import logging
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
 
 class CardinalityType(Enum):
     """Relationship cardinality types"""
+
     ONE_TO_ONE = "1:1"
     ONE_TO_MANY = "1:N"
     MANY_TO_MANY = "M:N"
@@ -22,6 +24,7 @@ class CardinalityType(Enum):
 
 class PropertyType(Enum):
     """Supported property types in FalkorDB"""
+
     STRING = "string"
     INTEGER = "integer"
     FLOAT = "float"
@@ -34,6 +37,7 @@ class PropertyType(Enum):
 @dataclass
 class PropertySchema:
     """Schema definition for entity/relationship properties"""
+
     name: str
     property_type: PropertyType
     required: bool = False
@@ -47,6 +51,7 @@ class PropertySchema:
 @dataclass
 class EntitySchema:
     """Schema definition for graph entities"""
+
     label: str
     properties: List[PropertySchema]
     primary_key: str
@@ -58,6 +63,7 @@ class EntitySchema:
 @dataclass
 class RelationshipSchema:
     """Schema definition for graph relationships"""
+
     type: str
     from_label: str
     to_label: str
@@ -71,6 +77,7 @@ class RelationshipSchema:
 @dataclass
 class CompiledSchema:
     """Complete compiled ontology schema"""
+
     entities: Dict[str, EntitySchema]
     relationships: Dict[str, RelationshipSchema]
     constraints: List[Dict[str, Any]]
@@ -134,11 +141,13 @@ class SchemaCompiler:
             indexes=self.indexes,
             graphity_config=graphity_config,
             version="1.0",
-            metadata={"compiled_files": [f.name for f in schema_files]}
+            metadata={"compiled_files": [f.name for f in schema_files]},
         )
 
-        logger.info(f"Compilation complete: {len(self.entities)} entities, "
-                   f"{len(self.relationships)} relationships")
+        logger.info(
+            f"Compilation complete: {len(self.entities)} entities, "
+            f"{len(self.relationships)} relationships"
+        )
 
         return compiled
 
@@ -146,68 +155,68 @@ class SchemaCompiler:
         """Load and parse a single YAML schema file"""
         logger.debug(f"Loading {filepath.name}")
 
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             data = yaml.safe_load(f)
 
         # Load entities
-        if 'entities' in data:
-            for entity_def in data['entities']:
+        if "entities" in data:
+            for entity_def in data["entities"]:
                 entity = self._parse_entity(entity_def)
                 self.entities[entity.label] = entity
 
         # Load relationships
-        if 'relationships' in data:
-            for rel_def in data['relationships']:
+        if "relationships" in data:
+            for rel_def in data["relationships"]:
                 relationship = self._parse_relationship(rel_def)
                 self.relationships[relationship.type] = relationship
 
     def _parse_entity(self, entity_def: Dict[str, Any]) -> EntitySchema:
         """Parse entity definition from YAML"""
         properties = []
-        for prop_def in entity_def.get('properties', []):
+        for prop_def in entity_def.get("properties", []):
             prop = PropertySchema(
-                name=prop_def['name'],
-                property_type=PropertyType(prop_def['type']),
-                required=prop_def.get('required', False),
-                indexed=prop_def.get('indexed', False),
-                unique=prop_def.get('unique', False),
-                default=prop_def.get('default'),
-                constraints=prop_def.get('constraints', {}),
-                description=prop_def.get('description')
+                name=prop_def["name"],
+                property_type=PropertyType(prop_def["type"]),
+                required=prop_def.get("required", False),
+                indexed=prop_def.get("indexed", False),
+                unique=prop_def.get("unique", False),
+                default=prop_def.get("default"),
+                constraints=prop_def.get("constraints", {}),
+                description=prop_def.get("description"),
             )
             properties.append(prop)
 
         return EntitySchema(
-            label=entity_def['label'],
+            label=entity_def["label"],
             properties=properties,
-            primary_key=entity_def['primary_key'],
-            indexes=entity_def.get('indexes', []),
-            description=entity_def.get('description'),
-            metadata=entity_def.get('metadata', {})
+            primary_key=entity_def["primary_key"],
+            indexes=entity_def.get("indexes", []),
+            description=entity_def.get("description"),
+            metadata=entity_def.get("metadata", {}),
         )
 
     def _parse_relationship(self, rel_def: Dict[str, Any]) -> RelationshipSchema:
         """Parse relationship definition from YAML"""
         properties = []
-        for prop_def in rel_def.get('properties', []):
+        for prop_def in rel_def.get("properties", []):
             prop = PropertySchema(
-                name=prop_def['name'],
-                property_type=PropertyType(prop_def['type']),
-                required=prop_def.get('required', False),
-                indexed=prop_def.get('indexed', False),
-                description=prop_def.get('description')
+                name=prop_def["name"],
+                property_type=PropertyType(prop_def["type"]),
+                required=prop_def.get("required", False),
+                indexed=prop_def.get("indexed", False),
+                description=prop_def.get("description"),
             )
             properties.append(prop)
 
         return RelationshipSchema(
-            type=rel_def['type'],
-            from_label=rel_def['from'],
-            to_label=rel_def['to'],
+            type=rel_def["type"],
+            from_label=rel_def["from"],
+            to_label=rel_def["to"],
             properties=properties,
-            cardinality=CardinalityType(rel_def.get('cardinality', '1:N')),
-            bidirectional=rel_def.get('bidirectional', False),
-            description=rel_def.get('description'),
-            metadata=rel_def.get('metadata', {})
+            cardinality=CardinalityType(rel_def.get("cardinality", "1:N")),
+            bidirectional=rel_def.get("bidirectional", False),
+            description=rel_def.get("description"),
+            metadata=rel_def.get("metadata", {}),
         )
 
     def _validate_references(self) -> None:
@@ -216,15 +225,17 @@ class SchemaCompiler:
 
         for rel_type, rel in self.relationships.items():
             if rel.from_label not in self.entities:
-                errors.append(f"Relationship '{rel_type}' references "
-                            f"unknown entity '{rel.from_label}'")
+                errors.append(
+                    f"Relationship '{rel_type}' references unknown entity '{rel.from_label}'"
+                )
 
             if rel.to_label not in self.entities:
-                errors.append(f"Relationship '{rel_type}' references "
-                            f"unknown entity '{rel.to_label}'")
+                errors.append(
+                    f"Relationship '{rel_type}' references unknown entity '{rel.to_label}'"
+                )
 
         if errors:
-            raise ValueError(f"Schema validation failed:\n" + "\n".join(errors))
+            raise ValueError("Schema validation failed:\n" + "\n".join(errors))
 
     def _generate_constraints(self) -> None:
         """Generate FalkorDB constraints from schema"""
@@ -232,29 +243,27 @@ class SchemaCompiler:
         for entity in self.entities.values():
             for prop in entity.properties:
                 if prop.unique:
-                    self.constraints.append({
-                        'type': 'unique',
-                        'entity': entity.label,
-                        'property': prop.name
-                    })
+                    self.constraints.append(
+                        {"type": "unique", "entity": entity.label, "property": prop.name}
+                    )
 
         # Primary key constraints
         for entity in self.entities.values():
-            self.constraints.append({
-                'type': 'primary_key',
-                'entity': entity.label,
-                'property': entity.primary_key
-            })
+            self.constraints.append(
+                {"type": "primary_key", "entity": entity.label, "property": entity.primary_key}
+            )
 
         # Cardinality constraints (for enforcement)
         for rel in self.relationships.values():
             if rel.cardinality == CardinalityType.ONE_TO_ONE:
-                self.constraints.append({
-                    'type': 'cardinality',
-                    'relationship': rel.type,
-                    'max_outgoing': 1,
-                    'max_incoming': 1
-                })
+                self.constraints.append(
+                    {
+                        "type": "cardinality",
+                        "relationship": rel.type,
+                        "max_outgoing": 1,
+                        "max_incoming": 1,
+                    }
+                )
 
     def _generate_indexes(self) -> None:
         """Generate FalkorDB indexes from schema"""
@@ -262,22 +271,22 @@ class SchemaCompiler:
         for entity in self.entities.values():
             for prop in entity.properties:
                 if prop.indexed:
-                    self.indexes.append({
-                        'entity': entity.label,
-                        'property': prop.name,
-                        'type': 'exact' if prop.property_type in [
-                            PropertyType.STRING, PropertyType.INTEGER
-                        ] else 'range'
-                    })
+                    self.indexes.append(
+                        {
+                            "entity": entity.label,
+                            "property": prop.name,
+                            "type": "exact"
+                            if prop.property_type in [PropertyType.STRING, PropertyType.INTEGER]
+                            else "range",
+                        }
+                    )
 
             # Explicit indexes
             for index_prop in entity.indexes:
                 if index_prop != entity.primary_key:  # PK auto-indexed
-                    self.indexes.append({
-                        'entity': entity.label,
-                        'property': index_prop,
-                        'type': 'exact'
-                    })
+                    self.indexes.append(
+                        {"entity": entity.label, "property": index_prop, "type": "exact"}
+                    )
 
     def _generate_graphity_config(self) -> Dict[str, Any]:
         """
@@ -288,32 +297,33 @@ class SchemaCompiler:
         hub_entities = []
         for entity in self.entities.values():
             # Count incoming relationships
-            incoming = sum(1 for r in self.relationships.values()
-                          if r.to_label == entity.label)
+            incoming = sum(1 for r in self.relationships.values() if r.to_label == entity.label)
             if incoming >= 3:  # Hub threshold
                 hub_entities.append(entity.label)
 
         # Identify frequently traversed paths
         traversal_patterns = []
         for rel in self.relationships.values():
-            traversal_patterns.append({
-                'pattern': f"({rel.from_label})-[:{rel.type}]->({rel.to_label})",
-                'edge_type': rel.type,
-                'estimated_frequency': 'high' if rel.from_label in hub_entities else 'medium'
-            })
+            traversal_patterns.append(
+                {
+                    "pattern": f"({rel.from_label})-[:{rel.type}]->({rel.to_label})",
+                    "edge_type": rel.type,
+                    "estimated_frequency": "high" if rel.from_label in hub_entities else "medium",
+                }
+            )
 
         return {
-            'enabled': True,
-            'hub_entities': hub_entities,
-            'edge_grouping': {
-                'strategy': 'by_type',  # Group edges by relationship type
-                'chunk_size': 1000      # Edges per chunk
+            "enabled": True,
+            "hub_entities": hub_entities,
+            "edge_grouping": {
+                "strategy": "by_type",  # Group edges by relationship type
+                "chunk_size": 1000,  # Edges per chunk
             },
-            'traversal_patterns': traversal_patterns,
-            'cache_policy': {
-                'hot_paths': True,      # Cache frequently traversed paths
-                'ttl_seconds': 3600
-            }
+            "traversal_patterns": traversal_patterns,
+            "cache_policy": {
+                "hot_paths": True,  # Cache frequently traversed paths
+                "ttl_seconds": 3600,
+            },
         }
 
     def export_cypher_ddl(self, compiled: CompiledSchema) -> str:
@@ -341,9 +351,11 @@ class SchemaCompiler:
         # Create constraints
         statements.append("// Constraints")
         for constraint in compiled.constraints:
-            if constraint['type'] == 'unique':
-                stmt = (f"CREATE CONSTRAINT FOR (n:{constraint['entity']}) "
-                       f"REQUIRE n.{constraint['property']} IS UNIQUE")
+            if constraint["type"] == "unique":
+                stmt = (
+                    f"CREATE CONSTRAINT FOR (n:{constraint['entity']}) "
+                    f"REQUIRE n.{constraint['property']} IS UNIQUE"
+                )
                 statements.append(stmt)
 
         return "\n".join(statements)
@@ -363,38 +375,37 @@ class SchemaCompiler:
             "title": "E2I Ontology Schema",
             "version": compiled.version,
             "entities": {},
-            "relationships": {}
+            "relationships": {},
         }
 
         # Export entities
         for label, entity in compiled.entities.items():
-            schema['entities'][label] = {
-                'type': 'object',
-                'description': entity.description,
-                'primaryKey': entity.primary_key,
-                'properties': {},
-                'required': []
+            schema["entities"][label] = {
+                "type": "object",
+                "description": entity.description,
+                "primaryKey": entity.primary_key,
+                "properties": {},
+                "required": [],
             }
 
             for prop in entity.properties:
-                schema['entities'][label]['properties'][prop.name] = {
-                    'type': prop.property_type.value,
-                    'description': prop.description
+                schema["entities"][label]["properties"][prop.name] = {
+                    "type": prop.property_type.value,
+                    "description": prop.description,
                 }
                 if prop.required:
-                    schema['entities'][label]['required'].append(prop.name)
+                    schema["entities"][label]["required"].append(prop.name)
 
         # Export relationships
         for rel_type, rel in compiled.relationships.items():
-            schema['relationships'][rel_type] = {
-                'from': rel.from_label,
-                'to': rel.to_label,
-                'cardinality': rel.cardinality.value,
-                'bidirectional': rel.bidirectional,
-                'properties': {
-                    prop.name: {'type': prop.property_type.value}
-                    for prop in rel.properties
-                }
+            schema["relationships"][rel_type] = {
+                "from": rel.from_label,
+                "to": rel.to_label,
+                "cardinality": rel.cardinality.value,
+                "bidirectional": rel.bidirectional,
+                "properties": {
+                    prop.name: {"type": prop.property_type.value} for prop in rel.properties
+                },
             }
 
         return schema
@@ -402,8 +413,8 @@ class SchemaCompiler:
 
 # CLI interface
 if __name__ == "__main__":
-    import sys
     import json
+    import sys
 
     if len(sys.argv) < 2:
         print("Usage: schema_compiler.py <ontology_dir> [--output-format cypher|json]")

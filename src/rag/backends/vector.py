@@ -111,8 +111,7 @@ class VectorBackend:
                 )
 
             logger.debug(
-                f"Vector search returned {len(results)} results "
-                f"in {self._last_latency_ms:.1f}ms"
+                f"Vector search returned {len(results)} results in {self._last_latency_ms:.1f}ms"
             )
 
             return results

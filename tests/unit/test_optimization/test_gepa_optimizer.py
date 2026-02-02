@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # Mark all tests in this module to run on the same worker (DSPy import safety)
 pytestmark = pytest.mark.xdist_group(name="gepa_optimizer")
 
@@ -221,18 +220,12 @@ class TestCreateOptimizerForAgent:
     @pytest.fixture
     def sample_trainset(self) -> List[Dict[str, Any]]:
         """Create sample training data."""
-        return [
-            {"question": f"Query {i}", "context": {}, "ground_truth": {}}
-            for i in range(10)
-        ]
+        return [{"question": f"Query {i}", "context": {}, "ground_truth": {}} for i in range(10)]
 
     @pytest.fixture
     def sample_valset(self) -> List[Dict[str, Any]]:
         """Create sample validation data."""
-        return [
-            {"question": f"Val Query {i}", "context": {}, "ground_truth": {}}
-            for i in range(5)
-        ]
+        return [{"question": f"Val Query {i}", "context": {}, "ground_truth": {}} for i in range(5)]
 
     @patch("dspy.GEPA")
     @patch("dspy.LM")
@@ -394,7 +387,7 @@ class TestVersioning:
             version_id="gepa_v1_test_agent_20251201_100000",
             output_dir=temp_output_dir,
         )
-        save_result2 = save_optimized_module(
+        save_optimized_module(
             module=mock_module,
             agent_name="test_agent",
             version_id="gepa_v1_test_agent_20251202_100000",
@@ -687,6 +680,6 @@ class TestToolOptimization:
 
         for expected in expected_tools:
             # Check if tool exists (case-insensitive)
-            assert any(
-                expected.lower() in name.lower() for name in tool_names
-            ), f"Missing tool: {expected}"
+            assert any(expected.lower() in name.lower() for name in tool_names), (
+                f"Missing tool: {expected}"
+            )

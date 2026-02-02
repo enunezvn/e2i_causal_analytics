@@ -38,10 +38,9 @@ Author: E2I Causal Analytics Team
 """
 
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -283,11 +282,15 @@ class OpikFeedbackCollector:
             # Clean up indexes
             if oldest.trace_id in self._by_trace:
                 self._by_trace[oldest.trace_id] = [
-                    r for r in self._by_trace[oldest.trace_id] if r.feedback_id != oldest.feedback_id
+                    r
+                    for r in self._by_trace[oldest.trace_id]
+                    if r.feedback_id != oldest.feedback_id
                 ]
             if oldest.agent_name in self._by_agent:
                 self._by_agent[oldest.agent_name] = [
-                    r for r in self._by_agent[oldest.agent_name] if r.feedback_id != oldest.feedback_id
+                    r
+                    for r in self._by_agent[oldest.agent_name]
+                    if r.feedback_id != oldest.feedback_id
                 ]
 
     def _log_to_opik(self, record: FeedbackRecord) -> None:
@@ -491,20 +494,22 @@ class OpikFeedbackCollector:
         examples = []
         for record in records:
             if record.query and record.response:
-                examples.append({
-                    "question": record.query,
-                    "answer": record.response,
-                    "feedback_score": record.score,
-                    "feedback_type": record.feedback_type,
-                    "feedback_text": (
-                        str(record.user_feedback) if record.user_feedback else ""
-                    ),
-                    "metadata": {
-                        "feedback_id": record.feedback_id,
-                        "trace_id": record.trace_id,
-                        "timestamp": record.timestamp.isoformat(),
-                    },
-                })
+                examples.append(
+                    {
+                        "question": record.query,
+                        "answer": record.response,
+                        "feedback_score": record.score,
+                        "feedback_type": record.feedback_type,
+                        "feedback_text": (
+                            str(record.user_feedback) if record.user_feedback else ""
+                        ),
+                        "metadata": {
+                            "feedback_id": record.feedback_id,
+                            "trace_id": record.trace_id,
+                            "timestamp": record.timestamp.isoformat(),
+                        },
+                    }
+                )
 
         return examples
 

@@ -228,7 +228,7 @@ def partial_r_squared(
     Returns:
         Partial R-squared value [0, 1]
     """
-    n = len(treatment)
+    len(treatment)
     D = treatment.flatten()
     Z = instruments.reshape(-1, 1) if instruments.ndim == 1 else instruments
 
@@ -321,7 +321,9 @@ def sargan_test(
     rejects = p_value < 0.05
 
     if rejects:
-        message = f"Sargan χ²({df}) = {sargan_stat:.2f}, p = {p_value:.4f}: REJECTS instrument validity"
+        message = (
+            f"Sargan χ²({df}) = {sargan_stat:.2f}, p = {p_value:.4f}: REJECTS instrument validity"
+        )
     else:
         message = f"Sargan χ²({df}) = {sargan_stat:.2f}, p = {p_value:.4f}: Cannot reject validity"
 
@@ -409,7 +411,9 @@ def anderson_rubin_test(
     if is_significant:
         message = f"AR F({df1},{df2}) = {ar_stat:.2f}, p = {p_value:.4f}: REJECTS β = {beta_null}"
     else:
-        message = f"AR F({df1},{df2}) = {ar_stat:.2f}, p = {p_value:.4f}: Cannot reject β = {beta_null}"
+        message = (
+            f"AR F({df1},{df2}) = {ar_stat:.2f}, p = {p_value:.4f}: Cannot reject β = {beta_null}"
+        )
 
     return EndogeneityTest(
         test_name="Anderson-Rubin",
@@ -451,15 +455,14 @@ def durbin_wu_hausman_test(
     Y = outcome.flatten()
     D = treatment.flatten()
     Z = instruments.reshape(-1, 1) if instruments.ndim == 1 else instruments
-    k = Z.shape[1]
+    Z.shape[1]
 
     # Step 1: First-stage regression to get residuals
     if covariates is not None:
         X = covariates.reshape(-1, 1) if covariates.ndim == 1 else covariates
-        p = X.shape[1]
+        X.shape[1]
         first_stage = np.column_stack([Z, X])
     else:
-        p = 0
         first_stage = Z
 
     pi = np.linalg.lstsq(first_stage, D, rcond=None)[0]

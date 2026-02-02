@@ -29,7 +29,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query
@@ -146,9 +146,7 @@ class AgentHealth(BaseModel):
     available: bool = Field(..., description="Whether agent is available")
     avg_latency_ms: int = Field(default=0, description="Average response latency")
     success_rate: float = Field(default=1.0, description="Success rate (0-1)")
-    last_invocation: Optional[str] = Field(
-        default=None, description="Last invocation timestamp"
-    )
+    last_invocation: Optional[str] = Field(default=None, description="Last invocation timestamp")
     invocations_24h: int = Field(default=0, description="Invocations in last 24 hours")
 
 
@@ -187,9 +185,7 @@ class HealthScoreResponse(BaseModel):
         default_factory=list, description="Critical issues requiring attention"
     )
     warnings: List[str] = Field(default_factory=list, description="Non-critical warnings")
-    recommendations: List[str] = Field(
-        default_factory=list, description="Recommended actions"
-    )
+    recommendations: List[str] = Field(default_factory=list, description="Recommended actions")
 
     # Summary
     health_summary: str = Field(..., description="Human-readable health summary")
@@ -581,9 +577,7 @@ async def get_health_history(
         for h in history
     ]
 
-    avg_score = (
-        sum(h.overall_health_score for h in history) / len(history) if history else 0.0
-    )
+    avg_score = sum(h.overall_health_score for h in history) / len(history) if history else 0.0
 
     # Calculate trend
     trend = "stable"
@@ -619,7 +613,7 @@ async def get_service_status() -> HealthServiceStatus:
     # Check agent availability
     agent_available = True
     try:
-        from src.agents.health_score import HealthScoreAgent
+        from src.agents.health_score import HealthScoreAgent  # noqa: F401
 
         agent_available = True
     except ImportError:
@@ -714,9 +708,13 @@ def _generate_mock_health_response(
     import time
 
     # Mock component health
-    components = _get_mock_component_health() if scope in [CheckScope.FULL, CheckScope.QUICK] else None
+    components = (
+        _get_mock_component_health() if scope in [CheckScope.FULL, CheckScope.QUICK] else None
+    )
     models = _get_mock_model_health() if scope in [CheckScope.FULL, CheckScope.MODELS] else None
-    pipelines = _get_mock_pipeline_health() if scope in [CheckScope.FULL, CheckScope.PIPELINES] else None
+    pipelines = (
+        _get_mock_pipeline_health() if scope in [CheckScope.FULL, CheckScope.PIPELINES] else None
+    )
     agents = _get_mock_agent_health() if scope in [CheckScope.FULL, CheckScope.AGENTS] else None
 
     # Calculate scores
@@ -727,10 +725,7 @@ def _generate_mock_health_response(
 
     # Weighted overall score
     overall = (
-        0.30 * component_score
-        + 0.30 * model_score
-        + 0.25 * pipeline_score
-        + 0.15 * agent_score
+        0.30 * component_score + 0.30 * model_score + 0.25 * pipeline_score + 0.15 * agent_score
     ) * 100
 
     # Determine grade

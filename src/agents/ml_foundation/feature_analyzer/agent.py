@@ -21,7 +21,7 @@ Integration:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from .graph import create_feature_analyzer_graph, create_shap_analysis_graph
 from .state import FeatureAnalyzerState
@@ -33,6 +33,7 @@ def _get_shap_repository():
     """Get ShapAnalysisRepository (lazy import to avoid circular deps)."""
     try:
         from src.repositories.shap_analysis import get_shap_analysis_repository
+
         return get_shap_analysis_repository()
     except Exception as e:
         logger.warning(f"Could not get SHAP repository: {e}")
@@ -43,6 +44,7 @@ def _get_opik_connector():
     """Get OpikConnector (lazy import to avoid circular deps)."""
     try:
         from src.mlops.opik_connector import get_opik_connector
+
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
@@ -53,6 +55,7 @@ def _get_semantic_memory():
     """Get semantic memory client (lazy import with graceful degradation)."""
     try:
         from src.memory.semantic_memory import get_semantic_memory_client
+
         return get_semantic_memory_client()
     except Exception as e:
         logger.debug(f"Semantic memory not available: {e}")
@@ -181,11 +184,13 @@ class FeatureAnalyzerAgent:
                 ) as span:
                     final_state = await graph.ainvoke(initial_state)
                     # Set output on span
-                    span.set_output({
-                        "samples_analyzed": final_state.get("samples_analyzed"),
-                        "explainer_type": final_state.get("explainer_type"),
-                        "top_features_count": len(final_state.get("top_features", [])),
-                    })
+                    span.set_output(
+                        {
+                            "samples_analyzed": final_state.get("samples_analyzed"),
+                            "explainer_type": final_state.get("explainer_type"),
+                            "top_features_count": len(final_state.get("top_features", [])),
+                        }
+                    )
             else:
                 final_state = await graph.ainvoke(initial_state)
 
@@ -200,9 +205,10 @@ class FeatureAnalyzerAgent:
             semantic_memory_entries = 0
 
             if final_state.get("store_in_semantic_memory", True):
-                semantic_memory_updated, semantic_memory_entries = await self._update_semantic_memory(
-                    final_state
-                )
+                (
+                    semantic_memory_updated,
+                    semantic_memory_entries,
+                ) = await self._update_semantic_memory(final_state)
 
             # Construct structured outputs
             shap_analysis = self._build_shap_analysis(final_state)
@@ -256,9 +262,7 @@ class FeatureAnalyzerAgent:
 
             # Log execution time
             duration = (datetime.now() - start_time).total_seconds()
-            logger.info(
-                f"Feature analysis completed in {duration:.2f}s (SLA: {self.sla_seconds}s)"
-            )
+            logger.info(f"Feature analysis completed in {duration:.2f}s (SLA: {self.sla_seconds}s)")
 
             # Check SLA
             if duration > self.sla_seconds:
@@ -381,7 +385,7 @@ class FeatureAnalyzerAgent:
                             "importance": float(importance),
                             "rank": rank,
                             "model_version": state.get("model_version", "unknown"),
-                        }
+                        },
                     )
                     entries_added += 1
                 except Exception as e:
@@ -400,7 +404,7 @@ class FeatureAnalyzerAgent:
                         properties={
                             "interaction_strength": float(strength),
                             "experiment_id": experiment_id,
-                        }
+                        },
                     )
                     entries_added += 1
                 except Exception as e:

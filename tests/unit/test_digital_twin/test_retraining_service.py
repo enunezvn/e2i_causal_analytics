@@ -10,17 +10,17 @@ Tests cover:
 - Training config generation
 """
 
-import pytest
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
+import pytest
+
 from src.digital_twin.retraining_service import (
-    TwinRetrainingService,
     TwinRetrainingConfig,
     TwinRetrainingDecision,
     TwinRetrainingJob,
+    TwinRetrainingService,
     TwinRetrainingStatus,
     TwinTriggerReason,
     get_twin_retraining_service,
@@ -201,7 +201,9 @@ class TestTwinRetrainingService:
         assert "No fidelity data available" in decision.details.get("error", "")
 
     @pytest.mark.asyncio
-    async def test_evaluate_retraining_need_insufficient_validations(self, service, mock_repository):
+    async def test_evaluate_retraining_need_insufficient_validations(
+        self, service, mock_repository
+    ):
         """Test evaluation with insufficient validations."""
         model_id = uuid4()
         fidelity_report = {
@@ -495,9 +497,7 @@ class TestTwinRetrainingService:
 
     def test_build_training_config_fidelity_degradation(self, service):
         """Test training config for fidelity degradation."""
-        config = service._build_training_config(
-            TwinTriggerReason.FIDELITY_DEGRADATION, 0.65, 0.15
-        )
+        config = service._build_training_config(TwinTriggerReason.FIDELITY_DEGRADATION, 0.65, 0.15)
 
         assert config["retrain_full"] is True
         assert config["increase_training_samples"] is True
@@ -506,27 +506,21 @@ class TestTwinRetrainingService:
 
     def test_build_training_config_prediction_error(self, service):
         """Test training config for prediction error."""
-        config = service._build_training_config(
-            TwinTriggerReason.PREDICTION_ERROR, 0.75, 0.30
-        )
+        config = service._build_training_config(TwinTriggerReason.PREDICTION_ERROR, 0.75, 0.30)
 
         assert config["focus_on_high_error_segments"] is True
         assert config["adjust_feature_weights"] is True
 
     def test_build_training_config_ci_coverage_drop(self, service):
         """Test training config for CI coverage drop."""
-        config = service._build_training_config(
-            TwinTriggerReason.CI_COVERAGE_DROP, 0.75, 0.15
-        )
+        config = service._build_training_config(TwinTriggerReason.CI_COVERAGE_DROP, 0.75, 0.15)
 
         assert config["recalibrate_uncertainty"] is True
         assert config["increase_ensemble_size"] is True
 
     def test_build_training_config_severe_degradation(self, service):
         """Test training config for severe degradation."""
-        config = service._build_training_config(
-            TwinTriggerReason.FIDELITY_DEGRADATION, 0.45, 0.30
-        )
+        config = service._build_training_config(TwinTriggerReason.FIDELITY_DEGRADATION, 0.45, 0.30)
 
         assert config["retrain_full"] is True
         assert config["extended_tuning_budget"] is True

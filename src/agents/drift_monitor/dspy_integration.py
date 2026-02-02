@@ -54,7 +54,9 @@ class DriftDetectionTrainingSignal:
     model_drift_count: int = 0
     concept_drift_count: int = 0
     overall_drift_score: float = 0.0
-    severity_distribution: Dict[str, int] = field(default_factory=dict)  # none, low, medium, high, critical
+    severity_distribution: Dict[str, int] = field(
+        default_factory=dict
+    )  # none, low, medium, high, critical
 
     # === Alert Generation ===
     alerts_generated: int = 0
@@ -90,7 +92,9 @@ class DriftDetectionTrainingSignal:
         else:
             # Proxy: appropriate drift detection rate
             if self.features_monitored > 0:
-                total_drift = self.data_drift_count + self.model_drift_count + self.concept_drift_count
+                total_drift = (
+                    self.data_drift_count + self.model_drift_count + self.concept_drift_count
+                )
                 drift_rate = total_drift / self.features_monitored
                 # Ideal: 5-20% drift rate (not too few, not too many)
                 if 0.05 <= drift_rate <= 0.20:
@@ -108,7 +112,11 @@ class DriftDetectionTrainingSignal:
             alert_rate = self.alerts_generated / max(1, total_drift)
             alerting_score += 0.5 * min(1.0, alert_rate)
             # Critical alerts should be rare but not zero
-            critical_rate = self.critical_alerts / max(1, self.alerts_generated) if self.alerts_generated > 0 else 0
+            critical_rate = (
+                self.critical_alerts / max(1, self.alerts_generated)
+                if self.alerts_generated > 0
+                else 0
+            )
             if 0.1 <= critical_rate <= 0.3:
                 alerting_score += 0.5
             else:
@@ -360,11 +368,7 @@ class DriftMonitorSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def get_validated_examples(

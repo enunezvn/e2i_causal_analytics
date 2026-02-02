@@ -1,18 +1,19 @@
 """Tests for Meta-Learner estimators (S-Learner, T-Learner, X-Learner, OrthoForest)."""
 
-import pytest
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
-from unittest.mock import Mock, patch
+import pytest
 
 from src.causal_engine.energy_score.estimator_selector import (
     EstimatorConfig,
     EstimatorResult,
     EstimatorType,
+    OrthoForestWrapper,
     SLearnerWrapper,
     TLearnerWrapper,
     XLearnerWrapper,
-    OrthoForestWrapper,
 )
 
 
@@ -39,9 +40,7 @@ def generate_synthetic_data(
 
     # Generate covariates
     X = np.random.randn(n_samples, n_features)
-    covariates = pd.DataFrame(
-        X, columns=[f"x{i}" for i in range(n_features)]
-    )
+    covariates = pd.DataFrame(X, columns=[f"x{i}" for i in range(n_features)])
 
     # Propensity depends on X[:,0]
     propensity = 1 / (1 + np.exp(-X[:, 0]))
@@ -289,10 +288,7 @@ class TestOrthoForestWrapper:
         wrapper = OrthoForestWrapper(config)
         assert wrapper.estimator_type == EstimatorType.ORTHO_FOREST
 
-    @pytest.mark.skipif(
-        True,
-        reason="OrthoForest requires econml.orf which may not be available"
-    )
+    @pytest.mark.skipif(True, reason="OrthoForest requires econml.orf which may not be available")
     def test_fit_returns_result(self, config, data):
         """Test that fit returns an EstimatorResult."""
         treatment, outcome, covariates, _ = data

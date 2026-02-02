@@ -21,16 +21,16 @@ from .analyzer import (
     HierarchicalResult,
     SegmentResult,
 )
+from .nested_ci import (
+    AggregationMethod,
+    NestedCIConfig,
+    NestedCIResult,
+    NestedConfidenceInterval,
+)
 from .segment_cate import (
     SegmentCATECalculator,
     SegmentCATEConfig,
     SegmentCATEResult,
-)
-from .nested_ci import (
-    NestedConfidenceInterval,
-    NestedCIConfig,
-    NestedCIResult,
-    AggregationMethod,
 )
 
 __all__ = [

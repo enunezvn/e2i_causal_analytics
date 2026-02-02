@@ -19,7 +19,6 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 # =============================================================================
 # ENUMS
 # =============================================================================
@@ -163,42 +162,24 @@ class ObservabilitySpan(BaseModel):
     # Timing
     started_at: datetime = Field(..., description="Span start time")
     ended_at: Optional[datetime] = Field(default=None, description="Span end time")
-    duration_ms: Optional[int] = Field(
-        default=None, ge=0, description="Duration in milliseconds"
-    )
+    duration_ms: Optional[int] = Field(default=None, ge=0, description="Duration in milliseconds")
 
     # LLM specific (for Hybrid/Deep agents)
-    model_name: Optional[str] = Field(
-        default=None, max_length=100, description="LLM model name"
-    )
-    input_tokens: Optional[int] = Field(
-        default=None, ge=0, description="Input tokens used"
-    )
-    output_tokens: Optional[int] = Field(
-        default=None, ge=0, description="Output tokens generated"
-    )
-    total_tokens: Optional[int] = Field(
-        default=None, ge=0, description="Total tokens consumed"
-    )
+    model_name: Optional[str] = Field(default=None, max_length=100, description="LLM model name")
+    input_tokens: Optional[int] = Field(default=None, ge=0, description="Input tokens used")
+    output_tokens: Optional[int] = Field(default=None, ge=0, description="Output tokens generated")
+    total_tokens: Optional[int] = Field(default=None, ge=0, description="Total tokens consumed")
 
     # Status
-    status: SpanStatusEnum = Field(
-        default=SpanStatusEnum.SUCCESS, description="Execution status"
-    )
+    status: SpanStatusEnum = Field(default=SpanStatusEnum.SUCCESS, description="Execution status")
     error_type: Optional[str] = Field(
         default=None, max_length=100, description="Error type if failed"
     )
-    error_message: Optional[str] = Field(
-        default=None, description="Error message if failed"
-    )
+    error_message: Optional[str] = Field(default=None, description="Error message if failed")
 
     # Fallback tracking
-    fallback_used: bool = Field(
-        default=False, description="Whether fallback was triggered"
-    )
-    fallback_chain: List[str] = Field(
-        default_factory=list, description="Sequence of models tried"
-    )
+    fallback_used: bool = Field(default=False, description="Whether fallback was triggered")
+    fallback_chain: List[str] = Field(default_factory=list, description="Sequence of models tried")
 
     # Custom attributes
     attributes: Dict[str, Any] = Field(
@@ -211,20 +192,12 @@ class ObservabilitySpan(BaseModel):
     )
 
     # Links to other entities (optional foreign keys)
-    experiment_id: Optional[UUID] = Field(
-        default=None, description="Linked experiment ID"
-    )
-    training_run_id: Optional[UUID] = Field(
-        default=None, description="Linked training run ID"
-    )
-    deployment_id: Optional[UUID] = Field(
-        default=None, description="Linked deployment ID"
-    )
+    experiment_id: Optional[UUID] = Field(default=None, description="Linked experiment ID")
+    training_run_id: Optional[UUID] = Field(default=None, description="Linked training run ID")
+    deployment_id: Optional[UUID] = Field(default=None, description="Linked deployment ID")
 
     # User context
-    user_id: Optional[str] = Field(
-        default=None, max_length=100, description="User identifier"
-    )
+    user_id: Optional[str] = Field(default=None, max_length=100, description="User identifier")
     session_id: Optional[str] = Field(
         default=None, max_length=100, description="Session identifier"
     )
@@ -316,23 +289,17 @@ class LatencyStats(BaseModel):
     agent_name: Optional[AgentNameEnum] = Field(
         default=None, description="Agent name (None for tier-level stats)"
     )
-    agent_tier: Optional[AgentTierEnum] = Field(
-        default=None, description="Agent tier"
-    )
+    agent_tier: Optional[AgentTierEnum] = Field(default=None, description="Agent tier")
     total_spans: int = Field(default=0, ge=0, description="Total spans analyzed")
     avg_duration_ms: float = Field(default=0.0, ge=0, description="Average latency")
     p50_ms: float = Field(default=0.0, ge=0, description="Median latency (50th)")
     p95_ms: float = Field(default=0.0, ge=0, description="95th percentile latency")
     p99_ms: float = Field(default=0.0, ge=0, description="99th percentile latency")
-    error_rate: float = Field(
-        default=0.0, ge=0, le=1, description="Error rate (0.0-1.0)"
-    )
+    error_rate: float = Field(default=0.0, ge=0, le=1, description="Error rate (0.0-1.0)")
     fallback_rate: float = Field(
         default=0.0, ge=0, le=1, description="Fallback invocation rate (0.0-1.0)"
     )
-    total_tokens_used: int = Field(
-        default=0, ge=0, description="Total tokens consumed"
-    )
+    total_tokens_used: int = Field(default=0, ge=0, description="Total tokens consumed")
 
     @property
     def is_healthy(self) -> bool:
@@ -356,9 +323,7 @@ class QualityMetrics(BaseModel):
     """
 
     # Time window
-    time_window: str = Field(
-        default="24h", description="Time window for metrics (1h, 24h, 7d)"
-    )
+    time_window: str = Field(default="24h", description="Time window for metrics (1h, 24h, 7d)")
     computed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), description="When metrics were computed"
     )
@@ -370,12 +335,8 @@ class QualityMetrics(BaseModel):
     timeout_count: int = Field(default=0, ge=0, description="Timed out spans")
 
     # Rates
-    success_rate: float = Field(
-        default=1.0, ge=0, le=1, description="Success rate (0.0-1.0)"
-    )
-    error_rate: float = Field(
-        default=0.0, ge=0, le=1, description="Error rate (0.0-1.0)"
-    )
+    success_rate: float = Field(default=1.0, ge=0, le=1, description="Success rate (0.0-1.0)")
+    error_rate: float = Field(default=0.0, ge=0, le=1, description="Error rate (0.0-1.0)")
     fallback_rate: float = Field(
         default=0.0, ge=0, le=1, description="Fallback usage rate (0.0-1.0)"
     )
@@ -388,9 +349,7 @@ class QualityMetrics(BaseModel):
 
     # Token usage
     total_tokens: int = Field(default=0, ge=0, description="Total tokens used")
-    avg_tokens_per_span: float = Field(
-        default=0.0, ge=0, description="Average tokens per span"
-    )
+    avg_tokens_per_span: float = Field(default=0.0, ge=0, description="Average tokens per span")
 
     # By-agent breakdown
     latency_by_agent: Dict[str, LatencyStats] = Field(
@@ -407,9 +366,7 @@ class QualityMetrics(BaseModel):
     )
 
     # Derived quality score (0.0-1.0)
-    quality_score: float = Field(
-        default=1.0, ge=0, le=1, description="Overall quality score"
-    )
+    quality_score: float = Field(default=1.0, ge=0, le=1, description="Overall quality score")
 
     def compute_quality_score(self) -> float:
         """Compute overall quality score from metrics.

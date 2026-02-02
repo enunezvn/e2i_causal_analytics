@@ -8,7 +8,7 @@ V4.4: Added discovery routing to pass DAG data to discovery-aware agents.
 
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ..state import AgentDispatch, OrchestratorState
 
@@ -288,7 +288,9 @@ class RouterNode:
         for d in dispatches:
             groups[d["priority"]].append(d["agent_name"])
         # Sort by priority order: critical=1, high=2, medium=3, low=4
-        return [groups[p] for p in sorted(groups.keys(), key=lambda x: self.PRIORITY_ORDER.get(x, 99))]
+        return [
+            groups[p] for p in sorted(groups.keys(), key=lambda x: self.PRIORITY_ORDER.get(x, 99))
+        ]
 
     # ========================================================================
     # V4.4: Discovery Routing Methods

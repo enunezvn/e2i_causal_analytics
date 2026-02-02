@@ -14,32 +14,31 @@ Key validations:
 Phase 2.1 of Synthetic Data Audit Plan.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import date, timedelta
 
+import numpy as np
+import pandas as pd
+import pytest
+
 from src.ml.synthetic.config import (
-    Brand,
-    DGPType,
-    DataSplit,
-    DGP_CONFIGS,
-    SyntheticDataConfig,
     BRANDS,
+    DGP_CONFIGS,
     DGP_TYPES,
+    Brand,
+    DataSplit,
+    DGPType,
+    SyntheticDataConfig,
 )
-from src.ml.synthetic.validators import SchemaValidator
 from src.ml.synthetic.ground_truth.causal_effects import (
     GroundTruthStore,
-    GroundTruthEffect,
     create_ground_truth_from_dgp_config,
-    get_global_store,
 )
 from src.ml.synthetic.loaders.batch_loader import (
+    LOADING_ORDER,
     BatchLoader,
     LoaderConfig,
-    LOADING_ORDER,
 )
+from src.ml.synthetic.validators import SchemaValidator
 
 
 class TestSyntheticDataConsolidation:
@@ -68,29 +67,31 @@ class TestSyntheticDataConsolidation:
         np.random.seed(42)
         n_hcps = 50
 
-        return pd.DataFrame({
-            "hcp_id": [f"hcp_{i:05d}" for i in range(n_hcps)],
-            "npi": [f"{1000000000 + i}" for i in range(n_hcps)],
-            "specialty": np.random.choice(
-                ["dermatology", "hematology", "oncology", "neurology"],
-                n_hcps,
-            ),
-            "practice_type": np.random.choice(
-                ["academic", "community", "private"],
-                n_hcps,
-            ),
-            "geographic_region": np.random.choice(
-                ["northeast", "south", "midwest", "west"],
-                n_hcps,
-            ),
-            "years_experience": np.random.randint(2, 35, n_hcps),
-            "academic_hcp": np.random.binomial(1, 0.3, n_hcps),
-            "total_patient_volume": np.random.randint(50, 500, n_hcps),
-            "brand": np.random.choice(
-                ["Remibrutinib", "Fabhalta", "Kisqali"],  # Capitalized - correct
-                n_hcps,
-            ),
-        })
+        return pd.DataFrame(
+            {
+                "hcp_id": [f"hcp_{i:05d}" for i in range(n_hcps)],
+                "npi": [f"{1000000000 + i}" for i in range(n_hcps)],
+                "specialty": np.random.choice(
+                    ["dermatology", "hematology", "oncology", "neurology"],
+                    n_hcps,
+                ),
+                "practice_type": np.random.choice(
+                    ["academic", "community", "private"],
+                    n_hcps,
+                ),
+                "geographic_region": np.random.choice(
+                    ["northeast", "south", "midwest", "west"],
+                    n_hcps,
+                ),
+                "years_experience": np.random.randint(2, 35, n_hcps),
+                "academic_hcp": np.random.binomial(1, 0.3, n_hcps),
+                "total_patient_volume": np.random.randint(50, 500, n_hcps),
+                "brand": np.random.choice(
+                    ["Remibrutinib", "Fabhalta", "Kisqali"],  # Capitalized - correct
+                    n_hcps,
+                ),
+            }
+        )
 
     @pytest.fixture
     def sample_patient_df(self, sample_hcp_df):
@@ -133,36 +134,40 @@ class TestSyntheticDataConsolidation:
             else:
                 splits.append("holdout")
 
-        return pd.DataFrame({
-            "patient_journey_id": [f"journey_{i:06d}" for i in range(n_patients)],
-            "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
-            "hcp_id": hcp_ids,
-            "brand": np.random.choice(
-                ["Remibrutinib", "Fabhalta", "Kisqali"],  # Capitalized - correct
-                n_patients,
-            ),
-            "journey_start_date": [d.strftime("%Y-%m-%d") for d in dates],
-            "data_split": splits,
-            "disease_severity": np.clip(np.random.normal(5, 2, n_patients), 0, 10),
-            "academic_hcp": np.random.binomial(1, 0.3, n_patients),
-            "engagement_score": np.random.uniform(0, 10, n_patients),
-            "treatment_initiated": np.random.binomial(1, 0.5, n_patients),
-            "geographic_region": np.random.choice(
-                ["northeast", "south", "midwest", "west"],
-                n_patients,
-            ),
-            "insurance_type": np.random.choice(
-                ["commercial", "medicare", "medicaid"],
-                n_patients,
-            ),
-            "age_at_diagnosis": np.random.randint(18, 80, n_patients),
-        })
+        return pd.DataFrame(
+            {
+                "patient_journey_id": [f"journey_{i:06d}" for i in range(n_patients)],
+                "patient_id": [f"pt_{i:06d}" for i in range(n_patients)],
+                "hcp_id": hcp_ids,
+                "brand": np.random.choice(
+                    ["Remibrutinib", "Fabhalta", "Kisqali"],  # Capitalized - correct
+                    n_patients,
+                ),
+                "journey_start_date": [d.strftime("%Y-%m-%d") for d in dates],
+                "data_split": splits,
+                "disease_severity": np.clip(np.random.normal(5, 2, n_patients), 0, 10),
+                "academic_hcp": np.random.binomial(1, 0.3, n_patients),
+                "engagement_score": np.random.uniform(0, 10, n_patients),
+                "treatment_initiated": np.random.binomial(1, 0.5, n_patients),
+                "geographic_region": np.random.choice(
+                    ["northeast", "south", "midwest", "west"],
+                    n_patients,
+                ),
+                "insurance_type": np.random.choice(
+                    ["commercial", "medicare", "medicaid"],
+                    n_patients,
+                ),
+                "age_at_diagnosis": np.random.randint(18, 80, n_patients),
+            }
+        )
 
     # =========================================================================
     # Test 1: Brand ENUM Supabase Compatibility
     # =========================================================================
 
-    def test_brand_enum_supabase_compatibility(self, schema_validator, sample_hcp_df, sample_patient_df):
+    def test_brand_enum_supabase_compatibility(
+        self, schema_validator, sample_hcp_df, sample_patient_df
+    ):
         """
         Test that Brand ENUM values match Supabase schema exactly.
 
@@ -410,9 +415,7 @@ class TestSyntheticDataConsolidation:
 
         # Dry run should report success (no actual loading)
         for table_name, result in results.items():
-            assert result.records_failed == 0, (
-                f"{table_name} had failures: {result.errors}"
-            )
+            assert result.records_failed == 0, f"{table_name} had failures: {result.errors}"
 
         # Test with orphan FK (patient references non-existent HCP)
         bad_patient_df = sample_patient_df.copy()
@@ -427,10 +430,9 @@ class TestSyntheticDataConsolidation:
         )
 
         assert result.is_valid is False, "Orphan FK should fail validation"
-        assert any(
-            e.error_type == "orphan_fk"
-            for e in result.errors
-        ), "Should identify orphan FK error"
+        assert any(e.error_type == "orphan_fk" for e in result.errors), (
+            "Should identify orphan FK error"
+        )
 
 
 class TestConsolidationSummary:

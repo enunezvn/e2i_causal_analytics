@@ -349,16 +349,20 @@ def check_all_production_models(
                     model_id=model_id,
                     time_window=effective_window,
                 )
-                results.append({
-                    "model_id": model_id,
-                    "task_id": result.id,
-                    "status": "queued",
-                })
+                results.append(
+                    {
+                        "model_id": model_id,
+                        "task_id": result.id,
+                        "status": "queued",
+                    }
+                )
             except Exception as e:
-                errors.append({
-                    "model_id": model_id,
-                    "error": str(e),
-                })
+                errors.append(
+                    {
+                        "model_id": model_id,
+                        "error": str(e),
+                    }
+                )
 
         return {
             "status": "completed",
@@ -405,10 +409,7 @@ def cleanup_old_drift_history(
 
             # Delete old drift history records
             drift_result = await (
-                client.table("ml_drift_history")
-                .delete()
-                .lt("detected_at", cutoff_iso)
-                .execute()
+                client.table("ml_drift_history").delete().lt("detected_at", cutoff_iso).execute()
             )
             drift_deleted = len(drift_result.data) if drift_result.data else 0
 
@@ -424,10 +425,7 @@ def cleanup_old_drift_history(
 
             # Delete old monitoring runs
             run_result = await (
-                client.table("ml_monitoring_runs")
-                .delete()
-                .lt("started_at", cutoff_iso)
-                .execute()
+                client.table("ml_monitoring_runs").delete().lt("started_at", cutoff_iso).execute()
             )
             runs_deleted = len(run_result.data) if run_result.data else 0
 
@@ -494,7 +492,7 @@ def track_model_performance(
 
             # Route alerts if any
             if alerts:
-                from src.services.alert_routing import get_alert_router, AlertPayload
+                from src.services.alert_routing import AlertPayload, get_alert_router
 
                 router = get_alert_router()
                 for alert in alerts:
@@ -545,8 +543,8 @@ def check_model_performance_alerts(
     logger.info(f"Checking performance alerts for model {model_id}")
 
     async def execute_check():
+        from src.services.alert_routing import AlertPayload, get_alert_router
         from src.services.performance_tracking import get_performance_tracker
-        from src.services.alert_routing import get_alert_router, AlertPayload
 
         try:
             tracker = get_performance_tracker()
@@ -622,28 +620,34 @@ def send_drift_alert_notifications(
                 if email_recipients:
                     # Placeholder for email sending
                     logger.info(f"Would send email for alert {alert_id} to {email_recipients}")
-                    notifications_sent.append({
-                        "alert_id": alert_id,
-                        "channel": "email",
-                        "status": "simulated",
-                    })
+                    notifications_sent.append(
+                        {
+                            "alert_id": alert_id,
+                            "channel": "email",
+                            "status": "simulated",
+                        }
+                    )
 
                 # Send Slack if configured
                 slack_webhook = alert_config.get("slack_webhook")
                 if slack_webhook:
                     # Placeholder for Slack webhook
                     logger.info(f"Would send Slack notification for alert {alert_id}")
-                    notifications_sent.append({
-                        "alert_id": alert_id,
-                        "channel": "slack",
-                        "status": "simulated",
-                    })
+                    notifications_sent.append(
+                        {
+                            "alert_id": alert_id,
+                            "channel": "slack",
+                            "status": "simulated",
+                        }
+                    )
 
             except Exception as e:
-                errors.append({
-                    "alert_id": alert_id,
-                    "error": str(e),
-                })
+                errors.append(
+                    {
+                        "alert_id": alert_id,
+                        "error": str(e),
+                    }
+                )
 
         return {
             "status": "completed",
@@ -724,8 +728,7 @@ def execute_model_retraining(
         Retraining results
     """
     logger.info(
-        f"Starting model retraining: {model_version} -> {new_version}, "
-        f"task {self.request.id}"
+        f"Starting model retraining: {model_version} -> {new_version}, task {self.request.id}"
     )
 
     async def execute_retraining():
@@ -751,6 +754,7 @@ def execute_model_retraining(
 
             # Simulate training (placeholder)
             import asyncio
+
             await asyncio.sleep(1)  # Would be actual training time
 
             # For now, simulate a successful retraining with slight improvement
@@ -827,7 +831,6 @@ def check_retraining_for_all_models(
             }
 
         results = []
-        triggered = []
         errors = []
 
         for model in models:
@@ -838,16 +841,20 @@ def check_retraining_for_all_models(
                     model_id=model_id,
                     auto_approve=auto_approve,
                 )
-                results.append({
-                    "model_id": model_id,
-                    "task_id": task.id,
-                    "status": "queued",
-                })
+                results.append(
+                    {
+                        "model_id": model_id,
+                        "task_id": task.id,
+                        "status": "queued",
+                    }
+                )
             except Exception as e:
-                errors.append({
-                    "model_id": model_id,
-                    "error": str(e),
-                })
+                errors.append(
+                    {
+                        "model_id": model_id,
+                        "error": str(e),
+                    }
+                )
 
         return {
             "status": "completed",

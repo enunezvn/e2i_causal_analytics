@@ -9,11 +9,12 @@ Tests cover:
 - Error handling
 """
 
-import pytest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent.parent
@@ -177,9 +178,7 @@ class TestFullMaterialization:
         """Test full materialization error handling."""
         mock_client = MagicMock()
         mock_client.initialize = AsyncMock()
-        mock_client.materialize = AsyncMock(
-            side_effect=Exception("Materialization error")
-        )
+        mock_client.materialize = AsyncMock(side_effect=Exception("Materialization error"))
 
         job = MaterializationJob(feast_client=mock_client)
 
@@ -241,9 +240,7 @@ class TestIncrementalMaterialization:
         """Test incremental materialization with specific feature views."""
         mock_client = MagicMock()
         mock_client.initialize = AsyncMock()
-        mock_client.materialize_incremental = AsyncMock(
-            return_value={"status": "completed"}
-        )
+        mock_client.materialize_incremental = AsyncMock(return_value={"status": "completed"})
 
         job = MaterializationJob(feast_client=mock_client)
 
@@ -260,9 +257,7 @@ class TestIncrementalMaterialization:
         """Test incremental materialization error handling."""
         mock_client = MagicMock()
         mock_client.initialize = AsyncMock()
-        mock_client.materialize_incremental = AsyncMock(
-            side_effect=Exception("Incremental error")
-        )
+        mock_client.materialize_incremental = AsyncMock(side_effect=Exception("Incremental error"))
 
         job = MaterializationJob(feast_client=mock_client)
 
@@ -445,9 +440,7 @@ class TestFeatureFreshness:
         mock_client.list_feature_views = AsyncMock(
             return_value=[{"name": "hcp_conversion_features"}]
         )
-        mock_client.get_feature_statistics = AsyncMock(
-            side_effect=Exception("Stats error")
-        )
+        mock_client.get_feature_statistics = AsyncMock(side_effect=Exception("Stats error"))
 
         job = MaterializationJob(feast_client=mock_client)
 

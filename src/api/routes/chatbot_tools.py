@@ -21,6 +21,15 @@ from typing import Any, Dict, List, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from src.agents.tool_composer import compose_query
+from src.api.routes.chatbot_dspy import (
+    CHATBOT_DSPY_ROUTING_ENABLED,
+    VALID_AGENTS,
+    route_agent_dspy,
+    route_agent_hardcoded,
+)
+from src.api.routes.cognitive import get_orchestrator
+from src.memory.services.factories import get_async_supabase_client
 from src.rag.retriever import hybrid_search
 from src.repositories import (
     AgentActivityRepository,
@@ -28,24 +37,13 @@ from src.repositories import (
     CausalPathRepository,
     TriggerRepository,
 )
-from src.memory.services.factories import get_async_supabase_client
 from src.repositories.chatbot_conversation import (
-    ChatbotConversationRepository,
     get_chatbot_conversation_repository,
 )
 from src.repositories.chatbot_message import (
-    ChatbotMessageRepository,
     get_chatbot_message_repository,
 )
-from src.api.routes.cognitive import get_orchestrator
-from src.agents.tool_composer import compose_query
 from src.utils.llm_factory import get_chat_llm
-from src.api.routes.chatbot_dspy import (
-    route_agent_dspy,
-    route_agent_hardcoded,
-    CHATBOT_DSPY_ROUTING_ENABLED,
-    VALID_AGENTS,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -657,11 +655,13 @@ async def agent_routing_tool(
                 }
                 # Log to Opik
                 if opik_span:
-                    opik_span.set_metadata({
-                        "routed_to": target_agent,
-                        "routing_confidence": 1.0,
-                        "routing_method": "explicit",
-                    })
+                    opik_span.set_metadata(
+                        {
+                            "routed_to": target_agent,
+                            "routing_confidence": 1.0,
+                            "routing_method": "explicit",
+                        }
+                    )
                 return result
             else:
                 return {
@@ -678,13 +678,17 @@ async def agent_routing_tool(
             brand_context = context.get("brand_context", "") or context.get("brand", "")
 
         # Use DSPy routing with fallback to hardcoded
-        primary_agent, secondary_agents, confidence, rationale, routing_method = (
-            await route_agent_dspy(
-                query=query,
-                intent=intent,
-                brand_context=brand_context,
-                collect_signal=True,
-            )
+        (
+            primary_agent,
+            secondary_agents,
+            confidence,
+            rationale,
+            routing_method,
+        ) = await route_agent_dspy(
+            query=query,
+            intent=intent,
+            brand_context=brand_context,
+            collect_signal=True,
         )
 
         result = {
@@ -700,14 +704,16 @@ async def agent_routing_tool(
 
         # Log routing decision to Opik
         if opik_span:
-            opik_span.set_metadata({
-                "routed_to": primary_agent,
-                "secondary_agents": secondary_agents,
-                "routing_confidence": confidence,
-                "routing_method": routing_method,
-                "intent": intent,
-                "brand_context": brand_context,
-            })
+            opik_span.set_metadata(
+                {
+                    "routed_to": primary_agent,
+                    "secondary_agents": secondary_agents,
+                    "routing_confidence": confidence,
+                    "routing_method": routing_method,
+                    "intent": intent,
+                    "brand_context": brand_context,
+                }
+            )
 
         return result
 
@@ -972,11 +978,13 @@ async def orchestrator_tool(
         effective_session_id = session_id or f"chatbot-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
         # Call the orchestrator
-        orchestrator_result = await orchestrator.run({
-            "query": query,
-            "session_id": effective_session_id,
-            "user_context": user_context,
-        })
+        orchestrator_result = await orchestrator.run(
+            {
+                "query": query,
+                "session_id": effective_session_id,
+                "user_context": user_context,
+            }
+        )
 
         # Extract key fields from orchestrator response
         response_text = orchestrator_result.get("response_text", "")
@@ -1095,11 +1103,14 @@ async def tool_composer_tool(
             logger.info("Tool composer fallback: attempting orchestrator")
             orchestrator = get_orchestrator()
             if orchestrator:
-                fallback_result = await orchestrator.run({
-                    "query": query,
-                    "session_id": session_id or f"fallback-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                    "user_context": {"brand": brand, "region": region},
-                })
+                fallback_result = await orchestrator.run(
+                    {
+                        "query": query,
+                        "session_id": session_id
+                        or f"fallback-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        "user_context": {"brand": brand, "region": region},
+                    }
+                )
                 return {
                     "success": True,
                     "fallback": True,

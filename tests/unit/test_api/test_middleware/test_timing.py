@@ -12,20 +12,18 @@ QW3 from observability audit remediation plan.
 """
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from starlette.applications import Starlette
-from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from src.api.middleware.timing import (
-    TimingMiddleware,
     RequestTimingContext,
+    TimingMiddleware,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -149,10 +147,7 @@ class TestPathExclusion:
 
     def test_should_track_method(self):
         """Test _should_track method directly."""
-        middleware = TimingMiddleware(
-            app=MagicMock(),
-            exclude_paths=["/health", "/metrics"]
-        )
+        middleware = TimingMiddleware(app=MagicMock(), exclude_paths=["/health", "/metrics"])
 
         assert middleware._should_track("/api/users") is True
         assert middleware._should_track("/health") is False

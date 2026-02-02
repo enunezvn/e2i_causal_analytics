@@ -12,9 +12,8 @@ Tests cover:
 Phase 1 G03 from observability audit remediation plan.
 """
 
-import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -23,7 +22,6 @@ from src.agents.causal_impact.mlflow_tracker import (
     CausalImpactMetrics,
     CausalImpactMLflowTracker,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -42,7 +40,9 @@ def mock_mlflow():
     mock.log_metric = MagicMock()
     mock.log_metrics = MagicMock()
     mock.log_artifact = MagicMock()
-    mock.search_runs = MagicMock(return_value=MagicMock(to_dict=MagicMock(return_value={"run_id": []})))
+    mock.search_runs = MagicMock(
+        return_value=MagicMock(to_dict=MagicMock(return_value={"run_id": []}))
+    )
     mock.get_experiment_by_name = MagicMock(return_value=MagicMock(experiment_id="test_exp_id"))
     return mock
 
@@ -228,7 +228,9 @@ class TestStartAnalysisRun:
     async def test_start_run_with_mlflow(self, tracker, mock_mlflow):
         """Test start_analysis_run with MLflow available."""
         with patch.object(tracker, "_mlflow_available", True):
-            with patch("mlflow.get_experiment_by_name", return_value=MagicMock(experiment_id="exp_123")):
+            with patch(
+                "mlflow.get_experiment_by_name", return_value=MagicMock(experiment_id="exp_123")
+            ):
                 with patch("mlflow.start_run") as mock_start_run:
                     with patch("mlflow.set_tag"):  # Mock set_tag to prevent real MLflow calls
                         mock_run = MagicMock()
@@ -253,7 +255,7 @@ class TestStartAnalysisRun:
                 treatment_var="treatment",
                 outcome_var="outcome",
                 query_id="query_123",
-            ) as run_ctx:
+            ):
                 # Should not raise with optional params
                 pass
 
@@ -409,7 +411,7 @@ class TestGetAnalysisHistory:
                     mock_runs_df = MagicMock()
                     mock_runs_df.iterrows.return_value = iter([])
                     with patch("mlflow.search_runs", return_value=mock_runs_df) as mock_search:
-                        history = await tracker.get_analysis_history()
+                        await tracker.get_analysis_history()
                         mock_search.assert_called()
 
     @pytest.mark.asyncio

@@ -268,15 +268,15 @@ class ExplanationMemoryHooks:
                 # Query semantic memory for each extracted entity type
                 # Brands map to general entity lookups
                 for brand in entities.brands:
-                    entity_data = self.semantic_memory.get_entity(
-                        E2IEntityType.TREATMENT, brand
-                    )
+                    entity_data = self.semantic_memory.get_entity(E2IEntityType.TREATMENT, brand)
                     if entity_data:
-                        extracted_entities.append({
-                            "type": "brand",
-                            "id": brand,
-                            "data": entity_data,
-                        })
+                        extracted_entities.append(
+                            {
+                                "type": "brand",
+                                "id": brand,
+                                "data": entity_data,
+                            }
+                        )
                         # Get relationships for this entity
                         rels = self.semantic_memory.get_relationships(
                             E2IEntityType.TREATMENT, brand, direction="both"
@@ -286,15 +286,15 @@ class ExplanationMemoryHooks:
                 # KPIs - look up as triggers or causal paths
                 for kpi in entities.kpis:
                     # Try as trigger first
-                    entity_data = self.semantic_memory.get_entity(
-                        E2IEntityType.TRIGGER, kpi
-                    )
+                    entity_data = self.semantic_memory.get_entity(E2IEntityType.TRIGGER, kpi)
                     if entity_data:
-                        extracted_entities.append({
-                            "type": "kpi",
-                            "id": kpi,
-                            "data": entity_data,
-                        })
+                        extracted_entities.append(
+                            {
+                                "type": "kpi",
+                                "id": kpi,
+                                "data": entity_data,
+                            }
+                        )
                         rels = self.semantic_memory.get_relationships(
                             E2IEntityType.TRIGGER, kpi, direction="both"
                         )
@@ -306,23 +306,25 @@ class ExplanationMemoryHooks:
                         E2IEntityType.AGENT_ACTIVITY, agent
                     )
                     if entity_data:
-                        extracted_entities.append({
-                            "type": "agent",
-                            "id": agent,
-                            "data": entity_data,
-                        })
+                        extracted_entities.append(
+                            {
+                                "type": "agent",
+                                "id": agent,
+                                "data": entity_data,
+                            }
+                        )
 
                 # HCP segments
                 for segment in entities.hcp_segments:
-                    entity_data = self.semantic_memory.get_entity(
-                        E2IEntityType.HCP, segment
-                    )
+                    entity_data = self.semantic_memory.get_entity(E2IEntityType.HCP, segment)
                     if entity_data:
-                        extracted_entities.append({
-                            "type": "hcp_segment",
-                            "id": segment,
-                            "data": entity_data,
-                        })
+                        extracted_entities.append(
+                            {
+                                "type": "hcp_segment",
+                                "id": segment,
+                                "data": entity_data,
+                            }
+                        )
 
                 logger.debug(
                     f"Extracted {len(extracted_entities)} entities, "

@@ -101,8 +101,7 @@ class Tier2SignalRouter:
                 self._queue.pop(0)
                 self._metrics["signals_dropped"] += 1
                 logger.warning(
-                    f"Signal queue full, dropped oldest signal. "
-                    f"Received from {agent_name}"
+                    f"Signal queue full, dropped oldest signal. Received from {agent_name}"
                 )
 
             # Add to queue
@@ -218,7 +217,7 @@ class Tier2SignalRouter:
         """
         for entry in signals:
             agent_name = entry["agent_name"]
-            signal_data = entry["signal"]
+            entry["signal"]
 
             try:
                 # Store in agent's local buffer
@@ -227,7 +226,7 @@ class Tier2SignalRouter:
                         get_causal_impact_signal_collector,
                     )
 
-                    collector = get_causal_impact_signal_collector()
+                    get_causal_impact_signal_collector()
                     # Signal already in buffer from collection
                     logger.debug(f"Signal from {agent_name} stored locally")
 
@@ -236,7 +235,7 @@ class Tier2SignalRouter:
                         get_gap_analyzer_signal_collector,
                     )
 
-                    collector = get_gap_analyzer_signal_collector()
+                    get_gap_analyzer_signal_collector()
                     logger.debug(f"Signal from {agent_name} stored locally")
 
                 elif agent_name == "heterogeneous_optimizer":
@@ -244,7 +243,7 @@ class Tier2SignalRouter:
                         get_heterogeneous_optimizer_signal_collector,
                     )
 
-                    collector = get_heterogeneous_optimizer_signal_collector()
+                    get_heterogeneous_optimizer_signal_collector()
                     logger.debug(f"Signal from {agent_name} stored locally")
 
             except Exception as e:

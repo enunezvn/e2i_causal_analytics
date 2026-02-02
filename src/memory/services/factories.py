@@ -114,7 +114,9 @@ class OpenAIEmbeddingService(EmbeddingService):
             response = client.embeddings.create(model=self.model, input=texts)
             return [item.embedding for item in response.data]
         except Exception as e:
-            raise ServiceConnectionError("OpenAI", f"Failed to generate batch embeddings: {e}", e) from e
+            raise ServiceConnectionError(
+                "OpenAI", f"Failed to generate batch embeddings: {e}", e
+            ) from e
 
 
 class BedrockEmbeddingService(EmbeddingService):
@@ -136,7 +138,9 @@ class BedrockEmbeddingService(EmbeddingService):
                     "Bedrock", "boto3 package is not installed. Run: pip install boto3"
                 ) from e
             except Exception as e:
-                raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e) from e
+                raise ServiceConnectionError(
+                    "Bedrock", f"Failed to create Bedrock client: {e}", e
+                ) from e
         return self._client
 
     async def embed(self, text: str) -> List[float]:
@@ -182,7 +186,7 @@ class LocalEmbeddingService(EmbeddingService):
 
                 logger.info(f"Loading local embedding model: {self.model_name}")
                 self._model = SentenceTransformer(self.model_name)
-                logger.info(f"Local embedding model loaded successfully")
+                logger.info("Local embedding model loaded successfully")
             except ImportError as e:
                 raise ServiceConnectionError(
                     "LocalEmbedding",
@@ -268,6 +272,7 @@ class FallbackEmbeddingService(EmbeddingService):
         if not self._using_fallback or self._fallback_activated_at is None:
             return True
         import time
+
         elapsed = time.time() - self._fallback_activated_at
         return elapsed >= self._primary_retry_interval
 
@@ -299,7 +304,7 @@ class FallbackEmbeddingService(EmbeddingService):
             fallback = self._get_fallback()
             return await fallback.embed(text)
         except ServiceConnectionError as e:
-            logger.error(f"Both primary and fallback embedding services failed")
+            logger.error("Both primary and fallback embedding services failed")
             raise ServiceConnectionError(
                 "FallbackEmbedding",
                 "All embedding services unavailable",
@@ -331,7 +336,7 @@ class FallbackEmbeddingService(EmbeddingService):
             fallback = self._get_fallback()
             return await fallback.embed_batch(texts)
         except ServiceConnectionError as e:
-            logger.error(f"Both primary and fallback embedding services failed")
+            logger.error("Both primary and fallback embedding services failed")
             raise ServiceConnectionError(
                 "FallbackEmbedding",
                 "All embedding services unavailable",
@@ -347,12 +352,11 @@ class FallbackEmbeddingService(EmbeddingService):
     def status(self) -> Dict[str, Any]:
         """Get current service status."""
         import time
+
         return {
             "using_fallback": self._using_fallback,
             "fallback_duration_seconds": (
-                time.time() - self._fallback_activated_at
-                if self._fallback_activated_at
-                else None
+                time.time() - self._fallback_activated_at if self._fallback_activated_at else None
             ),
             "environment": self._environment,
         }
@@ -415,7 +419,9 @@ class AnthropicLLMService(LLMService):
             )
             return response.content[0].text
         except Exception as e:
-            raise ServiceConnectionError("Anthropic", f"Failed to generate completion: {e}", e) from e
+            raise ServiceConnectionError(
+                "Anthropic", f"Failed to generate completion: {e}", e
+            ) from e
 
 
 class OpenAILLMService(LLMService):
@@ -489,7 +495,9 @@ class BedrockLLMService(LLMService):
                     "Bedrock", "boto3 package is not installed. Run: pip install boto3"
                 ) from e
             except Exception as e:
-                raise ServiceConnectionError("Bedrock", f"Failed to create Bedrock client: {e}", e) from e
+                raise ServiceConnectionError(
+                    "Bedrock", f"Failed to create Bedrock client: {e}", e
+                ) from e
         return self._client
 
     async def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
@@ -700,7 +708,8 @@ async def get_async_supabase_service_client():
         raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
     if not key:
         raise ServiceConnectionError(
-            "Supabase", "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY environment variable is not set"
+            "Supabase",
+            "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY environment variable is not set",
         )
 
     if os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY"):
@@ -713,7 +722,9 @@ async def get_async_supabase_service_client():
         _async_supabase_service_client = await acreate_client(url, key)
         return _async_supabase_service_client
     except Exception as e:
-        raise ServiceConnectionError("Supabase", f"Failed to create async service client: {e}", e) from e
+        raise ServiceConnectionError(
+            "Supabase", f"Failed to create async service client: {e}", e
+        ) from e
 
 
 _falkordb_client = None
@@ -796,9 +807,7 @@ def get_embedding_service(
     if use_fallback is None:
         use_fallback = os.environ.get("E2I_EMBEDDING_FALLBACK", "true").lower() == "true"
 
-    logger.info(
-        f"Creating embedding service: environment={environment}, fallback={use_fallback}"
-    )
+    logger.info(f"Creating embedding service: environment={environment}, fallback={use_fallback}")
 
     if use_fallback:
         return FallbackEmbeddingService(environment=environment)
@@ -1026,7 +1035,13 @@ async def test_all_connections() -> Dict[str, bool]:
 
 def reset_all_clients() -> None:
     """Reset all cached clients. Useful for testing."""
-    global _redis_client, _supabase_client, _async_supabase_client, _async_supabase_service_client, _falkordb_client, _embedding_service
+    global \
+        _redis_client, \
+        _supabase_client, \
+        _async_supabase_client, \
+        _async_supabase_service_client, \
+        _falkordb_client, \
+        _embedding_service
 
     _redis_client = None
     _supabase_client = None

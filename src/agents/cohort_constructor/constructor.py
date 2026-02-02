@@ -12,16 +12,14 @@ SLA: <120 seconds for 100K patients
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 from uuid import uuid4
 
-import numpy as np
 import pandas as pd
 
 from .constants import (
     CohortErrorCode,
     Defaults,
-    ERROR_DESCRIPTIONS,
     SLAThreshold,
 )
 from .types import (
@@ -146,9 +144,7 @@ class CohortConstructor:
             logger.info(f"{'=' * 60}")
             logger.info(f"Initial Population: {initial_count:,}")
             logger.info(f"Eligible Population: {len(eligible):,}")
-            logger.info(
-                f"Exclusion Rate: {result.eligibility_stats.get('exclusion_rate', 0):.1%}"
-            )
+            logger.info(f"Exclusion Rate: {result.eligibility_stats.get('exclusion_rate', 0):.1%}")
 
             return eligible, result
 
@@ -197,9 +193,7 @@ class CohortConstructor:
         Raises:
             ValueError: If required fields are missing (CC_002)
         """
-        missing_fields = [
-            f for f in self.config.required_fields if f not in df.columns
-        ]
+        missing_fields = [f for f in self.config.required_fields if f not in df.columns]
 
         if missing_fields:
             error_msg = f"Missing required fields: {missing_fields}"
@@ -214,9 +208,7 @@ class CohortConstructor:
             )
             raise ValueError(error_msg)
 
-        logger.info(
-            f"All {len(self.config.required_fields)} required fields present"
-        )
+        logger.info(f"All {len(self.config.required_fields)} required fields present")
 
     def _apply_inclusion_criteria(self, df: pd.DataFrame) -> pd.DataFrame:
         """Apply inclusion criteria to filter eligible patients.
@@ -236,14 +228,10 @@ class CohortConstructor:
 
         for criterion in self.config.inclusion_criteria:
             initial_count = len(eligible)
-            eligible = self._apply_criterion(
-                eligible, criterion, CriterionType.INCLUSION
-            )
+            eligible = self._apply_criterion(eligible, criterion, CriterionType.INCLUSION)
             removed = initial_count - len(eligible)
 
-            logger.info(
-                f"   {criterion.field}: {removed:,} excluded ({len(eligible):,} remaining)"
-            )
+            logger.info(f"   {criterion.field}: {removed:,} excluded ({len(eligible):,} remaining)")
 
             self._criterion_order += 1
             self.eligibility_log.append(
@@ -283,14 +271,10 @@ class CohortConstructor:
                 continue
 
             initial_count = len(eligible)
-            eligible = self._apply_criterion(
-                eligible, criterion, CriterionType.EXCLUSION
-            )
+            eligible = self._apply_criterion(eligible, criterion, CriterionType.EXCLUSION)
             removed = initial_count - len(eligible)
 
-            logger.info(
-                f"   {criterion.field}: {removed:,} excluded ({len(eligible):,} remaining)"
-            )
+            logger.info(f"   {criterion.field}: {removed:,} excluded ({len(eligible):,} remaining)")
 
             self._criterion_order += 1
             self.eligibility_log.append(
@@ -339,9 +323,7 @@ class CohortConstructor:
             # Remove those who meet exclusion criteria
             return df[~mask]
 
-    def _compute_mask(
-        self, field_data: pd.Series, operator: Operator, value: Any
-    ) -> pd.Series:
+    def _compute_mask(self, field_data: pd.Series, operator: Operator, value: Any) -> pd.Series:
         """Compute boolean mask for operator and value.
 
         Args:
@@ -393,7 +375,7 @@ class CohortConstructor:
         logger.info(f"   Follow-up required: {temporal.followup_days} days")
 
         eligible = df.copy()
-        initial_count = len(eligible)
+        len(eligible)
 
         # Define index date
         if temporal.index_date_field in eligible.columns:
@@ -401,9 +383,7 @@ class CohortConstructor:
                 eligible[temporal.index_date_field], errors="coerce"
             )
         else:
-            logger.warning(
-                f"   Index date field '{temporal.index_date_field}' not found"
-            )
+            logger.warning(f"   Index date field '{temporal.index_date_field}' not found")
             return eligible
 
         # Check lookback completeness
@@ -676,9 +656,9 @@ class CohortConstructor:
         metadata = result.execution_metadata
 
         report = f"""
-{'=' * 60}
+{"=" * 60}
 COHORT CONSTRUCTION SUMMARY
-{'=' * 60}
+{"=" * 60}
 
 Cohort: {self.config.cohort_name}
 Brand: {self.config.brand.upper()}
@@ -687,32 +667,34 @@ Version: {self.config.version}
 Cohort ID: {result.cohort_id}
 
 POPULATION STATISTICS
-{'=' * 60}
-Initial Population:     {stats.get('total_input_patients', 0):>10,}
-Eligible Population:    {stats.get('eligible_patient_count', 0):>10,}
-Excluded Population:    {stats.get('excluded_patient_count', 0):>10,}
-Exclusion Rate:         {stats.get('exclusion_rate', 0):>10.1%}
+{"=" * 60}
+Initial Population:     {stats.get("total_input_patients", 0):>10,}
+Eligible Population:    {stats.get("eligible_patient_count", 0):>10,}
+Excluded Population:    {stats.get("excluded_patient_count", 0):>10,}
+Exclusion Rate:         {stats.get("exclusion_rate", 0):>10.1%}
 
 CRITERIA APPLIED
-{'=' * 60}
+{"=" * 60}
 Inclusion Criteria:     {len(self.config.inclusion_criteria):>10}
 Exclusion Criteria:     {len(self.config.exclusion_criteria):>10}
 Temporal Validation:    Lookback {self.config.temporal_requirements.lookback_days}d, Follow-up {self.config.temporal_requirements.followup_days}d
 
 PERFORMANCE
-{'=' * 60}
-Total Execution Time:   {metadata.get('execution_time_ms', 0):>10,} ms
-SLA Target:             {metadata.get('sla_target_ms', 120000):>10,} ms
-SLA Compliant:          {metadata.get('sla_compliant', True)}
+{"=" * 60}
+Total Execution Time:   {metadata.get("execution_time_ms", 0):>10,} ms
+SLA Target:             {metadata.get("sla_target_ms", 120000):>10,} ms
+SLA Compliant:          {metadata.get("sla_compliant", True)}
 
 ELIGIBILITY LOG
-{'=' * 60}
+{"=" * 60}
 """
         for entry in result.eligibility_log:
             report += f"\n{entry.criterion_order}. [{entry.criterion_type.upper()}] {entry.criterion_name}"
             report += f"\n   Operator: {entry.operator}"
             report += f"\n   Value: {entry.value}"
-            report += f"\n   Removed: {entry.removed_count:,} | Remaining: {entry.remaining_count:,}"
+            report += (
+                f"\n   Removed: {entry.removed_count:,} | Remaining: {entry.remaining_count:,}"
+            )
             if entry.description:
                 report += f"\n   Description: {entry.description}"
 
@@ -746,9 +728,7 @@ def create_cohort_quick(
     return constructor.construct_cohort(df)
 
 
-def compare_cohorts(
-    df: pd.DataFrame, configs: List[CohortConfig]
-) -> pd.DataFrame:
+def compare_cohorts(df: pd.DataFrame, configs: List[CohortConfig]) -> pd.DataFrame:
     """Compare multiple cohort definitions on same dataset.
 
     Args:

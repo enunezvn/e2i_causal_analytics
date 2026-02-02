@@ -14,16 +14,16 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
 
+# Import validation outcome for causal validation learning
+# NOTE: Must be unconditional (not TYPE_CHECKING) because TypedDict evaluates
+# forward references at runtime when used with get_type_hints() or similar
+from src.causal_engine.validation_outcome import ValidationOutcome
+
 # Import cognitive context from DSPy integration module
 from .dspy_integration import (
     FeedbackLearnerCognitiveContext,
     FeedbackLearnerTrainingSignal,
 )
-
-# Import validation outcome for causal validation learning
-# NOTE: Must be unconditional (not TYPE_CHECKING) because TypedDict evaluates
-# forward references at runtime when used with get_type_hints() or similar
-from src.causal_engine.validation_outcome import ValidationOutcome
 
 
 class FeedbackItem(TypedDict):

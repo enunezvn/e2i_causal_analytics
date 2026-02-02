@@ -11,7 +11,7 @@ This is a deterministic computation node with no LLM calls.
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -112,13 +112,15 @@ async def select_features(state: Dict[str, Any]) -> Dict[str, Any]:
                 threshold=variance_threshold,
             )
             removed_features[VARIANCE_SELECTION] = var_removed
-            selection_history.append({
-                "step": "variance_threshold",
-                "threshold": variance_threshold,
-                "features_before": len(current_features) + len(var_removed),
-                "features_after": len(current_features),
-                "removed": len(var_removed),
-            })
+            selection_history.append(
+                {
+                    "step": "variance_threshold",
+                    "threshold": variance_threshold,
+                    "features_before": len(current_features) + len(var_removed),
+                    "features_after": len(current_features),
+                    "removed": len(var_removed),
+                }
+            )
             logger.info(f"Variance selection: removed {len(var_removed)} features")
 
         # 2. Correlation-based Selection
@@ -129,13 +131,15 @@ async def select_features(state: Dict[str, Any]) -> Dict[str, Any]:
                 threshold=correlation_threshold,
             )
             removed_features[CORRELATION_SELECTION] = corr_removed
-            selection_history.append({
-                "step": "correlation_filter",
-                "threshold": correlation_threshold,
-                "features_before": len(current_features) + len(corr_removed),
-                "features_after": len(current_features),
-                "removed": len(corr_removed),
-            })
+            selection_history.append(
+                {
+                    "step": "correlation_filter",
+                    "threshold": correlation_threshold,
+                    "features_before": len(current_features) + len(corr_removed),
+                    "features_after": len(current_features),
+                    "removed": len(corr_removed),
+                }
+            )
             logger.info(f"Correlation selection: removed {len(corr_removed)} features")
 
         # 3. VIF-based Selection (optional, can be slow)
@@ -146,40 +150,44 @@ async def select_features(state: Dict[str, Any]) -> Dict[str, Any]:
                 threshold=vif_threshold,
             )
             removed_features[VIF_SELECTION] = vif_removed
-            selection_history.append({
-                "step": "vif_filter",
-                "threshold": vif_threshold,
-                "features_before": len(current_features) + len(vif_removed),
-                "features_after": len(current_features),
-                "removed": len(vif_removed),
-            })
+            selection_history.append(
+                {
+                    "step": "vif_filter",
+                    "threshold": vif_threshold,
+                    "features_before": len(current_features) + len(vif_removed),
+                    "features_after": len(current_features),
+                    "removed": len(vif_removed),
+                }
+            )
             logger.info(f"VIF selection: removed {len(vif_removed)} features")
 
         # 4. Model-based Importance Ranking
         feature_importance: Dict[str, float] = {}
         if selection_config.get("compute_importance", True) and y_train is not None:
-            max_features_for_importance = selection_config.get(
-                "max_features_for_selection", None
-            )
+            max_features_for_importance = selection_config.get("max_features_for_selection", None)
             feature_importance, importance_ranking = _compute_model_importance(
                 X_train_numeric[current_features],
                 y_train,
                 problem_type=problem_type,
             )
-            selection_history.append({
-                "step": "model_importance",
-                "model": "RandomForest",
-                "features_ranked": len(importance_ranking),
-            })
+            selection_history.append(
+                {
+                    "step": "model_importance",
+                    "model": "RandomForest",
+                    "features_ranked": len(importance_ranking),
+                }
+            )
 
             # Apply feature count limit if specified
             if max_features_for_importance and len(current_features) > max_features_for_importance:
                 current_features = importance_ranking[:max_features_for_importance]
-                selection_history.append({
-                    "step": "importance_filter",
-                    "max_features": max_features_for_importance,
-                    "features_selected": len(current_features),
-                })
+                selection_history.append(
+                    {
+                        "step": "importance_filter",
+                        "max_features": max_features_for_importance,
+                        "features_selected": len(current_features),
+                    }
+                )
 
         # 5. Select final features from DataFrames
         # Include both numeric and non-numeric columns that weren't filtered
@@ -287,9 +295,7 @@ def _apply_correlation_selection(
     corr_matrix = df.corr().abs()
 
     # Get upper triangle (to avoid double counting)
-    upper_tri = corr_matrix.where(
-        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-    )
+    upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
 
     # Find features to drop
     to_drop = set()
@@ -398,8 +404,7 @@ def _compute_model_importance(
     # Encode categorical target if needed
     if problem_type == "classification":
         if y_values.dtype == object or (
-            hasattr(y_values, 'dtype') and
-            not np.issubdtype(y_values.dtype, np.number)
+            hasattr(y_values, "dtype") and not np.issubdtype(y_values.dtype, np.number)
         ):
             le = LabelEncoder()
             y_values = le.fit_transform(y_values.astype(str))
@@ -429,7 +434,7 @@ def _compute_model_importance(
 
         # Create importance dict
         importance_dict = {
-            col: float(imp) for col, imp in zip(X.columns, importances)
+            col: float(imp) for col, imp in zip(X.columns, importances, strict=False)
         }
 
         # Rank features by importance
@@ -445,7 +450,7 @@ def _compute_model_importance(
         logger.warning(f"Model-based importance failed: {e}")
         # Return equal importance as fallback
         equal_importance = 1.0 / len(X.columns)
-        return {col: equal_importance for col in X.columns}, list(X.columns)
+        return dict.fromkeys(X.columns, equal_importance), list(X.columns)
 
 
 def _compute_feature_statistics(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
@@ -468,13 +473,15 @@ def _compute_feature_statistics(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         }
 
         if pd.api.types.is_numeric_dtype(df[col]):
-            col_stats.update({
-                "mean": float(df[col].mean()) if not df[col].isna().all() else None,
-                "std": float(df[col].std()) if not df[col].isna().all() else None,
-                "min": float(df[col].min()) if not df[col].isna().all() else None,
-                "max": float(df[col].max()) if not df[col].isna().all() else None,
-                "median": float(df[col].median()) if not df[col].isna().all() else None,
-            })
+            col_stats.update(
+                {
+                    "mean": float(df[col].mean()) if not df[col].isna().all() else None,
+                    "std": float(df[col].std()) if not df[col].isna().all() else None,
+                    "min": float(df[col].min()) if not df[col].isna().all() else None,
+                    "max": float(df[col].max()) if not df[col].isna().all() else None,
+                    "median": float(df[col].median()) if not df[col].isna().all() else None,
+                }
+            )
 
         stats[col] = col_stats
 

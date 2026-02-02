@@ -14,7 +14,6 @@ Tests cover:
 From observability audit remediation plan.
 """
 
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,7 +26,6 @@ from src.agents.ml_foundation.data_preparer.mlflow_tracker import (
     _NoOpRun,
     create_tracker,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -309,9 +307,7 @@ class TestLazyLoading:
     def test_get_mlflow_handles_import_error(self, tracker):
         """Test _get_mlflow handles ImportError gracefully."""
         with patch.dict("sys.modules", {"mlflow": None}):
-            with patch(
-                "builtins.__import__", side_effect=ImportError("No MLflow")
-            ):
+            with patch("builtins.__import__", side_effect=ImportError("No MLflow")):
                 result = tracker._get_mlflow()
                 assert result is None
 
@@ -392,9 +388,7 @@ class TestTrackPreparationRun:
                 assert isinstance(run, _NoOpRun)
 
     @pytest.mark.asyncio
-    async def test_track_run_without_connector(
-        self, tracker, mock_mlflow, sample_context
-    ):
+    async def test_track_run_without_connector(self, tracker, mock_mlflow, sample_context):
         """Test track_preparation_run when connector unavailable."""
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             with patch.object(tracker, "_get_connector", return_value=None):
@@ -411,12 +405,8 @@ class TestTrackPreparationRun:
 
         # Setup async context manager
         mock_connector.start_run = MagicMock()
-        mock_connector.start_run.return_value.__aenter__ = AsyncMock(
-            return_value=mock_run
-        )
-        mock_connector.start_run.return_value.__aexit__ = AsyncMock(
-            return_value=False
-        )
+        mock_connector.start_run.return_value.__aenter__ = AsyncMock(return_value=mock_run)
+        mock_connector.start_run.return_value.__aexit__ = AsyncMock(return_value=False)
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             with patch.object(tracker, "_get_connector", return_value=mock_connector):
@@ -432,16 +422,12 @@ class TestTrackPreparationRun:
         mock_run.log_params = AsyncMock()
 
         mock_connector.start_run = MagicMock()
-        mock_connector.start_run.return_value.__aenter__ = AsyncMock(
-            return_value=mock_run
-        )
-        mock_connector.start_run.return_value.__aexit__ = AsyncMock(
-            return_value=False
-        )
+        mock_connector.start_run.return_value.__aenter__ = AsyncMock(return_value=mock_run)
+        mock_connector.start_run.return_value.__aexit__ = AsyncMock(return_value=False)
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             with patch.object(tracker, "_get_connector", return_value=mock_connector):
-                async with tracker.track_preparation_run(sample_context) as run:
+                async with tracker.track_preparation_run(sample_context):
                     pass
 
                 mock_run.log_params.assert_called_once()
@@ -559,18 +545,14 @@ class TestLogQcReport:
     """Tests for log_qc_report method."""
 
     @pytest.mark.asyncio
-    async def test_log_qc_report_without_artifact_support(
-        self, tracker, sample_state
-    ):
+    async def test_log_qc_report_without_artifact_support(self, tracker, sample_state):
         """Test QC report logging without artifact support."""
         mock_run = MagicMock(spec=[])  # No log_artifact method
         # Should not raise
         await tracker.log_qc_report(mock_run, sample_state)
 
     @pytest.mark.asyncio
-    async def test_log_qc_report_with_artifact_support(
-        self, tracker, sample_state
-    ):
+    async def test_log_qc_report_with_artifact_support(self, tracker, sample_state):
         """Test QC report logging with artifact support."""
         mock_run = AsyncMock()
         mock_run.log_artifact = AsyncMock()
@@ -783,9 +765,7 @@ class TestErrorHandling:
         self, tracker, mock_mlflow, mock_connector, sample_context
     ):
         """Test handling of connector errors."""
-        mock_connector.get_or_create_experiment.side_effect = Exception(
-            "Connection failed"
-        )
+        mock_connector.get_or_create_experiment.side_effect = Exception("Connection failed")
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             with patch.object(tracker, "_get_connector", return_value=mock_connector):

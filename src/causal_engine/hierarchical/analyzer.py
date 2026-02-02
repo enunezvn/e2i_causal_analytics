@@ -214,16 +214,18 @@ class HierarchicalResult:
         """Get summary DataFrame of all segments."""
         data = []
         for seg in self.segment_results:
-            data.append({
-                "segment": seg.segment_name,
-                "n_samples": seg.n_samples,
-                "uplift_min": seg.uplift_range[0],
-                "uplift_max": seg.uplift_range[1],
-                "cate_mean": seg.cate_mean,
-                "cate_ci_lower": seg.cate_ci_lower,
-                "cate_ci_upper": seg.cate_ci_upper,
-                "success": seg.success,
-            })
+            data.append(
+                {
+                    "segment": seg.segment_name,
+                    "n_samples": seg.n_samples,
+                    "uplift_min": seg.uplift_range[0],
+                    "uplift_max": seg.uplift_range[1],
+                    "cate_mean": seg.cate_mean,
+                    "cate_ci_lower": seg.cate_ci_lower,
+                    "cate_ci_upper": seg.cate_ci_upper,
+                    "success": seg.success,
+                }
+            )
         return pd.DataFrame(data)
 
 
@@ -293,9 +295,7 @@ class HierarchicalAnalyzer:
             if feature_names is not None:
                 X_df = pd.DataFrame(X, columns=feature_names)
             else:
-                X_df = pd.DataFrame(
-                    X, columns=[f"feature_{i}" for i in range(X.shape[1])]
-                )
+                X_df = pd.DataFrame(X, columns=[f"feature_{i}" for i in range(X.shape[1])])
         else:
             X_df = X
 
@@ -334,9 +334,7 @@ class HierarchicalAnalyzer:
             # Check for segment failures
             failed_segments = [s for s in segment_results if not s.success]
             if failed_segments:
-                warnings.append(
-                    f"{len(failed_segments)} segment(s) failed CATE estimation"
-                )
+                warnings.append(f"{len(failed_segments)} segment(s) failed CATE estimation")
 
             elapsed = (time.perf_counter() - start_time) * 1000
 
@@ -389,7 +387,7 @@ class HierarchicalAnalyzer:
         Returns:
             Tuple of (uplift_scores, model_name)
         """
-        from ..uplift import UpliftRandomForest, UpliftConfig
+        from ..uplift import UpliftConfig, UpliftRandomForest
 
         config = UpliftConfig(
             n_estimators=100,
@@ -609,15 +607,13 @@ class HierarchicalAnalyzer:
         if total_samples == 0:
             return None, None, None
 
-        overall_ate = sum(
-            s.cate_mean * s.n_samples / total_samples for s in successful
-        )
+        overall_ate = sum(s.cate_mean * s.n_samples / total_samples for s in successful)
 
         # Aggregate confidence intervals using nested CI calculation
         if self.config.compute_nested_ci:
             from .nested_ci import (
-                NestedConfidenceInterval,
                 NestedCIConfig,
+                NestedConfidenceInterval,
                 SegmentEstimate,
             )
 
@@ -646,21 +642,17 @@ class HierarchicalAnalyzer:
         else:
             # Simple pooled CI (conservative)
             ci_lower_weighted = sum(
-                (s.cate_ci_lower or s.cate_mean) * s.n_samples / total_samples
-                for s in successful
+                (s.cate_ci_lower or s.cate_mean) * s.n_samples / total_samples for s in successful
             )
             ci_upper_weighted = sum(
-                (s.cate_ci_upper or s.cate_mean) * s.n_samples / total_samples
-                for s in successful
+                (s.cate_ci_upper or s.cate_mean) * s.n_samples / total_samples for s in successful
             )
             overall_ci_lower = ci_lower_weighted
             overall_ci_upper = ci_upper_weighted
 
         return overall_ate, overall_ci_lower, overall_ci_upper
 
-    def _compute_heterogeneity(
-        self, segment_results: List[SegmentResult]
-    ) -> Optional[float]:
+    def _compute_heterogeneity(self, segment_results: List[SegmentResult]) -> Optional[float]:
         """Compute between-segment heterogeneity.
 
         Uses coefficient of variation of segment CATEs.

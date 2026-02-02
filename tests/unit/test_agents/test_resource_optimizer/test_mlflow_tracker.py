@@ -14,7 +14,7 @@ Part of observability audit remediation - G09 Phase 2.
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -25,7 +25,6 @@ from src.agents.resource_optimizer.mlflow_tracker import (
     ResourceOptimizerMLflowTracker,
     create_tracker,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -46,12 +45,8 @@ def mock_mlflow():
     mock.log_artifact = MagicMock()
     mock.set_tag = MagicMock()
     mock.set_tags = MagicMock()
-    mock.get_experiment_by_name = MagicMock(
-        return_value=MagicMock(experiment_id="test_exp_id")
-    )
-    mock.search_runs = MagicMock(
-        return_value=MagicMock(iterrows=MagicMock(return_value=iter([])))
-    )
+    mock.get_experiment_by_name = MagicMock(return_value=MagicMock(experiment_id="test_exp_id"))
+    mock.search_runs = MagicMock(return_value=MagicMock(iterrows=MagicMock(return_value=iter([]))))
     return mock
 
 
@@ -468,12 +463,17 @@ class TestGetOptimizationHistory:
     async def test_get_history_with_results(self, tracker, mock_mlflow):
         """Test history query with results."""
         mock_df = MagicMock()
-        mock_df.iterrows.return_value = iter([
-            (0, {
-                "run_id": "run_1",
-                "start_time": datetime.now(timezone.utc),
-            }),
-        ])
+        mock_df.iterrows.return_value = iter(
+            [
+                (
+                    0,
+                    {
+                        "run_id": "run_1",
+                        "start_time": datetime.now(timezone.utc),
+                    },
+                ),
+            ]
+        )
         mock_mlflow.search_runs.return_value = mock_df
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):

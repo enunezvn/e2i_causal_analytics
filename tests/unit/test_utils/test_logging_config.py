@@ -15,35 +15,33 @@ G14 from observability audit remediation plan.
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.utils.logging_config import (
-    # Context variables
-    request_id_var,
-    trace_id_var,
-    span_id_var,
-    user_id_var,
-    agent_name_var,
-    operation_var,
-    set_request_context,
-    clear_request_context,
-    get_request_context,
-    # Formatters
-    JSONFormatter,
     ColoredFormatter,
     ContextFilter,
+    # Formatters
+    JSONFormatter,
     # Configuration
     LoggingConfig,
+    agent_name_var,
+    clear_request_context,
     configure_logging,
     get_logger,
+    get_request_context,
     # Utilities
     log_level_context,
+    operation_var,
+    # Context variables
+    request_id_var,
+    set_request_context,
+    span_id_var,
     timed_operation,
+    trace_id_var,
+    user_id_var,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -80,6 +78,7 @@ def error_log_record():
         raise ValueError("Test error")
     except ValueError:
         import sys
+
         exc_info = sys.exc_info()
 
     record = logging.LogRecord(
@@ -495,6 +494,7 @@ class TestTimedOperation:
         mock_logger = MagicMock()
 
         import time
+
         with timed_operation("test_op", logger=mock_logger, warn_threshold_ms=0.001):
             time.sleep(0.01)  # Sleep 10ms, threshold is 0.001ms
 

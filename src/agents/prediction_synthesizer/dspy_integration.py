@@ -15,7 +15,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +227,9 @@ try:
 
         individual_predictions: str = dspy.InputField(desc="Predictions from each model")
         model_uncertainties: str = dspy.InputField(desc="Each model's uncertainty estimate")
-        historical_calibration: str = dspy.InputField(desc="How well calibrated past predictions were")
+        historical_calibration: str = dspy.InputField(
+            desc="How well calibrated past predictions were"
+        )
 
         prediction_interval: str = dspy.OutputField(desc="Lower and upper bounds")
         confidence_level: float = dspy.OutputField(desc="Probability interval contains true value")
@@ -361,11 +363,7 @@ class PredictionSynthesizerSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def get_accurate_examples(
@@ -375,7 +373,8 @@ class PredictionSynthesizerSignalCollector:
     ) -> List[Dict[str, Any]]:
         """Get examples with high prediction accuracy (ground truth)."""
         signals = [
-            s for s in self._signals_buffer
+            s
+            for s in self._signals_buffer
             if s.prediction_accuracy is not None and s.prediction_accuracy >= min_accuracy
         ]
         sorted_signals = sorted(signals, key=lambda s: s.compute_reward(), reverse=True)
@@ -432,15 +431,13 @@ async def emit_training_signal(
     reward = signal.compute_reward()
 
     if reward < min_reward_threshold:
-        logger.debug(
-            f"Signal not emitted: reward {reward:.3f} < threshold {min_reward_threshold}"
-        )
+        logger.debug(f"Signal not emitted: reward {reward:.3f} < threshold {min_reward_threshold}")
         return False
 
     try:
         from src.agents.feedback_learner.memory_hooks import (
-            get_feedback_learner_memory_hooks,
             LearningSignal,
+            get_feedback_learner_memory_hooks,
         )
 
         hooks = get_feedback_learner_memory_hooks()

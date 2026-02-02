@@ -14,7 +14,6 @@ Tests cover:
 From observability audit remediation plan.
 """
 
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,7 +27,6 @@ from src.agents.feedback_learner.mlflow_tracker import (
     create_tracker,
 )
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -40,9 +38,7 @@ def mock_mlflow():
     mock = MagicMock()
     mock.set_tracking_uri = MagicMock()
     mock.set_experiment = MagicMock()
-    mock.get_experiment_by_name = MagicMock(
-        return_value=MagicMock(experiment_id="test_exp_id")
-    )
+    mock.get_experiment_by_name = MagicMock(return_value=MagicMock(experiment_id="test_exp_id"))
     mock.create_experiment = MagicMock(return_value="new_exp_id")
     mock.start_run = MagicMock()
     mock.end_run = MagicMock()
@@ -289,9 +285,7 @@ class TestTrackerInitialization:
 
     def test_tracker_custom_uri(self):
         """Test tracker with custom tracking URI."""
-        tracker = FeedbackLearnerMLflowTracker(
-            tracking_uri="http://custom:5000"
-        )
+        tracker = FeedbackLearnerMLflowTracker(tracking_uri="http://custom:5000")
         assert tracker._tracking_uri == "http://custom:5000"
 
     def test_tracker_artifact_logging_enabled_by_default(self, tracker):
@@ -321,9 +315,7 @@ class TestLazyLoading:
     def test_get_mlflow_handles_import_error(self, tracker):
         """Test _get_mlflow handles ImportError gracefully."""
         with patch.dict("sys.modules", {"mlflow": None}):
-            with patch(
-                "builtins.__import__", side_effect=ImportError("No MLflow")
-            ):
+            with patch("builtins.__import__", side_effect=ImportError("No MLflow")):
                 result = tracker._get_mlflow()
                 assert result is None
 
@@ -353,12 +345,8 @@ class TestStartLearningRun:
         """Test start_learning_run with MLflow available."""
         mock_run = MagicMock()
         mock_run.info.run_id = "test_run_123"
-        mock_mlflow.start_run.return_value.__enter__ = MagicMock(
-            return_value=mock_run
-        )
-        mock_mlflow.start_run.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
+        mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
+        mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             async with tracker.start_learning_run(
@@ -374,44 +362,34 @@ class TestStartLearningRun:
         """Test that parameters are logged on run start."""
         mock_run = MagicMock()
         mock_run.info.run_id = "test_run_123"
-        mock_mlflow.start_run.return_value.__enter__ = MagicMock(
-            return_value=mock_run
-        )
-        mock_mlflow.start_run.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
+        mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
+        mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             async with tracker.start_learning_run(
                 experiment_name="test",
                 batch_id="batch_001",
                 focus_agents=["agent1", "agent2"],
-            ) as ctx:
+            ):
                 pass
 
             mock_mlflow.log_params.assert_called()
             mock_mlflow.set_tags.assert_called()
 
     @pytest.mark.asyncio
-    async def test_start_run_creates_experiment_if_missing(
-        self, tracker, mock_mlflow
-    ):
+    async def test_start_run_creates_experiment_if_missing(self, tracker, mock_mlflow):
         """Test experiment creation when not exists."""
         mock_mlflow.get_experiment_by_name.return_value = None
         mock_run = MagicMock()
         mock_run.info.run_id = "test_run_123"
-        mock_mlflow.start_run.return_value.__enter__ = MagicMock(
-            return_value=mock_run
-        )
-        mock_mlflow.start_run.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
+        mock_mlflow.start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
+        mock_mlflow.start_run.return_value.__exit__ = MagicMock(return_value=False)
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             async with tracker.start_learning_run(
                 experiment_name="new_experiment",
                 batch_id="batch_001",
-            ) as ctx:
+            ):
                 pass
 
             mock_mlflow.create_experiment.assert_called_once()
@@ -540,9 +518,7 @@ class TestLogLearningResult:
                 mock_mlflow.set_tags.assert_called()
 
     @pytest.mark.asyncio
-    async def test_log_result_sets_quality_tags(
-        self, tracker, mock_mlflow, sample_state
-    ):
+    async def test_log_result_sets_quality_tags(self, tracker, mock_mlflow, sample_state):
         """Test that quality tags are set."""
         tracker._current_run_id = "active_run"
 
@@ -566,15 +542,11 @@ class TestLogArtifacts:
             await tracker._log_artifacts(sample_state)
 
     @pytest.mark.asyncio
-    async def test_log_artifacts_logs_patterns(
-        self, tracker, mock_mlflow, sample_state
-    ):
+    async def test_log_artifacts_logs_patterns(self, tracker, mock_mlflow, sample_state):
         """Test that detected patterns are logged as artifacts."""
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             with patch("tempfile.TemporaryDirectory") as mock_tmpdir:
-                mock_tmpdir.return_value.__enter__ = MagicMock(
-                    return_value="/tmp/test"
-                )
+                mock_tmpdir.return_value.__enter__ = MagicMock(return_value="/tmp/test")
                 mock_tmpdir.return_value.__exit__ = MagicMock(return_value=False)
 
                 with patch("builtins.open", MagicMock()):
@@ -668,9 +640,7 @@ class TestGetLearningSummary:
     @pytest.mark.asyncio
     async def test_get_summary_empty_history(self, tracker):
         """Test summary with no history."""
-        with patch.object(
-            tracker, "get_learning_history", new_callable=AsyncMock
-        ) as mock_history:
+        with patch.object(tracker, "get_learning_history", new_callable=AsyncMock) as mock_history:
             mock_history.return_value = []
 
             summary = await tracker.get_learning_summary()
@@ -719,9 +689,7 @@ class TestGetPatternTrends:
     @pytest.mark.asyncio
     async def test_get_trends_empty_history(self, tracker):
         """Test pattern trends with no history."""
-        with patch.object(
-            tracker, "get_learning_history", new_callable=AsyncMock
-        ) as mock_history:
+        with patch.object(tracker, "get_learning_history", new_callable=AsyncMock) as mock_history:
             mock_history.return_value = []
 
             trends = await tracker.get_pattern_trends()
@@ -783,9 +751,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_handles_mlflow_connection_error(self, tracker, mock_mlflow):
         """Test handling of MLflow connection errors."""
-        mock_mlflow.get_experiment_by_name.side_effect = Exception(
-            "Connection failed"
-        )
+        mock_mlflow.get_experiment_by_name.side_effect = Exception("Connection failed")
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):
             async with tracker.start_learning_run(
@@ -806,9 +772,7 @@ class TestErrorHandling:
             await tracker.log_learning_result(sample_state)
 
     @pytest.mark.asyncio
-    async def test_handles_artifact_logging_error(
-        self, tracker, mock_mlflow, sample_state
-    ):
+    async def test_handles_artifact_logging_error(self, tracker, mock_mlflow, sample_state):
         """Test handling of artifact logging errors."""
         mock_mlflow.log_artifact.side_effect = Exception("Artifact failed")
 

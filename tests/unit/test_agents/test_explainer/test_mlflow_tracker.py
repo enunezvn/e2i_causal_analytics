@@ -14,18 +14,17 @@ Part of observability audit remediation - G09 Phase 2.
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.agents.explainer.mlflow_tracker import (
     EXPERIMENT_PREFIX,
-    ExplanationContext,
     ExplainerMetrics,
     ExplainerMLflowTracker,
+    ExplanationContext,
     create_tracker,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -46,12 +45,8 @@ def mock_mlflow():
     mock.log_artifact = MagicMock()
     mock.set_tag = MagicMock()
     mock.set_tags = MagicMock()
-    mock.get_experiment_by_name = MagicMock(
-        return_value=MagicMock(experiment_id="test_exp_id")
-    )
-    mock.search_runs = MagicMock(
-        return_value=MagicMock(iterrows=MagicMock(return_value=iter([])))
-    )
+    mock.get_experiment_by_name = MagicMock(return_value=MagicMock(experiment_id="test_exp_id"))
+    mock.search_runs = MagicMock(return_value=MagicMock(iterrows=MagicMock(return_value=iter([]))))
     return mock
 
 
@@ -376,9 +371,7 @@ class TestMetricExtraction:
     def test_extract_metrics_handles_missing_fields(self, tracker):
         """Test metric extraction with missing fields."""
         state = {
-            "extracted_insights": [
-                {"category": "finding", "confidence": 0.9}
-            ],
+            "extracted_insights": [{"category": "finding", "confidence": 0.9}],
         }
         metrics = tracker._extract_metrics(state)
         assert metrics.insight_count == 1
@@ -489,12 +482,17 @@ class TestGetExplanationHistory:
     async def test_get_history_with_results(self, tracker, mock_mlflow):
         """Test history query with results."""
         mock_df = MagicMock()
-        mock_df.iterrows.return_value = iter([
-            (0, {
-                "run_id": "run_1",
-                "start_time": datetime.now(timezone.utc),
-            }),
-        ])
+        mock_df.iterrows.return_value = iter(
+            [
+                (
+                    0,
+                    {
+                        "run_id": "run_1",
+                        "start_time": datetime.now(timezone.utc),
+                    },
+                ),
+            ]
+        )
         mock_mlflow.search_runs.return_value = mock_df
 
         with patch.object(tracker, "_get_mlflow", return_value=mock_mlflow):

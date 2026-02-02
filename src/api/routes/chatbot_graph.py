@@ -25,46 +25,41 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from src.api.routes.chatbot_dspy import (
+    CHATBOT_COGNITIVE_RAG_ENABLED,
+    CHATBOT_DSPY_SYNTHESIS_ENABLED,
+    classify_intent_dspy,
+    cognitive_rag_retrieve,
+    get_chatbot_signal_collector,
+    route_agent_hardcoded,
+    synthesize_response_dspy,
+)
 from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
-from src.utils.llm_factory import get_chat_llm, get_llm_provider
+from src.api.routes.chatbot_tracer import (
+    ChatbotTraceContext,
+    get_chatbot_tracer,
+)
+from src.api.routes.cognitive import get_orchestrator
+from src.memory.episodic_memory import (
+    E2IEntityReferences,
+    EpisodicMemoryInput,
+    insert_episodic_memory_with_text,
+)
 from src.memory.services.factories import get_async_supabase_client
 from src.memory.working_memory import get_langgraph_checkpointer
+from src.mlops.mlflow_connector import MLflowConnector
 from src.rag.retriever import hybrid_search
 from src.repositories.chatbot_conversation import (
-    ChatbotConversationRepository,
     get_chatbot_conversation_repository,
 )
 from src.repositories.chatbot_message import (
-    ChatbotMessageRepository,
     get_chatbot_message_repository,
 )
-from src.memory.episodic_memory import (
-    EpisodicMemoryInput,
-    E2IEntityReferences,
-    insert_episodic_memory_with_text,
-)
-from src.api.routes.chatbot_tracer import (
-    get_chatbot_tracer,
-    ChatbotTraceContext,
-    CHATBOT_OPIK_TRACING_ENABLED,
-)
-from src.api.routes.chatbot_dspy import (
-    classify_intent_dspy,
-    CHATBOT_DSPY_INTENT_ENABLED,
-    cognitive_rag_retrieve,
-    CHATBOT_COGNITIVE_RAG_ENABLED,
-    synthesize_response_dspy,
-    CHATBOT_DSPY_SYNTHESIS_ENABLED,
-    get_chatbot_signal_collector,
-    route_agent_hardcoded,
-)
-from src.mlops.mlflow_connector import MLflowConnector
-from src.api.routes.cognitive import get_orchestrator
+from src.utils.llm_factory import get_chat_llm, get_llm_provider
 
 # MLflow metrics feature flag
 CHATBOT_MLFLOW_METRICS_ENABLED = os.getenv("CHATBOT_MLFLOW_METRICS", "true").lower() == "true"
@@ -92,8 +87,9 @@ logger = logging.getLogger(__name__)
 
 # Context variable for active trace context (accessible by nodes)
 import contextvars
-_active_trace_context: contextvars.ContextVar[Optional[ChatbotTraceContext]] = contextvars.ContextVar(
-    "chatbot_trace_context", default=None
+
+_active_trace_context: contextvars.ContextVar[Optional[ChatbotTraceContext]] = (
+    contextvars.ContextVar("chatbot_trace_context", default=None)
 )
 
 
@@ -133,7 +129,9 @@ def get_progress_update(
     Returns:
         Dict with progress fields to merge into state
     """
-    progress_info = WORKFLOW_PROGRESS.get(node_name, (50, f"Processing {node_name}...", "processing"))
+    progress_info = WORKFLOW_PROGRESS.get(
+        node_name, (50, f"Processing {node_name}...", "processing")
+    )
     percent, default_step, status = progress_info
 
     # Build step description
@@ -189,7 +187,9 @@ async def _get_or_create_chatbot_experiment() -> Optional[str]:
                 "framework": "langgraph",
             },
         )
-        logger.info(f"MLflow experiment '{CHATBOT_MLFLOW_EXPERIMENT}' ready: {_mlflow_experiment_id}")
+        logger.info(
+            f"MLflow experiment '{CHATBOT_MLFLOW_EXPERIMENT}' ready: {_mlflow_experiment_id}"
+        )
         return _mlflow_experiment_id
     except Exception as e:
         logger.warning(f"Failed to get/create MLflow experiment: {e}")
@@ -346,11 +346,15 @@ def classify_intent(query: str) -> str:
         return IntentType.MULTI_FACETED
 
     # KPI patterns
-    if _matches_pattern(query_lower, ["kpi", "trx", "nrx", "market share", "conversion", "metric", "volume"]):
+    if _matches_pattern(
+        query_lower, ["kpi", "trx", "nrx", "market share", "conversion", "metric", "volume"]
+    ):
         return IntentType.KPI_QUERY
 
     # Causal patterns (including past tense variations)
-    if _matches_pattern(query_lower, ["why", "cause", "caused", "impact", "effect", "driver", "causal", "because"]):
+    if _matches_pattern(
+        query_lower, ["why", "cause", "caused", "impact", "effect", "driver", "causal", "because"]
+    ):
         return IntentType.CAUSAL_ANALYSIS
 
     # Agent patterns
@@ -366,12 +370,26 @@ def classify_intent(query: str) -> str:
         return IntentType.SEARCH
 
     # Cohort definition patterns (patient/HCP cohort construction)
-    if _matches_pattern(query_lower, [
-        "cohort", "build a cohort", "create a cohort", "define a cohort",
-        "patient population", "patient set", "eligibility", "eligible patient",
-        "inclusion criteria", "exclusion criteria", "high-value hcp", "high value hcp",
-        "hcp cohort", "physician cohort", "filter patient"
-    ]):
+    if _matches_pattern(
+        query_lower,
+        [
+            "cohort",
+            "build a cohort",
+            "create a cohort",
+            "define a cohort",
+            "patient population",
+            "patient set",
+            "eligibility",
+            "eligible patient",
+            "inclusion criteria",
+            "exclusion criteria",
+            "high-value hcp",
+            "high value hcp",
+            "hcp cohort",
+            "physician cohort",
+            "filter patient",
+        ],
+    ):
         return IntentType.COHORT_DEFINITION
 
     return IntentType.GENERAL
@@ -559,7 +577,9 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
     intent = state.get("intent") or ""
     messages = state.get("messages", [])
 
-    logger.debug(f"RAG retrieval: query={query[:50]}..., intent={intent}, cognitive_enabled={CHATBOT_COGNITIVE_RAG_ENABLED}")
+    logger.debug(
+        f"RAG retrieval: query={query[:50]}..., intent={intent}, cognitive_enabled={CHATBOT_COGNITIVE_RAG_ENABLED}"
+    )
 
     # Build conversation context from recent messages (last 3)
     conversation_context = ""
@@ -623,7 +643,9 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
             ]
 
             rag_sources = [e.get("source_id", "unknown") for e in result.evidence]
-            relevance_scores = [e.get("relevance_score", e.get("score", 0.0)) for e in result.evidence]
+            relevance_scores = [
+                e.get("relevance_score", e.get("score", 0.0)) for e in result.evidence
+            ]
 
             logger.debug(
                 f"Cognitive RAG complete: method={retrieval_method}, results={len(rag_context)}, "
@@ -699,17 +721,21 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
             )
             # Log cognitive RAG specific metrics
             if retrieval_method == "cognitive":
-                node_span.log_metadata({
-                    "rewritten_query": rewritten_query[:100] if rewritten_query else None,
-                    "search_keywords": search_keywords[:5],
-                    "graph_entities": graph_entities[:5],
-                    "avg_relevance_score": avg_relevance,
-                })
+                node_span.log_metadata(
+                    {
+                        "rewritten_query": rewritten_query[:100] if rewritten_query else None,
+                        "search_keywords": search_keywords[:5],
+                        "graph_entities": graph_entities[:5],
+                        "avg_relevance_score": avg_relevance,
+                    }
+                )
     else:
         await _execute_rag()
 
     # Build progress update
-    custom_step = f"Retrieved {len(rag_context)} documents" if rag_context else "Retrieving knowledge..."
+    custom_step = (
+        f"Retrieved {len(rag_context)} documents" if rag_context else "Retrieving knowledge..."
+    )
     progress = get_progress_update(
         "retrieve_rag",
         current_steps=state.get("progress_steps", []),
@@ -790,9 +816,11 @@ async def classify_intent_node(state: ChatbotState) -> Dict[str, Any]:
         )
 
         # Route to specialized agent based on query and intent
-        routed_agent, secondary_agents, routing_confidence, routing_rationale = route_agent_hardcoded(
-            query=query,
-            intent=intent,
+        routed_agent, secondary_agents, routing_confidence, routing_rationale = (
+            route_agent_hardcoded(
+                query=query,
+                intent=intent,
+            )
         )
         logger.debug(
             f"Routed to agent: {routed_agent} (confidence={routing_confidence:.2f}, "
@@ -954,16 +982,18 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             evidence = [ctx.get("content", "") for ctx in rag_context[:5]] if rag_context else []
 
             # Call orchestrator
-            orchestrator_result = await orchestrator.run({
-                "query": query,
-                "session_id": session_id,
-                "user_id": user_id,
-                "user_context": {
-                    "brand": brand_context,
-                    "region": region_context,
-                    "evidence": evidence,
-                },
-            })
+            orchestrator_result = await orchestrator.run(
+                {
+                    "query": query,
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "user_context": {
+                        "brand": brand_context,
+                        "region": region_context,
+                        "evidence": evidence,
+                    },
+                }
+            )
 
             orchestrator_used = True
             response_text = orchestrator_result.get("response_text", "")
@@ -995,9 +1025,7 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
                 if response_text and failure_warning:
                     response_text = f"{response_text}\n\n{failure_warning}"
             elif status == "failed":
-                logger.error(
-                    f"Orchestrator complete failure: all agents failed - {failed_agents}"
-                )
+                logger.error(f"Orchestrator complete failure: all agents failed - {failed_agents}")
             else:
                 logger.info(
                     f"Orchestrator processed query: agents={agents_dispatched}, "
@@ -1006,7 +1034,9 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
 
             # Create response message and update state
             if response_text or has_partial_failure:
-                response_msg = AIMessage(content=response_text or "Analysis could not be completed.")
+                response_msg = AIMessage(
+                    content=response_text or "Analysis could not be completed."
+                )
                 result = {
                     "messages": [response_msg],
                     "response_text": response_text,
@@ -1034,21 +1064,20 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             # Fall through to generate_node by returning empty result
 
     # Only route through orchestrator for complex intents
-    should_use_orchestrator = (
-        CHATBOT_ORCHESTRATOR_ENABLED
-        and intent in ORCHESTRATOR_ROUTED_INTENTS
-    )
+    should_use_orchestrator = CHATBOT_ORCHESTRATOR_ENABLED and intent in ORCHESTRATOR_ROUTED_INTENTS
 
     if should_use_orchestrator:
         if trace_ctx:
             async with trace_ctx.trace_node("orchestrator") as node_span:
                 await _execute_orchestrator()
-                node_span.log_metadata({
-                    "orchestrator_used": orchestrator_used,
-                    "agents_dispatched": agents_dispatched,
-                    "response_confidence": response_confidence,
-                    "response_length": len(response_text),
-                })
+                node_span.log_metadata(
+                    {
+                        "orchestrator_used": orchestrator_used,
+                        "agents_dispatched": agents_dispatched,
+                        "response_confidence": response_confidence,
+                        "response_length": len(response_text),
+                    }
+                )
         else:
             await _execute_orchestrator()
     else:
@@ -1197,7 +1226,14 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
 
     async def _execute_llm_generate():
         """Execute LLM generation with tools."""
-        nonlocal result, provider, model_name, tool_calls_count, input_tokens, output_tokens, is_fallback
+        nonlocal \
+            result, \
+            provider, \
+            model_name, \
+            tool_calls_count, \
+            input_tokens, \
+            output_tokens, \
+            is_fallback
 
         # Build context string for system prompt
         context_parts = []
@@ -1208,7 +1244,9 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
         if rag_context:
             context_parts.append("\n## Retrieved Context\n")
             for ctx in rag_context[:3]:  # Top 3 for context window
-                context_parts.append(f"- [{ctx.get('source', 'unknown')}] {ctx.get('content', '')[:200]}...")
+                context_parts.append(
+                    f"- [{ctx.get('source', 'unknown')}] {ctx.get('content', '')[:200]}..."
+                )
 
         context_str = "\n".join(context_parts) if context_parts else ""
 
@@ -1287,13 +1325,17 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
             )
             # Log synthesis-specific metrics
             if synthesis_used:
-                node_span.log_metadata({
-                    "synthesis_method": synthesis_method,
-                    "confidence_statement": confidence_statement[:100] if confidence_statement else None,
-                    "citations_count": len(evidence_citations),
-                    "follow_up_count": len(follow_up_suggestions),
-                    "avg_evidence_score": avg_evidence_score,
-                })
+                node_span.log_metadata(
+                    {
+                        "synthesis_method": synthesis_method,
+                        "confidence_statement": confidence_statement[:100]
+                        if confidence_statement
+                        else None,
+                        "citations_count": len(evidence_citations),
+                        "follow_up_count": len(follow_up_suggestions),
+                        "avg_evidence_score": avg_evidence_score,
+                    }
+                )
     else:
         await _execute_generate()
 
@@ -1314,7 +1356,7 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
 def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
     """Generate a fallback response when LLM is unavailable."""
     intent = state.get("intent", IntentType.GENERAL)
-    query = state.get("query", "")
+    state.get("query", "")
     routed_agent = state.get("routed_agent") or "chatbot"
 
     responses = {
@@ -1509,9 +1551,13 @@ async def _save_to_episodic_memory(
         # Extract entities mentioned in the interaction
         entities = {}
         if brand_context:
-            entities["brands"] = [brand_context] if isinstance(brand_context, str) else brand_context
+            entities["brands"] = (
+                [brand_context] if isinstance(brand_context, str) else brand_context
+            )
         if region_context:
-            entities["regions"] = [region_context] if isinstance(region_context, str) else region_context
+            entities["regions"] = (
+                [region_context] if isinstance(region_context, str) else region_context
+            )
 
         # Extract KPIs from tool results or metadata
         metadata = state.get("metadata", {})
@@ -1666,8 +1712,7 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                 if memory_id:
                     episodic_memory_saved = True
                     logger.debug(
-                        f"Episodic memory saved: {memory_id} "
-                        f"(score={significance_score:.2f})"
+                        f"Episodic memory saved: {memory_id} (score={significance_score:.2f})"
                     )
             else:
                 logger.debug(
@@ -1687,7 +1732,7 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                 signal_collector = get_chatbot_signal_collector()
 
                 # Create session signal with all available data
-                signal = signal_collector.start_session(
+                signal_collector.start_session(
                     session_id=session_id or "",
                     thread_id=state.get("request_id", ""),
                     query=query,
@@ -1722,8 +1767,7 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                     avg_relevance = 0.0
                     if rag_context:
                         scores = [
-                            c.get("relevance_score", c.get("score", 0.5))
-                            for c in rag_context
+                            c.get("relevance_score", c.get("score", 0.5)) for c in rag_context
                         ]
                         avg_relevance = sum(scores) / len(scores) if scores else 0.0
 
@@ -1749,15 +1793,11 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
                 )
 
                 # Finalize the session signal
-                finalized_signal = signal_collector.finalize_session(
-                    session_id=session_id or ""
-                )
+                finalized_signal = signal_collector.finalize_session(session_id=session_id or "")
 
                 # Persist to database if signal was finalized
                 if finalized_signal:
-                    db_id = await signal_collector.persist_signal_to_database(
-                        finalized_signal
-                    )
+                    db_id = await signal_collector.persist_signal_to_database(finalized_signal)
                     if db_id:
                         logger.debug(f"Training signal persisted to DB: id={db_id}")
 
@@ -1879,7 +1919,9 @@ def create_e2i_chatbot_graph() -> StateGraph:
     workflow.add_node("load_context", load_context_node)
     workflow.add_node("classify_intent", classify_intent_node)
     workflow.add_node("retrieve_rag", retrieve_rag_node)
-    workflow.add_node("orchestrator", orchestrator_node)  # Routes complex queries to specialized agents
+    workflow.add_node(
+        "orchestrator", orchestrator_node
+    )  # Routes complex queries to specialized agents
     workflow.add_node("generate", generate_node)
     workflow.add_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("finalize", finalize_node)
@@ -1891,8 +1933,12 @@ def create_e2i_chatbot_graph() -> StateGraph:
     workflow.add_edge("init", "load_context")
     workflow.add_edge("load_context", "classify_intent")
     workflow.add_edge("classify_intent", "retrieve_rag")
-    workflow.add_edge("retrieve_rag", "orchestrator")  # Route through orchestrator for potential agent dispatch
-    workflow.add_edge("orchestrator", "generate")  # generate_node skips if orchestrator handled query
+    workflow.add_edge(
+        "retrieve_rag", "orchestrator"
+    )  # Route through orchestrator for potential agent dispatch
+    workflow.add_edge(
+        "orchestrator", "generate"
+    )  # generate_node skips if orchestrator handled query
 
     # Conditional edge: generate → tools or finalize
     workflow.add_conditional_edges(
@@ -1975,7 +2021,6 @@ async def run_chatbot(
         # Track for MLflow metrics
         result = None
         error_occurred = False
-        error_type = None
 
         try:
             initial_state = create_initial_state(
@@ -2008,7 +2053,7 @@ async def run_chatbot(
         except Exception as e:
             # Log failure
             error_occurred = True
-            error_type = type(e).__name__
+            type(e).__name__  # noqa: B018
             trace_ctx.log_workflow_complete(
                 status="failed",
                 success=False,
@@ -2034,7 +2079,9 @@ async def run_chatbot(
 
                     if experiment_id and mlflow_conn:
                         # Generate run name from session and request
-                        run_name = f"chat_{session_id[:8] if session_id else 'anon'}_{request_id[:8]}"
+                        run_name = (
+                            f"chat_{session_id[:8] if session_id else 'anon'}_{request_id[:8]}"
+                        )
 
                         async with mlflow_conn.start_run(
                             experiment_id=experiment_id,
@@ -2046,13 +2093,17 @@ async def run_chatbot(
                             },
                         ) as mlflow_run:
                             # Task 2.3: Log session params
-                            await mlflow_run.log_params({
-                                "user_id": user_id[:8] if user_id else "anon",  # Truncated for privacy
-                                "brand_context": brand_context or "none",
-                                "region_context": region_context or "none",
-                                "query_length": len(query),
-                                "is_new_session": str(session_id is None),
-                            })
+                            await mlflow_run.log_params(
+                                {
+                                    "user_id": user_id[:8]
+                                    if user_id
+                                    else "anon",  # Truncated for privacy
+                                    "brand_context": brand_context or "none",
+                                    "region_context": region_context or "none",
+                                    "query_length": len(query),
+                                    "is_new_session": str(session_id is None),
+                                }
+                            )
 
                             # Task 2.4: Log per-request metrics (latency, token usage)
                             metrics = {
@@ -2074,7 +2125,9 @@ async def run_chatbot(
                                 intent = result.get("intent")
                                 if intent:
                                     # Convert intent to numeric for MLflow (1 for each type)
-                                    intent_str = intent.value if hasattr(intent, "value") else str(intent)
+                                    intent_str = (
+                                        intent.value if hasattr(intent, "value") else str(intent)
+                                    )
                                     metrics[f"intent_{intent_str}"] = 1
 
                                 # Tool usage metrics
@@ -2086,7 +2139,9 @@ async def run_chatbot(
                                 metrics["rag_result_count"] = len(rag_context)
                                 if rag_context:
                                     # Calculate average relevance score
-                                    scores = [ctx.get("score", 0) for ctx in rag_context if "score" in ctx]
+                                    scores = [
+                                        ctx.get("score", 0) for ctx in rag_context if "score" in ctx
+                                    ]
                                     if scores:
                                         metrics["rag_avg_relevance"] = sum(scores) / len(scores)
                                         metrics["rag_max_relevance"] = max(scores)

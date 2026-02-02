@@ -12,7 +12,7 @@ Tables: ml_bentoml_services, ml_bentoml_serving_metrics
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -111,7 +111,9 @@ class BentoMLService:
             "resources": self.resources,
             "environment": self.environment,
             "health_status": self.health_status,
-            "last_health_check": self.last_health_check.isoformat() if self.last_health_check else None,
+            "last_health_check": self.last_health_check.isoformat()
+            if self.last_health_check
+            else None,
             "health_check_failures": self.health_check_failures,
             "serving_endpoint": self.serving_endpoint,
             "internal_endpoint": self.internal_endpoint,
@@ -133,7 +135,9 @@ class BentoMLService:
             service_name=data.get("service_name", ""),
             bento_tag=data.get("bento_tag", ""),
             bento_version=data.get("bento_version"),
-            model_registry_id=UUID(data["model_registry_id"]) if data.get("model_registry_id") else None,
+            model_registry_id=UUID(data["model_registry_id"])
+            if data.get("model_registry_id")
+            else None,
             deployment_id=UUID(data["deployment_id"]) if data.get("deployment_id") else None,
             container_image=data.get("container_image"),
             container_tag=data.get("container_tag"),
@@ -141,15 +145,25 @@ class BentoMLService:
             resources=data.get("resources") or {"cpu": "1", "memory": "2Gi"},
             environment=data.get("environment", "staging"),
             health_status=data.get("health_status", "unknown"),
-            last_health_check=datetime.fromisoformat(data["last_health_check"]) if data.get("last_health_check") else None,
+            last_health_check=datetime.fromisoformat(data["last_health_check"])
+            if data.get("last_health_check")
+            else None,
             health_check_failures=data.get("health_check_failures", 0),
             serving_endpoint=data.get("serving_endpoint"),
             internal_endpoint=data.get("internal_endpoint"),
             status=data.get("status", "pending"),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
-            started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
-            stopped_at=datetime.fromisoformat(data["stopped_at"]) if data.get("stopped_at") else None,
-            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
+            created_at=datetime.fromisoformat(data["created_at"])
+            if data.get("created_at")
+            else None,
+            started_at=datetime.fromisoformat(data["started_at"])
+            if data.get("started_at")
+            else None,
+            stopped_at=datetime.fromisoformat(data["stopped_at"])
+            if data.get("stopped_at")
+            else None,
+            updated_at=datetime.fromisoformat(data["updated_at"])
+            if data.get("updated_at")
+            else None,
             created_by=data.get("created_by"),
             labels=data.get("labels") or {},
             annotations=data.get("annotations") or {},
@@ -226,7 +240,9 @@ class BentoMLServingMetrics:
         return cls(
             id=UUID(data["id"]) if data.get("id") else None,
             service_id=UUID(data["service_id"]) if data.get("service_id") else None,
-            recorded_at=datetime.fromisoformat(data["recorded_at"]) if data.get("recorded_at") else None,
+            recorded_at=datetime.fromisoformat(data["recorded_at"])
+            if data.get("recorded_at")
+            else None,
             requests_total=data.get("requests_total", 0),
             requests_per_second=data.get("requests_per_second"),
             successful_requests=data.get("successful_requests", 0),
@@ -459,11 +475,7 @@ class BentoMLServiceRepository(BaseRepository[BentoMLService]):
             return []
 
         try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("status", "active")
-            )
+            query = self.client.table(self.table_name).select("*").eq("status", "active")
 
             if environment:
                 query = query.eq("environment", environment)
@@ -721,7 +733,9 @@ class BentoMLMetricsRepository(BaseRepository[BentoMLServingMetrics]):
                 "get_bentoml_metrics_summary",
                 {
                     "p_service_id": str(service_id),
-                    "p_start_time": (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(),
+                    "p_start_time": (
+                        datetime.now(timezone.utc) - timedelta(hours=hours)
+                    ).isoformat(),
                     "p_end_time": datetime.now(timezone.utc).isoformat(),
                 },
             ).execute()
@@ -740,11 +754,21 @@ class BentoMLMetricsRepository(BaseRepository[BentoMLServingMetrics]):
 
             return {
                 "total_requests": sum(m.requests_total for m in metrics),
-                "avg_rps": sum(m.requests_per_second or 0 for m in metrics) / len(metrics) if metrics else 0,
-                "avg_latency_ms": sum(m.avg_latency_ms or 0 for m in metrics) / len(metrics) if metrics else 0,
-                "avg_error_rate": sum(m.error_rate or 0 for m in metrics) / len(metrics) if metrics else 0,
-                "avg_memory_mb": sum(m.memory_mb or 0 for m in metrics) / len(metrics) if metrics else 0,
-                "avg_cpu_percent": sum(m.cpu_percent or 0 for m in metrics) / len(metrics) if metrics else 0,
+                "avg_rps": sum(m.requests_per_second or 0 for m in metrics) / len(metrics)
+                if metrics
+                else 0,
+                "avg_latency_ms": sum(m.avg_latency_ms or 0 for m in metrics) / len(metrics)
+                if metrics
+                else 0,
+                "avg_error_rate": sum(m.error_rate or 0 for m in metrics) / len(metrics)
+                if metrics
+                else 0,
+                "avg_memory_mb": sum(m.memory_mb or 0 for m in metrics) / len(metrics)
+                if metrics
+                else 0,
+                "avg_cpu_percent": sum(m.cpu_percent or 0 for m in metrics) / len(metrics)
+                if metrics
+                else 0,
                 "data_points": len(metrics),
             }
 

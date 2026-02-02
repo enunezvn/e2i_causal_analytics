@@ -14,13 +14,12 @@ import pandas as pd
 import pytest
 
 from src.causal_engine.energy_score.score_calculator import (
-    EnergyScoreVariant,
-    EnergyScoreResult,
-    EnergyScoreConfig,
     EnergyScoreCalculator,
+    EnergyScoreConfig,
+    EnergyScoreResult,
+    EnergyScoreVariant,
     compute_energy_score,
 )
-
 
 # =============================================================================
 # EnergyScoreVariant Enum Tests
@@ -121,7 +120,7 @@ class TestEnergyScoreResult:
         )
 
         # Use == instead of 'is' because numpy.isfinite returns np.bool_
-        assert result.is_valid == True
+        assert result.is_valid
 
     def test_is_valid_with_nan_score(self):
         """Test is_valid returns False for NaN score."""
@@ -138,7 +137,7 @@ class TestEnergyScoreResult:
         )
 
         # Use == instead of 'is' because numpy.isfinite returns np.bool_
-        assert result.is_valid == False
+        assert not result.is_valid
 
     def test_is_valid_with_inf_score(self):
         """Test is_valid returns False for infinite score."""
@@ -155,7 +154,7 @@ class TestEnergyScoreResult:
         )
 
         # Use == instead of 'is' because numpy.isfinite returns np.bool_
-        assert result.is_valid == False
+        assert not result.is_valid
 
     def test_to_dict(self):
         """Test to_dict method."""
@@ -279,11 +278,13 @@ class TestEnergyScoreCalculator:
         n = 200
 
         # Generate covariates - use reset_index to ensure RangeIndex for bootstrap compatibility
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-            "x3": np.random.normal(0, 1, n),
-        }).reset_index(drop=True)
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+                "x3": np.random.normal(0, 1, n),
+            }
+        ).reset_index(drop=True)
 
         # Generate treatment based on covariates
         propensity = 1 / (1 + np.exp(-(0.5 * covariates["x1"] + 0.3 * covariates["x2"])))
@@ -292,8 +293,11 @@ class TestEnergyScoreCalculator:
         # Generate outcome with treatment effect
         true_effect = 2.0
         outcome = (
-            1.0 + 0.5 * covariates["x1"] + 0.3 * covariates["x2"] +
-            true_effect * treatment + np.random.normal(0, 0.5, n)
+            1.0
+            + 0.5 * covariates["x1"]
+            + 0.3 * covariates["x2"]
+            + true_effect * treatment
+            + np.random.normal(0, 0.5, n)
         )
 
         # Estimated effects (add some noise)
@@ -302,10 +306,10 @@ class TestEnergyScoreCalculator:
         # Convert propensity to numpy array to avoid index issues in bootstrap
         return {
             "treatment": treatment,
-            "outcome": outcome.values if hasattr(outcome, 'values') else outcome,
+            "outcome": outcome.values if hasattr(outcome, "values") else outcome,
             "covariates": covariates,
             "estimated_effects": estimated_effects,
-            "propensity_scores": propensity.values if hasattr(propensity, 'values') else propensity,
+            "propensity_scores": propensity.values if hasattr(propensity, "values") else propensity,
         }
 
     def test_calculator_init_default_config(self):
@@ -504,10 +508,12 @@ class TestComputeEnergyScoreFunction:
         n = 100
 
         # Reset index for bootstrap compatibility
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-        }).reset_index(drop=True)
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+            }
+        ).reset_index(drop=True)
 
         treatment = np.random.binomial(1, 0.5, n)
         outcome = 1.0 + 0.5 * covariates["x1"] + 2.0 * treatment + np.random.normal(0, 0.3, n)
@@ -516,7 +522,7 @@ class TestComputeEnergyScoreFunction:
         # Convert outcome to numpy array if it's a Series
         return {
             "treatment": treatment,
-            "outcome": outcome.values if hasattr(outcome, 'values') else outcome,
+            "outcome": outcome.values if hasattr(outcome, "values") else outcome,
             "covariates": covariates,
             "estimated_effects": estimated_effects,
         }
@@ -591,18 +597,19 @@ class TestEnergyScoreIntegration:
 
         # Generate data with known treatment effect
         # Reset index for bootstrap compatibility
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-        }).reset_index(drop=True)
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+            }
+        ).reset_index(drop=True)
 
         propensity = 1 / (1 + np.exp(-covariates["x1"]))
         treatment = (np.random.random(n) < propensity).astype(int)
 
         true_effect = 2.0
         outcome = (
-            1.0 + 0.5 * covariates["x1"] +
-            true_effect * treatment + np.random.normal(0, 0.5, n)
+            1.0 + 0.5 * covariates["x1"] + true_effect * treatment + np.random.normal(0, 0.5, n)
         )
 
         config = EnergyScoreConfig(enable_bootstrap=False)
@@ -612,10 +619,10 @@ class TestEnergyScoreIntegration:
         effects_1 = np.full(n, true_effect) + np.random.normal(0, 0.1, n)
         result_1 = calculator.compute(
             treatment=treatment,
-            outcome=outcome.values if hasattr(outcome, 'values') else outcome,
+            outcome=outcome.values if hasattr(outcome, "values") else outcome,
             covariates=covariates,
             estimated_effects=effects_1,
-            propensity_scores=propensity.values if hasattr(propensity, 'values') else propensity,
+            propensity_scores=propensity.values if hasattr(propensity, "values") else propensity,
             estimator_name="Estimator1",
         )
 
@@ -623,10 +630,10 @@ class TestEnergyScoreIntegration:
         effects_2 = np.full(n, true_effect * 1.5) + np.random.normal(0, 0.5, n)
         result_2 = calculator.compute(
             treatment=treatment,
-            outcome=outcome.values if hasattr(outcome, 'values') else outcome,
+            outcome=outcome.values if hasattr(outcome, "values") else outcome,
             covariates=covariates,
             estimated_effects=effects_2,
-            propensity_scores=propensity.values if hasattr(propensity, 'values') else propensity,
+            propensity_scores=propensity.values if hasattr(propensity, "values") else propensity,
             estimator_name="Estimator2",
         )
 
@@ -648,10 +655,12 @@ class TestEnergyScoreIntegration:
         n = 100
 
         # Reset index for bootstrap compatibility
-        covariates = pd.DataFrame({
-            "x1": np.random.normal(0, 1, n),
-            "x2": np.random.normal(0, 1, n),
-        }).reset_index(drop=True)
+        covariates = pd.DataFrame(
+            {
+                "x1": np.random.normal(0, 1, n),
+                "x2": np.random.normal(0, 1, n),
+            }
+        ).reset_index(drop=True)
 
         treatment = np.random.binomial(1, 0.5, n)
         outcome = 1.0 + treatment + np.random.normal(0, 0.3, n)
@@ -659,7 +668,7 @@ class TestEnergyScoreIntegration:
         propensity = np.full(n, 0.5)
 
         # Ensure outcome is numpy array
-        outcome = outcome.values if hasattr(outcome, 'values') else outcome
+        outcome = outcome.values if hasattr(outcome, "values") else outcome
 
         config = EnergyScoreConfig(enable_bootstrap=False)
         calculator = EnergyScoreCalculator(config)

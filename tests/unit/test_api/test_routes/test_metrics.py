@@ -9,12 +9,11 @@ Tests cover:
 QW1 from observability audit remediation plan.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 
 # =============================================================================
 # FIXTURES
@@ -240,7 +239,7 @@ class TestMetricsRegistry:
 
     def test_get_metrics_registry_initializes_on_first_call(self, reset_metrics_state):
         """Test that registry is initialized on first call."""
-        from src.api.routes.metrics import get_metrics_registry, _metrics_initialized
+        from src.api.routes.metrics import get_metrics_registry
 
         registry = get_metrics_registry()
 

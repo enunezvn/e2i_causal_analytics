@@ -11,7 +11,6 @@ from src.mlops.bentoml_monitoring import (
     AlertSeverity,
     BentoMLHealthMonitor,
     HealthCheckResult,
-    MetricSnapshot,
     PrometheusMetrics,
     ServiceStatus,
     create_health_monitor,
@@ -109,10 +108,12 @@ class TestPrometheusMetrics:
     @patch("src.mlops.bentoml_monitoring.PROMETHEUS_AVAILABLE", True)
     def test_initialization_with_prometheus(self):
         """Should create metrics when prometheus available."""
-        with patch("src.mlops.bentoml_monitoring.Counter") as mock_counter, \
-             patch("src.mlops.bentoml_monitoring.Histogram") as mock_histogram, \
-             patch("src.mlops.bentoml_monitoring.Gauge") as mock_gauge:
-            metrics = PrometheusMetrics(namespace="test")
+        with (
+            patch("src.mlops.bentoml_monitoring.Counter") as mock_counter,
+            patch("src.mlops.bentoml_monitoring.Histogram") as mock_histogram,
+            patch("src.mlops.bentoml_monitoring.Gauge") as mock_gauge,
+        ):
+            PrometheusMetrics(namespace="test")
 
             assert mock_counter.called
             assert mock_histogram.called

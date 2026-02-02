@@ -361,9 +361,7 @@ class ExperimentDesignerMLflowTracker:
                 metrics.alpha = power_analysis.get("alpha", 0.05)
             else:
                 # Pydantic model
-                metrics.required_sample_size = getattr(
-                    power_analysis, "required_sample_size", 0
-                )
+                metrics.required_sample_size = getattr(power_analysis, "required_sample_size", 0)
                 metrics.required_sample_size_per_arm = getattr(
                     power_analysis, "required_sample_size_per_arm", 0
                 )
@@ -412,9 +410,7 @@ class ExperimentDesignerMLflowTracker:
             if is_primary:
                 metrics.primary_outcomes_count += 1
 
-        metrics.stratification_vars_count = len(
-            output_dict.get("stratification_variables", [])
-        )
+        metrics.stratification_vars_count = len(output_dict.get("stratification_variables", []))
         metrics.blocking_vars_count = len(output_dict.get("blocking_variables", []))
 
         # Iteration metrics
@@ -430,9 +426,7 @@ class ExperimentDesignerMLflowTracker:
             metrics.reasoning_latency_ms = node_latencies.get("design_reasoning", 0)
             metrics.power_analysis_latency_ms = node_latencies.get("power_analysis", 0)
             metrics.validity_audit_latency_ms = node_latencies.get("validity_audit", 0)
-            metrics.template_generation_latency_ms = node_latencies.get(
-                "template_generator", 0
-            )
+            metrics.template_generation_latency_ms = node_latencies.get("template_generator", 0)
             metrics.total_llm_tokens = state.get("total_llm_tokens_used", 0)
 
             mitigations = state.get("mitigations", [])
@@ -460,8 +454,8 @@ class ExperimentDesignerMLflowTracker:
         if mlflow is None:
             return
 
-        import tempfile
         import os
+        import tempfile
 
         # Handle both Pydantic models and dicts
         if hasattr(output, "model_dump"):
@@ -547,15 +541,15 @@ class ExperimentDesignerMLflowTracker:
                 if treatments or outcomes:
                     spec = {
                         "treatments": [
-                            t.model_dump() if hasattr(t, "model_dump") else (
-                                t.dict() if hasattr(t, "dict") else t
-                            )
+                            t.model_dump()
+                            if hasattr(t, "model_dump")
+                            else (t.dict() if hasattr(t, "dict") else t)
                             for t in treatments
                         ],
                         "outcomes": [
-                            o.model_dump() if hasattr(o, "model_dump") else (
-                                o.dict() if hasattr(o, "dict") else o
-                            )
+                            o.model_dump()
+                            if hasattr(o, "model_dump")
+                            else (o.dict() if hasattr(o, "dict") else o)
                             for o in outcomes
                         ],
                     }

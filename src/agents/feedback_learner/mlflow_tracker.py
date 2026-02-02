@@ -30,7 +30,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 if TYPE_CHECKING:
     from .state import FeedbackLearnerState
@@ -258,11 +258,13 @@ class FeedbackLearnerMLflowTracker:
                 self._current_run_id = run.info.run_id
 
                 # Log run parameters
-                mlflow.log_params({
-                    "agent": "feedback_learner",
-                    "tier": 5,
-                    "batch_id": batch_id,
-                })
+                mlflow.log_params(
+                    {
+                        "agent": "feedback_learner",
+                        "tier": 5,
+                        "batch_id": batch_id,
+                    }
+                )
 
                 # Log time range if provided
                 if time_range_start:
@@ -276,10 +278,12 @@ class FeedbackLearnerMLflowTracker:
                     mlflow.log_param("focus_agents_count", len(focus_agents))
 
                 # Log context tags
-                mlflow.set_tags({
-                    "agent_type": "self_improvement",
-                    "framework_version": "4.3",
-                })
+                mlflow.set_tags(
+                    {
+                        "agent_type": "self_improvement",
+                        "framework_version": "4.3",
+                    }
+                )
 
                 # Custom tags
                 for key, value in (tags or {}).items():
@@ -323,13 +327,15 @@ class FeedbackLearnerMLflowTracker:
             mlflow.log_metrics(metrics.to_dict())
 
             # Log quality tags
-            mlflow.set_tags({
-                "has_patterns": str(metrics.patterns_detected > 0).lower(),
-                "has_critical_patterns": str(metrics.critical_patterns > 0).lower(),
-                "has_recommendations": str(metrics.recommendations_count > 0).lower(),
-                "has_applied_updates": str(metrics.applied_updates_count > 0).lower(),
-                "rubric_evaluated": str(metrics.has_rubric_evaluation).lower(),
-            })
+            mlflow.set_tags(
+                {
+                    "has_patterns": str(metrics.patterns_detected > 0).lower(),
+                    "has_critical_patterns": str(metrics.critical_patterns > 0).lower(),
+                    "has_recommendations": str(metrics.recommendations_count > 0).lower(),
+                    "has_applied_updates": str(metrics.applied_updates_count > 0).lower(),
+                    "rubric_evaluated": str(metrics.has_rubric_evaluation).lower(),
+                }
+            )
 
             # Log rubric decision if present
             rubric_decision = state.get("rubric_decision")
@@ -553,19 +559,21 @@ class FeedbackLearnerMLflowTracker:
 
             history = []
             for _, row in runs.iterrows():
-                history.append({
-                    "run_id": row["run_id"],
-                    "timestamp": row["start_time"],
-                    "batch_id": row.get("params.batch_id"),
-                    "total_feedback_items": row.get("metrics.total_feedback_items"),
-                    "patterns_detected": row.get("metrics.patterns_detected"),
-                    "critical_patterns": row.get("metrics.critical_patterns"),
-                    "recommendations_count": row.get("metrics.recommendations_count"),
-                    "applied_updates_count": row.get("metrics.applied_updates_count"),
-                    "rubric_weighted_score": row.get("metrics.rubric_weighted_score"),
-                    "total_latency_ms": row.get("metrics.total_latency_ms"),
-                    "completion_status": row.get("tags.completion_status"),
-                })
+                history.append(
+                    {
+                        "run_id": row["run_id"],
+                        "timestamp": row["start_time"],
+                        "batch_id": row.get("params.batch_id"),
+                        "total_feedback_items": row.get("metrics.total_feedback_items"),
+                        "patterns_detected": row.get("metrics.patterns_detected"),
+                        "critical_patterns": row.get("metrics.critical_patterns"),
+                        "recommendations_count": row.get("metrics.recommendations_count"),
+                        "applied_updates_count": row.get("metrics.applied_updates_count"),
+                        "rubric_weighted_score": row.get("metrics.rubric_weighted_score"),
+                        "total_latency_ms": row.get("metrics.total_latency_ms"),
+                        "completion_status": row.get("tags.completion_status"),
+                    }
+                )
 
             return history
 
@@ -620,12 +628,8 @@ class FeedbackLearnerMLflowTracker:
             "total_patterns_detected": sum(pattern_counts),
             "total_recommendations": sum(rec_counts),
             "avg_rubric_score": sum(rubric_scores) / len(rubric_scores) if rubric_scores else 0.0,
-            "successful_runs": sum(
-                1 for h in history if h.get("completion_status") == "completed"
-            ),
-            "failed_runs": sum(
-                1 for h in history if h.get("completion_status") == "failed"
-            ),
+            "successful_runs": sum(1 for h in history if h.get("completion_status") == "completed"),
+            "failed_runs": sum(1 for h in history if h.get("completion_status") == "failed"),
         }
 
     async def get_pattern_trends(
@@ -654,12 +658,8 @@ class FeedbackLearnerMLflowTracker:
                 "critical_pattern_rate": 0.0,
             }
 
-        runs_with_patterns = sum(
-            1 for h in history if (h.get("patterns_detected") or 0) > 0
-        )
-        runs_with_critical = sum(
-            1 for h in history if (h.get("critical_patterns") or 0) > 0
-        )
+        runs_with_patterns = sum(1 for h in history if (h.get("patterns_detected") or 0) > 0)
+        runs_with_critical = sum(1 for h in history if (h.get("critical_patterns") or 0) > 0)
 
         return {
             "total_runs": len(history),

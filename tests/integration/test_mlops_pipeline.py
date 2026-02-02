@@ -9,11 +9,11 @@ Tests cover end-to-end integration of:
 - HPO pruning efficiency
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
 import pandas as pd
-import numpy as np
+import pytest
 
 
 class TestDataFlowIntegration:
@@ -22,27 +22,30 @@ class TestDataFlowIntegration:
     @pytest.mark.asyncio
     async def test_pandera_to_ge_pipeline(self):
         """Test that Pandera validation feeds into GE validation pipeline."""
-        from src.mlops.pandera_schemas import BusinessMetricsSchema
-        from src.mlops.data_quality import DataQualityValidator
         import pandera as pa
 
+        from src.mlops.data_quality import DataQualityValidator
+        from src.mlops.pandera_schemas import BusinessMetricsSchema
+
         # Create test data that matches BusinessMetricsSchema
-        valid_data = pd.DataFrame({
-            "metric_id": ["M001", "M002", "M003"],
-            "brand_id": ["brand1", "brand2", "brand3"],
-            "metric_name": ["TRx", "NRx", "MarketShare"],
-            "metric_value": [100.0, 50.0, 0.25],
-            "metric_date": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
-            "period_type": ["weekly", "monthly", "quarterly"],
-            "data_source": ["source1", "source2", "source3"],
-            "created_at": pd.to_datetime(["2024-01-01"] * 3),
-        })
+        valid_data = pd.DataFrame(
+            {
+                "metric_id": ["M001", "M002", "M003"],
+                "brand_id": ["brand1", "brand2", "brand3"],
+                "metric_name": ["TRx", "NRx", "MarketShare"],
+                "metric_value": [100.0, 50.0, 0.25],
+                "metric_date": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+                "period_type": ["weekly", "monthly", "quarterly"],
+                "data_source": ["source1", "source2", "source3"],
+                "created_at": pd.to_datetime(["2024-01-01"] * 3),
+            }
+        )
 
         # Step 1: Pandera validation
         try:
             validated_df = BusinessMetricsSchema.validate(valid_data)
             pandera_passed = True
-        except pa.errors.SchemaError as e:
+        except pa.errors.SchemaError:
             pandera_passed = False
             validated_df = None
 
@@ -52,7 +55,9 @@ class TestDataFlowIntegration:
         if pandera_passed and validated_df is not None:
             validator = DataQualityValidator()
             # Use the generic validate method with suite name and table name
-            result = await validator.validate(validated_df, suite_name="business_metrics", table_name="test_business_metrics")
+            result = await validator.validate(
+                validated_df, suite_name="business_metrics", table_name="test_business_metrics"
+            )
 
             # GE should also pass for valid data
             assert result is not None
@@ -68,17 +73,19 @@ class TestDataFlowIntegration:
         validator = DataQualityValidator()
 
         # QC gate should detect issues with empty data
-        result = await validator.validate(invalid_data, suite_name="business_metrics", table_name="test_empty_data")
+        result = await validator.validate(
+            invalid_data, suite_name="business_metrics", table_name="test_empty_data"
+        )
 
         # Result should indicate validation failure for empty data
         # The QC gate prevents training from proceeding with bad data
-        if hasattr(result, 'success'):
-            qc_passed = result.success
+        if hasattr(result, "success"):
+            pass
         elif isinstance(result, dict):
-            qc_passed = result.get('success', result.get('valid', True))
+            result.get("success", result.get("valid", True))
         else:
             # Empty data should not be considered valid
-            qc_passed = len(invalid_data) > 0
+            len(invalid_data) > 0  # noqa: B015
 
         # Note: Behavior depends on GE suite configuration
         # Empty data typically fails validation
@@ -121,7 +128,10 @@ class TestDataFlowIntegration:
         )
 
         # Features should be available for training
-        assert "engagement_score" in features or "hcp_conversion_features__engagement_score" in features
+        assert (
+            "engagement_score" in features
+            or "hcp_conversion_features__engagement_score" in features
+        )
         assert len(features.get("hcp_id", features.get("engagement_score", []))) == 3
 
     @pytest.mark.asyncio
@@ -161,11 +171,12 @@ class TestHPOFlowIntegration:
     @pytest.mark.asyncio
     async def test_optuna_mlflow_integration(self):
         """Test Optuna HPO integrates with MLflow tracking."""
-        from src.mlops.optuna_optimizer import OptunaOptimizer
         import optuna
 
+        from src.mlops.optuna_optimizer import OptunaOptimizer
+
         # Create optimizer with experiment_id
-        optimizer = OptunaOptimizer(
+        OptunaOptimizer(
             experiment_id="test_mlflow_integration",
             mlflow_tracking=False,  # Disable MLflow for test
         )
@@ -201,7 +212,7 @@ class TestHPOFlowIntegration:
         def objective(trial):
             x = trial.suggest_float("x", -10, 10)
             y = trial.suggest_float("y", 0, 1)
-            return (x - 2) ** 2 + y ** 2
+            return (x - 2) ** 2 + y**2
 
         # Create study
         study = optuna.create_study(direction="minimize")
@@ -316,10 +327,10 @@ class TestPipelineOrchestration:
     @pytest.mark.asyncio
     async def test_end_to_end_mlops_health(self):
         """Test overall MLOps stack health check."""
-        from src.mlops.pandera_schemas import BusinessMetricsSchema
-        from src.mlops.data_quality import DataQualityValidator
         from src.feature_store.feast_client import FeastClient
+        from src.mlops.data_quality import DataQualityValidator
         from src.mlops.optuna_optimizer import OptunaOptimizer
+        from src.mlops.pandera_schemas import BusinessMetricsSchema
 
         health_status = {}
 
@@ -332,21 +343,21 @@ class TestPipelineOrchestration:
 
         # Check Great Expectations
         try:
-            validator = DataQualityValidator()
+            DataQualityValidator()
             health_status["great_expectations"] = "healthy"
         except Exception as e:
             health_status["great_expectations"] = f"error: {e}"
 
         # Check Feast
         try:
-            client = FeastClient()
+            FeastClient()
             health_status["feast"] = "healthy"
         except Exception as e:
             health_status["feast"] = f"error: {e}"
 
         # Check Optuna (requires experiment_id)
         try:
-            optimizer = OptunaOptimizer(experiment_id="health_check_test")
+            OptunaOptimizer(experiment_id="health_check_test")
             health_status["optuna"] = "healthy"
         except Exception as e:
             health_status["optuna"] = f"error: {e}"
@@ -358,10 +369,11 @@ class TestPipelineOrchestration:
     @pytest.mark.asyncio
     async def test_config_consistency_across_tools(self):
         """Test that configuration is consistent across MLOps tools."""
-        from src.feature_store.feast_client import load_feast_config
-        from src.mlops.optuna_optimizer import OptunaOptimizer
         from pathlib import Path
+
         import yaml
+
+        from src.feature_store.feast_client import load_feast_config
 
         # Load configs
         feast_config = load_feast_config()

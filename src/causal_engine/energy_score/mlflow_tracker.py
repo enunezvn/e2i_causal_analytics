@@ -24,8 +24,8 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, TYPE_CHECKING
-from uuid import UUID, uuid4
+from typing import TYPE_CHECKING, Any, Optional
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from .estimator_selector import SelectionResult
@@ -86,14 +86,11 @@ class EnergyScoreMLflowTracker:
             db_connection_string: Supabase connection string for direct logging
         """
         self.tracking_uri = tracking_uri or os.getenv(
-            "MLFLOW_TRACKING_URI",
-            "http://localhost:5000"
+            "MLFLOW_TRACKING_URI", "http://localhost:5000"
         )
         self.experiment_prefix = experiment_prefix
         self.enable_db_logging = enable_db_logging
-        self.db_connection_string = db_connection_string or os.getenv(
-            "DATABASE_URL"
-        )
+        self.db_connection_string = db_connection_string or os.getenv("DATABASE_URL")
 
         self._current_context: Optional[ExperimentContext] = None
         self._mlflow_available = self._check_mlflow()
@@ -101,7 +98,8 @@ class EnergyScoreMLflowTracker:
     def _check_mlflow(self) -> bool:
         """Check if MLflow is available."""
         try:
-            import mlflow
+            import mlflow  # noqa: F401
+
             os.environ["MLFLOW_TRACKING_URI"] = self.tracking_uri
             return True
         except ImportError:
@@ -242,8 +240,7 @@ class EnergyScoreMLflowTracker:
 
         # Log comparison metrics
         mlflow.log_metric("n_estimators_evaluated", len(result.all_results))
-        mlflow.log_metric("n_estimators_succeeded",
-                         sum(1 for r in result.all_results if r.success))
+        mlflow.log_metric("n_estimators_succeeded", sum(1 for r in result.all_results if r.success))
         mlflow.log_metric("energy_score_gap", result.energy_score_gap)
         mlflow.log_metric("total_selection_time_ms", result.total_time_ms)
 
@@ -269,7 +266,8 @@ class EnergyScoreMLflowTracker:
 
         # Write to temp file and log
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(results_dict, f, indent=2, default=str)
             temp_path = f.name
 
@@ -294,7 +292,8 @@ class EnergyScoreMLflowTracker:
             cur = conn.cursor()
 
             for i, eval_result in enumerate(result.all_results):
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO estimator_evaluations (
                         experiment_id, estimator_type, estimator_priority,
                         success, ate, ate_std, ate_ci_lower, ate_ci_upper,
@@ -308,34 +307,62 @@ class EnergyScoreMLflowTracker:
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
-                """, (
-                    experiment_id,
-                    eval_result.estimator_type.value,
-                    i + 1,  # priority
-                    eval_result.success,
-                    eval_result.ate,
-                    eval_result.ate_std,
-                    eval_result.ate_ci_lower,
-                    eval_result.ate_ci_upper,
-                    eval_result.energy_score if eval_result.success else None,
-                    eval_result.energy_score_result.treatment_balance_score if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.outcome_fit_score if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.propensity_calibration if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.ci_lower if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.ci_upper if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.bootstrap_std if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.n_samples if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.n_treated if eval_result.energy_score_result else None,
-                    eval_result.energy_score_result.n_control if eval_result.energy_score_result else None,
-                    eval_result.estimation_time_ms,
-                    eval_result.energy_score_result.computation_time_ms if eval_result.energy_score_result else None,
-                    eval_result.estimator_type == result.selected.estimator_type,
-                    result.selection_reason if eval_result.estimator_type == result.selected.estimator_type else None,
-                    eval_result.error_message,
-                    eval_result.error_type,
-                    Json({}),  # estimator_params
-                    Json(eval_result.energy_score_result.details if eval_result.energy_score_result else {}),
-                ))
+                """,
+                    (
+                        experiment_id,
+                        eval_result.estimator_type.value,
+                        i + 1,  # priority
+                        eval_result.success,
+                        eval_result.ate,
+                        eval_result.ate_std,
+                        eval_result.ate_ci_lower,
+                        eval_result.ate_ci_upper,
+                        eval_result.energy_score if eval_result.success else None,
+                        eval_result.energy_score_result.treatment_balance_score
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.outcome_fit_score
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.propensity_calibration
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.ci_lower
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.ci_upper
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.bootstrap_std
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.n_samples
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.n_treated
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.energy_score_result.n_control
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.estimation_time_ms,
+                        eval_result.energy_score_result.computation_time_ms
+                        if eval_result.energy_score_result
+                        else None,
+                        eval_result.estimator_type == result.selected.estimator_type,
+                        result.selection_reason
+                        if eval_result.estimator_type == result.selected.estimator_type
+                        else None,
+                        eval_result.error_message,
+                        eval_result.error_type,
+                        Json({}),  # estimator_params
+                        Json(
+                            eval_result.energy_score_result.details
+                            if eval_result.energy_score_result
+                            else {}
+                        ),
+                    ),
+                )
 
             conn.commit()
             cur.close()
@@ -407,7 +434,7 @@ class EnergyScoreMLflowTracker:
             """)
 
             columns = [desc[0] for desc in cur.description]
-            results = [dict(zip(columns, row)) for row in cur.fetchall()]
+            results = [dict(zip(columns, row, strict=False)) for row in cur.fetchall()]
 
             cur.close()
             conn.close()

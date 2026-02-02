@@ -450,9 +450,7 @@ class TestMemoryContribution:
         assert composer.enable_memory_contribution is True
 
     @pytest.mark.asyncio
-    async def test_memory_contribution_can_be_disabled(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_memory_contribution_can_be_disabled(self, mock_llm_client, mock_tool_registry):
         """Test that memory contribution can be disabled"""
         composer = ToolComposer(
             llm_client=mock_llm_client,
@@ -462,9 +460,7 @@ class TestMemoryContribution:
         assert composer.enable_memory_contribution is False
 
     @pytest.mark.asyncio
-    async def test_memory_hooks_initialized(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_memory_hooks_initialized(self, mock_llm_client, mock_tool_registry):
         """Test that memory hooks are initialized"""
         composer = ToolComposer(
             llm_client=mock_llm_client,
@@ -474,9 +470,7 @@ class TestMemoryContribution:
         assert hasattr(composer, "memory_hooks")
 
     @pytest.mark.asyncio
-    async def test_custom_memory_hooks_accepted(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_custom_memory_hooks_accepted(self, mock_llm_client, mock_tool_registry):
         """Test that custom memory hooks can be provided"""
         mock_memory_hooks = AsyncMock()
 
@@ -596,9 +590,7 @@ class TestMemoryContribution:
             assert call_kwargs["region"] == "Northeast"
 
     @pytest.mark.asyncio
-    async def test_memory_hooks_passed_to_planner(
-        self, mock_llm_client, mock_tool_registry
-    ):
+    async def test_memory_hooks_passed_to_planner(self, mock_llm_client, mock_tool_registry):
         """Test that memory hooks are passed to planner for episodic lookup"""
         mock_memory_hooks = AsyncMock()
 

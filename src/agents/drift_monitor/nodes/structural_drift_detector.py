@@ -19,10 +19,9 @@ Contract: .claude/contracts/tier3-contracts.md (V4.4 extension)
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import networkx as nx
-import numpy as np
 
 from src.agents.drift_monitor.state import (
     DriftMonitorState,
@@ -222,11 +221,13 @@ class StructuralDriftNode:
                 baseline_type = baseline_edge_types.get(edge_key)
                 current_type = current_edge_types.get(edge_key)
                 if baseline_type and current_type and baseline_type != current_type:
-                    edge_type_changes.append({
-                        "edge": edge,
-                        "baseline_type": baseline_type,
-                        "current_type": current_type,
-                    })
+                    edge_type_changes.append(
+                        {
+                            "edge": edge,
+                            "baseline_type": baseline_type,
+                            "current_type": current_type,
+                        }
+                    )
 
         # Determine severity
         severity = self._determine_severity(drift_score, edge_type_changes)
@@ -268,8 +269,7 @@ class StructuralDriftNode:
         """
         # Edge type changes (especially DIRECTED -> BIDIRECTED) are serious
         has_serious_type_changes = any(
-            change.get("current_type") == "BIDIRECTED"
-            for change in edge_type_changes
+            change.get("current_type") == "BIDIRECTED" for change in edge_type_changes
         )
 
         if drift_score >= self.CRITICAL_THRESHOLD or has_serious_type_changes:

@@ -18,7 +18,6 @@ Handoff Flow:
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, TypedDict
 
-
 # =============================================================================
 # Type Definitions for Handoff Contracts
 # =============================================================================
@@ -514,9 +513,7 @@ def validate_trainer_to_deployer_handoff(data: Dict[str, Any]) -> tuple:
     if target_env == "production":
         # Success criteria check
         if not data.get("success_criteria_met", False):
-            errors.append(
-                "Production deployment requires success_criteria_met=True"
-            )
+            errors.append("Production deployment requires success_criteria_met=True")
 
         # Shadow mode validation
         shadow_duration = data.get("shadow_mode_duration_hours", 0)

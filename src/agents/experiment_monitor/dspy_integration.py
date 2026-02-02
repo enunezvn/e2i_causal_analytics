@@ -12,9 +12,9 @@ The Experiment Monitor agent is a DSPy Recipient agent that:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 logger = logging.getLogger(__name__)
 

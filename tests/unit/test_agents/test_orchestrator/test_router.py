@@ -555,12 +555,12 @@ class TestIntentToAgentMapping:
 
         for pattern, agents in router.MULTI_AGENT_PATTERNS.items():
             priorities = [priority for _, priority in agents]
-            assert (
-                len(priorities) == len(set(priorities)) or len(priorities) <= 1
-            ), f"Duplicate priorities in pattern {pattern}"
-            assert all(
-                p in valid_priorities for p in priorities
-            ), f"Invalid priority in pattern {pattern}"
+            assert len(priorities) == len(set(priorities)) or len(priorities) <= 1, (
+                f"Duplicate priorities in pattern {pattern}"
+            )
+            assert all(p in valid_priorities for p in priorities), (
+                f"Invalid priority in pattern {pattern}"
+            )
 
 
 # ============================================================================
@@ -681,9 +681,7 @@ class TestEnhanceWithDiscoveryData:
             }
         ]
 
-        enhanced, aware_agents = router._enhance_with_discovery_data(
-            dispatch_plan, sample_state
-        )
+        enhanced, aware_agents = router._enhance_with_discovery_data(dispatch_plan, sample_state)
 
         assert len(enhanced) == 1
         assert enhanced[0]["agent_name"] == "causal_impact"
@@ -726,9 +724,7 @@ class TestEnhanceWithDiscoveryData:
             }
         ]
 
-        enhanced, aware_agents = router._enhance_with_discovery_data(
-            dispatch_plan, sample_state
-        )
+        enhanced, aware_agents = router._enhance_with_discovery_data(dispatch_plan, sample_state)
 
         assert len(enhanced) == 1
         assert "discovered_dag_adjacency" not in enhanced[0]["parameters"]
@@ -755,9 +751,7 @@ class TestEnhanceWithDiscoveryData:
             },
         ]
 
-        enhanced, aware_agents = router._enhance_with_discovery_data(
-            dispatch_plan, sample_state
-        )
+        enhanced, aware_agents = router._enhance_with_discovery_data(dispatch_plan, sample_state)
 
         assert len(enhanced) == 2
         assert set(aware_agents) == {"causal_impact", "heterogeneous_optimizer"}
@@ -784,9 +778,7 @@ class TestEnhanceWithDiscoveryData:
             }
         ]
 
-        enhanced, aware_agents = router._enhance_with_discovery_data(
-            dispatch_plan, state
-        )
+        enhanced, aware_agents = router._enhance_with_discovery_data(dispatch_plan, state)
 
         assert "discovery_config" in enhanced[0]["parameters"]
         # No DAG data, so not in aware_agents
@@ -900,9 +892,7 @@ class TestDiscoveryRoutingIntegration:
         assert "discovered_dag_adjacency" not in result["dispatch_plan"][0]["parameters"]
 
     @pytest.mark.asyncio
-    async def test_multi_agent_discovery_routing(
-        self, sample_dag_adjacency, sample_dag_nodes
-    ):
+    async def test_multi_agent_discovery_routing(self, sample_dag_adjacency, sample_dag_nodes):
         """Should apply discovery routing to multiple discovery-aware agents."""
         router = RouterNode()
 
@@ -952,9 +942,7 @@ class TestDiscoveryRoutingIntegration:
         assert "discovery_config" in result["dispatch_plan"][0]["parameters"]
 
     @pytest.mark.asyncio
-    async def test_experiment_designer_receives_dag(
-        self, sample_dag_adjacency, sample_dag_nodes
-    ):
+    async def test_experiment_designer_receives_dag(self, sample_dag_adjacency, sample_dag_nodes):
         """Should pass DAG data to experiment_designer agent."""
         router = RouterNode()
 

@@ -187,9 +187,7 @@ class SimulationCache:
         if client is None:
             return None
 
-        cache_key = self._generate_cache_key(
-            intervention_config, population_filter, model_id
-        )
+        cache_key = self._generate_cache_key(intervention_config, population_filter, model_id)
         full_key = self._make_key(cache_key)
 
         try:
@@ -200,9 +198,7 @@ class SimulationCache:
                 return None
 
             # Deserialize
-            result_dict = pickle.loads(
-                data.encode("latin-1") if isinstance(data, str) else data
-            )
+            result_dict = pickle.loads(data.encode("latin-1") if isinstance(data, str) else data)
             result = SimulationResult(**result_dict)
 
             logger.debug(f"Cache hit for key: {cache_key}")
@@ -316,9 +312,7 @@ class SimulationCache:
                 await client.delete(*keys_to_delete)
                 count = len(keys_to_delete) // 2  # Count actual results (not meta)
                 self._stats.invalidations += count
-                logger.info(
-                    f"Invalidated {count} cached simulations for model {model_id}"
-                )
+                logger.info(f"Invalidated {count} cached simulations for model {model_id}")
                 return count
 
             return 0
@@ -401,9 +395,7 @@ class SimulationCache:
                     if intervention not in by_intervention:
                         by_intervention[intervention] = {"count": 0, "hits": 0}
                     by_intervention[intervention]["count"] += 1
-                    by_intervention[intervention]["hits"] += int(
-                        meta.get("hit_count", 0)
-                    )
+                    by_intervention[intervention]["hits"] += int(meta.get("hit_count", 0))
 
             stats["redis_status"] = "connected"
             stats["cached_entries"] = entry_count

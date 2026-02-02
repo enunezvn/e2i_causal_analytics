@@ -13,7 +13,7 @@ import io
 import logging
 from base64 import b64encode
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 # Check for matplotlib availability
 try:
     import matplotlib
+
     matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.pyplot as plt
+
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
@@ -174,7 +176,7 @@ def _create_importance_chart(
     ax.set_title(title, fontsize=14, fontweight="bold")
 
     # Add value labels
-    for bar, importance in zip(bars, importances):
+    for bar, importance in zip(bars, importances, strict=False):
         ax.text(
             bar.get_width() + 0.001,
             bar.get_y() + bar.get_height() / 2,
@@ -246,7 +248,7 @@ def _create_selection_funnel(
     ax.set_title("Feature Selection Funnel", fontsize=14, fontweight="bold")
 
     # Add value labels and reduction percentages
-    for i, (bar, count) in enumerate(zip(bars, counts)):
+    for i, (bar, count) in enumerate(zip(bars, counts, strict=False)):
         # Count label
         ax.text(
             bar.get_x() + bar.get_width() / 2,
@@ -279,9 +281,7 @@ def _create_selection_funnel(
         "steps": steps,
         "counts": counts,
         "final_reduction": (
-            f"{(1 - counts[-1] / counts[0]) * 100:.1f}%"
-            if counts[0] > 0
-            else "N/A"
+            f"{(1 - counts[-1] / counts[0]) * 100:.1f}%" if counts[0] > 0 else "N/A"
         ),
     }
 
@@ -318,10 +318,10 @@ def _create_statistics_table(
     for feature, stats in list(feature_statistics.items())[:top_n]:
         row = {
             "Feature": feature[:30] + "..." if len(feature) > 30 else feature,
-            "Mean": f"{stats.get('mean', 'N/A'):.3f}" if stats.get('mean') else "N/A",
-            "Std": f"{stats.get('std', 'N/A'):.3f}" if stats.get('std') else "N/A",
-            "Min": f"{stats.get('min', 'N/A'):.3f}" if stats.get('min') else "N/A",
-            "Max": f"{stats.get('max', 'N/A'):.3f}" if stats.get('max') else "N/A",
+            "Mean": f"{stats.get('mean', 'N/A'):.3f}" if stats.get("mean") else "N/A",
+            "Std": f"{stats.get('std', 'N/A'):.3f}" if stats.get("std") else "N/A",
+            "Min": f"{stats.get('min', 'N/A'):.3f}" if stats.get("min") else "N/A",
+            "Max": f"{stats.get('max', 'N/A'):.3f}" if stats.get("max") else "N/A",
             "Null%": f"{stats.get('null_pct', 0) * 100:.1f}%",
         }
         data.append(row)
@@ -415,7 +415,7 @@ def _create_shap_summary(
     ax.set_title("SHAP Feature Importance", fontsize=14, fontweight="bold")
 
     # Add value labels
-    for bar, value in zip(bars, top_values):
+    for bar, value in zip(bars, top_values, strict=False):
         ax.text(
             bar.get_width() + max(top_values) * 0.01,
             bar.get_y() + bar.get_height() / 2,

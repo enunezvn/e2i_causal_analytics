@@ -11,14 +11,13 @@ Version: 1.0.0
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.routes.audit import router, get_audit_service
-
+from src.api.routes.audit import router
 
 # =============================================================================
 # FIXTURES
@@ -420,7 +419,9 @@ class TestGetWorkflowSummary:
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
-    def test_get_summary_with_avg_confidence(self, mock_audit_service, workflow_id, mock_audit_entries):
+    def test_get_summary_with_avg_confidence(
+        self, mock_audit_service, workflow_id, mock_audit_entries
+    ):
         """Test that average confidence score is calculated correctly."""
         mock_query = MagicMock()
         mock_query.select.return_value = mock_query

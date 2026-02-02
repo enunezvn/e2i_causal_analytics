@@ -64,9 +64,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """Check if this calculator supports the given KPI."""
         return kpi.workstream == Workstream.WS1_MODEL_PERFORMANCE
 
-    def calculate(
-        self, kpi: KPIMetadata, context: dict[str, Any] | None = None
-    ) -> KPIResult:
+    def calculate(self, kpi: KPIMetadata, context: dict[str, Any] | None = None) -> KPIResult:
         """Calculate a model performance KPI.
 
         Args:
@@ -172,9 +170,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         Slope of reliability diagram (1.0 = perfectly calibrated).
         """
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(
-            model_name, "calibration_slope", default=1.0
-        )
+        return self._get_metric_from_mlflow(model_name, "calibration_slope", default=1.0)
 
     def _calc_shap_coverage(self, context: dict[str, Any]) -> float:
         """Calculate WS1-MP-007: SHAP Coverage.
@@ -255,9 +251,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         except Exception:
             return default
 
-    def _execute_query(
-        self, query: str, params: list[Any]
-    ) -> list[dict[str, Any]] | None:
+    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()

@@ -11,13 +11,12 @@ Tests all endpoints in src/api/routes/experiments.py including:
 - Experiment monitoring
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock, patch
-from uuid import uuid4, UUID
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
+import pytest
 from fastapi import HTTPException
-
 
 # =============================================================================
 # FIXTURES
@@ -152,7 +151,9 @@ def mock_results_analysis_service():
 
         instance.compute_itt_results.return_value = mock_result
         instance.compute_per_protocol_results.return_value = mock_per_protocol_result
-        instance.compute_heterogeneous_effects.return_value = {"region": {"northeast": {"ate": 2.5}}}
+        instance.compute_heterogeneous_effects.return_value = {
+            "region": {"northeast": {"ate": 2.5}}
+        }
 
         mock_srm = MagicMock()
         mock_srm.id = uuid4()
@@ -316,7 +317,7 @@ def mock_experiment_monitor_agent():
 @pytest.mark.asyncio
 async def test_randomize_units_stratified(mock_randomization_service):
     """Test stratified randomization."""
-    from src.api.routes.experiments import randomize_units, RandomizeRequest, RandomizationMethod
+    from src.api.routes.experiments import RandomizationMethod, RandomizeRequest, randomize_units
 
     experiment_id = str(uuid4())
     request = RandomizeRequest(
@@ -338,7 +339,7 @@ async def test_randomize_units_stratified(mock_randomization_service):
 @pytest.mark.asyncio
 async def test_randomize_units_block(mock_randomization_service):
     """Test block randomization."""
-    from src.api.routes.experiments import randomize_units, RandomizeRequest, RandomizationMethod
+    from src.api.routes.experiments import RandomizationMethod, RandomizeRequest, randomize_units
 
     experiment_id = str(uuid4())
     request = RandomizeRequest(
@@ -356,7 +357,7 @@ async def test_randomize_units_block(mock_randomization_service):
 @pytest.mark.asyncio
 async def test_randomize_units_simple(mock_randomization_service):
     """Test simple randomization."""
-    from src.api.routes.experiments import randomize_units, RandomizeRequest, RandomizationMethod
+    from src.api.routes.experiments import RandomizationMethod, RandomizeRequest, randomize_units
 
     experiment_id = str(uuid4())
     request = RandomizeRequest(
@@ -373,7 +374,7 @@ async def test_randomize_units_simple(mock_randomization_service):
 @pytest.mark.asyncio
 async def test_randomize_units_error(mock_randomization_service):
     """Test randomization with error."""
-    from src.api.routes.experiments import randomize_units, RandomizeRequest
+    from src.api.routes.experiments import RandomizeRequest, randomize_units
 
     mock_randomization_service.stratified_randomize.side_effect = Exception("Randomization failed")
 
@@ -429,7 +430,7 @@ async def test_get_assignments_filtered(mock_ab_experiment_repository):
 @pytest.mark.asyncio
 async def test_enroll_unit_success(mock_enrollment_service):
     """Test enrolling a unit."""
-    from src.api.routes.experiments import enroll_unit, EnrollUnitRequest
+    from src.api.routes.experiments import EnrollUnitRequest, enroll_unit
 
     experiment_id = str(uuid4())
     request = EnrollUnitRequest(
@@ -449,7 +450,7 @@ async def test_enroll_unit_success(mock_enrollment_service):
 @pytest.mark.asyncio
 async def test_enroll_unit_validation_error(mock_enrollment_service):
     """Test enrollment with validation error."""
-    from src.api.routes.experiments import enroll_unit, EnrollUnitRequest
+    from src.api.routes.experiments import EnrollUnitRequest, enroll_unit
 
     mock_enrollment_service.enroll_unit.side_effect = ValueError("Unit not assigned")
 
@@ -469,7 +470,7 @@ async def test_enroll_unit_validation_error(mock_enrollment_service):
 @pytest.mark.asyncio
 async def test_withdraw_unit_success(mock_enrollment_service):
     """Test withdrawing a unit."""
-    from src.api.routes.experiments import withdraw_unit, WithdrawRequest
+    from src.api.routes.experiments import WithdrawRequest, withdraw_unit
 
     experiment_id = str(uuid4())
     enrollment_id = str(uuid4())
@@ -485,7 +486,7 @@ async def test_withdraw_unit_success(mock_enrollment_service):
 @pytest.mark.asyncio
 async def test_withdraw_unit_not_found(mock_enrollment_service):
     """Test withdrawing non-existent enrollment."""
-    from src.api.routes.experiments import withdraw_unit, WithdrawRequest
+    from src.api.routes.experiments import WithdrawRequest, withdraw_unit
 
     mock_enrollment_service.withdraw_unit.side_effect = ValueError("Not found")
 
@@ -522,15 +523,18 @@ async def test_get_enrollment_stats(mock_enrollment_service):
 @pytest.mark.asyncio
 async def test_trigger_interim_analysis_sync(mock_interim_analysis_service):
     """Test triggering interim analysis synchronously."""
-    from src.api.routes.experiments import trigger_interim_analysis, TriggerInterimAnalysisRequest
     from fastapi import BackgroundTasks
+
+    from src.api.routes.experiments import TriggerInterimAnalysisRequest, trigger_interim_analysis
 
     experiment_id = str(uuid4())
     request = TriggerInterimAnalysisRequest(analysis_number=1, force=False)
     background_tasks = BackgroundTasks()
     user = {"user_id": "test_user", "role": "operator"}
 
-    result = await trigger_interim_analysis(experiment_id, request, background_tasks, async_mode=False, user=user)
+    result = await trigger_interim_analysis(
+        experiment_id, request, background_tasks, async_mode=False, user=user
+    )
 
     assert result.analysis_number == 1
     assert result.decision.value == "continue"
@@ -539,8 +543,9 @@ async def test_trigger_interim_analysis_sync(mock_interim_analysis_service):
 @pytest.mark.asyncio
 async def test_trigger_interim_analysis_async():
     """Test triggering interim analysis asynchronously."""
-    from src.api.routes.experiments import trigger_interim_analysis, TriggerInterimAnalysisRequest
     from fastapi import BackgroundTasks
+
+    from src.api.routes.experiments import TriggerInterimAnalysisRequest, trigger_interim_analysis
 
     with patch("src.tasks.ab_testing_tasks.scheduled_interim_analysis") as mock_task:
         mock_celery_result = MagicMock()
@@ -552,7 +557,9 @@ async def test_trigger_interim_analysis_async():
         background_tasks = BackgroundTasks()
         user = {"user_id": "test_user", "role": "operator"}
 
-        result = await trigger_interim_analysis(experiment_id, request, background_tasks, async_mode=True, user=user)
+        result = await trigger_interim_analysis(
+            experiment_id, request, background_tasks, async_mode=True, user=user
+        )
 
         assert result.metrics_snapshot.get("task_id") == "task_123"
 
@@ -560,10 +567,13 @@ async def test_trigger_interim_analysis_async():
 @pytest.mark.asyncio
 async def test_trigger_interim_analysis_validation_error(mock_interim_analysis_service):
     """Test interim analysis with validation error."""
-    from src.api.routes.experiments import trigger_interim_analysis, TriggerInterimAnalysisRequest
     from fastapi import BackgroundTasks
 
-    mock_interim_analysis_service.perform_interim_analysis.side_effect = ValueError("Milestone not reached")
+    from src.api.routes.experiments import TriggerInterimAnalysisRequest, trigger_interim_analysis
+
+    mock_interim_analysis_service.perform_interim_analysis.side_effect = ValueError(
+        "Milestone not reached"
+    )
 
     experiment_id = str(uuid4())
     request = TriggerInterimAnalysisRequest(force=False)
@@ -571,7 +581,9 @@ async def test_trigger_interim_analysis_validation_error(mock_interim_analysis_s
     user = {"user_id": "test_user", "role": "operator"}
 
     with pytest.raises(HTTPException) as exc_info:
-        await trigger_interim_analysis(experiment_id, request, background_tasks, async_mode=False, user=user)
+        await trigger_interim_analysis(
+            experiment_id, request, background_tasks, async_mode=False, user=user
+        )
 
     assert exc_info.value.status_code == 400
 
@@ -597,7 +609,7 @@ async def test_list_interim_analyses(mock_ab_experiment_repository):
 @pytest.mark.asyncio
 async def test_get_experiment_results_recompute(mock_results_analysis_service):
     """Test getting experiment results with recompute."""
-    from src.api.routes.experiments import get_experiment_results, AnalysisType, AnalysisMethod
+    from src.api.routes.experiments import AnalysisMethod, AnalysisType, get_experiment_results
 
     experiment_id = str(uuid4())
 
@@ -614,9 +626,11 @@ async def test_get_experiment_results_recompute(mock_results_analysis_service):
 
 
 @pytest.mark.asyncio
-async def test_get_experiment_results_cached(mock_results_analysis_service, mock_ab_results_repository):
+async def test_get_experiment_results_cached(
+    mock_results_analysis_service, mock_ab_results_repository
+):
     """Test getting cached experiment results."""
-    from src.api.routes.experiments import get_experiment_results, AnalysisType, AnalysisMethod
+    from src.api.routes.experiments import AnalysisMethod, AnalysisType, get_experiment_results
 
     experiment_id = str(uuid4())
 
@@ -633,7 +647,7 @@ async def test_get_experiment_results_cached(mock_results_analysis_service, mock
 @pytest.mark.asyncio
 async def test_get_experiment_results_per_protocol(mock_results_analysis_service):
     """Test getting per-protocol results."""
-    from src.api.routes.experiments import get_experiment_results, AnalysisType, AnalysisMethod
+    from src.api.routes.experiments import AnalysisMethod, AnalysisType, get_experiment_results
 
     experiment_id = str(uuid4())
 
@@ -737,8 +751,9 @@ async def test_update_fidelity_comparison(mock_results_analysis_service):
 @pytest.mark.asyncio
 async def test_trigger_experiment_monitoring_sync(mock_experiment_monitor_agent):
     """Test triggering experiment monitoring synchronously."""
-    from src.api.routes.experiments import trigger_experiment_monitoring, TriggerMonitorRequest
     from fastapi import BackgroundTasks
+
+    from src.api.routes.experiments import TriggerMonitorRequest, trigger_experiment_monitoring
 
     request = TriggerMonitorRequest(
         experiment_ids=None,
@@ -749,7 +764,9 @@ async def test_trigger_experiment_monitoring_sync(mock_experiment_monitor_agent)
     background_tasks = BackgroundTasks()
     user = {"user_id": "test_user", "role": "auth"}
 
-    result = await trigger_experiment_monitoring(request, background_tasks, async_mode=False, user=user)
+    result = await trigger_experiment_monitoring(
+        request, background_tasks, async_mode=False, user=user
+    )
 
     assert result.experiments_checked == 5
     assert result.healthy_count == 4
@@ -758,8 +775,9 @@ async def test_trigger_experiment_monitoring_sync(mock_experiment_monitor_agent)
 @pytest.mark.asyncio
 async def test_trigger_experiment_monitoring_async():
     """Test triggering monitoring asynchronously."""
-    from src.api.routes.experiments import trigger_experiment_monitoring, TriggerMonitorRequest
     from fastapi import BackgroundTasks
+
+    from src.api.routes.experiments import TriggerMonitorRequest, trigger_experiment_monitoring
 
     with patch("src.tasks.ab_testing_tasks.check_all_active_experiments") as mock_task:
         mock_celery_result = MagicMock()
@@ -770,23 +788,31 @@ async def test_trigger_experiment_monitoring_async():
         background_tasks = BackgroundTasks()
         user = {"user_id": "test_user", "role": "auth"}
 
-        result = await trigger_experiment_monitoring(request, background_tasks, async_mode=True, user=user)
+        result = await trigger_experiment_monitoring(
+            request, background_tasks, async_mode=True, user=user
+        )
 
-        assert "task_id" in result.monitor_summary.lower() or "queued" in result.monitor_summary.lower()
+        assert (
+            "task_id" in result.monitor_summary.lower()
+            or "queued" in result.monitor_summary.lower()
+        )
 
 
 @pytest.mark.asyncio
 async def test_trigger_experiment_monitoring_specific_experiments(mock_experiment_monitor_agent):
     """Test monitoring specific experiments."""
-    from src.api.routes.experiments import trigger_experiment_monitoring, TriggerMonitorRequest
     from fastapi import BackgroundTasks
+
+    from src.api.routes.experiments import TriggerMonitorRequest, trigger_experiment_monitoring
 
     exp_id = str(uuid4())
     request = TriggerMonitorRequest(experiment_ids=[exp_id])
     background_tasks = BackgroundTasks()
     user = {"user_id": "test_user", "role": "auth"}
 
-    result = await trigger_experiment_monitoring(request, background_tasks, async_mode=False, user=user)
+    result = await trigger_experiment_monitoring(
+        request, background_tasks, async_mode=False, user=user
+    )
 
     assert result.experiments_checked > 0
 
@@ -837,7 +863,7 @@ async def test_get_experiment_alerts(mock_ab_results_repository):
 @pytest.mark.asyncio
 async def test_get_experiment_alerts_filtered(mock_ab_results_repository):
     """Test getting alerts with severity filter."""
-    from src.api.routes.experiments import get_experiment_alerts, AlertSeverity
+    from src.api.routes.experiments import AlertSeverity, get_experiment_alerts
 
     experiment_id = str(uuid4())
 
@@ -854,7 +880,7 @@ async def test_get_experiment_alerts_filtered(mock_ab_results_repository):
 @pytest.mark.asyncio
 async def test_randomize_units_multiple_units(mock_randomization_service):
     """Test randomizing multiple units."""
-    from src.api.routes.experiments import randomize_units, RandomizeRequest
+    from src.api.routes.experiments import RandomizeRequest, randomize_units
 
     # Create multiple mock assignments
     assignments = []
@@ -923,7 +949,7 @@ async def test_enrollment_stats_empty_experiment(mock_enrollment_service):
 @pytest.mark.asyncio
 async def test_results_no_cached_results(mock_results_analysis_service, mock_ab_results_repository):
     """Test getting results when no cached results exist."""
-    from src.api.routes.experiments import get_experiment_results, AnalysisType, AnalysisMethod
+    from src.api.routes.experiments import AnalysisMethod, AnalysisType, get_experiment_results
 
     mock_ab_results_repository.get_results.return_value = []
 

@@ -274,11 +274,7 @@ class OrchestratorSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def clear_buffer(self):

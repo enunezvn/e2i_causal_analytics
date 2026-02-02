@@ -4,7 +4,6 @@ Tests the save_checkpoint, load_checkpoint, and list_checkpoints functions.
 """
 
 import json
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -12,15 +11,14 @@ import pytest
 from sklearn.ensemble import RandomForestClassifier
 
 from src.agents.ml_foundation.model_trainer.nodes.checkpointer import (
-    save_checkpoint,
-    load_checkpoint,
-    list_checkpoints,
-    delete_checkpoint,
     _compute_model_hash,
     _filter_serializable,
     _get_framework,
+    delete_checkpoint,
+    list_checkpoints,
+    load_checkpoint,
+    save_checkpoint,
 )
-
 
 # ============================================================================
 # Test fixtures
@@ -213,9 +211,7 @@ class TestLoadCheckpoint:
 
     async def test_error_when_file_not_found(self, tmp_checkpoint_dir):
         """Should return error when checkpoint not found."""
-        load_state = {
-            "checkpoint_path": str(tmp_checkpoint_dir / "nonexistent.pkl")
-        }
+        load_state = {"checkpoint_path": str(tmp_checkpoint_dir / "nonexistent.pkl")}
         load_result = await load_checkpoint(load_state)
 
         assert load_result["load_status"] == "failed"
@@ -251,9 +247,7 @@ class TestListCheckpoints:
         checkpoint_state["experiment_id"] = "exp_002"
         await save_checkpoint(checkpoint_state)
 
-        checkpoints = list_checkpoints(
-            checkpoint_dir=checkpoint_state["checkpoint_dir"]
-        )
+        checkpoints = list_checkpoints(checkpoint_dir=checkpoint_state["checkpoint_dir"])
 
         assert len(checkpoints) >= 2
 
@@ -287,9 +281,7 @@ class TestListCheckpoints:
 
     def test_returns_empty_for_nonexistent_dir(self, tmp_path):
         """Should return empty list for nonexistent directory."""
-        checkpoints = list_checkpoints(
-            checkpoint_dir=str(tmp_path / "nonexistent")
-        )
+        checkpoints = list_checkpoints(checkpoint_dir=str(tmp_path / "nonexistent"))
 
         assert checkpoints == []
 
@@ -300,9 +292,7 @@ class TestListCheckpoints:
         checkpoint_state["experiment_id"] = "exp_002"
         await save_checkpoint(checkpoint_state)
 
-        checkpoints = list_checkpoints(
-            checkpoint_dir=checkpoint_state["checkpoint_dir"]
-        )
+        checkpoints = list_checkpoints(checkpoint_dir=checkpoint_state["checkpoint_dir"])
 
         # Most recent should be first
         times = [c.get("created_at", "") for c in checkpoints]

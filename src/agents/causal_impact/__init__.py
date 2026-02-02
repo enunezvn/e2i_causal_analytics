@@ -9,6 +9,8 @@ from src.agents.causal_impact.mlflow_tracker import (
     AnalysisContext,
     CausalImpactMetrics,
     CausalImpactMLflowTracker,
+)
+from src.agents.causal_impact.mlflow_tracker import (
     create_tracker as create_mlflow_tracker,
 )
 from src.agents.causal_impact.opik_tracer import (
@@ -16,6 +18,8 @@ from src.agents.causal_impact.opik_tracer import (
     CausalImpactOpikTracer,
     NodeSpanContext,
     get_causal_impact_tracer,
+)
+from src.agents.causal_impact.opik_tracer import (
     reset_tracer as reset_opik_tracer,
 )
 from src.agents.causal_impact.state import (

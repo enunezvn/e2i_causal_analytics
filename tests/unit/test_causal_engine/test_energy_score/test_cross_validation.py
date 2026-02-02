@@ -14,10 +14,11 @@ Assertions:
 - Energy scores should be stable (CV < 20% across runs)
 """
 
+from typing import Dict, Tuple
+
 import numpy as np
 import pandas as pd
 import pytest
-from typing import Dict, Tuple, List
 
 # Mark all tests in this module for the dspy_integration xdist group
 pytestmark = pytest.mark.xdist_group(name="cross_validation")
@@ -66,13 +67,15 @@ def generate_known_effect_data(
         + np.random.normal(0, noise_level, n_samples)
     )
 
-    data = pd.DataFrame({
-        "X1": X1,
-        "X2": X2,
-        "X3": X3,
-        "treatment": treatment,
-        "outcome": outcome,
-    })
+    data = pd.DataFrame(
+        {
+            "X1": X1,
+            "X2": X2,
+            "X3": X3,
+            "treatment": treatment,
+            "outcome": outcome,
+        }
+    )
 
     return data, {"true_ate": true_ate, "noise_level": noise_level}
 
@@ -108,12 +111,14 @@ def generate_nonlinear_effect_data(
         + np.random.normal(0, 0.5, n_samples)
     )
 
-    data = pd.DataFrame({
-        "X1": X1,
-        "X2": X2,
-        "treatment": treatment,
-        "outcome": outcome,
-    })
+    data = pd.DataFrame(
+        {
+            "X1": X1,
+            "X2": X2,
+            "treatment": treatment,
+            "outcome": outcome,
+        }
+    )
 
     return data, {"true_ate": true_ate, "data_type": "nonlinear"}
 
@@ -160,9 +165,11 @@ def compute_energy_score_for_estimator(
         Dict with energy score, components, and ATE estimate
     """
     try:
-        from sklearn.linear_model import LogisticRegressionCV, LassoCV
-        from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
         import warnings
+
+        from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+        from sklearn.linear_model import LassoCV, LogisticRegressionCV
+
         warnings.filterwarnings("ignore")
 
         covariates = [c for c in data.columns if c not in ["treatment", "outcome"]]
@@ -179,6 +186,7 @@ def compute_energy_score_for_estimator(
         # Fit estimator and get ATE
         if estimator_type == "linear_dml":
             from econml.dml import LinearDML
+
             model = LinearDML(
                 model_y=LassoCV(),
                 model_t=LogisticRegressionCV(max_iter=1000),
@@ -188,6 +196,7 @@ def compute_energy_score_for_estimator(
             ate = float(model.ate(X))
         elif estimator_type == "causal_forest":
             from econml.dml import CausalForestDML
+
             model = CausalForestDML(
                 model_y=GradientBoostingRegressor(n_estimators=48, max_depth=3),
                 model_t=GradientBoostingClassifier(n_estimators=48, max_depth=3),
@@ -199,6 +208,7 @@ def compute_energy_score_for_estimator(
             ate = float(model.ate(X))
         elif estimator_type == "drlearner":
             from econml.dr import DRLearner
+
             model = DRLearner(
                 model_propensity=GradientBoostingClassifier(n_estimators=50, max_depth=3),
                 model_regression=GradientBoostingRegressor(n_estimators=50, max_depth=3),
@@ -215,8 +225,12 @@ def compute_energy_score_for_estimator(
         weighted_mean_diff = 0.0
         for col in covariates:
             x = data[col].values
-            treated_mean = np.average(x[T == 1], weights=weights[T == 1] if sum(T == 1) > 0 else None)
-            control_mean = np.average(x[T == 0], weights=weights[T == 0] if sum(T == 0) > 0 else None)
+            treated_mean = np.average(
+                x[T == 1], weights=weights[T == 1] if sum(T == 1) > 0 else None
+            )
+            control_mean = np.average(
+                x[T == 0], weights=weights[T == 0] if sum(T == 0) > 0 else None
+            )
             weighted_mean_diff += abs(treated_mean - control_mean)
         treatment_balance = weighted_mean_diff / len(covariates)
         treatment_balance = min(1.0, treatment_balance)  # Normalize to 0-1
@@ -233,6 +247,7 @@ def compute_energy_score_for_estimator(
 
         # 3. Propensity calibration (20%): Calibration error
         from sklearn.calibration import calibration_curve
+
         try:
             prob_true, prob_pred = calibration_curve(T, propensity, n_bins=10, strategy="uniform")
             calibration_error = np.mean(np.abs(prob_true - prob_pred))
@@ -240,11 +255,7 @@ def compute_energy_score_for_estimator(
             calibration_error = 0.5  # Default if calibration fails
 
         # Weighted energy score
-        energy_score = (
-            0.35 * treatment_balance
-            + 0.45 * outcome_fit
-            + 0.20 * calibration_error
-        )
+        energy_score = 0.35 * treatment_balance + 0.45 * outcome_fit + 0.20 * calibration_error
 
         return {
             "estimator": estimator_type,
@@ -300,6 +311,7 @@ class TestEnergyScoreVsAccuracy:
 
         # Compute rank correlation
         from scipy import stats
+
         energy_ranks = list(range(len(results)))
         error_ranks = sorted(range(len(results)), key=lambda i: results[i]["estimation_error"])
 
@@ -408,15 +420,15 @@ class TestQualityTierAssignment:
 
         # V4.2 thresholds
         if score <= 0.25:
-            expected_tier = "excellent"
+            pass
         elif score <= 0.45:
-            expected_tier = "good"
+            pass
         elif score <= 0.65:
-            expected_tier = "acceptable"
+            pass
         elif score <= 0.80:
-            expected_tier = "poor"
+            pass
         else:
-            expected_tier = "unreliable"
+            pass
 
         # On clean linear data, should be at least "acceptable"
         assert score <= 0.65, f"Energy score {score:.3f} should be acceptable on clean data"

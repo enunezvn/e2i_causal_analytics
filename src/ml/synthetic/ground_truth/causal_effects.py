@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from ..config import Brand, DGPType, DGP_CONFIGS
+from ..config import DGP_CONFIGS, Brand, DGPType
 
 
 @dataclass
@@ -49,9 +49,7 @@ class GroundTruthEffect:
         return {
             "brand": self.brand.value if isinstance(self.brand, Brand) else self.brand,
             "dgp_type": (
-                self.dgp_type.value
-                if isinstance(self.dgp_type, DGPType)
-                else self.dgp_type
+                self.dgp_type.value if isinstance(self.dgp_type, DGPType) else self.dgp_type
             ),
             "true_ate": self.true_ate,
             "tolerance": self.tolerance,
@@ -95,9 +93,7 @@ class GroundTruthStore:
         """Get all stored ground truth effects."""
         return list(self._effects.values())
 
-    def validate_estimate(
-        self, brand: Brand, dgp_type: DGPType, estimated_ate: float
-    ) -> Dict:
+    def validate_estimate(self, brand: Brand, dgp_type: DGPType, estimated_ate: float) -> Dict:
         """
         Validate an estimated ATE against ground truth.
 
@@ -142,9 +138,7 @@ def get_ground_truth(brand: Brand, dgp_type: DGPType) -> Optional[GroundTruthEff
     return _GLOBAL_STORE.get(brand, dgp_type)
 
 
-def validate_estimate(
-    brand: Brand, dgp_type: DGPType, estimated_ate: float
-) -> Dict:
+def validate_estimate(brand: Brand, dgp_type: DGPType, estimated_ate: float) -> Dict:
     """Validate an estimate against the global store."""
     return _GLOBAL_STORE.validate_estimate(brand, dgp_type, estimated_ate)
 

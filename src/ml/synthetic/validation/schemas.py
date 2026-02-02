@@ -4,23 +4,21 @@ Pandera Schema Definitions for Synthetic Data.
 Validates DataFrame structure, data types, and value constraints.
 """
 
-from typing import Dict, List, Optional, Tuple, Type
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import pandera.pandas as pa
-from pandera import Column, Check, DataFrameSchema
-from pandera.typing import Series
+from pandera import Check, Column, DataFrameSchema
 
 from ..config import (
     Brand,
     DataSplit,
-    SpecialtyEnum,
+    EngagementTypeEnum,
+    InsuranceTypeEnum,
     PracticeTypeEnum,
     RegionEnum,
-    InsuranceTypeEnum,
-    EngagementTypeEnum,
+    SpecialtyEnum,
 )
-
 
 # =============================================================================
 # ENUM VALUE LISTS (for validation)
@@ -36,20 +34,27 @@ ENGAGEMENT_TYPE_VALUES = [e.value for e in EngagementTypeEnum]
 
 # Treatment event types (from Supabase schema)
 TREATMENT_EVENT_TYPES = [
-    "diagnosis", "prescription", "lab_test",
-    "procedure", "consultation", "hospitalization"
+    "diagnosis",
+    "prescription",
+    "lab_test",
+    "procedure",
+    "consultation",
+    "hospitalization",
 ]
 
 # Prediction types (from Supabase schema)
-PREDICTION_TYPES = [
-    "trigger", "propensity", "risk", "churn", "next_best_action"
-]
+PREDICTION_TYPES = ["trigger", "propensity", "risk", "churn", "next_best_action"]
 
 # Trigger types
 TRIGGER_TYPES = [
-    "prescription_opportunity", "adherence_risk", "churn_prevention",
-    "cross_sell", "engagement_gap", "competitive_threat",
-    "treatment_switch", "reactivation"
+    "prescription_opportunity",
+    "adherence_risk",
+    "churn_prevention",
+    "cross_sell",
+    "engagement_gap",
+    "competitive_threat",
+    "treatment_switch",
+    "reactivation",
 ]
 
 # Delivery channels
@@ -122,7 +127,7 @@ HCPProfileSchema = DataFrameSchema(
         ),
     },
     strict=False,  # Allow extra columns
-    coerce=True,   # Coerce types when possible
+    coerce=True,  # Coerce types when possible
     name="HCPProfileSchema",
     description="Schema for HCP profile records",
 )
@@ -641,8 +646,14 @@ BusinessMetricsSchema = DataFrameSchema(
 
 # Feature value types from feature store schema
 FEATURE_VALUE_TYPES = [
-    "int64", "float64", "string", "bool", "timestamp",
-    "array_int64", "array_float64", "array_string"
+    "int64",
+    "float64",
+    "string",
+    "bool",
+    "timestamp",
+    "array_int64",
+    "array_float64",
+    "array_string",
 ]
 
 # Freshness status values
@@ -824,6 +835,7 @@ SCHEMA_REGISTRY: Dict[str, DataFrameSchema] = {
 # VALIDATION FUNCTIONS
 # =============================================================================
 
+
 def validate_dataframe(
     df: pd.DataFrame,
     table_name: str,
@@ -910,7 +922,9 @@ def get_validation_summary(
                     if i >= 3:
                         lines.append(f"    ... and {error_count - 3} more errors")
                         break
-                    lines.append(f"    - {case.get('column', 'unknown')}: {case.get('check', 'unknown')}")
+                    lines.append(
+                        f"    - {case.get('column', 'unknown')}: {case.get('check', 'unknown')}"
+                    )
 
     lines.append("-" * 60)
     overall = "ALL PASSED" if all_valid else "VALIDATION FAILED"

@@ -16,7 +16,7 @@ Integration:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Literal
 
 from .graph import (
     create_conditional_selector_graph,
@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 def _get_model_registry_repository():
     """Get MLModelRegistryRepository (lazy import to avoid circular deps)."""
     try:
-        from src.repositories.ml_experiment import MLModelRegistryRepository
         from src.memory.services.factories import get_supabase_client
+        from src.repositories.ml_experiment import MLModelRegistryRepository
 
         client = get_supabase_client()
         return MLModelRegistryRepository(supabase_client=client)
@@ -45,6 +45,7 @@ def _get_opik_connector():
     """Get OpikConnector (lazy import to avoid circular deps)."""
     try:
         from src.mlops.opik_connector import get_opik_connector
+
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
@@ -55,6 +56,7 @@ def _get_procedural_memory():
     """Get procedural memory client (lazy import with graceful degradation)."""
     try:
         from src.memory.procedural_memory import get_procedural_memory_client
+
         return get_procedural_memory_client()
     except Exception as e:
         logger.debug(f"Procedural memory not available: {e}")
@@ -227,11 +229,13 @@ class ModelSelectorAgent:
                     final_state = await self.graph.ainvoke(initial_state)
                     # Set output on span
                     if span and not final_state.get("error"):
-                        span.set_output({
-                            "algorithm_name": final_state.get("algorithm_name"),
-                            "selection_score": final_state.get("selection_score"),
-                            "registered_in_mlflow": final_state.get("registered_in_mlflow"),
-                        })
+                        span.set_output(
+                            {
+                                "algorithm_name": final_state.get("algorithm_name"),
+                                "selection_score": final_state.get("selection_score"),
+                                "registered_in_mlflow": final_state.get("registered_in_mlflow"),
+                            }
+                        )
             else:
                 final_state = await self.graph.ainvoke(initial_state)
 
@@ -297,12 +301,8 @@ class ModelSelectorAgent:
             "default_hyperparameters": final_state.get("default_hyperparameters", {}),
             "hyperparameter_search_space": final_state.get("hyperparameter_search_space", {}),
             "expected_performance": final_state.get("expected_performance", {}),
-            "training_time_estimate_hours": final_state.get(
-                "training_time_estimate_hours", 0.0
-            ),
-            "estimated_inference_latency_ms": final_state.get(
-                "estimated_inference_latency_ms", 0
-            ),
+            "training_time_estimate_hours": final_state.get("training_time_estimate_hours", 0.0),
+            "estimated_inference_latency_ms": final_state.get("estimated_inference_latency_ms", 0),
             "memory_requirement_gb": final_state.get("memory_requirement_gb", 0.0),
             "interpretability_score": final_state.get("interpretability_score", 0.5),
             "scalability_score": final_state.get("scalability_score", 0.7),
@@ -390,7 +390,9 @@ class ModelSelectorAgent:
                 hyperparameters=model_candidate.get("default_hyperparameters", {}),
                 hyperparameter_search_space=model_candidate.get("hyperparameter_search_space", {}),
                 selection_score=model_candidate.get("selection_score", 0.0),
-                selection_rationale=output.get("selection_rationale", {}).get("selection_rationale", ""),
+                selection_rationale=output.get("selection_rationale", {}).get(
+                    "selection_rationale", ""
+                ),
                 stage="candidate",
                 created_by="model_selector",
                 mlflow_run_id=mlflow_info.get("mlflow_run_id"),
@@ -398,7 +400,9 @@ class ModelSelectorAgent:
             )
 
             if result:
-                logger.info(f"Persisted model candidate: {model_candidate.get('algorithm_name')} for {experiment_id}")
+                logger.info(
+                    f"Persisted model candidate: {model_candidate.get('algorithm_name')} for {experiment_id}"
+                )
             else:
                 logger.debug("Model candidate not persisted (no result returned)")
 

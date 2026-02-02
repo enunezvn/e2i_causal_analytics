@@ -22,7 +22,6 @@ Version: 4.3.0
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -142,6 +141,7 @@ def _get_supabase_client():
     """Get Supabase client for analytics queries."""
     try:
         from src.api.dependencies.supabase_client import get_supabase
+
         return get_supabase()
     except Exception as e:
         logger.warning(f"Could not get Supabase client: {e}")
@@ -156,9 +156,14 @@ async def _fetch_audit_metrics(
 ) -> Dict[str, Any]:
     """Fetch aggregated metrics from audit_chain_entries."""
     try:
-        query = db.table("audit_chain_entries").select(
-            "agent_name, agent_tier, duration_ms, validation_passed, confidence_score, created_at, action_type"
-        ).gte("created_at", start_date.isoformat()).lte("created_at", end_date.isoformat())
+        query = (
+            db.table("audit_chain_entries")
+            .select(
+                "agent_name, agent_tier, duration_ms, validation_passed, confidence_score, created_at, action_type"
+            )
+            .gte("created_at", start_date.isoformat())
+            .lte("created_at", end_date.isoformat())
+        )
 
         if brand:
             query = query.eq("brand", brand)
@@ -218,21 +223,25 @@ def _aggregate_agent_metrics(entries: List[Dict[str, Any]]) -> List[AgentMetrics
         total = data["total"]
         successful = data["successful"]
 
-        metrics.append(AgentMetrics(
-            agent_name=agent_name,
-            agent_tier=data["agent_tier"],
-            total_invocations=total,
-            successful_invocations=successful,
-            failed_invocations=data["failed"],
-            success_rate=round(successful / total * 100, 2) if total > 0 else 0.0,
-            avg_latency_ms=round(sum(latencies) / len(latencies), 2) if latencies else 0.0,
-            p50_latency_ms=round(_calculate_percentile(latencies, 50), 2),
-            p95_latency_ms=round(_calculate_percentile(latencies, 95), 2),
-            p99_latency_ms=round(_calculate_percentile(latencies, 99), 2),
-            min_latency_ms=round(min(latencies), 2) if latencies else 0.0,
-            max_latency_ms=round(max(latencies), 2) if latencies else 0.0,
-            avg_confidence=round(sum(confidences) / len(confidences), 3) if confidences else None,
-        ))
+        metrics.append(
+            AgentMetrics(
+                agent_name=agent_name,
+                agent_tier=data["agent_tier"],
+                total_invocations=total,
+                successful_invocations=successful,
+                failed_invocations=data["failed"],
+                success_rate=round(successful / total * 100, 2) if total > 0 else 0.0,
+                avg_latency_ms=round(sum(latencies) / len(latencies), 2) if latencies else 0.0,
+                p50_latency_ms=round(_calculate_percentile(latencies, 50), 2),
+                p95_latency_ms=round(_calculate_percentile(latencies, 95), 2),
+                p99_latency_ms=round(_calculate_percentile(latencies, 99), 2),
+                min_latency_ms=round(min(latencies), 2) if latencies else 0.0,
+                max_latency_ms=round(max(latencies), 2) if latencies else 0.0,
+                avg_confidence=round(sum(confidences) / len(confidences), 3)
+                if confidences
+                else None,
+            )
+        )
 
     # Sort by total invocations descending
     return sorted(metrics, key=lambda m: m.total_invocations, reverse=True)
@@ -277,10 +286,12 @@ def _build_time_series(
     points = []
     for ts, values in sorted(buckets.items()):
         avg_value = sum(values) / len(values) if values else 0.0
-        points.append(TimeSeriesPoint(
-            timestamp=ts,
-            value=round(avg_value, 2),
-        ))
+        points.append(
+            TimeSeriesPoint(
+                timestamp=ts,
+                value=round(avg_value, 2),
+            )
+        )
 
     return points
 
@@ -313,8 +324,7 @@ def _build_volume_series(
             buckets[bucket_ts] = buckets.get(bucket_ts, 0) + 1
 
     return [
-        TimeSeriesPoint(timestamp=ts, value=float(count))
-        for ts, count in sorted(buckets.items())
+        TimeSeriesPoint(timestamp=ts, value=float(count)) for ts, count in sorted(buckets.items())
     ]
 
 
@@ -411,10 +421,18 @@ async def get_analytics_dashboard(
 
     # Estimate breakdown based on tier (tiers correspond to processing stages)
     breakdown = LatencyBreakdown(
-        classification_ms=round(sum(tier_latencies.get(0, [0])) / max(len(tier_latencies.get(0, [1])), 1), 2),
-        routing_ms=round(sum(tier_latencies.get(1, [0])) / max(len(tier_latencies.get(1, [1])), 1), 2),
-        agent_dispatch_ms=round(sum(tier_latencies.get(2, [0])) / max(len(tier_latencies.get(2, [1])), 1), 2),
-        synthesis_ms=round(sum(tier_latencies.get(5, [0])) / max(len(tier_latencies.get(5, [1])), 1), 2),
+        classification_ms=round(
+            sum(tier_latencies.get(0, [0])) / max(len(tier_latencies.get(0, [1])), 1), 2
+        ),
+        routing_ms=round(
+            sum(tier_latencies.get(1, [0])) / max(len(tier_latencies.get(1, [1])), 1), 2
+        ),
+        agent_dispatch_ms=round(
+            sum(tier_latencies.get(2, [0])) / max(len(tier_latencies.get(2, [1])), 1), 2
+        ),
+        synthesis_ms=round(
+            sum(tier_latencies.get(5, [0])) / max(len(tier_latencies.get(5, [1])), 1), 2
+        ),
         total_ms=summary.avg_latency_ms,
     )
 
@@ -449,9 +467,12 @@ async def get_agent_metrics(
     start_date = now - timedelta(days=days)
 
     try:
-        query = db.table("audit_chain_entries").select(
-            "agent_name, agent_tier, duration_ms, validation_passed, confidence_score"
-        ).eq("agent_name", agent_name).gte("created_at", start_date.isoformat())
+        query = (
+            db.table("audit_chain_entries")
+            .select("agent_name, agent_tier, duration_ms, validation_passed, confidence_score")
+            .eq("agent_name", agent_name)
+            .gte("created_at", start_date.isoformat())
+        )
 
         if brand:
             query = query.eq("brand", brand)
@@ -495,9 +516,13 @@ async def get_agent_trend(
     interval_hours = 1 if days <= 1 else (6 if days <= 7 else 24)
 
     try:
-        result = db.table("audit_chain_entries").select(
-            "duration_ms, created_at"
-        ).eq("agent_name", agent_name).gte("created_at", start_date.isoformat()).execute()
+        result = (
+            db.table("audit_chain_entries")
+            .select("duration_ms, created_at")
+            .eq("agent_name", agent_name)
+            .gte("created_at", start_date.isoformat())
+            .execute()
+        )
 
         entries = result.data or []
         data_points = _build_time_series(entries, "duration_ms", interval_hours)
@@ -533,9 +558,12 @@ async def get_metrics_summary(
     start_date = now - timedelta(hours=hours)
 
     try:
-        result = db.table("audit_chain_entries").select(
-            "duration_ms, validation_passed, action_type, agent_name"
-        ).gte("created_at", start_date.isoformat()).execute()
+        result = (
+            db.table("audit_chain_entries")
+            .select("duration_ms, validation_passed, action_type, agent_name")
+            .gte("created_at", start_date.isoformat())
+            .execute()
+        )
 
         entries = result.data or []
         all_latencies = [e.get("duration_ms", 0) for e in entries if e.get("duration_ms")]
@@ -557,7 +585,9 @@ async def get_metrics_summary(
             successful_queries=successful,
             failed_queries=total - successful,
             success_rate=round(successful / total * 100, 2) if total > 0 else 0.0,
-            avg_latency_ms=round(sum(all_latencies) / len(all_latencies), 2) if all_latencies else 0.0,
+            avg_latency_ms=round(sum(all_latencies) / len(all_latencies), 2)
+            if all_latencies
+            else 0.0,
             p50_latency_ms=round(_calculate_percentile(all_latencies, 50), 2),
             p95_latency_ms=round(_calculate_percentile(all_latencies, 95), 2),
             p99_latency_ms=round(_calculate_percentile(all_latencies, 99), 2),

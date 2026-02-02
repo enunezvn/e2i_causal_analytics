@@ -9,21 +9,22 @@ Note: These tests require the feast package to be installed.
 They are skipped if feast is not available.
 """
 
-import pytest
 import sys
 from pathlib import Path
 
+import pytest
+
 # Check if feast is installed
 try:
-    import feast
+    import feast  # noqa: F401
+
     HAS_FEAST = True
 except ImportError:
     HAS_FEAST = False
 
 # Skip entire module if feast is not installed
 pytestmark = pytest.mark.skipif(
-    not HAS_FEAST,
-    reason="feast package not installed - install with: pip install feast"
+    not HAS_FEAST, reason="feast package not installed - install with: pip install feast"
 )
 
 # Add feature_repo to path for imports
@@ -37,14 +38,14 @@ class TestEntityDefinitions:
     def test_entity_imports(self):
         """Test that all entities can be imported."""
         from entities import (
-            hcp,
-            patient,
-            territory,
             brand,
-            trigger,
+            hcp,
             hcp_brand,
-            patient_brand,
             hcp_territory,
+            patient,
+            patient_brand,
+            territory,
+            trigger,
         )
 
         # Verify entities are not None
@@ -111,7 +112,7 @@ class TestEntityDefinitions:
         Note: Feast 0.58.0 only supports single join keys, so composite entities
         use single composite key strings (e.g., "hcp_brand_id" = "{hcp_id}_{brand_id}").
         """
-        from entities import hcp_brand, patient_brand, hcp_territory
+        from entities import hcp_brand, hcp_territory, patient_brand
 
         # HCP-Brand composite (uses single composite key)
         assert hcp_brand.name == "hcp_brand"
@@ -167,10 +168,10 @@ class TestDataSourceDefinitions:
         """Test that all data sources can be imported."""
         from data_sources import (
             business_metrics_source,
-            patient_journey_source,
-            triggers_source,
             hcp_profiles_source,
+            patient_journey_source,
             territory_metrics_source,
+            triggers_source,
         )
 
         assert business_metrics_source is not None
@@ -203,7 +204,7 @@ class TestDataSourceDefinitions:
 
     def test_source_registry(self):
         """Test source registry functions."""
-        from data_sources import ALL_SOURCES, SOURCE_MAP, get_source
+        from data_sources import ALL_SOURCES, get_source
 
         # Check source count
         assert len(ALL_SOURCES) >= 5
@@ -225,9 +226,9 @@ class TestFeatureViewDefinitions:
         from features import (
             hcp_conversion_fv,
             hcp_profile_fv,
+            market_dynamics_fv,
             patient_journey_fv,
             trigger_effectiveness_fv,
-            market_dynamics_fv,
         )
 
         assert hcp_conversion_fv is not None

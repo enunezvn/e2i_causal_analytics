@@ -29,7 +29,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 if TYPE_CHECKING:
     from .state import PredictionSynthesizerState
@@ -233,18 +233,22 @@ class PredictionSynthesizerMLflowTracker:
                 self._current_run_id = run.info.run_id
 
                 # Log run parameters
-                mlflow.log_params({
-                    "agent": "prediction_synthesizer",
-                    "tier": 4,
-                    "entity_type": entity_type,
-                    "prediction_target": prediction_target,
-                })
+                mlflow.log_params(
+                    {
+                        "agent": "prediction_synthesizer",
+                        "tier": 4,
+                        "entity_type": entity_type,
+                        "prediction_target": prediction_target,
+                    }
+                )
 
                 # Log context tags
-                mlflow.set_tags({
-                    "agent_type": "ml_predictions",
-                    "framework_version": "4.3",
-                })
+                mlflow.set_tags(
+                    {
+                        "agent_type": "ml_predictions",
+                        "framework_version": "4.3",
+                    }
+                )
                 if brand:
                     mlflow.set_tag("brand", brand)
                 if region:
@@ -300,11 +304,13 @@ class PredictionSynthesizerMLflowTracker:
                 mlflow.log_param("ensemble_method", ensemble_pred.get("ensemble_method", "unknown"))
 
             # Log confidence and agreement tags
-            mlflow.set_tags({
-                "high_confidence": str(metrics.ensemble_confidence >= 0.7).lower(),
-                "strong_agreement": str(metrics.model_agreement >= 0.8).lower(),
-                "has_failures": str(metrics.models_failed > 0).lower(),
-            })
+            mlflow.set_tags(
+                {
+                    "high_confidence": str(metrics.ensemble_confidence >= 0.7).lower(),
+                    "strong_agreement": str(metrics.model_agreement >= 0.8).lower(),
+                    "has_failures": str(metrics.models_failed > 0).lower(),
+                }
+            )
 
             # Log artifacts
             if self.enable_artifact_logging:
@@ -438,19 +444,21 @@ class PredictionSynthesizerMLflowTracker:
 
             history = []
             for _, row in runs.iterrows():
-                history.append({
-                    "run_id": row["run_id"],
-                    "timestamp": row["start_time"],
-                    "point_estimate": row.get("metrics.point_estimate"),
-                    "ensemble_confidence": row.get("metrics.ensemble_confidence"),
-                    "model_agreement": row.get("metrics.model_agreement"),
-                    "models_succeeded": row.get("metrics.models_succeeded"),
-                    "models_failed": row.get("metrics.models_failed"),
-                    "total_latency_ms": row.get("metrics.total_latency_ms"),
-                    "entity_type": row.get("params.entity_type"),
-                    "prediction_target": row.get("params.prediction_target"),
-                    "ensemble_method": row.get("params.ensemble_method"),
-                })
+                history.append(
+                    {
+                        "run_id": row["run_id"],
+                        "timestamp": row["start_time"],
+                        "point_estimate": row.get("metrics.point_estimate"),
+                        "ensemble_confidence": row.get("metrics.ensemble_confidence"),
+                        "model_agreement": row.get("metrics.model_agreement"),
+                        "models_succeeded": row.get("metrics.models_succeeded"),
+                        "models_failed": row.get("metrics.models_failed"),
+                        "total_latency_ms": row.get("metrics.total_latency_ms"),
+                        "entity_type": row.get("params.entity_type"),
+                        "prediction_target": row.get("params.prediction_target"),
+                        "ensemble_method": row.get("params.ensemble_method"),
+                    }
+                )
 
             return history
 
@@ -499,9 +507,7 @@ class PredictionSynthesizerMLflowTracker:
             "predictions_by_target": self._count_by_field(history, "prediction_target"),
         }
 
-    def _count_by_field(
-        self, history: list[dict[str, Any]], field: str
-    ) -> dict[str, int]:
+    def _count_by_field(self, history: list[dict[str, Any]], field: str) -> dict[str, int]:
         """Count records by a specific field."""
         counts: dict[str, int] = {}
         for h in history:

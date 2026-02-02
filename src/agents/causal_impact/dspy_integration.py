@@ -273,15 +273,9 @@ try:
         effect_size: str = dspy.InputField(desc="Effect magnitude category")
         refutation_passed: bool = dspy.InputField(desc="Whether refutation tests passed")
 
-        mechanism_explanation: str = dspy.OutputField(
-            desc="Explanation of the causal mechanism"
-        )
-        assumption_warnings: list = dspy.OutputField(
-            desc="Key assumptions that may be violated"
-        )
-        practical_significance: str = dspy.OutputField(
-            desc="What this means in practice"
-        )
+        mechanism_explanation: str = dspy.OutputField(desc="Explanation of the causal mechanism")
+        assumption_warnings: list = dspy.OutputField(desc="Key assumptions that may be violated")
+        practical_significance: str = dspy.OutputField(desc="What this means in practice")
 
     class CausalImpactModule(dspy.Module):
         """
@@ -377,9 +371,7 @@ def get_causal_impact_module() -> "CausalImpactModule":
     global _causal_impact_module
 
     if not DSPY_AVAILABLE:
-        raise RuntimeError(
-            "DSPy is not available. Install with: pip install dspy-ai"
-        )
+        raise RuntimeError("DSPy is not available. Install with: pip install dspy-ai")
 
     if _causal_impact_module is None:
         _causal_impact_module = CausalImpactModule()
@@ -547,11 +539,7 @@ class CausalImpactSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def get_robust_examples(

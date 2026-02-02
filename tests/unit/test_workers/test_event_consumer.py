@@ -10,23 +10,22 @@ Tests cover:
 - Event handler routing
 """
 
-import pytest
-import time
-from datetime import datetime, timezone
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch, call
-
 # Mock prometheus_client before importing event_consumer
 import sys
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 mock_prom = MagicMock()
-sys.modules['prometheus_client'] = mock_prom
+sys.modules["prometheus_client"] = mock_prom
 
 from src.workers.event_consumer import (
-    CeleryMetrics,
     CeleryEventConsumer,
+    CeleryMetrics,
     TaskTiming,
-    inject_trace_context,
     extract_trace_context,
+    inject_trace_context,
     traced_task,
 )
 
@@ -78,13 +77,14 @@ class TestCeleryMetrics:
         assert celery_metrics.worker_count is None
         assert celery_metrics._initialized is False
 
-    @patch('src.workers.event_consumer.PROMETHEUS_AVAILABLE', True)
+    @patch("src.workers.event_consumer.PROMETHEUS_AVAILABLE", True)
     def test_initialize_prometheus_metrics(self, celery_metrics):
         """Test Prometheus metrics initialization."""
-        with patch('src.workers.event_consumer.Counter') as MockCounter, \
-             patch('src.workers.event_consumer.Histogram') as MockHistogram, \
-             patch('src.workers.event_consumer.Gauge') as MockGauge:
-
+        with (
+            patch("src.workers.event_consumer.Counter") as MockCounter,
+            patch("src.workers.event_consumer.Histogram") as MockHistogram,
+            patch("src.workers.event_consumer.Gauge") as MockGauge,
+        ):
             celery_metrics.initialize()
 
             assert celery_metrics._initialized is True
@@ -92,7 +92,7 @@ class TestCeleryMetrics:
             assert MockHistogram.call_count > 0
             assert MockGauge.call_count > 0
 
-    @patch('src.workers.event_consumer.PROMETHEUS_AVAILABLE', False)
+    @patch("src.workers.event_consumer.PROMETHEUS_AVAILABLE", False)
     def test_initialize_no_prometheus(self, celery_metrics):
         """Test initialization without Prometheus available."""
         celery_metrics.initialize()
@@ -101,7 +101,7 @@ class TestCeleryMetrics:
 
     def test_initialize_only_once(self, celery_metrics):
         """Test metrics only initialize once."""
-        with patch('src.workers.event_consumer.Counter') as MockCounter:
+        with patch("src.workers.event_consumer.Counter") as MockCounter:
             celery_metrics.initialize()
             celery_metrics.initialize()  # Second call should be no-op
 
@@ -264,10 +264,17 @@ class TestCeleryEventConsumer:
             "routing_key": "analytics",
             "timestamp": 1234567892.0,
         }
-        consumer.on_task_sent({"uuid": "task-start-1", "name": "my_task", "routing_key": "analytics", "timestamp": 1234567890.0})
+        consumer.on_task_sent(
+            {
+                "uuid": "task-start-1",
+                "name": "my_task",
+                "routing_key": "analytics",
+                "timestamp": 1234567890.0,
+            }
+        )
 
         # Mock metrics
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.task_started = MagicMock()
             mock_metrics.task_started.labels = MagicMock(return_value=MagicMock())
             mock_metrics.task_latency = MagicMock()
@@ -283,8 +290,22 @@ class TestCeleryEventConsumer:
     def test_on_task_succeeded(self, consumer):
         """Test task-succeeded event handler."""
         # Setup timing
-        consumer.on_task_sent({"uuid": "task-success-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567890.0})
-        consumer.on_task_started({"uuid": "task-success-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567891.0})
+        consumer.on_task_sent(
+            {
+                "uuid": "task-success-1",
+                "name": "my_task",
+                "routing_key": "default",
+                "timestamp": 1234567890.0,
+            }
+        )
+        consumer.on_task_started(
+            {
+                "uuid": "task-success-1",
+                "name": "my_task",
+                "routing_key": "default",
+                "timestamp": 1234567891.0,
+            }
+        )
 
         event = {
             "uuid": "task-success-1",
@@ -293,7 +314,7 @@ class TestCeleryEventConsumer:
             "timestamp": 1234567900.0,
         }
 
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.task_succeeded = MagicMock()
             mock_metrics.task_succeeded.labels = MagicMock(return_value=MagicMock())
             mock_metrics.task_runtime = MagicMock()
@@ -309,8 +330,22 @@ class TestCeleryEventConsumer:
     def test_on_task_failed(self, consumer):
         """Test task-failed event handler."""
         # Setup timing
-        consumer.on_task_sent({"uuid": "task-fail-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567890.0})
-        consumer.on_task_started({"uuid": "task-fail-1", "name": "my_task", "routing_key": "default", "timestamp": 1234567891.0})
+        consumer.on_task_sent(
+            {
+                "uuid": "task-fail-1",
+                "name": "my_task",
+                "routing_key": "default",
+                "timestamp": 1234567890.0,
+            }
+        )
+        consumer.on_task_started(
+            {
+                "uuid": "task-fail-1",
+                "name": "my_task",
+                "routing_key": "default",
+                "timestamp": 1234567891.0,
+            }
+        )
 
         event = {
             "uuid": "task-fail-1",
@@ -320,7 +355,7 @@ class TestCeleryEventConsumer:
             "exception": "ValueError('test error')",
         }
 
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.task_failed = MagicMock()
             mock_metrics.task_failed.labels = MagicMock(return_value=MagicMock())
             mock_metrics.task_runtime = MagicMock()
@@ -341,7 +376,7 @@ class TestCeleryEventConsumer:
             "routing_key": "default",
         }
 
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.task_retried = MagicMock()
             mock_metrics.task_retried.labels = MagicMock(return_value=MagicMock())
 
@@ -355,7 +390,7 @@ class TestCeleryEventConsumer:
             "routing_key": "default",
         }
 
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.task_rejected = MagicMock()
             mock_metrics.task_rejected.labels = MagicMock(return_value=MagicMock())
 
@@ -364,14 +399,16 @@ class TestCeleryEventConsumer:
     def test_on_task_revoked(self, consumer):
         """Test task-revoked event handler."""
         # Setup timing first
-        consumer.on_task_sent({"uuid": "task-revoke-1", "name": "my_task", "routing_key": "default"})
+        consumer.on_task_sent(
+            {"uuid": "task-revoke-1", "name": "my_task", "routing_key": "default"}
+        )
 
         event = {
             "uuid": "task-revoke-1",
             "name": "my_task",
         }
 
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.task_revoked = MagicMock()
             mock_metrics.task_revoked.labels = MagicMock(return_value=MagicMock())
 
@@ -384,7 +421,7 @@ class TestCeleryEventConsumer:
         """Test worker-online event handler."""
         event = {"hostname": "worker-light-01"}
 
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.worker_count = MagicMock()
             mock_metrics.worker_count.labels = MagicMock(return_value=MagicMock())
 
@@ -394,7 +431,7 @@ class TestCeleryEventConsumer:
         """Test worker-offline event handler."""
         event = {"hostname": "worker-heavy-02"}
 
-        with patch('src.workers.event_consumer.celery_metrics') as mock_metrics:
+        with patch("src.workers.event_consumer.celery_metrics") as mock_metrics:
             mock_metrics.worker_count = MagicMock()
             mock_metrics.worker_count.labels = MagicMock(return_value=MagicMock())
 
@@ -523,7 +560,7 @@ class TestTracedTask:
     def test_traced_task_exception(self):
         """Test traced task with exception."""
         with pytest.raises(ValueError):
-            with traced_task("failing_task") as trace_id:
+            with traced_task("failing_task"):
                 raise ValueError("Test error")
 
 
@@ -535,38 +572,46 @@ class TestEventHandlerIntegration:
         task_id = "lifecycle-1"
 
         # Task sent
-        consumer.on_task_sent({
-            "uuid": task_id,
-            "name": "integration_task",
-            "routing_key": "analytics",
-            "timestamp": 1000.0,
-        })
+        consumer.on_task_sent(
+            {
+                "uuid": task_id,
+                "name": "integration_task",
+                "routing_key": "analytics",
+                "timestamp": 1000.0,
+            }
+        )
 
         # Task received
-        consumer.on_task_received({
-            "uuid": task_id,
-            "name": "integration_task",
-            "routing_key": "analytics",
-            "timestamp": 1001.0,
-        })
+        consumer.on_task_received(
+            {
+                "uuid": task_id,
+                "name": "integration_task",
+                "routing_key": "analytics",
+                "timestamp": 1001.0,
+            }
+        )
 
         # Task started
-        with patch('src.workers.event_consumer.celery_metrics'):
-            consumer.on_task_started({
-                "uuid": task_id,
-                "name": "integration_task",
-                "routing_key": "analytics",
-                "timestamp": 1002.0,
-            })
+        with patch("src.workers.event_consumer.celery_metrics"):
+            consumer.on_task_started(
+                {
+                    "uuid": task_id,
+                    "name": "integration_task",
+                    "routing_key": "analytics",
+                    "timestamp": 1002.0,
+                }
+            )
 
         # Task succeeded
-        with patch('src.workers.event_consumer.celery_metrics'):
-            consumer.on_task_succeeded({
-                "uuid": task_id,
-                "name": "integration_task",
-                "routing_key": "analytics",
-                "timestamp": 1010.0,
-            })
+        with patch("src.workers.event_consumer.celery_metrics"):
+            consumer.on_task_succeeded(
+                {
+                    "uuid": task_id,
+                    "name": "integration_task",
+                    "routing_key": "analytics",
+                    "timestamp": 1010.0,
+                }
+            )
 
         # Task should be cleaned up
         assert task_id not in consumer._task_timings
@@ -576,30 +621,36 @@ class TestEventHandlerIntegration:
         task_id = "failure-1"
 
         # Task sent and started
-        consumer.on_task_sent({
-            "uuid": task_id,
-            "name": "failing_task",
-            "routing_key": "default",
-            "timestamp": 2000.0,
-        })
-
-        with patch('src.workers.event_consumer.celery_metrics'):
-            consumer.on_task_started({
+        consumer.on_task_sent(
+            {
                 "uuid": task_id,
                 "name": "failing_task",
                 "routing_key": "default",
-                "timestamp": 2001.0,
-            })
+                "timestamp": 2000.0,
+            }
+        )
+
+        with patch("src.workers.event_consumer.celery_metrics"):
+            consumer.on_task_started(
+                {
+                    "uuid": task_id,
+                    "name": "failing_task",
+                    "routing_key": "default",
+                    "timestamp": 2001.0,
+                }
+            )
 
         # Task failed
-        with patch('src.workers.event_consumer.celery_metrics'):
-            consumer.on_task_failed({
-                "uuid": task_id,
-                "name": "failing_task",
-                "routing_key": "default",
-                "timestamp": 2005.0,
-                "exception": "RuntimeError('fail')",
-            })
+        with patch("src.workers.event_consumer.celery_metrics"):
+            consumer.on_task_failed(
+                {
+                    "uuid": task_id,
+                    "name": "failing_task",
+                    "routing_key": "default",
+                    "timestamp": 2005.0,
+                    "exception": "RuntimeError('fail')",
+                }
+            )
 
         # Task should be cleaned up
         assert task_id not in consumer._task_timings

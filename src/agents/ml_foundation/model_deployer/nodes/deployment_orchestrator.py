@@ -13,18 +13,10 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 # BentoML integration imports
 try:
-    from src.mlops.bentoml_service import (
-        BENTOML_AVAILABLE,
-        BentoMLModelManager,
-        BentoPackager,
-        create_prediction_service,
-        deploy_model as bentoml_deploy_model,
-        get_model_serving_status,
-    )
     from src.mlops.bentoml_packaging import (
         BentoConfig,
         ContainerConfig,
@@ -33,10 +25,20 @@ try:
         generate_service_file,
         validate_bento,
     )
+    from src.mlops.bentoml_service import (
+        BENTOML_AVAILABLE,
+        BentoMLModelManager,  # noqa: F401
+        BentoPackager,  # noqa: F401
+        create_prediction_service,  # noqa: F401
+        get_model_serving_status,  # noqa: F401
+    )
+    from src.mlops.bentoml_service import (
+        deploy_model as bentoml_deploy_model,
+    )
     from src.mlops.bentoml_templates import (
-        CausalInferenceServiceTemplate,
-        ClassificationServiceTemplate,
-        RegressionServiceTemplate,
+        CausalInferenceServiceTemplate,  # noqa: F401
+        ClassificationServiceTemplate,  # noqa: F401
+        RegressionServiceTemplate,  # noqa: F401
     )
 except ImportError:
     BENTOML_AVAILABLE = False
@@ -91,7 +93,7 @@ async def package_model(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # Get model type and service template from deployment plan
         model_type = deployment_plan.get("model_type", "classification")
-        service_template = deployment_plan.get(
+        deployment_plan.get(
             "service_template", SERVICE_TEMPLATES.get(model_type, "ClassificationServiceTemplate")
         )
 
@@ -116,7 +118,7 @@ async def package_model(state: Dict[str, Any]) -> Dict[str, Any]:
             bento_tag = f"e2i_{experiment_id}:{timestamp}_v{model_version}"
 
             # Get model metadata for labeling
-            validation_metrics = state.get("validation_metrics", {})
+            state.get("validation_metrics", {})
             labels = {
                 "experiment_id": experiment_id,
                 "model_type": model_type,
@@ -464,12 +466,15 @@ async def _deploy_canary(
     canary_url = f"https://api.e2i.com/v1/{canary_endpoint}/predict"
 
     # Get canary stages
-    stages = traffic_config.get("stages", [
-        {"percentage": 5, "duration_minutes": 15},
-        {"percentage": 25, "duration_minutes": 30},
-        {"percentage": 50, "duration_minutes": 30},
-        {"percentage": 100, "duration_minutes": 0},
-    ])
+    stages = traffic_config.get(
+        "stages",
+        [
+            {"percentage": 5, "duration_minutes": 15},
+            {"percentage": 25, "duration_minutes": 30},
+            {"percentage": 50, "duration_minutes": 30},
+            {"percentage": 100, "duration_minutes": 0},
+        ],
+    )
 
     return {
         "deployment_status": "healthy",
@@ -545,7 +550,7 @@ async def check_rollback_availability(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         experiment_id = state.get("experiment_id")
         current_stage = state.get("current_stage", "None")
-        deployment_id = state.get("deployment_id")
+        state.get("deployment_id")
 
         # Check deployment history for rollback candidates
         # In production, this would query ml_deployments table
@@ -621,12 +626,14 @@ async def execute_rollback(state: Dict[str, Any]) -> Dict[str, Any]:
             # Direct rollback
             result = await _rollback_direct(state)
 
-        result.update({
-            "rollback_reason": rollback_reason,
-            "rolled_back_at": datetime.now(timezone.utc).isoformat(),
-            "rolled_back_to_deployment_id": rollback_to_deployment_id,
-            "rolled_back_to_version": rollback_to_version,
-        })
+        result.update(
+            {
+                "rollback_reason": rollback_reason,
+                "rolled_back_at": datetime.now(timezone.utc).isoformat(),
+                "rolled_back_to_deployment_id": rollback_to_deployment_id,
+                "rolled_back_to_version": rollback_to_version,
+            }
+        )
 
         return result
 

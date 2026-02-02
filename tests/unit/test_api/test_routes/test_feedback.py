@@ -9,13 +9,11 @@ Tests all endpoints in src/api/routes/feedback.py including:
 - GEPA optimization signals
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock, patch
-from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
-
 
 # =============================================================================
 # FIXTURES
@@ -28,7 +26,9 @@ def mock_opik_feedback():
     with patch("src.api.routes.feedback.OPIK_FEEDBACK_AVAILABLE", True):
         with patch("src.api.routes.feedback.log_user_feedback") as mock_log:
             with patch("src.api.routes.feedback.get_feedback_collector") as mock_get_collector:
-                with patch("src.api.routes.feedback.get_feedback_signals_for_gepa") as mock_get_signals:
+                with patch(
+                    "src.api.routes.feedback.get_feedback_signals_for_gepa"
+                ) as mock_get_signals:
                     # Create async mock that returns trace_id based on input
                     async def mock_log_feedback(**kwargs):
                         mock_record = MagicMock()
@@ -81,7 +81,7 @@ def mock_feedback_learner_agent():
     def mock_create():
         return mock_graph
 
-    with patch.object(graph_module, 'create_feedback_learner_graph', mock_create, create=True):
+    with patch.object(graph_module, "create_feedback_learner_graph", mock_create, create=True):
         with patch("src.agents.feedback_learner.state.FeedbackLearnerState", dict):
             yield mock_graph
 
@@ -121,7 +121,7 @@ def sample_run_learning_request():
 @pytest.fixture
 def sample_detected_pattern():
     """Sample DetectedPattern for testing."""
-    from src.api.routes.feedback import DetectedPattern, PatternType, PatternSeverity
+    from src.api.routes.feedback import DetectedPattern, PatternSeverity, PatternType
 
     return DetectedPattern(
         pattern_id="pat_test123",
@@ -139,7 +139,7 @@ def sample_detected_pattern():
 @pytest.fixture
 def sample_knowledge_update():
     """Sample KnowledgeUpdate for testing."""
-    from src.api.routes.feedback import KnowledgeUpdate, UpdateType, UpdateStatus
+    from src.api.routes.feedback import KnowledgeUpdate, UpdateStatus, UpdateType
 
     return KnowledgeUpdate(
         update_id="upd_test123",
@@ -161,8 +161,9 @@ def sample_knowledge_update():
 @pytest.mark.asyncio
 async def test_run_learning_cycle_async(sample_run_learning_request, mock_feedback_learner_agent):
     """Test running learning cycle in async mode."""
-    from src.api.routes.feedback import run_learning_cycle, LearningStatus
     from fastapi import BackgroundTasks
+
+    from src.api.routes.feedback import LearningStatus, run_learning_cycle
 
     background_tasks = BackgroundTasks()
     user = {"user_id": "test_user", "role": "operator"}
@@ -181,8 +182,9 @@ async def test_run_learning_cycle_async(sample_run_learning_request, mock_feedba
 @pytest.mark.asyncio
 async def test_run_learning_cycle_sync(sample_run_learning_request, mock_feedback_learner_agent):
     """Test running learning cycle synchronously."""
-    from src.api.routes.feedback import run_learning_cycle, LearningStatus
     from fastapi import BackgroundTasks
+
+    from src.api.routes.feedback import LearningStatus, run_learning_cycle
 
     background_tasks = BackgroundTasks()
     user = {"user_id": "test_user", "role": "operator"}
@@ -202,8 +204,9 @@ async def test_run_learning_cycle_sync(sample_run_learning_request, mock_feedbac
 @pytest.mark.asyncio
 async def test_run_learning_cycle_error(sample_run_learning_request):
     """Test learning cycle with error."""
-    from src.api.routes.feedback import run_learning_cycle
     from fastapi import BackgroundTasks
+
+    from src.api.routes.feedback import run_learning_cycle
 
     with patch("src.api.routes.feedback._execute_learning_cycle") as mock_exec:
         mock_exec.side_effect = Exception("Test error")
@@ -226,7 +229,12 @@ async def test_run_learning_cycle_error(sample_run_learning_request):
 @pytest.mark.asyncio
 async def test_get_learning_results_success():
     """Test getting learning results by batch ID."""
-    from src.api.routes.feedback import get_learning_results, _learning_store, LearningResponse, LearningStatus
+    from src.api.routes.feedback import (
+        LearningResponse,
+        LearningStatus,
+        _learning_store,
+        get_learning_results,
+    )
 
     batch_id = "fb_test123"
     _learning_store[batch_id] = LearningResponse(
@@ -263,7 +271,7 @@ async def test_get_learning_results_not_found():
 @pytest.mark.asyncio
 async def test_process_feedback_success(sample_feedback_item):
     """Test processing feedback items."""
-    from src.api.routes.feedback import process_feedback, ProcessFeedbackRequest
+    from src.api.routes.feedback import ProcessFeedbackRequest, process_feedback
 
     request = ProcessFeedbackRequest(
         items=[sample_feedback_item],
@@ -283,7 +291,7 @@ async def test_process_feedback_success(sample_feedback_item):
 @pytest.mark.asyncio
 async def test_process_feedback_with_patterns(sample_feedback_item):
     """Test feedback processing with pattern detection."""
-    from src.api.routes.feedback import process_feedback, ProcessFeedbackRequest, FeedbackType
+    from src.api.routes.feedback import ProcessFeedbackRequest, process_feedback
 
     # Create multiple low-rating items to trigger pattern
     items = []
@@ -309,7 +317,7 @@ async def test_process_feedback_with_patterns(sample_feedback_item):
 @pytest.mark.asyncio
 async def test_process_feedback_no_pattern_detection(sample_feedback_item):
     """Test feedback processing without pattern detection."""
-    from src.api.routes.feedback import process_feedback, ProcessFeedbackRequest
+    from src.api.routes.feedback import ProcessFeedbackRequest, process_feedback
 
     request = ProcessFeedbackRequest(
         items=[sample_feedback_item],
@@ -327,7 +335,7 @@ async def test_process_feedback_no_pattern_detection(sample_feedback_item):
 @pytest.mark.asyncio
 async def test_process_feedback_error():
     """Test feedback processing with error."""
-    from src.api.routes.feedback import process_feedback, ProcessFeedbackRequest
+    from src.api.routes.feedback import ProcessFeedbackRequest, process_feedback
 
     # Invalid feedback item
     request = ProcessFeedbackRequest(items=[])
@@ -348,7 +356,7 @@ async def test_process_feedback_error():
 @pytest.mark.asyncio
 async def test_list_patterns_all(sample_detected_pattern):
     """Test listing all patterns."""
-    from src.api.routes.feedback import list_patterns, _patterns_store
+    from src.api.routes.feedback import _patterns_store, list_patterns
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
@@ -364,11 +372,13 @@ async def test_list_patterns_all(sample_detected_pattern):
 @pytest.mark.asyncio
 async def test_list_patterns_filter_by_severity(sample_detected_pattern):
     """Test listing patterns filtered by severity."""
-    from src.api.routes.feedback import list_patterns, _patterns_store, PatternSeverity
+    from src.api.routes.feedback import PatternSeverity, _patterns_store, list_patterns
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
-    result = await list_patterns(severity=PatternSeverity.HIGH, pattern_type=None, agent=None, limit=50)
+    result = await list_patterns(
+        severity=PatternSeverity.HIGH, pattern_type=None, agent=None, limit=50
+    )
 
     assert all(p.severity == PatternSeverity.HIGH for p in result.patterns)
 
@@ -379,11 +389,13 @@ async def test_list_patterns_filter_by_severity(sample_detected_pattern):
 @pytest.mark.asyncio
 async def test_list_patterns_filter_by_type(sample_detected_pattern):
     """Test listing patterns filtered by type."""
-    from src.api.routes.feedback import list_patterns, _patterns_store, PatternType
+    from src.api.routes.feedback import PatternType, _patterns_store, list_patterns
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
-    result = await list_patterns(severity=None, pattern_type=PatternType.ACCURACY_ISSUE, agent=None, limit=50)
+    result = await list_patterns(
+        severity=None, pattern_type=PatternType.ACCURACY_ISSUE, agent=None, limit=50
+    )
 
     assert all(p.pattern_type == PatternType.ACCURACY_ISSUE for p in result.patterns)
 
@@ -394,7 +406,7 @@ async def test_list_patterns_filter_by_type(sample_detected_pattern):
 @pytest.mark.asyncio
 async def test_list_patterns_filter_by_agent(sample_detected_pattern):
     """Test listing patterns filtered by agent."""
-    from src.api.routes.feedback import list_patterns, _patterns_store
+    from src.api.routes.feedback import _patterns_store, list_patterns
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
@@ -409,7 +421,7 @@ async def test_list_patterns_filter_by_agent(sample_detected_pattern):
 @pytest.mark.asyncio
 async def test_list_patterns_with_limit(sample_detected_pattern):
     """Test listing patterns with limit."""
-    from src.api.routes.feedback import list_patterns, _patterns_store
+    from src.api.routes.feedback import _patterns_store, list_patterns
 
     # Add multiple patterns
     for i in range(5):
@@ -434,7 +446,7 @@ async def test_list_patterns_with_limit(sample_detected_pattern):
 @pytest.mark.asyncio
 async def test_list_updates_all(sample_knowledge_update):
     """Test listing all knowledge updates."""
-    from src.api.routes.feedback import list_updates, _updates_store
+    from src.api.routes.feedback import _updates_store, list_updates
 
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
 
@@ -450,11 +462,13 @@ async def test_list_updates_all(sample_knowledge_update):
 @pytest.mark.asyncio
 async def test_list_updates_filter_by_status(sample_knowledge_update):
     """Test listing updates filtered by status."""
-    from src.api.routes.feedback import list_updates, _updates_store, UpdateStatus
+    from src.api.routes.feedback import UpdateStatus, _updates_store, list_updates
 
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
 
-    result = await list_updates(status=UpdateStatus.PROPOSED, update_type=None, agent=None, limit=50)
+    result = await list_updates(
+        status=UpdateStatus.PROPOSED, update_type=None, agent=None, limit=50
+    )
 
     assert all(u.status == UpdateStatus.PROPOSED for u in result.updates)
 
@@ -465,7 +479,12 @@ async def test_list_updates_filter_by_status(sample_knowledge_update):
 @pytest.mark.asyncio
 async def test_apply_update_success(sample_knowledge_update):
     """Test applying a knowledge update."""
-    from src.api.routes.feedback import apply_update, _updates_store, ApplyUpdateRequest, UpdateStatus
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+    )
 
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
 
@@ -484,7 +503,7 @@ async def test_apply_update_success(sample_knowledge_update):
 @pytest.mark.asyncio
 async def test_apply_update_not_found():
     """Test applying non-existent update."""
-    from src.api.routes.feedback import apply_update, ApplyUpdateRequest
+    from src.api.routes.feedback import ApplyUpdateRequest, apply_update
 
     request = ApplyUpdateRequest(update_id="upd_nonexistent", force=False)
     user = {"user_id": "test_user", "role": "operator"}
@@ -498,7 +517,12 @@ async def test_apply_update_not_found():
 @pytest.mark.asyncio
 async def test_apply_update_invalid_status(sample_knowledge_update):
     """Test applying update with invalid status."""
-    from src.api.routes.feedback import apply_update, _updates_store, ApplyUpdateRequest, UpdateStatus
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+    )
 
     sample_knowledge_update.status = UpdateStatus.APPLIED
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
@@ -518,7 +542,12 @@ async def test_apply_update_invalid_status(sample_knowledge_update):
 @pytest.mark.asyncio
 async def test_apply_update_force(sample_knowledge_update):
     """Test force applying update regardless of status."""
-    from src.api.routes.feedback import apply_update, _updates_store, ApplyUpdateRequest, UpdateStatus
+    from src.api.routes.feedback import (
+        ApplyUpdateRequest,
+        UpdateStatus,
+        _updates_store,
+        apply_update,
+    )
 
     sample_knowledge_update.status = UpdateStatus.ROLLED_BACK
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
@@ -537,7 +566,7 @@ async def test_apply_update_force(sample_knowledge_update):
 @pytest.mark.asyncio
 async def test_rollback_update_success(sample_knowledge_update):
     """Test rolling back an applied update."""
-    from src.api.routes.feedback import rollback_update, _updates_store, UpdateStatus
+    from src.api.routes.feedback import UpdateStatus, _updates_store, rollback_update
 
     sample_knowledge_update.status = UpdateStatus.APPLIED
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
@@ -555,7 +584,7 @@ async def test_rollback_update_success(sample_knowledge_update):
 @pytest.mark.asyncio
 async def test_rollback_update_not_applied(sample_knowledge_update):
     """Test rolling back update that is not applied."""
-    from src.api.routes.feedback import rollback_update, _updates_store
+    from src.api.routes.feedback import _updates_store, rollback_update
 
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
 
@@ -596,7 +625,7 @@ async def test_get_feedback_health():
 @pytest.mark.asyncio
 async def test_record_trace_feedback_success(mock_opik_feedback):
     """Test recording trace feedback successfully."""
-    from src.api.routes.feedback import record_trace_feedback, TraceFeedbackRequest
+    from src.api.routes.feedback import TraceFeedbackRequest, record_trace_feedback
 
     request = TraceFeedbackRequest(
         trace_id="trace_test123",
@@ -618,7 +647,7 @@ async def test_record_trace_feedback_success(mock_opik_feedback):
 @pytest.mark.asyncio
 async def test_record_trace_feedback_unavailable():
     """Test recording trace feedback when Opik is unavailable."""
-    from src.api.routes.feedback import record_trace_feedback, TraceFeedbackRequest
+    from src.api.routes.feedback import TraceFeedbackRequest, record_trace_feedback
 
     with patch("src.api.routes.feedback.OPIK_FEEDBACK_AVAILABLE", False):
         request = TraceFeedbackRequest(
@@ -636,7 +665,7 @@ async def test_record_trace_feedback_unavailable():
 @pytest.mark.asyncio
 async def test_record_trace_feedback_error(mock_opik_feedback):
     """Test recording trace feedback with error."""
-    from src.api.routes.feedback import record_trace_feedback, TraceFeedbackRequest
+    from src.api.routes.feedback import TraceFeedbackRequest, record_trace_feedback
 
     mock_opik_feedback["log_user_feedback"].side_effect = Exception("Test error")
 
@@ -674,7 +703,9 @@ async def test_get_agent_feedback_stats_success(mock_opik_feedback):
     mock_stats.score_trend = [0.7, 0.75, 0.8]
     mock_stats.last_feedback_time = datetime.now(timezone.utc)
 
-    mock_opik_feedback["get_feedback_collector"].return_value.get_agent_stats.return_value = mock_stats
+    mock_opik_feedback[
+        "get_feedback_collector"
+    ].return_value.get_agent_stats.return_value = mock_stats
 
     result = await get_agent_feedback_stats("causal_impact")
 
@@ -708,7 +739,9 @@ async def test_get_optimization_signals_success(mock_opik_feedback):
     mock_stats = MagicMock()
     mock_stats.total_feedback = 10
 
-    mock_opik_feedback["get_feedback_collector"].return_value.get_agent_stats.return_value = mock_stats
+    mock_opik_feedback[
+        "get_feedback_collector"
+    ].return_value.get_agent_stats.return_value = mock_stats
     mock_opik_feedback["get_feedback_signals_for_gepa"].return_value = [
         {
             "signal_type": "positive",
@@ -735,7 +768,9 @@ async def test_get_optimization_signals_insufficient_data(mock_opik_feedback):
     mock_stats = MagicMock()
     mock_stats.total_feedback = 3
 
-    mock_opik_feedback["get_feedback_collector"].return_value.get_agent_stats.return_value = mock_stats
+    mock_opik_feedback[
+        "get_feedback_collector"
+    ].return_value.get_agent_stats.return_value = mock_stats
     mock_opik_feedback["get_feedback_signals_for_gepa"].return_value = []
 
     result = await get_optimization_signals("causal_impact", min_feedback_count=5)
@@ -753,7 +788,9 @@ async def test_get_gepa_training_batch_success(mock_opik_feedback):
         {"query": "test2", "response": "answer2", "score": 0.9},
     ]
 
-    mock_opik_feedback["get_feedback_collector"].return_value.get_gepa_feedback_batch.return_value = mock_examples
+    mock_opik_feedback[
+        "get_feedback_collector"
+    ].return_value.get_gepa_feedback_batch.return_value = mock_examples
 
     result = await get_gepa_training_batch("causal_impact", batch_size=50)
 
@@ -769,7 +806,7 @@ async def test_get_gepa_training_batch_success(mock_opik_feedback):
 
 def test_detect_patterns_from_items():
     """Test pattern detection from feedback items."""
-    from src.api.routes.feedback import _detect_patterns_from_items, FeedbackItem, FeedbackType
+    from src.api.routes.feedback import FeedbackItem, FeedbackType, _detect_patterns_from_items
 
     # Create low-rating items
     items = []
@@ -793,7 +830,12 @@ def test_detect_patterns_from_items():
 
 def test_generate_recommendations():
     """Test recommendation generation from patterns."""
-    from src.api.routes.feedback import _generate_recommendations, DetectedPattern, PatternType, PatternSeverity
+    from src.api.routes.feedback import (
+        DetectedPattern,
+        PatternSeverity,
+        PatternType,
+        _generate_recommendations,
+    )
 
     pattern = DetectedPattern(
         pattern_id="pat_test",
@@ -885,8 +927,9 @@ def test_convert_updates():
 
 def test_generate_mock_learning_response(sample_run_learning_request):
     """Test generating mock learning response."""
-    from src.api.routes.feedback import _generate_mock_learning_response
     import time
+
+    from src.api.routes.feedback import _generate_mock_learning_response
 
     start_time = time.time()
 

@@ -19,7 +19,7 @@ Author: E2I Causal Analytics Team
 """
 
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,6 @@ from ..base import (
     BaseDiscoveryAlgorithm,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
-    EdgeType,
 )
 
 
@@ -131,9 +130,7 @@ class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             runtime = time.time() - start_time
             return AlgorithmResult(
                 algorithm=self.algorithm_type,
-                adjacency_matrix=np.zeros(
-                    (len(data.columns), len(data.columns)), dtype=int
-                ),
+                adjacency_matrix=np.zeros((len(data.columns), len(data.columns)), dtype=int),
                 edge_list=[],
                 runtime_seconds=runtime,
                 converged=False,
@@ -147,9 +144,7 @@ class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             runtime = time.time() - start_time
             return AlgorithmResult(
                 algorithm=self.algorithm_type,
-                adjacency_matrix=np.zeros(
-                    (len(data.columns), len(data.columns)), dtype=int
-                ),
+                adjacency_matrix=np.zeros((len(data.columns), len(data.columns)), dtype=int),
                 edge_list=[],
                 runtime_seconds=runtime,
                 converged=False,
@@ -304,9 +299,7 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             runtime = time.time() - start_time
             return AlgorithmResult(
                 algorithm=self.algorithm_type,
-                adjacency_matrix=np.zeros(
-                    (len(data.columns), len(data.columns)), dtype=int
-                ),
+                adjacency_matrix=np.zeros((len(data.columns), len(data.columns)), dtype=int),
                 edge_list=[],
                 runtime_seconds=runtime,
                 converged=False,
@@ -320,9 +313,7 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             runtime = time.time() - start_time
             return AlgorithmResult(
                 algorithm=self.algorithm_type,
-                adjacency_matrix=np.zeros(
-                    (len(data.columns), len(data.columns)), dtype=int
-                ),
+                adjacency_matrix=np.zeros((len(data.columns), len(data.columns)), dtype=int),
                 edge_list=[],
                 runtime_seconds=runtime,
                 converged=False,

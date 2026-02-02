@@ -287,7 +287,6 @@ class TestHybridRetrieverSearch:
                 hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
             ) as mock_graph,
         ):
-
             mock_vector.return_value = []
             mock_fulltext.return_value = []
             mock_graph.return_value = []
@@ -316,7 +315,6 @@ class TestHybridRetrieverSearch:
                 hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
             ) as mock_graph,
         ):
-
             mock_fulltext.return_value = []
             mock_graph.return_value = []
 
@@ -343,7 +341,6 @@ class TestHybridRetrieverSearch:
                 hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
             ) as mock_graph,
         ):
-
             mock_vector.return_value = [
                 create_mock_result("doc-1", "Vector result", RetrievalSource.VECTOR, 0.9)
             ]
@@ -385,7 +382,6 @@ class TestHybridRetrieverSearch:
                 hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
             ) as mock_graph,
         ):
-
             mock_vector.return_value = []  # Returns empty on error
             mock_fulltext.return_value = [
                 create_mock_result("doc-1", "Fulltext result", RetrievalSource.FULLTEXT, 0.8)
@@ -415,7 +411,6 @@ class TestHybridRetrieverSearch:
                 hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
             ) as mock_graph,
         ):
-
             mock_vector.return_value = [
                 create_mock_result("doc-1", "V", RetrievalSource.VECTOR, 0.9),
                 create_mock_result("doc-2", "V", RetrievalSource.VECTOR, 0.8),
@@ -460,7 +455,6 @@ class TestHybridRetrieverHealthCheck:
                 hybrid_retriever.graph_backend, "health_check", new_callable=AsyncMock
             ) as mock_graph_health,
         ):
-
             mock_vector_health.return_value = {"status": "healthy", "latency_ms": 10}
             mock_fulltext_health.return_value = {"status": "healthy", "latency_ms": 5}
             mock_graph_health.return_value = {"status": "healthy", "latency_ms": 15}
@@ -486,7 +480,6 @@ class TestHybridRetrieverHealthCheck:
                 hybrid_retriever.graph_backend, "health_check", new_callable=AsyncMock
             ) as mock_graph_health,
         ):
-
             mock_vector_health.return_value = {"status": "healthy", "latency_ms": 10}
             mock_fulltext_health.return_value = {
                 "status": "unhealthy",

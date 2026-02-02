@@ -5,9 +5,8 @@ Routes KPI calculations to appropriate causal inference libraries
 based on the KPI Framework documentation's library selection matrix.
 """
 
-from typing import Any, Protocol
-
 import logging
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +62,7 @@ class CausalLibraryRouter:
         """Check if DoWhy is available."""
         try:
             import dowhy  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -72,6 +72,7 @@ class CausalLibraryRouter:
         """Check if EconML is available."""
         try:
             import econml  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -81,6 +82,7 @@ class CausalLibraryRouter:
         """Check if CausalML is available."""
         try:
             import causalml  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -90,6 +92,7 @@ class CausalLibraryRouter:
         """Check if NetworkX is available."""
         try:
             import networkx  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -125,27 +128,19 @@ class CausalLibraryRouter:
 
         # Fallback logic based on KPI type
         if primary == CausalLibrary.ECONML and self._dowhy_available:
-            logger.warning(
-                f"EconML unavailable for {kpi.id}, falling back to DoWhy"
-            )
+            logger.warning(f"EconML unavailable for {kpi.id}, falling back to DoWhy")
             return CausalLibrary.DOWHY
 
         if primary == CausalLibrary.CAUSALML and self._econml_available:
-            logger.warning(
-                f"CausalML unavailable for {kpi.id}, falling back to EconML"
-            )
+            logger.warning(f"CausalML unavailable for {kpi.id}, falling back to EconML")
             return CausalLibrary.ECONML
 
         if primary == CausalLibrary.DOWHY and self._networkx_available:
-            logger.warning(
-                f"DoWhy unavailable for {kpi.id}, falling back to NetworkX"
-            )
+            logger.warning(f"DoWhy unavailable for {kpi.id}, falling back to NetworkX")
             return CausalLibrary.NETWORKX
 
         # Last resort
-        logger.warning(
-            f"No causal library available for {kpi.id}, using non-causal calculation"
-        )
+        logger.warning(f"No causal library available for {kpi.id}, using non-causal calculation")
         return CausalLibrary.NONE
 
     def get_estimator(

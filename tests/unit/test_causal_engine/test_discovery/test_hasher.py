@@ -12,17 +12,15 @@ Covers:
 
 import numpy as np
 import pandas as pd
-import pytest
 
+from src.causal_engine.discovery.base import DiscoveryConfig
 from src.causal_engine.discovery.hasher import (
-    hash_dataframe,
     hash_config,
-    make_cache_key,
+    hash_dataframe,
     hash_discovery_request,
+    make_cache_key,
     verify_hash_determinism,
 )
-from src.causal_engine.discovery.base import DiscoveryConfig
-
 
 # =============================================================================
 # hash_dataframe Tests
@@ -105,11 +103,13 @@ class TestHashDataframe:
 
     def test_hash_with_mixed_types(self):
         """Test hashing DataFrame with mixed types."""
-        df = pd.DataFrame({
-            "int_col": [1, 2, 3],
-            "float_col": [1.5, 2.5, 3.5],
-            "str_col": ["a", "b", "c"],
-        })
+        df = pd.DataFrame(
+            {
+                "int_col": [1, 2, 3],
+                "float_col": [1.5, 2.5, 3.5],
+                "str_col": ["a", "b", "c"],
+            }
+        )
         result = hash_dataframe(df)
 
         assert isinstance(result, str)
@@ -309,11 +309,13 @@ class TestVerifyHashDeterminism:
     def test_works_with_large_dataframe(self):
         """Test with larger DataFrame."""
         np.random.seed(42)
-        df = pd.DataFrame({
-            "A": np.random.randn(100),
-            "B": np.random.randn(100),
-            "C": np.random.randn(100),
-        })
+        df = pd.DataFrame(
+            {
+                "A": np.random.randn(100),
+                "B": np.random.randn(100),
+                "C": np.random.randn(100),
+            }
+        )
         config = DiscoveryConfig()
 
         result = verify_hash_determinism(df, config, n_iterations=3)
@@ -332,11 +334,13 @@ class TestHasherIntegration:
     def test_full_workflow(self):
         """Test the full hashing workflow."""
         # Create test data
-        df = pd.DataFrame({
-            "treatment": [0, 1, 0, 1, 0, 1],
-            "outcome": [10, 20, 15, 25, 12, 22],
-            "covariate": [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
-        })
+        df = pd.DataFrame(
+            {
+                "treatment": [0, 1, 0, 1, 0, 1],
+                "outcome": [10, 20, 15, 25, 12, 22],
+                "covariate": [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
+            }
+        )
         config = DiscoveryConfig(alpha=0.05, max_cond_vars=2)
 
         # Generate cache key
@@ -355,12 +359,14 @@ class TestHasherIntegration:
         np.random.seed(123)
         n = 50
 
-        df = pd.DataFrame({
-            "marketing_spend": np.random.uniform(100, 1000, n),
-            "sales": np.random.normal(5000, 500, n),
-            "region": np.random.choice(["A", "B", "C"], n),
-            "season": np.random.choice(["Q1", "Q2", "Q3", "Q4"], n),
-        })
+        df = pd.DataFrame(
+            {
+                "marketing_spend": np.random.uniform(100, 1000, n),
+                "sales": np.random.normal(5000, 500, n),
+                "region": np.random.choice(["A", "B", "C"], n),
+                "season": np.random.choice(["Q1", "Q2", "Q3", "Q4"], n),
+            }
+        )
         config = DiscoveryConfig()
 
         key = hash_discovery_request(df, config)

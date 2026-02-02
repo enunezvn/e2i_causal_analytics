@@ -25,7 +25,6 @@ from enum import Enum
 from typing import Any, Optional
 
 import numpy as np
-import pandas as pd
 from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
@@ -234,7 +233,7 @@ class BaseIVEstimator(ABC):
         treatment: NDArray[np.float64],
         instruments: NDArray[np.float64],
         covariates: Optional[NDArray[np.float64]] = None,
-        **kwargs
+        **kwargs,
     ) -> IVResult:
         """
         Fit the IV estimator.

@@ -36,9 +36,7 @@ class TestSkillMatcher:
 
         assert len(matches) > 0
         # Should find the KPI calculation skill
-        kpi_match = next(
-            (m for m in matches if "kpi-calculation" in m.skill_path), None
-        )
+        kpi_match = next((m for m in matches if "kpi-calculation" in m.skill_path), None)
         assert kpi_match is not None
         assert kpi_match.score > 0.3
 
@@ -48,9 +46,7 @@ class TestSkillMatcher:
 
         assert len(matches) > 0
         # Should find the confounder identification skill
-        confounder_match = next(
-            (m for m in matches if "confounder" in m.skill_path), None
-        )
+        confounder_match = next((m for m in matches if "confounder" in m.skill_path), None)
         assert confounder_match is not None
 
     def test_find_matches_empty_query(self, matcher):
@@ -119,9 +115,7 @@ class TestSkillMatcher:
 
         assert len(matches) > 0
         # Should find KPI skill with "market share" trigger
-        kpi_match = next(
-            (m for m in matches if "kpi-calculation" in m.skill_path), None
-        )
+        kpi_match = next((m for m in matches if "kpi-calculation" in m.skill_path), None)
         assert kpi_match is not None
 
 

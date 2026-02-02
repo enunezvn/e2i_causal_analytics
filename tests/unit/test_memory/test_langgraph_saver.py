@@ -13,7 +13,6 @@ All tests use mocked dependencies to avoid external services.
 
 import os
 from unittest.mock import MagicMock, patch
-import builtins
 
 import pytest
 
@@ -22,7 +21,6 @@ from src.memory.langgraph_saver import (
     create_async_checkpointer,
     create_checkpointer,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -92,7 +90,7 @@ class TestCreateCheckpointer:
                 sys.modules,
                 {"langgraph.checkpoint.redis": mock_module},
             ):
-                result = create_checkpointer()
+                create_checkpointer()
                 mock_cls.from_conn_string.assert_called_once_with("redis://env-host:6379")
 
     def test_falls_back_to_memory_on_import_error(self, mock_memory_saver):
@@ -178,7 +176,7 @@ class TestCreateCheckpointer:
             sys.modules,
             {"langgraph.checkpoint.redis": mock_module},
         ):
-            result = create_checkpointer()
+            create_checkpointer()
             mock_cls.from_conn_string.assert_called_once_with("redis://localhost:6382")
 
 
@@ -324,7 +322,7 @@ class TestCheckpointerConfig:
             {"langgraph.checkpoint.redis": mock_module},
         ):
             config = CheckpointerConfig(redis_url="redis://config-test:6379")
-            result = config.create_checkpointer()
+            config.create_checkpointer()
             mock_cls.from_conn_string.assert_called_once_with("redis://config-test:6379")
 
     def test_create_async_checkpointer_method(self):
@@ -342,7 +340,7 @@ class TestCheckpointerConfig:
             {"langgraph.checkpoint.redis.aio": mock_module},
         ):
             config = CheckpointerConfig(redis_url="redis://config-async:6379")
-            result = config.create_async_checkpointer()
+            config.create_async_checkpointer()
             mock_cls.from_conn_string.assert_called_once_with("redis://config-async:6379")
 
 

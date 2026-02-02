@@ -13,7 +13,7 @@ Version: 1.0.0
 """
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -26,6 +26,7 @@ class TestRedisClient:
     def reset_client(self):
         """Reset global client before each test."""
         import src.api.dependencies.redis_client as redis_module
+
         redis_module._redis_client = None
         yield
         redis_module._redis_client = None
@@ -63,7 +64,9 @@ class TestRedisClient:
         ):
             # Re-import module to pick up environment changes
             import importlib
+
             import src.api.dependencies.redis_client
+
             importlib.reload(src.api.dependencies.redis_client)
             from src.api.dependencies.redis_client import init_redis
 
@@ -260,7 +263,9 @@ class TestRedisClient:
                 await init_redis()
 
                 assert any("Initializing Redis connection" in msg for msg in caplog.messages)
-                assert any("Redis connection established successfully" in msg for msg in caplog.messages)
+                assert any(
+                    "Redis connection established successfully" in msg for msg in caplog.messages
+                )
 
     @pytest.mark.asyncio
     async def test_redis_error_logging(self, caplog):

@@ -17,7 +17,6 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .chatbot_state import IntentType
@@ -111,9 +110,7 @@ async def _run_dspy_with_retry(
 
         except asyncio.TimeoutError:
             last_error = TimeoutError(f"{operation_name} timed out after {timeout}s")
-            logger.warning(
-                f"{operation_name} timeout (attempt {attempt + 1}/{max_retries + 1})"
-            )
+            logger.warning(f"{operation_name} timeout (attempt {attempt + 1}/{max_retries + 1})")
 
         except Exception as e:
             last_error = e
@@ -174,9 +171,7 @@ if DSPY_AVAILABLE:
         confidence: float = dspy.OutputField(
             desc="Confidence score between 0.0 and 1.0 for the classification"
         )
-        reasoning: str = dspy.OutputField(
-            desc="Brief explanation of why this intent was chosen"
-        )
+        reasoning: str = dspy.OutputField(desc="Brief explanation of why this intent was chosen")
 
     class AgentRoutingSignature(dspy.Signature):
         """
@@ -222,9 +217,7 @@ if DSPY_AVAILABLE:
         routing_confidence: float = dspy.OutputField(
             desc="Confidence score between 0.0 and 1.0 for the routing decision"
         )
-        rationale: str = dspy.OutputField(
-            desc="Brief explanation of why this agent was chosen"
-        )
+        rationale: str = dspy.OutputField(desc="Brief explanation of why this agent was chosen")
 
 
 # =============================================================================
@@ -445,20 +438,16 @@ def _is_multi_faceted_query(query: str) -> bool:
     facets = {
         # Query contains comparative/conjunction keywords suggesting multiple questions
         "conjunction_keywords": any(
-            w in query_lower
-            for w in ["compare", "trends", "explain", "also", "and then", "both"]
+            w in query_lower for w in ["compare", "trends", "explain", "also", "and then", "both"]
         ),
         # Query mentions multiple KPIs
         "multiple_kpis": len(
-            re.findall(
-                r"(trx|nrx|market share|conversion|volume|patient starts)", query_lower
-            )
+            re.findall(r"(trx|nrx|market share|conversion|volume|patient starts)", query_lower)
         )
         > 1,
         # Query spans cross-agent capabilities
         "cross_agent": any(
-            w in query_lower
-            for w in ["drift", "health", "causal", "experiment", "prediction"]
+            w in query_lower for w in ["drift", "health", "causal", "experiment", "prediction"]
         ),
         # Query mentions multiple brands
         "multiple_brands": len(
@@ -466,9 +455,7 @@ def _is_multi_faceted_query(query: str) -> bool:
         )
         > 1,
         # Query asks for both analysis AND recommendations
-        "analysis_and_recommendation": (
-            "why" in query_lower or "what caused" in query_lower
-        )
+        "analysis_and_recommendation": ("why" in query_lower or "what caused" in query_lower)
         and any(w in query_lower for w in ["recommend", "suggest", "should"]),
     }
 
@@ -485,9 +472,7 @@ def classify_intent_hardcoded(query: str) -> Tuple[str, float, str]:
     query_lower = query.lower()
 
     # Greeting patterns
-    if _matches_pattern(
-        query_lower, ["hello", "hi", "hey", "good morning", "good afternoon"]
-    ):
+    if _matches_pattern(query_lower, ["hello", "hi", "hey", "good morning", "good afternoon"]):
         return (IntentType.GREETING, 0.95, "Matched greeting pattern")
 
     # Help patterns
@@ -513,21 +498,15 @@ def classify_intent_hardcoded(query: str) -> Tuple[str, float, str]:
         return (IntentType.CAUSAL_ANALYSIS, 0.90, "Matched causal analysis pattern")
 
     # Agent patterns
-    if _matches_pattern(
-        query_lower, ["agent", "tier", "orchestrator", "status", "system"]
-    ):
+    if _matches_pattern(query_lower, ["agent", "tier", "orchestrator", "status", "system"]):
         return (IntentType.AGENT_STATUS, 0.90, "Matched agent status pattern")
 
     # Recommendation patterns
-    if _matches_pattern(
-        query_lower, ["recommend", "suggest", "improve", "optimize", "strategy"]
-    ):
+    if _matches_pattern(query_lower, ["recommend", "suggest", "improve", "optimize", "strategy"]):
         return (IntentType.RECOMMENDATION, 0.90, "Matched recommendation pattern")
 
     # Search patterns
-    if _matches_pattern(
-        query_lower, ["search", "find", "look for", "show me", "trend"]
-    ):
+    if _matches_pattern(query_lower, ["search", "find", "look for", "show me", "trend"]):
         return (IntentType.SEARCH, 0.85, "Matched search pattern")
 
     return (IntentType.GENERAL, 0.70, "No specific pattern matched - defaulting to general")
@@ -658,8 +637,7 @@ async def classify_intent_dspy(
             reasoning = str(getattr(result, "reasoning", "DSPy classification"))
 
             logger.debug(
-                f"DSPy classified '{query[:50]}...' as {intent} "
-                f"(confidence={confidence:.2f})"
+                f"DSPy classified '{query[:50]}...' as {intent} (confidence={confidence:.2f})"
             )
         else:
             use_fallback = True
@@ -735,7 +713,20 @@ VALID_AGENTS = {
 
 # Agent capability keywords for fallback routing
 AGENT_CAPABILITIES = {
-    "cohort_constructor": ["cohort", "eligib", "inclusion", "exclusion", "patient set", "patient population", "criteria", "filter patient", "hcp cohort", "build cohort", "create cohort", "define cohort"],
+    "cohort_constructor": [
+        "cohort",
+        "eligib",
+        "inclusion",
+        "exclusion",
+        "patient set",
+        "patient population",
+        "criteria",
+        "filter patient",
+        "hcp cohort",
+        "build cohort",
+        "create cohort",
+        "define cohort",
+    ],
     "causal_impact": ["why", "cause", "caused", "effect", "impact", "driver", "factor", "causal"],
     "gap_analyzer": ["gap", "opportunity", "roi", "underperforming", "potential", "growth"],
     "heterogeneous_optimizer": ["segment", "cate", "heterogeneous", "subgroup", "treatment effect"],
@@ -884,7 +875,7 @@ class RoutingTrainingSignalCollector:
         """Add a routing signal to the buffer."""
         self._buffer.append(signal)
         if len(self._buffer) > self._buffer_size:
-            self._buffer = self._buffer[-self._buffer_size:]
+            self._buffer = self._buffer[-self._buffer_size :]
 
     def get_signals(self, limit: int = 100) -> List[RoutingTrainingSignal]:
         """Get recent signals from buffer."""
@@ -993,8 +984,7 @@ async def route_agent_dspy(
             rationale = str(getattr(result, "rationale", "DSPy routing"))
 
             logger.debug(
-                f"DSPy routed '{query[:50]}...' to {primary_agent} "
-                f"(confidence={confidence:.2f})"
+                f"DSPy routed '{query[:50]}...' to {primary_agent} (confidence={confidence:.2f})"
             )
         else:
             use_fallback = True
@@ -1039,9 +1029,7 @@ def route_agent_sync(
     Returns:
         Tuple of (primary_agent, secondary_agents, confidence, rationale, routing_method)
     """
-    primary_agent, secondary_agents, confidence, rationale = route_agent_hardcoded(
-        query, intent
-    )
+    primary_agent, secondary_agents, confidence, rationale = route_agent_hardcoded(query, intent)
     return (primary_agent, secondary_agents, confidence, rationale, "hardcoded")
 
 
@@ -1245,7 +1233,7 @@ class RAGTrainingSignalCollector:
         """Add a RAG signal to the buffer."""
         self._buffer.append(signal)
         if len(self._buffer) > self._buffer_size:
-            self._buffer = self._buffer[-self._buffer_size:]
+            self._buffer = self._buffer[-self._buffer_size :]
 
     def get_signals(self, limit: int = 100) -> List[RAGTrainingSignal]:
         """Get recent signals from buffer."""
@@ -1344,13 +1332,55 @@ def rewrite_query_hardcoded(
     if not keywords:
         # Remove common words and extract nouns/adjectives
         stop_words = {
-            "the", "a", "an", "is", "are", "was", "were", "what", "why", "how",
-            "when", "where", "who", "which", "in", "on", "at", "to", "for", "of",
-            "and", "or", "but", "with", "from", "by", "about", "can", "could",
-            "would", "should", "do", "does", "did", "have", "has", "had", "be",
-            "been", "being", "this", "that", "these", "those", "my", "your", "our",
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "what",
+            "why",
+            "how",
+            "when",
+            "where",
+            "who",
+            "which",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "and",
+            "or",
+            "but",
+            "with",
+            "from",
+            "by",
+            "about",
+            "can",
+            "could",
+            "would",
+            "should",
+            "do",
+            "does",
+            "did",
+            "have",
+            "has",
+            "had",
+            "be",
+            "been",
+            "being",
+            "this",
+            "that",
+            "these",
+            "those",
+            "my",
+            "your",
+            "our",
         }
-        words = re.findall(r'\b[a-z]+\b', query_lower)
+        words = re.findall(r"\b[a-z]+\b", query_lower)
         keywords = [w for w in words if w not in stop_words and len(w) > 2][:5]
 
     # Build rewritten query
@@ -1544,14 +1574,16 @@ async def cognitive_rag_retrieve(
             relevance_scores.append(score)
 
             if score >= 0.3:  # Minimum relevance threshold
-                evidence.append({
-                    "source_id": r.source_id,
-                    "content": r.content[:500],
-                    "score": r.score,
-                    "relevance_score": score,
-                    "key_insight": insight,
-                    "source": r.source,
-                })
+                evidence.append(
+                    {
+                        "source_id": r.source_id,
+                        "content": r.content[:500],
+                        "score": r.score,
+                        "relevance_score": score,
+                        "key_insight": insight,
+                        "source": r.source,
+                    }
+                )
 
     except Exception as e:
         logger.error(f"Cognitive RAG retrieval failed: {e}")
@@ -1678,6 +1710,7 @@ def _get_dspy_synthesizer():
 # SYNTHESIS TRAINING SIGNAL COLLECTION
 # =============================================================================
 
+
 @dataclass
 class SynthesisTrainingSignal:
     """Training signal for evidence synthesis optimization."""
@@ -1743,7 +1776,7 @@ class SynthesisTrainingSignalCollector:
         self._signals.append(signal)
         if len(self._signals) > self._max_buffer_size:
             # Remove oldest signals
-            self._signals = self._signals[-self._max_buffer_size:]
+            self._signals = self._signals[-self._max_buffer_size :]
         logger.debug(f"Added synthesis training signal, buffer size: {len(self._signals)}")
 
     def get_signals(self, limit: int = 100) -> List[SynthesisTrainingSignal]:
@@ -1771,6 +1804,7 @@ def get_synthesis_signal_collector() -> SynthesisTrainingSignalCollector:
 # SYNTHESIS RESULT DATACLASS
 # =============================================================================
 
+
 @dataclass
 class SynthesisResult:
     """Result from evidence synthesis."""
@@ -1786,6 +1820,7 @@ class SynthesisResult:
 # =============================================================================
 # HARDCODED SYNTHESIS FALLBACK
 # =============================================================================
+
 
 def synthesize_response_hardcoded(
     query: str,
@@ -1826,7 +1861,9 @@ def synthesize_response_hardcoded(
         evidence_text = "\n".join(evidence_summary)
 
         # Determine confidence based on evidence quality
-        avg_score = sum(e.get("relevance_score", e.get("score", 0.5)) for e in evidence) / len(evidence)
+        avg_score = sum(e.get("relevance_score", e.get("score", 0.5)) for e in evidence) / len(
+            evidence
+        )
         if avg_score >= 0.7 and len(evidence) >= 2:
             confidence_level = "high"
             confidence_statement = f"High confidence based on {len(evidence)} corroborating sources (avg relevance: {avg_score:.0%})"
@@ -1835,7 +1872,9 @@ def synthesize_response_hardcoded(
             confidence_statement = f"Moderate confidence based on {len(evidence)} source(s) (avg relevance: {avg_score:.0%})"
         else:
             confidence_level = "low"
-            confidence_statement = f"Low confidence - limited evidence (avg relevance: {avg_score:.0%})"
+            confidence_statement = (
+                f"Low confidence - limited evidence (avg relevance: {avg_score:.0%})"
+            )
 
         # Generate response based on intent
         if intent == "kpi_query":
@@ -1885,6 +1924,7 @@ def synthesize_response_hardcoded(
 # =============================================================================
 # MAIN SYNTHESIS FUNCTION
 # =============================================================================
+
 
 async def synthesize_response_dspy(
     query: str,
@@ -1950,18 +1990,19 @@ async def synthesize_response_dspy(
                 # Parse evidence citations (comma-separated source_ids)
                 citations_str = result.evidence_citations
                 if citations_str:
-                    evidence_citations = [
-                        c.strip() for c in citations_str.split(",") if c.strip()
-                    ]
+                    evidence_citations = [c.strip() for c in citations_str.split(",") if c.strip()]
 
                 # Parse follow-up suggestions
                 if follow_up_suggestions_str:
                     follow_up_suggestions = [
-                        s.strip() for s in follow_up_suggestions_str.split("?")
+                        s.strip()
+                        for s in follow_up_suggestions_str.split("?")
                         if s.strip() and len(s.strip()) > 10
                     ]
                     # Re-add question marks
-                    follow_up_suggestions = [s + "?" if not s.endswith("?") else s for s in follow_up_suggestions[:2]]
+                    follow_up_suggestions = [
+                        s + "?" if not s.endswith("?") else s for s in follow_up_suggestions[:2]
+                    ]
 
                 # Determine confidence level from statement
                 confidence_lower = confidence_statement.lower()
@@ -1973,16 +2014,22 @@ async def synthesize_response_dspy(
                     confidence_level = "low"
 
                 synthesis_method = "dspy"
-                logger.debug(f"DSPy synthesis complete: {len(response)} chars, {len(evidence_citations)} citations")
+                logger.debug(
+                    f"DSPy synthesis complete: {len(response)} chars, {len(evidence_citations)} citations"
+                )
 
         except Exception as e:
             logger.warning(f"DSPy synthesis failed, using fallback: {e}")
 
     # Fallback to hardcoded synthesis
     if synthesis_method == "hardcoded":
-        response, confidence_statement, evidence_citations, follow_up_suggestions, confidence_level = (
-            synthesize_response_hardcoded(query, intent, evidence, brand_context)
-        )
+        (
+            response,
+            confidence_statement,
+            evidence_citations,
+            follow_up_suggestions,
+            confidence_level,
+        ) = synthesize_response_hardcoded(query, intent, evidence, brand_context)
 
     # Collect training signal
     if collect_signal:
@@ -2010,6 +2057,7 @@ async def synthesize_response_dspy(
 # =============================================================================
 # PHASE 7: UNIFIED TRAINING SIGNAL COLLECTION
 # =============================================================================
+
 
 @dataclass
 class ChatbotSessionSignal:
@@ -2121,12 +2169,14 @@ class ChatbotSessionSignal:
         reward = 0.5  # Base reward
 
         # DSPy usage rewards (structured processing)
-        dspy_usage = sum([
-            1 if self.intent_method == "dspy" else 0,
-            1 if self.routing_method == "dspy" else 0,
-            1 if self.rag_method == "cognitive" else 0,
-            1 if self.synthesis_method == "dspy" else 0,
-        ])
+        dspy_usage = sum(
+            [
+                1 if self.intent_method == "dspy" else 0,
+                1 if self.routing_method == "dspy" else 0,
+                1 if self.rag_method == "cognitive" else 0,
+                1 if self.synthesis_method == "dspy" else 0,
+            ]
+        )
         reward += dspy_usage * 0.05  # Up to 0.2 bonus for full DSPy
 
         # Hop efficiency (fewer hops for good results = better)
@@ -2208,9 +2258,9 @@ class ChatbotSessionSignal:
 
         # Weighted overall score
         overall = (
-            accuracy * 0.35 +  # Classification/routing correctness
-            efficiency * 0.25 +  # Resource efficiency
-            satisfaction * 0.40  # User satisfaction (most important)
+            accuracy * 0.35  # Classification/routing correctness
+            + efficiency * 0.25  # Resource efficiency
+            + satisfaction * 0.40  # User satisfaction (most important)
         )
 
         return {
@@ -2451,7 +2501,7 @@ class ChatbotSignalCollector:
             # Add to completed signals buffer
             self._signals.append(signal)
             if len(self._signals) > self._buffer_size:
-                self._signals = self._signals[-self._buffer_size:]
+                self._signals = self._signals[-self._buffer_size :]
 
             rewards = signal.compute_unified_reward()
             logger.info(
@@ -2475,8 +2525,7 @@ class ChatbotSignalCollector:
     ) -> List[ChatbotSessionSignal]:
         """Get high-quality signals for training."""
         high_quality = [
-            s for s in self._signals
-            if s.compute_unified_reward()["overall"] >= min_overall_reward
+            s for s in self._signals if s.compute_unified_reward()["overall"] >= min_overall_reward
         ]
         return high_quality[-limit:]
 
@@ -2506,7 +2555,8 @@ class ChatbotSignalCollector:
                     "confidence": s.intent_confidence,
                     "reward": s.compute_accuracy_reward(),
                 }
-                for s in signals if s.intent_method
+                for s in signals
+                if s.intent_method
             ]
         elif phase == "routing":
             return [
@@ -2518,7 +2568,8 @@ class ChatbotSignalCollector:
                     "confidence": s.routing_confidence,
                     "reward": s.compute_accuracy_reward(),
                 }
-                for s in signals if s.routing_method
+                for s in signals
+                if s.routing_method
             ]
         elif phase == "rag":
             return [
@@ -2531,7 +2582,8 @@ class ChatbotSignalCollector:
                     "relevance": s.avg_relevance_score,
                     "reward": s.compute_efficiency_reward(),
                 }
-                for s in signals if s.rag_method
+                for s in signals
+                if s.rag_method
             ]
         elif phase == "synthesis":
             return [
@@ -2544,7 +2596,8 @@ class ChatbotSignalCollector:
                     "citations": s.citations_count,
                     "reward": s.compute_satisfaction_reward(),
                 }
-                for s in signals if s.synthesis_method
+                for s in signals
+                if s.synthesis_method
             ]
         else:
             return [s.to_dict() for s in signals]
@@ -2614,6 +2667,7 @@ class ChatbotSignalCollector:
             if signal.user_id:
                 try:
                     import uuid
+
                     user_id = str(uuid.UUID(signal.user_id))
                 except (ValueError, TypeError):
                     # user_id is not a valid UUID, skip it
@@ -2664,9 +2718,7 @@ class ChatbotSignalCollector:
                 "session_timestamp": signal.timestamp.isoformat(),
             }
 
-            result = await client.table("chatbot_training_signals").insert(
-                signal_data
-            ).execute()
+            result = await client.table("chatbot_training_signals").insert(signal_data).execute()
 
             if result.data and len(result.data) > 0:
                 db_id = result.data[0].get("id")
@@ -2696,21 +2748,17 @@ def get_chatbot_signal_collector() -> ChatbotSignalCollector:
 # =============================================================================
 
 # Feature flags for optimization
-CHATBOT_GEPA_OPTIMIZATION_ENABLED = os.getenv(
-    "CHATBOT_GEPA_OPTIMIZATION", "true"
-).lower() == "true"
-CHATBOT_AB_TESTING_ENABLED = os.getenv(
-    "CHATBOT_AB_TESTING", "false"
-).lower() == "true"
+CHATBOT_GEPA_OPTIMIZATION_ENABLED = os.getenv("CHATBOT_GEPA_OPTIMIZATION", "true").lower() == "true"
+CHATBOT_AB_TESTING_ENABLED = os.getenv("CHATBOT_AB_TESTING", "false").lower() == "true"
 
 # Check GEPA availability
 try:
     from src.optimization.gepa import (
         create_gepa_optimizer,
-        save_optimized_module,
         load_optimized_module,
+        save_optimized_module,
     )
-    from src.optimization.gepa.metrics.base import ScoreWithFeedback, DSPyTrace
+    from src.optimization.gepa.metrics.base import DSPyTrace, ScoreWithFeedback
 
     GEPA_AVAILABLE = True
 except ImportError:
@@ -2820,9 +2868,7 @@ class ChatbotGEPAMetric:
     def _score_intent(self, pred: Any, gold: Any) -> Tuple[float, str]:
         """Score intent classification quality."""
         predicted_intent = getattr(pred, "intent", None)
-        expected_intent = getattr(gold, "expected_intent", None) or getattr(
-            gold, "intent", None
-        )
+        expected_intent = getattr(gold, "expected_intent", None) or getattr(gold, "intent", None)
         confidence = getattr(pred, "confidence", 0.5)
 
         if not predicted_intent:
@@ -3032,9 +3078,7 @@ class ChatbotOptimizer:
         # Use explicit None check because ChatbotSignalCollector has __len__
         # which returns 0 for empty collectors, making bool(collector) False
         self._signal_collector = (
-            signal_collector
-            if signal_collector is not None
-            else get_chatbot_signal_collector()
+            signal_collector if signal_collector is not None else get_chatbot_signal_collector()
         )
         self._pending_requests: List[ChatbotOptimizationRequest] = []
         self._ab_test_variants: Dict[str, List[Any]] = {}
@@ -3090,20 +3134,17 @@ class ChatbotOptimizer:
 
             # Build query based on phase
             method_col = f"{phase}_method" if phase != "rag" else "rag_method"
-            reward_col = (
-                "reward_accuracy" if phase in ("intent", "routing")
-                else "reward_overall"
-            )
+            reward_col = "reward_accuracy" if phase in ("intent", "routing") else "reward_overall"
 
-            result = await client.table("chatbot_training_signals").select(
-                "*"
-            ).gte(
-                reward_col, min_reward
-            ).neq(
-                method_col, ""
-            ).order(
-                "session_timestamp", desc=True
-            ).limit(limit).execute()
+            result = (
+                await client.table("chatbot_training_signals")
+                .select("*")
+                .gte(reward_col, min_reward)
+                .neq(method_col, "")
+                .order("session_timestamp", desc=True)
+                .limit(limit)
+                .execute()
+            )
 
             if result.data:
                 logger.info(f"Retrieved {len(result.data)} training signals for {phase}")
@@ -3254,9 +3295,7 @@ class ChatbotOptimizer:
             if not client:
                 return False
 
-            await client.table("chatbot_optimization_requests").insert(
-                request.to_dict()
-            ).execute()
+            await client.table("chatbot_optimization_requests").insert(request.to_dict()).execute()
 
             return True
         except Exception as e:
@@ -3460,12 +3499,11 @@ class ChatbotOptimizer:
             if module is None:
                 return {"error": f"Module not available: {module_name}", "success": False}
 
-            optimized_module = optimizer.compile(module, trainset=trainset)
+            optimizer.compile(module, trainset=trainset)
             self._best_score = getattr(optimizer, "best_score", 0.0)
 
             logger.info(
-                f"Completed MIPROv2 optimization for {module_name}: "
-                f"score={self._best_score:.3f}"
+                f"Completed MIPROv2 optimization for {module_name}: score={self._best_score:.3f}"
             )
 
             return {
@@ -3501,11 +3539,13 @@ class ChatbotOptimizer:
         if module_name not in self._ab_test_variants:
             self._ab_test_variants[module_name] = []
 
-        self._ab_test_variants[module_name].append({
-            "name": variant_name,
-            "module": variant_module,
-            "metrics": [],
-        })
+        self._ab_test_variants[module_name].append(
+            {
+                "name": variant_name,
+                "module": variant_module,
+                "metrics": [],
+            }
+        )
         logger.info(f"Registered A/B variant '{variant_name}' for {module_name}")
 
     def get_ab_variant(
@@ -3533,9 +3573,8 @@ class ChatbotOptimizer:
 
         # Consistent hash assignment
         import hashlib
-        hash_val = int(hashlib.md5(
-            f"{session_id}:{module_name}".encode()
-        ).hexdigest(), 16)
+
+        hash_val = int(hashlib.md5(f"{session_id}:{module_name}".encode()).hexdigest(), 16)
 
         # 50% control, 50% split among variants
         if hash_val % 2 == 0:

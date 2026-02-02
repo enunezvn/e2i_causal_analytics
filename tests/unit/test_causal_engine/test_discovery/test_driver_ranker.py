@@ -4,19 +4,19 @@ Version: 1.0.0
 Tests the driver ranking logic comparing causal vs predictive importance.
 """
 
+import networkx as nx
 import numpy as np
 import pytest
-import networkx as nx
 
+from src.causal_engine.discovery.base import (
+    DiscoveryConfig,
+    DiscoveryResult,
+)
 from src.causal_engine.discovery.driver_ranker import (
     DriverRanker,
     DriverRankingResult,
     FeatureRanking,
     ImportanceType,
-)
-from src.causal_engine.discovery.base import (
-    DiscoveryConfig,
-    DiscoveryResult,
 )
 
 
@@ -182,11 +182,13 @@ class TestDriverRanker:
     def simple_dag(self):
         """Create simple DAG: A -> B -> Target, C -> Target."""
         dag = nx.DiGraph()
-        dag.add_edges_from([
-            ("A", "B"),
-            ("B", "Target"),
-            ("C", "Target"),
-        ])
+        dag.add_edges_from(
+            [
+                ("A", "B"),
+                ("B", "Target"),
+                ("C", "Target"),
+            ]
+        )
         return dag
 
     @pytest.fixture
@@ -194,11 +196,13 @@ class TestDriverRanker:
         """Create synthetic SHAP values."""
         # 100 samples, 3 features (A, B, C)
         np.random.seed(42)
-        return np.array([
-            np.random.randn(100) * 0.5,  # A - medium SHAP
-            np.random.randn(100) * 0.3,  # B - lower SHAP
-            np.random.randn(100) * 0.8,  # C - highest SHAP
-        ]).T
+        return np.array(
+            [
+                np.random.randn(100) * 0.5,  # A - medium SHAP
+                np.random.randn(100) * 0.3,  # B - lower SHAP
+                np.random.randn(100) * 0.8,  # C - highest SHAP
+            ]
+        ).T
 
     def test_rank_drivers_basic(self, ranker, simple_dag, shap_values):
         """Test basic driver ranking."""
@@ -299,11 +303,13 @@ class TestDriverRanker:
 
         # SHAP: C is highly predictive, A is low
         np.random.seed(42)
-        shap_values = np.array([
-            np.random.randn(100) * 0.2,  # A - low SHAP
-            np.random.randn(100) * 0.3,  # B - medium SHAP
-            np.random.randn(100) * 0.9,  # C - high SHAP
-        ]).T
+        shap_values = np.array(
+            [
+                np.random.randn(100) * 0.2,  # A - low SHAP
+                np.random.randn(100) * 0.3,  # B - medium SHAP
+                np.random.randn(100) * 0.9,  # C - high SHAP
+            ]
+        ).T
 
         result = ranker.rank_drivers(
             dag=dag,
@@ -326,11 +332,13 @@ class TestCausalImportanceComputation:
         ranker = DriverRanker()
 
         dag = nx.DiGraph()
-        dag.add_edges_from([
-            ("Direct1", "Target"),
-            ("Direct2", "Target"),
-            ("Indirect", "Direct1"),
-        ])
+        dag.add_edges_from(
+            [
+                ("Direct1", "Target"),
+                ("Direct2", "Target"),
+                ("Indirect", "Direct1"),
+            ]
+        )
 
         shap_values = np.random.randn(50, 3)
 
@@ -380,11 +388,13 @@ class TestPredictiveImportanceComputation:
         dag.add_nodes_from(["A", "B", "Target"])
 
         # A has much higher SHAP than B
-        shap_values = np.array([
-            [1.0, 0.1],
-            [0.9, 0.1],
-            [1.1, 0.2],
-        ])
+        shap_values = np.array(
+            [
+                [1.0, 0.1],
+                [0.9, 0.1],
+                [1.1, 0.2],
+            ]
+        )
 
         result = ranker.rank_drivers(
             dag=dag,

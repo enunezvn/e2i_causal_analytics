@@ -2,7 +2,6 @@
 Integration tests for Feedback Learner agent.
 """
 
-
 import pytest
 
 from src.agents.feedback_learner import (

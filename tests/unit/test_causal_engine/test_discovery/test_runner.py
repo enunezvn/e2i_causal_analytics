@@ -4,22 +4,21 @@ Version: 1.0.0
 Tests the causal discovery runner with ensemble algorithms.
 """
 
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
+
+import networkx as nx
 import numpy as np
 import pandas as pd
 import pytest
-import networkx as nx
-from unittest.mock import MagicMock, patch, AsyncMock
-from uuid import uuid4
 
-from src.causal_engine.discovery.runner import DiscoveryRunner
 from src.causal_engine.discovery.base import (
     AlgorithmResult,
-    DiscoveredEdge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
     DiscoveryResult,
-    EdgeType,
 )
+from src.causal_engine.discovery.runner import DiscoveryRunner
 
 
 class TestDiscoveryRunnerInit:
@@ -253,10 +252,15 @@ class TestRemoveCycles:
     def test_multiple_cycles(self, runner):
         """Test multiple cycles are resolved."""
         dag = nx.DiGraph()
-        dag.add_edges_from([
-            ("A", "B"), ("B", "C"), ("C", "A"),  # Cycle 1
-            ("D", "E"), ("E", "D"),  # Cycle 2
-        ])
+        dag.add_edges_from(
+            [
+                ("A", "B"),
+                ("B", "C"),
+                ("C", "A"),  # Cycle 1
+                ("D", "E"),
+                ("E", "D"),  # Cycle 2
+            ]
+        )
         for u, v in dag.edges():
             dag.edges[u, v]["confidence"] = 0.5
 
@@ -274,11 +278,13 @@ class TestDiscoverDagSync:
         runner = DiscoveryRunner()
 
         # Create simple test data
-        data = pd.DataFrame({
-            "A": np.random.randn(100),
-            "B": np.random.randn(100),
-            "C": np.random.randn(100),
-        })
+        data = pd.DataFrame(
+            {
+                "A": np.random.randn(100),
+                "B": np.random.randn(100),
+                "C": np.random.randn(100),
+            }
+        )
 
         # Mock the async discover_dag
         expected_result = DiscoveryResult(
@@ -376,6 +382,7 @@ class TestRegisterAlgorithm:
 
     def test_register_custom_algorithm(self):
         """Test registering a custom algorithm."""
+
         # Create mock algorithm class
         class MockAlgorithm:
             def discover(self, data, config):

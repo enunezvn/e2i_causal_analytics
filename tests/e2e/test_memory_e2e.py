@@ -48,7 +48,6 @@ def mock_all_services():
         patch("src.api.routes.memory.get_procedure_by_id") as mock_proc,
         patch("src.api.routes.memory.get_semantic_memory") as mock_semantic,
     ):
-
         # Configure mock responses
         mock_search.return_value = [
             RetrievalResult(
@@ -115,7 +114,6 @@ def mock_cognitive_service():
         patch("src.api.routes.cognitive.get_working_memory") as mock_memory,
         patch("src.api.routes.cognitive.hybrid_search") as mock_search,
     ):
-
         # Mock working memory
         mock_wm = MagicMock()
         mock_wm.create_session = AsyncMock(return_value={"session_id": "sess_e2e"})
@@ -175,7 +173,8 @@ class TestFullCognitiveE2E:
     def test_prediction_query_full_cycle(self, mock_all_services, mock_cognitive_service):
         """Test complete prediction query cycle through API."""
         response = client.post(
-            "/api/cognitive/query", json={"query": "What will TRx be next quarter?", "brand": "Kisqali"}
+            "/api/cognitive/query",
+            json={"query": "What will TRx be next quarter?", "brand": "Kisqali"},
         )
 
         assert response.status_code == 200
@@ -194,7 +193,8 @@ class TestFullCognitiveE2E:
 
         # Second query reuses session
         response2 = client.post(
-            "/api/cognitive/query", json={"query": "Why is this happening?", "session_id": session_id}
+            "/api/cognitive/query",
+            json={"query": "Why is this happening?", "session_id": session_id},
         )
 
         assert response2.status_code == 200
@@ -415,7 +415,8 @@ class TestConcurrentAccessE2E:
         """Test mixed read/write operations."""
         # Create episodic memory
         create_resp = client.post(
-            "/api/memory/episodic", json={"content": "Concurrent test memory", "event_type": "action"}
+            "/api/memory/episodic",
+            json={"content": "Concurrent test memory", "event_type": "action"},
         )
         assert create_resp.status_code == 200
 

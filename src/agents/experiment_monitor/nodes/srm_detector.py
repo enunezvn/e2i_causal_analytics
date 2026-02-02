@@ -161,9 +161,7 @@ class SRMDetectorNode:
 
         return None
 
-    async def _get_variant_counts(
-        self, client: Any, experiment_id: str
-    ) -> Dict[str, int]:
+    async def _get_variant_counts(self, client: Any, experiment_id: str) -> Dict[str, int]:
         """Get counts by variant for an experiment.
 
         Args:

@@ -47,9 +47,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """Check if this calculator supports the given KPI."""
         return kpi.workstream == Workstream.WS3_BUSINESS
 
-    def calculate(
-        self, kpi: KPIMetadata, context: dict[str, Any] | None = None
-    ) -> KPIResult:
+    def calculate(self, kpi: KPIMetadata, context: dict[str, Any] | None = None) -> KPIResult:
         """Calculate a business impact KPI.
 
         Args:
@@ -364,9 +362,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         return 0.0
 
-    def _execute_query(
-        self, query: str, params: list[Any]
-    ) -> list[dict[str, Any]] | None:
+    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()

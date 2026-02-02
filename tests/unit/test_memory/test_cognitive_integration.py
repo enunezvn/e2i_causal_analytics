@@ -11,11 +11,7 @@ Tests focus on:
 All tests use mocked dependencies to avoid external services.
 """
 
-import asyncio
-import json
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -23,12 +19,11 @@ from pydantic import ValidationError
 from src.memory.cognitive_integration import (
     CognitiveQueryInput,
     CognitiveQueryOutput,
-    PhaseResult,
     CognitiveService,
+    PhaseResult,
     get_cognitive_service,
     process_cognitive_query,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -225,9 +220,7 @@ class TestCognitiveServiceInit:
         """get_working_memory should create and cache instance."""
         service = CognitiveService()
 
-        with patch(
-            "src.memory.cognitive_integration.get_working_memory"
-        ) as mock_get_wm:
+        with patch("src.memory.cognitive_integration.get_working_memory") as mock_get_wm:
             mock_wm = MagicMock()
             mock_get_wm.return_value = mock_wm
 
@@ -591,15 +584,19 @@ class TestReflectorPhase:
     @pytest.mark.asyncio
     async def test_reflector_stores_episodic_memory(self, cognitive_service):
         """Reflector should store episodic memory for high confidence."""
-        with patch(
-            "src.memory.cognitive_integration.insert_episodic_memory_with_text",
-            new_callable=AsyncMock,
-        ) as mock_insert, patch(
-            "src.memory.cognitive_integration.record_learning_signal",
-            new_callable=AsyncMock,
-        ), patch(
-            "src.memory.cognitive_integration.get_graphiti_service",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "src.memory.cognitive_integration.insert_episodic_memory_with_text",
+                new_callable=AsyncMock,
+            ) as mock_insert,
+            patch(
+                "src.memory.cognitive_integration.record_learning_signal",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "src.memory.cognitive_integration.get_graphiti_service",
+                new_callable=AsyncMock,
+            ),
         ):
             await cognitive_service._run_reflector(
                 session_id="session-123",
@@ -616,15 +613,19 @@ class TestReflectorPhase:
     @pytest.mark.asyncio
     async def test_reflector_records_learning_signal(self, cognitive_service):
         """Reflector should record learning signal."""
-        with patch(
-            "src.memory.cognitive_integration.insert_episodic_memory_with_text",
-            new_callable=AsyncMock,
-        ), patch(
-            "src.memory.cognitive_integration.record_learning_signal",
-            new_callable=AsyncMock,
-        ) as mock_signal, patch(
-            "src.memory.cognitive_integration.get_graphiti_service",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "src.memory.cognitive_integration.insert_episodic_memory_with_text",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "src.memory.cognitive_integration.record_learning_signal",
+                new_callable=AsyncMock,
+            ) as mock_signal,
+            patch(
+                "src.memory.cognitive_integration.get_graphiti_service",
+                new_callable=AsyncMock,
+            ),
         ):
             await cognitive_service._run_reflector(
                 session_id="session-123",
@@ -639,20 +640,22 @@ class TestReflectorPhase:
             mock_signal.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_reflector_stores_to_graphiti(
-        self, cognitive_service, mock_graphiti_service
-    ):
+    async def test_reflector_stores_to_graphiti(self, cognitive_service, mock_graphiti_service):
         """Reflector should store to Graphiti knowledge graph."""
-        with patch(
-            "src.memory.cognitive_integration.insert_episodic_memory_with_text",
-            new_callable=AsyncMock,
-        ), patch(
-            "src.memory.cognitive_integration.record_learning_signal",
-            new_callable=AsyncMock,
-        ), patch(
-            "src.memory.cognitive_integration.get_graphiti_service",
-            new_callable=AsyncMock,
-            return_value=mock_graphiti_service,
+        with (
+            patch(
+                "src.memory.cognitive_integration.insert_episodic_memory_with_text",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "src.memory.cognitive_integration.record_learning_signal",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "src.memory.cognitive_integration.get_graphiti_service",
+                new_callable=AsyncMock,
+                return_value=mock_graphiti_service,
+            ),
         ):
             await cognitive_service._run_reflector(
                 session_id="session-123",
@@ -714,9 +717,7 @@ class TestStoreToGraphiti:
             assert "TRx is declining because" in call_kwargs["content"]
 
     @pytest.mark.asyncio
-    async def test_store_to_graphiti_handles_failure(
-        self, cognitive_service
-    ):
+    async def test_store_to_graphiti_handles_failure(self, cognitive_service):
         """Graphiti storage failure should not raise."""
         mock_service = AsyncMock()
         mock_service.add_episode = AsyncMock(side_effect=Exception("Graphiti error"))
@@ -744,12 +745,13 @@ class TestProcessQuery:
     @pytest.mark.asyncio
     async def test_process_query_full_cycle(self, cognitive_service, mock_working_memory):
         """process_query should execute full cognitive cycle."""
-        with patch(
-            "src.memory.cognitive_integration.hybrid_search",
-            new_callable=AsyncMock,
-            return_value=[],
-        ), patch.object(
-            cognitive_service, "_run_reflector", new_callable=AsyncMock
+        with (
+            patch(
+                "src.memory.cognitive_integration.hybrid_search",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(cognitive_service, "_run_reflector", new_callable=AsyncMock),
         ):
             input_data = CognitiveQueryInput(
                 query="Why is TRx declining?",
@@ -767,12 +769,13 @@ class TestProcessQuery:
     @pytest.mark.asyncio
     async def test_process_query_creates_session(self, cognitive_service, mock_working_memory):
         """process_query should create session if not provided."""
-        with patch(
-            "src.memory.cognitive_integration.hybrid_search",
-            new_callable=AsyncMock,
-            return_value=[],
-        ), patch.object(
-            cognitive_service, "_run_reflector", new_callable=AsyncMock
+        with (
+            patch(
+                "src.memory.cognitive_integration.hybrid_search",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(cognitive_service, "_run_reflector", new_callable=AsyncMock),
         ):
             input_data = CognitiveQueryInput(
                 query="test",
@@ -786,12 +789,13 @@ class TestProcessQuery:
     @pytest.mark.asyncio
     async def test_process_query_adds_messages(self, cognitive_service, mock_working_memory):
         """process_query should add user and assistant messages."""
-        with patch(
-            "src.memory.cognitive_integration.hybrid_search",
-            new_callable=AsyncMock,
-            return_value=[],
-        ), patch.object(
-            cognitive_service, "_run_reflector", new_callable=AsyncMock
+        with (
+            patch(
+                "src.memory.cognitive_integration.hybrid_search",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(cognitive_service, "_run_reflector", new_callable=AsyncMock),
         ):
             input_data = CognitiveQueryInput(
                 query="test query",
@@ -812,12 +816,13 @@ class TestProcessQuery:
         mock_result.retrieval_method = "vector"
         mock_result.metadata = {}
 
-        with patch(
-            "src.memory.cognitive_integration.hybrid_search",
-            new_callable=AsyncMock,
-            return_value=[mock_result],
-        ), patch.object(
-            cognitive_service, "_run_reflector", new_callable=AsyncMock
+        with (
+            patch(
+                "src.memory.cognitive_integration.hybrid_search",
+                new_callable=AsyncMock,
+                return_value=[mock_result],
+            ),
+            patch.object(cognitive_service, "_run_reflector", new_callable=AsyncMock),
         ):
             input_data = CognitiveQueryInput(
                 query="test",
@@ -856,12 +861,13 @@ class TestProcessQuery:
         mock_result.retrieval_method = "vector"
         mock_result.metadata = {}
 
-        with patch(
-            "src.memory.cognitive_integration.hybrid_search",
-            new_callable=AsyncMock,
-            return_value=[mock_result],
-        ), patch.object(
-            cognitive_service, "_run_reflector", new_callable=AsyncMock
+        with (
+            patch(
+                "src.memory.cognitive_integration.hybrid_search",
+                new_callable=AsyncMock,
+                return_value=[mock_result],
+            ),
+            patch.object(cognitive_service, "_run_reflector", new_callable=AsyncMock),
         ):
             input_data = CognitiveQueryInput(query="test")
             result = await cognitive_service.process_query(input_data)
@@ -913,9 +919,7 @@ class TestConvenienceFunctions:
     @pytest.mark.asyncio
     async def test_process_cognitive_query_uses_service(self):
         """process_cognitive_query should use the singleton service."""
-        with patch(
-            "src.memory.cognitive_integration.get_cognitive_service"
-        ) as mock_get_service:
+        with patch("src.memory.cognitive_integration.get_cognitive_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.process_query = AsyncMock(
                 return_value=CognitiveQueryOutput(
@@ -945,9 +949,7 @@ class TestConvenienceFunctions:
     @pytest.mark.asyncio
     async def test_process_cognitive_query_passes_all_params(self):
         """process_cognitive_query should pass all parameters."""
-        with patch(
-            "src.memory.cognitive_integration.get_cognitive_service"
-        ) as mock_get_service:
+        with patch("src.memory.cognitive_integration.get_cognitive_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.process_query = AsyncMock(
                 return_value=MagicMock(spec=CognitiveQueryOutput)

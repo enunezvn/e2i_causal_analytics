@@ -13,19 +13,18 @@ the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
-from datetime import datetime, timezone
 
 # Mark entire module to run on same worker - prevents import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.tool_composer.dspy_integration import (
-    CompositionTrainingSignal,
-    ToolComposerSignalCollector,
-    ToolComposerDSPyIntegration,
-    get_tool_composer_signal_collector,
-    get_tool_composer_dspy_integration,
-    reset_dspy_integration,
     DSPY_AVAILABLE,
+    CompositionTrainingSignal,
+    ToolComposerDSPyIntegration,
+    ToolComposerSignalCollector,
+    get_tool_composer_dspy_integration,
+    get_tool_composer_signal_collector,
+    reset_dspy_integration,
 )
 
 
@@ -207,9 +206,7 @@ class TestCompositionTrainingSignal:
 
     def test_to_dict_tools_limit(self):
         """Test tools list limiting."""
-        signal = CompositionTrainingSignal(
-            tools_planned=[f"tool_{i}" for i in range(15)]
-        )
+        signal = CompositionTrainingSignal(tools_planned=[f"tool_{i}" for i in range(15)])
         result = signal.to_dict()
 
         assert len(result["planning"]["tools_planned"]) <= 10
@@ -488,10 +485,12 @@ class TestToolComposerDSPyIntegration:
         integration = ToolComposerDSPyIntegration()
 
         # Add a request
-        integration._optimization_requests.append({
-            "request_id": "test_req",
-            "status": "pending",
-        })
+        integration._optimization_requests.append(
+            {
+                "request_id": "test_req",
+                "status": "pending",
+            }
+        )
 
         pending = integration.get_pending_requests()
         assert len(pending) == 1
@@ -555,25 +554,28 @@ class TestDSPySignatures:
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_query_decomposition_signature(self):
         """Test QueryDecompositionSignature exists."""
+        import dspy
+
         from src.agents.tool_composer.dspy_integration import QueryDecompositionSignature
 
-        import dspy
         assert issubclass(QueryDecompositionSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_tool_mapping_signature(self):
         """Test ToolMappingSignature exists."""
+        import dspy
+
         from src.agents.tool_composer.dspy_integration import ToolMappingSignature
 
-        import dspy
         assert issubclass(ToolMappingSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_response_synthesis_signature(self):
         """Test ResponseSynthesisSignature exists."""
+        import dspy
+
         from src.agents.tool_composer.dspy_integration import ResponseSynthesisSignature
 
-        import dspy
         assert issubclass(ResponseSynthesisSignature, dspy.Signature)
 
 

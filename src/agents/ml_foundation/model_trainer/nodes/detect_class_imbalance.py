@@ -7,8 +7,7 @@ Version: 1.0.0
 """
 
 import logging
-import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import numpy as np
 
@@ -16,21 +15,21 @@ logger = logging.getLogger(__name__)
 
 # Severity thresholds based on minority class ratio
 SEVERITY_THRESHOLDS = {
-    "none": 0.40,      # Minority >= 40% - no action needed
+    "none": 0.40,  # Minority >= 40% - no action needed
     "moderate": 0.20,  # Minority 20-40% - consider weighting
-    "severe": 0.05,    # Minority 5-20% - resampling recommended
-    "extreme": 0.0,    # Minority < 5% - aggressive resampling + weighting
+    "severe": 0.05,  # Minority 5-20% - resampling recommended
+    "extreme": 0.0,  # Minority < 5% - aggressive resampling + weighting
 }
 
 # Valid remediation strategies
 VALID_STRATEGIES = [
-    "smote",              # Synthetic minority oversampling
+    "smote",  # Synthetic minority oversampling
     "random_oversample",  # Duplicate minority samples
-    "random_undersample", # Remove majority samples
-    "smote_tomek",        # SMOTE + Tomek links cleaning
-    "class_weight",       # Use class weights only (no resampling)
-    "combined",           # Moderate resampling + class weights
-    "none",               # No action needed
+    "random_undersample",  # Remove majority samples
+    "smote_tomek",  # SMOTE + Tomek links cleaning
+    "class_weight",  # Use class weights only (no resampling)
+    "combined",  # Moderate resampling + class weights
+    "none",  # No action needed
 ]
 
 
@@ -44,7 +43,7 @@ def _calculate_imbalance_metrics(y: np.ndarray) -> Dict[str, Any]:
         Dictionary with imbalance metrics
     """
     unique, counts = np.unique(y, return_counts=True)
-    class_distribution = dict(zip(unique.astype(int).tolist(), counts.tolist()))
+    class_distribution = dict(zip(unique.astype(int).tolist(), counts.tolist(), strict=False))
 
     total = len(y)
     minority_count = min(counts)
@@ -101,11 +100,11 @@ async def _get_llm_recommendation(
         prompt = f"""You are an ML expert analyzing class imbalance in a classification dataset.
 
 Dataset Metrics:
-- Total samples: {metrics['total_samples']}
-- Minority class ({metrics['minority_class']}): {metrics['minority_count']} samples ({metrics['minority_ratio']:.1%})
-- Majority class ({metrics['majority_class']}): {metrics['majority_count']} samples ({1-metrics['minority_ratio']:.1%})
-- Imbalance ratio: {metrics['imbalance_ratio']:.1f}:1
-- Severity: {metrics['severity']}
+- Total samples: {metrics["total_samples"]}
+- Minority class ({metrics["minority_class"]}): {metrics["minority_count"]} samples ({metrics["minority_ratio"]:.1%})
+- Majority class ({metrics["majority_class"]}): {metrics["majority_count"]} samples ({1 - metrics["minority_ratio"]:.1%})
+- Imbalance ratio: {metrics["imbalance_ratio"]:.1f}:1
+- Severity: {metrics["severity"]}
 
 Model: {algorithm_name} for {problem_type}
 
@@ -172,7 +171,7 @@ def _heuristic_strategy(
     """
     severity = metrics["severity"]
     minority_count = metrics["minority_count"]
-    total_samples = metrics["total_samples"]
+    metrics["total_samples"]
 
     # Tree-based models handle class weights well
     tree_models = ["XGBoost", "LightGBM", "RandomForest", "GradientBoosting", "CausalForest"]
@@ -183,7 +182,10 @@ def _heuristic_strategy(
 
     if severity == "moderate":
         if is_tree_model:
-            return "class_weight", "Moderate imbalance - tree models handle class weights efficiently"
+            return (
+                "class_weight",
+                "Moderate imbalance - tree models handle class weights efficiently",
+            )
         return "random_oversample", "Moderate imbalance - light oversampling recommended"
 
     if severity == "severe":
@@ -291,9 +293,7 @@ async def detect_class_imbalance(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # Get LLM recommendation for remediation strategy
-    strategy, rationale = await _get_llm_recommendation(
-        metrics, algorithm_name, problem_type
-    )
+    strategy, rationale = await _get_llm_recommendation(metrics, algorithm_name, problem_type)
 
     logger.info(f"Recommended strategy: {strategy} - {rationale}")
 

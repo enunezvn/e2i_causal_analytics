@@ -2,20 +2,19 @@
 
 import pandas as pd
 import pytest
-from datetime import datetime, timedelta
 
 from src.agents.cohort_constructor import (
-    CohortConstructor,
     CohortConfig,
+    CohortConstructor,
+    CohortExecutionResult,
     Criterion,
     CriterionType,
     Operator,
     TemporalRequirements,
-    CohortExecutionResult,
 )
 from src.agents.cohort_constructor.constructor import (
-    create_cohort_quick,
     compare_cohorts,
+    create_cohort_quick,
 )
 
 
@@ -135,11 +134,13 @@ class TestCohortConstructorOperators:
     @pytest.fixture
     def basic_df(self):
         """Create a basic test DataFrame."""
-        return pd.DataFrame({
-            "value": [1, 2, 3, 4, 5],
-            "text": ["a", "ab", "abc", "b", "c"],
-            "category": ["X", "Y", "Z", "X", "Y"],
-        })
+        return pd.DataFrame(
+            {
+                "value": [1, 2, 3, 4, 5],
+                "text": ["a", "ab", "abc", "b", "c"],
+                "category": ["X", "Y", "Z", "X", "Y"],
+            }
+        )
 
     def test_operator_equal(self, basic_df):
         """Test EQUAL operator."""
@@ -168,8 +169,12 @@ class TestCohortConstructorOperators:
     def test_operator_not_equal(self, basic_df):
         """Test NOT_EQUAL operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -180,8 +185,12 @@ class TestCohortConstructorOperators:
     def test_operator_greater(self, basic_df):
         """Test GREATER operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -192,8 +201,12 @@ class TestCohortConstructorOperators:
     def test_operator_greater_equal(self, basic_df):
         """Test GREATER_EQUAL operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -204,8 +217,12 @@ class TestCohortConstructorOperators:
     def test_operator_less(self, basic_df):
         """Test LESS operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -216,8 +233,12 @@ class TestCohortConstructorOperators:
     def test_operator_less_equal(self, basic_df):
         """Test LESS_EQUAL operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -228,8 +249,12 @@ class TestCohortConstructorOperators:
     def test_operator_in(self, basic_df):
         """Test IN operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -240,8 +265,12 @@ class TestCohortConstructorOperators:
     def test_operator_not_in(self, basic_df):
         """Test NOT_IN operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -252,8 +281,12 @@ class TestCohortConstructorOperators:
     def test_operator_between(self, basic_df):
         """Test BETWEEN operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -264,8 +297,12 @@ class TestCohortConstructorOperators:
     def test_operator_contains(self, basic_df):
         """Test CONTAINS operator."""
         config = CohortConfig(
-            cohort_name="Test", brand="test", indication="test",
-            inclusion_criteria=[], exclusion_criteria=[], required_fields=[],
+            cohort_name="Test",
+            brand="test",
+            indication="test",
+            inclusion_criteria=[],
+            exclusion_criteria=[],
+            required_fields=[],
         )
 
         constructor = CohortConstructor(config)
@@ -342,7 +379,9 @@ class TestCohortConstructorExecution:
 
         assert len(result.patient_assignments) == len(sample_patient_df)
 
-    def test_construct_cohort_no_patient_assignments_when_disabled(self, sample_config, sample_patient_df):
+    def test_construct_cohort_no_patient_assignments_when_disabled(
+        self, sample_config, sample_patient_df
+    ):
         """Test that patient assignments are not tracked when disabled."""
         constructor = CohortConstructor(sample_config)
         _, result = constructor.construct_cohort(sample_patient_df, track_assignments=False)
@@ -355,13 +394,19 @@ class TestCohortConstructorTemporalValidation:
 
     def test_temporal_validation_with_lookback(self):
         """Test temporal validation with lookback period."""
-        df = pd.DataFrame({
-            "patient_journey_id": ["P001", "P002", "P003"],
-            "age_at_diagnosis": [30, 40, 50],
-            "diagnosis_date": ["2023-06-01", "2023-06-01", "2023-06-01"],
-            "journey_start_date": ["2023-01-01", "2023-05-01", "2023-05-20"],  # P003 has only 12 days lookback
-            "follow_up_days": [120, 120, 120],
-        })
+        df = pd.DataFrame(
+            {
+                "patient_journey_id": ["P001", "P002", "P003"],
+                "age_at_diagnosis": [30, 40, 50],
+                "diagnosis_date": ["2023-06-01", "2023-06-01", "2023-06-01"],
+                "journey_start_date": [
+                    "2023-01-01",
+                    "2023-05-01",
+                    "2023-05-20",
+                ],  # P003 has only 12 days lookback
+                "follow_up_days": [120, 120, 120],
+            }
+        )
 
         config = CohortConfig(
             cohort_name="Test",
@@ -482,4 +527,6 @@ class TestCohortConstructorModuleFunctions:
         assert len(comparison) == 2
         assert "cohort_name" in comparison.columns
         assert "eligible_population" in comparison.columns
-        assert comparison.iloc[1]["eligible_population"] >= comparison.iloc[0]["eligible_population"]
+        assert (
+            comparison.iloc[1]["eligible_population"] >= comparison.iloc[0]["eligible_population"]
+        )

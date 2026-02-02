@@ -74,7 +74,9 @@ class SHAPResult:
     feature_count: int
     model_version_id: str
     features_anonymized: bool = False  # L5: Indicates if feature names were anonymized
-    feature_name_mapping: Optional[Dict[str, str]] = None  # L5: Mapping from anonymized to original names
+    feature_name_mapping: Optional[Dict[str, str]] = (
+        None  # L5: Mapping from anonymized to original names
+    )
 
 
 class RealTimeSHAPExplainer:
@@ -199,7 +201,15 @@ class RealTimeSHAPExplainer:
 
         # Fallback: Use business model name hints (backward compatibility)
         # These are E2I-specific conventions for when model object isn't available
-        tree_model_hints = {"propensity", "risk_stratification", "churn_prediction", "xgboost", "lightgbm", "random_forest", "gradient_boosting"}
+        tree_model_hints = {
+            "propensity",
+            "risk_stratification",
+            "churn_prediction",
+            "xgboost",
+            "lightgbm",
+            "random_forest",
+            "gradient_boosting",
+        }
         linear_model_hints = {"baseline_logistic", "logistic", "linear", "ridge", "lasso"}
         deep_model_hints = {"deep_nba", "neural_propensity", "neural", "mlp", "deep"}
 
@@ -311,9 +321,7 @@ class RealTimeSHAPExplainer:
 
             elif explainer_type == ExplainerType.DEEP:
                 if background_data is None:
-                    raise ValueError(
-                        "DeepExplainer requires background_data but None was provided"
-                    )
+                    raise ValueError("DeepExplainer requires background_data but None was provided")
                 return shap.DeepExplainer(model, background_data)
 
             elif explainer_type == ExplainerType.GRADIENT:
@@ -363,14 +371,12 @@ class RealTimeSHAPExplainer:
             Background data array of shape (n_samples, n_features)
         """
         n_samples = self.default_background_sample
-        n_features = len(feature_names)
+        len(feature_names)
 
         # Try to get real data from Feast first
         if feast_client is not None:
             try:
-                background = self._get_background_from_feast(
-                    feast_client, feature_names, n_samples
-                )
+                background = self._get_background_from_feast(feast_client, feature_names, n_samples)
                 if background is not None:
                     logger.info("Using real feature data from Feast for SHAP background")
                     return background
@@ -404,9 +410,11 @@ class RealTimeSHAPExplainer:
                 # Create entity DataFrame with sample entity IDs
                 import pandas as pd
 
-                entity_df = pd.DataFrame({
-                    "patient_id": [f"sample_{i}" for i in range(n_samples)],
-                })
+                entity_df = pd.DataFrame(
+                    {
+                        "patient_id": [f"sample_{i}" for i in range(n_samples)],
+                    }
+                )
 
                 features = feast_client.get_historical_features(
                     entity_df=entity_df,
@@ -804,7 +812,7 @@ class RealTimeSHAPExplainer:
             Tuple of (anonymized_names, mapping from anonymous to original)
         """
         anonymized = [f"feature_{i}" for i in range(len(feature_names))]
-        mapping = {anon: orig for anon, orig in zip(anonymized, feature_names)}
+        mapping = dict(zip(anonymized, feature_names, strict=False))
         return anonymized, mapping
 
 

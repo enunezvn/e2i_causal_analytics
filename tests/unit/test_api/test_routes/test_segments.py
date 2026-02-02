@@ -4,38 +4,33 @@ Tests all endpoints and helper functions in src/api/routes/segments.py.
 Mocks all external dependencies to ensure unit test isolation.
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock, AsyncMock, ANY
-from typing import Dict, Any, List
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import BackgroundTasks
 
 # Import route functions and models
 from src.api.routes.segments import (
-    # Endpoints
-    run_segment_analysis,
-    get_segment_analysis,
-    list_policies,
-    get_segment_health,
-    # Helper functions
-    _run_segment_analysis_task,
-    _execute_segment_analysis,
-    _convert_cate_results,
-    _convert_uplift_metrics,
-    _convert_segment_profiles,
-    _convert_policies,
-    _generate_mock_response,
-    # Enums
-    ResponderType,
-    SegmentationMethod,
     AnalysisStatus,
-    QuestionType,
+    ResponderType,
     # Models
     RunSegmentAnalysisRequest,
-    # Module-level storage
     _analyses_store,
+    _convert_cate_results,
+    _convert_policies,
+    _convert_segment_profiles,
+    _convert_uplift_metrics,
+    _execute_segment_analysis,
+    _generate_mock_response,
+    # Helper functions
+    _run_segment_analysis_task,
+    get_segment_analysis,
+    get_segment_health,
+    list_policies,
+    # Endpoints
+    run_segment_analysis,
 )
-from fastapi import BackgroundTasks
-
 
 # =============================================================================
 # FIXTURES
@@ -158,9 +153,7 @@ async def test_run_segment_analysis_sync_mode(sample_request, mock_user):
     """Test run_segment_analysis in sync mode executes immediately."""
     background_tasks = BackgroundTasks()
 
-    with patch(
-        "src.api.routes.segments._execute_segment_analysis"
-    ) as mock_execute:
+    with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_result = MagicMock(
             analysis_id="",
             status=AnalysisStatus.COMPLETED,
@@ -184,9 +177,7 @@ async def test_run_segment_analysis_sync_mode_exception(sample_request, mock_use
     """Test run_segment_analysis handles exceptions in sync mode."""
     background_tasks = BackgroundTasks()
 
-    with patch(
-        "src.api.routes.segments._execute_segment_analysis"
-    ) as mock_execute:
+    with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_execute.side_effect = RuntimeError("Test error")
 
         with pytest.raises(Exception) as exc_info:
@@ -205,9 +196,7 @@ async def test_run_segment_analysis_stores_result(sample_request, mock_user):
     """Test run_segment_analysis stores result in store."""
     background_tasks = BackgroundTasks()
 
-    with patch(
-        "src.api.routes.segments._execute_segment_analysis"
-    ) as mock_execute:
+    with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_result = MagicMock(
             analysis_id="",
             status=AnalysisStatus.COMPLETED,
@@ -492,15 +481,16 @@ async def test_get_segment_health_agent_unavailable():
 async def test_get_segment_health_libraries_unavailable():
     """Test get_segment_health when libraries unavailable."""
     import sys
+
     # Patch sys.modules to make econml appear unavailable
-    original_econml = sys.modules.get('econml')
+    original_econml = sys.modules.get("econml")
 
     # Remove econml temporarily
-    if 'econml' in sys.modules:
-        del sys.modules['econml']
+    if "econml" in sys.modules:
+        del sys.modules["econml"]
 
     # Block econml import
-    sys.modules['econml'] = None
+    sys.modules["econml"] = None
 
     try:
         result = await get_segment_health()
@@ -509,9 +499,9 @@ async def test_get_segment_health_libraries_unavailable():
     finally:
         # Restore
         if original_econml is not None:
-            sys.modules['econml'] = original_econml
-        elif 'econml' in sys.modules:
-            del sys.modules['econml']
+            sys.modules["econml"] = original_econml
+        elif "econml" in sys.modules:
+            del sys.modules["econml"]
 
 
 @pytest.mark.asyncio
@@ -569,9 +559,7 @@ async def test_run_segment_analysis_task_success(sample_request, mock_agent_resu
         status=AnalysisStatus.PENDING,
     )
 
-    with patch(
-        "src.api.routes.segments._execute_segment_analysis"
-    ) as mock_execute:
+    with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_result = MagicMock(
             analysis_id="",
             status=AnalysisStatus.COMPLETED,
@@ -595,9 +583,7 @@ async def test_run_segment_analysis_task_handles_error(sample_request):
         status=AnalysisStatus.PENDING,
     )
 
-    with patch(
-        "src.api.routes.segments._execute_segment_analysis"
-    ) as mock_execute:
+    with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
         mock_execute.side_effect = RuntimeError("Test error")
 
         await _run_segment_analysis_task(analysis_id, sample_request)

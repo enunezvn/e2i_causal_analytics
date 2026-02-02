@@ -25,8 +25,6 @@ from scipy import stats
 
 from .base import (
     BaseIVEstimator,
-    InstrumentStrength,
-    IVConfig,
     IVDiagnostics,
     IVEstimatorType,
     IVResult,
@@ -60,7 +58,7 @@ class TwoStageLSEstimator(BaseIVEstimator):
         treatment: NDArray[np.float64],
         instruments: NDArray[np.float64],
         covariates: Optional[NDArray[np.float64]] = None,
-        **kwargs
+        **kwargs,
     ) -> IVResult:
         """
         Fit 2SLS estimator.
@@ -102,7 +100,7 @@ class TwoStageLSEstimator(BaseIVEstimator):
             first_stage_result = self._first_stage(D, W, n, k)
             D_hat = first_stage_result["D_hat"]
             first_stage_coef = first_stage_result["coef"]
-            first_stage_residuals = first_stage_result["residuals"]
+            first_stage_result["residuals"]
             first_stage_r_squared = first_stage_result["r_squared"]
 
             # First-stage F-statistic for instrument relevance
@@ -122,9 +120,7 @@ class TwoStageLSEstimator(BaseIVEstimator):
 
             # ============ Standard Errors ============
             # Use proper 2SLS standard errors (not OLS on second stage)
-            std_error = self._compute_2sls_std_error(
-                Y, D, D_hat, W2, residuals, n, k, p
-            )
+            std_error = self._compute_2sls_std_error(Y, D, D_hat, W2, residuals, n, k, p)
 
             # Degrees of freedom
             df = n - (1 + p + 1)  # n - (treatment + covariates + constant)
@@ -195,7 +191,7 @@ class TwoStageLSEstimator(BaseIVEstimator):
 
         # R-squared
         ss_res = np.sum(residuals**2)
-        ss_tot = np.sum((D - np.mean(D))**2)
+        ss_tot = np.sum((D - np.mean(D)) ** 2)
         r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
         return {
@@ -227,7 +223,7 @@ class TwoStageLSEstimator(BaseIVEstimator):
 
         # Use ACTUAL treatment D (not D_hat) for residuals
         # This is important for correct standard errors
-        Y_hat = W2 @ coef
+        W2 @ coef
         # But replace D_hat with D for residual calculation
         W2_actual = W2.copy()
         W2_actual[:, 0] = D
@@ -392,17 +388,13 @@ class TwoStageLSEstimator(BaseIVEstimator):
 
             # Overidentification test (if k > 1)
             if k > 1 and self.config.run_overid_test:
-                sargan_stat, sargan_pvalue = self._sargan_test(
-                    residuals, Z, X, n, k, p
-                )
+                sargan_stat, sargan_pvalue = self._sargan_test(residuals, Z, X, n, k, p)
                 diagnostics.sargan_stat = sargan_stat
                 diagnostics.sargan_pvalue = sargan_pvalue
 
             # Hausman test for endogeneity
             if self.config.run_hausman_test:
-                hausman_stat, hausman_pvalue = self._hausman_test(
-                    Y, D, Z, X, n, k, p
-                )
+                hausman_stat, hausman_pvalue = self._hausman_test(Y, D, Z, X, n, k, p)
                 diagnostics.hausman_stat = hausman_stat
                 diagnostics.hausman_pvalue = hausman_pvalue
 
@@ -426,11 +418,11 @@ class TwoStageLSEstimator(BaseIVEstimator):
 
         # Full model R-squared
         coef_full = np.linalg.lstsq(W_full, D, rcond=None)[0]
-        ss_res_full = np.sum((D - W_full @ coef_full)**2)
+        ss_res_full = np.sum((D - W_full @ coef_full) ** 2)
 
         # Restricted model R-squared
         coef_restr = np.linalg.lstsq(W_restricted, D, rcond=None)[0]
-        ss_res_restr = np.sum((D - W_restricted @ coef_restr)**2)
+        ss_res_restr = np.sum((D - W_restricted @ coef_restr) ** 2)
 
         # Partial R-squared
         if ss_res_restr > 0:

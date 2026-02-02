@@ -5,20 +5,16 @@ Tests patient journey generation with embedded causal effects.
 """
 
 import pytest
-import numpy as np
-import pandas as pd
 
-from src.ml.synthetic.generators import (
-    PatientGenerator,
-    HCPGenerator,
-    GeneratorConfig,
-)
 from src.ml.synthetic.config import (
-    Brand,
     DGPType,
-    DGP_CONFIGS,
-    RegionEnum,
     InsuranceTypeEnum,
+    RegionEnum,
+)
+from src.ml.synthetic.generators import (
+    GeneratorConfig,
+    HCPGenerator,
+    PatientGenerator,
 )
 
 
@@ -289,8 +285,12 @@ class TestPatientGeneratorCausalStructure:
 
         # Use median split for more robust comparison
         median_engagement = df["engagement_score"].median()
-        high_engagement = df[df["engagement_score"] > median_engagement]["treatment_initiated"].mean()
-        low_engagement = df[df["engagement_score"] <= median_engagement]["treatment_initiated"].mean()
+        high_engagement = df[df["engagement_score"] > median_engagement][
+            "treatment_initiated"
+        ].mean()
+        low_engagement = df[df["engagement_score"] <= median_engagement][
+            "treatment_initiated"
+        ].mean()
 
         assert high_engagement > low_engagement, (
             "High engagement should have higher treatment initiation rate"

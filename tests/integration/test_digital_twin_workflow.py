@@ -9,25 +9,16 @@ Tests the end-to-end digital twin workflow integration:
 Phase 15: Digital Twin Pre-Screening for A/B Tests
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
+
+import pytest
 
 from src.agents.experiment_designer.graph import (
     create_experiment_designer_graph,
     create_initial_state,
 )
 from src.agents.experiment_designer.nodes import TwinSimulationNode
-from src.agents.experiment_designer.state import ExperimentDesignState
-from src.digital_twin.models.simulation_models import (
-    SimulationRecommendation,
-    SimulationResult,
-    SimulationStatus,
-    InterventionConfig,
-    PopulationFilter,
-    EffectHeterogeneity,
-)
-
 
 # =============================================================================
 # Fixtures
@@ -186,7 +177,9 @@ class TestTwinSimulationNode:
         assert result["twin_recommended_sample_size"] == 1500
 
     @pytest.mark.asyncio
-    async def test_skip_recommendation_auto_skip(self, initial_state_with_twin, mock_simulation_skip):
+    async def test_skip_recommendation_auto_skip(
+        self, initial_state_with_twin, mock_simulation_skip
+    ):
         """Test that SKIP recommendation exits workflow when auto_skip is enabled."""
         node = TwinSimulationNode(auto_skip_on_low_effect=True)
 
@@ -202,7 +195,9 @@ class TestTwinSimulationNode:
         assert any("skipped based on twin simulation" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
-    async def test_skip_recommendation_no_auto_skip(self, initial_state_with_twin, mock_simulation_skip):
+    async def test_skip_recommendation_no_auto_skip(
+        self, initial_state_with_twin, mock_simulation_skip
+    ):
         """Test that SKIP recommendation continues workflow when auto_skip is disabled."""
         node = TwinSimulationNode(auto_skip_on_low_effect=False)
 
@@ -327,7 +322,9 @@ class TestWorkflowScenarios:
     """Test complete workflow scenarios."""
 
     @pytest.mark.asyncio
-    async def test_scenario_deploy_continues_to_design(self, initial_state_with_twin, mock_simulation_deploy):
+    async def test_scenario_deploy_continues_to_design(
+        self, initial_state_with_twin, mock_simulation_deploy
+    ):
         """Scenario: Simulation recommends DEPLOY, workflow continues to design."""
         # Create node
         node = TwinSimulationNode()
@@ -407,7 +404,9 @@ class TestStateManagement:
     """Test state field management during twin simulation."""
 
     @pytest.mark.asyncio
-    async def test_twin_fields_populated_on_success(self, initial_state_with_twin, mock_simulation_deploy):
+    async def test_twin_fields_populated_on_success(
+        self, initial_state_with_twin, mock_simulation_deploy
+    ):
         """Test that all twin fields are populated on successful simulation."""
         node = TwinSimulationNode()
 
@@ -427,7 +426,11 @@ class TestStateManagement:
     async def test_errors_preserved_on_failure(self, initial_state_with_twin):
         """Test that existing errors are preserved on simulation failure."""
         initial_state_with_twin["errors"] = [
-            {"node": "previous_node", "error": "Previous error", "timestamp": "2024-01-01T00:00:00Z"}
+            {
+                "node": "previous_node",
+                "error": "Previous error",
+                "timestamp": "2024-01-01T00:00:00Z",
+            }
         ]
 
         node = TwinSimulationNode()
@@ -520,4 +523,7 @@ class TestParameterExtraction:
         params = node._extract_simulation_params(state, state.get("constraints", {}))
 
         # Default should be used (not in params, will use class default)
-        assert "twin_count" not in params or params.get("twin_count") == TwinSimulationNode.DEFAULT_TWIN_COUNT
+        assert (
+            "twin_count" not in params
+            or params.get("twin_count") == TwinSimulationNode.DEFAULT_TWIN_COUNT
+        )

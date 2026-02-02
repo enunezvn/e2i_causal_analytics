@@ -6,9 +6,6 @@ Tests the circuit breaker implementation for fault tolerance.
 
 import threading
 import time
-from unittest.mock import MagicMock
-
-import pytest
 
 from src.mlops.opik_connector import (
     CircuitBreaker,

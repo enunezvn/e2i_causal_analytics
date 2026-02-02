@@ -133,16 +133,12 @@ class TestIntentClassifierNode:
         classifier = IntentClassifierNode()
 
         # Test Remibrutinib CSU cohort
-        result = classifier._pattern_classify(
-            "build a remibrutinib patient cohort for CSU"
-        )
+        result = classifier._pattern_classify("build a remibrutinib patient cohort for CSU")
         assert result["primary_intent"] == "cohort_definition"
         assert result["confidence"] >= 0.8
 
         # Test Fabhalta PNH cohort
-        result = classifier._pattern_classify(
-            "create a fabhalta cohort for PNH patients"
-        )
+        result = classifier._pattern_classify("create a fabhalta cohort for PNH patients")
         assert result["primary_intent"] == "cohort_definition"
         assert result["confidence"] >= 0.8
 
@@ -158,9 +154,7 @@ class TestIntentClassifierNode:
         """Test pattern matching for patient eligibility queries."""
         classifier = IntentClassifierNode()
 
-        result = classifier._pattern_classify(
-            "filter patients by eligibility criteria"
-        )
+        result = classifier._pattern_classify("filter patients by eligibility criteria")
 
         assert result["primary_intent"] == "cohort_definition"
         assert result["confidence"] >= 0.8

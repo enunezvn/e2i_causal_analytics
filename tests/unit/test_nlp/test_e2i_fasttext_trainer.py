@@ -18,9 +18,7 @@ import hashlib
 import os
 import sys
 import tempfile
-from io import StringIO
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -423,7 +421,7 @@ class TestRunTestSuite:
         assert isinstance(results["by_category"], dict)
         assert len(results["by_category"]) > 0
 
-        for category, stats in results["by_category"].items():
+        for _category, stats in results["by_category"].items():
             assert "passed" in stats
             assert "failed" in stats
 

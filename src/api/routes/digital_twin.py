@@ -103,13 +103,17 @@ class InterventionConfigRequest(BaseModel):
     channel: Optional[str] = Field(None, description="Channel: email, call, in_person, digital")
     frequency: Optional[str] = Field(None, description="Frequency: daily, weekly, monthly")
     duration_weeks: int = Field(default=8, ge=1, le=52, description="Duration in weeks")
-    content_type: Optional[str] = Field(None, description="Content type: clinical_data, patient_stories, etc.")
+    content_type: Optional[str] = Field(
+        None, description="Content type: clinical_data, patient_stories, etc."
+    )
     personalization_level: str = Field(default="standard", description="none, standard, high")
     target_segment: Optional[str] = Field(None, description="Target segment identifier")
     target_deciles: List[int] = Field(default=[1, 2, 3], description="Target deciles (1-10)")
     target_specialties: List[str] = Field(default=[], description="Target specialty list")
     target_regions: List[str] = Field(default=[], description="Target region list")
-    intensity_multiplier: float = Field(default=1.0, ge=0.1, le=10.0, description="Treatment intensity")
+    intensity_multiplier: float = Field(
+        default=1.0, ge=0.1, le=10.0, description="Treatment intensity"
+    )
     extra_params: Dict[str, Any] = Field(default={}, description="Additional parameters")
 
     model_config = ConfigDict(
@@ -144,9 +148,15 @@ class SimulateRequest(BaseModel):
     brand: BrandEnum
     twin_type: TwinTypeEnum = Field(default=TwinTypeEnum.HCP)
     population_filters: Optional[PopulationFilterRequest] = None
-    twin_count: int = Field(default=10000, ge=100, le=100000, description="Number of twins to simulate")
-    confidence_level: float = Field(default=0.95, ge=0.8, le=0.99, description="Confidence level for CI")
-    calculate_heterogeneity: bool = Field(default=True, description="Calculate heterogeneous effects")
+    twin_count: int = Field(
+        default=10000, ge=100, le=100000, description="Number of twins to simulate"
+    )
+    confidence_level: float = Field(
+        default=0.95, ge=0.8, le=0.99, description="Confidence level for CI"
+    )
+    calculate_heterogeneity: bool = Field(
+        default=True, description="Calculate heterogeneous effects"
+    )
     model_id: Optional[str] = Field(None, description="Specific model ID to use")
     experiment_design_id: Optional[str] = Field(None, description="Link to experiment design")
 
@@ -369,9 +379,7 @@ class DigitalTwinHealthResponse(BaseModel):
     service: str = Field(default="digital-twin", description="Service name")
     models_available: int = Field(..., description="Number of twin models available")
     simulations_pending: int = Field(..., description="Number of pending simulations")
-    last_simulation_at: Optional[datetime] = Field(
-        None, description="Timestamp of last simulation"
-    )
+    last_simulation_at: Optional[datetime] = Field(None, description="Timestamp of last simulation")
 
 
 @router.get("/health", response_model=DigitalTwinHealthResponse)
@@ -643,7 +651,9 @@ async def get_simulation(
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
             completed_at=result.completed_at,
-            population_filters=result.population_filters.to_dict() if result.population_filters else {},
+            population_filters=result.population_filters.to_dict()
+            if result.population_filters
+            else {},
             effect_heterogeneity=heterogeneity,
             intervention_config=result.intervention_config.model_dump(),
         )
@@ -692,7 +702,9 @@ async def validate_simulation(
         # Get the simulation result
         simulation_data = await repo.get_simulation(simulation_uuid)
         if not simulation_data:
-            raise HTTPException(status_code=404, detail=f"Simulation {request.simulation_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Simulation {request.simulation_id} not found"
+            )
 
         # Check if fidelity record already exists for this simulation
         existing_record = tracker.get_simulation_record(simulation_uuid)
@@ -702,7 +714,6 @@ async def validate_simulation(
             from src.digital_twin.models.simulation_models import (
                 InterventionConfig,
                 SimulationRecommendation,
-                SimulationStatus,
             )
 
             # Build SimulationResult from stored data

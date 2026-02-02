@@ -128,7 +128,12 @@ def mock_model_data():
         "rmse": 0.045,
         "cv_mean": 0.76,
         "cv_std": 0.03,
-        "feature_importances": {"specialty": 0.35, "decile": 0.30, "region": 0.20, "baseline_trx": 0.15},
+        "feature_importances": {
+            "specialty": 0.35,
+            "decile": 0.30,
+            "region": 0.20,
+            "baseline_trx": 0.15,
+        },
         "top_features": ["specialty", "decile", "region"],
         "training_samples": 50000,
         "training_duration_seconds": 125.5,
@@ -184,9 +189,11 @@ class TestRunSimulation:
         mock_repo = MagicMock()
         mock_repo.save_simulation = AsyncMock()
 
-        with patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator), \
-             patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine), \
-             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
+        with (
+            patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator),
+            patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine),
+            patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+        ):
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
         assert response.status_code == 200
@@ -216,9 +223,11 @@ class TestRunSimulation:
         mock_repo = MagicMock()
         mock_repo.save_simulation = AsyncMock()
 
-        with patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator), \
-             patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine), \
-             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
+        with (
+            patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator),
+            patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine),
+            patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+        ):
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
         assert response.status_code == 200
@@ -314,7 +323,9 @@ class TestGetSimulation:
         mock_result.population_filters.to_dict = MagicMock(return_value={"deciles": [1, 2, 3]})
         mock_result.intervention_config = MagicMock()
         mock_result.intervention_config.intervention_type = "email_campaign"
-        mock_result.intervention_config.model_dump = MagicMock(return_value={"intervention_type": "email_campaign"})
+        mock_result.intervention_config.model_dump = MagicMock(
+            return_value={"intervention_type": "email_campaign"}
+        )
         mock_result.intervention_config.extra_params = {"brand": "Remibrutinib", "twin_type": "hcp"}
 
         mock_effect_het = MagicMock()
@@ -322,14 +333,18 @@ class TestGetSimulation:
         mock_effect_het.by_decile = {"1": {"ate": 0.15}}
         mock_effect_het.by_region = {"northeast": {"ate": 0.10}}
         mock_effect_het.by_adoption_stage = {"early": {"ate": 0.14}}
-        mock_effect_het.get_top_segments = MagicMock(return_value=[{"segment": "oncology_d1", "ate": 0.18}])
+        mock_effect_het.get_top_segments = MagicMock(
+            return_value=[{"segment": "oncology_d1", "ate": 0.18}]
+        )
         mock_result.effect_heterogeneity = mock_effect_het
 
         mock_repo = MagicMock()
         mock_repo.get_simulation = AsyncMock(return_value=mock_result)
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/api/digital-twin/simulations/550e8400-e29b-41d4-a716-446655440000")
+            response = client.get(
+                "/api/digital-twin/simulations/550e8400-e29b-41d4-a716-446655440000"
+            )
 
         assert response.status_code == 200
         data = response.json()
@@ -343,7 +358,9 @@ class TestGetSimulation:
         mock_repo.get_simulation = AsyncMock(return_value=None)
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/api/digital-twin/simulations/999e8400-e29b-41d4-a716-446655440000")
+            response = client.get(
+                "/api/digital-twin/simulations/999e8400-e29b-41d4-a716-446655440000"
+            )
 
         assert response.status_code == 404
 
@@ -351,7 +368,9 @@ class TestGetSimulation:
 class TestValidateSimulation:
     """Tests for POST /digital-twin/validate."""
 
-    def test_validate_simulation_success(self, validate_request, mock_simulation_data, mock_fidelity_record):
+    def test_validate_simulation_success(
+        self, validate_request, mock_simulation_data, mock_fidelity_record
+    ):
         """Should validate simulation and return fidelity record."""
         mock_repo = MagicMock()
         mock_repo.get_simulation = AsyncMock(return_value=mock_simulation_data)
@@ -360,8 +379,10 @@ class TestValidateSimulation:
         mock_tracker.get_simulation_record = MagicMock(return_value=mock_fidelity_record)
         mock_tracker.validate = MagicMock(return_value=mock_fidelity_record)
 
-        with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
-             patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
+        with (
+            patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker),
+        ):
             response = client.post("/api/digital-twin/validate", json=validate_request)
 
         assert response.status_code == 200
@@ -463,7 +484,9 @@ class TestGetModelFidelity:
         mock_repo.get_model_fidelity_records = AsyncMock(return_value=[mock_fidelity_record])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
-            response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity")
+            response = client.get(
+                "/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity"
+            )
 
         assert response.status_code == 200
         data = response.json()
@@ -494,22 +517,34 @@ class TestGetFidelityReport:
         mock_repo = MagicMock()
 
         mock_tracker = MagicMock()
-        mock_tracker.get_model_fidelity_report = MagicMock(return_value={
-            "model_id": "770e8400-e29b-41d4-a716-446655440000",
-            "validation_count": 15,
-            "fidelity_score": 0.82,
-            "degradation_alert": False,
-            "metrics": {
-                "ci_coverage_rate": 0.87,
-                "mean_absolute_error": 0.025,
-            },
-            "grade_distribution": {"excellent": 5, "good": 8, "fair": 2, "poor": 0, "unvalidated": 0},
-            "computed_at": datetime.now(timezone.utc),
-        })
+        mock_tracker.get_model_fidelity_report = MagicMock(
+            return_value={
+                "model_id": "770e8400-e29b-41d4-a716-446655440000",
+                "validation_count": 15,
+                "fidelity_score": 0.82,
+                "degradation_alert": False,
+                "metrics": {
+                    "ci_coverage_rate": 0.87,
+                    "mean_absolute_error": 0.025,
+                },
+                "grade_distribution": {
+                    "excellent": 5,
+                    "good": 8,
+                    "fair": 2,
+                    "poor": 0,
+                    "unvalidated": 0,
+                },
+                "computed_at": datetime.now(timezone.utc),
+            }
+        )
 
-        with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
-             patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
-            response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report")
+        with (
+            patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker),
+        ):
+            response = client.get(
+                "/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report"
+            )
 
         assert response.status_code == 200
         data = response.json()
@@ -525,18 +560,28 @@ class TestGetFidelityReport:
         mock_repo = MagicMock()
 
         mock_tracker = MagicMock()
-        mock_tracker.get_model_fidelity_report = MagicMock(return_value={
-            "model_id": "770e8400-e29b-41d4-a716-446655440000",
-            "validation_count": 5,
-            "fidelity_score": 0.75,
-            "degradation_alert": False,
-            "metrics": {"ci_coverage_rate": 0.80},
-            "grade_distribution": {"excellent": 1, "good": 3, "fair": 1, "poor": 0, "unvalidated": 0},
-            "computed_at": datetime.now(timezone.utc),
-        })
+        mock_tracker.get_model_fidelity_report = MagicMock(
+            return_value={
+                "model_id": "770e8400-e29b-41d4-a716-446655440000",
+                "validation_count": 5,
+                "fidelity_score": 0.75,
+                "degradation_alert": False,
+                "metrics": {"ci_coverage_rate": 0.80},
+                "grade_distribution": {
+                    "excellent": 1,
+                    "good": 3,
+                    "fair": 1,
+                    "poor": 0,
+                    "unvalidated": 0,
+                },
+                "computed_at": datetime.now(timezone.utc),
+            }
+        )
 
-        with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
-             patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
+        with (
+            patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker),
+        ):
             response = client.get(
                 "/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report",
                 params={"lookback_days": 30},
@@ -549,19 +594,31 @@ class TestGetFidelityReport:
         mock_repo = MagicMock()
 
         mock_tracker = MagicMock()
-        mock_tracker.get_model_fidelity_report = MagicMock(return_value={
-            "model_id": "770e8400-e29b-41d4-a716-446655440000",
-            "validation_count": 20,
-            "fidelity_score": 0.55,
-            "degradation_alert": True,
-            "metrics": {"ci_coverage_rate": 0.65},
-            "grade_distribution": {"excellent": 2, "good": 5, "fair": 8, "poor": 5, "unvalidated": 0},
-            "computed_at": datetime.now(timezone.utc),
-        })
+        mock_tracker.get_model_fidelity_report = MagicMock(
+            return_value={
+                "model_id": "770e8400-e29b-41d4-a716-446655440000",
+                "validation_count": 20,
+                "fidelity_score": 0.55,
+                "degradation_alert": True,
+                "metrics": {"ci_coverage_rate": 0.65},
+                "grade_distribution": {
+                    "excellent": 2,
+                    "good": 5,
+                    "fair": 8,
+                    "poor": 5,
+                    "unvalidated": 0,
+                },
+                "computed_at": datetime.now(timezone.utc),
+            }
+        )
 
-        with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo), \
-             patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker):
-            response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report")
+        with (
+            patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.fidelity_tracker.FidelityTracker", return_value=mock_tracker),
+        ):
+            response = client.get(
+                "/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000/fidelity/report"
+            )
 
         assert response.status_code == 200
         data = response.json()

@@ -13,13 +13,13 @@ The DriverRanker:
 Author: E2I Causal Analytics Team
 """
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import networkx as nx
 import numpy as np
-import logging
 
 logger = logging.getLogger(__name__)
 from numpy.typing import NDArray
@@ -243,15 +243,17 @@ class DriverRanker:
         # Categorize features
         n_important = max(1, int(len(rankings) * self.importance_percentile))
 
-        top_causal = {r.feature_name for r in sorted(rankings, key=lambda x: x.causal_rank)[:n_important]}
-        top_predictive = {r.feature_name for r in sorted(rankings, key=lambda x: x.predictive_rank)[:n_important]}
+        top_causal = {
+            r.feature_name for r in sorted(rankings, key=lambda x: x.causal_rank)[:n_important]
+        }
+        top_predictive = {
+            r.feature_name for r in sorted(rankings, key=lambda x: x.predictive_rank)[:n_important]
+        }
 
         causal_only = list(top_causal - top_predictive)
         predictive_only = list(top_predictive - top_causal)
         concordant = [
-            r.feature_name
-            for r in rankings
-            if abs(r.rank_difference) <= self.concordance_threshold
+            r.feature_name for r in rankings if abs(r.rank_difference) <= self.concordance_threshold
         ]
 
         # Calculate rank correlation
@@ -368,7 +370,7 @@ class DriverRanker:
         max_shap = mean_abs_shap.max() if mean_abs_shap.max() > 0 else 1.0
         normalized = mean_abs_shap / max_shap
 
-        return {name: float(score) for name, score in zip(feature_names, normalized)}
+        return {name: float(score) for name, score in zip(feature_names, normalized, strict=False)}
 
     def _scores_to_ranks(self, scores: Dict[str, float]) -> Dict[str, int]:
         """Convert scores to ranks (1 = highest score).
@@ -400,7 +402,7 @@ class DriverRanker:
             return 0.0
 
         n = len(ranks1)
-        d_squared = sum((r1 - r2) ** 2 for r1, r2 in zip(ranks1, ranks2))
+        d_squared = sum((r1 - r2) ** 2 for r1, r2 in zip(ranks1, ranks2, strict=False))
 
         # Spearman's rho formula
         rho = 1 - (6 * d_squared) / (n * (n**2 - 1))

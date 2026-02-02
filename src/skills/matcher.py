@@ -108,7 +108,7 @@ class SkillMatcher:
         Args:
             loader: Optional SkillLoader instance. If None, creates a new one.
         """
-        from src.skills.loader import SkillLoader, get_loader
+        from src.skills.loader import get_loader
 
         self.loader = loader if loader is not None else get_loader()
         self._index: dict[str, list[tuple[str, str]]] = {}  # keyword -> [(skill_path, skill_name)]
@@ -195,7 +195,9 @@ class SkillMatcher:
         for token in query_tokens:
             if token in self._index:
                 for skill_path, skill_name in self._index[token]:
-                    current_score, current_triggers, _ = matches.get(skill_path, (0.0, [], skill_name))
+                    current_score, current_triggers, _ = matches.get(
+                        skill_path, (0.0, [], skill_name)
+                    )
                     current_triggers.append(token)
                     matches[skill_path] = (current_score + 1.0, current_triggers, skill_name)
 
@@ -203,7 +205,9 @@ class SkillMatcher:
         for keyword in self._index:
             if " " in keyword and keyword in query_lower:
                 for skill_path, skill_name in self._index[keyword]:
-                    current_score, current_triggers, _ = matches.get(skill_path, (0.0, [], skill_name))
+                    current_score, current_triggers, _ = matches.get(
+                        skill_path, (0.0, [], skill_name)
+                    )
                     if keyword not in current_triggers:
                         current_triggers.append(keyword)
                         # Phrase matches get bonus

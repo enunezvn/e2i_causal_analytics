@@ -38,7 +38,6 @@ from src.digital_twin.models.twin_models import (
 from src.digital_twin.simulation_cache import SimulationCache, SimulationCacheConfig
 from src.digital_twin.simulation_engine import SimulationEngine
 
-
 # Mark all tests as requiring Redis
 pytestmark = [
     pytest.mark.xdist_group(name="digital_twin_concurrency"),
@@ -187,10 +186,7 @@ class TestConcurrentCacheReads:
         mock_redis_client.get = mock_get
 
         # Run 10 concurrent reads
-        tasks = [
-            cache.get_cached_result(config, None, model_id)
-            for _ in range(10)
-        ]
+        tasks = [cache.get_cached_result(config, None, model_id) for _ in range(10)]
 
         results = await asyncio.gather(*tasks)
 
@@ -212,10 +208,7 @@ class TestConcurrentCacheReads:
 
         model_id = uuid4()
 
-        tasks = [
-            cache.get_cached_result(config, None, model_id)
-            for config in configs
-        ]
+        tasks = [cache.get_cached_result(config, None, model_id) for config in configs]
 
         results = await asyncio.gather(*tasks)
 
@@ -244,10 +237,7 @@ class TestConcurrentCacheReads:
 
         mock_redis_client.get = mock_get
 
-        tasks = [
-            cache.get_cached_result(config, None, model_id)
-            for _ in range(5)
-        ]
+        tasks = [cache.get_cached_result(config, None, model_id) for _ in range(5)]
 
         results = await asyncio.gather(*tasks)
 
@@ -337,7 +327,7 @@ class TestConcurrentCacheWrites:
 
         # Verify stored data is valid
         expected_ates = [0.05, 0.06, 0.07]
-        for key, value in stored_data.items():
+        for _key, value in stored_data.items():
             data = pickle.loads(value.encode("latin-1"))
             assert "simulated_ate" in data
             # Use tolerance for floating point comparison
@@ -356,7 +346,6 @@ class TestCacheInvalidationDuringRead:
     @pytest.mark.asyncio
     async def test_invalidation_during_read(self, cache, mock_redis_client):
         """Test that invalidation during read is handled correctly."""
-        import pickle
 
         model_id = uuid4()
         config = InterventionConfig(
@@ -375,13 +364,11 @@ class TestCacheInvalidationDuringRead:
             return None
 
         async def mock_scan():
-            yield f"test_concurrent:email_campaign:abc:meta"
+            yield "test_concurrent:email_campaign:abc:meta"
 
         mock_redis_client.get = mock_get
         mock_redis_client.scan_iter = mock_scan
-        mock_redis_client.hgetall = AsyncMock(
-            return_value={"model_id": str(model_id)}
-        )
+        mock_redis_client.hgetall = AsyncMock(return_value={"model_id": str(model_id)})
 
         async def do_read():
             return await cache.get_cached_result(config, None, model_id)
@@ -393,9 +380,7 @@ class TestCacheInvalidationDuringRead:
             return result
 
         # Run read and invalidation concurrently
-        read_result, invalidate_count = await asyncio.gather(
-            do_read(), do_invalidate()
-        )
+        read_result, invalidate_count = await asyncio.gather(do_read(), do_invalidate())
 
         # Read should return None (cache was invalidated)
         assert read_result is None
@@ -425,10 +410,7 @@ class TestCacheInvalidationDuringRead:
         mock_redis_client.scan_iter = mock_scan
 
         # Start multiple readers and one invalidator
-        read_tasks = [
-            cache.get_cached_result(config, None, model_id)
-            for _ in range(5)
-        ]
+        read_tasks = [cache.get_cached_result(config, None, model_id) for _ in range(5)]
         invalidate_task = cache.invalidate_model_cache(model_id)
 
         all_results = await asyncio.gather(*read_tasks, invalidate_task)
@@ -473,7 +455,7 @@ class TestConcurrentSimulations:
 
         # Results should be different due to different intensities
         ates = [r.simulated_ate for r in results]
-        assert len(set(round(ate, 4) for ate in ates)) > 1  # Not all identical
+        assert len({round(ate, 4) for ate in ates}) > 1  # Not all identical
 
     def test_concurrent_simulations_same_config(self, sample_population):
         """Test concurrent simulations with same config."""
@@ -614,7 +596,6 @@ class TestRaceConditions:
     @pytest.mark.asyncio
     async def test_read_write_race(self, cache, mock_redis_client):
         """Test race between read and write operations."""
-        import pickle
 
         model_id = uuid4()
         config = InterventionConfig(
@@ -665,10 +646,7 @@ class TestRaceConditions:
         # All reads will be misses
         mock_redis_client.get = AsyncMock(return_value=None)
 
-        tasks = [
-            cache.get_cached_result(config, None, model_id)
-            for _ in range(100)
-        ]
+        tasks = [cache.get_cached_result(config, None, model_id) for _ in range(100)]
 
         await asyncio.gather(*tasks)
 
@@ -691,19 +669,14 @@ class TestRaceConditions:
             return len(keys)
 
         async def mock_scan():
-            yield f"test_concurrent:email:abc:meta"
+            yield "test_concurrent:email:abc:meta"
 
         mock_redis_client.delete = mock_delete
         mock_redis_client.scan_iter = mock_scan
-        mock_redis_client.hgetall = AsyncMock(
-            return_value={"model_id": str(model_id)}
-        )
+        mock_redis_client.hgetall = AsyncMock(return_value={"model_id": str(model_id)})
 
         # Run multiple invalidations concurrently
-        tasks = [
-            cache.invalidate_model_cache(model_id)
-            for _ in range(5)
-        ]
+        tasks = [cache.invalidate_model_cache(model_id) for _ in range(5)]
 
         results = await asyncio.gather(*tasks)
 

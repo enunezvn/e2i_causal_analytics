@@ -10,11 +10,10 @@ Provides Supabase data extraction for ML pipelines with:
 Version: 1.0.0
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 

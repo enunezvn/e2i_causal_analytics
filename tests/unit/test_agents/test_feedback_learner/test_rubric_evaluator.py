@@ -10,18 +10,16 @@ Tests verify:
 """
 
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
-from datetime import datetime
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.agents.feedback_learner.evaluation.criteria import (
     DEFAULT_CRITERIA,
-    DEFAULT_THRESHOLDS,
     DEFAULT_OVERRIDE_CONDITIONS,
-    RubricCriterion,
-    get_default_criteria,
+    DEFAULT_THRESHOLDS,
     get_criterion_by_name,
+    get_default_criteria,
     get_total_weight,
     validate_weights,
 )
@@ -29,16 +27,10 @@ from src.agents.feedback_learner.evaluation.models import (
     CriterionScore,
     EvaluationContext,
     ImprovementDecision,
-    ImprovementSource,
     PatternFlag,
     RubricEvaluation,
-    RubricConfig,
-    RubricCriterionConfig,
-    DecisionThresholds,
-    OverrideCondition,
 )
 from src.agents.feedback_learner.evaluation.rubric_evaluator import RubricEvaluator
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FIXTURES
@@ -212,13 +204,9 @@ class TestCriterionScore:
     def test_score_bounds(self):
         """Should enforce score bounds 1-5."""
         with pytest.raises(ValueError):
-            CriterionScore(
-                criterion="test", score=0.5, reasoning="Too low"
-            )
+            CriterionScore(criterion="test", score=0.5, reasoning="Too low")
         with pytest.raises(ValueError):
-            CriterionScore(
-                criterion="test", score=5.5, reasoning="Too high"
-            )
+            CriterionScore(criterion="test", score=5.5, reasoning="Too high")
 
     def test_optional_evidence(self):
         """Evidence should be optional."""
@@ -386,8 +374,7 @@ class TestWeightedScoreCalculation:
     def test_all_ones(self, evaluator_no_client):
         """All 1s should give 1.0."""
         scores = [
-            CriterionScore(criterion=c.name, score=1.0, reasoning="Poor")
-            for c in DEFAULT_CRITERIA
+            CriterionScore(criterion=c.name, score=1.0, reasoning="Poor") for c in DEFAULT_CRITERIA
         ]
         result = evaluator_no_client._calculate_weighted_score(scores)
         assert result == 1.0
@@ -399,8 +386,7 @@ class TestDecisionDetermination:
     def test_acceptable_decision(self, evaluator_no_client):
         """Score >= 4.0 should be ACCEPTABLE."""
         scores = [
-            CriterionScore(criterion=c.name, score=4.5, reasoning="Good")
-            for c in DEFAULT_CRITERIA
+            CriterionScore(criterion=c.name, score=4.5, reasoning="Good") for c in DEFAULT_CRITERIA
         ]
         decision = evaluator_no_client._determine_decision(4.5, scores)
         assert decision == ImprovementDecision.ACCEPTABLE
@@ -408,8 +394,7 @@ class TestDecisionDetermination:
     def test_suggestion_decision(self, evaluator_no_client):
         """Score 3.0-3.9 should be SUGGESTION."""
         scores = [
-            CriterionScore(criterion=c.name, score=3.5, reasoning="OK")
-            for c in DEFAULT_CRITERIA
+            CriterionScore(criterion=c.name, score=3.5, reasoning="OK") for c in DEFAULT_CRITERIA
         ]
         decision = evaluator_no_client._determine_decision(3.5, scores)
         assert decision == ImprovementDecision.SUGGESTION
@@ -428,8 +413,7 @@ class TestDecisionDetermination:
         # Create evaluator without override conditions to test pure threshold logic
         evaluator = RubricEvaluator(override_conditions=[])
         scores = [
-            CriterionScore(criterion=c.name, score=1.5, reasoning="Poor")
-            for c in DEFAULT_CRITERIA
+            CriterionScore(criterion=c.name, score=1.5, reasoning="Poor") for c in DEFAULT_CRITERIA
         ]
         decision = evaluator._determine_decision(1.5, scores)
         assert decision == ImprovementDecision.ESCALATE
@@ -470,8 +454,7 @@ class TestPatternDetection:
     def test_no_patterns_for_good_scores(self, evaluator_no_client):
         """Should detect no patterns for all scores >= 3.0."""
         scores = [
-            CriterionScore(criterion=c.name, score=4.0, reasoning="Good")
-            for c in DEFAULT_CRITERIA
+            CriterionScore(criterion=c.name, score=4.0, reasoning="Good") for c in DEFAULT_CRITERIA
         ]
         patterns = evaluator_no_client._detect_patterns(scores)
         assert len(patterns) == 0
@@ -508,8 +491,7 @@ class TestSummarizeEvaluation:
     def test_summarize_adequate(self, evaluator_no_client):
         """Should show 'Adequate' when no extreme scores."""
         scores = [
-            CriterionScore(criterion=c.name, score=3.5, reasoning="OK")
-            for c in DEFAULT_CRITERIA
+            CriterionScore(criterion=c.name, score=3.5, reasoning="OK") for c in DEFAULT_CRITERIA
         ]
         summary = evaluator_no_client._summarize_evaluation(scores)
         assert "Adequate" in summary
@@ -537,7 +519,9 @@ class TestEvaluateAsync:
 
         # Mock the Anthropic client
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='''```json
+        mock_response.content = [
+            MagicMock(
+                text="""```json
 {
     "causal_validity": {"score": 4.5, "reasoning": "Good causal language", "evidence": "Uses 'contributed to'"},
     "actionability": {"score": 4.0, "reasoning": "Clear next steps", "evidence": "Mentions campaign"},
@@ -546,7 +530,9 @@ class TestEvaluateAsync:
     "uncertainty_communication": {"score": 3.5, "reasoning": "Some hedging", "evidence": "Uses 'suggests'"},
     "overall_analysis": "Strong response with minor improvements needed"
 }
-```''')]
+```"""
+            )
+        ]
 
         mock_client = MagicMock()
         mock_client.messages.create = MagicMock(return_value=mock_response)
@@ -565,7 +551,7 @@ class TestParseEvaluationResponse:
 
     def test_parse_valid_json(self, evaluator_no_client):
         """Should parse valid JSON response."""
-        response = '''Here is my evaluation:
+        response = """Here is my evaluation:
 ```json
 {
     "causal_validity": {"score": 4, "reasoning": "Good", "evidence": "test"},
@@ -574,7 +560,7 @@ class TestParseEvaluationResponse:
     "regulatory_awareness": {"score": 4, "reasoning": "Good", "evidence": "test"},
     "uncertainty_communication": {"score": 3, "reasoning": "OK", "evidence": "test"}
 }
-```'''
+```"""
         scores, analysis = evaluator_no_client._parse_evaluation_response(response)
         assert len(scores) == 5
         assert scores[0].score == 4.0
@@ -589,14 +575,14 @@ class TestParseEvaluationResponse:
 
     def test_parse_clamps_out_of_range_scores(self, evaluator_no_client):
         """Should clamp scores to 1-5 range."""
-        response = '''
+        response = """
 {
     "causal_validity": {"score": 10, "reasoning": "Too high"},
     "actionability": {"score": -5, "reasoning": "Too low"},
     "evidence_chain": {"score": 3, "reasoning": "Normal"},
     "regulatory_awareness": {"score": 4, "reasoning": "Good"},
     "uncertainty_communication": {"score": 3, "reasoning": "OK"}
-}'''
+}"""
         scores, _ = evaluator_no_client._parse_evaluation_response(response)
         score_values = {s.criterion: s.score for s in scores}
         assert score_values["causal_validity"] == 5.0  # Clamped to max

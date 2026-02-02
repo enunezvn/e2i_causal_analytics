@@ -241,9 +241,7 @@ async def emit_spans(state: Dict[str, Any]) -> Dict[str, Any]:
                             status=_parse_status(event.get("status", "success")),
                             error_type=event.get("error_type"),
                             error_message=event.get("error"),
-                            fallback_used=event.get("metadata", {}).get(
-                                "fallback_used", False
-                            ),
+                            fallback_used=event.get("metadata", {}).get("fallback_used", False),
                             attributes=event.get("metadata", {}),
                         )
 
@@ -256,17 +254,13 @@ async def emit_spans(state: Dict[str, Any]) -> Dict[str, Any]:
 
                     except Exception as e:
                         logger.warning(f"Database write failed for span {span_id}: {e}")
-                        emission_errors.append(
-                            f"DB write failed for span {span_id}: {str(e)}"
-                        )
+                        emission_errors.append(f"DB write failed for span {span_id}: {str(e)}")
 
             except Exception as e:
                 emission_errors.append(f"Failed to emit span {span_id}: {str(e)}")
 
         # Determine overall success (allow partial success)
-        emission_successful = len(span_ids) > 0 and (
-            opik_emit_count > 0 or db_write_count > 0
-        )
+        emission_successful = len(span_ids) > 0 and (opik_emit_count > 0 or db_write_count > 0)
         db_writes_successful = db_write_count > 0 or repository is None
 
         return {

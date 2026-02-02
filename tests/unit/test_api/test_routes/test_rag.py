@@ -8,30 +8,29 @@ Tests cover:
 - Mock all external dependencies (HybridRetriever, EntityExtractor, HealthMonitor, Supabase)
 """
 
-import pytest
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi import HTTPException
 
 from src.api.routes.rag import (
     RAGService,
-    SearchMode,
     ResultFormat,
+    SearchMode,
     SearchRequest,
-    search,
-    get_causal_subgraph,
-    get_causal_path,
     extract_entities,
+    get_causal_path,
+    get_causal_subgraph,
     get_health,
-    get_stats,
     get_rag_service,
+    get_stats,
+    search,
 )
-from src.rag import RetrievalResult, ExtractedEntities
+from src.rag import ExtractedEntities, RetrievalResult
+from src.rag.exceptions import BackendTimeoutError, CircuitBreakerOpenError, RAGError
 from src.rag.types import RetrievalSource
-from src.rag.exceptions import CircuitBreakerOpenError, BackendTimeoutError, RAGError
-
 
 # =============================================================================
 # TEST DATA CLASSES
@@ -41,6 +40,7 @@ from src.rag.exceptions import CircuitBreakerOpenError, BackendTimeoutError, RAG
 @dataclass
 class QueryStats:
     """Mock QueryStats dataclass for testing."""
+
     vector_count: int = 0
     fulltext_count: int = 0
     graph_count: int = 0
@@ -56,39 +56,47 @@ class QueryStats:
 def mock_hybrid_retriever():
     """Mock HybridRetriever."""
     retriever = AsyncMock()
-    retriever.search = AsyncMock(return_value=[
-        RetrievalResult(
-            id="doc1",
-            content="Test content 1",
-            score=0.9,
-            source=RetrievalSource.VECTOR,
-            metadata={"brand": "Kisqali"},
-        ),
-        RetrievalResult(
-            id="doc2",
-            content="Test content 2",
-            score=0.8,
-            source=RetrievalSource.FULLTEXT,
-            metadata={"region": "northeast"},
-        ),
-    ])
-    retriever.get_last_query_stats = MagicMock(return_value=MagicMock(
-        vector_count=1,
-        fulltext_count=1,
-        graph_count=0,
-        total_latency_ms=150.0,
-    ))
-    retriever.get_causal_subgraph = AsyncMock(return_value={
-        "nodes": [
-            {"id": "node1", "label": "Kisqali", "type": "brand", "properties": {}},
-        ],
-        "edges": [
-            {"source": "node1", "target": "node2", "relationship": "affects", "weight": 1.0},
-        ],
-    })
-    retriever.get_causal_path = AsyncMock(return_value={
-        "paths": [["node1", "node2", "node3"]],
-    })
+    retriever.search = AsyncMock(
+        return_value=[
+            RetrievalResult(
+                id="doc1",
+                content="Test content 1",
+                score=0.9,
+                source=RetrievalSource.VECTOR,
+                metadata={"brand": "Kisqali"},
+            ),
+            RetrievalResult(
+                id="doc2",
+                content="Test content 2",
+                score=0.8,
+                source=RetrievalSource.FULLTEXT,
+                metadata={"region": "northeast"},
+            ),
+        ]
+    )
+    retriever.get_last_query_stats = MagicMock(
+        return_value=MagicMock(
+            vector_count=1,
+            fulltext_count=1,
+            graph_count=0,
+            total_latency_ms=150.0,
+        )
+    )
+    retriever.get_causal_subgraph = AsyncMock(
+        return_value={
+            "nodes": [
+                {"id": "node1", "label": "Kisqali", "type": "brand", "properties": {}},
+            ],
+            "edges": [
+                {"source": "node1", "target": "node2", "relationship": "affects", "weight": 1.0},
+            ],
+        }
+    )
+    retriever.get_causal_path = AsyncMock(
+        return_value={
+            "paths": [["node1", "node2", "node3"]],
+        }
+    )
     return retriever
 
 
@@ -96,15 +104,17 @@ def mock_hybrid_retriever():
 def mock_entity_extractor():
     """Mock EntityExtractor."""
     extractor = MagicMock()
-    extractor.extract = MagicMock(return_value=ExtractedEntities(
-        brands=["Kisqali"],
-        regions=["northeast"],
-        kpis=["trx"],
-        agents=[],
-        journey_stages=[],
-        time_references=["Q3"],
-        hcp_segments=[],
-    ))
+    extractor.extract = MagicMock(
+        return_value=ExtractedEntities(
+            brands=["Kisqali"],
+            regions=["northeast"],
+            kpis=["trx"],
+            agents=[],
+            journey_stages=[],
+            time_references=["Q3"],
+            hcp_segments=[],
+        )
+    )
     return extractor
 
 
@@ -112,18 +122,20 @@ def mock_entity_extractor():
 def mock_health_monitor():
     """Mock HealthMonitor."""
     monitor = AsyncMock()
-    monitor.get_health_status = AsyncMock(return_value={
-        "status": "healthy",
-        "backends": {
-            "vector": {
-                "status": "healthy",
-                "latency_ms": 50.0,
-                "last_check": datetime.now(timezone.utc).isoformat(),
-                "consecutive_failures": 0,
+    monitor.get_health_status = AsyncMock(
+        return_value={
+            "status": "healthy",
+            "backends": {
+                "vector": {
+                    "status": "healthy",
+                    "latency_ms": 50.0,
+                    "last_check": datetime.now(timezone.utc).isoformat(),
+                    "consecutive_failures": 0,
+                },
             },
-        },
-        "monitoring_enabled": True,
-    })
+            "monitoring_enabled": True,
+        }
+    )
     return monitor
 
 
@@ -197,9 +209,10 @@ class TestRAGService:
         RAGService._initialized = False
         RAGService._instance = None
 
-        with patch("src.api.routes.rag.RAGConfig") as mock_config, \
-             patch("src.api.routes.rag.HybridRetriever") as mock_retriever_class:
-
+        with (
+            patch("src.api.routes.rag.RAGConfig") as mock_config,
+            patch("src.api.routes.rag.HybridRetriever") as mock_retriever_class,
+        ):
             mock_config.from_env.return_value = MagicMock()
             mock_retriever_class.return_value = MagicMock()
 
@@ -220,9 +233,10 @@ class TestRAGService:
 
     def test_health_monitor_lazy_creation(self):
         """Test health monitor is created lazily."""
-        with patch("src.api.routes.rag.RAGConfig") as mock_config, \
-             patch("src.api.routes.rag.HealthMonitor") as mock_monitor_class:
-
+        with (
+            patch("src.api.routes.rag.RAGConfig") as mock_config,
+            patch("src.api.routes.rag.HealthMonitor") as mock_monitor_class,
+        ):
             mock_config.from_env.return_value = MagicMock()
             mock_monitor_class.return_value = MagicMock()
 
@@ -262,8 +276,12 @@ class TestRAGService:
         """Test search applies minimum score filter."""
         # Set up results with different scores
         mock_hybrid_retriever.search.return_value = [
-            RetrievalResult(id="doc1", content="High score", score=0.9, source=RetrievalSource.VECTOR),
-            RetrievalResult(id="doc2", content="Low score", score=0.3, source=RetrievalSource.VECTOR),
+            RetrievalResult(
+                id="doc1", content="High score", score=0.9, source=RetrievalSource.VECTOR
+            ),
+            RetrievalResult(
+                id="doc2", content="Low score", score=0.3, source=RetrievalSource.VECTOR
+            ),
         ]
 
         results, _ = await rag_service.search(
@@ -342,27 +360,31 @@ class TestSearchEndpoint:
         """Test successful search request."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.extract_entities = MagicMock(return_value=ExtractedEntities(
-                brands=["Kisqali"],
-                regions=["west"],
-                kpis=["trx"],
-                agents=[],
-                journey_stages=[],
-                time_references=["Q3"],
-                hcp_segments=[],
-            ))
-            mock_service.search = AsyncMock(return_value=(
-                [
-                    RetrievalResult(
-                        id="doc1",
-                        content="Test content",
-                        score=0.9,
-                        source=RetrievalSource.VECTOR,
-                        metadata={"brand": "Kisqali"},
-                    ),
-                ],
-                QueryStats(vector_count=1, fulltext_count=0),
-            ))
+            mock_service.extract_entities = MagicMock(
+                return_value=ExtractedEntities(
+                    brands=["Kisqali"],
+                    regions=["west"],
+                    kpis=["trx"],
+                    agents=[],
+                    journey_stages=[],
+                    time_references=["Q3"],
+                    hcp_segments=[],
+                )
+            )
+            mock_service.search = AsyncMock(
+                return_value=(
+                    [
+                        RetrievalResult(
+                            id="doc1",
+                            content="Test content",
+                            score=0.9,
+                            source=RetrievalSource.VECTOR,
+                            metadata={"brand": "Kisqali"},
+                        ),
+                    ],
+                    QueryStats(vector_count=1, fulltext_count=0),
+                )
+            )
             mock_get_service.return_value = mock_service
 
             response = await search(sample_search_request, mock_service)
@@ -379,18 +401,20 @@ class TestSearchEndpoint:
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.extract_entities = MagicMock(return_value=ExtractedEntities())
-            mock_service.search = AsyncMock(return_value=(
-                [
-                    RetrievalResult(
-                        id="doc1",
-                        content="Long content " * 50,
-                        score=0.9,
-                        source=RetrievalSource.VECTOR,
-                        metadata={"key": "value"},
-                    ),
-                ],
-                QueryStats(),
-            ))
+            mock_service.search = AsyncMock(
+                return_value=(
+                    [
+                        RetrievalResult(
+                            id="doc1",
+                            content="Long content " * 50,
+                            score=0.9,
+                            source=RetrievalSource.VECTOR,
+                            metadata={"key": "value"},
+                        ),
+                    ],
+                    QueryStats(),
+                )
+            )
             mock_get_service.return_value = mock_service
 
             response = await search(sample_search_request, mock_service)
@@ -407,18 +431,20 @@ class TestSearchEndpoint:
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.extract_entities = MagicMock(return_value=ExtractedEntities())
-            mock_service.search = AsyncMock(return_value=(
-                [
-                    RetrievalResult(
-                        id="doc1",
-                        content="Long content " * 50,
-                        score=0.9,
-                        source=RetrievalSource.VECTOR,
-                        metadata={"key": "value"},
-                    ),
-                ],
-                QueryStats(),
-            ))
+            mock_service.search = AsyncMock(
+                return_value=(
+                    [
+                        RetrievalResult(
+                            id="doc1",
+                            content="Long content " * 50,
+                            score=0.9,
+                            source=RetrievalSource.VECTOR,
+                            metadata={"key": "value"},
+                        ),
+                    ],
+                    QueryStats(),
+                )
+            )
             mock_get_service.return_value = mock_service
 
             response = await search(sample_search_request, mock_service)
@@ -435,17 +461,19 @@ class TestSearchEndpoint:
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.extract_entities = MagicMock(return_value=ExtractedEntities())
-            mock_service.search = AsyncMock(return_value=(
-                [
-                    RetrievalResult(
-                        id="doc1",
-                        content="Content",
-                        score=0.9,
-                        source=RetrievalSource.VECTOR,
-                    ),
-                ],
-                QueryStats(),
-            ))
+            mock_service.search = AsyncMock(
+                return_value=(
+                    [
+                        RetrievalResult(
+                            id="doc1",
+                            content="Content",
+                            score=0.9,
+                            source=RetrievalSource.VECTOR,
+                        ),
+                    ],
+                    QueryStats(),
+                )
+            )
             mock_get_service.return_value = mock_service
 
             response = await search(sample_search_request, mock_service)
@@ -459,10 +487,12 @@ class TestSearchEndpoint:
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.extract_entities = MagicMock(return_value=ExtractedEntities())
-            mock_service.search = AsyncMock(side_effect=CircuitBreakerOpenError(
-                backend="vector",
-                reset_time_seconds=30.0,
-            ))
+            mock_service.search = AsyncMock(
+                side_effect=CircuitBreakerOpenError(
+                    backend="vector",
+                    reset_time_seconds=30.0,
+                )
+            )
             mock_get_service.return_value = mock_service
 
             with pytest.raises(HTTPException) as exc_info:
@@ -477,10 +507,12 @@ class TestSearchEndpoint:
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.extract_entities = MagicMock(return_value=ExtractedEntities())
-            mock_service.search = AsyncMock(side_effect=BackendTimeoutError(
-                backend="vector",
-                timeout_ms=5000.0,
-            ))
+            mock_service.search = AsyncMock(
+                side_effect=BackendTimeoutError(
+                    backend="vector",
+                    timeout_ms=5000.0,
+                )
+            )
             mock_get_service.return_value = mock_service
 
             with pytest.raises(HTTPException) as exc_info:
@@ -525,14 +557,27 @@ class TestGetCausalSubgraphEndpoint:
         """Test successful subgraph retrieval."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_causal_subgraph = AsyncMock(return_value={
-                "nodes": [
-                    {"id": "node1", "label": "Kisqali", "type": "brand", "properties": {"key": "value"}},
-                ],
-                "edges": [
-                    {"source": "node1", "target": "node2", "relationship": "affects", "weight": 0.8, "properties": {}},
-                ],
-            })
+            mock_service.get_causal_subgraph = AsyncMock(
+                return_value={
+                    "nodes": [
+                        {
+                            "id": "node1",
+                            "label": "Kisqali",
+                            "type": "brand",
+                            "properties": {"key": "value"},
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "source": "node1",
+                            "target": "node2",
+                            "relationship": "affects",
+                            "weight": 0.8,
+                            "properties": {},
+                        },
+                    ],
+                }
+            )
             mock_get_service.return_value = mock_service
 
             response = await get_causal_subgraph(
@@ -551,10 +596,12 @@ class TestGetCausalSubgraphEndpoint:
         """Test subgraph with custom depth parameter."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_causal_subgraph = AsyncMock(return_value={
-                "nodes": [],
-                "edges": [],
-            })
+            mock_service.get_causal_subgraph = AsyncMock(
+                return_value={
+                    "nodes": [],
+                    "edges": [],
+                }
+            )
             mock_get_service.return_value = mock_service
 
             await get_causal_subgraph(
@@ -593,12 +640,14 @@ class TestGetCausalPathEndpoint:
         """Test successful path finding."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_causal_path = AsyncMock(return_value={
-                "paths": [
-                    ["Kisqali", "HCP", "TRx"],
-                    ["Kisqali", "Market", "TRx"],
-                ],
-            })
+            mock_service.get_causal_path = AsyncMock(
+                return_value={
+                    "paths": [
+                        ["Kisqali", "HCP", "TRx"],
+                        ["Kisqali", "Market", "TRx"],
+                    ],
+                }
+            )
             mock_get_service.return_value = mock_service
 
             response = await get_causal_path(
@@ -618,9 +667,11 @@ class TestGetCausalPathEndpoint:
         """Test path finding when no paths exist."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_causal_path = AsyncMock(return_value={
-                "paths": [],
-            })
+            mock_service.get_causal_path = AsyncMock(
+                return_value={
+                    "paths": [],
+                }
+            )
             mock_get_service.return_value = mock_service
 
             response = await get_causal_path(
@@ -658,15 +709,17 @@ class TestExtractEntitiesEndpoint:
         """Test successful entity extraction."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.extract_entities = MagicMock(return_value=ExtractedEntities(
-                brands=["Kisqali", "Fabhalta"],
-                regions=["northeast"],
-                kpis=["trx", "nrx"],
-                agents=["causal_impact"],
-                journey_stages=["awareness"],
-                time_references=["Q3", "2024"],
-                hcp_segments=["oncologist"],
-            ))
+            mock_service.extract_entities = MagicMock(
+                return_value=ExtractedEntities(
+                    brands=["Kisqali", "Fabhalta"],
+                    regions=["northeast"],
+                    kpis=["trx", "nrx"],
+                    agents=["causal_impact"],
+                    journey_stages=["awareness"],
+                    time_references=["Q3", "2024"],
+                    hcp_segments=["oncologist"],
+                )
+            )
             mock_get_service.return_value = mock_service
 
             response = await extract_entities(
@@ -719,19 +772,21 @@ class TestGetHealthEndpoint:
         """Test health check when system is healthy."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_health_status = AsyncMock(return_value={
-                "status": "healthy",
-                "backends": {
-                    "vector": {
-                        "status": "healthy",
-                        "latency_ms": 50.0,
-                        "last_check": datetime.now(timezone.utc).isoformat(),
-                        "consecutive_failures": 0,
-                        "circuit_breaker": {"state": "closed"},
+            mock_service.get_health_status = AsyncMock(
+                return_value={
+                    "status": "healthy",
+                    "backends": {
+                        "vector": {
+                            "status": "healthy",
+                            "latency_ms": 50.0,
+                            "last_check": datetime.now(timezone.utc).isoformat(),
+                            "consecutive_failures": 0,
+                            "circuit_breaker": {"state": "closed"},
+                        },
                     },
-                },
-                "monitoring_enabled": True,
-            })
+                    "monitoring_enabled": True,
+                }
+            )
             mock_get_service.return_value = mock_service
 
             response = await get_health(mock_service)
@@ -745,11 +800,13 @@ class TestGetHealthEndpoint:
         """Test health check when system is degraded."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_health_status = AsyncMock(return_value={
-                "status": "degraded",
-                "backends": {},
-                "monitoring_enabled": False,
-            })
+            mock_service.get_health_status = AsyncMock(
+                return_value={
+                    "status": "degraded",
+                    "backends": {},
+                    "monitoring_enabled": False,
+                }
+            )
             mock_get_service.return_value = mock_service
 
             response = await get_health(mock_service)
@@ -832,7 +889,7 @@ class TestGetStatsEndpoint:
             mock_client.rpc.return_value = mock_rpc
             mock_get_sb.return_value = mock_client
 
-            response = await get_stats(hours=72)
+            await get_stats(hours=72)
 
             mock_client.rpc.assert_called_with("get_rag_search_stats", {"hours_lookback": 72})
 
@@ -901,7 +958,12 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_search_different_modes(self):
         """Test search with different search modes."""
-        modes = [SearchMode.HYBRID, SearchMode.VECTOR_ONLY, SearchMode.FULLTEXT_ONLY, SearchMode.GRAPH_ONLY]
+        modes = [
+            SearchMode.HYBRID,
+            SearchMode.VECTOR_ONLY,
+            SearchMode.FULLTEXT_ONLY,
+            SearchMode.GRAPH_ONLY,
+        ]
 
         for mode in modes:
             request = SearchRequest(query="test", mode=mode)
@@ -921,10 +983,12 @@ class TestEdgeCases:
         """Test subgraph retrieval when no graph exists."""
         with patch("src.api.routes.rag.get_rag_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.get_causal_subgraph = AsyncMock(return_value={
-                "nodes": [],
-                "edges": [],
-            })
+            mock_service.get_causal_subgraph = AsyncMock(
+                return_value={
+                    "nodes": [],
+                    "edges": [],
+                }
+            )
             mock_get_service.return_value = mock_service
 
             response = await get_causal_subgraph(

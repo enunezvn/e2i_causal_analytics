@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -335,17 +335,11 @@ class FeatureAnalyzerMLflowTracker:
             samples_analyzed=state.get("samples_analyzed", 0),
             explainer_type=state.get("explainer_type", "unknown"),
             base_value=float(state.get("base_value", 0.0)),
-            shap_computation_time_seconds=state.get(
-                "shap_computation_time_seconds", 0.0
-            ),
+            shap_computation_time_seconds=state.get("shap_computation_time_seconds", 0.0),
             # Importance metrics
-            top_feature_importance=(
-                max(importance_values) if importance_values else 0.0
-            ),
+            top_feature_importance=(max(importance_values) if importance_values else 0.0),
             avg_feature_importance=(
-                sum(importance_values) / len(importance_values)
-                if importance_values
-                else 0.0
+                sum(importance_values) / len(importance_values) if importance_values else 0.0
             ),
             feature_count=len(state.get("feature_names", [])),
             top_features_count=len(state.get("top_features", [])),
@@ -357,9 +351,7 @@ class FeatureAnalyzerMLflowTracker:
             # Feature generation
             original_feature_count=state.get("original_feature_count", 0),
             new_feature_count=state.get("new_feature_count", 0),
-            feature_generation_time_seconds=state.get(
-                "feature_generation_time_seconds", 0.0
-            ),
+            feature_generation_time_seconds=state.get("feature_generation_time_seconds", 0.0),
             # Feature selection
             selected_feature_count=state.get("selected_feature_count", 0),
             removed_variance_count=len(removed_features.get("variance", [])),
@@ -368,9 +360,7 @@ class FeatureAnalyzerMLflowTracker:
             selection_time_seconds=state.get("selection_time_seconds", 0.0),
             # Interaction metrics
             top_interactions_count=len(top_interactions),
-            max_interaction_strength=(
-                max(interaction_strengths) if interaction_strengths else 0.0
-            ),
+            max_interaction_strength=(max(interaction_strengths) if interaction_strengths else 0.0),
             avg_interaction_strength=(
                 sum(interaction_strengths) / len(interaction_strengths)
                 if interaction_strengths
@@ -387,9 +377,7 @@ class FeatureAnalyzerMLflowTracker:
             rank_correlation=state.get("rank_correlation", 0.0),
             divergent_features_count=len(state.get("divergent_features", [])),
             # Overall
-            total_computation_time_seconds=state.get(
-                "total_computation_time_seconds", 0.0
-            ),
+            total_computation_time_seconds=state.get("total_computation_time_seconds", 0.0),
             status=state.get("status", "unknown"),
         )
 
@@ -419,8 +407,7 @@ class FeatureAnalyzerMLflowTracker:
             "samples_analyzed": state.get("samples_analyzed"),
             "top_features": state.get("top_features", []),
             "feature_importance_ranked": [
-                {"feature": f, "importance": float(i)}
-                for f, i in global_importance_ranked
+                {"feature": f, "importance": float(i)} for f, i in global_importance_ranked
             ],
             "feature_directions": state.get("feature_directions", {}),
         }
@@ -459,9 +446,7 @@ class FeatureAnalyzerMLflowTracker:
         interaction_data = {
             "shap_analysis_id": state.get("shap_analysis_id"),
             "interaction_method": state.get("interaction_method"),
-            "computation_time_seconds": state.get(
-                "interaction_computation_time_seconds"
-            ),
+            "computation_time_seconds": state.get("interaction_computation_time_seconds"),
             "top_interactions": [
                 {
                     "feature_1": feat1,
@@ -588,9 +573,7 @@ class FeatureAnalyzerMLflowTracker:
 
         try:
             experiment_name = f"{self.project_name}_shap_analysis"
-            filter_string = (
-                f"tags.model_uri = '{model_uri}'" if model_uri else ""
-            )
+            filter_string = f"tags.model_uri = '{model_uri}'" if model_uri else ""
 
             runs = await connector.search_runs(
                 experiment_names=[experiment_name],
@@ -609,9 +592,7 @@ class FeatureAnalyzerMLflowTracker:
                         "model_uri": run.data.tags.get("model_uri"),
                         "samples_analyzed": run.data.metrics.get("samples_analyzed"),
                         "feature_count": run.data.metrics.get("feature_count"),
-                        "top_feature_importance": run.data.metrics.get(
-                            "top_feature_importance"
-                        ),
+                        "top_feature_importance": run.data.metrics.get("top_feature_importance"),
                         "shap_computation_time": run.data.metrics.get(
                             "shap_computation_time_seconds"
                         ),
@@ -658,9 +639,7 @@ class FeatureAnalyzerMLflowTracker:
                 {
                     "run_id": run.info.run_id,
                     "timestamp": run.info.start_time,
-                    "top_feature_importance": run.data.metrics.get(
-                        "top_feature_importance"
-                    ),
+                    "top_feature_importance": run.data.metrics.get("top_feature_importance"),
                 }
                 for run in runs
             ]

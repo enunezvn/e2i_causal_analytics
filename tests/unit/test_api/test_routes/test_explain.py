@@ -8,27 +8,26 @@ Tests cover:
 - Mock all external dependencies (BentoML, Feast, SHAP, Supabase)
 """
 
-import pytest
 from datetime import datetime, timezone
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.api.routes.explain import (
-    RealTimeSHAPService,
-    ModelType,
-    ExplanationFormat,
-    ExplainRequest,
-    FeatureContribution,
-    explain_prediction,
-    explain_batch,
-    get_explanation_history,
-    list_explainable_models,
-    health_check,
-    get_shap_service,
     BatchExplainRequest,
+    ExplainRequest,
+    ExplanationFormat,
+    FeatureContribution,
+    ModelType,
+    RealTimeSHAPService,
+    explain_batch,
+    explain_prediction,
+    get_explanation_history,
+    get_shap_service,
+    health_check,
+    list_explainable_models,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -39,10 +38,9 @@ from src.api.routes.explain import (
 def mock_bentoml_client():
     """Mock BentoML client."""
     client = AsyncMock()
-    client.predict = AsyncMock(return_value={
-        "predictions": [[0.25, 0.75]],
-        "_metadata": {"model_name": "v2.3.1-prod"}
-    })
+    client.predict = AsyncMock(
+        return_value={"predictions": [[0.25, 0.75]], "_metadata": {"model_name": "v2.3.1-prod"}}
+    )
     return client
 
 
@@ -50,11 +48,13 @@ def mock_bentoml_client():
 def mock_feast_client():
     """Mock Feast client."""
     client = AsyncMock()
-    client.get_online_features = AsyncMock(return_value={
-        "days_since_last_hcp_visit": [45],
-        "total_hcp_interactions_90d": [12],
-        "therapy_adherence_score": [0.72],
-    })
+    client.get_online_features = AsyncMock(
+        return_value={
+            "days_since_last_hcp_visit": [45],
+            "total_hcp_interactions_90d": [12],
+            "therapy_adherence_score": [0.72],
+        }
+    )
     return client
 
 
@@ -62,16 +62,18 @@ def mock_feast_client():
 def mock_shap_explainer():
     """Mock SHAP explainer."""
     explainer = AsyncMock()
-    explainer.compute_shap_values = AsyncMock(return_value=MagicMock(
-        shap_values={
-            "days_since_last_hcp_visit": 0.15,
-            "total_hcp_interactions_90d": 0.10,
-            "therapy_adherence_score": 0.11,
-        },
-        base_value=0.42,
-        explainer_type=MagicMock(value="TreeExplainer"),
-        computation_time_ms=125.5,
-    ))
+    explainer.compute_shap_values = AsyncMock(
+        return_value=MagicMock(
+            shap_values={
+                "days_since_last_hcp_visit": 0.15,
+                "total_hcp_interactions_90d": 0.10,
+                "therapy_adherence_score": 0.11,
+            },
+            base_value=0.42,
+            explainer_type=MagicMock(value="TreeExplainer"),
+            computation_time_ms=125.5,
+        )
+    )
     explainer.get_cache_stats = MagicMock(return_value={"hits": 10, "misses": 2})
     return explainer
 
@@ -90,7 +92,9 @@ def mock_shap_repo():
     execute_mock.data = [
         {"id": 1, "experiment_id": "test", "computed_at": datetime.now(timezone.utc).isoformat()}
     ]
-    table_mock.select.return_value.order.return_value.limit.return_value.execute.return_value = execute_mock
+    table_mock.select.return_value.order.return_value.limit.return_value.execute.return_value = (
+        execute_mock
+    )
     repo.client.table.return_value = table_mock
 
     return repo
@@ -154,10 +158,15 @@ class TestRealTimeSHAPService:
         service = RealTimeSHAPService()
         assert service._initialized is False
 
-        with patch("src.api.routes.explain.get_bentoml_client", new_callable=AsyncMock) as mock_get_bento, \
-             patch("src.api.routes.explain.get_feast_client", new_callable=AsyncMock) as mock_get_feast, \
-             patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
-
+        with (
+            patch(
+                "src.api.routes.explain.get_bentoml_client", new_callable=AsyncMock
+            ) as mock_get_bento,
+            patch(
+                "src.api.routes.explain.get_feast_client", new_callable=AsyncMock
+            ) as mock_get_feast,
+            patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo,
+        ):
             mock_get_bento.return_value = MagicMock()
             mock_get_feast.return_value = MagicMock()
             mock_get_repo.return_value = MagicMock()
@@ -174,10 +183,16 @@ class TestRealTimeSHAPService:
         """Test initialization handles missing dependencies gracefully."""
         service = RealTimeSHAPService()
 
-        with patch("src.api.routes.explain.get_bentoml_client", side_effect=Exception("BentoML error")), \
-             patch("src.api.routes.explain.get_feast_client", side_effect=Exception("Feast error")), \
-             patch("src.api.routes.explain.get_shap_analysis_repository", side_effect=Exception("Repo error")):
-
+        with (
+            patch(
+                "src.api.routes.explain.get_bentoml_client", side_effect=Exception("BentoML error")
+            ),
+            patch("src.api.routes.explain.get_feast_client", side_effect=Exception("Feast error")),
+            patch(
+                "src.api.routes.explain.get_shap_analysis_repository",
+                side_effect=Exception("Repo error"),
+            ),
+        ):
             await service._ensure_initialized()
 
             assert service._initialized is True
@@ -246,7 +261,9 @@ class TestRealTimeSHAPService:
         assert prediction["prediction_probability"] == 0.75
 
     @pytest.mark.asyncio
-    async def test_get_prediction_fallback(self, shap_service, mock_bentoml_client, sample_features):
+    async def test_get_prediction_fallback(
+        self, shap_service, mock_bentoml_client, sample_features
+    ):
         """Test prediction fallback when BentoML fails."""
         mock_bentoml_client.predict.side_effect = Exception("BentoML error")
 
@@ -293,7 +310,9 @@ class TestRealTimeSHAPService:
         assert isinstance(result["contributions"][0], FeatureContribution)
 
     @pytest.mark.asyncio
-    async def test_compute_shap_error_raises_http_exception(self, shap_service, mock_shap_explainer, sample_features):
+    async def test_compute_shap_error_raises_http_exception(
+        self, shap_service, mock_shap_explainer, sample_features
+    ):
         """Test SHAP computation error handling."""
         mock_shap_explainer.compute_shap_values.side_effect = Exception("SHAP error")
 
@@ -403,24 +422,28 @@ class TestExplainPredictionEndpoint:
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={"feat1": 1.0})
-            mock_service.get_prediction = AsyncMock(return_value={
-                "prediction_class": "high_propensity",
-                "prediction_probability": 0.78,
-                "model_version_id": "v2.3.1",
-            })
-            mock_service.compute_shap = AsyncMock(return_value={
-                "base_value": 0.42,
-                "contributions": [
-                    FeatureContribution(
-                        feature_name="feat1",
-                        feature_value=1.0,
-                        shap_value=0.15,
-                        contribution_direction="positive",
-                        contribution_rank=1,
-                    )
-                ],
-                "shap_sum": 0.36,
-            })
+            mock_service.get_prediction = AsyncMock(
+                return_value={
+                    "prediction_class": "high_propensity",
+                    "prediction_probability": 0.78,
+                    "model_version_id": "v2.3.1",
+                }
+            )
+            mock_service.compute_shap = AsyncMock(
+                return_value={
+                    "base_value": 0.42,
+                    "contributions": [
+                        FeatureContribution(
+                            feature_name="feat1",
+                            feature_value=1.0,
+                            shap_value=0.15,
+                            contribution_direction="positive",
+                            contribution_rank=1,
+                        )
+                    ],
+                    "shap_sum": 0.36,
+                }
+            )
             mock_service.generate_narrative = AsyncMock(return_value="Test narrative")
             mock_service.store_audit_record = AsyncMock(return_value=True)
             mock_get_service.return_value = mock_service
@@ -448,19 +471,23 @@ class TestExplainPredictionEndpoint:
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock()
-            mock_service.get_prediction = AsyncMock(return_value={
-                "prediction_class": "high",
-                "prediction_probability": 0.8,
-                "model_version_id": "v1",
-            })
-            mock_service.compute_shap = AsyncMock(return_value={
-                "base_value": 0.5,
-                "contributions": [],
-                "shap_sum": 0.3,
-            })
+            mock_service.get_prediction = AsyncMock(
+                return_value={
+                    "prediction_class": "high",
+                    "prediction_probability": 0.8,
+                    "model_version_id": "v1",
+                }
+            )
+            mock_service.compute_shap = AsyncMock(
+                return_value={
+                    "base_value": 0.5,
+                    "contributions": [],
+                    "shap_sum": 0.3,
+                }
+            )
             mock_get_service.return_value = mock_service
 
-            response = await explain_prediction(request, BackgroundTasks(), mock_user)
+            await explain_prediction(request, BackgroundTasks(), mock_user)
 
             # Should NOT call get_features since features were provided
             mock_service.get_features.assert_not_called()
@@ -477,16 +504,20 @@ class TestExplainPredictionEndpoint:
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={})
-            mock_service.get_prediction = AsyncMock(return_value={
-                "prediction_class": "high",
-                "prediction_probability": 0.8,
-                "model_version_id": "v1",
-            })
-            mock_service.compute_shap = AsyncMock(return_value={
-                "base_value": 0.5,
-                "contributions": [],
-                "shap_sum": 0.3,
-            })
+            mock_service.get_prediction = AsyncMock(
+                return_value={
+                    "prediction_class": "high",
+                    "prediction_probability": 0.8,
+                    "model_version_id": "v1",
+                }
+            )
+            mock_service.compute_shap = AsyncMock(
+                return_value={
+                    "base_value": 0.5,
+                    "contributions": [],
+                    "shap_sum": 0.3,
+                }
+            )
             mock_service.generate_narrative = AsyncMock(return_value="Generated narrative")
             mock_get_service.return_value = mock_service
 
@@ -519,8 +550,7 @@ class TestExplainBatchEndpoint:
         from src.api.routes.explain import ExplainResponse
 
         requests = [
-            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY)
-            for i in range(3)
+            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY) for i in range(3)
         ]
         batch_request = BatchExplainRequest(requests=requests, parallel=True)
 
@@ -553,8 +583,7 @@ class TestExplainBatchEndpoint:
         from src.api.routes.explain import ExplainResponse
 
         requests = [
-            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY)
-            for i in range(2)
+            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY) for i in range(2)
         ]
         batch_request = BatchExplainRequest(requests=requests, parallel=False)
 
@@ -585,8 +614,7 @@ class TestExplainBatchEndpoint:
         from src.api.routes.explain import ExplainResponse
 
         requests = [
-            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY)
-            for i in range(3)
+            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY) for i in range(3)
         ]
         batch_request = BatchExplainRequest(requests=requests, parallel=True)
 
@@ -746,6 +774,7 @@ class TestGetShapServiceFunction:
         """Test that get_shap_service creates a singleton."""
         # Reset singleton
         import src.api.routes.explain as explain_module
+
         explain_module._shap_service = None
 
         service1 = await get_shap_service()
@@ -781,16 +810,20 @@ class TestEdgeCases:
 
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
-            mock_service.get_prediction = AsyncMock(return_value={
-                "prediction_class": "high",
-                "prediction_probability": 0.8,
-                "model_version_id": "v1",
-            })
-            mock_service.compute_shap = AsyncMock(return_value={
-                "base_value": 0.5,
-                "contributions": [],
-                "shap_sum": 0.3,
-            })
+            mock_service.get_prediction = AsyncMock(
+                return_value={
+                    "prediction_class": "high",
+                    "prediction_probability": 0.8,
+                    "model_version_id": "v1",
+                }
+            )
+            mock_service.compute_shap = AsyncMock(
+                return_value={
+                    "base_value": 0.5,
+                    "contributions": [],
+                    "shap_sum": 0.3,
+                }
+            )
             mock_get_service.return_value = mock_service
 
             response = await explain_prediction(request, BackgroundTasks(), mock_user)
@@ -809,19 +842,23 @@ class TestEdgeCases:
         with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_features = AsyncMock(return_value={})
-            mock_service.get_prediction = AsyncMock(return_value={
-                "prediction_class": "high",
-                "prediction_probability": 0.8,
-                "model_version_id": "v1",
-            })
-            mock_service.compute_shap = AsyncMock(return_value={
-                "base_value": 0.5,
-                "contributions": [],
-                "shap_sum": 0.3,
-            })
+            mock_service.get_prediction = AsyncMock(
+                return_value={
+                    "prediction_class": "high",
+                    "prediction_probability": 0.8,
+                    "model_version_id": "v1",
+                }
+            )
+            mock_service.compute_shap = AsyncMock(
+                return_value={
+                    "base_value": 0.5,
+                    "contributions": [],
+                    "shap_sum": 0.3,
+                }
+            )
             mock_get_service.return_value = mock_service
 
-            response = await explain_prediction(request, BackgroundTasks(), mock_user)
+            await explain_prediction(request, BackgroundTasks(), mock_user)
 
             mock_service.compute_shap.assert_called_once()
             call_args = mock_service.compute_shap.call_args

@@ -26,7 +26,6 @@ from src.causal_engine.uplift.metrics import (
     uplift_at_k,
 )
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -61,9 +60,7 @@ def perfect_uplift_data():
         0.0, 0.3, np.sum((treatment == 0) & (outcome == 1))
     )
     # Medium scores for non-responders
-    uplift_scores[outcome == 0] = np.random.uniform(
-        0.3, 0.7, np.sum(outcome == 0)
-    )
+    uplift_scores[outcome == 0] = np.random.uniform(0.3, 0.7, np.sum(outcome == 0))
 
     return uplift_scores, treatment, outcome
 
@@ -103,9 +100,7 @@ class TestUpliftCurve:
     def test_uplift_curve_shape(self, simple_uplift_data):
         """Test uplift curve returns correct shape."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        x_values, uplift_values = calculate_uplift_curve(
-            uplift_scores, treatment, outcome
-        )
+        x_values, uplift_values = calculate_uplift_curve(uplift_scores, treatment, outcome)
 
         # Should have n+1 points (including origin)
         assert len(x_values) == len(uplift_scores) + 1
@@ -114,9 +109,7 @@ class TestUpliftCurve:
     def test_uplift_curve_starts_at_origin(self, simple_uplift_data):
         """Test uplift curve starts at (0, 0)."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        x_values, uplift_values = calculate_uplift_curve(
-            uplift_scores, treatment, outcome
-        )
+        x_values, uplift_values = calculate_uplift_curve(uplift_scores, treatment, outcome)
 
         assert x_values[0] == 0.0
         assert uplift_values[0] == 0.0
@@ -124,9 +117,7 @@ class TestUpliftCurve:
     def test_uplift_curve_ends_at_one(self, simple_uplift_data):
         """Test uplift curve x-axis ends at 1.0."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        x_values, uplift_values = calculate_uplift_curve(
-            uplift_scores, treatment, outcome
-        )
+        x_values, uplift_values = calculate_uplift_curve(uplift_scores, treatment, outcome)
 
         assert x_values[-1] == 1.0
 
@@ -139,9 +130,7 @@ class TestUpliftCurve:
 
     def test_uplift_curve_empty_data(self):
         """Test uplift curve handles empty data."""
-        x_values, uplift_values = calculate_uplift_curve(
-            np.array([]), np.array([]), np.array([])
-        )
+        x_values, uplift_values = calculate_uplift_curve(np.array([]), np.array([]), np.array([]))
 
         assert len(x_values) == 2
         assert len(uplift_values) == 2
@@ -158,9 +147,7 @@ class TestQiniCurve:
     def test_qini_curve_shape(self, simple_uplift_data):
         """Test Qini curve returns correct shape."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        x_values, qini_values = calculate_qini_curve(
-            uplift_scores, treatment, outcome
-        )
+        x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
 
         assert len(x_values) == len(uplift_scores) + 1
         assert len(qini_values) == len(uplift_scores) + 1
@@ -168,9 +155,7 @@ class TestQiniCurve:
     def test_qini_curve_starts_at_origin(self, simple_uplift_data):
         """Test Qini curve starts at origin."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        x_values, qini_values = calculate_qini_curve(
-            uplift_scores, treatment, outcome
-        )
+        x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
 
         assert x_values[0] == 0.0
         assert qini_values[0] == 0.0
@@ -187,9 +172,7 @@ class TestCumulativeGain:
     def test_cumulative_gain_shape(self, simple_uplift_data):
         """Test cumulative gain returns correct shape."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        x_values, gain_values = calculate_cumulative_gain(
-            uplift_scores, treatment, outcome
-        )
+        x_values, gain_values = calculate_cumulative_gain(uplift_scores, treatment, outcome)
 
         assert len(x_values) == len(uplift_scores) + 1
         assert len(gain_values) == len(uplift_scores) + 1
@@ -197,9 +180,7 @@ class TestCumulativeGain:
     def test_cumulative_gain_starts_at_origin(self, simple_uplift_data):
         """Test cumulative gain starts at origin."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        x_values, gain_values = calculate_cumulative_gain(
-            uplift_scores, treatment, outcome
-        )
+        x_values, gain_values = calculate_cumulative_gain(uplift_scores, treatment, outcome)
 
         assert x_values[0] == 0.0
         assert gain_values[0] == 0.0
@@ -333,9 +314,7 @@ class TestUpliftAtK:
     def test_uplift_at_k_custom_percentiles(self, simple_uplift_data):
         """Test uplift_at_k with custom percentiles."""
         uplift_scores, treatment, outcome = simple_uplift_data
-        result = uplift_at_k(
-            uplift_scores, treatment, outcome, k_percentiles=[5, 25, 75, 95]
-        )
+        result = uplift_at_k(uplift_scores, treatment, outcome, k_percentiles=[5, 25, 75, 95])
 
         assert "uplift_at_5" in result
         assert "uplift_at_25" in result
@@ -373,18 +352,14 @@ class TestCalibration:
     def test_calibration_arrays_same_length(self, random_uplift_data):
         """Test calibration arrays have same length."""
         uplift_scores, treatment, outcome = random_uplift_data
-        pred_means, obs_means, _ = treatment_effect_calibration(
-            uplift_scores, treatment, outcome
-        )
+        pred_means, obs_means, _ = treatment_effect_calibration(uplift_scores, treatment, outcome)
 
         assert len(pred_means) == len(obs_means)
 
     def test_calibration_error_non_negative(self, random_uplift_data):
         """Test calibration error is non-negative."""
         uplift_scores, treatment, outcome = random_uplift_data
-        _, _, cal_error = treatment_effect_calibration(
-            uplift_scores, treatment, outcome
-        )
+        _, _, cal_error = treatment_effect_calibration(uplift_scores, treatment, outcome)
 
         assert cal_error >= 0.0
 

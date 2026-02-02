@@ -20,19 +20,19 @@ from .event_consumer import (
     CeleryEventConsumer,
     CeleryMetrics,
     celery_metrics,
-    inject_trace_context,
     extract_trace_context,
+    inject_trace_context,
     traced_task,
 )
 from .monitoring import (
-    CeleryQueueMonitor,
-    QueueMetrics,
-    queue_metrics,
     AutoscalerMetricsProvider,
     AutoscalerRecommendation,
-    get_queue_monitor,
-    get_queue_depths,
+    CeleryQueueMonitor,
+    QueueMetrics,
     get_monitoring_summary,
+    get_queue_depths,
+    get_queue_monitor,
+    queue_metrics,
     register_monitoring_tasks,
 )
 

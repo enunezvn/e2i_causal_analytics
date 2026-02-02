@@ -1,7 +1,7 @@
 """Node functions for model_trainer agent."""
 
 from .apply_resampling import apply_resampling
-from .checkpointer import save_checkpoint, load_checkpoint, list_checkpoints
+from .checkpointer import list_checkpoints, load_checkpoint, save_checkpoint
 from .detect_class_imbalance import detect_class_imbalance
 from .evaluator import evaluate_model
 from .hyperparameter_tuner import tune_hyperparameters

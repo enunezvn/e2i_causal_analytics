@@ -89,7 +89,9 @@ class ConceptDriftNode:
         if tier0_data is not None:
             try:
                 drift_results = self._create_concept_drift_from_tier0(
-                    tier0_data, state["features_to_monitor"], state["significance_level"],
+                    tier0_data,
+                    state["features_to_monitor"],
+                    state["significance_level"],
                 )
                 state["concept_drift_results"] = drift_results
                 latency_ms = int((time.time() - start_time) * 1000)
@@ -104,7 +106,7 @@ class ConceptDriftNode:
                 state["errors"] = state.get("errors", []) + [error]
                 state["concept_drift_results"] = []
                 state["warnings"] = state.get("warnings", []) + [
-                    f"Concept drift: tier0 passthrough error, returning empty results"
+                    "Concept drift: tier0 passthrough error, returning empty results"
                 ]
                 return state
 
@@ -277,7 +279,8 @@ class ConceptDriftNode:
 
         # Check correlation drift for each numeric feature
         numeric_features = [
-            f for f in features_to_monitor
+            f
+            for f in features_to_monitor
             if f in tier0_data.columns
             and np.issubdtype(tier0_data[f].dtype, np.number)
             and f != outcome_col
@@ -489,9 +492,7 @@ class ConceptDriftNode:
 
         return results
 
-    def _fisher_z_test(
-        self, r1: float, r2: float, n1: int, n2: int
-    ) -> tuple[float, float]:
+    def _fisher_z_test(self, r1: float, r2: float, n1: int, n2: int) -> tuple[float, float]:
         """Compare two correlation coefficients using Fisher Z transformation.
 
         Args:

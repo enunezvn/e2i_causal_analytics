@@ -14,11 +14,11 @@ Verifies:
 Run: pytest tests/unit/test_agents/test_tier2_signal_routing/test_signal_router.py -v
 """
 
-import asyncio
-import pytest
 from datetime import datetime, timezone
-from typing import Dict, Any
-from unittest.mock import AsyncMock, patch, MagicMock
+from typing import Any, Dict
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 # Mark all tests in this module for the tier2 xdist group
 pytestmark = pytest.mark.xdist_group(name="tier2_signal_routing")
@@ -94,6 +94,7 @@ def heterogeneous_optimizer_signal() -> Dict[str, Any]:
 def signal_router():
     """Create a fresh signal router instance."""
     from src.agents.tier2_signal_router import Tier2SignalRouter
+
     return Tier2SignalRouter()
 
 
@@ -101,6 +102,7 @@ def signal_router():
 def reset_router_singleton():
     """Reset the router singleton before and after each test."""
     from src.agents.tier2_signal_router import reset_signal_router
+
     reset_signal_router()
     yield
     reset_signal_router()
@@ -189,15 +191,11 @@ class TestQueueManagement:
     """Tests for signal queue management."""
 
     @pytest.mark.asyncio
-    async def test_submit_signal_adds_to_queue(
-        self, signal_router, causal_impact_signal
-    ):
+    async def test_submit_signal_adds_to_queue(self, signal_router, causal_impact_signal):
         """Submitting a signal should add it to the queue."""
         # Patch the flush to prevent auto-flush
         with patch.object(signal_router, "_flush_internal", new_callable=AsyncMock):
-            result = await signal_router.submit_signal(
-                "causal_impact", causal_impact_signal
-            )
+            result = await signal_router.submit_signal("causal_impact", causal_impact_signal)
 
             assert result is True
             assert signal_router.queue_size == 1
@@ -221,9 +219,7 @@ class TestQueueManagement:
         assert signal_router._metrics["signals_dropped"] == 5
 
     @pytest.mark.asyncio
-    async def test_signals_have_timestamp_on_queue(
-        self, signal_router, causal_impact_signal
-    ):
+    async def test_signals_have_timestamp_on_queue(self, signal_router, causal_impact_signal):
         """Signals should have timestamp added when queued."""
         with patch.object(signal_router, "_flush_internal", new_callable=AsyncMock):
             await signal_router.submit_signal("causal_impact", causal_impact_signal)
@@ -257,13 +253,9 @@ class TestBatchFlushing:
             signal_router._queue.clear()
             return 3
 
-        with patch.object(
-            signal_router, "_flush_internal", side_effect=mock_flush
-        ):
+        with patch.object(signal_router, "_flush_internal", side_effect=mock_flush):
             for i in range(3):
-                await signal_router.submit_signal(
-                    "causal_impact", {"signal_id": f"test_{i}"}
-                )
+                await signal_router.submit_signal("causal_impact", {"signal_id": f"test_{i}"})
 
         # Should have auto-flushed once at batch size
         assert flush_count == 1
@@ -280,12 +272,8 @@ class TestBatchFlushing:
             new_callable=AsyncMock,
             return_value=2,
         ):
-            await signal_router.submit_signal(
-                "causal_impact", {"signal_id": "test_1"}
-            )
-            await signal_router.submit_signal(
-                "gap_analyzer", {"signal_id": "test_2"}
-            )
+            await signal_router.submit_signal("causal_impact", {"signal_id": "test_1"})
+            await signal_router.submit_signal("gap_analyzer", {"signal_id": "test_2"})
 
             assert signal_router.queue_size == 2
 
@@ -387,15 +375,9 @@ class TestDelivery:
             "_deliver_to_feedback_learner",
             side_effect=capture_delivery,
         ):
-            await signal_router.submit_signal(
-                "causal_impact", {"signal_id": "ci_1"}
-            )
-            await signal_router.submit_signal(
-                "gap_analyzer", {"signal_id": "ga_1"}
-            )
-            await signal_router.submit_signal(
-                "causal_impact", {"signal_id": "ci_2"}
-            )
+            await signal_router.submit_signal("causal_impact", {"signal_id": "ci_1"})
+            await signal_router.submit_signal("gap_analyzer", {"signal_id": "ga_1"})
+            await signal_router.submit_signal("causal_impact", {"signal_id": "ci_2"})
             await signal_router.flush()
 
         # Should have 3 signals total
@@ -409,13 +391,13 @@ class TestDelivery:
     @pytest.mark.asyncio
     async def test_delivery_to_feedback_learner_receiver(self):
         """Should deliver to feedback_learner receiver when available."""
-        from src.agents.tier2_signal_router import (
-            get_signal_router,
-            reset_signal_router,
-        )
         from src.agents.feedback_learner.dspy_receiver import (
             get_signal_receiver,
             reset_signal_receiver,
+        )
+        from src.agents.tier2_signal_router import (
+            get_signal_router,
+            reset_signal_router,
         )
 
         reset_signal_router()
@@ -449,9 +431,9 @@ class TestConvenienceFunctions:
     async def test_route_causal_impact_signal(self, causal_impact_signal):
         """route_causal_impact_signal should route to router."""
         from src.agents.tier2_signal_router import (
-            route_causal_impact_signal,
             get_signal_router,
             reset_signal_router,
+            route_causal_impact_signal,
         )
 
         reset_signal_router()
@@ -469,9 +451,9 @@ class TestConvenienceFunctions:
     async def test_route_gap_analyzer_signal(self, gap_analyzer_signal):
         """route_gap_analyzer_signal should route to router."""
         from src.agents.tier2_signal_router import (
-            route_gap_analyzer_signal,
             get_signal_router,
             reset_signal_router,
+            route_gap_analyzer_signal,
         )
 
         reset_signal_router()
@@ -486,23 +468,19 @@ class TestConvenienceFunctions:
         reset_signal_router()
 
     @pytest.mark.asyncio
-    async def test_route_heterogeneous_optimizer_signal(
-        self, heterogeneous_optimizer_signal
-    ):
+    async def test_route_heterogeneous_optimizer_signal(self, heterogeneous_optimizer_signal):
         """route_heterogeneous_optimizer_signal should route to router."""
         from src.agents.tier2_signal_router import (
-            route_heterogeneous_optimizer_signal,
             get_signal_router,
             reset_signal_router,
+            route_heterogeneous_optimizer_signal,
         )
 
         reset_signal_router()
         router = get_signal_router()
 
         with patch.object(router, "_flush_internal", new_callable=AsyncMock):
-            result = await route_heterogeneous_optimizer_signal(
-                heterogeneous_optimizer_signal
-            )
+            result = await route_heterogeneous_optimizer_signal(heterogeneous_optimizer_signal)
 
             assert result is True
             assert router.queue_size == 1

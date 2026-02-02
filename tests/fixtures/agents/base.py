@@ -26,11 +26,10 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 from uuid import uuid4
 
 import pytest
-
 
 T = TypeVar("T")
 
@@ -267,6 +266,7 @@ def base_agent_state() -> Dict[str, Any]:
 @pytest.fixture
 def state_progression_factory() -> Callable[..., StateProgression]:
     """Factory fixture for creating state progressions."""
+
     def _create(
         agent_name: str = "test_agent",
         query: str = "Test query",
@@ -274,12 +274,14 @@ def state_progression_factory() -> Callable[..., StateProgression]:
     ) -> StateProgression:
         base = create_base_state(agent_name=agent_name, query=query, **base_kwargs)
         return StateProgression(base)
+
     return _create
 
 
 @pytest.fixture
 def workflow_states_factory() -> Callable[..., Dict[str, Dict[str, Any]]]:
     """Factory fixture for creating complete workflow state sets."""
+
     def _create(
         agent_name: str,
         progressions: List[Dict[str, Any]],
@@ -287,4 +289,5 @@ def workflow_states_factory() -> Callable[..., Dict[str, Dict[str, Any]]]:
     ) -> Dict[str, Dict[str, Any]]:
         base = create_base_state(agent_name=agent_name, **base_kwargs)
         return create_workflow_states(base, progressions)
+
     return _create

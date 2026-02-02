@@ -7,32 +7,30 @@ Tests cover:
 - Mock all external dependencies (WorkingMemory, HybridSearch, OrchestratorAgent, CausalRAG)
 """
 
-import pytest
 from datetime import datetime, timezone
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import HTTPException, BackgroundTasks
+
+import pytest
+from fastapi import BackgroundTasks, HTTPException
 
 from src.api.routes.cognitive import (
-    QueryType,
-    SessionState,
     CognitivePhase,
     CognitiveQueryRequest,
-    SessionResponse,
     CreateSessionRequest,
-    process_cognitive_query,
-    get_session,
+    QueryType,
+    SessionState,
+    _build_filters,
+    _detect_query_type,
+    _extract_kpi_from_query,
+    _generate_placeholder_response,
+    _route_to_agent,
+    cognitive_rag_search,
     create_session,
     delete_session,
-    cognitive_rag_search,
     get_orchestrator,
-    _detect_query_type,
-    _route_to_agent,
-    _extract_kpi_from_query,
-    _build_filters,
-    _generate_placeholder_response,
+    get_session,
+    process_cognitive_query,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -44,14 +42,16 @@ def mock_working_memory():
     """Mock WorkingMemory."""
     memory = AsyncMock()
     memory.create_session = AsyncMock(return_value={"session_id": "test-session"})
-    memory.get_session = AsyncMock(return_value={
-        "session_id": "test-session",
-        "user_id": "test-user",
-        "context": {"brand": "Kisqali", "region": "northeast"},
-        "state": "active",
-        "created_at": datetime.now(timezone.utc),
-        "last_activity": datetime.now(timezone.utc),
-    })
+    memory.get_session = AsyncMock(
+        return_value={
+            "session_id": "test-session",
+            "user_id": "test-user",
+            "context": {"brand": "Kisqali", "region": "northeast"},
+            "state": "active",
+            "created_at": datetime.now(timezone.utc),
+            "last_activity": datetime.now(timezone.utc),
+        }
+    )
     memory.add_message = AsyncMock()
     memory.append_evidence = AsyncMock()
     memory.get_messages = AsyncMock(return_value=[])
@@ -63,9 +63,11 @@ def mock_working_memory():
 @pytest.fixture
 def mock_hybrid_search():
     """Mock hybrid_search function."""
+
     async def search_mock(*args, **kwargs):
         from src.rag import RetrievalResult
         from src.rag.types import RetrievalSource
+
         return [
             RetrievalResult(
                 id="doc1",
@@ -75,6 +77,7 @@ def mock_hybrid_search():
                 metadata={"retrieval_method": "hybrid"},
             )
         ]
+
     return search_mock
 
 
@@ -82,11 +85,13 @@ def mock_hybrid_search():
 def mock_orchestrator():
     """Mock OrchestratorAgent."""
     orchestrator = MagicMock()
-    orchestrator.run = AsyncMock(return_value={
-        "response_text": "Test response from orchestrator",
-        "response_confidence": 0.85,
-        "agents_dispatched": ["causal_impact"],
-    })
+    orchestrator.run = AsyncMock(
+        return_value={
+            "response_text": "Test response from orchestrator",
+            "response_confidence": 0.85,
+            "agents_dispatched": ["causal_impact"],
+        }
+    )
     return orchestrator
 
 
@@ -110,12 +115,15 @@ class TestProcessCognitiveQueryEndpoint:
     """Tests for /cognitive/query endpoint."""
 
     @pytest.mark.asyncio
-    async def test_process_query_success(self, sample_query_request, mock_working_memory, mock_hybrid_search, mock_orchestrator):
+    async def test_process_query_success(
+        self, sample_query_request, mock_working_memory, mock_hybrid_search, mock_orchestrator
+    ):
         """Test successful cognitive query processing."""
-        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search), \
-             patch("src.api.routes.cognitive.get_orchestrator", return_value=mock_orchestrator):
-
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=mock_orchestrator),
+        ):
             response = await process_cognitive_query(sample_query_request, BackgroundTasks())
 
             assert response.query == sample_query_request.query
@@ -124,26 +132,32 @@ class TestProcessCognitiveQueryEndpoint:
             assert CognitivePhase.COMPLETE in response.phases_completed
 
     @pytest.mark.asyncio
-    async def test_process_query_creates_new_session(self, sample_query_request, mock_working_memory, mock_hybrid_search):
+    async def test_process_query_creates_new_session(
+        self, sample_query_request, mock_working_memory, mock_hybrid_search
+    ):
         """Test query creates new session when session_id not provided."""
-        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search), \
-             patch("src.api.routes.cognitive.get_orchestrator", return_value=None):
-
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
             response = await process_cognitive_query(sample_query_request, BackgroundTasks())
 
             mock_working_memory.create_session.assert_called_once()
             assert response.session_id is not None
 
     @pytest.mark.asyncio
-    async def test_process_query_uses_existing_session(self, sample_query_request, mock_working_memory, mock_hybrid_search):
+    async def test_process_query_uses_existing_session(
+        self, sample_query_request, mock_working_memory, mock_hybrid_search
+    ):
         """Test query uses existing session when session_id provided."""
         sample_query_request.session_id = "existing-session"
 
-        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search), \
-             patch("src.api.routes.cognitive.get_orchestrator", return_value=None):
-
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
             response = await process_cognitive_query(sample_query_request, BackgroundTasks())
 
             assert response.session_id == "existing-session"
@@ -151,12 +165,15 @@ class TestProcessCognitiveQueryEndpoint:
             mock_working_memory.create_session.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_process_query_without_orchestrator(self, sample_query_request, mock_working_memory, mock_hybrid_search):
+    async def test_process_query_without_orchestrator(
+        self, sample_query_request, mock_working_memory, mock_hybrid_search
+    ):
         """Test query processing when orchestrator not available."""
-        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search), \
-             patch("src.api.routes.cognitive.get_orchestrator", return_value=None):
-
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
             response = await process_cognitive_query(sample_query_request, BackgroundTasks())
 
             # Should use fallback response
@@ -182,7 +199,12 @@ class TestGetSessionEndpoint:
     async def test_get_session_success(self, mock_working_memory):
         """Test successful session retrieval."""
         mock_working_memory.get_messages.return_value = [
-            {"role": "user", "content": "Test message", "timestamp": datetime.now(timezone.utc), "metadata": {}}
+            {
+                "role": "user",
+                "content": "Test message",
+                "timestamp": datetime.now(timezone.utc),
+                "metadata": {},
+            }
         ]
         mock_working_memory.get_evidence_trail.return_value = [
             {"content": "Evidence", "source": "test", "score": 0.9}
@@ -287,15 +309,17 @@ class TestCognitiveRAGSearchEndpoint:
         )
 
         mock_rag = MagicMock()
-        mock_rag.cognitive_search = AsyncMock(return_value={
-            "response": "Adoption increased due to increased engagement",
-            "evidence": [{"content": "Evidence 1"}],
-            "hop_count": 2,
-            "entities": ["Kisqali", "Northeast"],
-            "intent": "causal",
-            "rewritten_query": "Enhanced query",
-            "latency_ms": 1250.5,
-        })
+        mock_rag.cognitive_search = AsyncMock(
+            return_value={
+                "response": "Adoption increased due to increased engagement",
+                "evidence": [{"content": "Evidence 1"}],
+                "hop_count": 2,
+                "entities": ["Kisqali", "Northeast"],
+                "intent": "causal",
+                "rewritten_query": "Enhanced query",
+                "latency_ms": 1250.5,
+            }
+        )
 
         with patch("src.rag.causal_rag.CausalRAG", return_value=mock_rag):
             response = await cognitive_rag_search(request)
@@ -352,7 +376,9 @@ class TestHelperFunctions:
 
     def test_detect_query_type_optimization(self):
         """Test optimization query type detection."""
-        assert _detect_query_type("How can we optimize resource allocation?") == QueryType.OPTIMIZATION
+        assert (
+            _detect_query_type("How can we optimize resource allocation?") == QueryType.OPTIMIZATION
+        )
         assert _detect_query_type("What's the best approach?") == QueryType.OPTIMIZATION
 
     def test_detect_query_type_monitoring(self):
@@ -421,6 +447,7 @@ class TestGetOrchestratorFunction:
         """Test orchestrator instance creation."""
         # Reset global
         import src.api.routes.cognitive as cognitive_module
+
         cognitive_module._orchestrator_instance = None
 
         with patch("src.agents.orchestrator.OrchestratorAgent") as mock_orch_class:
@@ -434,9 +461,12 @@ class TestGetOrchestratorFunction:
     def test_get_orchestrator_handles_error(self):
         """Test orchestrator creation error handling."""
         import src.api.routes.cognitive as cognitive_module
+
         cognitive_module._orchestrator_instance = None
 
-        with patch("src.agents.orchestrator.OrchestratorAgent", side_effect=Exception("Init error")):
+        with patch(
+            "src.agents.orchestrator.OrchestratorAgent", side_effect=Exception("Init error")
+        ):
             orchestrator = get_orchestrator()
 
             assert orchestrator is None
@@ -446,15 +476,19 @@ class TestEdgeCases:
     """Tests for edge cases and boundary conditions."""
 
     @pytest.mark.asyncio
-    async def test_process_query_with_empty_evidence(self, sample_query_request, mock_working_memory):
+    async def test_process_query_with_empty_evidence(
+        self, sample_query_request, mock_working_memory
+    ):
         """Test processing query with no evidence found."""
+
         async def empty_search(*args, **kwargs):
             return []
 
-        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=empty_search), \
-             patch("src.api.routes.cognitive.get_orchestrator", return_value=None):
-
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=empty_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
             response = await process_cognitive_query(sample_query_request, BackgroundTasks())
 
             assert response.evidence is None or len(response.evidence) == 0
@@ -468,10 +502,11 @@ class TestEdgeCases:
         )
         # Don't set query_type explicitly
 
-        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search), \
-             patch("src.api.routes.cognitive.get_orchestrator", return_value=None):
-
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
             response = await process_cognitive_query(request, BackgroundTasks())
 
             assert response.query_type == QueryType.CAUSAL
@@ -487,10 +522,11 @@ class TestEdgeCases:
         # Wrap the async function in AsyncMock to track calls
         mock_search = AsyncMock(side_effect=mock_hybrid_search)
 
-        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=mock_search), \
-             patch("src.api.routes.cognitive.get_orchestrator", return_value=None):
-
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
             await process_cognitive_query(request, BackgroundTasks())
 
             # Verify max_memory_results was used

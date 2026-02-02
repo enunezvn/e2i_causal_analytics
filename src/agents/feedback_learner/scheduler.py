@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
@@ -287,9 +287,7 @@ class FeedbackLearnerScheduler:
         """Main scheduler loop."""
         # Initial delay
         if self._config.initial_delay_seconds > 0:
-            logger.debug(
-                f"Waiting {self._config.initial_delay_seconds}s before first cycle"
-            )
+            logger.debug(f"Waiting {self._config.initial_delay_seconds}s before first cycle")
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),
@@ -323,9 +321,7 @@ class FeedbackLearnerScheduler:
 
             # Wait for next interval
             try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=interval_seconds
-                )
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval_seconds)
                 break  # Stop event was set
             except asyncio.TimeoutError:
                 pass  # Continue to next cycle
@@ -341,7 +337,9 @@ class FeedbackLearnerScheduler:
             CycleResult with outcome
         """
         self._cycle_counter += 1
-        cycle_id = f"cycle_{self._cycle_counter}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        cycle_id = (
+            f"cycle_{self._cycle_counter}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        )
         started_at = datetime.now(timezone.utc)
 
         logger.info(f"Starting learning cycle: {cycle_id}")

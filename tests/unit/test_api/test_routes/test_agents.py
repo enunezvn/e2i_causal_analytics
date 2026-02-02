@@ -14,14 +14,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.routes.agents import (
+    AGENT_REGISTRY,
     AgentInfo,
     AgentStatusEnum,
     AgentStatusResponse,
     AgentTierEnum,
-    AGENT_REGISTRY,
     router,
 )
-
 
 # =============================================================================
 # Fixtures

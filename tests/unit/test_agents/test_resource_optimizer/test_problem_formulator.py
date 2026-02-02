@@ -150,7 +150,9 @@ class TestProblemFormulatorMILP:
     """Tests for MILP problem formulation."""
 
     @pytest.mark.asyncio
-    async def test_formulate_integer_variables(self, base_state, integer_targets, integer_constraint):
+    async def test_formulate_integer_variables(
+        self, base_state, integer_targets, integer_constraint
+    ):
         """Test formulation with integer variables."""
         base_state["allocation_targets"] = integer_targets
         base_state["constraints"] = integer_constraint
@@ -203,7 +205,9 @@ class TestProblemFormulatorMILP:
         assert problem["min_entities"] is None
 
     @pytest.mark.asyncio
-    async def test_formulate_selects_milp_for_integer(self, base_state, integer_targets, integer_constraint):
+    async def test_formulate_selects_milp_for_integer(
+        self, base_state, integer_targets, integer_constraint
+    ):
         """Test that MILP solver is auto-selected for integer variables."""
         base_state["allocation_targets"] = integer_targets
         base_state["constraints"] = integer_constraint
@@ -226,7 +230,9 @@ class TestProblemFormulatorMILP:
         assert result["solver_type"] == "milp"
 
     @pytest.mark.asyncio
-    async def test_formulate_mixed_variable_types(self, base_state, mixed_targets, budget_constraint):
+    async def test_formulate_mixed_variable_types(
+        self, base_state, mixed_targets, budget_constraint
+    ):
         """Test formulation with mixed continuous and integer variables."""
         base_state["allocation_targets"] = mixed_targets
         base_state["constraints"] = budget_constraint
@@ -243,7 +249,9 @@ class TestProblemFormulatorMILP:
         assert result["solver_type"] == "milp"
 
     @pytest.mark.asyncio
-    async def test_formulate_allocation_units(self, base_state, integer_targets, integer_constraint):
+    async def test_formulate_allocation_units(
+        self, base_state, integer_targets, integer_constraint
+    ):
         """Test allocation units are captured in problem."""
         # Add allocation unit to first target
         integer_targets[0]["allocation_unit"] = 5.0

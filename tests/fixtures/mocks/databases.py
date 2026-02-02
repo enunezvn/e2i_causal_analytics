@@ -17,8 +17,8 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Union
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Dict, List, Optional, Union
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -37,11 +37,13 @@ class MockDatabaseClient:
     def record_call(self, method: str, *args, **kwargs) -> None:
         """Record a call for inspection."""
         self.call_count += 1
-        self.calls.append({
-            "method": method,
-            "args": args,
-            "kwargs": kwargs,
-        })
+        self.calls.append(
+            {
+                "method": method,
+                "args": args,
+                "kwargs": kwargs,
+            }
+        )
 
     def get_calls_for_method(self, method: str) -> List[Dict[str, Any]]:
         """Get all calls to a specific method."""

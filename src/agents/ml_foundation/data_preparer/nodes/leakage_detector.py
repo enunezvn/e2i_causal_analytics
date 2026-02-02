@@ -151,9 +151,7 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
             if split_date:
                 for col in feature_date_columns:
                     if col in df.columns:
-                        future_count, future_pct = _check_future_dates(
-                            df, col, split_date
-                        )
+                        future_count, future_pct = _check_future_dates(df, col, split_date)
                         if future_count > 0:
                             issues.append(
                                 f"Temporal leakage: {future_count} rows ({future_pct:.2f}%) "
@@ -389,12 +387,8 @@ def check_train_test_contamination(
             else:
                 # Fallback to row hash comparison (more reliable than index)
                 # Create hash from all columns to identify unique rows
-                train_hashes = set(
-                    train_df.apply(lambda row: hash(tuple(row)), axis=1)
-                )
-                split_hashes = set(
-                    split_df.apply(lambda row: hash(tuple(row)), axis=1)
-                )
+                train_hashes = set(train_df.apply(lambda row: hash(tuple(row)), axis=1))
+                split_hashes = set(split_df.apply(lambda row: hash(tuple(row)), axis=1))
                 overlap = train_hashes.intersection(split_hashes)
 
             if len(overlap) > 0:

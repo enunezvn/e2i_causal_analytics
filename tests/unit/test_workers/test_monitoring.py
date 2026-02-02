@@ -16,17 +16,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.workers.monitoring import (
-    QueueMetrics,
-    CeleryQueueMonitor,
-    AutoscalerRecommendation,
     AutoscalerMetricsProvider,
-    queue_metrics,
-    get_queue_monitor,
-    get_queue_depths,
+    AutoscalerRecommendation,
+    CeleryQueueMonitor,
+    QueueMetrics,
     get_monitoring_summary,
-    PROMETHEUS_AVAILABLE,
+    get_queue_depths,
+    get_queue_monitor,
+    queue_metrics,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -159,9 +157,16 @@ class TestGetQueueDepthsByTier:
     def test_get_depths_by_tier_aggregates_correctly(self, monitor):
         """Test tier depths aggregate queue depths correctly."""
         mock_depths = {
-            "default": 1, "quick": 2, "api": 3,
-            "analytics": 4, "reports": 5, "aggregations": 6,
-            "shap": 7, "causal": 8, "ml": 9, "twins": 10,
+            "default": 1,
+            "quick": 2,
+            "api": 3,
+            "analytics": 4,
+            "reports": 5,
+            "aggregations": 6,
+            "shap": 7,
+            "causal": 8,
+            "ml": 9,
+            "twins": 10,
         }
         with patch.object(monitor, "get_queue_depths", return_value=mock_depths):
             tier_depths = monitor.get_queue_depths_by_tier()
@@ -205,7 +210,9 @@ class TestGetWorkerStats:
 
     def test_get_worker_stats_handles_inspect_failure(self, monitor, mock_celery_app):
         """Test get_worker_stats handles inspect failure gracefully."""
-        mock_celery_app.control.inspect.return_value.ping.side_effect = Exception("Connection failed")
+        mock_celery_app.control.inspect.return_value.ping.side_effect = Exception(
+            "Connection failed"
+        )
         stats = monitor.get_worker_stats()
         assert stats["total_workers"] == 0
 
@@ -263,7 +270,11 @@ class TestGetMonitoringSummary:
         """Test get_monitoring_summary returns dictionary."""
         with patch.object(monitor, "get_queue_depths", return_value={"default": 0}):
             with patch.object(monitor, "get_queue_depths_by_tier", return_value={"light": 0}):
-                with patch.object(monitor, "get_worker_stats", return_value={"total_workers": 0, "workers_by_tier": {}, "workers": []}):
+                with patch.object(
+                    monitor,
+                    "get_worker_stats",
+                    return_value={"total_workers": 0, "workers_by_tier": {}, "workers": []},
+                ):
                     summary = monitor.get_monitoring_summary()
                     assert isinstance(summary, dict)
 
@@ -271,7 +282,11 @@ class TestGetMonitoringSummary:
         """Test get_monitoring_summary includes expected keys."""
         with patch.object(monitor, "get_queue_depths", return_value={"default": 0}):
             with patch.object(monitor, "get_queue_depths_by_tier", return_value={"light": 0}):
-                with patch.object(monitor, "get_worker_stats", return_value={"total_workers": 0, "workers_by_tier": {}, "workers": []}):
+                with patch.object(
+                    monitor,
+                    "get_worker_stats",
+                    return_value={"total_workers": 0, "workers_by_tier": {}, "workers": []},
+                ):
                     summary = monitor.get_monitoring_summary()
                     assert "timestamp" in summary
                     assert "queues" in summary
@@ -315,8 +330,16 @@ class TestAutoscalerMetricsProvider:
         """Test get_scaling_recommendations returns list."""
         with patch("src.workers.monitoring.PROMETHEUS_AVAILABLE", False):
             provider = AutoscalerMetricsProvider(mock_celery_app)
-            with patch.object(provider.monitor, "get_queue_depths_by_tier", return_value={"light": 5, "medium": 10, "heavy": 0}):
-                with patch.object(provider.monitor, "get_worker_stats", return_value={"workers_by_tier": {"light": 1, "medium": 2, "heavy": 0}}):
+            with patch.object(
+                provider.monitor,
+                "get_queue_depths_by_tier",
+                return_value={"light": 5, "medium": 10, "heavy": 0},
+            ):
+                with patch.object(
+                    provider.monitor,
+                    "get_worker_stats",
+                    return_value={"workers_by_tier": {"light": 1, "medium": 2, "heavy": 0}},
+                ):
                     recs = provider.get_scaling_recommendations()
                     assert isinstance(recs, list)
                     assert len(recs) == 3  # One per tier
@@ -326,8 +349,16 @@ class TestAutoscalerMetricsProvider:
         with patch("src.workers.monitoring.PROMETHEUS_AVAILABLE", False):
             provider = AutoscalerMetricsProvider(mock_celery_app)
             # High load: 50 tasks / 1 worker = 50 tasks per worker
-            with patch.object(provider.monitor, "get_queue_depths_by_tier", return_value={"light": 50, "medium": 0, "heavy": 0}):
-                with patch.object(provider.monitor, "get_worker_stats", return_value={"workers_by_tier": {"light": 1, "medium": 0, "heavy": 0}}):
+            with patch.object(
+                provider.monitor,
+                "get_queue_depths_by_tier",
+                return_value={"light": 50, "medium": 0, "heavy": 0},
+            ):
+                with patch.object(
+                    provider.monitor,
+                    "get_worker_stats",
+                    return_value={"workers_by_tier": {"light": 1, "medium": 0, "heavy": 0}},
+                ):
                     recs = provider.get_scaling_recommendations()
                     light_rec = next(r for r in recs if r.tier == "light")
                     assert light_rec.recommended_workers > light_rec.current_workers
@@ -337,8 +368,16 @@ class TestAutoscalerMetricsProvider:
         with patch("src.workers.monitoring.PROMETHEUS_AVAILABLE", False):
             provider = AutoscalerMetricsProvider(mock_celery_app)
             # Low load: 1 task / 4 workers = 0.25 tasks per worker
-            with patch.object(provider.monitor, "get_queue_depths_by_tier", return_value={"light": 1, "medium": 0, "heavy": 0}):
-                with patch.object(provider.monitor, "get_worker_stats", return_value={"workers_by_tier": {"light": 4, "medium": 0, "heavy": 0}}):
+            with patch.object(
+                provider.monitor,
+                "get_queue_depths_by_tier",
+                return_value={"light": 1, "medium": 0, "heavy": 0},
+            ):
+                with patch.object(
+                    provider.monitor,
+                    "get_worker_stats",
+                    return_value={"workers_by_tier": {"light": 4, "medium": 0, "heavy": 0}},
+                ):
                     recs = provider.get_scaling_recommendations()
                     light_rec = next(r for r in recs if r.tier == "light")
                     assert light_rec.recommended_workers <= light_rec.current_workers
@@ -361,14 +400,19 @@ class TestConvenienceFunctions:
     def test_get_queue_depths_function(self, mock_celery_app):
         """Test get_queue_depths convenience function."""
         with patch("src.workers.monitoring.PROMETHEUS_AVAILABLE", False):
-            with patch("src.workers.monitoring.CeleryQueueMonitor.get_queue_depths", return_value={"default": 0}):
+            with patch(
+                "src.workers.monitoring.CeleryQueueMonitor.get_queue_depths",
+                return_value={"default": 0},
+            ):
                 depths = get_queue_depths(mock_celery_app)
                 assert isinstance(depths, dict)
 
     def test_get_monitoring_summary_function(self, mock_celery_app):
         """Test get_monitoring_summary convenience function."""
         with patch("src.workers.monitoring.PROMETHEUS_AVAILABLE", False):
-            with patch("src.workers.monitoring.CeleryQueueMonitor.get_monitoring_summary", return_value={}):
+            with patch(
+                "src.workers.monitoring.CeleryQueueMonitor.get_monitoring_summary", return_value={}
+            ):
                 summary = get_monitoring_summary(mock_celery_app)
                 assert isinstance(summary, dict)
 

@@ -102,11 +102,7 @@ class DataQualityReportRepository(BaseRepository):
             return []
 
         try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("table_name", table_name)
-            )
+            query = self.client.table(self.table_name).select("*").eq("table_name", table_name)
 
             if data_split:
                 query = query.eq("data_split", data_split)
@@ -170,11 +166,7 @@ class DataQualityReportRepository(BaseRepository):
             return []
 
         try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("overall_status", "failed")
-            )
+            query = self.client.table(self.table_name).select("*").eq("overall_status", "failed")
 
             if since:
                 query = query.gte("run_at", since.isoformat())
@@ -210,9 +202,8 @@ class DataQualityReportRepository(BaseRepository):
             return False  # No report = fail gate
 
         latest = reports[0]
-        return (
-            latest.get("overall_status") == "passed"
-            and not latest.get("leakage_detected", False)
+        return latest.get("overall_status") == "passed" and not latest.get(
+            "leakage_detected", False
         )
 
 

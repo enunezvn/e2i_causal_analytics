@@ -7,7 +7,6 @@ domains using weighted scoring. Each domain has specific signals that
 indicate relevance.
 """
 
-
 from .schemas import (
     Domain,
     DomainMapping,

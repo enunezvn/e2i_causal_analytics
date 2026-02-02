@@ -8,20 +8,18 @@ Tests for the query-time entity extraction including:
 - VocabularyEnrichedGraphiti bridge class
 """
 
-import pytest
 import time
-from pathlib import Path
-from typing import Dict, Any
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.ontology.query_extractor import (
-    ExtractionContext,
-    Entity,
-    QueryExtractionResult,
     E2IQueryExtractor,
+    Entity,
+    ExtractionContext,
+    QueryExtractionResult,
     VocabularyEnrichedGraphiti,
 )
-
 
 # =============================================================================
 # ENUM TESTS
@@ -45,7 +43,7 @@ class TestExtractionContextEnum:
 
     def test_all_enum_members_exist(self):
         """Test that all expected enum members exist."""
-        expected = {'QUERY_ROUTING', 'FILTER_CONSTRUCTION', 'VALIDATION'}
+        expected = {"QUERY_ROUTING", "FILTER_CONSTRUCTION", "VALIDATION"}
         actual = {m.name for m in ExtractionContext}
         assert expected == actual
 
@@ -65,7 +63,7 @@ class TestEntityDataclass:
             entity_type="brand",
             confidence=0.95,
             vocabulary_match=True,
-            routing_hint="brand_specific_analysis"
+            routing_hint="brand_specific_analysis",
         )
 
         assert entity.text == "TestBrand"
@@ -77,10 +75,7 @@ class TestEntityDataclass:
     def test_entity_without_routing_hint(self):
         """Test Entity with default routing_hint."""
         entity = Entity(
-            text="region_value",
-            entity_type="region",
-            confidence=1.0,
-            vocabulary_match=True
+            text="region_value", entity_type="region", confidence=1.0, vocabulary_match=True
         )
 
         assert entity.routing_hint is None
@@ -92,7 +87,7 @@ class TestEntityDataclass:
             entity_type="kpi",
             confidence=0.8,
             vocabulary_match=False,
-            routing_hint="kpi_analysis"
+            routing_hint="kpi_analysis",
         )
 
         assert entity.vocabulary_match is False
@@ -106,7 +101,7 @@ class TestQueryExtractionResultDataclass:
         """Test creating a QueryExtractionResult."""
         entities = [
             Entity("TestBrand", "brand", 1.0, True),
-            Entity("northeast", "region", 1.0, True)
+            Entity("northeast", "region", 1.0, True),
         ]
 
         result = QueryExtractionResult(
@@ -115,7 +110,7 @@ class TestQueryExtractionResultDataclass:
             region_filter="northeast",
             kpi_filter=None,
             suggested_agent="orchestrator",
-            suggested_tier=1
+            suggested_tier=1,
         )
 
         assert len(result.entities) == 2
@@ -133,16 +128,12 @@ class TestQueryExtractionResultDataclass:
             region_filter="northeast",
             kpi_filter="TRx Volume",
             suggested_agent=None,
-            suggested_tier=None
+            suggested_tier=None,
         )
 
         filters = result.to_filter_dict()
 
-        assert filters == {
-            'brand': 'TestBrand',
-            'region': 'northeast',
-            'kpi': 'TRx Volume'
-        }
+        assert filters == {"brand": "TestBrand", "region": "northeast", "kpi": "TRx Volume"}
 
     def test_to_filter_dict_partial(self):
         """Test to_filter_dict with only some filters present."""
@@ -152,14 +143,14 @@ class TestQueryExtractionResultDataclass:
             region_filter=None,
             kpi_filter=None,
             suggested_agent=None,
-            suggested_tier=None
+            suggested_tier=None,
         )
 
         filters = result.to_filter_dict()
 
-        assert filters == {'brand': 'TestBrand'}
-        assert 'region' not in filters
-        assert 'kpi' not in filters
+        assert filters == {"brand": "TestBrand"}
+        assert "region" not in filters
+        assert "kpi" not in filters
 
     def test_to_filter_dict_empty(self):
         """Test to_filter_dict with no filters."""
@@ -169,7 +160,7 @@ class TestQueryExtractionResultDataclass:
             region_filter=None,
             kpi_filter=None,
             suggested_agent=None,
-            suggested_tier=None
+            suggested_tier=None,
         )
 
         filters = result.to_filter_dict()
@@ -189,8 +180,8 @@ class TestE2IQueryExtractorInit:
         """Test that vocabulary is loaded from file."""
         extractor = E2IQueryExtractor(str(mock_vocabulary_file))
 
-        assert hasattr(extractor, 'vocab')
-        assert 'brands' in extractor.vocab
+        assert hasattr(extractor, "vocab")
+        assert "brands" in extractor.vocab
 
     def test_init_nonexistent_file_raises_error(self):
         """Test that FileNotFoundError is raised for missing file."""
@@ -206,7 +197,7 @@ class TestE2IQueryExtractorBrandExtraction:
         result = query_extractor.extract_for_routing("What is TestBrand performance?")
 
         assert result.brand_filter == "TestBrand"
-        brand_entities = [e for e in result.entities if e.entity_type == 'brand']
+        brand_entities = [e for e in result.entities if e.entity_type == "brand"]
         assert len(brand_entities) == 1
         assert brand_entities[0].confidence == 1.0
 
@@ -221,7 +212,7 @@ class TestE2IQueryExtractorBrandExtraction:
         result = query_extractor.extract_for_routing("Show me tb sales")
 
         assert result.brand_filter == "TestBrand"
-        brand_entities = [e for e in result.entities if e.entity_type == 'brand']
+        brand_entities = [e for e in result.entities if e.entity_type == "brand"]
         assert len(brand_entities) == 1
         # Alias match has slightly lower confidence
         assert brand_entities[0].confidence == 0.95
@@ -248,7 +239,7 @@ class TestE2IQueryExtractorRegionExtraction:
         result = query_extractor.extract_for_routing("Sales in the northeast region")
 
         assert result.region_filter == "northeast"
-        region_entities = [e for e in result.entities if e.entity_type == 'region']
+        region_entities = [e for e in result.entities if e.entity_type == "region"]
         assert len(region_entities) == 1
         assert region_entities[0].confidence == 1.0
 
@@ -280,38 +271,36 @@ class TestE2IQueryExtractorKPIExtraction:
         result = query_extractor.extract_for_routing("Show TRx Volume trends")
 
         assert result.kpi_filter == "TRx Volume"
-        kpi_entities = [e for e in result.entities if e.entity_type == 'kpi']
+        kpi_entities = [e for e in result.entities if e.entity_type == "kpi"]
         assert len(kpi_entities) >= 1
 
     def test_extract_kpi_via_alias(self, query_extractor):
         """Test extracting KPI via alias."""
         result = query_extractor.extract_for_routing("What are the trx numbers?")
 
-        kpi_entities = [e for e in result.entities if e.entity_type == 'kpi']
+        kpi_entities = [e for e in result.entities if e.entity_type == "kpi"]
         assert len(kpi_entities) >= 1
 
     def test_extract_kpi_pattern_market_share(self, query_extractor):
         """Test extracting KPI via pattern matching."""
         result = query_extractor.extract_for_routing("What is the market share?")
 
-        kpi_entities = [e for e in result.entities if e.entity_type == 'kpi']
+        kpi_entities = [e for e in result.entities if e.entity_type == "kpi"]
         assert len(kpi_entities) >= 1
 
     def test_extract_kpi_pattern_adoption_rate(self, query_extractor):
         """Test extracting 'adoption rate' pattern."""
         result = query_extractor.extract_for_routing("Show the adoption rate")
 
-        kpi_entities = [e for e in result.entities if e.entity_type == 'kpi']
+        kpi_entities = [e for e in result.entities if e.entity_type == "kpi"]
         # Should find via pattern matching
-        assert any(e.text.lower() == 'adoption rate' for e in kpi_entities)
+        assert any(e.text.lower() == "adoption rate" for e in kpi_entities)
 
     def test_extract_multiple_kpis(self, query_extractor):
         """Test extracting multiple KPIs from query."""
-        result = query_extractor.extract_for_routing(
-            "Compare TRx Volume and Market Share"
-        )
+        result = query_extractor.extract_for_routing("Compare TRx Volume and Market Share")
 
-        kpi_entities = [e for e in result.entities if e.entity_type == 'kpi']
+        kpi_entities = [e for e in result.entities if e.entity_type == "kpi"]
         assert len(kpi_entities) >= 2
 
 
@@ -322,7 +311,7 @@ class TestE2IQueryExtractorDiagnosisCodeExtraction:
         """Test extracting ICD-10 code."""
         result = query_extractor.extract_for_routing("Patients with L50.1 diagnosis")
 
-        diagnosis_entities = [e for e in result.entities if e.entity_type == 'diagnosis_code']
+        diagnosis_entities = [e for e in result.entities if e.entity_type == "diagnosis_code"]
         assert len(diagnosis_entities) >= 1
         assert any(e.text == "L50.1" for e in diagnosis_entities)
 
@@ -330,14 +319,14 @@ class TestE2IQueryExtractorDiagnosisCodeExtraction:
         """Test extracting ICD-10 code without decimal."""
         result = query_extractor.extract_for_routing("Patients with L50 diagnosis")
 
-        diagnosis_entities = [e for e in result.entities if e.entity_type == 'diagnosis_code']
+        diagnosis_entities = [e for e in result.entities if e.entity_type == "diagnosis_code"]
         assert len(diagnosis_entities) >= 1
 
     def test_extract_multiple_diagnosis_codes(self, query_extractor):
         """Test extracting multiple diagnosis codes."""
         result = query_extractor.extract_for_routing("L50.1 and D50.8 patients")
 
-        diagnosis_entities = [e for e in result.entities if e.entity_type == 'diagnosis_code']
+        diagnosis_entities = [e for e in result.entities if e.entity_type == "diagnosis_code"]
         assert len(diagnosis_entities) >= 2
 
 
@@ -425,7 +414,7 @@ class TestE2IQueryExtractorPerformance:
         )
 
         start = time.time()
-        result = query_extractor.extract_for_routing(complex_query)
+        query_extractor.extract_for_routing(complex_query)
         elapsed_ms = (time.time() - start) * 1000
 
         # Even complex queries should be fast
@@ -444,23 +433,20 @@ class TestE2IQueryExtractorIntegration:
         # Should have brand, region, KPI, and diagnosis code
         entity_types = {e.entity_type for e in result.entities}
 
-        assert 'brand' in entity_types
-        assert 'region' in entity_types
+        assert "brand" in entity_types
+        assert "region" in entity_types
         # KPI should be present
-        assert result.kpi_filter is not None or any(e.entity_type == 'kpi' for e in result.entities)
-        assert 'diagnosis_code' in entity_types
+        assert result.kpi_filter is not None or any(e.entity_type == "kpi" for e in result.entities)
+        assert "diagnosis_code" in entity_types
 
     def test_extraction_preserves_entity_order(self, query_extractor):
         """Test that entities are returned in extraction order."""
-        result = query_extractor.extract_for_routing(
-            "TestBrand in northeast with TRx Volume"
-        )
+        result = query_extractor.extract_for_routing("TestBrand in northeast with TRx Volume")
 
         # Brand is extracted first
         if len(result.entities) > 0:
             first_brand_idx = next(
-                (i for i, e in enumerate(result.entities) if e.entity_type == 'brand'),
-                -1
+                (i for i, e in enumerate(result.entities) if e.entity_type == "brand"), -1
             )
             assert first_brand_idx >= 0
 
@@ -493,7 +479,7 @@ class TestVocabularyEnrichedGraphitiAnnotateContent:
 
         entities = [
             Entity("TestBrand", "brand", 1.0, True),
-            Entity("northeast", "region", 1.0, True)
+            Entity("northeast", "region", 1.0, True),
         ]
 
         content = "TestBrand performs well in northeast"
@@ -507,9 +493,7 @@ class TestVocabularyEnrichedGraphitiAnnotateContent:
         mock_graphiti = MagicMock()
         bridge = VocabularyEnrichedGraphiti(mock_graphiti, query_extractor)
 
-        entities = [
-            Entity("TestBrand", "brand", 1.0, True)
-        ]
+        entities = [Entity("TestBrand", "brand", 1.0, True)]
 
         content = "TestBrand is here"
         annotated = bridge._annotate_content(content, entities)
@@ -586,7 +570,7 @@ class TestVocabularyEnrichedGraphitiAddEpisode:
         await bridge.add_episode_with_vocab_hints(
             content="TestBrand analysis in northeast",
             name="test_episode",
-            source_description="Test source"
+            source_description="Test source",
         )
 
         mock_graphiti.add_episode.assert_called_once()
@@ -602,12 +586,12 @@ class TestVocabularyEnrichedGraphitiAddEpisode:
         await bridge.add_episode_with_vocab_hints(
             content="TestBrand analysis in northeast",
             name="test_episode",
-            source_description="Test source"
+            source_description="Test source",
         )
 
         # Check that content was enriched
         call_kwargs = mock_graphiti.add_episode.call_args[1]
-        assert "[E2I:" in call_kwargs['content']
+        assert "[E2I:" in call_kwargs["content"]
 
     @pytest.mark.asyncio
     async def test_add_episode_with_group_id(self, query_extractor):
@@ -621,11 +605,11 @@ class TestVocabularyEnrichedGraphitiAddEpisode:
             content="Test content",
             name="test_episode",
             source_description="Test source",
-            group_id="test_group"
+            group_id="test_group",
         )
 
         call_kwargs = mock_graphiti.add_episode.call_args[1]
-        assert call_kwargs['group_id'] == "test_group"
+        assert call_kwargs["group_id"] == "test_group"
 
 
 # =============================================================================
@@ -646,18 +630,14 @@ class TestE2IQueryExtractorEdgeCases:
 
     def test_query_with_special_characters(self, query_extractor):
         """Test query with special characters."""
-        result = query_extractor.extract_for_routing(
-            "What's TestBrand's performance @2024?"
-        )
+        result = query_extractor.extract_for_routing("What's TestBrand's performance @2024?")
 
         # Should still extract brand
         assert result.brand_filter == "TestBrand"
 
     def test_query_with_numbers(self, query_extractor):
         """Test query with numeric values."""
-        result = query_extractor.extract_for_routing(
-            "Show 2024 Q1 TestBrand sales in northeast"
-        )
+        result = query_extractor.extract_for_routing("Show 2024 Q1 TestBrand sales in northeast")
 
         assert result.brand_filter == "TestBrand"
         assert result.region_filter == "northeast"
@@ -673,9 +653,7 @@ class TestE2IQueryExtractorEdgeCases:
 
     def test_unicode_characters(self, query_extractor):
         """Test query with unicode characters."""
-        result = query_extractor.extract_for_routing(
-            "TestBrand performance — northeast région"
-        )
+        result = query_extractor.extract_for_routing("TestBrand performance — northeast région")
 
         # Should handle unicode gracefully
         assert result.brand_filter == "TestBrand"

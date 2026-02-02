@@ -26,6 +26,9 @@ Usage:
     result = compose_query_sync("Compare X and predict Y", llm_client)
 """
 
+# Import tool_registrations to trigger @composable_tool decorators
+# This ensures tools are registered when the package is loaded
+from . import tool_registrations as _tool_registrations  # noqa: F401
 from .agent import ToolComposerAgent, ToolComposerOutput
 from .composer import (
     ToolComposer,
@@ -76,10 +79,6 @@ from .synthesizer import (
     synthesize_results,
     synthesize_sync,
 )
-
-# Import tool_registrations to trigger @composable_tool decorators
-# This ensures tools are registered when the package is loaded
-from . import tool_registrations as _tool_registrations  # noqa: F401
 
 __all__ = [
     # Agent class (for factory registration)

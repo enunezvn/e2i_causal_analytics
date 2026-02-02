@@ -9,19 +9,19 @@ Validates that generated data matches Supabase table schemas:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Type
 from enum import Enum
+from typing import Any, Dict, List, Optional, Set, Type
 
 import pandas as pd
 
 from ..config import (
     Brand,
-    SpecialtyEnum,
+    DataSplit,
+    EngagementTypeEnum,
+    InsuranceTypeEnum,
     PracticeTypeEnum,
     RegionEnum,
-    InsuranceTypeEnum,
-    EngagementTypeEnum,
-    DataSplit,
+    SpecialtyEnum,
 )
 
 
@@ -102,6 +102,7 @@ class SchemaValidationResult:
 # TABLE SCHEMAS
 # =============================================================================
 
+
 # Helper to convert enum to set of values
 def _enum_values(enum_class: Type[Enum]) -> Set[str]:
     return {e.value for e in enum_class}
@@ -135,9 +136,7 @@ HCP_PROFILES_SCHEMA = TableSchema(
         "years_experience": ColumnSpec(
             name="years_experience", dtype=(int, float), nullable=True, min_value=0, max_value=60
         ),
-        "academic_hcp": ColumnSpec(
-            name="academic_hcp", dtype=(int, bool), nullable=False
-        ),
+        "academic_hcp": ColumnSpec(name="academic_hcp", dtype=(int, bool), nullable=False),
         "total_patient_volume": ColumnSpec(
             name="total_patient_volume", dtype=(int, float), nullable=True, min_value=0
         ),
@@ -291,9 +290,7 @@ class SchemaValidator:
             return result
 
         schema = self.schemas[table_name]
-        result = SchemaValidationResult(
-            is_valid=True, table_name=table_name, total_rows=len(df)
-        )
+        result = SchemaValidationResult(is_valid=True, table_name=table_name, total_rows=len(df))
 
         # 1. Check for missing required columns
         self._validate_required_columns(df, schema, result)
@@ -408,8 +405,7 @@ class SchemaValidator:
             pk_column = ref_schema.primary_key
             if pk_column not in ref_df.columns:
                 result.add_warning(
-                    f"Cannot validate FK '{fk_column}': "
-                    f"PK '{pk_column}' not in reference table"
+                    f"Cannot validate FK '{fk_column}': PK '{pk_column}' not in reference table"
                 )
                 continue
 
@@ -427,9 +423,7 @@ class SchemaValidator:
                     sample_values=orphan_values[:5],
                 )
 
-    def validate_all(
-        self, datasets: Dict[str, pd.DataFrame]
-    ) -> Dict[str, SchemaValidationResult]:
+    def validate_all(self, datasets: Dict[str, pd.DataFrame]) -> Dict[str, SchemaValidationResult]:
         """
         Validate all datasets at once with FK resolution.
 
@@ -441,14 +435,10 @@ class SchemaValidator:
         """
         results = {}
         for table_name, df in datasets.items():
-            results[table_name] = self.validate(
-                df, table_name, reference_dfs=datasets
-            )
+            results[table_name] = self.validate(df, table_name, reference_dfs=datasets)
         return results
 
-    def get_validation_summary(
-        self, results: Dict[str, SchemaValidationResult]
-    ) -> Dict:
+    def get_validation_summary(self, results: Dict[str, SchemaValidationResult]) -> Dict:
         """Get a summary of validation results."""
         total_errors = sum(len(r.errors) for r in results.values())
         total_warnings = sum(len(r.warnings) for r in results.values())

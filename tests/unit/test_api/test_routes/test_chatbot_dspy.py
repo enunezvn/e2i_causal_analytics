@@ -26,26 +26,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.api.routes.chatbot_dspy import (
+    AGENT_CAPABILITIES,
+    VALID_AGENTS,
+    VALID_INTENTS,
     IntentTrainingSignal,
     IntentTrainingSignalCollector,
     RoutingTrainingSignal,
     RoutingTrainingSignalCollector,
-    _matches_pattern,
     _is_multi_faceted_query,
-    classify_intent_hardcoded,
+    _matches_pattern,
+    _normalize_agent,
     _normalize_intent,
     _validate_confidence,
+    classify_intent_hardcoded,
     classify_intent_sync,
-    _normalize_agent,
-    route_agent_hardcoded,
-    get_signal_collector,
     get_routing_signal_collector,
-    VALID_INTENTS,
-    VALID_AGENTS,
-    AGENT_CAPABILITIES,
+    get_signal_collector,
+    route_agent_hardcoded,
 )
 from src.api.routes.chatbot_state import IntentType
-
 
 # =============================================================================
 # IntentTrainingSignal Tests
@@ -584,7 +583,9 @@ class TestIsMultiFacetedQuery:
         """Test analysis + recommendation query (requires 2+ facets)."""
         # "why" + "should" = analysis_and_recommendation (1 facet)
         # Add cross_agent keyword to get 2 facets
-        assert _is_multi_faceted_query("Why did the health score drop and what should we do?") is True
+        assert (
+            _is_multi_faceted_query("Why did the health score drop and what should we do?") is True
+        )
 
     def test_single_facet_not_multi_faceted(self):
         """Test single facet is not multi-faceted."""
@@ -643,12 +644,16 @@ class TestClassifyIntentHardcoded:
 
     def test_causal_analysis_why(self):
         """Test causal analysis for 'why' questions."""
-        intent, confidence, reasoning = classify_intent_hardcoded("Why did sales drop last quarter?")
+        intent, confidence, reasoning = classify_intent_hardcoded(
+            "Why did sales drop last quarter?"
+        )
         assert intent == IntentType.CAUSAL_ANALYSIS
 
     def test_causal_analysis_impact(self):
         """Test causal analysis for impact questions."""
-        intent, confidence, reasoning = classify_intent_hardcoded("What is the impact of the campaign?")
+        intent, confidence, reasoning = classify_intent_hardcoded(
+            "What is the impact of the campaign?"
+        )
         assert intent == IntentType.CAUSAL_ANALYSIS
 
     def test_causal_analysis_driver(self):
@@ -1103,7 +1108,9 @@ class TestClassifyIntentDspy:
         mock_result.reasoning = "Query mentions TRx metric"
 
         with patch("src.api.routes.chatbot_dspy._get_dspy_classifier") as mock_get_classifier:
-            with patch("src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock) as mock_retry:
+            with patch(
+                "src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock
+            ) as mock_retry:
                 mock_retry.return_value = mock_result
                 mock_get_classifier.return_value = MagicMock()
 
@@ -1122,7 +1129,9 @@ class TestClassifyIntentDspy:
         from src.api.routes.chatbot_dspy import classify_intent_dspy
 
         with patch("src.api.routes.chatbot_dspy._get_dspy_classifier") as mock_get_classifier:
-            with patch("src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock) as mock_retry:
+            with patch(
+                "src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock
+            ) as mock_retry:
                 # DSPy returns None (failure)
                 mock_retry.return_value = None
                 mock_get_classifier.return_value = MagicMock()
@@ -1166,7 +1175,9 @@ class TestRouteAgentDspy:
         mock_result.rationale = "Query asks about opportunities"
 
         with patch("src.api.routes.chatbot_dspy._get_dspy_router") as mock_get_router:
-            with patch("src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock) as mock_retry:
+            with patch(
+                "src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock
+            ) as mock_retry:
                 mock_retry.return_value = mock_result
                 mock_get_router.return_value = MagicMock()
 
@@ -1184,7 +1195,9 @@ class TestRouteAgentDspy:
         from src.api.routes.chatbot_dspy import route_agent_dspy
 
         with patch("src.api.routes.chatbot_dspy._get_dspy_router") as mock_get_router:
-            with patch("src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock) as mock_retry:
+            with patch(
+                "src.api.routes.chatbot_dspy._run_dspy_with_retry", new_callable=AsyncMock
+            ) as mock_retry:
                 # DSPy returns None (failure)
                 mock_retry.return_value = None
                 mock_get_router.return_value = MagicMock()
@@ -1264,4 +1277,6 @@ class TestIntegration:
 
         for query, expected_agent in test_cases:
             agent, _, _, _ = route_agent_hardcoded(query)
-            assert agent == expected_agent, f"Query '{query}' routed to {agent}, expected {expected_agent}"
+            assert agent == expected_agent, (
+                f"Query '{query}' routed to {agent}, expected {expected_agent}"
+            )

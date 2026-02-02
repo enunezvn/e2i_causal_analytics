@@ -121,8 +121,7 @@ class TestConfoundedModerateBenchmark:
             correlation = subset["C"].corr(subset["Y"])
 
             assert abs(correlation) > 0.30, (
-                f"Confounder-outcome correlation {correlation:.4f} "
-                f"in T={t_val} group is too weak"
+                f"Confounder-outcome correlation {correlation:.4f} in T={t_val} group is too weak"
             )
 
     @pytest.mark.parametrize(
@@ -225,9 +224,9 @@ class TestConfoundingBiasDirection:
         )
 
         # Naive should overestimate (positive bias)
-        assert (
-            naive_ate > dataset.true_ate
-        ), f"Expected upward bias: naive {naive_ate:.4f} > true {dataset.true_ate:.4f}"
+        assert naive_ate > dataset.true_ate, (
+            f"Expected upward bias: naive {naive_ate:.4f} > true {dataset.true_ate:.4f}"
+        )
 
     def test_bias_magnitude_scales_with_confounding(self):
         """Stronger confounding should create larger bias."""

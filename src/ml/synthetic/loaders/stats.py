@@ -12,8 +12,8 @@ the main synthetic data system.
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
 import pandas as pd
-import numpy as np
 
 
 @dataclass
@@ -102,7 +102,9 @@ class DatasetStats:
         if self.split_stats:
             lines.append("  Splits:")
             for split in self.split_stats:
-                lines.append(f"    {split.split_name}: {split.record_count:,} ({split.percentage:.1f}%)")
+                lines.append(
+                    f"    {split.split_name}: {split.record_count:,} ({split.percentage:.1f}%)"
+                )
 
         if self.brand_distribution:
             lines.append("  Brands:")
@@ -362,9 +364,7 @@ def validate_supabase_data(
             actual_splits = set(df["data_split"].dropna().unique())
             missing_splits = set(expected_splits) - actual_splits
             if missing_splits:
-                results["warnings"].append(
-                    f"{table_name}: Missing splits: {missing_splits}"
-                )
+                results["warnings"].append(f"{table_name}: Missing splits: {missing_splits}")
                 if "holdout" in missing_splits:
                     results["errors"].append(
                         f"{table_name}: Missing holdout split. "
@@ -391,7 +391,7 @@ def print_dataset_summary(datasets: Dict[str, pd.DataFrame]) -> None:
     total_records = 0
     total_memory = 0.0
 
-    for table_name, stats in all_stats.items():
+    for _table_name, stats in all_stats.items():
         print(f"\n{stats.summary()}")
         total_records += stats.total_records
         total_memory += stats.memory_usage_mb

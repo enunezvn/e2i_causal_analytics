@@ -41,9 +41,9 @@ class ErrorCategory(str, Enum):
 class ErrorSeverity(str, Enum):
     """Severity levels for error tracking and alerting."""
 
-    LOW = "low"          # User-correctable, no action needed
-    MEDIUM = "medium"    # May need investigation
-    HIGH = "high"        # Requires attention
+    LOW = "low"  # User-correctable, no action needed
+    MEDIUM = "medium"  # May need investigation
+    HIGH = "high"  # Requires attention
     CRITICAL = "critical"  # Immediate attention required
 
 
@@ -167,8 +167,7 @@ class ValidationError(E2IError):
 
         # Allow subclasses to override suggested_action
         kwargs.setdefault(
-            "suggested_action",
-            "Check the API documentation for valid request format."
+            "suggested_action", "Check the API documentation for valid request format."
         )
 
         super().__init__(
@@ -193,10 +192,7 @@ class SchemaValidationError(ValidationError):
             details["schema_errors"] = schema_errors
 
         # Allow override of suggested_action
-        kwargs.setdefault(
-            "suggested_action",
-            "Review the schema errors and correct your request."
-        )
+        kwargs.setdefault("suggested_action", "Review the schema errors and correct your request.")
 
         super().__init__(
             message,
@@ -226,10 +222,7 @@ class AuthenticationError(E2IError):
 
     def __init__(self, message: str = "Authentication required", **kwargs):
         # Allow subclasses to override suggested_action
-        kwargs.setdefault(
-            "suggested_action",
-            "Provide a valid authentication token."
-        )
+        kwargs.setdefault("suggested_action", "Provide a valid authentication token.")
 
         super().__init__(
             message,
@@ -241,10 +234,7 @@ class TokenExpiredError(AuthenticationError):
     """Raised when the authentication token has expired."""
 
     def __init__(self, **kwargs):
-        kwargs.setdefault(
-            "suggested_action",
-            "Refresh your authentication token and retry."
-        )
+        kwargs.setdefault("suggested_action", "Refresh your authentication token and retry.")
         super().__init__(
             "Authentication token has expired",
             **kwargs,
@@ -330,8 +320,7 @@ class NotFoundError(E2IError):
 
         # Allow subclasses to override suggested_action
         suggested_action = kwargs.pop(
-            "suggested_action",
-            f"Verify the {resource_type.lower()} identifier is correct."
+            "suggested_action", f"Verify the {resource_type.lower()} identifier is correct."
         )
 
         super().__init__(
@@ -434,7 +423,7 @@ class AgentError(E2IError):
         kwargs.setdefault(
             "suggested_action",
             f"The {agent_name} agent encountered an issue. "
-            "Try rephrasing your request or contact support if the problem persists."
+            "Try rephrasing your request or contact support if the problem persists.",
         )
 
         super().__init__(
@@ -467,7 +456,7 @@ class AgentTimeoutError(AgentError):
         kwargs.setdefault(
             "suggested_action",
             "The operation took too long. Try simplifying your request "
-            "or breaking it into smaller parts."
+            "or breaking it into smaller parts.",
         )
 
         super().__init__(
@@ -496,8 +485,7 @@ class AgentConfigurationError(AgentError):
 
         # Allow subclasses/callers to override suggested_action
         kwargs.setdefault(
-            "suggested_action",
-            "Contact support - this is a system configuration issue."
+            "suggested_action", "Contact support - this is a system configuration issue."
         )
 
         super().__init__(

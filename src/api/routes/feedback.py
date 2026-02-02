@@ -31,7 +31,7 @@ Version: 4.3.0 (Opik Feedback Loop Integration)
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -42,11 +42,13 @@ from src.api.dependencies.auth import require_operator
 # Opik Feedback Loop imports (Phase 4 - G23)
 try:
     from src.mlops.opik_feedback import (
-        AgentFeedbackStats,
-        FeedbackRecord as OpikFeedbackRecord,
+        AgentFeedbackStats,  # noqa: F401
         get_feedback_collector,
         get_feedback_signals_for_gepa,
         log_user_feedback,
+    )
+    from src.mlops.opik_feedback import (
+        FeedbackRecord as OpikFeedbackRecord,  # noqa: F401
     )
 
     OPIK_FEEDBACK_AVAILABLE = True
@@ -133,9 +135,7 @@ class FeedbackItem(BaseModel):
     feedback_id: Optional[str] = Field(
         default=None, description="Unique feedback identifier (auto-generated if not provided)"
     )
-    timestamp: Optional[str] = Field(
-        default=None, description="Feedback timestamp (ISO format)"
-    )
+    timestamp: Optional[str] = Field(default=None, description="Feedback timestamp (ISO format)")
     feedback_type: FeedbackType = Field(..., description="Type of feedback")
     source_agent: str = Field(..., description="Agent that generated the original response")
     query: str = Field(..., description="Original user query")
@@ -143,9 +143,7 @@ class FeedbackItem(BaseModel):
     user_feedback: Any = Field(
         ..., description="User's feedback (rating, correction, outcome, etc.)"
     )
-    metadata: Optional[Dict[str, Any]] = Field(
-        default=None, description="Additional metadata"
-    )
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -178,9 +176,7 @@ class RunLearningRequest(BaseModel):
     pattern_threshold: float = Field(
         default=0.1, description="Minimum frequency for pattern detection (0-1)", ge=0.0, le=1.0
     )
-    auto_apply: bool = Field(
-        default=False, description="Automatically apply approved updates"
-    )
+    auto_apply: bool = Field(default=False, description="Automatically apply approved updates")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -200,9 +196,7 @@ class ProcessFeedbackRequest(BaseModel):
     """Request to process specific feedback items."""
 
     items: List[FeedbackItem] = Field(..., description="Feedback items to process")
-    detect_patterns: bool = Field(
-        default=True, description="Whether to detect patterns"
-    )
+    detect_patterns: bool = Field(default=True, description="Whether to detect patterns")
     generate_recommendations: bool = Field(
         default=True, description="Whether to generate recommendations"
     )
@@ -212,9 +206,7 @@ class ApplyUpdateRequest(BaseModel):
     """Request to apply a knowledge update."""
 
     update_id: str = Field(..., description="Update identifier to apply")
-    force: bool = Field(
-        default=False, description="Force apply even if not approved"
-    )
+    force: bool = Field(default=False, description="Force apply even if not approved")
 
 
 # =============================================================================
@@ -294,9 +286,7 @@ class LearningResponse(BaseModel):
     learning_recommendations: List[LearningRecommendation] = Field(
         default_factory=list, description="Improvement recommendations"
     )
-    priority_improvements: List[str] = Field(
-        default_factory=list, description="Top priority items"
-    )
+    priority_improvements: List[str] = Field(default_factory=list, description="Top priority items")
     proposed_updates: List[KnowledgeUpdate] = Field(
         default_factory=list, description="Proposed knowledge updates"
     )
@@ -788,7 +778,7 @@ async def get_feedback_health() -> FeedbackHealthResponse:
     # Check agent availability
     agent_available = True
     try:
-        from src.agents.feedback_learner import FeedbackLearnerAgent
+        from src.agents.feedback_learner import FeedbackLearnerAgent  # noqa: F401
 
         agent_available = True
     except ImportError:
@@ -797,9 +787,7 @@ async def get_feedback_health() -> FeedbackHealthResponse:
     # Count recent cycles
     now = datetime.now(timezone.utc)
     cycles_24h = sum(
-        1
-        for lr in _learning_store.values()
-        if (now - lr.timestamp).total_seconds() < 86400
+        1 for lr in _learning_store.values() if (now - lr.timestamp).total_seconds() < 86400
     )
 
     # Get last cycle
@@ -809,9 +797,7 @@ async def get_feedback_health() -> FeedbackHealthResponse:
 
     # Count active items
     patterns_active = len(_patterns_store)
-    pending_updates = sum(
-        1 for u in _updates_store.values() if u.status == UpdateStatus.PROPOSED
-    )
+    pending_updates = sum(1 for u in _updates_store.values() if u.status == UpdateStatus.PROPOSED)
 
     return FeedbackHealthResponse(
         status="healthy" if agent_available else "degraded",
@@ -1033,9 +1019,7 @@ async def get_agent_feedback_stats(
 )
 async def get_optimization_signals(
     agent_name: str,
-    min_feedback_count: int = Query(
-        default=5, description="Minimum feedback required", ge=1
-    ),
+    min_feedback_count: int = Query(default=5, description="Minimum feedback required", ge=1),
 ) -> OptimizationSignalsResponse:
     """
     Get GEPA optimization signals derived from user feedback.
@@ -1339,7 +1323,9 @@ def _detect_patterns_from_items(items: List[FeedbackItem]) -> List[DetectedPatte
                     pattern_type=PatternType.ACCURACY_ISSUE,
                     description=f"Multiple low ratings for {agent} responses",
                     frequency=low_rating_count,
-                    severity=PatternSeverity.HIGH if low_rating_count >= 5 else PatternSeverity.MEDIUM,
+                    severity=PatternSeverity.HIGH
+                    if low_rating_count >= 5
+                    else PatternSeverity.MEDIUM,
                     affected_agents=[agent],
                     example_feedback_ids=[i.feedback_id or "" for i in agent_items[:3]],
                     root_cause_hypothesis="Response quality may not meet user expectations",

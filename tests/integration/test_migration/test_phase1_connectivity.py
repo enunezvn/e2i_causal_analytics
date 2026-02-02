@@ -9,7 +9,6 @@ Test count: 5 tests
 
 from __future__ import annotations
 
-import os
 import re
 
 import pytest
@@ -60,18 +59,14 @@ class TestPostgreSQLExtensions:
 
     def test_extension_uuid_ossp(self, pg_cursor):
         """Test that uuid-ossp extension is installed."""
-        pg_cursor.execute(
-            "SELECT extname FROM pg_extension WHERE extname = 'uuid-ossp'"
-        )
+        pg_cursor.execute("SELECT extname FROM pg_extension WHERE extname = 'uuid-ossp'")
         result = pg_cursor.fetchone()
         assert result is not None, "uuid-ossp extension not installed"
         assert result[0] == "uuid-ossp"
 
     def test_extension_pgcrypto(self, pg_cursor):
         """Test that pgcrypto extension is installed."""
-        pg_cursor.execute(
-            "SELECT extname FROM pg_extension WHERE extname = 'pgcrypto'"
-        )
+        pg_cursor.execute("SELECT extname FROM pg_extension WHERE extname = 'pgcrypto'")
         result = pg_cursor.fetchone()
         assert result is not None, "pgcrypto extension not installed"
         assert result[0] == "pgcrypto"

@@ -81,8 +81,20 @@ def mock_subgraph_result():
             {"id": "west", "label": "West", "type": "region", "properties": {}},
         ],
         "edges": [
-            {"source": "kisqali", "target": "trx", "relationship": "has_kpi", "weight": 1.0, "properties": {}},
-            {"source": "west", "target": "trx", "relationship": "affects", "weight": 0.8, "properties": {}},
+            {
+                "source": "kisqali",
+                "target": "trx",
+                "relationship": "has_kpi",
+                "weight": 1.0,
+                "properties": {},
+            },
+            {
+                "source": "west",
+                "target": "trx",
+                "relationship": "affects",
+                "weight": 0.8,
+                "properties": {},
+            },
         ],
     }
 
@@ -315,9 +327,7 @@ class TestEntityExtraction:
 
     def test_extract_entities_error_handling(self, mock_rag_service):
         """Should return 500 on extraction error."""
-        mock_rag_service.extract_entities = MagicMock(
-            side_effect=Exception("Extraction failed")
-        )
+        mock_rag_service.extract_entities = MagicMock(side_effect=Exception("Extraction failed"))
         app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
         response = client.get(
             "/api/v1/rag/entities",
@@ -398,9 +408,7 @@ class TestRAGHealth:
 
     def test_health_check_error_returns_degraded(self, mock_rag_service):
         """Should return degraded status on health check error."""
-        mock_rag_service.get_health_status = AsyncMock(
-            side_effect=Exception("Health check failed")
-        )
+        mock_rag_service.get_health_status = AsyncMock(side_effect=Exception("Health check failed"))
         app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
         response = client.get("/api/v1/rag/health")
 
@@ -464,9 +472,7 @@ class TestCausalSubgraph:
         """Should return 500 on graph error."""
         from src.rag.exceptions import RAGError
 
-        mock_rag_service.get_causal_subgraph = AsyncMock(
-            side_effect=RAGError("Graph query failed")
-        )
+        mock_rag_service.get_causal_subgraph = AsyncMock(side_effect=RAGError("Graph query failed"))
         app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
         response = client.get("/api/v1/rag/graph/unknown_entity")
 
@@ -538,9 +544,7 @@ class TestCausalPath:
         """Should return 500 on path finding error."""
         from src.rag.exceptions import RAGError
 
-        mock_rag_service.get_causal_path = AsyncMock(
-            side_effect=RAGError("Path query failed")
-        )
+        mock_rag_service.get_causal_path = AsyncMock(side_effect=RAGError("Path query failed"))
         app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
         response = client.get(
             "/api/v1/rag/causal-path",

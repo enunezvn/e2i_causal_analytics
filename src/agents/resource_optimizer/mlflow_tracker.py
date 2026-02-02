@@ -29,7 +29,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 if TYPE_CHECKING:
     from .state import ResourceOptimizerState
@@ -240,19 +240,23 @@ class ResourceOptimizerMLflowTracker:
                 self._current_run_id = run.info.run_id
 
                 # Log run parameters
-                mlflow.log_params({
-                    "agent": "resource_optimizer",
-                    "tier": 4,
-                    "resource_type": resource_type,
-                    "objective": objective,
-                    "solver_type": solver_type,
-                })
+                mlflow.log_params(
+                    {
+                        "agent": "resource_optimizer",
+                        "tier": 4,
+                        "resource_type": resource_type,
+                        "objective": objective,
+                        "solver_type": solver_type,
+                    }
+                )
 
                 # Log context tags
-                mlflow.set_tags({
-                    "agent_type": "ml_predictions",
-                    "framework_version": "4.3",
-                })
+                mlflow.set_tags(
+                    {
+                        "agent_type": "ml_predictions",
+                        "framework_version": "4.3",
+                    }
+                )
                 if brand:
                     mlflow.set_tag("brand", brand)
                 if region:
@@ -300,11 +304,13 @@ class ResourceOptimizerMLflowTracker:
             mlflow.log_metrics(metrics.to_dict())
 
             # Log solver status tag
-            mlflow.set_tags({
-                "solver_status": metrics.solver_status,
-                "has_violations": str(metrics.constraint_violations > 0).lower(),
-                "positive_roi": str((metrics.projected_roi or 0) > 1.0).lower(),
-            })
+            mlflow.set_tags(
+                {
+                    "solver_status": metrics.solver_status,
+                    "has_violations": str(metrics.constraint_violations > 0).lower(),
+                    "positive_roi": str((metrics.projected_roi or 0) > 1.0).lower(),
+                }
+            )
 
             # Log artifacts
             if self.enable_artifact_logging:
@@ -336,22 +342,12 @@ class ResourceOptimizerMLflowTracker:
         allocations = state.get("optimal_allocations", [])
         if allocations:
             metrics.entities_optimized = len(allocations)
-            metrics.entities_increased = sum(
-                1 for a in allocations if a.get("change", 0) > 0
-            )
-            metrics.entities_decreased = sum(
-                1 for a in allocations if a.get("change", 0) < 0
-            )
-            metrics.entities_unchanged = sum(
-                1 for a in allocations if a.get("change", 0) == 0
-            )
-            metrics.total_allocation_change = sum(
-                abs(a.get("change", 0)) for a in allocations
-            )
+            metrics.entities_increased = sum(1 for a in allocations if a.get("change", 0) > 0)
+            metrics.entities_decreased = sum(1 for a in allocations if a.get("change", 0) < 0)
+            metrics.entities_unchanged = sum(1 for a in allocations if a.get("change", 0) == 0)
+            metrics.total_allocation_change = sum(abs(a.get("change", 0)) for a in allocations)
 
-            change_percentages = [
-                abs(a.get("change_percentage", 0)) for a in allocations
-            ]
+            change_percentages = [abs(a.get("change_percentage", 0)) for a in allocations]
             if change_percentages:
                 metrics.avg_change_percentage = sum(change_percentages) / len(change_percentages)
 
@@ -471,19 +467,21 @@ class ResourceOptimizerMLflowTracker:
 
             history = []
             for _, row in runs.iterrows():
-                history.append({
-                    "run_id": row["run_id"],
-                    "timestamp": row["start_time"],
-                    "objective_value": row.get("metrics.objective_value"),
-                    "projected_roi": row.get("metrics.projected_roi"),
-                    "entities_optimized": row.get("metrics.entities_optimized"),
-                    "solve_time_ms": row.get("metrics.solve_time_ms"),
-                    "total_latency_ms": row.get("metrics.total_latency_ms"),
-                    "resource_type": row.get("params.resource_type"),
-                    "objective": row.get("params.objective"),
-                    "solver_type": row.get("params.solver_type"),
-                    "solver_status": row.get("tags.solver_status"),
-                })
+                history.append(
+                    {
+                        "run_id": row["run_id"],
+                        "timestamp": row["start_time"],
+                        "objective_value": row.get("metrics.objective_value"),
+                        "projected_roi": row.get("metrics.projected_roi"),
+                        "entities_optimized": row.get("metrics.entities_optimized"),
+                        "solve_time_ms": row.get("metrics.solve_time_ms"),
+                        "total_latency_ms": row.get("metrics.total_latency_ms"),
+                        "resource_type": row.get("params.resource_type"),
+                        "objective": row.get("params.objective"),
+                        "solver_type": row.get("params.solver_type"),
+                        "solver_status": row.get("tags.solver_status"),
+                    }
+                )
 
             return history
 
@@ -522,8 +520,8 @@ class ResourceOptimizerMLflowTracker:
         # Calculate trend
         trend = "stable"
         if len(rois) >= 4:
-            first_half = rois[:len(rois)//2]
-            second_half = rois[len(rois)//2:]
+            first_half = rois[: len(rois) // 2]
+            second_half = rois[len(rois) // 2 :]
             first_avg = sum(first_half) / len(first_half)
             second_avg = sum(second_half) / len(second_half)
 
@@ -543,9 +541,7 @@ class ResourceOptimizerMLflowTracker:
             "optimizations_by_objective": self._count_by_field(history, "objective"),
         }
 
-    def _count_by_field(
-        self, history: list[dict[str, Any]], field: str
-    ) -> dict[str, int]:
+    def _count_by_field(self, history: list[dict[str, Any]], field: str) -> dict[str, int]:
         """Count records by a specific field."""
         counts: dict[str, int] = {}
         for h in history:

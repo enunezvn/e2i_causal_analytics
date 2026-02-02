@@ -13,7 +13,6 @@ import time
 
 import pytest
 
-
 # =============================================================================
 # QUERY EXTRACTION TESTS
 # =============================================================================
@@ -30,9 +29,8 @@ class TestQueryExtractionWithProductionVocabulary:
         assert result is not None, "Extraction returned None"
         # Check brand was extracted (may be in brand_filter field or entities)
         brand_found = (
-            (result.brand_filter and "remibrutinib" in result.brand_filter.lower()) or
-            any("remibrutinib" in str(e).lower() for e in result.entities)
-        )
+            result.brand_filter and "remibrutinib" in result.brand_filter.lower()
+        ) or any("remibrutinib" in str(e).lower() for e in result.entities)
         assert brand_found, f"Remibrutinib not extracted from query. Result: {result}"
 
     def test_extract_kisqali_brand(self, query_extractor):
@@ -41,9 +39,8 @@ class TestQueryExtractionWithProductionVocabulary:
         result = query_extractor.extract_for_routing(query)
 
         assert result is not None, "Extraction returned None"
-        brand_found = (
-            (result.brand_filter and "kisqali" in result.brand_filter.lower()) or
-            any("kisqali" in str(e).lower() for e in result.entities)
+        brand_found = (result.brand_filter and "kisqali" in result.brand_filter.lower()) or any(
+            "kisqali" in str(e).lower() for e in result.entities
         )
         assert brand_found, f"Kisqali not extracted from query. Result: {result}"
 
@@ -53,9 +50,8 @@ class TestQueryExtractionWithProductionVocabulary:
         result = query_extractor.extract_for_routing(query)
 
         assert result is not None, "Extraction returned None"
-        brand_found = (
-            (result.brand_filter and "fabhalta" in result.brand_filter.lower()) or
-            any("fabhalta" in str(e).lower() for e in result.entities)
+        brand_found = (result.brand_filter and "fabhalta" in result.brand_filter.lower()) or any(
+            "fabhalta" in str(e).lower() for e in result.entities
         )
         assert brand_found, f"Fabhalta not extracted from query. Result: {result}"
 
@@ -65,9 +61,9 @@ class TestQueryExtractionWithProductionVocabulary:
         result = query_extractor.extract_for_routing(query)
 
         assert result is not None, "Extraction returned None"
-        region_found = (
-            (result.region_filter and "us" in result.region_filter.lower()) or
-            any("us" in str(e).lower() for e in result.entities)
+        (
+            (result.region_filter and "us" in result.region_filter.lower())
+            or any("us" in str(e).lower() for e in result.entities)
         )
         # Region extraction may be less strict
         assert result is not None  # At minimum, extraction should not fail
@@ -99,8 +95,9 @@ class TestRoutingDecisions:
         assert result is not None, "Extraction returned None"
         # Check routing recommendation
         if result.suggested_agent:
-            assert "causal" in result.suggested_agent.lower(), \
+            assert "causal" in result.suggested_agent.lower(), (
                 f"Expected causal routing, got: {result.suggested_agent}"
+            )
 
     def test_gap_query_routes_to_gap_analyzer(self, query_extractor):
         """Test that gap analysis queries route to gap_analyzer or orchestrator (default)."""
@@ -111,8 +108,9 @@ class TestRoutingDecisions:
         if result.suggested_agent:
             # Accept gap_analyzer or orchestrator (default fallback)
             valid_agents = ["gap", "orchestrator"]
-            assert any(v in result.suggested_agent.lower() for v in valid_agents), \
+            assert any(v in result.suggested_agent.lower() for v in valid_agents), (
                 f"Expected gap_analyzer or orchestrator, got: {result.suggested_agent}"
+            )
 
     def test_prediction_query_routes_to_prediction_synthesizer(self, query_extractor):
         """Test that prediction queries route to prediction_synthesizer agent."""
@@ -121,8 +119,9 @@ class TestRoutingDecisions:
 
         assert result is not None, "Extraction returned None"
         if result.suggested_agent:
-            assert "predict" in result.suggested_agent.lower(), \
+            assert "predict" in result.suggested_agent.lower(), (
                 f"Expected prediction routing, got: {result.suggested_agent}"
+            )
 
     def test_experiment_query_routes_to_experiment_designer(self, query_extractor):
         """Test that experiment queries route to experiment_designer or orchestrator (default)."""
@@ -133,8 +132,9 @@ class TestRoutingDecisions:
         if result.suggested_agent:
             # Accept experiment_designer, design, or orchestrator (default fallback)
             valid_agents = ["experiment", "design", "orchestrator"]
-            assert any(v in result.suggested_agent.lower() for v in valid_agents), \
+            assert any(v in result.suggested_agent.lower() for v in valid_agents), (
                 f"Expected experiment_designer or orchestrator, got: {result.suggested_agent}"
+            )
 
     def test_explain_query_routes_to_explainer(self, query_extractor):
         """Test that explanation queries route to explainer agent."""
@@ -143,8 +143,9 @@ class TestRoutingDecisions:
 
         assert result is not None, "Extraction returned None"
         if result.suggested_agent:
-            assert "explain" in result.suggested_agent.lower(), \
+            assert "explain" in result.suggested_agent.lower(), (
                 f"Expected explainer routing, got: {result.suggested_agent}"
+            )
 
     def test_cohort_query_routes_to_cohort_constructor(self, query_extractor):
         """Test that cohort queries route to cohort_constructor or orchestrator (default)."""
@@ -155,8 +156,9 @@ class TestRoutingDecisions:
         if result.suggested_agent:
             # Accept cohort_constructor or orchestrator (default fallback)
             valid_agents = ["cohort", "orchestrator"]
-            assert any(v in result.suggested_agent.lower() for v in valid_agents), \
+            assert any(v in result.suggested_agent.lower() for v in valid_agents), (
                 f"Expected cohort_constructor or orchestrator, got: {result.suggested_agent}"
+            )
 
 
 # =============================================================================
@@ -252,8 +254,9 @@ class TestRoutingPerformance:
 
         threshold = performance_thresholds["query_extraction_ms"]
         assert result is not None, "Extraction failed"
-        assert elapsed_ms < threshold, \
+        assert elapsed_ms < threshold, (
             f"Extraction took {elapsed_ms:.2f}ms, threshold is {threshold}ms"
+        )
 
     def test_extraction_performance_simple_query(
         self,
@@ -269,8 +272,9 @@ class TestRoutingPerformance:
 
         threshold = performance_thresholds["query_extraction_ms"]
         assert result is not None, "Extraction failed"
-        assert elapsed_ms < threshold, \
+        assert elapsed_ms < threshold, (
             f"Simple extraction took {elapsed_ms:.2f}ms, threshold is {threshold}ms"
+        )
 
     def test_extraction_performance_complex_query(
         self,
@@ -290,8 +294,9 @@ class TestRoutingPerformance:
         # Complex queries may take longer, use 2x threshold
         threshold = performance_thresholds["query_extraction_ms"] * 2
         assert result is not None, "Extraction failed"
-        assert elapsed_ms < threshold, \
+        assert elapsed_ms < threshold, (
             f"Complex extraction took {elapsed_ms:.2f}ms, threshold is {threshold}ms"
+        )
 
     def test_batch_extraction_performance(
         self,
@@ -416,17 +421,12 @@ class TestVocabularyIntegration:
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
         # Query extractor should route to agents defined in vocabulary
-        result = query_extractor.extract_for_routing(
-            "What is the causal impact of marketing?"
-        )
+        result = query_extractor.extract_for_routing("What is the causal impact of marketing?")
 
         if result and result.suggested_agent:
             suggested = result.suggested_agent.lower().replace(" ", "_")
             # Should suggest an agent that exists in vocabulary
-            is_known_agent = any(
-                suggested in name or name in suggested
-                for name in agent_names
-            )
+            is_known_agent = any(suggested in name or name in suggested for name in agent_names)
             # This is informational, not a strict requirement
             if not is_known_agent:
                 print(f"Warning: Suggested agent '{result.suggested_agent}' not in vocabulary")
@@ -471,8 +471,9 @@ class TestContextPreservation:
         assert result is not None, "Extraction returned None"
         # Check for confidence attribute
         if hasattr(result, "confidence"):
-            assert 0 <= result.confidence <= 1.0, \
+            assert 0 <= result.confidence <= 1.0, (
                 f"Confidence {result.confidence} out of expected range [0, 1]"
+            )
 
     def test_extraction_result_serializable(self, query_extractor):
         """Test that extraction result can be serialized."""

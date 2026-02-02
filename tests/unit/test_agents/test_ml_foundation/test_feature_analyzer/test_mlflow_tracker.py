@@ -7,9 +7,6 @@ and interaction detection.
 Version: 1.0.0
 """
 
-import json
-import tempfile
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +18,6 @@ from src.agents.ml_foundation.feature_analyzer.mlflow_tracker import (
     _NoOpRun,
     create_tracker,
 )
-
 
 # ==============================================================================
 # Test Fixtures
@@ -429,9 +425,7 @@ class TestTrackAnalysisRun:
     """Tests for track_analysis_run context manager."""
 
     @pytest.mark.asyncio
-    async def test_yields_noop_when_mlflow_unavailable(
-        self, tracker, sample_context
-    ):
+    async def test_yields_noop_when_mlflow_unavailable(self, tracker, sample_context):
         """Test that NoOpRun is yielded when MLflow is unavailable."""
         tracker._get_mlflow = MagicMock(return_value=None)
 
@@ -457,7 +451,7 @@ class TestTrackAnalysisRun:
         tracker._get_mlflow = MagicMock(return_value=mock_mlflow)
         tracker._get_connector = MagicMock(return_value=mock_connector)
 
-        async with tracker.track_analysis_run(sample_context) as run:
+        async with tracker.track_analysis_run(sample_context):
             pass
 
         mock_connector.get_or_create_experiment.assert_called_once()
@@ -472,7 +466,7 @@ class TestTrackAnalysisRun:
         tracker._get_mlflow = MagicMock(return_value=mock_mlflow)
         tracker._get_connector = MagicMock(return_value=mock_connector)
 
-        async with tracker.track_analysis_run(sample_context) as run:
+        async with tracker.track_analysis_run(sample_context):
             pass
 
         # Get the mock run from context manager
@@ -864,9 +858,7 @@ class TestErrorHandling:
     """Tests for error handling and graceful degradation."""
 
     @pytest.mark.asyncio
-    async def test_artifact_logging_handles_json_error(
-        self, tracker, sample_state
-    ):
+    async def test_artifact_logging_handles_json_error(self, tracker, sample_state):
         """Test that JSON serialization errors are handled."""
         # Add non-serializable object
         sample_state["non_serializable"] = object()
@@ -878,9 +870,7 @@ class TestErrorHandling:
         await tracker.log_feature_importance(mock_run, sample_state)
 
     @pytest.mark.asyncio
-    async def test_context_manager_cleanup_on_error(
-        self, tracker, sample_context
-    ):
+    async def test_context_manager_cleanup_on_error(self, tracker, sample_context):
         """Test that context manager handles errors gracefully.
 
         Note: The implementation catches all exceptions inside the generator
@@ -899,11 +889,6 @@ class TestErrorHandling:
     def test_extract_metrics_handles_malformed_state(self, tracker):
         """Test behavior with malformed state - some fields cause errors."""
         # Test with None values (should be handled gracefully)
-        safe_malformed_state = {
-            "global_importance": None,  # None is handled by if check
-            "feature_directions": None,  # None is handled by .values() check
-            "removed_features": None,  # None would cause issues
-        }
 
         # None global_importance is handled (if check returns [])
         metrics = tracker.extract_metrics({"global_importance": None})

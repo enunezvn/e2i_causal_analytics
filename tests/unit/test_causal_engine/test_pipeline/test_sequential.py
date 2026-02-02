@@ -7,7 +7,6 @@ import pytest
 
 from src.causal_engine.pipeline import (
     CausalLibrary,
-    LibraryExecutionResult,
     PipelineInput,
     PipelineStage,
     SequentialPipeline,
@@ -66,11 +65,7 @@ class TestSequentialPipelineCreation:
 
     def test_builder_pattern(self):
         """Test SequentialPipelineBuilder."""
-        pipeline = (
-            SequentialPipelineBuilder()
-            .with_fail_fast(True)
-            .build()
-        )
+        pipeline = SequentialPipelineBuilder().with_fail_fast(True).build()
         assert isinstance(pipeline, SequentialPipeline)
         assert pipeline.fail_fast is True
 
@@ -111,9 +106,7 @@ class TestSequentialPipelineExecution:
         assert len(output["libraries_used"]) > 0
 
     @pytest.mark.asyncio
-    async def test_execute_with_specific_libraries(
-        self, pipeline: SequentialPipeline
-    ):
+    async def test_execute_with_specific_libraries(self, pipeline: SequentialPipeline):
         """Test executing with specific libraries."""
         input_data = PipelineInput(
             query="How much does the treatment effect vary by region?",

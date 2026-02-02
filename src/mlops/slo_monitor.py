@@ -44,12 +44,11 @@ Version: 1.0.0 (Phase 4 - G26)
 
 import logging
 import threading
-import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -300,10 +299,7 @@ class SLOMonitor:
         # Custom SLO targets (override defaults)
         self._custom_targets: Dict[str, SLOTarget] = {}
 
-        logger.info(
-            f"SLOMonitor initialized (window={window_hours}h, "
-            f"max_records={max_records})"
-        )
+        logger.info(f"SLOMonitor initialized (window={window_hours}h, max_records={max_records})")
 
     def record(
         self,
@@ -344,8 +340,7 @@ class SLOMonitor:
                 self._total_errors[agent_name] += 1
 
         logger.debug(
-            f"SLO record: agent={agent_name}, latency={latency_ms:.1f}ms, "
-            f"success={success}"
+            f"SLO record: agent={agent_name}, latency={latency_ms:.1f}ms, success={success}"
         )
 
         return record
@@ -384,9 +379,7 @@ class SLOMonitor:
 
         with self._lock:
             # Get records in window
-            records = [
-                r for r in self._records[agent_name] if r.timestamp > cutoff
-            ]
+            records = [r for r in self._records[agent_name] if r.timestamp > cutoff]
 
         if not records:
             # No data - return compliant by default
@@ -510,58 +503,72 @@ class SLOMonitor:
 
         for agent_name, compliance in all_compliance.items():
             # Availability gauge
-            metrics.append({
-                "name": "e2i_slo_availability",
-                "value": compliance.actual_availability,
-                "labels": {"agent": agent_name, "tier": compliance.tier.value},
-                "type": "gauge",
-            })
+            metrics.append(
+                {
+                    "name": "e2i_slo_availability",
+                    "value": compliance.actual_availability,
+                    "labels": {"agent": agent_name, "tier": compliance.tier.value},
+                    "type": "gauge",
+                }
+            )
 
             # Error rate gauge
-            metrics.append({
-                "name": "e2i_slo_error_rate",
-                "value": compliance.actual_error_rate,
-                "labels": {"agent": agent_name, "tier": compliance.tier.value},
-                "type": "gauge",
-            })
+            metrics.append(
+                {
+                    "name": "e2i_slo_error_rate",
+                    "value": compliance.actual_error_rate,
+                    "labels": {"agent": agent_name, "tier": compliance.tier.value},
+                    "type": "gauge",
+                }
+            )
 
             # Latency gauges
-            metrics.append({
-                "name": "e2i_slo_latency_p50_ms",
-                "value": compliance.actual_p50_ms,
-                "labels": {"agent": agent_name, "tier": compliance.tier.value},
-                "type": "gauge",
-            })
-            metrics.append({
-                "name": "e2i_slo_latency_p99_ms",
-                "value": compliance.actual_p99_ms,
-                "labels": {"agent": agent_name, "tier": compliance.tier.value},
-                "type": "gauge",
-            })
+            metrics.append(
+                {
+                    "name": "e2i_slo_latency_p50_ms",
+                    "value": compliance.actual_p50_ms,
+                    "labels": {"agent": agent_name, "tier": compliance.tier.value},
+                    "type": "gauge",
+                }
+            )
+            metrics.append(
+                {
+                    "name": "e2i_slo_latency_p99_ms",
+                    "value": compliance.actual_p99_ms,
+                    "labels": {"agent": agent_name, "tier": compliance.tier.value},
+                    "type": "gauge",
+                }
+            )
 
             # Compliance gauges (1 = met, 0 = violated)
-            metrics.append({
-                "name": "e2i_slo_compliant",
-                "value": 1 if compliance.overall_compliant else 0,
-                "labels": {"agent": agent_name, "tier": compliance.tier.value},
-                "type": "gauge",
-            })
+            metrics.append(
+                {
+                    "name": "e2i_slo_compliant",
+                    "value": 1 if compliance.overall_compliant else 0,
+                    "labels": {"agent": agent_name, "tier": compliance.tier.value},
+                    "type": "gauge",
+                }
+            )
 
             # Error budget remaining
-            metrics.append({
-                "name": "e2i_slo_error_budget_remaining",
-                "value": compliance.error_budget_remaining,
-                "labels": {"agent": agent_name, "tier": compliance.tier.value},
-                "type": "gauge",
-            })
+            metrics.append(
+                {
+                    "name": "e2i_slo_error_budget_remaining",
+                    "value": compliance.error_budget_remaining,
+                    "labels": {"agent": agent_name, "tier": compliance.tier.value},
+                    "type": "gauge",
+                }
+            )
 
             # Burn rate
-            metrics.append({
-                "name": "e2i_slo_burn_rate",
-                "value": compliance.burn_rate,
-                "labels": {"agent": agent_name, "tier": compliance.tier.value},
-                "type": "gauge",
-            })
+            metrics.append(
+                {
+                    "name": "e2i_slo_burn_rate",
+                    "value": compliance.burn_rate,
+                    "labels": {"agent": agent_name, "tier": compliance.tier.value},
+                    "type": "gauge",
+                }
+            )
 
         return metrics
 
@@ -583,13 +590,9 @@ class SLOMonitor:
         # Group by tier
         by_tier: Dict[str, Dict[str, Any]] = {}
         for tier in AgentTier:
-            tier_compliance = [
-                c for c in all_compliance.values() if c.tier == tier
-            ]
+            tier_compliance = [c for c in all_compliance.values() if c.tier == tier]
             if tier_compliance:
-                tier_compliant = sum(
-                    1 for c in tier_compliance if c.overall_compliant
-                )
+                tier_compliant = sum(1 for c in tier_compliance if c.overall_compliant)
                 by_tier[tier.value] = {
                     "total": len(tier_compliance),
                     "compliant": tier_compliant,
@@ -602,8 +605,7 @@ class SLOMonitor:
             "compliant_agents": compliant,
             "compliance_rate": compliant / total if total > 0 else 1.0,
             "violated_agents": [
-                c.agent_name for c in all_compliance.values()
-                if not c.overall_compliant
+                c.agent_name for c in all_compliance.values() if not c.overall_compliant
             ],
             "by_tier": by_tier,
             "window_hours": self._window_hours,

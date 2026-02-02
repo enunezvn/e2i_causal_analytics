@@ -4,11 +4,11 @@ This module defines the LangGraph state structure for segment-level CATE analysi
 """
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict, TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Literal, Optional, TypedDict
 from uuid import UUID
 
 if TYPE_CHECKING:
-    import pandas as pd
+    pass
 
 
 class CATEResult(TypedDict):
@@ -63,7 +63,9 @@ class HeterogeneousOptimizerState(TypedDict):
     effect_modifiers: List[str]  # Variables that modify treatment effect
     data_source: str
     filters: Optional[Dict[str, Any]]
-    tier0_data: Optional[Any]  # DataFrame passthrough from tier0 testing (use Any to avoid pd import)
+    tier0_data: Optional[
+        Any
+    ]  # DataFrame passthrough from tier0 testing (use Any to avoid pd import)
 
     # === CONFIGURATION (4 fields) ===
     n_estimators: int  # Causal Forest trees (default: 100)
@@ -116,7 +118,9 @@ class HeterogeneousOptimizerState(TypedDict):
     # === SUMMARY (3 fields) ===
     executive_summary: Optional[str]
     key_insights: Optional[List[str]]
-    strategic_interpretation: Optional[str]  # v4.3: actionable business interpretation of CATE results
+    strategic_interpretation: Optional[
+        str
+    ]  # v4.3: actionable business interpretation of CATE results
 
     # === EXECUTION METADATA (3 fields) ===
     estimation_latency_ms: int
@@ -163,7 +167,9 @@ class HeterogeneousOptimizerState(TypedDict):
 
     # Cross-library validation (DoWhy ↔ CausalML)
     cross_library_validation: Optional[Dict[str, Any]]  # Validation results between libraries
-    econml_causalml_agreement: Optional[float]  # Agreement between EconML CATE and CausalML uplift (0-1)
+    econml_causalml_agreement: Optional[
+        float
+    ]  # Agreement between EconML CATE and CausalML uplift (0-1)
     dowhy_validation_result: Optional[Dict[str, Any]]  # DoWhy validation of CATE estimates
     validation_passed: Optional[bool]  # Whether cross-validation passed thresholds
 
@@ -173,12 +179,14 @@ class HeterogeneousOptimizerState(TypedDict):
     effect_estimate_variance: Optional[float]  # Variance across library estimates
 
     # Multi-library routing metadata
-    question_type: Optional[Literal[
-        "effect_heterogeneity",  # "How does effect vary?" → EconML primary
-        "targeting",  # "Who should we target?" → CausalML primary
-        "segment_optimization",  # Both EconML and CausalML
-        "comprehensive",  # All libraries including DoWhy validation
-    ]]
+    question_type: Optional[
+        Literal[
+            "effect_heterogeneity",  # "How does effect vary?" → EconML primary
+            "targeting",  # "Who should we target?" → CausalML primary
+            "segment_optimization",  # Both EconML and CausalML
+            "comprehensive",  # All libraries including DoWhy validation
+        ]
+    ]
     routing_confidence: Optional[float]  # Confidence in library routing decision
     routing_rationale: Optional[str]  # Why this library routing was chosen
 
@@ -192,7 +200,9 @@ class HeterogeneousOptimizerState(TypedDict):
     # Discovered DAG from causal discovery module
     discovered_dag_adjacency: Optional[List[List[int]]]  # Adjacency matrix
     discovered_dag_nodes: Optional[List[str]]  # Node names
-    discovered_dag_edge_types: Optional[Dict[str, str]]  # Edge types (DIRECTED, BIDIRECTED, UNDIRECTED)
+    discovered_dag_edge_types: Optional[
+        Dict[str, str]
+    ]  # Edge types (DIRECTED, BIDIRECTED, UNDIRECTED)
 
     # Discovery gate decision
     discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]]
@@ -201,7 +211,9 @@ class HeterogeneousOptimizerState(TypedDict):
     # DAG validation outputs
     dag_validated_segments: Optional[List[str]]  # Segments with valid causal paths
     dag_invalid_segments: Optional[List[str]]  # Segments without causal paths
-    latent_confounder_segments: Optional[List[str]]  # Segments with bidirected edges (latent confounders)
+    latent_confounder_segments: Optional[
+        List[str]
+    ]  # Segments with bidirected edges (latent confounders)
     dag_validation_warnings: Optional[List[str]]  # Warnings from DAG validation
 
 
@@ -281,7 +293,9 @@ class HeterogeneousOptimizerOutput(TypedDict):
 
     # B7.4: Multi-Library Support Output
     libraries_used: Optional[List[str]]  # Libraries that were executed
-    library_execution_mode: Optional[Literal["sequential", "parallel"]]  # How libraries were executed
+    library_execution_mode: Optional[
+        Literal["sequential", "parallel"]
+    ]  # How libraries were executed
     primary_library: Optional[str]  # Main library used for the analysis
     library_agreement_score: Optional[float]  # Agreement between libraries (0-1)
     library_consensus_effect: Optional[float]  # Confidence-weighted consensus CATE

@@ -14,19 +14,19 @@ Test Classes:
 - TestSchemaCompilerExport: Cypher DDL and JSON Schema export
 """
 
+from pathlib import Path
+
 import pytest
 import yaml
-from pathlib import Path
-from typing import Any, Dict
 
 from src.ontology.schema_compiler import (
-    SchemaCompiler,
+    CardinalityType,
     CompiledSchema,
     EntitySchema,
-    RelationshipSchema,
     PropertySchema,
     PropertyType,
-    CardinalityType,
+    RelationshipSchema,
+    SchemaCompiler,
 )
 
 
@@ -87,22 +87,18 @@ class TestDataclasses:
             indexed=True,
             unique=False,
             default=0.0,
-            constraints={'min': 0.0, 'max': 1.0},
-            description="Risk score"
+            constraints={"min": 0.0, "max": 1.0},
+            description="Risk score",
         )
 
         assert prop.name == "score"
         assert prop.required is True
         assert prop.indexed is True
-        assert prop.constraints == {'min': 0.0, 'max': 1.0}
+        assert prop.constraints == {"min": 0.0, "max": 1.0}
 
     def test_entity_schema_defaults(self):
         """Test EntitySchema has correct defaults."""
-        entity = EntitySchema(
-            label="TestEntity",
-            properties=[],
-            primary_key="id"
-        )
+        entity = EntitySchema(label="TestEntity", properties=[], primary_key="id")
 
         assert entity.label == "TestEntity"
         assert entity.indexes == []
@@ -116,7 +112,7 @@ class TestDataclasses:
             from_label="A",
             to_label="B",
             properties=[],
-            cardinality=CardinalityType.ONE_TO_MANY
+            cardinality=CardinalityType.ONE_TO_MANY,
         )
 
         assert rel.type == "TEST_REL"
@@ -131,9 +127,9 @@ class TestDataclasses:
             relationships={},
             constraints=[],
             indexes=[],
-            graphity_config={'enabled': True},
+            graphity_config={"enabled": True},
             version="1.0",
-            metadata={}
+            metadata={},
         )
 
         assert isinstance(compiled.entities, dict)
@@ -177,115 +173,115 @@ class TestSchemaCompilerParsing:
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        assert 'Patient' in compiled.entities
-        assert 'HCP' in compiled.entities
-        assert 'Brand' in compiled.entities
+        assert "Patient" in compiled.entities
+        assert "HCP" in compiled.entities
+        assert "Brand" in compiled.entities
 
     def test_entity_primary_key(self, mock_ontology_dir: Path):
         """Test entities have correct primary keys."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        assert compiled.entities['Patient'].primary_key == 'patient_id'
-        assert compiled.entities['HCP'].primary_key == 'hcp_id'
-        assert compiled.entities['Brand'].primary_key == 'brand_id'
+        assert compiled.entities["Patient"].primary_key == "patient_id"
+        assert compiled.entities["HCP"].primary_key == "hcp_id"
+        assert compiled.entities["Brand"].primary_key == "brand_id"
 
     def test_entity_properties_parsed(self, mock_ontology_dir: Path):
         """Test entity properties are correctly parsed."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        patient = compiled.entities['Patient']
+        patient = compiled.entities["Patient"]
         prop_names = [p.name for p in patient.properties]
 
-        assert 'patient_id' in prop_names
-        assert 'region' in prop_names
-        assert 'risk_score' in prop_names
-        assert 'created_at' in prop_names
+        assert "patient_id" in prop_names
+        assert "region" in prop_names
+        assert "risk_score" in prop_names
+        assert "created_at" in prop_names
 
     def test_property_type_mapping(self, mock_ontology_dir: Path):
         """Test property types are correctly mapped."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        patient = compiled.entities['Patient']
+        patient = compiled.entities["Patient"]
         props = {p.name: p for p in patient.properties}
 
-        assert props['patient_id'].property_type == PropertyType.STRING
-        assert props['region'].property_type == PropertyType.STRING
-        assert props['risk_score'].property_type == PropertyType.FLOAT
-        assert props['created_at'].property_type == PropertyType.DATETIME
+        assert props["patient_id"].property_type == PropertyType.STRING
+        assert props["region"].property_type == PropertyType.STRING
+        assert props["risk_score"].property_type == PropertyType.FLOAT
+        assert props["created_at"].property_type == PropertyType.DATETIME
 
     def test_property_required_flag(self, mock_ontology_dir: Path):
         """Test property required flag is parsed correctly."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        patient = compiled.entities['Patient']
+        patient = compiled.entities["Patient"]
         props = {p.name: p for p in patient.properties}
 
-        assert props['patient_id'].required is True
-        assert props['region'].required is True
-        assert props['risk_score'].required is False
+        assert props["patient_id"].required is True
+        assert props["region"].required is True
+        assert props["risk_score"].required is False
 
     def test_property_indexed_flag(self, mock_ontology_dir: Path):
         """Test property indexed flag is parsed correctly."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        patient = compiled.entities['Patient']
+        patient = compiled.entities["Patient"]
         props = {p.name: p for p in patient.properties}
 
-        assert props['patient_id'].indexed is True
-        assert props['region'].indexed is True
+        assert props["patient_id"].indexed is True
+        assert props["region"].indexed is True
 
     def test_property_constraints_parsed(self, mock_ontology_dir: Path):
         """Test property constraints are parsed correctly."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        patient = compiled.entities['Patient']
+        patient = compiled.entities["Patient"]
         props = {p.name: p for p in patient.properties}
 
-        assert props['risk_score'].constraints == {'min': 0.0, 'max': 1.0}
+        assert props["risk_score"].constraints == {"min": 0.0, "max": 1.0}
 
     def test_compile_extracts_relationships(self, mock_ontology_dir: Path):
         """Test compile() extracts all relationships from YAML."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        assert 'TREATED_BY' in compiled.relationships
-        assert 'PRESCRIBED' in compiled.relationships
-        assert 'PRESCRIBES' in compiled.relationships
+        assert "TREATED_BY" in compiled.relationships
+        assert "PRESCRIBED" in compiled.relationships
+        assert "PRESCRIBES" in compiled.relationships
 
     def test_relationship_endpoints(self, mock_ontology_dir: Path):
         """Test relationship from/to labels are correct."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        treated_by = compiled.relationships['TREATED_BY']
-        assert treated_by.from_label == 'Patient'
-        assert treated_by.to_label == 'HCP'
+        treated_by = compiled.relationships["TREATED_BY"]
+        assert treated_by.from_label == "Patient"
+        assert treated_by.to_label == "HCP"
 
     def test_relationship_cardinality(self, mock_ontology_dir: Path):
         """Test relationship cardinality is correctly parsed."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        assert compiled.relationships['TREATED_BY'].cardinality == CardinalityType.ONE_TO_MANY
-        assert compiled.relationships['PRESCRIBED'].cardinality == CardinalityType.MANY_TO_MANY
-        assert compiled.relationships['PRESCRIBES'].cardinality == CardinalityType.ONE_TO_MANY
+        assert compiled.relationships["TREATED_BY"].cardinality == CardinalityType.ONE_TO_MANY
+        assert compiled.relationships["PRESCRIBED"].cardinality == CardinalityType.MANY_TO_MANY
+        assert compiled.relationships["PRESCRIBES"].cardinality == CardinalityType.ONE_TO_MANY
 
     def test_relationship_properties_parsed(self, mock_ontology_dir: Path):
         """Test relationship properties are correctly parsed."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        treated_by = compiled.relationships['TREATED_BY']
+        treated_by = compiled.relationships["TREATED_BY"]
         prop_names = [p.name for p in treated_by.properties]
 
-        assert 'is_primary' in prop_names
-        assert 'visit_count' in prop_names
+        assert "is_primary" in prop_names
+        assert "visit_count" in prop_names
 
 
 class TestSchemaCompilerValidation:
@@ -325,33 +321,27 @@ class TestSchemaCompilerGeneration:
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        unique_constraints = [
-            c for c in compiled.constraints
-            if c['type'] == 'unique'
-        ]
+        unique_constraints = [c for c in compiled.constraints if c["type"] == "unique"]
 
         # patient_id, hcp_id, brand_id are all unique
-        unique_entities = [c['entity'] for c in unique_constraints]
-        assert 'Patient' in unique_entities
-        assert 'HCP' in unique_entities
+        unique_entities = [c["entity"] for c in unique_constraints]
+        assert "Patient" in unique_entities
+        assert "HCP" in unique_entities
 
     def test_primary_key_constraints_generated(self, mock_ontology_dir: Path):
         """Test primary key constraints are generated for all entities."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        pk_constraints = [
-            c for c in compiled.constraints
-            if c['type'] == 'primary_key'
-        ]
+        pk_constraints = [c for c in compiled.constraints if c["type"] == "primary_key"]
 
         # One PK constraint per entity
         assert len(pk_constraints) == len(compiled.entities)
 
-        pk_entities = [c['entity'] for c in pk_constraints]
-        assert 'Patient' in pk_entities
-        assert 'HCP' in pk_entities
-        assert 'Brand' in pk_entities
+        pk_entities = [c["entity"] for c in pk_constraints]
+        assert "Patient" in pk_entities
+        assert "HCP" in pk_entities
+        assert "Brand" in pk_entities
 
     def test_cardinality_constraints_for_one_to_one(self, tmp_path: Path):
         """Test cardinality constraints generated for 1:1 relationships."""
@@ -360,44 +350,41 @@ class TestSchemaCompilerGeneration:
         ontology_dir.mkdir()
 
         schema_data = {
-            'entities': [
+            "entities": [
                 {
-                    'label': 'User',
-                    'primary_key': 'id',
-                    'properties': [{'name': 'id', 'type': 'string', 'required': True}]
+                    "label": "User",
+                    "primary_key": "id",
+                    "properties": [{"name": "id", "type": "string", "required": True}],
                 },
                 {
-                    'label': 'Profile',
-                    'primary_key': 'id',
-                    'properties': [{'name': 'id', 'type': 'string', 'required': True}]
+                    "label": "Profile",
+                    "primary_key": "id",
+                    "properties": [{"name": "id", "type": "string", "required": True}],
+                },
+            ],
+            "relationships": [
+                {
+                    "type": "HAS_PROFILE",
+                    "from": "User",
+                    "to": "Profile",
+                    "cardinality": "1:1",
+                    "properties": [],
                 }
             ],
-            'relationships': [
-                {
-                    'type': 'HAS_PROFILE',
-                    'from': 'User',
-                    'to': 'Profile',
-                    'cardinality': '1:1',
-                    'properties': []
-                }
-            ]
         }
 
-        with open(ontology_dir / "schema.yaml", 'w') as f:
+        with open(ontology_dir / "schema.yaml", "w") as f:
             yaml.dump(schema_data, f)
 
         compiler = SchemaCompiler(ontology_dir)
         compiled = compiler.compile()
 
-        cardinality_constraints = [
-            c for c in compiled.constraints
-            if c['type'] == 'cardinality'
-        ]
+        cardinality_constraints = [c for c in compiled.constraints if c["type"] == "cardinality"]
 
         assert len(cardinality_constraints) == 1
-        assert cardinality_constraints[0]['relationship'] == 'HAS_PROFILE'
-        assert cardinality_constraints[0]['max_outgoing'] == 1
-        assert cardinality_constraints[0]['max_incoming'] == 1
+        assert cardinality_constraints[0]["relationship"] == "HAS_PROFILE"
+        assert cardinality_constraints[0]["max_outgoing"] == 1
+        assert cardinality_constraints[0]["max_incoming"] == 1
 
     def test_indexes_generated_for_indexed_properties(self, mock_ontology_dir: Path):
         """Test indexes are generated for properties with indexed=True."""
@@ -405,11 +392,11 @@ class TestSchemaCompilerGeneration:
         compiled = compiler.compile()
 
         # Check that indexed properties have indexes
-        index_props = [(i['entity'], i['property']) for i in compiled.indexes]
+        index_props = [(i["entity"], i["property"]) for i in compiled.indexes]
 
         # patient_id, region are indexed
-        assert ('Patient', 'patient_id') in index_props
-        assert ('Patient', 'region') in index_props
+        assert ("Patient", "patient_id") in index_props
+        assert ("Patient", "region") in index_props
 
     def test_index_types(self, mock_ontology_dir: Path):
         """Test correct index types are assigned."""
@@ -417,12 +404,9 @@ class TestSchemaCompilerGeneration:
         compiled = compiler.compile()
 
         # String/integer properties get 'exact' type
-        string_indexes = [
-            i for i in compiled.indexes
-            if i['property'] == 'patient_id'
-        ]
+        string_indexes = [i for i in compiled.indexes if i["property"] == "patient_id"]
         if string_indexes:
-            assert string_indexes[0]['type'] == 'exact'
+            assert string_indexes[0]["type"] == "exact"
 
 
 class TestSchemaCompilerGraphity:
@@ -433,8 +417,8 @@ class TestSchemaCompilerGraphity:
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        assert 'enabled' in compiled.graphity_config
-        assert compiled.graphity_config['enabled'] is True
+        assert "enabled" in compiled.graphity_config
+        assert compiled.graphity_config["enabled"] is True
 
     def test_hub_entities_identified(self, mock_ontology_dir: Path):
         """Test hub entities are identified based on incoming relationships."""
@@ -442,7 +426,7 @@ class TestSchemaCompilerGraphity:
         compiled = compiler.compile()
 
         # HCP and Brand have multiple incoming relationships
-        hub_entities = compiled.graphity_config.get('hub_entities', [])
+        hub_entities = compiled.graphity_config.get("hub_entities", [])
         # May or may not be identified as hubs depending on relationship count
         assert isinstance(hub_entities, list)
 
@@ -451,32 +435,32 @@ class TestSchemaCompilerGraphity:
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        patterns = compiled.graphity_config.get('traversal_patterns', [])
+        patterns = compiled.graphity_config.get("traversal_patterns", [])
         assert len(patterns) == len(compiled.relationships)
 
         # Check pattern structure
         for pattern in patterns:
-            assert 'pattern' in pattern
-            assert 'edge_type' in pattern
-            assert 'estimated_frequency' in pattern
+            assert "pattern" in pattern
+            assert "edge_type" in pattern
+            assert "estimated_frequency" in pattern
 
     def test_edge_grouping_config(self, mock_ontology_dir: Path):
         """Test edge grouping configuration is present."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        edge_grouping = compiled.graphity_config.get('edge_grouping', {})
-        assert edge_grouping['strategy'] == 'by_type'
-        assert edge_grouping['chunk_size'] == 1000
+        edge_grouping = compiled.graphity_config.get("edge_grouping", {})
+        assert edge_grouping["strategy"] == "by_type"
+        assert edge_grouping["chunk_size"] == 1000
 
     def test_cache_policy_config(self, mock_ontology_dir: Path):
         """Test cache policy configuration is present."""
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        cache_policy = compiled.graphity_config.get('cache_policy', {})
-        assert cache_policy['hot_paths'] is True
-        assert 'ttl_seconds' in cache_policy
+        cache_policy = compiled.graphity_config.get("cache_policy", {})
+        assert cache_policy["hot_paths"] is True
+        assert "ttl_seconds" in cache_policy
 
 
 class TestSchemaCompilerExport:
@@ -523,10 +507,10 @@ class TestSchemaCompilerExport:
         schema = compiler.export_json_schema(compiled)
 
         assert isinstance(schema, dict)
-        assert '$schema' in schema
-        assert 'title' in schema
-        assert 'entities' in schema
-        assert 'relationships' in schema
+        assert "$schema" in schema
+        assert "title" in schema
+        assert "entities" in schema
+        assert "relationships" in schema
 
     def test_export_json_schema_entities(self, mock_ontology_dir: Path):
         """Test JSON Schema contains entity definitions."""
@@ -535,13 +519,13 @@ class TestSchemaCompilerExport:
 
         schema = compiler.export_json_schema(compiled)
 
-        assert 'Patient' in schema['entities']
-        patient_schema = schema['entities']['Patient']
+        assert "Patient" in schema["entities"]
+        patient_schema = schema["entities"]["Patient"]
 
-        assert patient_schema['type'] == 'object'
-        assert 'properties' in patient_schema
-        assert 'patient_id' in patient_schema['properties']
-        assert 'required' in patient_schema
+        assert patient_schema["type"] == "object"
+        assert "properties" in patient_schema
+        assert "patient_id" in patient_schema["properties"]
+        assert "required" in patient_schema
 
     def test_export_json_schema_relationships(self, mock_ontology_dir: Path):
         """Test JSON Schema contains relationship definitions."""
@@ -550,12 +534,12 @@ class TestSchemaCompilerExport:
 
         schema = compiler.export_json_schema(compiled)
 
-        assert 'TREATED_BY' in schema['relationships']
-        rel_schema = schema['relationships']['TREATED_BY']
+        assert "TREATED_BY" in schema["relationships"]
+        rel_schema = schema["relationships"]["TREATED_BY"]
 
-        assert rel_schema['from'] == 'Patient'
-        assert rel_schema['to'] == 'HCP'
-        assert rel_schema['cardinality'] == '1:N'
+        assert rel_schema["from"] == "Patient"
+        assert rel_schema["to"] == "HCP"
+        assert rel_schema["cardinality"] == "1:N"
 
     def test_export_json_schema_version(self, mock_ontology_dir: Path):
         """Test JSON Schema contains version."""
@@ -564,7 +548,7 @@ class TestSchemaCompilerExport:
 
         schema = compiler.export_json_schema(compiled)
 
-        assert schema['version'] == compiled.version
+        assert schema["version"] == compiled.version
 
 
 class TestSchemaCompilerMetadata:
@@ -575,10 +559,10 @@ class TestSchemaCompilerMetadata:
         compiler = SchemaCompiler(mock_ontology_dir)
         compiled = compiler.compile()
 
-        assert 'compiled_files' in compiled.metadata
-        assert isinstance(compiled.metadata['compiled_files'], list)
+        assert "compiled_files" in compiled.metadata
+        assert isinstance(compiled.metadata["compiled_files"], list)
         # Should include our mock YAML files
-        assert len(compiled.metadata['compiled_files']) > 0
+        assert len(compiled.metadata["compiled_files"]) > 0
 
     def test_version_in_compiled_schema(self, mock_ontology_dir: Path):
         """Test version is set in compiled schema."""

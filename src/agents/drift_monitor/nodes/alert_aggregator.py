@@ -377,9 +377,7 @@ class AlertAggregatorNode:
 
         return "\n".join(summary_parts)
 
-    def _enhance_summary_with_interpretation(
-        self, base_summary: str, interpretation: dict
-    ) -> str:
+    def _enhance_summary_with_interpretation(self, base_summary: str, interpretation: dict) -> str:
         """Enhance the drift summary with interpretation insights.
 
         Args:
@@ -405,7 +403,9 @@ class AlertAggregatorNode:
 
         # Add root cause hypothesis
         if interpretation.get("root_cause_hypothesis"):
-            enhanced_parts.append(f"\nRoot Cause Hypothesis: {interpretation['root_cause_hypothesis']}")
+            enhanced_parts.append(
+                f"\nRoot Cause Hypothesis: {interpretation['root_cause_hypothesis']}"
+            )
 
         # Add cascading effects
         if interpretation.get("cascading_effects"):
@@ -496,16 +496,14 @@ class AlertAggregatorNode:
         drifted_results = [r for r in results if r["drift_detected"]]
         severity_order = {"critical": 4, "high": 3, "medium": 2, "low": 1, "none": 0}
         sorted_results = sorted(
-            drifted_results,
-            key=lambda r: severity_order.get(r["severity"], 0),
-            reverse=True
+            drifted_results, key=lambda r: severity_order.get(r["severity"], 0), reverse=True
         )
 
         for result in sorted_results[:3]:
             feature = result["feature"]
             drift_type = result["drift_type"]
             severity = result["severity"]
-            psi = result.get("psi_score", 0)
+            result.get("psi_score", 0)
 
             driver_info = {
                 "feature": feature,
@@ -562,7 +560,7 @@ class AlertAggregatorNode:
             Human-readable description of the change
         """
         psi = result.get("psi_score", 0)
-        ks_stat = result.get("ks_statistic", 0)
+        result.get("ks_statistic", 0)
         drift_type = result["drift_type"]
 
         if drift_type == "data":
@@ -592,8 +590,14 @@ class AlertAggregatorNode:
         """
         # Common high-impact features in pharma commercial analytics
         high_impact_features = {
-            "hcp_visits", "prescription_volume", "market_share", "trx_count",
-            "nrx_count", "conversion_rate", "patient_count", "days_on_therapy"
+            "hcp_visits",
+            "prescription_volume",
+            "market_share",
+            "trx_count",
+            "nrx_count",
+            "conversion_rate",
+            "patient_count",
+            "days_on_therapy",
         }
 
         feature_lower = feature.lower()
@@ -603,7 +607,9 @@ class AlertAggregatorNode:
             if is_high_impact:
                 return f"HIGH IMPACT: {feature} is a key business metric - drift here directly affects model reliability for critical decisions"
             else:
-                return f"SIGNIFICANT: {feature} shows major drift - may affect downstream predictions"
+                return (
+                    f"SIGNIFICANT: {feature} shows major drift - may affect downstream predictions"
+                )
         elif severity == "medium":
             return f"MODERATE: {feature} drift may contribute to prediction degradation over time"
         else:
@@ -619,9 +625,15 @@ class AlertAggregatorNode:
             Root cause hypothesis string
         """
         # Analyze patterns in drift
-        data_drift_count = sum(1 for r in results if r["drift_type"] == "data" and r["drift_detected"])
-        model_drift_count = sum(1 for r in results if r["drift_type"] == "model" and r["drift_detected"])
-        concept_drift_count = sum(1 for r in results if r["drift_type"] == "concept" and r["drift_detected"])
+        data_drift_count = sum(
+            1 for r in results if r["drift_type"] == "data" and r["drift_detected"]
+        )
+        model_drift_count = sum(
+            1 for r in results if r["drift_type"] == "model" and r["drift_detected"]
+        )
+        concept_drift_count = sum(
+            1 for r in results if r["drift_type"] == "concept" and r["drift_detected"]
+        )
 
         hypotheses = []
 
@@ -650,7 +662,9 @@ class AlertAggregatorNode:
             )
 
         if not hypotheses:
-            hypotheses.append("Drift patterns do not indicate a clear root cause - recommend detailed investigation.")
+            hypotheses.append(
+                "Drift patterns do not indicate a clear root cause - recommend detailed investigation."
+            )
 
         return " ".join(hypotheses)
 

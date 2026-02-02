@@ -3,11 +3,11 @@
 import pytest
 
 from src.agents.ml_foundation.model_selector.nodes.historical_analyzer import (
+    _get_default_recommendations,
+    _get_default_success_rates,
     analyze_historical_performance,
     get_algorithm_trends,
     get_recommendations_from_history,
-    _get_default_success_rates,
-    _get_default_recommendations,
 )
 
 
@@ -92,9 +92,7 @@ class TestGetDefaultRecommendations:
         assert len(recs) > 0
         # Causal problems should recommend CausalForest or LinearDML
         causal_algos = ["CausalForest", "LinearDML", "causal"]
-        assert any(
-            any(algo.lower() in r.lower() for algo in causal_algos) for r in recs
-        )
+        assert any(any(algo.lower() in r.lower() for algo in causal_algos) for r in recs)
 
     def test_returns_recommendations_for_conversion(self):
         """Should return conversion-specific recommendations."""
@@ -126,9 +124,7 @@ class TestGetDefaultRecommendations:
 
     def test_adjusts_for_regression_problem_type(self):
         """Should adjust recommendations for regression."""
-        recs_classification = _get_default_recommendations(
-            "binary_classification", "churn"
-        )
+        recs_classification = _get_default_recommendations("binary_classification", "churn")
         recs_regression = _get_default_recommendations("regression", "churn")
 
         # Both should return recommendations
@@ -209,7 +205,7 @@ class TestGetAlgorithmTrends:
         result = await get_algorithm_trends(state)
         trends = result["algorithm_trends"]
 
-        for algo_name, trend_data in trends.items():
+        for _algo_name, trend_data in trends.items():
             assert isinstance(trend_data, dict)
             # Should have performance trend indicator
             assert "trend" in trend_data
@@ -302,9 +298,7 @@ class TestGetRecommendationsFromHistory:
         recommended = result["history_recommended_algorithms"]
         # Should have causal-related recommendations
         causal_terms = ["Causal", "DML", "causal"]
-        has_causal = any(
-            any(term in algo for term in causal_terms) for algo in recommended
-        )
+        has_causal = any(any(term in algo for term in causal_terms) for algo in recommended)
         assert has_causal or len(recommended) > 0
 
 

@@ -9,11 +9,9 @@ Tests the E2IGEPAMetric protocol implementation for each agent type:
 Version: 4.3
 """
 
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 
 # Mark all tests in this module to run on the same worker (DSPy import safety)
 pytestmark = pytest.mark.xdist_group(name="gepa_metrics")
@@ -514,7 +512,9 @@ class TestToolComposerGEPAMetric:
 
         # High-quality response
         response = MagicMock()
-        response.answer = "Comprehensive analysis comparing brand performance across regions with clear insights."
+        response.answer = (
+            "Comprehensive analysis comparing brand performance across regions with clear insights."
+        )
         response.confidence = 0.9
         response.caveats = []
         response.failed_components = []

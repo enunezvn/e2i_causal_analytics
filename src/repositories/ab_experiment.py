@@ -121,6 +121,7 @@ class ABExperimentRepository(BaseRepository):
         if self.client is None:
             try:
                 from src.repositories import get_supabase_client
+
                 self.client = get_supabase_client()
             except ImportError:
                 logger.warning("Supabase client not available, running in mock mode")
@@ -212,17 +213,19 @@ class ABExperimentRepository(BaseRepository):
         # Prepare data
         data = []
         for a in assignments:
-            data.append({
-                "experiment_id": str(a["experiment_id"]),
-                "unit_id": a["unit_id"],
-                "unit_type": a["unit_type"],
-                "variant": a["variant"],
-                "randomization_method": a["randomization_method"],
-                "stratification_key": a.get("stratification_key", {}),
-                "block_id": a.get("block_id"),
-                "assignment_hash": a.get("assignment_hash"),
-                "created_by": a.get("created_by"),
-            })
+            data.append(
+                {
+                    "experiment_id": str(a["experiment_id"]),
+                    "unit_id": a["unit_id"],
+                    "unit_type": a["unit_type"],
+                    "variant": a["variant"],
+                    "randomization_method": a["randomization_method"],
+                    "stratification_key": a.get("stratification_key", {}),
+                    "block_id": a.get("block_id"),
+                    "assignment_hash": a.get("assignment_hash"),
+                    "created_by": a.get("created_by"),
+                }
+            )
 
         result = self.client.table(self.table_name).insert(data).execute()
 
@@ -237,10 +240,7 @@ class ABExperimentRepository(BaseRepository):
             return None
 
         result = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("id", str(assignment_id))
-            .execute()
+            self.client.table(self.table_name).select("*").eq("id", str(assignment_id)).execute()
         )
 
         return self._to_assignment(result.data[0]) if result.data else None
@@ -270,9 +270,7 @@ class ABExperimentRepository(BaseRepository):
             return []
 
         query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("experiment_id", str(experiment_id))
+            self.client.table(self.table_name).select("*").eq("experiment_id", str(experiment_id))
         )
 
         if variant:
@@ -358,7 +356,9 @@ class ABExperimentRepository(BaseRepository):
             block_id=data.get("block_id"),
             assignment_hash=data.get("assignment_hash"),
             created_by=data.get("created_by"),
-            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")) if data.get("created_at") else None,
+            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+            if data.get("created_at")
+            else None,
         )
 
     # =========================================================================
@@ -407,11 +407,7 @@ class ABExperimentRepository(BaseRepository):
             "consent_version": consent_version,
         }
 
-        result = (
-            self.client.table("ab_experiment_enrollments")
-            .insert(data)
-            .execute()
-        )
+        result = self.client.table("ab_experiment_enrollments").insert(data).execute()
 
         if result.data:
             return self._to_enrollment(result.data[0])
@@ -711,11 +707,7 @@ class ABExperimentRepository(BaseRepository):
             "performed_by": performed_by,
         }
 
-        result = (
-            self.client.table("ab_interim_analyses")
-            .insert(data)
-            .execute()
-        )
+        result = self.client.table("ab_interim_analyses").insert(data).execute()
 
         if result.data:
             return self._to_interim_analysis(result.data[0])

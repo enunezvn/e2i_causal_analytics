@@ -4,13 +4,13 @@ KPI Registry
 Loads KPI definitions from YAML and provides lookup functionality.
 """
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
 
 import yaml
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,7 @@ class KPIRegistry:
         # Default fallback
         return Path("config/kpi_definitions.yaml")
 
-    def _parse_workstream(
-        self, ws_data: dict, workstream: Workstream
-    ) -> None:
+    def _parse_workstream(self, ws_data: dict, workstream: Workstream) -> None:
         """Parse KPI definitions for a workstream."""
         for kpi_key, kpi_data in ws_data.items():
             try:
@@ -99,9 +97,7 @@ class KPIRegistry:
             except Exception as e:
                 logger.warning(f"Failed to parse KPI {kpi_key}: {e}")
 
-    def _parse_kpi(
-        self, key: str, data: dict, workstream: Workstream
-    ) -> KPIMetadata:
+    def _parse_kpi(self, key: str, data: dict, workstream: Workstream) -> KPIMetadata:
         """Parse a single KPI definition."""
         # Parse threshold
         threshold = None
@@ -138,9 +134,7 @@ class KPIRegistry:
             note=data.get("note"),
         )
 
-    def _determine_causal_library(
-        self, workstream: Workstream, data: dict
-    ) -> CausalLibrary:
+    def _determine_causal_library(self, workstream: Workstream, data: dict) -> CausalLibrary:
         """Determine the appropriate causal library for a KPI.
 
         Based on the KPI Framework documentation's library selection matrix.
@@ -191,10 +185,7 @@ class KPIRegistry:
 
     def get_by_causal_library(self, library: CausalLibrary) -> list[KPIMetadata]:
         """Get all KPIs that use a specific causal library."""
-        return [
-            kpi for kpi in self._kpis.values()
-            if kpi.primary_causal_library == library
-        ]
+        return [kpi for kpi in self._kpis.values() if kpi.primary_causal_library == library]
 
     def __iter__(self) -> Iterator[KPIMetadata]:
         """Iterate over all KPIs."""

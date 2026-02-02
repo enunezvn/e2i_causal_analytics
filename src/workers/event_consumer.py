@@ -13,11 +13,9 @@ Version: 1.0.0
 from __future__ import annotations
 
 import logging
-import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from celery import Celery
@@ -41,6 +39,7 @@ try:
         Gauge,
         Histogram,
     )
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -246,8 +245,7 @@ class CeleryEventConsumer:
         timing.sent_at = event.get("timestamp", time.time())
 
         logger.debug(
-            f"Task sent: {event.get('name')} [{event.get('uuid')}] "
-            f"to queue {timing.queue}"
+            f"Task sent: {event.get('name')} [{event.get('uuid')}] to queue {timing.queue}"
         )
 
     def on_task_received(self, event: Dict[str, Any]) -> None:
@@ -258,9 +256,7 @@ class CeleryEventConsumer:
         if timing.sent_at is None:
             timing.sent_at = event.get("timestamp", time.time())
 
-        logger.debug(
-            f"Task received: {event.get('name')} [{event.get('uuid')}]"
-        )
+        logger.debug(f"Task received: {event.get('name')} [{event.get('uuid')}]")
 
     def on_task_started(self, event: Dict[str, Any]) -> None:
         """Handle task-started event."""
@@ -289,7 +285,8 @@ class CeleryEventConsumer:
         logger.debug(
             f"Task started: {timing.task_name} [{timing.task_id}] "
             f"latency={timing.started_at - timing.sent_at:.3f}s"
-            if timing.sent_at else ""
+            if timing.sent_at
+            else ""
         )
 
     def on_task_succeeded(self, event: Dict[str, Any]) -> None:
@@ -315,8 +312,7 @@ class CeleryEventConsumer:
             ).observe(runtime)
 
             logger.debug(
-                f"Task succeeded: {timing.task_name} [{timing.task_id}] "
-                f"runtime={runtime:.3f}s"
+                f"Task succeeded: {timing.task_name} [{timing.task_id}] runtime={runtime:.3f}s"
             )
 
         # Record success counter
@@ -368,10 +364,7 @@ class CeleryEventConsumer:
         if celery_metrics.active_tasks:
             celery_metrics.active_tasks.labels(queue=timing.queue).dec()
 
-        logger.warning(
-            f"Task failed: {timing.task_name} [{timing.task_id}] "
-            f"exception={exc_class}"
-        )
+        logger.warning(f"Task failed: {timing.task_name} [{timing.task_id}] exception={exc_class}")
 
     def on_task_retried(self, event: Dict[str, Any]) -> None:
         """Handle task-retried event."""

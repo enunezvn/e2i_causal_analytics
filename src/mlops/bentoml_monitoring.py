@@ -22,10 +22,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-import numpy as np
-
 try:
-    from prometheus_client import Counter, Gauge, Histogram, generate_latest, CollectorRegistry
+    from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -193,7 +192,7 @@ class PrometheusMetrics:
         latency_seconds: float,
     ) -> None:
         """Record a request metric."""
-        if not getattr(self, '_enabled', False):
+        if not getattr(self, "_enabled", False):
             return
 
         self.request_counter.labels(service=service, endpoint=endpoint, status=status).inc()
@@ -206,7 +205,7 @@ class PrometheusMetrics:
         batch_size: int,
     ) -> None:
         """Record prediction metrics."""
-        if not getattr(self, '_enabled', False):
+        if not getattr(self, "_enabled", False):
             return
 
         self.prediction_counter.labels(service=service, model_type=model_type).inc(batch_size)
@@ -218,7 +217,7 @@ class PrometheusMetrics:
         error_type: str,
     ) -> None:
         """Record an error."""
-        if not getattr(self, '_enabled', False):
+        if not getattr(self, "_enabled", False):
             return
 
         self.error_counter.labels(service=service, error_type=error_type).inc()
@@ -229,14 +228,14 @@ class PrometheusMetrics:
         healthy: bool,
     ) -> None:
         """Set health status gauge."""
-        if not getattr(self, '_enabled', False):
+        if not getattr(self, "_enabled", False):
             return
 
         self.health_status.labels(service=service).set(1 if healthy else 0)
 
     def export_metrics(self) -> bytes:
         """Export metrics in Prometheus format."""
-        if not getattr(self, '_enabled', False):
+        if not getattr(self, "_enabled", False):
             return b""
 
         return generate_latest(self._registry)
@@ -485,43 +484,51 @@ class BentoMLHealthMonitor:
 
         # Check health status
         if health_result.status == ServiceStatus.UNHEALTHY:
-            alerts.append(Alert(
-                service_name=service_name,
-                severity=AlertSeverity.ERROR,
-                message=f"Service {service_name} is unhealthy: {health_result.error}",
-                timestamp=health_result.timestamp,
-            ))
+            alerts.append(
+                Alert(
+                    service_name=service_name,
+                    severity=AlertSeverity.ERROR,
+                    message=f"Service {service_name} is unhealthy: {health_result.error}",
+                    timestamp=health_result.timestamp,
+                )
+            )
 
         elif health_result.status == ServiceStatus.DEGRADED:
-            alerts.append(Alert(
-                service_name=service_name,
-                severity=AlertSeverity.WARNING,
-                message=f"Service {service_name} is degraded",
-                timestamp=health_result.timestamp,
-            ))
+            alerts.append(
+                Alert(
+                    service_name=service_name,
+                    severity=AlertSeverity.WARNING,
+                    message=f"Service {service_name} is degraded",
+                    timestamp=health_result.timestamp,
+                )
+            )
 
         # Check latency
         if health_result.latency_ms > self._thresholds["latency_error_ms"]:
-            alerts.append(Alert(
-                service_name=service_name,
-                severity=AlertSeverity.ERROR,
-                message=f"High latency for {service_name}",
-                timestamp=health_result.timestamp,
-                metric_name="latency_ms",
-                metric_value=health_result.latency_ms,
-                threshold=self._thresholds["latency_error_ms"],
-            ))
+            alerts.append(
+                Alert(
+                    service_name=service_name,
+                    severity=AlertSeverity.ERROR,
+                    message=f"High latency for {service_name}",
+                    timestamp=health_result.timestamp,
+                    metric_name="latency_ms",
+                    metric_value=health_result.latency_ms,
+                    threshold=self._thresholds["latency_error_ms"],
+                )
+            )
 
         elif health_result.latency_ms > self._thresholds["latency_warning_ms"]:
-            alerts.append(Alert(
-                service_name=service_name,
-                severity=AlertSeverity.WARNING,
-                message=f"Elevated latency for {service_name}",
-                timestamp=health_result.timestamp,
-                metric_name="latency_ms",
-                metric_value=health_result.latency_ms,
-                threshold=self._thresholds["latency_warning_ms"],
-            ))
+            alerts.append(
+                Alert(
+                    service_name=service_name,
+                    severity=AlertSeverity.WARNING,
+                    message=f"Elevated latency for {service_name}",
+                    timestamp=health_result.timestamp,
+                    metric_name="latency_ms",
+                    metric_value=health_result.latency_ms,
+                    threshold=self._thresholds["latency_warning_ms"],
+                )
+            )
 
         # Emit alerts
         for alert in alerts:

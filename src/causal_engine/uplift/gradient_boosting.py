@@ -10,7 +10,7 @@ base learners for heterogeneous treatment effect estimation.
 Author: E2I Causal Analytics Team
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Optional, Union
 
@@ -55,16 +55,18 @@ class GradientBoostingUpliftConfig(UpliftConfig):
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
         base_dict = super().to_dict()
-        base_dict.update({
-            "meta_learner": self.meta_learner.value,
-            "learning_rate": self.learning_rate,
-            "subsample": self.subsample,
-            "use_xgboost": self.use_xgboost,
-            "early_stopping_rounds": self.early_stopping_rounds,
-            "colsample_bytree": self.colsample_bytree,
-            "reg_alpha": self.reg_alpha,
-            "reg_lambda": self.reg_lambda,
-        })
+        base_dict.update(
+            {
+                "meta_learner": self.meta_learner.value,
+                "learning_rate": self.learning_rate,
+                "subsample": self.subsample,
+                "use_xgboost": self.use_xgboost,
+                "early_stopping_rounds": self.early_stopping_rounds,
+                "colsample_bytree": self.colsample_bytree,
+                "reg_alpha": self.reg_alpha,
+                "reg_lambda": self.reg_lambda,
+            }
+        )
         return base_dict
 
 
@@ -336,9 +338,7 @@ class UpliftGradientBoosting(BaseUpliftModel):
             uplift_scores = self.predict(X_pred, p=p_pred)
 
             # Calculate aggregate treatment effects
-            ate, att, atc, ate_std = self._calculate_ate(
-                uplift_scores, treatment_eval, y_eval
-            )
+            ate, att, atc, ate_std = self._calculate_ate(uplift_scores, treatment_eval, y_eval)
 
             # Calculate confidence interval
             n = len(uplift_scores)
@@ -402,16 +402,12 @@ class UpliftGradientBoosting(BaseUpliftModel):
             if hasattr(self._base_learner, "feature_importances_"):
                 importances = self._base_learner.feature_importances_
 
-                if self._feature_names is not None and len(self._feature_names) == len(
-                    importances
-                ):
+                if self._feature_names is not None and len(self._feature_names) == len(importances):
                     return {
                         name: float(imp)
-                        for name, imp in zip(self._feature_names, importances)
+                        for name, imp in zip(self._feature_names, importances, strict=False)
                     }
-                return {
-                    f"feature_{i}": float(imp) for i, imp in enumerate(importances)
-                }
+                return {f"feature_{i}": float(imp) for i, imp in enumerate(importances)}
 
             # For T-Learner and X-Learner, try to get from internal models
             if hasattr(self.model, "models_t") and self.model.models_t:
@@ -423,17 +419,14 @@ class UpliftGradientBoosting(BaseUpliftModel):
 
                 if all_importances:
                     avg_importances = np.mean(all_importances, axis=0)
-                    if self._feature_names is not None and len(
-                        self._feature_names
-                    ) == len(avg_importances):
+                    if self._feature_names is not None and len(self._feature_names) == len(
+                        avg_importances
+                    ):
                         return {
                             name: float(imp)
-                            for name, imp in zip(self._feature_names, avg_importances)
+                            for name, imp in zip(self._feature_names, avg_importances, strict=False)
                         }
-                    return {
-                        f"feature_{i}": float(imp)
-                        for i, imp in enumerate(avg_importances)
-                    }
+                    return {f"feature_{i}": float(imp) for i, imp in enumerate(avg_importances)}
 
         except Exception:
             pass

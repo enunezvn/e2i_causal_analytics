@@ -29,43 +29,43 @@ Usage:
     # {'Remibrutinib': ['remi', 'remibrutinib'], ...}
 """
 
-from src.ontology.vocabulary_registry import VocabularyRegistry
-from src.ontology.schema_compiler import (
-    SchemaCompiler,
-    CompiledSchema,
-    EntitySchema,
-    RelationshipSchema,
-    PropertySchema,
-    PropertyType,
-    CardinalityType,
-)
-from src.ontology.validator import (
-    OntologyValidator,
-    ValidationReport,
-    ValidationIssue,
-    ValidationLevel,
-)
-from src.ontology.inference_engine import (
-    InferenceEngine,
-    InferenceRule,
-    InferenceType,
-    InferredRelationship,
-    CausalPath,
-    ConfidenceLevel,
-    PathFinder,
-)
-from src.ontology.query_extractor import (
-    E2IQueryExtractor,
-    QueryExtractionResult,
-    Entity,
-    ExtractionContext,
-    VocabularyEnrichedGraphiti,
-)
 from src.ontology.grafiti_config import (
     GraphityConfig,
     GraphityConfigBuilder,
     GraphityOptimizer,
 )
+from src.ontology.inference_engine import (
+    CausalPath,
+    ConfidenceLevel,
+    InferenceEngine,
+    InferenceRule,
+    InferenceType,
+    InferredRelationship,
+    PathFinder,
+)
+from src.ontology.query_extractor import (
+    E2IQueryExtractor,
+    Entity,
+    ExtractionContext,
+    QueryExtractionResult,
+    VocabularyEnrichedGraphiti,
+)
+from src.ontology.schema_compiler import (
+    CardinalityType,
+    CompiledSchema,
+    EntitySchema,
+    PropertySchema,
+    PropertyType,
+    RelationshipSchema,
+    SchemaCompiler,
+)
+from src.ontology.validator import (
+    OntologyValidator,
+    ValidationIssue,
+    ValidationLevel,
+    ValidationReport,
+)
+from src.ontology.vocabulary_registry import VocabularyRegistry
 
 __all__ = [
     # Vocabulary

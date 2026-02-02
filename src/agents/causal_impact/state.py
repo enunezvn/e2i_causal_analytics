@@ -207,10 +207,14 @@ class CausalImpactState(TypedDict):
 
     # V4.4: Causal Discovery Configuration
     auto_discover: NotRequired[bool]  # Enable automatic DAG discovery (default: False)
-    discovery_algorithms: NotRequired[List[str]]  # Algorithms to use: ["ges", "pc", "fci", "lingam"]
+    discovery_algorithms: NotRequired[
+        List[str]
+    ]  # Algorithms to use: ["ges", "pc", "fci", "lingam"]
     discovery_ensemble_threshold: NotRequired[float]  # Min algorithm agreement (default: 0.5)
     discovery_alpha: NotRequired[float]  # Significance level for CI tests (default: 0.05)
-    discovery_fallback_to_manual: NotRequired[bool]  # Use manual DAG on discovery failure (default: True)
+    discovery_fallback_to_manual: NotRequired[
+        bool
+    ]  # Use manual DAG on discovery failure (default: True)
     discovery_result: NotRequired[Dict[str, Any]]  # Full DiscoveryResult from runner
     discovery_gate_evaluation: NotRequired[Dict[str, Any]]  # Full GateEvaluation from gate
     discovery_latency_ms: NotRequired[float]  # Discovery computation time
@@ -226,16 +230,24 @@ class CausalImpactState(TypedDict):
     estimator_selection_result: NotRequired[Dict[str, Any]]  # Full SelectionResult
     energy_score_latency_ms: NotRequired[float]  # Energy score computation time
     best_energy_score: NotRequired[float]  # Best estimator's energy score
-    energy_score_quality_tier: NotRequired[Literal["excellent", "good", "acceptable", "poor", "unreliable"]]
+    energy_score_quality_tier: NotRequired[
+        Literal["excellent", "good", "acceptable", "poor", "unreliable"]
+    ]
 
     # ========================================================================
     # B7.4: Multi-Library Support (NetworkX → DoWhy → EconML → CausalML)
     # ========================================================================
 
     # Library execution plan
-    library_execution_plan: NotRequired[List[str]]  # Ordered libraries: ["networkx", "dowhy", "econml", "causalml"]
-    library_execution_mode: NotRequired[Literal["sequential", "parallel"]]  # How to execute libraries
-    primary_library: NotRequired[Literal["networkx", "dowhy", "econml", "causalml"]]  # Main library for question type
+    library_execution_plan: NotRequired[
+        List[str]
+    ]  # Ordered libraries: ["networkx", "dowhy", "econml", "causalml"]
+    library_execution_mode: NotRequired[
+        Literal["sequential", "parallel"]
+    ]  # How to execute libraries
+    primary_library: NotRequired[
+        Literal["networkx", "dowhy", "econml", "causalml"]
+    ]  # Main library for question type
     libraries_executed: NotRequired[List[str]]  # Actually executed libraries
     libraries_skipped: NotRequired[List[str]]  # Skipped due to validation or errors
 
@@ -256,13 +268,15 @@ class CausalImpactState(TypedDict):
     library_consensus_effect: NotRequired[float]  # Confidence-weighted consensus effect estimate
 
     # Multi-library routing metadata
-    question_type: NotRequired[Literal[
-        "causal_relationship",  # "Does X cause Y?" → DoWhy primary
-        "effect_heterogeneity",  # "How does effect vary?" → EconML primary
-        "targeting",  # "Who should we target?" → CausalML primary
-        "system_analysis",  # "How does impact flow?" → NetworkX primary
-        "comprehensive",  # All four libraries
-    ]]
+    question_type: NotRequired[
+        Literal[
+            "causal_relationship",  # "Does X cause Y?" → DoWhy primary
+            "effect_heterogeneity",  # "How does effect vary?" → EconML primary
+            "targeting",  # "Who should we target?" → CausalML primary
+            "system_analysis",  # "How does impact flow?" → NetworkX primary
+            "comprehensive",  # All four libraries
+        ]
+    ]
     routing_confidence: NotRequired[float]  # Confidence in library routing decision
     routing_rationale: NotRequired[str]  # Why this library routing was chosen
 
@@ -394,7 +408,9 @@ class CausalImpactOutput(TypedDict):
 
     # V4.2 Enhancement: Energy Score-based Selection
     energy_score: NotRequired[float]  # Selected estimator's energy score (0-1)
-    energy_score_quality_tier: NotRequired[Literal["excellent", "good", "acceptable", "poor", "unreliable"]]
+    energy_score_quality_tier: NotRequired[
+        Literal["excellent", "good", "acceptable", "poor", "unreliable"]
+    ]
     selection_strategy: NotRequired[Literal["first_success", "best_energy", "ensemble"]]
     selected_estimator: NotRequired[str]  # Name of selected estimator
     energy_score_gap: NotRequired[float]  # Gap between best and second-best
@@ -404,7 +420,9 @@ class CausalImpactOutput(TypedDict):
 
     # B7.4: Multi-Library Support Output
     libraries_used: NotRequired[List[str]]  # Libraries that were executed
-    library_execution_mode: NotRequired[Literal["sequential", "parallel"]]  # How libraries were executed
+    library_execution_mode: NotRequired[
+        Literal["sequential", "parallel"]
+    ]  # How libraries were executed
     primary_library: NotRequired[str]  # Main library used for the question type
     library_agreement_score: NotRequired[float]  # Agreement between libraries (0-1)
     library_consensus_effect: NotRequired[float]  # Confidence-weighted consensus effect

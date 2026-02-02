@@ -10,7 +10,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 from src.agents.experiment_monitor.dspy_integration import (
     get_experiment_monitor_dspy_integration,
@@ -157,9 +157,7 @@ class AlertGeneratorNode:
         # Fallback to hardcoded message
         return f"Sample Ratio Mismatch detected in '{exp_name}' (p={p_value:.6f})"
 
-    def _generate_srm_alerts(
-        self, state: ExperimentMonitorState
-    ) -> List[MonitorAlert]:
+    def _generate_srm_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
         """Generate alerts for SRM issues.
 
         Args:
@@ -246,9 +244,7 @@ class AlertGeneratorNode:
             f"{current_rate:.1f}/day (expected: {expected_rate:.1f}/day)"
         )
 
-    def _generate_enrollment_alerts(
-        self, state: ExperimentMonitorState
-    ) -> List[MonitorAlert]:
+    def _generate_enrollment_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
         """Generate alerts for enrollment issues.
 
         Args:
@@ -295,9 +291,7 @@ class AlertGeneratorNode:
 
         return alerts
 
-    def _generate_stale_data_alerts(
-        self, state: ExperimentMonitorState
-    ) -> List[MonitorAlert]:
+    def _generate_stale_data_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
         """Generate alerts for stale data issues.
 
         Args:
@@ -343,9 +337,7 @@ class AlertGeneratorNode:
 
         return alerts
 
-    def _generate_interim_alerts(
-        self, state: ExperimentMonitorState
-    ) -> List[MonitorAlert]:
+    def _generate_interim_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
         """Generate alerts for interim analysis triggers.
 
         Args:
@@ -432,9 +424,7 @@ class AlertGeneratorNode:
                 f"prediction error = {prediction_error:.2%}"
             )
 
-    def _generate_fidelity_alerts(
-        self, state: ExperimentMonitorState
-    ) -> List[MonitorAlert]:
+    def _generate_fidelity_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
         """Generate alerts for fidelity issues.
 
         Args:
@@ -490,9 +480,7 @@ class AlertGeneratorNode:
 
         return alerts
 
-    def _create_summary(
-        self, state: ExperimentMonitorState, alerts: List[MonitorAlert]
-    ) -> str:
+    def _create_summary(self, state: ExperimentMonitorState, alerts: List[MonitorAlert]) -> str:
         """Create monitoring summary.
 
         Args:
@@ -519,7 +507,7 @@ class AlertGeneratorNode:
 
         # Build summary
         parts = [
-            f"Experiment Monitor Summary",
+            "Experiment Monitor Summary",
             f"Experiments checked: {experiments_checked}",
             f"Health status: {health_counts['healthy']} healthy, "
             f"{health_counts['warning']} warning, {health_counts['critical']} critical",
@@ -564,7 +552,9 @@ class AlertGeneratorNode:
         recommendations: List[str] = []
 
         # Critical SRM issues
-        critical_srm = [a for a in alerts if a["alert_type"] == "srm" and a["severity"] == "critical"]
+        critical_srm = [
+            a for a in alerts if a["alert_type"] == "srm" and a["severity"] == "critical"
+        ]
         if critical_srm:
             recommendations.append(
                 f"URGENT: {len(critical_srm)} experiments have critical SRM issues - "

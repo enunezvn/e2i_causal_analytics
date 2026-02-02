@@ -13,7 +13,7 @@ V4.4: Added causal evidence filtering and confidence adjustments.
 """
 
 import time
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Tuple
 
 from ..state import (
     GapAnalyzerState,
@@ -21,7 +21,6 @@ from ..state import (
     PrioritizedOpportunity,
     ROIEstimate,
 )
-
 
 # V4.4: Causal evidence adjustment constants
 DIRECT_CAUSE_BOOST = 1.2  # Boost for direct causes

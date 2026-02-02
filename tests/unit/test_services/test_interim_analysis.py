@@ -15,14 +15,12 @@ Tests for:
 - Next analysis timing recommendations
 """
 
-import math
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import numpy as np
 import pytest
-from scipy import stats
 
 from src.services.interim_analysis import (
     InterimAnalysisConfig,
@@ -33,7 +31,6 @@ from src.services.interim_analysis import (
     StoppingDecision,
     get_interim_analysis_service,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -996,10 +993,10 @@ class TestRecommendNextAnalysisTiming:
         )
 
         assert recommendation["next_analysis_number"] == 2
-        assert recommendation["target_information_fraction"] == 2/3
+        assert recommendation["target_information_fraction"] == 2 / 3
         assert recommendation["target_sample_size"] == 200
         assert recommendation["samples_needed"] == 100
-        assert recommendation["current_progress"] == 100/300
+        assert recommendation["current_progress"] == 100 / 300
 
     def test_recommend_no_more_analyses(self, service: InterimAnalysisService):
         """Test recommendation when all analyses complete."""

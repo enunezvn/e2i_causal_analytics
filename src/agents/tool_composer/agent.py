@@ -261,9 +261,7 @@ class ToolComposerAgent:
             composer = self._ensure_composer()
 
             # Execute composition
-            result: CompositionResult = await composer.compose(
-                query=query, context=merged_context
-            )
+            result: CompositionResult = await composer.compose(query=query, context=merged_context)
 
             # Convert to agent output
             duration_ms = (time.time() - start_time) * 1000
@@ -276,22 +274,18 @@ class ToolComposerAgent:
                 sub_questions_count=(
                     result.decomposition.question_count if result.decomposition else 0
                 ),
-                tools_executed=(
-                    result.execution.tools_executed if result.execution else 0
-                ),
-                tools_succeeded=(
-                    result.execution.tools_succeeded if result.execution else 0
-                ),
+                tools_executed=(result.execution.tools_executed if result.execution else 0),
+                tools_succeeded=(result.execution.tools_succeeded if result.execution else 0),
                 total_duration_ms=result.total_duration_ms or duration_ms,
-                supporting_data=(
-                    result.response.supporting_data if result.response else {}
-                ),
+                supporting_data=(result.response.supporting_data if result.response else {}),
                 citations=result.response.citations if result.response else [],
                 caveats=result.response.caveats if result.response else [],
                 metadata={
                     "phase_durations": result.phase_durations,
                 },
-                status=result.status.value.upper() if result.status else ("SUCCESS" if result.success else "FAILED"),
+                status=result.status.value.upper()
+                if result.status
+                else ("SUCCESS" if result.success else "FAILED"),
             )
 
         except Exception as e:

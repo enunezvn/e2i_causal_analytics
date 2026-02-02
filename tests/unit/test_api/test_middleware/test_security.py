@@ -131,7 +131,9 @@ class TestSecurityHeadersMiddleware:
     async def test_custom_hsts_max_age(self):
         """Test custom HSTS max-age can be set."""
         app = MagicMock()
-        middleware = SecurityHeadersMiddleware(app, enable_hsts=True, hsts_max_age=7776000)  # 90 days
+        middleware = SecurityHeadersMiddleware(
+            app, enable_hsts=True, hsts_max_age=7776000
+        )  # 90 days
 
         mock_request = MagicMock(spec=Request)
         mock_request.url.path = "/api/test"

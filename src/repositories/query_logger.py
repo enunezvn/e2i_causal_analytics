@@ -17,7 +17,7 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,9 @@ try:
         Counter,
         Gauge,
         Histogram,
-        Info,
+        Info,  # noqa: F401
     )
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -147,14 +148,16 @@ class SlowQueryConfig:
     default_threshold_sec: float = 1.0
 
     # Per-operation thresholds (more lenient for complex operations)
-    operation_thresholds: Dict[str, float] = field(default_factory=lambda: {
-        "select": 0.5,      # 500ms for selects
-        "insert": 0.25,     # 250ms for inserts
-        "update": 0.25,     # 250ms for updates
-        "delete": 0.25,     # 250ms for deletes
-        "upsert": 0.5,      # 500ms for upserts
-        "rpc": 2.0,         # 2s for stored procedures
-    })
+    operation_thresholds: Dict[str, float] = field(
+        default_factory=lambda: {
+            "select": 0.5,  # 500ms for selects
+            "insert": 0.25,  # 250ms for inserts
+            "update": 0.25,  # 250ms for updates
+            "delete": 0.25,  # 250ms for deletes
+            "upsert": 0.5,  # 500ms for upserts
+            "rpc": 2.0,  # 2s for stored procedures
+        }
+    )
 
     # Per-table thresholds (for known complex tables)
     table_thresholds: Dict[str, float] = field(default_factory=dict)
@@ -246,7 +249,7 @@ class SlowQueryDetector:
         # Store in memory (with limit)
         self._slow_queries.append(record)
         if len(self._slow_queries) > self.config.max_retained_queries:
-            self._slow_queries = self._slow_queries[-self.config.max_retained_queries:]
+            self._slow_queries = self._slow_queries[-self.config.max_retained_queries :]
 
         # Update metrics
         if query_metrics._initialized:
@@ -421,9 +424,7 @@ class QueryLogger:
                     error_type=error_type,
                 ).inc()
 
-            logger.error(
-                f"Database query error: {operation} on {table} - {error_type}: {e}"
-            )
+            logger.error(f"Database query error: {operation} on {table} - {error_type}: {e}")
             raise
 
         finally:
@@ -495,9 +496,7 @@ class QueryLogger:
                     error_type=error_type,
                 ).inc()
 
-            logger.error(
-                f"Database query error: {operation} on {table} - {error_type}: {e}"
-            )
+            logger.error(f"Database query error: {operation} on {table} - {error_type}: {e}")
             raise
 
         finally:
@@ -693,6 +692,7 @@ def logged_query(operation: str, table: str):
         operation: Operation type
         table: Table name
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> T:
@@ -702,7 +702,9 @@ def logged_query(operation: str, table: str):
                 func=lambda: func(*args, **kwargs),
                 query_params=kwargs if kwargs else None,
             )
+
         return wrapper
+
     return decorator
 
 
@@ -720,6 +722,7 @@ def logged_query_async(operation: str, table: str):
         operation: Operation type
         table: Table name
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> T:
@@ -729,7 +732,9 @@ def logged_query_async(operation: str, table: str):
                 func=lambda: func(*args, **kwargs),
                 query_params=kwargs if kwargs else None,
             )
+
         return wrapper
+
     return decorator
 
 

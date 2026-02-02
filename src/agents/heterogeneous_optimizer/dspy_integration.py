@@ -119,7 +119,9 @@ class HeterogeneousOptimizationTrainingSignal:
             policy_score += 0.3
             # Actionable recommendations ratio
             if self.actionable_policies > 0:
-                policy_score += 0.4 * min(1.0, self.actionable_policies / self.policy_recommendations_count)
+                policy_score += 0.4 * min(
+                    1.0, self.actionable_policies / self.policy_recommendations_count
+                )
             # Expected lift is positive
             if self.expected_total_lift > 0:
                 policy_score += 0.3
@@ -377,11 +379,7 @@ class HeterogeneousOptimizerSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def get_high_heterogeneity_examples(

@@ -12,17 +12,16 @@ Phase 1 G03 from observability audit remediation plan.
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from src.agents.experiment_designer.mlflow_tracker import (
+    EXPERIMENT_PREFIX,
     DesignContext,
     ExperimentDesignerMetrics,
     ExperimentDesignerMLflowTracker,
-    EXPERIMENT_PREFIX,
 )
-
 
 # =============================================================================
 # FIXTURES

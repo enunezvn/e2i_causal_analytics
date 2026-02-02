@@ -14,18 +14,17 @@ Author: E2I Causal Analytics Team
 """
 
 import asyncio
+import logging
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Type
+from concurrent.futures import ProcessPoolExecutor
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 from uuid import UUID
 
 import networkx as nx
 import numpy as np
 import pandas as pd
-import logging
 
 logger = logging.getLogger(__name__)
-from numpy.typing import NDArray
 
 from .algorithms import (
     DirectLiNGAMAlgorithm,
@@ -66,7 +65,8 @@ def _run_algorithm_in_process(
         AlgorithmResult as dict for serialization
     """
     import pandas as pd
-    from .base import DiscoveryConfig, DiscoveryAlgorithmType
+
+    from .base import DiscoveryAlgorithmType, DiscoveryConfig
 
     # Reconstruct objects from dicts
     data = pd.DataFrame(data_dict)
@@ -90,8 +90,9 @@ def _run_algorithm_in_process(
     return {
         "algorithm": result.algorithm.value,
         "adjacency_matrix": result.adjacency_matrix.tolist(),
-        "edge_list": [(e.source, e.target, e.edge_type.value, e.confidence)
-                      for e in result.edge_list],
+        "edge_list": [
+            (e.source, e.target, e.edge_type.value, e.confidence) for e in result.edge_list
+        ],
         "runtime_seconds": result.runtime_seconds,
         "converged": result.converged,
         "metadata": result.metadata,
@@ -241,9 +242,7 @@ class DiscoveryRunner:
         )
 
         total_runtime = time.time() - start_time
-        logger.info(
-            f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s"
-        )
+        logger.info(f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s")
 
         return DiscoveryResult(
             success=True,
@@ -277,9 +276,7 @@ class DiscoveryRunner:
             tags=["causal_discovery", "ensemble"],
         ) as span:
             # Run algorithms with individual tracing
-            algorithm_results = await self._run_algorithms_with_tracing(
-                data, config, span
-            )
+            algorithm_results = await self._run_algorithms_with_tracing(data, config, span)
 
             # Combine results into ensemble
             edges, ensemble_dag = self._build_ensemble(
@@ -346,7 +343,7 @@ class DiscoveryRunner:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(
                     None,
-                    lambda: algorithm.discover(data, config),
+                    lambda: algorithm.discover(data, config),  # noqa: B023
                 )
 
                 results.append(result)
@@ -365,9 +362,7 @@ class DiscoveryRunner:
                 # Create failed result
                 failed_result = AlgorithmResult(
                     algorithm=algo_type,
-                    adjacency_matrix=np.zeros(
-                        (len(data.columns), len(data.columns)), dtype=int
-                    ),
+                    adjacency_matrix=np.zeros((len(data.columns), len(data.columns)), dtype=int),
                     edge_list=[],
                     runtime_seconds=0.0,
                     converged=False,

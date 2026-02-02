@@ -26,7 +26,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from opik import Opik, Trace
@@ -107,15 +107,17 @@ class OptimizationTraceContext:
         """Log that an optimization has started."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "resource_type": resource_type,
-                    "objective": objective,
-                    "solver_type": solver_type,
-                    "target_count": target_count,
-                    "constraint_count": constraint_count,
-                    "run_scenarios": run_scenarios,
-                    "optimization_started_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "resource_type": resource_type,
+                        "objective": objective,
+                        "solver_type": solver_type,
+                        "target_count": target_count,
+                        "constraint_count": constraint_count,
+                        "run_scenarios": run_scenarios,
+                        "optimization_started_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log optimization started: {e}")
@@ -179,12 +181,14 @@ class OptimizationTraceContext:
         """Log problem formulation results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "target_count": target_count,
-                    "constraint_count": constraint_count,
-                    "variables_count": variables_count,
-                    "formulation_latency_ms": formulation_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "target_count": target_count,
+                        "constraint_count": constraint_count,
+                        "variables_count": variables_count,
+                        "formulation_latency_ms": formulation_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log problem formulation: {e}")
@@ -200,13 +204,15 @@ class OptimizationTraceContext:
         """Log solver execution results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "solver_type": solver_type,
-                    "solver_status": solver_status,
-                    "solve_time_ms": solve_time_ms,
-                    "objective_value": objective_value,
-                    "allocations_count": allocations_count,
-                })
+                self.trace_metadata.update(
+                    {
+                        "solver_type": solver_type,
+                        "solver_status": solver_status,
+                        "solve_time_ms": solve_time_ms,
+                        "objective_value": objective_value,
+                        "allocations_count": allocations_count,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log solver execution: {e}")
@@ -220,11 +226,13 @@ class OptimizationTraceContext:
         """Log scenario analysis results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "scenario_count": scenario_count,
-                    "best_scenario": best_scenario,
-                    "scenario_latency_ms": scenario_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "scenario_count": scenario_count,
+                        "best_scenario": best_scenario,
+                        "scenario_latency_ms": scenario_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log scenario analysis: {e}")
@@ -239,12 +247,14 @@ class OptimizationTraceContext:
         """Log impact projection results."""
         if self.trace:
             try:
-                self.trace_metadata.update({
-                    "projected_outcome": projected_outcome,
-                    "projected_roi": projected_roi,
-                    "segments_count": segments_count,
-                    "projection_latency_ms": projection_latency_ms,
-                })
+                self.trace_metadata.update(
+                    {
+                        "projected_outcome": projected_outcome,
+                        "projected_roi": projected_roi,
+                        "segments_count": segments_count,
+                        "projection_latency_ms": projection_latency_ms,
+                    }
+                )
                 self.trace.update(metadata=self.trace_metadata)
             except Exception as e:
                 logger.debug(f"Failed to log impact projection: {e}")
@@ -269,25 +279,27 @@ class OptimizationTraceContext:
         if self.trace:
             try:
                 elapsed_ms = int((time.time() - self.start_time) * 1000)
-                self.trace_metadata.update({
-                    "status": status,
-                    "success": success,
-                    "total_duration_ms": total_duration_ms,
-                    "trace_duration_ms": elapsed_ms,
-                    "objective_value": objective_value,
-                    "solver_status": solver_status,
-                    "projected_outcome": projected_outcome,
-                    "projected_roi": projected_roi,
-                    "allocations_count": allocations_count,
-                    "increases_count": increases_count,
-                    "decreases_count": decreases_count,
-                    "recommendations_count": len(recommendations),
-                    "recommendations": recommendations[:5],  # Limit for trace size
-                    "errors_count": len(errors),
-                    "warnings_count": len(warnings),
-                    "warnings": warnings[:5],  # Limit for trace size
-                    "optimization_completed_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self.trace_metadata.update(
+                    {
+                        "status": status,
+                        "success": success,
+                        "total_duration_ms": total_duration_ms,
+                        "trace_duration_ms": elapsed_ms,
+                        "objective_value": objective_value,
+                        "solver_status": solver_status,
+                        "projected_outcome": projected_outcome,
+                        "projected_roi": projected_roi,
+                        "allocations_count": allocations_count,
+                        "increases_count": increases_count,
+                        "decreases_count": decreases_count,
+                        "recommendations_count": len(recommendations),
+                        "recommendations": recommendations[:5],  # Limit for trace size
+                        "errors_count": len(errors),
+                        "warnings_count": len(warnings),
+                        "warnings": warnings[:5],  # Limit for trace size
+                        "optimization_completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 self.trace.update(
                     metadata=self.trace_metadata,
                     output={

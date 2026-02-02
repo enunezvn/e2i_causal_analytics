@@ -32,6 +32,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
 
     try:
         import pandas as pd
+
         if isinstance(data, (pd.DataFrame, pd.Series)):
             return data.values
     except ImportError:
@@ -254,8 +255,7 @@ async def apply_resampling(state: Dict[str, Any]) -> Dict[str, Any]:
     original_distribution = class_distribution.copy()
 
     logger.info(
-        f"Applying resampling strategy: {recommended_strategy}, "
-        f"original shape: {original_shape}"
+        f"Applying resampling strategy: {recommended_strategy}, original shape: {original_shape}"
     )
 
     try:
@@ -266,7 +266,9 @@ async def apply_resampling(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # Calculate new distribution
         unique, counts = np.unique(y_resampled, return_counts=True)
-        resampled_distribution = dict(zip(unique.astype(int).tolist(), counts.tolist()))
+        resampled_distribution = dict(
+            zip(unique.astype(int).tolist(), counts.tolist(), strict=False)
+        )
 
         logger.info(
             f"Resampling complete: {original_shape} -> {X_resampled.shape}, "

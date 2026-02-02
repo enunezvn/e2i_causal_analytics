@@ -14,9 +14,9 @@ Usage:
     )
 """
 
+from .causal_service import CausalInferenceServiceTemplate
 from .classification_service import ClassificationServiceTemplate
 from .regression_service import RegressionServiceTemplate
-from .causal_service import CausalInferenceServiceTemplate
 
 __all__ = [
     "ClassificationServiceTemplate",

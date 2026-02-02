@@ -14,9 +14,6 @@ import asyncio
 import os
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,54 +22,48 @@ from src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator impor
     package_model,
 )
 from src.agents.prediction_synthesizer.clients import (
-    HTTPModelClient,
-    HTTPModelClientConfig,
     ModelClientFactory,
-    get_model_client,
 )
 from src.agents.prediction_synthesizer.clients.factory import (
-    MockModelClient,
     ModelEndpointConfig,
     ModelEndpointsConfig,
     close_model_clients,
-    configure_model_endpoints,
 )
 from src.api.dependencies.bentoml_client import (
-    BentoMLClient,
-    BentoMLClientConfig,
     close_bentoml_client,
     get_bentoml_client,
 )
-
 
 # =============================================================================
 # Test Configuration
 # =============================================================================
 
 # Environment checks for live service testing
-HAS_BENTOML_STACK = (
-    bool(os.getenv("BENTOML_SERVICE_URL")) and
-    bool(os.getenv("PROMETHEUS_URL"))
-)
+HAS_BENTOML_STACK = bool(os.getenv("BENTOML_SERVICE_URL")) and bool(os.getenv("PROMETHEUS_URL"))
 
 requires_live_stack = pytest.mark.skipif(
     not HAS_BENTOML_STACK,
     reason="BENTOML_SERVICE_URL and PROMETHEUS_URL environment variables not set",
 )
 
+
 # Check if BentoML is available (library import, not just CLI in PATH)
 def _check_bentoml_available() -> bool:
     """Check if BentoML library is installed and importable."""
     try:
-        import bentoml
+        import bentoml  # noqa: F401
+
         return True
     except ImportError:
         return False
 
+
 def _check_bentoml_cli_in_path() -> bool:
     """Check if BentoML CLI is in PATH (required for packaging/deployment)."""
     import shutil
+
     return shutil.which("bentoml") is not None
+
 
 HAS_BENTOML = _check_bentoml_available()
 HAS_BENTOML_CLI = _check_bentoml_cli_in_path()
@@ -200,9 +191,7 @@ class TestModelServingFlow:
 
     @requires_bentoml_deployment
     @pytest.mark.asyncio
-    async def test_full_serving_flow_with_mock(
-        self, mock_model_factory, sample_model_state
-    ):
+    async def test_full_serving_flow_with_mock(self, mock_model_factory, sample_model_state):
         """Test complete flow: deploy → serve → predict (requires full BentoML infrastructure)."""
         # Step 1: Package model
         package_result = await package_model(sample_model_state)
@@ -242,11 +231,13 @@ class TestModelServingFlow:
     async def test_multi_model_ensemble_flow(self, mock_model_factory):
         """Test prediction flow with multiple models (ensemble)."""
         # Get clients for multiple models
-        clients = await mock_model_factory.get_clients([
-            "churn_model",
-            "conversion_model",
-            "causal_model",
-        ])
+        clients = await mock_model_factory.get_clients(
+            [
+                "churn_model",
+                "conversion_model",
+                "causal_model",
+            ]
+        )
 
         assert len(clients) == 3
 
@@ -264,10 +255,7 @@ class TestModelServingFlow:
                 ),
             }
 
-        tasks = [
-            get_prediction(model_id, client)
-            for model_id, client in clients.items()
-        ]
+        tasks = [get_prediction(model_id, client) for model_id, client in clients.items()]
         results = await asyncio.gather(*tasks)
 
         # Verify all predictions received
@@ -279,15 +267,13 @@ class TestModelServingFlow:
         assert "causal_model" in predictions
 
         # Verify each has valid prediction
-        for model_id, result in predictions.items():
+        for _model_id, result in predictions.items():
             assert "prediction" in result
             assert "confidence" in result
 
         # Calculate ensemble (weighted average)
         weights = {"churn_model": 0.5, "conversion_model": 0.3, "causal_model": 0.2}
-        ensemble_prediction = sum(
-            predictions[m]["prediction"] * w for m, w in weights.items()
-        )
+        ensemble_prediction = sum(predictions[m]["prediction"] * w for m, w in weights.items())
 
         assert 0 <= ensemble_prediction <= 1
 
@@ -307,23 +293,22 @@ class TestModelServingFlow:
                 features={"recency": 10},
                 time_horizon="30d",
             )
-            predictions.append({
-                "model_id": model_id,
-                "prediction": result["prediction"],
-                "confidence": result["confidence"],
-            })
+            predictions.append(
+                {
+                    "model_id": model_id,
+                    "prediction": result["prediction"],
+                    "confidence": result["confidence"],
+                }
+            )
 
         # Phase 2: Ensemble Combination - weighted average
         total_confidence = sum(p["confidence"] for p in predictions)
         ensemble_prediction = sum(
-            p["prediction"] * (p["confidence"] / total_confidence)
-            for p in predictions
+            p["prediction"] * (p["confidence"] / total_confidence) for p in predictions
         )
 
         # Phase 3: Context Enrichment (simulated)
-        model_agreement = 1 - abs(
-            predictions[0]["prediction"] - predictions[1]["prediction"]
-        )
+        model_agreement = 1 - abs(predictions[0]["prediction"] - predictions[1]["prediction"])
 
         # Build synthesized output
         output = {
@@ -372,10 +357,12 @@ class TestOpikTraceCapture:
     @pytest.mark.asyncio
     async def test_trace_spans_for_multi_model(self, mock_model_factory):
         """Test trace spans are created for each model call."""
-        clients = await mock_model_factory.get_clients([
-            "churn_model",
-            "conversion_model",
-        ])
+        clients = await mock_model_factory.get_clients(
+            [
+                "churn_model",
+                "conversion_model",
+            ]
+        )
 
         trace_data = []
 
@@ -388,13 +375,15 @@ class TestOpikTraceCapture:
             )
             duration_ms = (time.perf_counter() - start_time) * 1000
 
-            trace_data.append({
-                "span_name": f"prediction_synthesizer.{model_id}",
-                "model_id": model_id,
-                "duration_ms": duration_ms,
-                "result_latency_ms": result["latency_ms"],
-                "timestamp": result["timestamp"],
-            })
+            trace_data.append(
+                {
+                    "span_name": f"prediction_synthesizer.{model_id}",
+                    "model_id": model_id,
+                    "duration_ms": duration_ms,
+                    "result_latency_ms": result["latency_ms"],
+                    "timestamp": result["timestamp"],
+                }
+            )
 
         # Verify trace structure
         assert len(trace_data) == 2
@@ -460,7 +449,7 @@ class TestPerformanceValidation:
         latencies.sort()
         p50 = latencies[50]
         p95 = latencies[95]
-        p99 = latencies[99]
+        latencies[99]
 
         # Target: <100ms P95
         assert p95 < 100, f"P95 latency {p95:.2f}ms exceeds 100ms target"
@@ -521,11 +510,13 @@ class TestPerformanceValidation:
     @pytest.mark.asyncio
     async def test_multi_model_parallel_latency(self, mock_model_factory):
         """Test parallel multi-model predictions meet latency requirements."""
-        clients = await mock_model_factory.get_clients([
-            "churn_model",
-            "conversion_model",
-            "causal_model",
-        ])
+        clients = await mock_model_factory.get_clients(
+            [
+                "churn_model",
+                "conversion_model",
+                "causal_model",
+            ]
+        )
 
         async def get_prediction(model_id: str, client):
             return await client.predict(
@@ -537,10 +528,7 @@ class TestPerformanceValidation:
         # Measure parallel execution time
         start = time.perf_counter()
 
-        tasks = [
-            get_prediction(model_id, client)
-            for model_id, client in clients.items()
-        ]
+        tasks = [get_prediction(model_id, client) for model_id, client in clients.items()]
         results = await asyncio.gather(*tasks)
 
         total_time = (time.perf_counter() - start) * 1000
@@ -627,10 +615,12 @@ class TestAgentIntegration:
         """Test handoff from model_deployer to prediction_synthesizer (requires full BentoML infrastructure)."""
         # 1. model_deployer: Package and deploy
         package_result = await package_model(sample_model_state)
-        deploy_result = await deploy_to_endpoint({
-            **sample_model_state,
-            "bento_tag": package_result["bento_tag"],
-        })
+        deploy_result = await deploy_to_endpoint(
+            {
+                **sample_model_state,
+                "bento_tag": package_result["bento_tag"],
+            }
+        )
 
         # 2. Handoff data
         handoff = {
@@ -682,10 +672,8 @@ class TestAgentIntegration:
         synthesis = {
             "models_deployed": len(deploy_results),
             "predictions_received": len(predictions),
-            "all_successful": all(
-                deploy_results[m]["status"] == "deployed"
-                for m in deploy_results
-            ) and len(predictions) == len(deploy_results),
+            "all_successful": all(deploy_results[m]["status"] == "deployed" for m in deploy_results)
+            and len(predictions) == len(deploy_results),
         }
 
         assert synthesis["all_successful"]

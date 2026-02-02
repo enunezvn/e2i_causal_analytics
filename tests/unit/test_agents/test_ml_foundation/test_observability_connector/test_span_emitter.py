@@ -4,7 +4,7 @@ Version: 2.0.0 (Phase 2 Integration)
 Tests use mocked OpikConnector and ObservabilitySpanRepository.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -231,7 +231,9 @@ class TestEmitSpans:
         assert result["events_logged"] == 1
 
     @pytest.mark.asyncio
-    async def test_emit_spans_generates_ids_if_missing(self, mock_opik_connector, mock_span_repository):
+    async def test_emit_spans_generates_ids_if_missing(
+        self, mock_opik_connector, mock_span_repository
+    ):
         """Test that span/trace IDs are generated if missing."""
         import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
 

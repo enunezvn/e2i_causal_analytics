@@ -10,23 +10,23 @@ ensemble (GES, PC) and gated acceptance for discovered DAGs.
 Version: 4.4
 """
 
+import logging
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 import pandas as pd
-import logging
 
 logger = logging.getLogger(__name__)
 
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState
 from src.causal_engine import compute_dag_hash
 from src.causal_engine.discovery import (
+    DiscoveryAlgorithmType,
     DiscoveryConfig,
     DiscoveryGate,
     DiscoveryResult,
     DiscoveryRunner,
-    DiscoveryAlgorithmType,
     GateDecision,
 )
 
@@ -173,13 +173,17 @@ class GraphBuilderNode:
                 "confidence": confidence,
                 # V4.4: Discovery metadata
                 "discovery_enabled": auto_discover,
-                "discovery_gate_decision": gate_evaluation.get("decision") if gate_evaluation else None,
+                "discovery_gate_decision": gate_evaluation.get("decision")
+                if gate_evaluation
+                else None,
                 "discovery_algorithms_used": (
                     [a.value for a in discovery_result.config.algorithms]
                     if discovery_result and discovery_result.config
                     else []
                 ),
-                "discovery_confidence": gate_evaluation.get("confidence", 0.0) if gate_evaluation else 0.0,
+                "discovery_confidence": gate_evaluation.get("confidence", 0.0)
+                if gate_evaluation
+                else 0.0,
                 "discovery_n_edges": discovery_result.n_edges if discovery_result else 0,
                 "augmented_edges": augmented_edges,
             }

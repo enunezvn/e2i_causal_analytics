@@ -10,10 +10,9 @@ Version: 4.3
 """
 
 import hashlib
+import importlib.util
 import json
 from typing import Any, Dict, List, Optional, Tuple
-
-import importlib.util
 
 NETWORKX_AVAILABLE = importlib.util.find_spec("networkx") is not None
 

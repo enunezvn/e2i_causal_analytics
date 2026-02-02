@@ -8,10 +8,9 @@ V4.4: Added DAG validation for segment-specific effects.
 
 import logging
 import time
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..state import CATEResult, HeterogeneousOptimizerState, SegmentProfile
-
 
 # V4.4: DAG validation constants
 LATENT_CONFOUNDER_WARNING_THRESHOLD = 0.3  # Warn if >30% segments have latent confounders
@@ -107,9 +106,13 @@ class SegmentAnalyzerNode:
                     "high_responder_count": len(high_responders),
                     "low_responder_count": len(low_responders),
                     "effect_ratio": comparison.get("effect_ratio"),
-                    "dag_validated_count": len(dag_validated_segments) if dag_validated_segments else 0,
+                    "dag_validated_count": len(dag_validated_segments)
+                    if dag_validated_segments
+                    else 0,
                     "dag_invalid_count": len(dag_invalid_segments) if dag_invalid_segments else 0,
-                    "latent_confounder_count": len(latent_confounder_segments) if latent_confounder_segments else 0,
+                    "latent_confounder_count": len(latent_confounder_segments)
+                    if latent_confounder_segments
+                    else 0,
                     "latency_ms": analysis_time,
                 },
             )
@@ -267,9 +270,7 @@ class SegmentAnalyzerNode:
                         ],
                         size=result["sample_size"],
                         size_percentage=(
-                            result["sample_size"] / total_size * 100
-                            if total_size > 0
-                            else 0
+                            result["sample_size"] / total_size * 100 if total_size > 0 else 0
                         ),
                         recommendation=self._generate_recommendation(
                             seg["segment_var"], result, rtype
@@ -413,7 +414,7 @@ class SegmentAnalyzerNode:
                 validated_segments.append(segment_id)  # Include but warn
                 continue
 
-            seg_idx = node_to_idx[segment_var]
+            node_to_idx[segment_var]
 
             # Check for treatment → segment path
             has_treatment_path = self._has_causal_path(

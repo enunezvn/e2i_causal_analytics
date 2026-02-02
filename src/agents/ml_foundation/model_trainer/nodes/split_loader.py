@@ -18,7 +18,6 @@ def _get_feature_analyzer_adapter():
     try:
         from src.feature_store.client import FeatureStoreClient
         from src.feature_store.feature_analyzer_adapter import (
-            FeatureAnalyzerAdapter,
             get_feature_analyzer_adapter,
         )
 
@@ -37,6 +36,7 @@ def _get_ml_data_loader():
     """Get MLDataLoader (lazy import to avoid circular deps)."""
     try:
         from src.ml.data_loader import MLDataLoader
+
         return MLDataLoader()
     except Exception as e:
         logger.warning(f"Could not initialize MLDataLoader: {e}")
@@ -100,12 +100,12 @@ async def _fetch_splits_from_feast(
                 continue
 
             # Build entity DataFrame with timestamps for point-in-time joins
-            entity_df = pd.DataFrame({
-                entity_key: split_entities.get("entity_ids", []),
-                "event_timestamp": pd.to_datetime(
-                    split_entities.get("event_timestamps", [])
-                ),
-            })
+            entity_df = pd.DataFrame(
+                {
+                    entity_key: split_entities.get("entity_ids", []),
+                    "event_timestamp": pd.to_datetime(split_entities.get("event_timestamps", [])),
+                }
+            )
 
             # Add brand_id if available (multi-entity join)
             if "brand_ids" in split_entities:
@@ -122,7 +122,9 @@ async def _fetch_splits_from_feast(
             target_col = split_entities.get("target_column", "target")
             if target_col in features_df.columns:
                 y = features_df[target_col]
-                X = features_df.drop(columns=[target_col, entity_key, "event_timestamp"], errors="ignore")
+                X = features_df.drop(
+                    columns=[target_col, entity_key, "event_timestamp"], errors="ignore"
+                )
             else:
                 # Target not in Feast - get from split metadata
                 y = pd.Series(split_entities.get("targets", []))
@@ -138,8 +140,7 @@ async def _fetch_splits_from_feast(
             }
 
             logger.info(
-                f"Loaded {split_name} split from Feast: "
-                f"{len(X)} samples, {len(X.columns)} features"
+                f"Loaded {split_name} split from Feast: {len(X)} samples, {len(X.columns)} features"
             )
 
         return {
@@ -206,8 +207,7 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
         if feast_splits is None:
             # Feast unavailable - try fallback to database
             logger.warning(
-                f"Feast split loading failed for {experiment_id}, "
-                "attempting database fallback"
+                f"Feast split loading failed for {experiment_id}, attempting database fallback"
             )
             ml_loader = _get_ml_data_loader()
             if ml_loader is not None:
@@ -218,9 +218,7 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
                         validation_data = db_splits.get("validation")
                         test_data = db_splits.get("test")
                         holdout_data = db_splits.get("holdout")
-                        logger.info(
-                            f"Loaded splits from database for {experiment_id}"
-                        )
+                        logger.info(f"Loaded splits from database for {experiment_id}")
                     else:
                         return {
                             "error": f"No splits found in database for experiment {experiment_id}",

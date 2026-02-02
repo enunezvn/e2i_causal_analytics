@@ -25,7 +25,6 @@ os.environ["E2I_TESTING_MODE"] = "1"
 # Now import the app (auth module will see TESTING_MODE=True)
 from src.api.main import app  # noqa: E402
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================

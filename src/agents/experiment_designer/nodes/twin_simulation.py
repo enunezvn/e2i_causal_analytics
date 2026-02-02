@@ -20,7 +20,7 @@ Contract: .claude/contracts/tier3-contracts.md
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from src.agents.experiment_designer.state import ErrorDetails, ExperimentDesignState
 

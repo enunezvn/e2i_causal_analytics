@@ -11,11 +11,9 @@ Tests the caching layer for composition performance optimization (G6):
 
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass
 from typing import List, Optional
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -28,7 +26,6 @@ from src.agents.tool_composer.cache import (
     ToolOutputCache,
     get_cache_manager,
 )
-
 
 # ============================================================================
 # TEST FIXTURES
@@ -50,9 +47,7 @@ def decomposition_cache():
 @pytest.fixture
 def plan_similarity_cache():
     """Create a fresh plan similarity cache for testing."""
-    return PlanSimilarityCache(
-        max_size=10, ttl_seconds=600.0, similarity_threshold=0.8
-    )
+    return PlanSimilarityCache(max_size=10, ttl_seconds=600.0, similarity_threshold=0.8)
 
 
 @pytest.fixture
@@ -320,6 +315,7 @@ class TestDecompositionCache:
 @dataclass
 class MockSubQuestion:
     """Mock sub-question for testing."""
+
     intent: str
     entities: List[str]
     depends_on: Optional[List[int]] = None
@@ -328,6 +324,7 @@ class MockSubQuestion:
 @dataclass
 class MockDecomposition:
     """Mock decomposition for testing."""
+
     sub_questions: List[MockSubQuestion]
 
 
@@ -647,9 +644,7 @@ class TestCacheIntegration:
         cached_plan = cache_manager.get_similar_plan(decomposition)
         assert cached_plan is not None
 
-        cached_output = cache_manager.get_tool_output(
-            "psi_calculator", {"metric": "rep_visits"}
-        )
+        cached_output = cache_manager.get_tool_output("psi_calculator", {"metric": "rep_visits"})
         assert cached_output == {"psi": 0.05}
 
     def test_cache_eviction_under_load(self):

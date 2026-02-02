@@ -17,7 +17,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -252,7 +252,7 @@ class RandomizationService:
 
         # Randomize within each stratum
         for strata_key_str, stratum_units in strata_groups.items():
-            strata_key_dict = dict(zip(strata_columns, strata_key_str.split("|")))
+            strata_key_dict = dict(zip(strata_columns, strata_key_str.split("|"), strict=False))
 
             for unit in stratum_units:
                 unit_id = str(unit.get("id") or unit.get("unit_id"))
@@ -521,9 +521,7 @@ class RandomizationService:
 
         for assignment in assignments:
             # Count by variant
-            variant_counts[assignment.variant] = (
-                variant_counts.get(assignment.variant, 0) + 1
-            )
+            variant_counts[assignment.variant] = variant_counts.get(assignment.variant, 0) + 1
 
             # Count by strata if stratified
             if assignment.stratification_key:
@@ -540,9 +538,9 @@ class RandomizationService:
         return {
             "total_units": total,
             "variant_counts": variant_counts,
-            "variant_proportions": {
-                v: c / total for v, c in variant_counts.items()
-            } if total > 0 else {},
+            "variant_proportions": {v: c / total for v, c in variant_counts.items()}
+            if total > 0
+            else {},
             "strata_counts": strata_counts if strata_counts else None,
         }
 

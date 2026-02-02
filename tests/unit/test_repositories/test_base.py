@@ -5,7 +5,7 @@ Tests CRUD operations, split-aware querying, and data leakage prevention.
 """
 
 import hashlib
-from typing import Any, Dict, Optional
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 

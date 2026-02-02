@@ -13,7 +13,6 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import numpy as np
 from scipy import stats
@@ -81,7 +80,9 @@ class ModelDriftNode:
         if tier0_data is not None:
             try:
                 drift_results = self._create_model_drift_from_tier0(
-                    tier0_data, state["features_to_monitor"], state["significance_level"],
+                    tier0_data,
+                    state["features_to_monitor"],
+                    state["significance_level"],
                     state.get("psi_threshold", 0.1),
                 )
                 state["model_drift_results"] = drift_results
@@ -97,7 +98,7 @@ class ModelDriftNode:
                 state["errors"] = state.get("errors", []) + [error]
                 state["model_drift_results"] = []
                 state["warnings"] = state.get("warnings", []) + [
-                    f"Model drift: tier0 passthrough error, returning empty results"
+                    "Model drift: tier0 passthrough error, returning empty results"
                 ]
                 return state
 
@@ -213,7 +214,8 @@ class ModelDriftNode:
 
         # Select numeric features to create pseudo-prediction scores
         numeric_features = [
-            f for f in features_to_monitor
+            f
+            for f in features_to_monitor
             if f in tier0_data.columns and np.issubdtype(tier0_data[f].dtype, np.number)
         ][:5]
 
@@ -237,7 +239,9 @@ class ModelDriftNode:
         current_scores = pseudo_scores[mid_point:].copy()
         # Apply shift to simulate model drift
         drift_shift = 0.15 * np.std(baseline_scores)
-        current_scores += rng.normal(drift_shift, np.std(baseline_scores) * 0.05, size=len(current_scores))
+        current_scores += rng.normal(
+            drift_shift, np.std(baseline_scores) * 0.05, size=len(current_scores)
+        )
         current_scores = np.clip(current_scores, 0.0, 1.0)
 
         drift_results = []

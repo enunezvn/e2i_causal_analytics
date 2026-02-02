@@ -72,7 +72,7 @@ class ScoreComposerNode:
 
             # Add diagnosis insights to summary if there are issues
             if diagnosis["root_causes"]:
-                summary += f"\n\nDiagnostic Analysis:"
+                summary += "\n\nDiagnostic Analysis:"
                 summary += f"\n- Health Trend: {diagnosis['health_trend'].upper()}"
                 if diagnosis["priority_fixes"]:
                     top_fix = diagnosis["priority_fixes"][0]
@@ -257,17 +257,19 @@ class ScoreComposerNode:
             # If score is degraded but no specific component issues found,
             # create a synthetic root cause for quality gate compliance
             if not issues:
-                issues.append({
-                    "dimension": "component",
-                    "component": "system_aggregate",
-                    "status": "degraded",
-                    "root_cause": (
-                        f"Component health score ({component_score:.1%}) below healthy threshold (80%). "
-                        f"Multiple minor issues may be contributing to overall degradation."
-                    ),
-                    "metrics": {"aggregate_score": component_score},
-                    "impact_score": 0.5,
-                })
+                issues.append(
+                    {
+                        "dimension": "component",
+                        "component": "system_aggregate",
+                        "status": "degraded",
+                        "root_cause": (
+                            f"Component health score ({component_score:.1%}) below healthy threshold (80%). "
+                            f"Multiple minor issues may be contributing to overall degradation."
+                        ),
+                        "metrics": {"aggregate_score": component_score},
+                        "impact_score": 0.5,
+                    }
+                )
 
         return issues
 

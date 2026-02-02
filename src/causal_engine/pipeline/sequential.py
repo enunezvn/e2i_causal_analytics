@@ -7,20 +7,14 @@ as defined in the Data Architecture & Integration documentation.
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from .orchestrator import (
-    CausalMLExecutor,
-    DoWhyExecutor,
-    EconMLExecutor,
     LibraryExecutor,
-    NetworkXExecutor,
     PipelineOrchestrator,
 )
 from .router import CausalLibrary, LibraryRouter
 from .state import (
-    LibraryExecutionResult,
-    PipelineConfig,
     PipelineInput,
     PipelineOutput,
     PipelineStage,
@@ -114,16 +108,12 @@ class SequentialPipeline(PipelineOrchestrator):
             # Validate input for this library
             is_valid, error_msg = executor.validate_input(state)
             if not is_valid:
-                logger.warning(
-                    f"Validation failed for {library.value}: {error_msg}"
-                )
+                logger.warning(f"Validation failed for {library.value}: {error_msg}")
                 state["warnings"].append(f"{library.value}: {error_msg}")
                 state["libraries_skipped"].append(library.value)
 
                 if self.fail_fast:
-                    state["errors"].append(
-                        {"library": library.value, "error": error_msg}
-                    )
+                    state["errors"].append({"library": library.value, "error": error_msg})
                     break
                 continue
 
@@ -142,15 +132,11 @@ class SequentialPipeline(PipelineOrchestrator):
                     if self.fail_fast:
                         break
                 else:
-                    logger.info(
-                        f"{library.value} completed in {result['latency_ms']}ms"
-                    )
+                    logger.info(f"{library.value} completed in {result['latency_ms']}ms")
 
             except asyncio.TimeoutError:
                 logger.error(f"{library.value} timed out")
-                state["errors"].append(
-                    {"library": library.value, "error": "Execution timed out"}
-                )
+                state["errors"].append({"library": library.value, "error": "Execution timed out"})
                 state["libraries_skipped"].append(library.value)
 
                 if self.fail_fast:
@@ -203,9 +189,9 @@ class SequentialPipeline(PipelineOrchestrator):
             # Confidence-weighted average
             total_weight = sum(conf for _, conf in effects)
             if total_weight > 0:
-                state["consensus_effect"] = sum(
-                    effect * conf for effect, conf in effects
-                ) / total_weight
+                state["consensus_effect"] = (
+                    sum(effect * conf for effect, conf in effects) / total_weight
+                )
                 state["consensus_confidence"] = total_weight / len(effects)
 
                 # Calculate pairwise agreement
@@ -290,14 +276,10 @@ class SequentialPipeline(PipelineOrchestrator):
         question_type = state.get("question_type", "")
 
         if question_type == "targeting_optimization" and state["targeting_recommendations"]:
-            recommendations.extend(
-                [str(rec) for rec in state["targeting_recommendations"][:3]]
-            )
+            recommendations.extend([str(rec) for rec in state["targeting_recommendations"][:3]])
 
         if question_type == "effect_heterogeneity" and state["cate_by_segment"]:
-            recommendations.append(
-                "Segment-specific targeting recommended based on CATE analysis"
-            )
+            recommendations.append("Segment-specific targeting recommended based on CATE analysis")
 
         if state["heterogeneity_score"] is not None and state["heterogeneity_score"] > 0.5:
             recommendations.append(

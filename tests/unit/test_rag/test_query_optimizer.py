@@ -14,7 +14,7 @@ Tests cover:
 import asyncio
 import sys
 import time
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -23,7 +23,6 @@ sys.modules["anthropic"] = MagicMock()
 sys.modules["tenacity"] = MagicMock()
 
 from src.rag.query_optimizer import QueryOptimizer
-
 
 # =============================================================================
 # Test Initialization
@@ -488,9 +487,7 @@ class TestCombinedOptimization:
     @pytest.mark.asyncio
     async def test_optimize_query_llm_only(self, optimizer):
         with patch.object(optimizer, "_call_llm", return_value="llm result"):
-            result = await optimizer.optimize_query(
-                query="test", use_llm=True, use_hyde=False
-            )
+            result = await optimizer.optimize_query(query="test", use_llm=True, use_hyde=False)
 
             assert result["llm_expanded"] == "llm result"
             assert result["hyde_document"] is None
@@ -498,9 +495,7 @@ class TestCombinedOptimization:
 
     @pytest.mark.asyncio
     async def test_optimize_query_rule_only(self, optimizer):
-        result = await optimizer.optimize_query(
-            query="TRx query", use_llm=False, use_hyde=False
-        )
+        result = await optimizer.optimize_query(query="TRx query", use_llm=False, use_hyde=False)
 
         assert result["llm_expanded"] is None
         assert result["hyde_document"] is None
@@ -511,9 +506,7 @@ class TestCombinedOptimization:
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
             with patch("src.rag.query_optimizer.TypoHandler") as mock_handler_class:
                 mock_handler = Mock()
-                mock_handler.correct_query = Mock(
-                    return_value=("corrected query", [])
-                )
+                mock_handler.correct_query = Mock(return_value=("corrected query", []))
                 mock_handler_class.return_value = mock_handler
 
                 optimizer = QueryOptimizer(typo_correction_enabled=True)
@@ -527,9 +520,7 @@ class TestCombinedOptimization:
     @pytest.mark.asyncio
     async def test_optimize_query_hyde_recommended(self, optimizer):
         with patch.object(optimizer, "_call_llm", return_value="hyde doc"):
-            result = await optimizer.optimize_query(
-                query="test", use_llm=False, use_hyde=True
-            )
+            result = await optimizer.optimize_query(query="test", use_llm=False, use_hyde=True)
 
             # HyDE should be recommended over rule expansion
             assert result["recommended"] == "hyde doc"
@@ -578,9 +569,7 @@ class TestEdgeCases:
             optimizer = QueryOptimizer(cache_enabled=True)
 
         with patch.object(optimizer, "_call_llm", return_value="result"):
-            tasks = [
-                optimizer.optimize_query(f"query_{i}", use_llm=True) for i in range(5)
-            ]
+            tasks = [optimizer.optimize_query(f"query_{i}", use_llm=True) for i in range(5)]
 
             results = await asyncio.gather(*tasks)
 

@@ -129,7 +129,7 @@ class GraphBackend:
             results = self._parse_query_results(result)
 
             logger.debug(
-                f"Graph search returned {len(results)} results " f"in {self._last_latency_ms:.1f}ms"
+                f"Graph search returned {len(results)} results in {self._last_latency_ms:.1f}ms"
             )
 
             return results
@@ -208,7 +208,7 @@ class GraphBackend:
             {match_str}
             {where_str}
             OPTIONAL MATCH path = ({return_items[0]})-[rel:CAUSES|AFFECTS*1..{self.falkordb_config.max_path_length}]->(target)
-            RETURN {', '.join(return_items)},
+            RETURN {", ".join(return_items)},
                    path,
                    nodes(path) as path_nodes,
                    relationships(path) as path_rels,
@@ -354,7 +354,9 @@ class GraphBackend:
             return self._parse_graph_for_visualization(result, center_node_id, max_depth)
 
         except asyncio.TimeoutError as e:
-            raise GraphSearchError(message="Graph subgraph query timeout", backend="falkordb_graph") from e
+            raise GraphSearchError(
+                message="Graph subgraph query timeout", backend="falkordb_graph"
+            ) from e
 
         except Exception as e:
             raise GraphSearchError(

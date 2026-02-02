@@ -71,17 +71,11 @@ def materialize_features(
     logger.info(f"Starting full materialization task: {self.request.id}")
 
     config = load_config()
-    default_days_back = config.get("full_materialization", {}).get(
-        "default_days_back", 7
-    )
+    default_days_back = config.get("full_materialization", {}).get("default_days_back", 7)
 
     # Parse dates
     now = datetime.now(timezone.utc)
-    end_dt = (
-        datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        if end_date
-        else now
-    )
+    end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00")) if end_date else now
     start_dt = (
         datetime.fromisoformat(start_date.replace("Z", "+00:00"))
         if start_date
@@ -144,11 +138,7 @@ def materialize_incremental_features(
 
     # Parse dates
     now = datetime.now(timezone.utc)
-    end_dt = (
-        datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        if end_date
-        else now
-    )
+    end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00")) if end_date else now
 
     async def run_job():
         job = MaterializationJob()
@@ -168,9 +158,7 @@ def materialize_incremental_features(
     status = result.get("status", "unknown")
     if status == "completed":
         duration = result.get("duration_seconds", 0)
-        logger.info(
-            f"Incremental materialization complete: duration={duration:.2f}s"
-        )
+        logger.info(f"Incremental materialization complete: duration={duration:.2f}s")
     elif status == "failed":
         logger.error(f"Incremental materialization failed: {result.get('error')}")
 
@@ -221,9 +209,9 @@ def check_feature_freshness(
     logger.info(f"Starting feature freshness check: {self.request.id}")
 
     config = load_config()
-    staleness_hours = max_staleness_hours or config.get(
-        "materialization", {}
-    ).get("max_staleness_hours", 24.0)
+    staleness_hours = max_staleness_hours or config.get("materialization", {}).get(
+        "max_staleness_hours", 24.0
+    )
 
     async def run_check():
         job = MaterializationJob()

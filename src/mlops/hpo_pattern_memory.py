@@ -43,9 +43,9 @@ Version: 1.0.0
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -370,8 +370,7 @@ async def record_warmstart_outcome(
         ).execute()
 
         logger.info(
-            f"Recorded warmstart outcome for {pattern_id[:8]}: "
-            f"improvement={improvement:+.4f}"
+            f"Recorded warmstart outcome for {pattern_id[:8]}: improvement={improvement:+.4f}"
         )
 
     except Exception as e:
@@ -397,7 +396,9 @@ async def get_pattern_stats(algorithm_name: Optional[str] = None) -> Dict[str, A
         return {"available": False, "reason": "Supabase not available"}
 
     try:
-        query = client.table("ml_hpo_patterns").select("algorithm_name, problem_type, best_value, times_used_as_warmstart")
+        query = client.table("ml_hpo_patterns").select(
+            "algorithm_name, problem_type, best_value, times_used_as_warmstart"
+        )
 
         if algorithm_name:
             query = query.eq("algorithm_name", algorithm_name)

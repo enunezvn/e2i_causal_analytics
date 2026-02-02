@@ -1,20 +1,21 @@
 """Tests for WS1 KPI Calculators."""
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-import numpy as np
+from unittest.mock import Mock
 
+import numpy as np
+import pytest
+
+from src.kpi.calculators.data_quality import DataQualityCalculator
+from src.kpi.calculators.model_performance import (
+    ModelPerformanceCalculator,
+    calculate_psi,
+)
 from src.kpi.models import (
     CalculationType,
     KPIMetadata,
     KPIStatus,
     KPIThreshold,
     Workstream,
-)
-from src.kpi.calculators.data_quality import DataQualityCalculator
-from src.kpi.calculators.model_performance import (
-    ModelPerformanceCalculator,
-    calculate_psi,
 )
 
 
@@ -73,9 +74,7 @@ class TestDataQualityCalculator:
     def test_calculate_source_coverage_success(self, calculator, sample_kpi):
         """Test source coverage calculation with mock data."""
         # Mock the execute_query to return coverage data
-        calculator._execute_query = Mock(
-            return_value=[{"covered": 850, "total": 1000}]
-        )
+        calculator._execute_query = Mock(return_value=[{"covered": 850, "total": 1000}])
 
         result = calculator.calculate(sample_kpi)
 
@@ -85,9 +84,7 @@ class TestDataQualityCalculator:
 
     def test_calculate_source_coverage_warning(self, calculator, sample_kpi):
         """Test source coverage in warning zone."""
-        calculator._execute_query = Mock(
-            return_value=[{"covered": 750, "total": 1000}]
-        )
+        calculator._execute_query = Mock(return_value=[{"covered": 750, "total": 1000}])
 
         result = calculator.calculate(sample_kpi)
 
@@ -96,9 +93,7 @@ class TestDataQualityCalculator:
 
     def test_calculate_source_coverage_critical(self, calculator, sample_kpi):
         """Test source coverage in critical zone."""
-        calculator._execute_query = Mock(
-            return_value=[{"covered": 400, "total": 1000}]
-        )
+        calculator._execute_query = Mock(return_value=[{"covered": 400, "total": 1000}])
 
         result = calculator.calculate(sample_kpi)
 
@@ -131,9 +126,7 @@ class TestModelPerformanceCalculator:
         """Create a calculator with mock clients."""
         mock_db = Mock()
         mock_mlflow = Mock()
-        return ModelPerformanceCalculator(
-            db_client=mock_db, mlflow_client=mock_mlflow
-        )
+        return ModelPerformanceCalculator(db_client=mock_db, mlflow_client=mock_mlflow)
 
     @pytest.fixture
     def roc_auc_kpi(self):
@@ -226,13 +219,9 @@ class TestModelPerformanceCalculator:
         assert result.value == 0.35
         assert result.status == KPIStatus.CRITICAL
 
-    def test_calculate_returns_default_when_mlflow_unavailable(
-        self, calculator, roc_auc_kpi
-    ):
+    def test_calculate_returns_default_when_mlflow_unavailable(self, calculator, roc_auc_kpi):
         """Test calculation falls back to default when MLflow errors."""
-        calculator._mlflow_client.get_latest_versions.side_effect = Exception(
-            "MLflow error"
-        )
+        calculator._mlflow_client.get_latest_versions.side_effect = Exception("MLflow error")
 
         result = calculator.calculate(roc_auc_kpi)
 

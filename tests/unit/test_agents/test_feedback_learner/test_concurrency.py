@@ -7,7 +7,7 @@ Tests concurrent batch processing and race condition handling.
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -67,7 +67,7 @@ class TestConcurrentBatchProcessing:
             return output
 
         # Create separate agent instances for parallel processing
-        agents = [FeedbackLearnerAgent() for _ in range(3)]
+        [FeedbackLearnerAgent() for _ in range(3)]
 
         # Process batches with different delays
         tasks = [
@@ -111,11 +111,11 @@ class TestConcurrentBatchProcessing:
             stateful_process("batch_c"),
         ]
 
-        results = await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
 
         # Each batch should have its own items
         assert len(batch_states) == 3
-        for batch_id, state in batch_states.items():
+        for _batch_id, state in batch_states.items():
             assert state["completed"] is True
             assert len(state["items"]) == 5
             assert all(f"item_{i}" in state["items"] for i in range(5))
@@ -183,11 +183,8 @@ class TestConcurrentBatchProcessing:
             return patterns
 
         # Run pattern detection concurrently
-        tasks = [
-            detect_patterns([], f"batch_{i}")
-            for i in range(5)
-        ]
-        results = await asyncio.gather(*tasks)
+        tasks = [detect_patterns([], f"batch_{i}") for i in range(5)]
+        await asyncio.gather(*tasks)
 
         # All patterns should be collected
         assert len(detected_patterns) == 15  # 5 batches * 3 patterns each
@@ -203,19 +200,18 @@ class TestConcurrentBatchProcessing:
 
         async def apply_update(update_id: str, batch_id: str, order: int):
             await asyncio.sleep(0.01 * (5 - order))  # Reverse delay
-            update_log.append({
-                "update_id": update_id,
-                "batch_id": batch_id,
-                "order": order,
-                "timestamp": datetime.now(timezone.utc),
-            })
+            update_log.append(
+                {
+                    "update_id": update_id,
+                    "batch_id": batch_id,
+                    "order": order,
+                    "timestamp": datetime.now(timezone.utc),
+                }
+            )
             return update_id
 
         # Apply updates for a single batch - should maintain order
-        batch_updates = [
-            apply_update(f"update_{i}", "batch_1", i)
-            for i in range(5)
-        ]
+        batch_updates = [apply_update(f"update_{i}", "batch_1", i) for i in range(5)]
 
         await asyncio.gather(*batch_updates)
 
@@ -274,10 +270,7 @@ class TestRaceConditionHandling:
                 await asyncio.sleep(0.001)
 
         # Run concurrent accumulations
-        tasks = [
-            accumulate_metrics(10, 2)
-            for _ in range(100)
-        ]
+        tasks = [accumulate_metrics(10, 2) for _ in range(100)]
         await asyncio.gather(*tasks)
 
         # Metrics should be accurate
@@ -293,8 +286,7 @@ class TestRaceConditionHandling:
             SchedulerConfig,
         )
 
-        cycle_results = []
-        cycle_lock = asyncio.Lock()
+        asyncio.Lock()
 
         async def mock_learn(*args, **kwargs):
             output = MagicMock()
@@ -319,10 +311,7 @@ class TestRaceConditionHandling:
         scheduler = FeedbackLearnerScheduler(agent, config)
 
         # Run multiple cycles manually
-        tasks = [
-            scheduler.run_cycle_now(force=True)
-            for _ in range(5)
-        ]
+        tasks = [scheduler.run_cycle_now(force=True) for _ in range(5)]
 
         results = await asyncio.gather(*tasks)
 
@@ -383,10 +372,7 @@ class TestStressTests:
             return batch_id
 
         # Mix of success and failure
-        tasks = [
-            process_batch(i, should_fail=(i % 3 == 0))
-            for i in range(30)
-        ]
+        tasks = [process_batch(i, should_fail=(i % 3 == 0)) for i in range(30)]
 
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -421,10 +407,7 @@ class TestStressTests:
                 raise
 
         # Start tasks with different delays
-        tasks = [
-            asyncio.create_task(cancellable_process(i, 0.1 * (i + 1)))
-            for i in range(5)
-        ]
+        tasks = [asyncio.create_task(cancellable_process(i, 0.1 * (i + 1))) for i in range(5)]
 
         # Wait briefly then cancel remaining
         await asyncio.sleep(0.15)

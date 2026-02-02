@@ -9,27 +9,25 @@ Tests the feedback_learner integration including:
 - Database integration for training signals
 """
 
-import pytest
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from src.api.routes.chatbot_dspy import (
+    CHATBOT_AB_TESTING_ENABLED,
+    # Feature flags
+    CHATBOT_GEPA_OPTIMIZATION_ENABLED,
     # Phase 8 components
     ChatbotGEPAMetric,
     ChatbotOptimizationRequest,
     ChatbotOptimizer,
-    get_chatbot_optimizer,
-    submit_signals_for_optimization,
-    # Training signal components
     ChatbotSignalCollector,
-    ChatbotSessionSignal,
+    get_chatbot_optimizer,
     get_chatbot_signal_collector,
-    # Feature flags
-    CHATBOT_GEPA_OPTIMIZATION_ENABLED,
-    CHATBOT_AB_TESTING_ENABLED,
+    submit_signals_for_optimization,
 )
-
 
 # =============================================================================
 # ChatbotGEPAMetric Tests
@@ -50,10 +48,10 @@ class TestChatbotGEPAMetric:
         assert metric.synthesis_weight == 0.30
         # Weights should sum to 1.0
         total_weight = (
-            metric.intent_weight +
-            metric.routing_weight +
-            metric.rag_weight +
-            metric.synthesis_weight
+            metric.intent_weight
+            + metric.routing_weight
+            + metric.rag_weight
+            + metric.synthesis_weight
         )
         assert abs(total_weight - 1.0) < 0.001
 
@@ -496,8 +494,7 @@ class TestChatbotOptimizer:
         # Mock training signals
         mock_collector = MagicMock(spec=ChatbotSignalCollector)
         mock_collector.get_signals_for_training.return_value = [
-            {"query": f"test{i}", "predicted_intent": "kpi_query"}
-            for i in range(60)
+            {"query": f"test{i}", "predicted_intent": "kpi_query"} for i in range(60)
         ]
         optimizer._signal_collector = mock_collector
 
@@ -647,10 +644,7 @@ class TestChatbotABTesting:
             session_id = "consistent-session-abc"
 
             # Get variant multiple times
-            results = [
-                optimizer.get_ab_variant("intent_classifier", session_id)
-                for _ in range(5)
-            ]
+            results = [optimizer.get_ab_variant("intent_classifier", session_id) for _ in range(5)]
 
             # All results should be the same for same session
             first_result = results[0]
@@ -692,7 +686,11 @@ class TestChatbotABTesting:
 
         # Add metrics directly
         optimizer._ab_test_variants["intent_classifier"][0]["metrics"] = [
-            0.80, 0.85, 0.90, 0.88, 0.92
+            0.80,
+            0.85,
+            0.90,
+            0.88,
+            0.92,
         ]
 
         results = optimizer.get_ab_results("intent_classifier")
@@ -717,9 +715,9 @@ class TestSignalSubmission:
         """Test submission fails with insufficient signals."""
         # Mock optimizer to return insufficient signals
         mock_optimizer = MagicMock(spec=ChatbotOptimizer)
-        mock_optimizer.get_training_signals = AsyncMock(return_value=[
-            {"query": "test", "predicted_intent": "kpi_query"}
-        ])  # Only 1 signal, below min_signals=50
+        mock_optimizer.get_training_signals = AsyncMock(
+            return_value=[{"query": "test", "predicted_intent": "kpi_query"}]
+        )  # Only 1 signal, below min_signals=50
         mock_optimizer.queue_optimization = AsyncMock(return_value="req_123")
 
         with patch(
@@ -758,7 +756,7 @@ class TestSignalSubmission:
             "src.api.routes.chatbot_dspy.get_chatbot_optimizer",
             return_value=mock_optimizer,
         ):
-            result = await submit_signals_for_optimization(
+            await submit_signals_for_optimization(
                 min_signals=50,
                 min_reward=0.5,
             )
@@ -796,7 +794,7 @@ class TestOptimizerCollectorIntegration:
 
     def test_optimizer_uses_collector(self):
         """Test that optimizer uses the signal collector."""
-        collector = get_chatbot_signal_collector()
+        get_chatbot_signal_collector()
         optimizer = get_chatbot_optimizer()
 
         # Optimizer should have a reference to collector
@@ -832,12 +830,16 @@ class TestOptimizerCollectorIntegration:
             )
 
         # Verify collector state before async call
-        assert len(collector._signals) == 15, f"Collector should have 15 signals, got {len(collector._signals)}"
+        assert len(collector._signals) == 15, (
+            f"Collector should have 15 signals, got {len(collector._signals)}"
+        )
         assert optimizer._signal_collector is collector, "Optimizer should reference same collector"
 
         # Verify get_signals_for_training works directly
         direct_signals = collector.get_signals_for_training("intent", 100)
-        assert len(direct_signals) == 15, f"Direct call should return 15 signals, got {len(direct_signals)}"
+        assert len(direct_signals) == 15, (
+            f"Direct call should return 15 signals, got {len(direct_signals)}"
+        )
 
         # Force fallback by making database raise exception
         with patch(
@@ -902,8 +904,7 @@ class TestOptimizerErrorHandling:
             "get_training_signals",
             new_callable=AsyncMock,
             return_value=[
-                {"query": f"test{i}", "predicted_intent": "kpi_query"}
-                for i in range(20)
+                {"query": f"test{i}", "predicted_intent": "kpi_query"} for i in range(20)
             ],
         ):
             # Force optimizer type to test the path
@@ -911,12 +912,15 @@ class TestOptimizerErrorHandling:
             optimizer._optimizer_type = "gepa"
 
             # Mock GEPA to raise exception
-            with patch(
-                "src.api.routes.chatbot_dspy.create_gepa_optimizer",
-                side_effect=Exception("GEPA failed"),
-            ), patch(
-                "src.api.routes.chatbot_dspy.GEPA_AVAILABLE",
-                True,
+            with (
+                patch(
+                    "src.api.routes.chatbot_dspy.create_gepa_optimizer",
+                    side_effect=Exception("GEPA failed"),
+                ),
+                patch(
+                    "src.api.routes.chatbot_dspy.GEPA_AVAILABLE",
+                    True,
+                ),
             ):
                 result = await optimizer.optimize_module(
                     module_name="intent_classifier",

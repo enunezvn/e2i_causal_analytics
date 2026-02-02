@@ -15,28 +15,25 @@ Covers:
 - create_tracker convenience function
 """
 
-import json
 import os
 from datetime import datetime
-from unittest.mock import MagicMock, patch, call
-from uuid import uuid4
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from src.causal_engine.energy_score.mlflow_tracker import (
-    ExperimentContext,
-    EnergyScoreMLflowTracker,
-    create_tracker,
-)
 from src.causal_engine.energy_score.estimator_selector import (
     EstimatorResult,
     EstimatorType,
     SelectionResult,
     SelectionStrategy,
 )
+from src.causal_engine.energy_score.mlflow_tracker import (
+    EnergyScoreMLflowTracker,
+    ExperimentContext,
+    create_tracker,
+)
 from src.causal_engine.energy_score.score_calculator import EnergyScoreResult
-
 
 # =============================================================================
 # Fixtures
@@ -93,9 +90,7 @@ def failed_estimator_result() -> EstimatorResult:
 
 
 @pytest.fixture
-def sample_selection_result(
-    sample_estimator_result, failed_estimator_result
-) -> SelectionResult:
+def sample_selection_result(sample_estimator_result, failed_estimator_result) -> SelectionResult:
     """Create a sample SelectionResult for testing."""
     return SelectionResult(
         selected=sample_estimator_result,
@@ -160,13 +155,16 @@ class TestEnergyScoreMLflowTrackerInit:
 
     def test_init_with_defaults(self):
         """Test initialization with default values."""
-        with patch.dict(os.environ, {
-            "MLFLOW_TRACKING_URI": "http://mlflow:5000",
-            "DATABASE_URL": "postgresql://user:pass@host/db"
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "MLFLOW_TRACKING_URI": "http://mlflow:5000",
+                "DATABASE_URL": "postgresql://user:pass@host/db",
+            },
+        ):
             with patch(
                 "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-                return_value=True
+                return_value=True,
             ):
                 tracker = EnergyScoreMLflowTracker()
 
@@ -180,7 +178,7 @@ class TestEnergyScoreMLflowTrackerInit:
         """Test initialization with custom values."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker(
                 tracking_uri="http://custom:9000",
@@ -203,7 +201,7 @@ class TestEnergyScoreMLflowTrackerInit:
 
             with patch(
                 "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-                return_value=False
+                return_value=False,
             ):
                 tracker = EnergyScoreMLflowTracker()
 
@@ -255,7 +253,7 @@ class TestStartSelectionRun:
         """Test context manager when MLflow is not available."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker()
 
@@ -273,7 +271,7 @@ class TestStartSelectionRun:
         """Test context manager with E2I-specific context."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker()
 
@@ -303,7 +301,7 @@ class TestStartSelectionRun:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker()
             tracker._mlflow_available = True
@@ -332,7 +330,7 @@ class TestStartSelectionRun:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker()
             tracker._mlflow_available = True
@@ -348,12 +346,12 @@ class TestStartSelectionRun:
         """Test that context is cleared even if exception occurs."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker()
 
         with pytest.raises(ValueError):
-            with tracker.start_selection_run("test") as ctx:
+            with tracker.start_selection_run("test"):
                 assert tracker._current_context is not None
                 raise ValueError("Test error")
 
@@ -373,7 +371,7 @@ class TestLogSelectionResult:
         """Test logging when no context is active."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(enable_db_logging=False)
 
@@ -384,7 +382,7 @@ class TestLogSelectionResult:
         """Test logging with context but no MLflow."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(enable_db_logging=False)
 
@@ -395,7 +393,7 @@ class TestLogSelectionResult:
         """Test that MLflow logging is called when available."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker(enable_db_logging=False)
 
@@ -414,11 +412,10 @@ class TestLogSelectionResult:
         """Test that database logging is called when enabled."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(
-                enable_db_logging=True,
-                db_connection_string="postgresql://test@host/db"
+                enable_db_logging=True, db_connection_string="postgresql://test@host/db"
             )
 
         tracker._current_context = ExperimentContext(
@@ -436,7 +433,7 @@ class TestLogSelectionResult:
         """Test logging with additional parameters."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker(enable_db_logging=False)
 
@@ -468,11 +465,12 @@ class TestLogToMlflow:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker()
 
         import sys
+
         with patch.dict(sys.modules, {"mlflow": mock_mlflow}):
             with patch("tempfile.NamedTemporaryFile") as mock_temp:
                 mock_file = MagicMock()
@@ -499,11 +497,12 @@ class TestLogToMlflow:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker()
 
         import sys
+
         with patch.dict(sys.modules, {"mlflow": mock_mlflow}):
             with patch("tempfile.NamedTemporaryFile") as mock_temp:
                 mock_file = MagicMock()
@@ -524,13 +523,14 @@ class TestLogToMlflow:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=True
+            return_value=True,
         ):
             tracker = EnergyScoreMLflowTracker()
 
         additional_params = {"brand": "Kisqali", "region": "East"}
 
         import sys
+
         with patch.dict(sys.modules, {"mlflow": mock_mlflow}):
             with patch("tempfile.NamedTemporaryFile") as mock_temp:
                 mock_file = MagicMock()
@@ -558,7 +558,7 @@ class TestLogToDatabase:
         """Test when no database connection string is provided."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(
                 enable_db_logging=True,
@@ -581,7 +581,7 @@ class TestLogToDatabase:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(
                 enable_db_logging=True,
@@ -589,10 +589,14 @@ class TestLogToDatabase:
             )
 
         import sys
-        with patch.dict(sys.modules, {
-            "psycopg2": mock_psycopg2,
-            "psycopg2.extras": mock_psycopg2_extras,
-        }):
+
+        with patch.dict(
+            sys.modules,
+            {
+                "psycopg2": mock_psycopg2,
+                "psycopg2.extras": mock_psycopg2_extras,
+            },
+        ):
             tracker._log_to_database(sample_selection_result, "exp-123")
 
         # Verify connection and cursor were used
@@ -608,7 +612,7 @@ class TestLogToDatabase:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(
                 enable_db_logging=True,
@@ -616,6 +620,7 @@ class TestLogToDatabase:
             )
 
         import sys
+
         with patch.dict(sys.modules, {"psycopg2": mock_psycopg2}):
             # Should not raise, just log error
             tracker._log_to_database(sample_selection_result, "exp-123")
@@ -633,7 +638,7 @@ class TestGetSelectionComparison:
         """Test when no database connection is available."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(db_connection_string=None)
 
@@ -652,14 +657,13 @@ class TestGetSelectionComparison:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
-            tracker = EnergyScoreMLflowTracker(
-                db_connection_string="postgresql://test@host/db"
-            )
+            tracker = EnergyScoreMLflowTracker(db_connection_string="postgresql://test@host/db")
 
         # Mock the import by patching sys.modules before the method is called
         import sys
+
         with patch.dict(sys.modules, {"psycopg2": mock_psycopg2}):
             result = tracker.get_selection_comparison(days=30)
 
@@ -682,13 +686,12 @@ class TestGetSelectionComparison:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
-            tracker = EnergyScoreMLflowTracker(
-                db_connection_string="postgresql://test@host/db"
-            )
+            tracker = EnergyScoreMLflowTracker(db_connection_string="postgresql://test@host/db")
 
         import sys
+
         with patch.dict(sys.modules, {"psycopg2": mock_psycopg2}):
             result = tracker.get_selection_comparison()
 
@@ -701,13 +704,12 @@ class TestGetSelectionComparison:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
-            tracker = EnergyScoreMLflowTracker(
-                db_connection_string="postgresql://test@host/db"
-            )
+            tracker = EnergyScoreMLflowTracker(db_connection_string="postgresql://test@host/db")
 
         import sys
+
         with patch.dict(sys.modules, {"psycopg2": mock_psycopg2}):
             result = tracker.get_selection_comparison()
 
@@ -726,7 +728,7 @@ class TestGetEstimatorPerformance:
         """Test when no database connection is available."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(db_connection_string=None)
 
@@ -741,9 +743,7 @@ class TestGetEstimatorPerformance:
         mock_cursor = MagicMock()
         mock_psycopg2.connect.return_value = mock_conn
         mock_conn.cursor.return_value = mock_cursor
-        mock_cursor.description = [
-            ("estimator_type",), ("avg_energy_score",), ("success_rate",)
-        ]
+        mock_cursor.description = [("estimator_type",), ("avg_energy_score",), ("success_rate",)]
         mock_cursor.fetchall.return_value = [
             ("causal_forest", 0.42, 0.95),
             ("linear_dml", 0.38, 0.90),
@@ -751,13 +751,12 @@ class TestGetEstimatorPerformance:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
-            tracker = EnergyScoreMLflowTracker(
-                db_connection_string="postgresql://test@host/db"
-            )
+            tracker = EnergyScoreMLflowTracker(db_connection_string="postgresql://test@host/db")
 
         import sys
+
         with patch.dict(sys.modules, {"psycopg2": mock_psycopg2}):
             result = tracker.get_estimator_performance()
 
@@ -785,13 +784,12 @@ class TestGetEstimatorPerformance:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
-            tracker = EnergyScoreMLflowTracker(
-                db_connection_string="postgresql://test@host/db"
-            )
+            tracker = EnergyScoreMLflowTracker(db_connection_string="postgresql://test@host/db")
 
         import sys
+
         with patch.dict(sys.modules, {"psycopg2": mock_psycopg2}):
             result = tracker.get_estimator_performance()
 
@@ -804,13 +802,12 @@ class TestGetEstimatorPerformance:
 
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
-            tracker = EnergyScoreMLflowTracker(
-                db_connection_string="postgresql://test@host/db"
-            )
+            tracker = EnergyScoreMLflowTracker(db_connection_string="postgresql://test@host/db")
 
         import sys
+
         with patch.dict(sys.modules, {"psycopg2": mock_psycopg2}):
             result = tracker.get_estimator_performance()
 
@@ -829,7 +826,7 @@ class TestCreateTracker:
         """Test creating tracker with default values."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = create_tracker()
 
@@ -839,7 +836,7 @@ class TestCreateTracker:
         """Test creating tracker with custom arguments."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = create_tracker(
                 tracking_uri="http://custom:5000",
@@ -864,7 +861,7 @@ class TestMlflowTrackerIntegration:
         """Test full workflow when MLflow is not available."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(enable_db_logging=False)
 
@@ -886,7 +883,7 @@ class TestMlflowTrackerIntegration:
         """Test multiple runs in sequence."""
         with patch(
             "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
-            return_value=False
+            return_value=False,
         ):
             tracker = EnergyScoreMLflowTracker(enable_db_logging=False)
 

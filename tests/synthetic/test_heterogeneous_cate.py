@@ -133,8 +133,7 @@ class TestHeterogeneousCateBenchmark:
 
         # Should have substantial bias due to confounding
         assert bias > 0.05, (
-            f"Naive estimate {naive_ate:.4f} unexpectedly close to "
-            f"true ATE {dataset.true_ate:.4f}"
+            f"Naive estimate {naive_ate:.4f} unexpectedly close to true ATE {dataset.true_ate:.4f}"
         )
 
 

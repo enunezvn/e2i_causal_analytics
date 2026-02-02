@@ -166,9 +166,7 @@ class ToolPlanner:
                 cached_result = self._cache_manager.get_similar_plan(decomposition)
                 if cached_result:
                     cached_plan, similarity = cached_result
-                    logger.info(
-                        f"Found similar cached plan (similarity: {similarity:.2f})"
-                    )
+                    logger.info(f"Found similar cached plan (similarity: {similarity:.2f})")
                     # Adapt cached plan to current decomposition
                     adapted_plan = self._adapt_cached_plan(cached_plan, decomposition)
                     if adapted_plan:
@@ -178,14 +176,10 @@ class ToolPlanner:
             tools_description = self._format_tools_for_prompt()
 
             # G1/G2: Check episodic memory for similar past compositions
-            similar_compositions = await self._check_episodic_memory(
-                decomposition.original_query
-            )
+            similar_compositions = await self._check_episodic_memory(decomposition.original_query)
 
             # Call LLM for planning (with episodic context if available)
-            response = await self._call_llm(
-                decomposition, tools_description, similar_compositions
-            )
+            response = await self._call_llm(decomposition, tools_description, similar_compositions)
 
             # Parse response
             parsed = self._parse_response(response)
@@ -253,9 +247,7 @@ class ToolPlanner:
             logger.debug(f"Failed to adapt cached plan: {e}")
             return None
 
-    async def _check_episodic_memory(
-        self, query: str, limit: int = 3
-    ) -> List[Dict[str, Any]]:
+    async def _check_episodic_memory(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
         """
         Check episodic memory for similar past compositions (G1, G2).
 
@@ -273,14 +265,10 @@ class ToolPlanner:
             return []
 
         try:
-            similar = await self.memory_hooks.find_similar_compositions(
-                query=query, limit=limit
-            )
+            similar = await self.memory_hooks.find_similar_compositions(query=query, limit=limit)
 
             if similar:
-                logger.info(
-                    f"Found {len(similar)} similar compositions in episodic memory"
-                )
+                logger.info(f"Found {len(similar)} similar compositions in episodic memory")
                 # Log the tool sequences for debugging
                 for comp in similar:
                     raw = comp.get("raw_content", {})
@@ -348,9 +336,7 @@ class ToolPlanner:
         # LangChain returns AIMessage with .content attribute
         return response.content
 
-    def _format_episodic_context(
-        self, similar_compositions: List[Dict[str, Any]]
-    ) -> str:
+    def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
         """Format similar compositions as context for the LLM."""
         if not similar_compositions:
             return ""
@@ -445,7 +431,7 @@ class ToolPlanner:
 
             steps.append(
                 ExecutionStep(
-                    step_id=s.get("step_id", f"step_{len(steps)+1}"),
+                    step_id=s.get("step_id", f"step_{len(steps) + 1}"),
                     sub_question_id=s["sub_question_id"],
                     tool_name=tool_name,
                     source_agent=schema.source_agent if schema else "unknown",
@@ -480,7 +466,7 @@ class ToolPlanner:
                         mappings.append(fallback)
                         # Also add a step for this mapping
                         step = ExecutionStep(
-                            step_id=f"step_{len(steps)+1}",
+                            step_id=f"step_{len(steps) + 1}",
                             sub_question_id=sq_id,
                             tool_name=fallback.tool_name,
                             source_agent=fallback.source_agent,
@@ -560,8 +546,8 @@ class ToolPlanner:
         Returns:
             ToolMapping if a suitable fallback found, None otherwise
         """
-        intent = sq.intent.upper() if hasattr(sq, 'intent') and sq.intent else "UNKNOWN"
-        question_lower = sq.question.lower() if hasattr(sq, 'question') else ""
+        intent = sq.intent.upper() if hasattr(sq, "intent") and sq.intent else "UNKNOWN"
+        question_lower = sq.question.lower() if hasattr(sq, "question") else ""
 
         # Intent-based tool mapping
         intent_to_tool = {
@@ -604,7 +590,7 @@ class ToolPlanner:
                         tool_name=tool_name,
                         source_agent=source_agent,
                         confidence=0.5,  # Even lower for keyword match
-                        reasoning=f"Auto-mapped based on keyword match",
+                        reasoning="Auto-mapped based on keyword match",
                     )
 
         # Last resort: use causal_effect_estimator as generic fallback

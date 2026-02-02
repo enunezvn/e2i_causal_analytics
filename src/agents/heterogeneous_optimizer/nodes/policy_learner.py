@@ -76,11 +76,13 @@ class PolicyLearnerNode:
 
             # Count increase/decrease recommendations
             increase_count = sum(
-                1 for r in recommendations
+                1
+                for r in recommendations
                 if r["recommended_treatment_rate"] > r["current_treatment_rate"]
             )
             decrease_count = sum(
-                1 for r in recommendations
+                1
+                for r in recommendations
                 if r["recommended_treatment_rate"] < r["current_treatment_rate"]
             )
 

@@ -1,6 +1,6 @@
 """Tests for hyperparameter tuner node."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -149,9 +149,7 @@ class TestValidateHyperparameterTypes:
     def test_validates_int_param(self):
         """Should validate int parameters."""
         hyperparameters = {"n_estimators": 100}
-        search_space = {
-            "n_estimators": {"type": "int", "low": 50, "high": 200}
-        }
+        search_space = {"n_estimators": {"type": "int", "low": 50, "high": 200}}
 
         is_valid, errors = validate_hyperparameter_types(hyperparameters, search_space)
 
@@ -161,9 +159,7 @@ class TestValidateHyperparameterTypes:
     def test_detects_out_of_range_value(self):
         """Should detect value outside allowed range."""
         hyperparameters = {"n_estimators": 300}  # Above max 200
-        search_space = {
-            "n_estimators": {"type": "int", "low": 50, "high": 200}
-        }
+        search_space = {"n_estimators": {"type": "int", "low": 50, "high": 200}}
 
         is_valid, errors = validate_hyperparameter_types(hyperparameters, search_space)
 
@@ -173,9 +169,7 @@ class TestValidateHyperparameterTypes:
     def test_validates_categorical_param(self):
         """Should validate categorical parameters."""
         hyperparameters = {"criterion": "gini"}
-        search_space = {
-            "criterion": {"type": "categorical", "choices": ["gini", "entropy"]}
-        }
+        search_space = {"criterion": {"type": "categorical", "choices": ["gini", "entropy"]}}
 
         is_valid, errors = validate_hyperparameter_types(hyperparameters, search_space)
 
@@ -184,9 +178,7 @@ class TestValidateHyperparameterTypes:
     def test_detects_invalid_categorical_value(self):
         """Should detect invalid categorical value."""
         hyperparameters = {"criterion": "invalid"}
-        search_space = {
-            "criterion": {"type": "categorical", "choices": ["gini", "entropy"]}
-        }
+        search_space = {"criterion": {"type": "categorical", "choices": ["gini", "entropy"]}}
 
         is_valid, errors = validate_hyperparameter_types(hyperparameters, search_space)
 

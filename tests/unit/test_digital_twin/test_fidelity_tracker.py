@@ -12,11 +12,9 @@ import pytest
 
 from src.digital_twin.fidelity_tracker import FidelityTracker
 from src.digital_twin.models.simulation_models import (
-    EffectHeterogeneity,
     FidelityGrade,
     FidelityRecord,
     InterventionConfig,
-    PopulationFilter,
     SimulationRecommendation,
     SimulationResult,
     SimulationStatus,
@@ -456,8 +454,7 @@ class TestDegradationDetection:
     def test_no_degradation_with_few_records(self, tracker):
         """Test no degradation alert with insufficient records."""
         records = [
-            self._create_validated_record(0.05, datetime.now(timezone.utc))
-            for _ in range(5)
+            self._create_validated_record(0.05, datetime.now(timezone.utc)) for _ in range(5)
         ]
 
         result = tracker._check_degradation(records)
@@ -480,7 +477,7 @@ class TestDegradationDetection:
 
         result = tracker._check_degradation(records)
 
-        assert result == False
+        assert not result
 
     def test_degradation_detected_with_increasing_errors(self, tracker):
         """Test degradation detected when recent errors are higher."""
@@ -507,7 +504,7 @@ class TestDegradationDetection:
 
         result = tracker._check_degradation(records)
 
-        assert result == True
+        assert result
 
 
 class TestModelFidelityReport:
@@ -912,9 +909,7 @@ class TestRetrainingService:
             "metrics": {},
         }
 
-        decision = await retraining_service.evaluate_retraining_need(
-            model_id, fidelity_report
-        )
+        decision = await retraining_service.evaluate_retraining_need(model_id, fidelity_report)
 
         assert decision.should_retrain is False
         assert "insufficient_validations" in decision.details.get("blocked_reason", "")
@@ -933,9 +928,7 @@ class TestRetrainingService:
             },
         }
 
-        decision = await retraining_service.evaluate_retraining_need(
-            model_id, fidelity_report
-        )
+        decision = await retraining_service.evaluate_retraining_need(model_id, fidelity_report)
 
         assert decision.should_retrain is True
         from src.digital_twin.retraining_service import TwinTriggerReason
@@ -956,9 +949,7 @@ class TestRetrainingService:
             },
         }
 
-        decision = await retraining_service.evaluate_retraining_need(
-            model_id, fidelity_report
-        )
+        decision = await retraining_service.evaluate_retraining_need(model_id, fidelity_report)
 
         assert decision.should_retrain is False
 
@@ -976,9 +967,7 @@ class TestRetrainingService:
             },
         }
 
-        decision = await retraining_service.evaluate_retraining_need(
-            model_id, fidelity_report
-        )
+        decision = await retraining_service.evaluate_retraining_need(model_id, fidelity_report)
 
         assert decision.should_retrain is True
         assert decision.requires_approval is False  # Auto-approved

@@ -12,7 +12,6 @@ These tests use mocked dependencies to measure pure agent latency
 without external service calls.
 """
 
-import asyncio
 import os
 import time
 from typing import Any, Dict
@@ -103,9 +102,9 @@ class TestExperimentDesignerSLA:
     async def test_twin_simulation_under_2s(self):
         """Test twin simulation node completes under 2 seconds."""
         import importlib.util
+
         spec = importlib.util.spec_from_file_location(
-            "twin_simulation",
-            "src/agents/experiment_designer/nodes/twin_simulation.py"
+            "twin_simulation", "src/agents/experiment_designer/nodes/twin_simulation.py"
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -114,9 +113,10 @@ class TestExperimentDesignerSLA:
         state = _create_mock_state(enable_twin=True)
 
         # Mock the simulate_intervention tool
-        with patch.object(module, "simulate_intervention") as mock_sim, \
-             patch.object(module, "SIMULATION_AVAILABLE", True):
-
+        with (
+            patch.object(module, "simulate_intervention") as mock_sim,
+            patch.object(module, "SIMULATION_AVAILABLE", True),
+        ):
             mock_sim.return_value = _create_mock_simulation_result()
 
             start = time.perf_counter()
@@ -124,15 +124,18 @@ class TestExperimentDesignerSLA:
             elapsed = time.perf_counter() - start
 
         assert elapsed < 2.0, f"Twin simulation took {elapsed:.3f}s, exceeds 2s SLA"
-        assert result.get("twin_simulation_result") is not None or result.get("status") in ("reasoning", "skipped")
+        assert result.get("twin_simulation_result") is not None or result.get("status") in (
+            "reasoning",
+            "skipped",
+        )
 
     @pytest.mark.asyncio
     async def test_power_analysis_under_100ms(self):
         """Test power analysis node completes under 100ms."""
         import importlib.util
+
         spec = importlib.util.spec_from_file_location(
-            "power_analysis",
-            "src/agents/experiment_designer/nodes/power_analysis.py"
+            "power_analysis", "src/agents/experiment_designer/nodes/power_analysis.py"
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -153,9 +156,9 @@ class TestExperimentDesignerSLA:
     async def test_validity_audit_under_30s(self):
         """Test validity audit node completes under 30 seconds."""
         import importlib.util
+
         spec = importlib.util.spec_from_file_location(
-            "validity_audit",
-            "src/agents/experiment_designer/nodes/validity_audit.py"
+            "validity_audit", "src/agents/experiment_designer/nodes/validity_audit.py"
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -189,15 +192,18 @@ class TestExperimentDesignerSLA:
             elapsed = time.perf_counter() - start
 
         assert elapsed < 30.0, f"Validity audit took {elapsed:.3f}s, exceeds 30s SLA"
-        assert result.get("overall_validity_score") is not None or result.get("validity_confidence") == "low"
+        assert (
+            result.get("overall_validity_score") is not None
+            or result.get("validity_confidence") == "low"
+        )
 
     @pytest.mark.asyncio
     async def test_template_generation_under_500ms(self):
         """Test template generation node completes under 500ms."""
         import importlib.util
+
         spec = importlib.util.spec_from_file_location(
-            "template_generator",
-            "src/agents/experiment_designer/nodes/template_generator.py"
+            "template_generator", "src/agents/experiment_designer/nodes/template_generator.py"
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -238,8 +244,7 @@ class TestExperimentDesignerSLA:
 
         # Test power analysis node
         spec = importlib.util.spec_from_file_location(
-            "power_analysis",
-            "src/agents/experiment_designer/nodes/power_analysis.py"
+            "power_analysis", "src/agents/experiment_designer/nodes/power_analysis.py"
         )
         power_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(power_module)
@@ -253,8 +258,7 @@ class TestExperimentDesignerSLA:
 
         # Test template generator node
         spec = importlib.util.spec_from_file_location(
-            "template_generator",
-            "src/agents/experiment_designer/nodes/template_generator.py"
+            "template_generator", "src/agents/experiment_designer/nodes/template_generator.py"
         )
         template_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(template_module)
@@ -277,8 +281,12 @@ class TestExperimentDesignerSLA:
         assert "template_generator" in node_latencies
 
         # Verify timing expectations
-        assert timings["power_analysis"] < 1.0, f"Power analysis took {timings['power_analysis']:.3f}s"
-        assert timings["template_generator"] < 1.0, f"Template generation took {timings['template_generator']:.3f}s"
+        assert timings["power_analysis"] < 1.0, (
+            f"Power analysis took {timings['power_analysis']:.3f}s"
+        )
+        assert timings["template_generator"] < 1.0, (
+            f"Template generation took {timings['template_generator']:.3f}s"
+        )
 
     @pytest.mark.asyncio
     async def test_total_workflow_latency_estimate(self):
@@ -290,8 +298,7 @@ class TestExperimentDesignerSLA:
 
         # Power analysis
         spec = importlib.util.spec_from_file_location(
-            "power_analysis",
-            "src/agents/experiment_designer/nodes/power_analysis.py"
+            "power_analysis", "src/agents/experiment_designer/nodes/power_analysis.py"
         )
         power_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(power_module)
@@ -304,8 +311,7 @@ class TestExperimentDesignerSLA:
 
         # Validity audit (mocked)
         spec = importlib.util.spec_from_file_location(
-            "validity_audit",
-            "src/agents/experiment_designer/nodes/validity_audit.py"
+            "validity_audit", "src/agents/experiment_designer/nodes/validity_audit.py"
         )
         validity_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(validity_module)
@@ -324,8 +330,7 @@ class TestExperimentDesignerSLA:
 
         # Template generation
         spec = importlib.util.spec_from_file_location(
-            "template_generator",
-            "src/agents/experiment_designer/nodes/template_generator.py"
+            "template_generator", "src/agents/experiment_designer/nodes/template_generator.py"
         )
         template_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(template_module)
@@ -353,9 +358,9 @@ class TestExperimentDesignerSkipPath:
     async def test_skip_path_under_5s(self):
         """Test skip path completes quickly when twin simulation recommends SKIP."""
         import importlib.util
+
         spec = importlib.util.spec_from_file_location(
-            "twin_simulation",
-            "src/agents/experiment_designer/nodes/twin_simulation.py"
+            "twin_simulation", "src/agents/experiment_designer/nodes/twin_simulation.py"
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -367,9 +372,10 @@ class TestExperimentDesignerSkipPath:
         skip_result = _create_mock_simulation_result(recommendation="skip")
         skip_result["recommendation_rationale"] = "Simulated effect too small"
 
-        with patch.object(module, "simulate_intervention") as mock_sim, \
-             patch.object(module, "SIMULATION_AVAILABLE", True):
-
+        with (
+            patch.object(module, "simulate_intervention") as mock_sim,
+            patch.object(module, "SIMULATION_AVAILABLE", True),
+        ):
             mock_sim.return_value = skip_result
 
             start = time.perf_counter()
@@ -387,8 +393,7 @@ class TestExperimentDesignerSkipPath:
 
         # Execute twin simulation with SKIP
         spec = importlib.util.spec_from_file_location(
-            "twin_simulation",
-            "src/agents/experiment_designer/nodes/twin_simulation.py"
+            "twin_simulation", "src/agents/experiment_designer/nodes/twin_simulation.py"
         )
         twin_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(twin_module)
@@ -398,9 +403,10 @@ class TestExperimentDesignerSkipPath:
 
         skip_result = _create_mock_simulation_result(recommendation="skip")
 
-        with patch.object(twin_module, "simulate_intervention") as mock_sim, \
-             patch.object(twin_module, "SIMULATION_AVAILABLE", True):
-
+        with (
+            patch.object(twin_module, "simulate_intervention") as mock_sim,
+            patch.object(twin_module, "SIMULATION_AVAILABLE", True),
+        ):
             mock_sim.return_value = skip_result
             state = await twin_node.execute(state)
 
@@ -409,13 +415,12 @@ class TestExperimentDesignerSkipPath:
 
         # Now try to execute power analysis - it should skip
         spec = importlib.util.spec_from_file_location(
-            "power_analysis",
-            "src/agents/experiment_designer/nodes/power_analysis.py"
+            "power_analysis", "src/agents/experiment_designer/nodes/power_analysis.py"
         )
         power_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(power_module)
 
-        power_node = power_module.PowerAnalysisNode()
+        power_module.PowerAnalysisNode()
 
         # Power analysis checks status != "failed", but for skip we should
         # verify workflow logic would prevent this call

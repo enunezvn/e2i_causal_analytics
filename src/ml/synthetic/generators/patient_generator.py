@@ -11,14 +11,14 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
-from .base import BaseGenerator, GeneratorConfig
 from ..config import (
+    DGP_CONFIGS,
     Brand,
     DGPType,
-    DGP_CONFIGS,
-    RegionEnum,
     InsuranceTypeEnum,
+    RegionEnum,
 )
+from .base import BaseGenerator, GeneratorConfig
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):
@@ -115,29 +115,31 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             brands = self._random_choice([b.value for b in Brand], n)
 
         # Build DataFrame
-        df = pd.DataFrame({
-            "patient_journey_id": journey_ids,
-            "patient_id": patient_ids,
-            "hcp_id": hcp_ids,
-            "brand": brands,
-            "journey_start_date": journey_dates,
-            "data_split": data_splits,
-            "disease_severity": confounders["disease_severity"],
-            "academic_hcp": confounders["academic_hcp"],
-            "engagement_score": engagement_scores,
-            "treatment_initiated": outcomes["treatment_initiated"],
-            "days_to_treatment": outcomes["days_to_treatment"],
-            "geographic_region": self._random_choice(
-                [r.value for r in RegionEnum],
-                n,
-            ),
-            "insurance_type": self._random_choice(
-                [i.value for i in InsuranceTypeEnum],
-                n,
-                p=[self.INSURANCE_DIST[i] for i in InsuranceTypeEnum],
-            ),
-            "age_at_diagnosis": self._random_int(18, 85, n),
-        })
+        df = pd.DataFrame(
+            {
+                "patient_journey_id": journey_ids,
+                "patient_id": patient_ids,
+                "hcp_id": hcp_ids,
+                "brand": brands,
+                "journey_start_date": journey_dates,
+                "data_split": data_splits,
+                "disease_severity": confounders["disease_severity"],
+                "academic_hcp": confounders["academic_hcp"],
+                "engagement_score": engagement_scores,
+                "treatment_initiated": outcomes["treatment_initiated"],
+                "days_to_treatment": outcomes["days_to_treatment"],
+                "geographic_region": self._random_choice(
+                    [r.value for r in RegionEnum],
+                    n,
+                ),
+                "insurance_type": self._random_choice(
+                    [i.value for i in InsuranceTypeEnum],
+                    n,
+                    p=[self.INSURANCE_DIST[i] for i in InsuranceTypeEnum],
+                ),
+                "age_at_diagnosis": self._random_int(18, 85, n),
+            }
+        )
 
         # Store ground truth metadata
         df.attrs["true_ate"] = true_ate
@@ -194,18 +196,18 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         elif dgp_type == DGPType.SELECTION_BIAS:
             # Strong selection bias based on disease severity
             propensity = (
-                2.0 +
-                0.8 * confounders["disease_severity"] +  # Strong severity effect
-                self._rng.normal(0, 0.5, n)
+                2.0
+                + 0.8 * confounders["disease_severity"]  # Strong severity effect
+                + self._rng.normal(0, 0.5, n)
             )
             engagement = expit(propensity / 3) * 10
         else:
             # Standard confounding structure
             propensity = (
-                3.0 +
-                0.3 * confounders["disease_severity"] +
-                2.0 * confounders["academic_hcp"] +
-                self._rng.normal(0, 1, n)
+                3.0
+                + 0.3 * confounders["disease_severity"]
+                + 2.0 * confounders["academic_hcp"]
+                + self._rng.normal(0, 1, n)
             )
             engagement = expit(propensity / 3) * 10
 
@@ -229,31 +231,29 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
 
         if dgp_type == DGPType.SIMPLE_LINEAR:
             # Simple linear: Y = TRUE_ATE * T + noise
-            outcome_propensity = (
-                -2.0 +
-                true_ate * treatment +
-                self._rng.normal(0, 1, n)
-            )
+            outcome_propensity = -2.0 + true_ate * treatment + self._rng.normal(0, 1, n)
         elif dgp_type == DGPType.HETEROGENEOUS:
             # Heterogeneous treatment effects by segment
             # Segment assignment based on disease severity
             segments = np.where(
-                confounders["disease_severity"] > 7, "high",
-                np.where(confounders["disease_severity"] > 4, "medium", "low")
+                confounders["disease_severity"] > 7,
+                "high",
+                np.where(confounders["disease_severity"] > 4, "medium", "low"),
             )
 
             # CATE by segment
             cate = np.where(
-                segments == "high", 0.50,  # High severity: strong effect
-                np.where(segments == "medium", 0.30, 0.15)  # Medium: moderate, Low: weak
+                segments == "high",
+                0.50,  # High severity: strong effect
+                np.where(segments == "medium", 0.30, 0.15),  # Medium: moderate, Low: weak
             )
 
             outcome_propensity = (
-                -2.0 +
-                cate * treatment +  # Heterogeneous effect
-                0.4 * confounders["disease_severity"] +
-                0.6 * confounders["academic_hcp"] +
-                self._rng.normal(0, 1, n)
+                -2.0
+                + cate * treatment  # Heterogeneous effect
+                + 0.4 * confounders["disease_severity"]
+                + 0.6 * confounders["academic_hcp"]
+                + self._rng.normal(0, 1, n)
             )
         elif dgp_type == DGPType.TIME_SERIES:
             # Time series: effect with lag
@@ -262,11 +262,11 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             effective_treatment = treatment * (0.5 + 0.5 * lag_effect)
 
             outcome_propensity = (
-                -2.0 +
-                true_ate * effective_treatment +
-                0.4 * confounders["disease_severity"] +
-                0.6 * confounders["academic_hcp"] +
-                self._rng.normal(0, 1, n)
+                -2.0
+                + true_ate * effective_treatment
+                + 0.4 * confounders["disease_severity"]
+                + 0.6 * confounders["academic_hcp"]
+                + self._rng.normal(0, 1, n)
             )
         elif dgp_type == DGPType.SELECTION_BIAS:
             # Selection bias: outcome affected by selection mechanism
@@ -274,20 +274,21 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             selection_baseline = 0.3 * confounders["disease_severity"]
 
             outcome_propensity = (
-                -2.0 + selection_baseline +
-                true_ate * treatment +
-                0.2 * confounders["disease_severity"] +  # Residual confounding
-                0.6 * confounders["academic_hcp"] +
-                self._rng.normal(0, 1, n)
+                -2.0
+                + selection_baseline
+                + true_ate * treatment
+                + 0.2 * confounders["disease_severity"]  # Residual confounding
+                + 0.6 * confounders["academic_hcp"]
+                + self._rng.normal(0, 1, n)
             )
         else:
             # Default: Confounded DGP
             outcome_propensity = (
-                -2.0 +
-                true_ate * treatment +  # TRUE CAUSAL EFFECT
-                0.4 * confounders["disease_severity"] +  # Confounding
-                0.6 * confounders["academic_hcp"] +  # Confounding
-                self._rng.normal(0, 1, n)
+                -2.0
+                + true_ate * treatment  # TRUE CAUSAL EFFECT
+                + 0.4 * confounders["disease_severity"]  # Confounding
+                + 0.6 * confounders["academic_hcp"]  # Confounding
+                + self._rng.normal(0, 1, n)
             )
 
         # Convert to binary outcome
@@ -318,12 +319,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         """
         if self.hcp_df is not None and len(self.hcp_df) > 0:
             # Match academic patients to academic HCPs when possible
-            academic_hcps = self.hcp_df[
-                self.hcp_df["academic_hcp"] == 1
-            ]["hcp_id"].values
-            non_academic_hcps = self.hcp_df[
-                self.hcp_df["academic_hcp"] == 0
-            ]["hcp_id"].values
+            academic_hcps = self.hcp_df[self.hcp_df["academic_hcp"] == 1]["hcp_id"].values
+            non_academic_hcps = self.hcp_df[self.hcp_df["academic_hcp"] == 0]["hcp_id"].values
 
             hcp_ids = []
             for is_academic in confounders["academic_hcp"]:

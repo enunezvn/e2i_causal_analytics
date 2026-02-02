@@ -13,8 +13,8 @@ from src.causal_engine.pipeline import (
     NetworkXToDoWhyValidator,
     PipelineConfig,
     PipelineStage,
-    PipelineValidator,
     PipelineState,
+    PipelineValidator,
     ValidationResult,
     validate_pipeline_state,
 )
@@ -402,15 +402,9 @@ class TestPipelineValidator:
         state = create_empty_state()
 
         # Should not raise
-        validator.validate_transition(
-            state, CausalLibrary.NETWORKX, CausalLibrary.DOWHY
-        )
-        validator.validate_transition(
-            state, CausalLibrary.DOWHY, CausalLibrary.ECONML
-        )
-        validator.validate_transition(
-            state, CausalLibrary.ECONML, CausalLibrary.CAUSALML
-        )
+        validator.validate_transition(state, CausalLibrary.NETWORKX, CausalLibrary.DOWHY)
+        validator.validate_transition(state, CausalLibrary.DOWHY, CausalLibrary.ECONML)
+        validator.validate_transition(state, CausalLibrary.ECONML, CausalLibrary.CAUSALML)
 
     def test_validate_unknown_transition(self, validator: PipelineValidator):
         """Test validating unknown transition returns valid with warning."""
@@ -473,9 +467,7 @@ class TestValidatePipelineStateFunction:
         """Test that convenience function works."""
         state = create_empty_state()
 
-        result = validate_pipeline_state(
-            state, CausalLibrary.NETWORKX, CausalLibrary.DOWHY
-        )
+        result = validate_pipeline_state(state, CausalLibrary.NETWORKX, CausalLibrary.DOWHY)
 
         assert isinstance(result, ValidationResult)
 
@@ -495,8 +487,6 @@ class TestCustomValidatorRegistration:
         validator.register_validator(custom)
 
         state = create_empty_state()
-        result = validator.validate_transition(
-            state, CausalLibrary.NETWORKX, CausalLibrary.DOWHY
-        )
+        result = validator.validate_transition(state, CausalLibrary.NETWORKX, CausalLibrary.DOWHY)
 
         assert "Custom suggestion" in result.suggestions

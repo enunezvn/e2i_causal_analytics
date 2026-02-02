@@ -11,26 +11,24 @@ Tests cover:
 QW5 from observability audit remediation plan.
 """
 
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch
 
 import pytest
 from starlette.applications import Starlette
-from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from src.api.middleware.tracing import (
-    TracingMiddleware,
     TraceContext,
-    get_request_id,
+    TracingMiddleware,
     get_correlation_id,
-    get_trace_id,
+    get_request_id,
     get_span_id,
     get_trace_context,
+    get_trace_id,
     with_trace_context,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -40,8 +38,10 @@ from src.api.middleware.tracing import (
 @pytest.fixture
 def mock_logging_context():
     """Mock the logging context functions."""
-    with patch("src.api.middleware.tracing.set_logging_context") as mock_set, \
-         patch("src.api.middleware.tracing.clear_logging_context") as mock_clear:
+    with (
+        patch("src.api.middleware.tracing.set_logging_context") as mock_set,
+        patch("src.api.middleware.tracing.clear_logging_context") as mock_clear,
+    ):
         yield mock_set, mock_clear
 
 
@@ -62,7 +62,7 @@ def create_test_app(middleware_kwargs=None):
                 f"request_id={trace_ctx.request_id},"
                 f"trace_id={trace_ctx.trace_id},"
                 f"span_id={trace_ctx.span_id}",
-                media_type="text/plain"
+                media_type="text/plain",
             )
         return Response("no trace context", media_type="text/plain")
 
@@ -104,10 +104,7 @@ class TestTraceContextDataclass:
 
     def test_from_headers_extracts_correlation_id(self):
         """Test extraction of X-Correlation-ID header."""
-        ctx = TraceContext.from_headers({
-            "x-request-id": "req-123",
-            "x-correlation-id": "corr-456"
-        })
+        ctx = TraceContext.from_headers({"x-request-id": "req-123", "x-correlation-id": "corr-456"})
         assert ctx.request_id == "req-123"
         assert ctx.correlation_id == "corr-456"
 
@@ -128,12 +125,14 @@ class TestTraceContextDataclass:
 
     def test_from_headers_parses_zipkin_b3(self):
         """Test parsing of Zipkin B3 headers."""
-        ctx = TraceContext.from_headers({
-            "x-b3-traceid": "80f198ee56343ba864fe8b2a57d3eff7",
-            "x-b3-spanid": "e457b5a2e4d86bd1",
-            "x-b3-parentspanid": "05e3ac9a4f6e3b90",
-            "x-b3-sampled": "1",
-        })
+        ctx = TraceContext.from_headers(
+            {
+                "x-b3-traceid": "80f198ee56343ba864fe8b2a57d3eff7",
+                "x-b3-spanid": "e457b5a2e4d86bd1",
+                "x-b3-parentspanid": "05e3ac9a4f6e3b90",
+                "x-b3-sampled": "1",
+            }
+        )
 
         assert ctx.trace_id == "80f198ee56343ba864fe8b2a57d3eff7"
         assert ctx.span_id == "e457b5a2e4d86bd1"
@@ -147,9 +146,9 @@ class TestTraceContextDataclass:
 
     def test_from_headers_extracts_amzn_trace_id(self):
         """Test extraction of X-Amzn-Trace-Id header (AWS)."""
-        ctx = TraceContext.from_headers({
-            "x-amzn-trace-id": "Root=1-5759e988-bd862e3fe1be46a994272793"
-        })
+        ctx = TraceContext.from_headers(
+            {"x-amzn-trace-id": "Root=1-5759e988-bd862e3fe1be46a994272793"}
+        )
         assert ctx.request_id == "Root=1-5759e988-bd862e3fe1be46a994272793"
 
 

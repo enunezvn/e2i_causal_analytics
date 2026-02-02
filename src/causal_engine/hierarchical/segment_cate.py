@@ -18,7 +18,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -220,9 +220,14 @@ class SegmentCATECalculator:
 
         try:
             # Run EconML estimator
-            cate_values, cate_mean, cate_std, ci_lower, ci_upper, estimator_name = (
-                await self._run_econml_estimator(X_df, treatment, outcome)
-            )
+            (
+                cate_values,
+                cate_mean,
+                cate_std,
+                ci_lower,
+                ci_upper,
+                estimator_name,
+            ) = await self._run_econml_estimator(X_df, treatment, outcome)
 
             elapsed = (time.perf_counter() - start_time) * 1000
 
@@ -327,7 +332,7 @@ class SegmentCATECalculator:
     ) -> tuple:
         """Run LinearDML estimator."""
         from econml.dml import LinearDML
-        from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
         model = LinearDML(
             model_y=RandomForestRegressor(n_estimators=50, random_state=self.config.random_state),
@@ -353,12 +358,18 @@ class SegmentCATECalculator:
     ) -> tuple:
         """Run DRLearner (Doubly Robust) estimator."""
         from econml.dr import DRLearner
-        from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
+        from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
         model = DRLearner(
-            model_regression=GradientBoostingRegressor(n_estimators=50, random_state=self.config.random_state),
-            model_propensity=GradientBoostingClassifier(n_estimators=50, random_state=self.config.random_state),
-            model_final=GradientBoostingRegressor(n_estimators=50, random_state=self.config.random_state),
+            model_regression=GradientBoostingRegressor(
+                n_estimators=50, random_state=self.config.random_state
+            ),
+            model_propensity=GradientBoostingClassifier(
+                n_estimators=50, random_state=self.config.random_state
+            ),
+            model_final=GradientBoostingRegressor(
+                n_estimators=50, random_state=self.config.random_state
+            ),
             random_state=self.config.random_state,
         )
         model.fit(outcome, treatment, X=X, W=X)

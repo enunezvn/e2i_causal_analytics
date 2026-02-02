@@ -179,10 +179,29 @@ class CohortStatisticsOutput(BaseModel):
     source_agent="cohort_constructor",
     tier=0,
     input_parameters=[
-        {"name": "brand", "type": "str", "description": "Brand name (Remibrutinib, Fabhalta, Kisqali)"},
-        {"name": "indication", "type": "str", "description": "Disease indication", "required": False},
-        {"name": "inclusion_criteria", "type": "List[str]", "description": "Inclusion criteria expressions", "required": False},
-        {"name": "exclusion_criteria", "type": "List[str]", "description": "Exclusion criteria expressions", "required": False},
+        {
+            "name": "brand",
+            "type": "str",
+            "description": "Brand name (Remibrutinib, Fabhalta, Kisqali)",
+        },
+        {
+            "name": "indication",
+            "type": "str",
+            "description": "Disease indication",
+            "required": False,
+        },
+        {
+            "name": "inclusion_criteria",
+            "type": "List[str]",
+            "description": "Inclusion criteria expressions",
+            "required": False,
+        },
+        {
+            "name": "exclusion_criteria",
+            "type": "List[str]",
+            "description": "Exclusion criteria expressions",
+            "required": False,
+        },
     ],
     output_schema="CohortBuilderOutput",
     avg_execution_ms=5000,
@@ -224,7 +243,13 @@ def cohort_builder(
     tier=0,
     input_parameters=[
         {"name": "cohort_result", "type": "dict", "description": "Output from cohort_builder"},
-        {"name": "min_cohort_size", "type": "int", "description": "Minimum required cohort size", "required": False, "default": 100},
+        {
+            "name": "min_cohort_size",
+            "type": "int",
+            "description": "Minimum required cohort size",
+            "required": False,
+            "default": 100,
+        },
     ],
     output_schema="CohortValidatorOutput",
     avg_execution_ms=1000,
@@ -244,12 +269,26 @@ def cohort_validator(
     return CohortValidatorOutput(
         is_valid=is_valid,
         validation_checks=[
-            {"check": "minimum_size", "passed": is_valid, "actual": total_eligible, "required": min_cohort_size},
-            {"check": "data_completeness", "passed": True, "actual": 0.95, "required": required_completeness},
+            {
+                "check": "minimum_size",
+                "passed": is_valid,
+                "actual": total_eligible,
+                "required": min_cohort_size,
+            },
+            {
+                "check": "data_completeness",
+                "passed": True,
+                "actual": 0.95,
+                "required": required_completeness,
+            },
         ],
         quality_score=0.92 if is_valid else 0.45,
-        warnings=[] if is_valid else [f"Cohort size {total_eligible} below minimum {min_cohort_size}"],
-        recommendations=["Consider relaxing age criteria to increase cohort size"] if not is_valid else [],
+        warnings=[]
+        if is_valid
+        else [f"Cohort size {total_eligible} below minimum {min_cohort_size}"],
+        recommendations=["Consider relaxing age criteria to increase cohort size"]
+        if not is_valid
+        else [],
     )
 
 
@@ -260,7 +299,13 @@ def cohort_validator(
     tier=0,
     input_parameters=[
         {"name": "cohort_result", "type": "dict", "description": "Output from cohort_builder"},
-        {"name": "include_demographics", "type": "bool", "description": "Include demographic stats", "required": False, "default": True},
+        {
+            "name": "include_demographics",
+            "type": "bool",
+            "description": "Include demographic stats",
+            "required": False,
+            "default": True,
+        },
     ],
     output_schema="CohortStatisticsOutput",
     avg_execution_ms=2000,
@@ -280,11 +325,15 @@ def cohort_statistics(
             "age_mean": 52.3,
             "age_std": 14.2,
             "gender_distribution": {"male": 0.48, "female": 0.52},
-        } if include_demographics else {},
+        }
+        if include_demographics
+        else {},
         clinical_characteristics={
             "disease_severity": {"mild": 0.2, "moderate": 0.5, "severe": 0.3},
             "prior_treatment": {"naive": 0.35, "experienced": 0.65},
-        } if include_clinical else {},
+        }
+        if include_clinical
+        else {},
         summary_table=[
             {"variable": "Age", "mean": 52.3, "std": 14.2, "min": 18, "max": 85},
             {"variable": "Time to diagnosis (days)", "mean": 180, "std": 90, "min": 30, "max": 730},

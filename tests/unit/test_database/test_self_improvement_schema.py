@@ -6,12 +6,17 @@ Tests verify:
 3. ENUMs and functions are properly defined
 """
 
-import pytest
 import re
 from pathlib import Path
 
+import pytest
 
-MIGRATION_PATH = Path(__file__).parent.parent.parent.parent / "database" / "ml" / "022_self_improvement_tables.sql"
+MIGRATION_PATH = (
+    Path(__file__).parent.parent.parent.parent
+    / "database"
+    / "ml"
+    / "022_self_improvement_tables.sql"
+)
 
 
 @pytest.fixture

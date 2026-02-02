@@ -19,17 +19,13 @@ Author: E2I Causal Analytics Team
 Updated: 2026-01-28 - Aligned with agent contract changes from commit 75462ef
 """
 
-import asyncio
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
-
 
 # =============================================================================
 # TEST CONFIGURATION
@@ -349,9 +345,9 @@ class TestCohortConstructor:
         )
 
         # Should have enough patients for ML
-        assert (
-            len(eligible_df) >= TEST_CONFIG["min_eligible_patients"]
-        ), f"Cohort size {len(eligible_df)} below minimum {TEST_CONFIG['min_eligible_patients']}"
+        assert len(eligible_df) >= TEST_CONFIG["min_eligible_patients"], (
+            f"Cohort size {len(eligible_df)} below minimum {TEST_CONFIG['min_eligible_patients']}"
+        )
 
     @pytest.mark.asyncio
     async def test_cohort_has_audit_trail(self, large_sample_patient_data, cohort_config):
@@ -448,9 +444,7 @@ class TestModelSelector:
 
         # Common classification algorithms
         valid_classifiers = ["xgboost", "lightgbm", "random_forest", "logistic", "gradient"]
-        assert any(
-            clf in algo for clf in valid_classifiers
-        ), f"Expected classifier, got {algo}"
+        assert any(clf in algo for clf in valid_classifiers), f"Expected classifier, got {algo}"
 
 
 # =============================================================================
@@ -609,8 +603,9 @@ class TestFeatureAnalyzer:
     @pytest.mark.asyncio
     async def test_feature_importance_computation(self, experiment_id, sample_patient_data):
         """Test feature analyzer computes importance scores."""
-        from src.agents.ml_foundation.feature_analyzer import FeatureAnalyzerAgent
         from sklearn.linear_model import LogisticRegression
+
+        from src.agents.ml_foundation.feature_analyzer import FeatureAnalyzerAgent
 
         agent = FeatureAnalyzerAgent()
 
@@ -699,7 +694,7 @@ class TestModelDeployer:
                 }
             )
             # Deployment should reflect unsuccessful criteria
-            status = result.get("status", result.get("deployment_successful", None))
+            result.get("status", result.get("deployment_successful", None))
             # May still register but not promote to production
         except RuntimeError as e:
             # BentoML not installed is an expected error in test environments
@@ -992,7 +987,10 @@ class TestTier0EndToEnd:
         except RuntimeError as e:
             # BentoML not installed is expected in test environments
             if "containerization_error" in str(e) or "bentoml" in str(e).lower():
-                pipeline_state["deployment_manifest"] = {"status": "skipped", "reason": "BentoML not installed"}
+                pipeline_state["deployment_manifest"] = {
+                    "status": "skipped",
+                    "reason": "BentoML not installed",
+                }
             else:
                 raise
 
@@ -1030,5 +1028,7 @@ class TestTier0EndToEnd:
 
 def pytest_configure(config):
     """Configure custom pytest markers."""
-    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+    )
     config.addinivalue_line("markers", "e2e: marks tests as end-to-end integration tests")

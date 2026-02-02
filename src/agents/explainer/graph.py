@@ -94,9 +94,7 @@ def build_explainer_graph(
         Compiled LangGraph workflow
     """
     # Create audit workflow initializer
-    audit_initializer = create_workflow_initializer(
-        "explainer", AgentTier.SELF_IMPROVEMENT
-    )
+    audit_initializer = create_workflow_initializer("explainer", AgentTier.SELF_IMPROVEMENT)
 
     # Initialize nodes
     assembler = ContextAssemblerNode(conversation_store)

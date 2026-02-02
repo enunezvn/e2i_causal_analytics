@@ -13,11 +13,9 @@ Tests cover:
 - Tool registration
 """
 
-import sys
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import networkx as nx
 import numpy as np
 import pandas as pd
 import pytest
@@ -75,12 +73,14 @@ class TestDiscoverDagInput:
         """Test that ensemble_threshold is validated."""
         with pytest.raises(ValidationError):
             DiscoverDagInput(
-                data={"x": [1, 2]}, ensemble_threshold=1.5  # Invalid: > 1.0
+                data={"x": [1, 2]},
+                ensemble_threshold=1.5,  # Invalid: > 1.0
             )
 
         with pytest.raises(ValidationError):
             DiscoverDagInput(
-                data={"x": [1, 2]}, ensemble_threshold=-0.1  # Invalid: < 0.0
+                data={"x": [1, 2]},
+                ensemble_threshold=-0.1,  # Invalid: < 0.0
             )
 
     def test_discover_dag_input_validates_alpha(self):
@@ -116,13 +116,9 @@ class TestDiscoverDagOutput:
             success=True,
             n_edges=5,
             n_nodes=3,
-            edge_list=[
-                {"source": "A", "target": "B", "confidence": 0.9, "type": "directed"}
-            ],
+            edge_list=[{"source": "A", "target": "B", "confidence": 0.9, "type": "directed"}],
             algorithms_used=["ges", "pc"],
-            algorithm_results={
-                "ges": {"n_edges": 5, "runtime_seconds": 1.2, "converged": True}
-            },
+            algorithm_results={"ges": {"n_edges": 5, "runtime_seconds": 1.2, "converged": True}},
             ensemble_threshold=0.5,
             gate_decision="accept",
             gate_confidence=0.95,
@@ -252,8 +248,8 @@ class TestCausalDiscoveryTool:
 
         assert tool._runner is None
 
-        with patch("src.causal_engine.discovery.DiscoveryRunner") as mock_runner:
-            with patch("src.causal_engine.discovery.DiscoveryGate") as mock_gate:
+        with patch("src.causal_engine.discovery.DiscoveryRunner"):
+            with patch("src.causal_engine.discovery.DiscoveryGate"):
                 tool._ensure_initialized()
 
                 assert tool._runner is not None
@@ -270,8 +266,6 @@ class TestCausalDiscoveryTool:
 
         # Create mock result
         from src.causal_engine.discovery import (
-            DiscoveryAlgorithmType,
-            DiscoveryConfig,
             DiscoveryResult,
         )
 
@@ -417,7 +411,7 @@ class TestDriverRankerTool:
         """Test lazy initialization."""
         tool = DriverRankerTool()
 
-        with patch("src.causal_engine.discovery.DriverRanker") as mock_ranker:
+        with patch("src.causal_engine.discovery.DriverRanker"):
             tool._ensure_initialized()
 
             assert tool._ranker is not None
@@ -583,9 +577,7 @@ class TestToolFunctions:
         df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
 
         # Mock the tool
-        with patch(
-            "src.tool_registry.tools.causal_discovery.get_discovery_tool"
-        ) as mock_get_tool:
+        with patch("src.tool_registry.tools.causal_discovery.get_discovery_tool") as mock_get_tool:
             mock_tool = MagicMock()
             mock_output = DiscoverDagOutput(
                 success=True,
@@ -605,9 +597,7 @@ class TestToolFunctions:
         """Test discover_dag function with dict input."""
         data_dict = {"x": [1, 2, 3], "y": [4, 5, 6]}
 
-        with patch(
-            "src.tool_registry.tools.causal_discovery.get_discovery_tool"
-        ) as mock_get_tool:
+        with patch("src.tool_registry.tools.causal_discovery.get_discovery_tool") as mock_get_tool:
             mock_tool = MagicMock()
             mock_output = DiscoverDagOutput(
                 success=True,
@@ -626,9 +616,7 @@ class TestToolFunctions:
         """Test rank_drivers function with numpy array."""
         shap_values = np.array([[0.5, 0.3], [0.6, 0.4]])
 
-        with patch(
-            "src.tool_registry.tools.causal_discovery.get_ranker_tool"
-        ) as mock_get_tool:
+        with patch("src.tool_registry.tools.causal_discovery.get_ranker_tool") as mock_get_tool:
             mock_tool = MagicMock()
             mock_output = RankDriversOutput(
                 success=True,
@@ -652,9 +640,7 @@ class TestToolFunctions:
         """Test rank_drivers function with list input."""
         shap_values = [[0.5, 0.3], [0.6, 0.4]]
 
-        with patch(
-            "src.tool_registry.tools.causal_discovery.get_ranker_tool"
-        ) as mock_get_tool:
+        with patch("src.tool_registry.tools.causal_discovery.get_ranker_tool") as mock_get_tool:
             mock_tool = MagicMock()
             mock_output = RankDriversOutput(
                 success=True,

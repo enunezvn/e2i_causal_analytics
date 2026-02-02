@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -55,7 +55,9 @@ class HealthScoreOutput(BaseModel):
     agent_health_score: float = Field(description="Agent health score (0-1)")
     critical_issues: List[str] = Field(default_factory=list, description="List of critical issues")
     warnings: List[str] = Field(default_factory=list, description="List of warnings")
-    recommendations: List[str] = Field(default_factory=list, description="Actionable recommendations based on health scores")
+    recommendations: List[str] = Field(
+        default_factory=list, description="Actionable recommendations based on health scores"
+    )
     health_summary: str = Field(description="Human-readable health summary")
     total_latency_ms: int = Field(description="Total check latency in ms")
     timestamp: str = Field(description="Timestamp of health check")
@@ -225,7 +227,7 @@ class HealthScoreAgent:
                 async with mlflow_tracker.start_health_run(
                     experiment_name=experiment_name,
                     check_scope=scope,
-                ) as ctx:
+                ):
                     result = await execute_workflow()
 
                     # Build output
@@ -351,13 +353,22 @@ class HealthScoreAgent:
                 critical_issues=[f"Health check failed: {e}"],
                 warnings=[],
                 recommendations=HealthScoreAgent._recommendations_from_scores(
-                    component=0.0, model=0.0, pipeline=0.0, agent=0.0,
+                    component=0.0,
+                    model=0.0,
+                    pipeline=0.0,
+                    agent=0.0,
                 ),
                 health_summary="Health check failed due to an error.",
                 total_latency_ms=elapsed,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 # Contract-required fields (v4.3 fix)
-                errors=[{"node": "health_check", "error": str(e), "timestamp": datetime.now(timezone.utc).isoformat()}],
+                errors=[
+                    {
+                        "node": "health_check",
+                        "error": str(e),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                ],
                 status="failed",
             )
 

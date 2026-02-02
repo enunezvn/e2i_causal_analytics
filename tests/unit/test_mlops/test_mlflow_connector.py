@@ -14,27 +14,23 @@ Coverage:
 - Graceful degradation
 """
 
-import os
-import sys
 import time
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.mlops.mlflow_connector import (
+    AutoLogger,
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerMetrics,
     CircuitState,
     MLflowConnector,
-    MLflowRun,
     ModelStage,
     ModelVersion,
     RunStatus,
-    AutoLogger,
 )
-
 
 # ============================================================================
 # MODEL STAGE ENUM TESTS
@@ -233,7 +229,8 @@ class TestCircuitBreaker:
     def test_half_open_after_timeout(self):
         """Test transition to half-open after timeout."""
         config = CircuitBreakerConfig(
-            failure_threshold=2, reset_timeout_seconds=0.01  # Very short for testing
+            failure_threshold=2,
+            reset_timeout_seconds=0.01,  # Very short for testing
         )
         cb = CircuitBreaker(config)
 
@@ -468,10 +465,7 @@ class TestMLflowConnectorWithMock:
         mock_mlflow.get_experiment_by_name.return_value = None
         mock_mlflow.create_experiment.return_value = "new-exp-456"
 
-        experiment_id = await conn.get_or_create_experiment(
-            "new_experiment",
-            tags={"env": "test"}
-        )
+        experiment_id = await conn.get_or_create_experiment("new_experiment", tags={"env": "test"})
 
         assert experiment_id == "new-exp-456"
         mock_mlflow.create_experiment.assert_called_once()

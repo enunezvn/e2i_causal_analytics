@@ -272,11 +272,10 @@ class ResultsAnalysisService:
 
         # Standard error and test statistic
         pooled_var = (
-            (np.var(control_data, ddof=1) * (n_control - 1) +
-             np.var(treatment_data, ddof=1) * (n_treatment - 1)) /
-            (n_control + n_treatment - 2)
-        )
-        se = float(np.sqrt(pooled_var * (1/n_control + 1/n_treatment)))
+            np.var(control_data, ddof=1) * (n_control - 1)
+            + np.var(treatment_data, ddof=1) * (n_treatment - 1)
+        ) / (n_control + n_treatment - 2)
+        se = float(np.sqrt(pooled_var * (1 / n_control + 1 / n_treatment)))
 
         # t-test
         df = n_control + n_treatment - 2
@@ -316,9 +315,7 @@ class ResultsAnalysisService:
         secondary_results = []
         if secondary_metrics:
             for metric_name, (ctrl, treat) in secondary_metrics.items():
-                secondary_results.append(
-                    self._analyze_metric(metric_name, ctrl, treat)
-                )
+                secondary_results.append(self._analyze_metric(metric_name, ctrl, treat))
 
         result = ExperimentResults(
             experiment_id=experiment_id,
@@ -436,9 +433,7 @@ class ResultsAnalysisService:
 
             results[segment_name] = segment_result
 
-        logger.info(
-            f"Computed HTE for {experiment_id}: {len(results)} segments analyzed"
-        )
+        logger.info(f"Computed HTE for {experiment_id}: {len(results)} segments analyzed")
 
         return results
 
@@ -465,10 +460,7 @@ class ResultsAnalysisService:
 
         # Calculate total and expected counts
         total = sum(actual_counts.values())
-        expected_counts = {
-            variant: ratio * total
-            for variant, ratio in expected_ratio.items()
-        }
+        expected_counts = {variant: ratio * total for variant, ratio in expected_ratio.items()}
 
         # Chi-squared test
         observed = [actual_counts.get(v, 0) for v in expected_ratio.keys()]
@@ -493,8 +485,7 @@ class ResultsAnalysisService:
 
         # Calculate actual ratio
         actual_ratio = {
-            variant: count / total if total > 0 else 0
-            for variant, count in actual_counts.items()
+            variant: count / total if total > 0 else 0 for variant, count in actual_counts.items()
         }
 
         result = SRMCheckResult(
@@ -518,9 +509,7 @@ class ResultsAnalysisService:
                 f"severity={severity.value}"
             )
         else:
-            logger.info(
-                f"No SRM detected for {experiment_id}: chi2={chi2:.2f}, p={p_value:.4f}"
-            )
+            logger.info(f"No SRM detected for {experiment_id}: chi2={chi2:.2f}, p={p_value:.4f}")
 
         return result
 
@@ -552,9 +541,7 @@ class ResultsAnalysisService:
         actual_effect = actual_results.effect_estimate
         prediction_error = actual_effect - predicted_effect
         prediction_error_percent = (
-            abs(prediction_error / predicted_effect * 100)
-            if predicted_effect != 0
-            else 0.0
+            abs(prediction_error / predicted_effect * 100) if predicted_effect != 0 else 0.0
         )
 
         # Check CI coverage
@@ -653,13 +640,9 @@ class ResultsAnalysisService:
         }
 
         if prediction_error_percent > 30:
-            recommendations["suggestions"].append(
-                "Consider updating twin model parameters"
-            )
+            recommendations["suggestions"].append("Consider updating twin model parameters")
         if not ci_coverage:
-            recommendations["suggestions"].append(
-                "Twin uncertainty estimates may need widening"
-            )
+            recommendations["suggestions"].append("Twin uncertainty estimates may need widening")
         if abs(prediction_error) > 0.1:
             recommendations["suggestions"].append(
                 f"Twin {recommendations['direction']} effect by {prediction_error_percent:.0f}%"

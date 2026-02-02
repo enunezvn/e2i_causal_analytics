@@ -26,7 +26,6 @@ import logging
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -172,20 +171,14 @@ class DriftDetectionResponse(BaseModel):
     task_id: str = Field(..., description="Celery task ID (if async)")
     model_id: str = Field(..., description="Model that was checked")
     status: str = Field(..., description="Detection status")
-    overall_drift_score: float = Field(
-        default=0.0, description="Overall drift severity (0-1)"
-    )
+    overall_drift_score: float = Field(default=0.0, description="Overall drift severity (0-1)")
     features_checked: int = Field(default=0, description="Number of features checked")
     features_with_drift: List[str] = Field(
         default_factory=list, description="Features with detected drift"
     )
-    results: List[DriftResult] = Field(
-        default_factory=list, description="Detailed drift results"
-    )
+    results: List[DriftResult] = Field(default_factory=list, description="Detailed drift results")
     drift_summary: str = Field(default="", description="Human-readable summary")
-    recommended_actions: List[str] = Field(
-        default_factory=list, description="Recommended actions"
-    )
+    recommended_actions: List[str] = Field(default_factory=list, description="Recommended actions")
     detection_latency_ms: int = Field(default=0, description="Detection time in ms")
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -658,9 +651,7 @@ async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
                 alert_id, acknowledged_by=request.user_id or "api_user"
             )
         elif request.action == AlertAction.RESOLVE:
-            record = await repo.resolve_alert(
-                alert_id, resolved_by=request.user_id or "api_user"
-            )
+            record = await repo.resolve_alert(alert_id, resolved_by=request.user_id or "api_user")
         elif request.action == AlertAction.SNOOZE:
             # Snooze is acknowledge with a note
             record = await repo.acknowledge_alert(
@@ -722,7 +713,7 @@ async def list_monitoring_runs(
 
     try:
         repo = MonitoringRunRepository()
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        datetime.now(timezone.utc) - timedelta(days=days)
 
         # Get runs for model or all (get_recent_runs handles both cases)
         all_records = await repo.get_recent_runs(model_version=model_id, limit=limit)
@@ -934,7 +925,7 @@ async def record_performance(
 
     if async_mode:
         # Queue Celery task
-        task = track_model_performance.delay(
+        track_model_performance.delay(
             model_id=request.model_id,
             predictions=request.predictions,
             actuals=request.actuals,
@@ -988,8 +979,8 @@ async def get_performance_trend(
     Returns:
         Performance trend analysis
     """
-    from src.services.performance_tracking import get_performance_tracker
     from src.repositories.drift_monitoring import PerformanceMetricRepository
+    from src.services.performance_tracking import get_performance_tracker
 
     try:
         tracker = get_performance_tracker()
@@ -1181,9 +1172,7 @@ class TriggerRetrainingRequest(BaseModel):
 class CompleteRetrainingRequest(BaseModel):
     """Request to mark retraining as complete."""
 
-    performance_after: float = Field(
-        ..., description="Performance metric after retraining"
-    )
+    performance_after: float = Field(..., description="Performance metric after retraining")
     success: bool = Field(default=True, description="Whether retraining was successful")
     notes: Optional[str] = Field(None, description="Additional notes")
 

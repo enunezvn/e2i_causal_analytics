@@ -6,12 +6,11 @@ Tests signal collection, batching, and aggregation from multiple sender agents.
 Run: pytest tests/integration/test_signal_flow/test_signal_collection.py -v
 """
 
-import pytest
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List
-from dataclasses import dataclass, field
 import json
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 
+import pytest
 
 # =============================================================================
 # SIGNAL COLLECTION TESTS
@@ -27,11 +26,11 @@ class TestSignalBatching:
         from src.agents.causal_impact.dspy_integration import (
             CausalAnalysisTrainingSignal,
         )
-        from src.agents.gap_analyzer.dspy_integration import (
-            GapAnalysisTrainingSignal,
-        )
         from src.agents.drift_monitor.dspy_integration import (
             DriftDetectionTrainingSignal,
+        )
+        from src.agents.gap_analyzer.dspy_integration import (
+            GapAnalysisTrainingSignal,
         )
 
         batch = []
@@ -80,12 +79,8 @@ class TestSignalBatching:
 
     def test_batch_can_be_filtered_by_agent(self, signal_batch):
         """Signals can be filtered by source agent."""
-        causal_signals = [
-            s for s in signal_batch if s["source_agent"] == "causal_impact"
-        ]
-        gap_signals = [
-            s for s in signal_batch if s["source_agent"] == "gap_analyzer"
-        ]
+        causal_signals = [s for s in signal_batch if s["source_agent"] == "causal_impact"]
+        gap_signals = [s for s in signal_batch if s["source_agent"] == "gap_analyzer"]
 
         assert len(causal_signals) == 3
         assert len(gap_signals) == 2
@@ -166,7 +161,8 @@ class TestSignalAggregation:
 
         # Signals in last 6 hours
         recent = [
-            s for s in time_series_signals
+            s
+            for s in time_series_signals
             if datetime.fromisoformat(s["timestamp"]) > now - timedelta(hours=6)
         ]
 
@@ -264,14 +260,12 @@ class TestSignalFlowContractCompliance:
 
         # Create batch below threshold
         small_batch = [
-            CausalAnalysisTrainingSignal(signal_id=f"ci_{i:03d}").to_dict()
-            for i in range(50)
+            CausalAnalysisTrainingSignal(signal_id=f"ci_{i:03d}").to_dict() for i in range(50)
         ]
 
         # Create batch at threshold
         threshold_batch = [
-            CausalAnalysisTrainingSignal(signal_id=f"ci_{i:03d}").to_dict()
-            for i in range(100)
+            CausalAnalysisTrainingSignal(signal_id=f"ci_{i:03d}").to_dict() for i in range(100)
         ]
 
         assert len(small_batch) < MIN_SIGNALS
@@ -292,17 +286,17 @@ class TestSignalFlowContractCompliance:
         from src.agents.causal_impact.dspy_integration import (
             CausalAnalysisTrainingSignal,
         )
-        from src.agents.gap_analyzer.dspy_integration import (
-            GapAnalysisTrainingSignal,
-        )
-        from src.agents.heterogeneous_optimizer.dspy_integration import (
-            HeterogeneousOptimizationTrainingSignal,
-        )
         from src.agents.drift_monitor.dspy_integration import (
             DriftDetectionTrainingSignal,
         )
         from src.agents.experiment_designer.dspy_integration import (
             ExperimentDesignTrainingSignal,
+        )
+        from src.agents.gap_analyzer.dspy_integration import (
+            GapAnalysisTrainingSignal,
+        )
+        from src.agents.heterogeneous_optimizer.dspy_integration import (
+            HeterogeneousOptimizationTrainingSignal,
         )
         from src.agents.prediction_synthesizer.dspy_integration import (
             PredictionSynthesisTrainingSignal,
@@ -331,17 +325,17 @@ class TestMultiAgentSignalMixing:
         from src.agents.causal_impact.dspy_integration import (
             CausalAnalysisTrainingSignal,
         )
-        from src.agents.gap_analyzer.dspy_integration import (
-            GapAnalysisTrainingSignal,
-        )
-        from src.agents.heterogeneous_optimizer.dspy_integration import (
-            HeterogeneousOptimizationTrainingSignal,
-        )
         from src.agents.drift_monitor.dspy_integration import (
             DriftDetectionTrainingSignal,
         )
         from src.agents.experiment_designer.dspy_integration import (
             ExperimentDesignTrainingSignal,
+        )
+        from src.agents.gap_analyzer.dspy_integration import (
+            GapAnalysisTrainingSignal,
+        )
+        from src.agents.heterogeneous_optimizer.dspy_integration import (
+            HeterogeneousOptimizationTrainingSignal,
         )
         from src.agents.prediction_synthesizer.dspy_integration import (
             PredictionSynthesisTrainingSignal,
@@ -350,14 +344,16 @@ class TestMultiAgentSignalMixing:
         # Create heterogeneous batch
         batch = []
         for i in range(5):
-            batch.extend([
-                CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict(),
-                GapAnalysisTrainingSignal(signal_id=f"ga_{i}").to_dict(),
-                HeterogeneousOptimizationTrainingSignal(signal_id=f"ho_{i}").to_dict(),
-                DriftDetectionTrainingSignal(signal_id=f"dm_{i}").to_dict(),
-                ExperimentDesignTrainingSignal(signal_id=f"ed_{i}").to_dict(),
-                PredictionSynthesisTrainingSignal(signal_id=f"ps_{i}").to_dict(),
-            ])
+            batch.extend(
+                [
+                    CausalAnalysisTrainingSignal(signal_id=f"ci_{i}").to_dict(),
+                    GapAnalysisTrainingSignal(signal_id=f"ga_{i}").to_dict(),
+                    HeterogeneousOptimizationTrainingSignal(signal_id=f"ho_{i}").to_dict(),
+                    DriftDetectionTrainingSignal(signal_id=f"dm_{i}").to_dict(),
+                    ExperimentDesignTrainingSignal(signal_id=f"ed_{i}").to_dict(),
+                    PredictionSynthesisTrainingSignal(signal_id=f"ps_{i}").to_dict(),
+                ]
+            )
 
         # Verify batch composition
         assert len(batch) == 30  # 5 * 6 agents
@@ -388,25 +384,25 @@ class TestMultiAgentSignalMixing:
 
         # High quality causal signals
         for i in range(5):
-            batch.append(CausalAnalysisTrainingSignal(
-                signal_id=f"ci_{i}",
-                refutation_tests_passed=4,
-                statistical_significance=True,
-            ).to_dict())
+            batch.append(
+                CausalAnalysisTrainingSignal(
+                    signal_id=f"ci_{i}",
+                    refutation_tests_passed=4,
+                    statistical_significance=True,
+                ).to_dict()
+            )
 
         # Low quality gap signals
         for i in range(5):
-            batch.append(GapAnalysisTrainingSignal(
-                signal_id=f"ga_{i}",
-            ).to_dict())
+            batch.append(
+                GapAnalysisTrainingSignal(
+                    signal_id=f"ga_{i}",
+                ).to_dict()
+            )
 
         # Compute per-agent reward stats
-        causal_rewards = [
-            s["reward"] for s in batch if s["source_agent"] == "causal_impact"
-        ]
-        gap_rewards = [
-            s["reward"] for s in batch if s["source_agent"] == "gap_analyzer"
-        ]
+        causal_rewards = [s["reward"] for s in batch if s["source_agent"] == "causal_impact"]
+        gap_rewards = [s["reward"] for s in batch if s["source_agent"] == "gap_analyzer"]
 
         avg_causal = sum(causal_rewards) / len(causal_rewards)
         avg_gap = sum(gap_rewards) / len(gap_rewards)

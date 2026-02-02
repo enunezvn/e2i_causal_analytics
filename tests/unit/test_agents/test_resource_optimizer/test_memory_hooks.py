@@ -9,20 +9,20 @@ Tests the memory integration for the Resource Optimizer agent including:
 """
 
 import json
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from src.agents.resource_optimizer.memory_hooks import (
-    ResourceOptimizerMemoryHooks,
     OptimizationContext,
     OptimizationPattern,
     OptimizationRecord,
+    ResourceOptimizerMemoryHooks,
     contribute_to_memory,
     get_resource_optimizer_memory_hooks,
     reset_memory_hooks,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -182,12 +182,15 @@ class TestGetContext:
         """Test that context retrieval handles missing memory gracefully."""
         # Patch the working_memory property to return None (prevents lazy loading)
         # Also patch episodic memory search to simulate unavailable memory
-        with patch(
-            "src.agents.resource_optimizer.memory_hooks.ResourceOptimizerMemoryHooks.working_memory",
-            new_callable=lambda: property(lambda self: None),
-        ), patch(
-            "src.memory.episodic_memory.search_episodic_by_text",
-            side_effect=Exception("Memory unavailable"),
+        with (
+            patch(
+                "src.agents.resource_optimizer.memory_hooks.ResourceOptimizerMemoryHooks.working_memory",
+                new_callable=lambda: property(lambda self: None),
+            ),
+            patch(
+                "src.memory.episodic_memory.search_episodic_by_text",
+                side_effect=Exception("Memory unavailable"),
+            ),
         ):
             context = await memory_hooks.get_context(
                 session_id="test-session",
@@ -206,9 +209,7 @@ class TestWorkingMemoryContext:
     """Tests for working memory context retrieval."""
 
     @pytest.mark.asyncio
-    async def test_get_working_memory_context_success(
-        self, memory_hooks, mock_working_memory
-    ):
+    async def test_get_working_memory_context_success(self, memory_hooks, mock_working_memory):
         """Test successful working memory context retrieval."""
         mock_working_memory.get_messages.return_value = [
             {"role": "user", "content": "Optimize my budget"},
@@ -220,9 +221,7 @@ class TestWorkingMemoryContext:
         messages = await memory_hooks._get_working_memory_context("test-session")
 
         assert len(messages) == 2
-        mock_working_memory.get_messages.assert_called_once_with(
-            "test-session", limit=10
-        )
+        mock_working_memory.get_messages.assert_called_once_with("test-session", limit=10)
 
     @pytest.mark.asyncio
     async def test_get_working_memory_context_unavailable(self, memory_hooks):
@@ -249,9 +248,7 @@ class TestCachedOptimization:
         result = await memory_hooks._get_cached_optimization("test-session")
 
         assert result == cached_data
-        mock_redis.get.assert_called_once_with(
-            "resource_optimizer:session:test-session"
-        )
+        mock_redis.get.assert_called_once_with("resource_optimizer:session:test-session")
 
     @pytest.mark.asyncio
     async def test_get_cached_optimization_not_found(
@@ -374,9 +371,7 @@ class TestStoreOptimizationPattern:
     ):
         """Test successful pattern storage."""
         # Patch at the source module where the import happens
-        with patch(
-            "src.memory.procedural_memory.insert_procedural_memory"
-        ) as mock_insert:
+        with patch("src.memory.procedural_memory.insert_procedural_memory") as mock_insert:
             mock_insert.return_value = "pattern-123"
 
             pattern_id = await memory_hooks.store_optimization_pattern(
@@ -405,9 +400,7 @@ class TestStoreOptimizationPattern:
         assert pattern_id is None
 
     @pytest.mark.asyncio
-    async def test_store_pattern_skips_infeasible(
-        self, memory_hooks, sample_state
-    ):
+    async def test_store_pattern_skips_infeasible(self, memory_hooks, sample_state):
         """Test that infeasible solutions don't create patterns."""
         result = {"solver_status": "infeasible", "projected_roi": 0}
 
@@ -420,9 +413,7 @@ class TestStoreOptimizationPattern:
         assert pattern_id is None
 
     @pytest.mark.asyncio
-    async def test_store_pattern_skips_low_roi(
-        self, memory_hooks, sample_state
-    ):
+    async def test_store_pattern_skips_low_roi(self, memory_hooks, sample_state):
         """Test that low ROI optimizations don't create patterns."""
         result = {
             "solver_status": "optimal",
@@ -475,9 +466,7 @@ class TestContributeToMemory:
     """Tests for the contribute_to_memory function."""
 
     @pytest.mark.asyncio
-    async def test_contribute_skips_failed_optimization(
-        self, sample_optimization_result
-    ):
+    async def test_contribute_skips_failed_optimization(self, sample_optimization_result):
         """Test that failed optimizations are skipped."""
         state = {"status": "failed"}
 
@@ -526,9 +515,7 @@ class TestContributeToMemory:
         assert counts["working_cached"] == 1
 
     @pytest.mark.asyncio
-    async def test_contribute_generates_session_id(
-        self, sample_optimization_result, sample_state
-    ):
+    async def test_contribute_generates_session_id(self, sample_optimization_result, sample_state):
         """Test that session ID is generated if not provided."""
         counts = await contribute_to_memory(
             result=sample_optimization_result,

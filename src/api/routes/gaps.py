@@ -24,8 +24,8 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
-from uuid import UUID, uuid4
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -183,9 +183,7 @@ class PrioritizedOpportunity(BaseModel):
     gap: PerformanceGap = Field(..., description="The identified gap")
     roi_estimate: ROIEstimate = Field(..., description="ROI analysis")
     recommended_action: str = Field(..., description="Specific action to close gap")
-    implementation_difficulty: ImplementationDifficulty = Field(
-        ..., description="Difficulty level"
-    )
+    implementation_difficulty: ImplementationDifficulty = Field(..., description="Difficulty level")
     time_to_impact: str = Field(..., description="Expected time to results")
 
 
@@ -220,9 +218,7 @@ class GapAnalysisResponse(BaseModel):
     key_insights: List[str] = Field(default_factory=list, description="Key findings")
 
     # Multi-library support
-    libraries_used: Optional[List[str]] = Field(
-        default=None, description="Causal libraries used"
-    )
+    libraries_used: Optional[List[str]] = Field(default=None, description="Causal libraries used")
     library_agreement_score: Optional[float] = Field(
         default=None, description="Agreement between libraries"
     )
@@ -260,9 +256,7 @@ class OpportunityListResponse(BaseModel):
     total_count: int = Field(..., description="Total opportunities")
     quick_wins_count: int = Field(..., description="Number of quick wins")
     strategic_bets_count: int = Field(..., description="Number of strategic bets")
-    opportunities: List[PrioritizedOpportunity] = Field(
-        ..., description="List of opportunities"
-    )
+    opportunities: List[PrioritizedOpportunity] = Field(..., description="List of opportunities")
     total_addressable_value: float = Field(..., description="Total potential value")
 
 
@@ -271,9 +265,7 @@ class GapHealthResponse(BaseModel):
 
     status: str = Field(..., description="Service status")
     agent_available: bool = Field(..., description="Gap Analyzer agent status")
-    last_analysis: Optional[datetime] = Field(
-        default=None, description="Last analysis timestamp"
-    )
+    last_analysis: Optional[datetime] = Field(default=None, description="Last analysis timestamp")
     analyses_24h: int = Field(default=0, description="Analyses in last 24 hours")
 
 
@@ -468,7 +460,7 @@ async def get_gap_health() -> GapHealthResponse:
     # Check agent availability
     agent_available = True
     try:
-        from src.agents.gap_analyzer import GapAnalyzerAgent
+        from src.agents.gap_analyzer import GapAnalyzerAgent  # noqa: F401
 
         agent_available = True
     except ImportError:
@@ -477,9 +469,7 @@ async def get_gap_health() -> GapHealthResponse:
     # Count recent analyses
     now = datetime.now(timezone.utc)
     analyses_24h = sum(
-        1
-        for a in _analyses_store.values()
-        if (now - a.timestamp).total_seconds() < 86400
+        1 for a in _analyses_store.values() if (now - a.timestamp).total_seconds() < 86400
     )
 
     # Get last analysis

@@ -29,7 +29,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 if TYPE_CHECKING:
     from .state import ExplainerState
@@ -241,12 +241,14 @@ class ExplainerMLflowTracker:
                 self._current_run_id = run.info.run_id
 
                 # Log run parameters
-                mlflow.log_params({
-                    "agent": "explainer",
-                    "tier": 5,
-                    "user_expertise": user_expertise,
-                    "output_format": output_format,
-                })
+                mlflow.log_params(
+                    {
+                        "agent": "explainer",
+                        "tier": 5,
+                        "user_expertise": user_expertise,
+                        "output_format": output_format,
+                    }
+                )
 
                 # Log source agents if provided
                 if source_agents:
@@ -254,10 +256,12 @@ class ExplainerMLflowTracker:
                     mlflow.log_param("source_agents_count", len(source_agents))
 
                 # Log context tags
-                mlflow.set_tags({
-                    "agent_type": "self_improvement",
-                    "framework_version": "4.3",
-                })
+                mlflow.set_tags(
+                    {
+                        "agent_type": "self_improvement",
+                        "framework_version": "4.3",
+                    }
+                )
                 if brand:
                     mlflow.set_tag("brand", brand)
                 if region:
@@ -306,12 +310,14 @@ class ExplainerMLflowTracker:
             mlflow.log_metrics(metrics.to_dict())
 
             # Log quality tags
-            mlflow.set_tags({
-                "high_insight_count": str(metrics.insight_count >= 5).lower(),
-                "has_recommendations": str(metrics.recommendations_count > 0).lower(),
-                "has_actionables": str(metrics.immediate_actionable_count > 0).lower(),
-                "multi_source": str(metrics.source_agents_count > 1).lower(),
-            })
+            mlflow.set_tags(
+                {
+                    "high_insight_count": str(metrics.insight_count >= 5).lower(),
+                    "has_recommendations": str(metrics.recommendations_count > 0).lower(),
+                    "has_actionables": str(metrics.immediate_actionable_count > 0).lower(),
+                    "multi_source": str(metrics.source_agents_count > 1).lower(),
+                }
+            )
 
             # Log artifacts
             if self.enable_artifact_logging:
@@ -496,18 +502,20 @@ class ExplainerMLflowTracker:
 
             history = []
             for _, row in runs.iterrows():
-                history.append({
-                    "run_id": row["run_id"],
-                    "timestamp": row["start_time"],
-                    "insight_count": row.get("metrics.insight_count"),
-                    "recommendations_count": row.get("metrics.recommendations_count"),
-                    "narrative_section_count": row.get("metrics.narrative_section_count"),
-                    "avg_insight_confidence": row.get("metrics.avg_insight_confidence"),
-                    "total_latency_ms": row.get("metrics.total_latency_ms"),
-                    "user_expertise": row.get("params.user_expertise"),
-                    "output_format": row.get("params.output_format"),
-                    "source_agents_count": row.get("metrics.source_agents_count"),
-                })
+                history.append(
+                    {
+                        "run_id": row["run_id"],
+                        "timestamp": row["start_time"],
+                        "insight_count": row.get("metrics.insight_count"),
+                        "recommendations_count": row.get("metrics.recommendations_count"),
+                        "narrative_section_count": row.get("metrics.narrative_section_count"),
+                        "avg_insight_confidence": row.get("metrics.avg_insight_confidence"),
+                        "total_latency_ms": row.get("metrics.total_latency_ms"),
+                        "user_expertise": row.get("params.user_expertise"),
+                        "output_format": row.get("params.output_format"),
+                        "source_agents_count": row.get("metrics.source_agents_count"),
+                    }
+                )
 
             return history
 
@@ -542,23 +550,21 @@ class ExplainerMLflowTracker:
 
         insight_counts = [h.get("insight_count", 0) for h in history if h.get("insight_count")]
         confidences = [
-            h.get("avg_insight_confidence", 0)
-            for h in history
-            if h.get("avg_insight_confidence")
+            h.get("avg_insight_confidence", 0) for h in history if h.get("avg_insight_confidence")
         ]
 
         return {
             "total_explanations": len(history),
             "total_insights": sum(insight_counts),
-            "avg_insights_per_run": sum(insight_counts) / len(insight_counts) if insight_counts else 0.0,
+            "avg_insights_per_run": sum(insight_counts) / len(insight_counts)
+            if insight_counts
+            else 0.0,
             "avg_confidence": sum(confidences) / len(confidences) if confidences else 0.0,
             "by_user_expertise": self._count_by_field(history, "user_expertise"),
             "by_output_format": self._count_by_field(history, "output_format"),
         }
 
-    def _count_by_field(
-        self, history: list[dict[str, Any]], field: str
-    ) -> dict[str, int]:
+    def _count_by_field(self, history: list[dict[str, Any]], field: str) -> dict[str, int]:
         """Count records by a specific field."""
         counts: dict[str, int] = {}
         for h in history:

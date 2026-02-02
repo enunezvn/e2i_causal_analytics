@@ -8,7 +8,6 @@ Defines the TypedDict-based state for the 4-node cohort construction workflow:
 """
 
 import operator
-from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 

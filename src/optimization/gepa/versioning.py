@@ -15,8 +15,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from dspy import Example
-
 
 def generate_version_id(agent_name: str, timestamp: Optional[datetime] = None) -> str:
     """Generate a unique version ID for an optimized module.
@@ -199,12 +197,14 @@ def list_versions(
         try:
             with open(version_file) as f:
                 data = json.load(f)
-            versions.append({
-                "version_id": data["version_id"],
-                "created_at": data["created_at"],
-                "instruction_hash": data["instruction_hash"],
-                "path": str(version_file),
-            })
+            versions.append(
+                {
+                    "version_id": data["version_id"],
+                    "created_at": data["created_at"],
+                    "instruction_hash": data["instruction_hash"],
+                    "path": str(version_file),
+                }
+            )
         except (json.JSONDecodeError, KeyError):
             continue
 

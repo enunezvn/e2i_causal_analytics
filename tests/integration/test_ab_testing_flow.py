@@ -18,11 +18,10 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
-import asyncio
 import os
 import time
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -56,7 +55,12 @@ def experiment_id() -> str:
 def sample_units() -> List[Dict[str, Any]]:
     """Create sample units for randomization testing."""
     return [
-        {"unit_id": f"hcp_{i:03d}", "unit_type": "hcp", "region": "northeast" if i % 2 == 0 else "southwest", "specialty": "cardiology" if i % 3 == 0 else "oncology"}
+        {
+            "unit_id": f"hcp_{i:03d}",
+            "unit_type": "hcp",
+            "region": "northeast" if i % 2 == 0 else "southwest",
+            "specialty": "cardiology" if i % 3 == 0 else "oncology",
+        }
         for i in range(20)
     ]
 
@@ -102,6 +106,7 @@ def mock_supabase_client():
     # Mock async execute
     async def mock_execute():
         return MagicMock(data=[])
+
     table_mock.execute = AsyncMock(side_effect=mock_execute)
 
     return client
@@ -251,7 +256,7 @@ class TestEnrollmentService:
     @pytest.mark.asyncio
     async def test_check_eligibility(self, experiment_id: str):
         """Test eligibility checking - pure computation, no mocking needed."""
-        from src.services.enrollment import EnrollmentService, EligibilityCriteria
+        from src.services.enrollment import EligibilityCriteria, EnrollmentService
 
         service = EnrollmentService()
 
@@ -288,9 +293,9 @@ class TestEnrollmentService:
     async def test_enroll_unit_success(self, experiment_id: str):
         """Test successful enrollment."""
         from src.services.enrollment import (
-            EnrollmentService,
-            EligibilityResult,
             ConsentMethod,
+            EligibilityResult,
+            EnrollmentService,
             EnrollmentStatus,
         )
 
@@ -360,7 +365,7 @@ class TestEnrollmentService:
     @pytest.mark.asyncio
     async def test_enrollment_stats(self, experiment_id: str):
         """Test enrollment statistics retrieval."""
-        from src.services.enrollment import EnrollmentService, EnrollmentStats
+        from src.services.enrollment import EnrollmentService
 
         service = EnrollmentService()
 
@@ -448,8 +453,8 @@ class TestInterimAnalysisService:
             current_effect=0.08,  # Strong effect
             current_variance=0.01,
             target_effect=0.05,
-            current_n=500,    # Current sample size
-            target_n=1000,    # Target sample size
+            current_n=500,  # Current sample size
+            target_n=1000,  # Target sample size
         )
 
         # Low conditional power scenario
@@ -457,8 +462,8 @@ class TestInterimAnalysisService:
             current_effect=0.02,  # Weak effect
             current_variance=0.01,
             target_effect=0.05,
-            current_n=100,    # Current sample size
-            target_n=1000,    # Target sample size
+            current_n=100,  # Current sample size
+            target_n=1000,  # Target sample size
         )
 
         assert high_power > low_power
@@ -468,12 +473,13 @@ class TestInterimAnalysisService:
     @pytest.mark.asyncio
     async def test_stopping_decision_via_interim_analysis(self, experiment_id: str):
         """Test stopping decision is embedded in interim analysis result."""
+        import numpy as np
+
         from src.services.interim_analysis import (
             InterimAnalysisService,
             MetricData,
             StoppingDecision,
         )
-        import numpy as np
 
         service = InterimAnalysisService()
 
@@ -507,11 +513,12 @@ class TestInterimAnalysisService:
     @pytest.mark.asyncio
     async def test_perform_interim_analysis(self, experiment_id: str):
         """Test full interim analysis workflow."""
+        import numpy as np
+
         from src.services.interim_analysis import (
             InterimAnalysisService,
             MetricData,
         )
-        import numpy as np
 
         service = InterimAnalysisService()
 
@@ -555,8 +562,9 @@ class TestResultsAnalysisService:
     @pytest.mark.asyncio
     async def test_itt_analysis(self, experiment_id: str):
         """Test intent-to-treat analysis."""
-        from src.services.results_analysis import ResultsAnalysisService, AnalysisMethod
         import numpy as np
+
+        from src.services.results_analysis import AnalysisMethod, ResultsAnalysisService
 
         service = ResultsAnalysisService()
 
@@ -627,8 +635,9 @@ class TestResultsAnalysisService:
     @pytest.mark.asyncio
     async def test_heterogeneous_effects(self, experiment_id: str):
         """Test heterogeneous treatment effects by segment."""
-        from src.services.results_analysis import ResultsAnalysisService
         import numpy as np
+
+        from src.services.results_analysis import ResultsAnalysisService
 
         service = ResultsAnalysisService()
 
@@ -657,10 +666,10 @@ class TestResultsAnalysisService:
     async def test_fidelity_comparison(self, experiment_id: str):
         """Test Digital Twin fidelity comparison."""
         from src.services.results_analysis import (
-            ResultsAnalysisService,
-            ExperimentResults,
-            AnalysisType,
             AnalysisMethod,
+            AnalysisType,
+            ExperimentResults,
+            ResultsAnalysisService,
         )
 
         twin_simulation_id = uuid.uuid4()
@@ -911,8 +920,11 @@ class TestEndToEndFlow:
         sample_experiment_config: Dict,
     ):
         """Test complete experiment lifecycle: design → randomize → enroll → analyze."""
+        from src.services.enrollment import (
+            EligibilityCriteria,
+            EnrollmentService,
+        )
         from src.services.randomization import RandomizationService
-        from src.services.enrollment import EnrollmentService, EligibilityCriteria, EligibilityResult
         from src.services.results_analysis import ResultsAnalysisService
 
         # Phase 1: Randomization (pure computation, no mocking needed)
@@ -963,6 +975,7 @@ class TestEndToEndFlow:
             # AssignmentResult doesn't have an 'id' field, generate one for enrollment
             assignment_id = uuid.uuid4()
             from src.services.enrollment import ConsentMethod
+
             enrollment = await enroll_service.enroll_unit(
                 assignment_id=assignment_id,
                 eligibility_result=eligibility,
@@ -972,7 +985,7 @@ class TestEndToEndFlow:
 
             # Handle both enum and string values
             status = enrollment.enrollment_status
-            status_str = status.value if hasattr(status, 'value') else str(status)
+            status_str = status.value if hasattr(status, "value") else str(status)
             assert status_str == "active"
 
         # Phase 3: Results Analysis - SRM check
@@ -1132,8 +1145,7 @@ class TestPerformance:
             mock_graph.ainvoke = AsyncMock(
                 return_value={
                     "experiments": [
-                        {"experiment_id": exp, "health_status": "healthy"}
-                        for exp in experiment_ids
+                        {"experiment_id": exp, "health_status": "healthy"} for exp in experiment_ids
                     ],
                     "alerts": [],
                     "experiments_checked": 10,

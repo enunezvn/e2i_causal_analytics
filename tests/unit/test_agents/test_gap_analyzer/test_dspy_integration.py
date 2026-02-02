@@ -12,17 +12,16 @@ the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
-from datetime import datetime, timezone
 
 # Mark entire module to run on same worker - prevents import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.gap_analyzer.dspy_integration import (
+    DSPY_AVAILABLE,
     GapAnalysisTrainingSignal,
     GapAnalyzerSignalCollector,
     get_gap_analyzer_signal_collector,
     reset_dspy_integration,
-    DSPY_AVAILABLE,
 )
 
 
@@ -192,9 +191,7 @@ class TestGapAnalysisTrainingSignal:
 
     def test_to_dict_metrics_limit(self):
         """Test metrics list limiting."""
-        signal = GapAnalysisTrainingSignal(
-            metrics_analyzed=[f"metric_{i}" for i in range(15)]
-        )
+        signal = GapAnalysisTrainingSignal(metrics_analyzed=[f"metric_{i}" for i in range(15)])
         result = signal.to_dict()
 
         assert len(result["input_context"]["metrics_analyzed"]) <= 10
@@ -439,25 +436,28 @@ class TestDSPySignatures:
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_gap_detection_signature(self):
         """Test GapDetectionSignature exists."""
+        import dspy
+
         from src.agents.gap_analyzer.dspy_integration import GapDetectionSignature
 
-        import dspy
         assert issubclass(GapDetectionSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_evidence_relevance_signature(self):
         """Test EvidenceRelevanceSignature exists."""
+        import dspy
+
         from src.agents.gap_analyzer.dspy_integration import EvidenceRelevanceSignature
 
-        import dspy
         assert issubclass(EvidenceRelevanceSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_gap_prioritization_signature(self):
         """Test GapPrioritizationSignature exists."""
+        import dspy
+
         from src.agents.gap_analyzer.dspy_integration import GapPrioritizationSignature
 
-        import dspy
         assert issubclass(GapPrioritizationSignature, dspy.Signature)
 
 

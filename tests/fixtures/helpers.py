@@ -14,10 +14,9 @@ Usage:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
-
 
 # =============================================================================
 # TOOL COMPOSER HELPERS
@@ -43,14 +42,16 @@ def make_decomposition_response(
             "What is the trend over time?",
         ]
 
-    return json.dumps({
-        "sub_questions": [
-            {"id": f"q{i+1}", "question": q, "dependencies": []}
-            for i, q in enumerate(sub_questions)
-        ],
-        "reasoning": reasoning,
-        "is_multi_faceted": len(sub_questions) > 1,
-    })
+    return json.dumps(
+        {
+            "sub_questions": [
+                {"id": f"q{i + 1}", "question": q, "dependencies": []}
+                for i, q in enumerate(sub_questions)
+            ],
+            "reasoning": reasoning,
+            "is_multi_faceted": len(sub_questions) > 1,
+        }
+    )
 
 
 def make_planning_response(
@@ -72,11 +73,13 @@ def make_planning_response(
             {"step": 2, "tool": "trend_analysis", "question_id": "q2", "params": {}},
         ]
 
-    return json.dumps({
-        "execution_plan": steps,
-        "strategy": strategy,
-        "estimated_calls": len(steps),
-    })
+    return json.dumps(
+        {
+            "execution_plan": steps,
+            "strategy": strategy,
+            "estimated_calls": len(steps),
+        }
+    )
 
 
 def make_synthesis_response(
@@ -94,12 +97,14 @@ def make_synthesis_response(
     Returns:
         JSON string with synthesis structure
     """
-    return json.dumps({
-        "final_answer": answer,
-        "confidence": confidence,
-        "sources": sources or ["q1_result", "q2_result"],
-        "synthesis_method": "aggregate",
-    })
+    return json.dumps(
+        {
+            "final_answer": answer,
+            "confidence": confidence,
+            "sources": sources or ["q1_result", "q2_result"],
+            "synthesis_method": "aggregate",
+        }
+    )
 
 
 # =============================================================================
@@ -131,7 +136,8 @@ def create_experiment_summary(
         "name": name,
         "status": status,
         "start_date": (start_date or datetime.utcnow()).isoformat(),
-        "metrics": metrics or {
+        "metrics": metrics
+        or {
             "conversion_rate": 0.05,
             "sample_size": 1000,
             "p_value": 0.03,
@@ -193,7 +199,8 @@ def create_enrollment_issue(
         "current_size": current_size,
         "progress_pct": (current_size / target_size) * 100,
         "days_remaining": days_remaining,
-        "projected_completion": current_size / max(1, (target_size - current_size) / days_remaining),
+        "projected_completion": current_size
+        / max(1, (target_size - current_size) / days_remaining),
         "detected_at": datetime.utcnow().isoformat(),
         "recommendation": "Consider extending experiment duration or increasing traffic",
     }
@@ -334,7 +341,9 @@ def create_drift_report(
         "p_value": p_value,
         "is_significant": is_significant,
         "detected_at": datetime.utcnow().isoformat(),
-        "recommendation": "Review recent data pipeline changes" if is_significant else "Continue monitoring",
+        "recommendation": "Review recent data pipeline changes"
+        if is_significant
+        else "Continue monitoring",
     }
 
 

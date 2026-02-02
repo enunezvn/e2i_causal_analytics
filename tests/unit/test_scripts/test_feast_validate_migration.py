@@ -8,12 +8,13 @@ Tests cover:
 - Export functionality
 """
 
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-import pandas as pd
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pandas as pd
+import pytest
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent.parent
@@ -129,9 +130,7 @@ class TestFeatureParityValidation:
         mock_custom = MagicMock()
         mock_feast = MagicMock()
         mock_feast.initialize = AsyncMock()
-        mock_feast.get_online_features = AsyncMock(
-            return_value={"test__feature": [0.5]}
-        )
+        mock_feast.get_online_features = AsyncMock(return_value={"test__feature": [0.5]})
 
         validator = MigrationValidator(
             custom_client=mock_custom,
@@ -160,9 +159,7 @@ class TestFeatureParityValidation:
         mock_custom = MagicMock()
         mock_feast = MagicMock()
         mock_feast.initialize = AsyncMock()
-        mock_feast.get_online_features = AsyncMock(
-            return_value={"test__feature": [0.8]}
-        )
+        mock_feast.get_online_features = AsyncMock(return_value={"test__feature": [0.8]})
 
         validator = MigrationValidator(
             custom_client=mock_custom,
@@ -264,20 +261,20 @@ class TestShadowMode:
         mock_custom = MagicMock()
         mock_feast = MagicMock()
         mock_feast.initialize = AsyncMock()
-        mock_feast.get_online_features = AsyncMock(
-            return_value={"test__feature": [0.5]}
-        )
+        mock_feast.get_online_features = AsyncMock(return_value={"test__feature": [0.5]})
 
         validator = MigrationValidator(
             custom_client=mock_custom,
             feast_client=mock_feast,
         )
 
-        entity_df = pd.DataFrame({
-            "hcp_id": ["hcp_001", "hcp_002"],
-            "brand_id": ["brand1", "brand1"],
-            "event_timestamp": [datetime.now(timezone.utc)] * 2,
-        })
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["hcp_001", "hcp_002"],
+                "brand_id": ["brand1", "brand1"],
+                "event_timestamp": [datetime.now(timezone.utc)] * 2,
+            }
+        )
 
         with patch.object(
             validator, "_get_custom_features", new_callable=AsyncMock
@@ -304,9 +301,7 @@ class TestShadowMode:
         mock_custom = MagicMock()
         mock_feast = MagicMock()
         mock_feast.initialize = AsyncMock()
-        mock_feast.get_online_features = AsyncMock(
-            return_value={"test__feature": [0.5]}
-        )
+        mock_feast.get_online_features = AsyncMock(return_value={"test__feature": [0.5]})
 
         validator = MigrationValidator(
             custom_client=mock_custom,
@@ -314,11 +309,13 @@ class TestShadowMode:
         )
 
         # Create large DataFrame
-        entity_df = pd.DataFrame({
-            "hcp_id": [f"hcp_{i:03d}" for i in range(1000)],
-            "brand_id": ["brand1"] * 1000,
-            "event_timestamp": [datetime.now(timezone.utc)] * 1000,
-        })
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": [f"hcp_{i:03d}" for i in range(1000)],
+                "brand_id": ["brand1"] * 1000,
+                "event_timestamp": [datetime.now(timezone.utc)] * 1000,
+            }
+        )
 
         with patch.object(
             validator, "_get_custom_features", new_callable=AsyncMock
@@ -344,9 +341,7 @@ class TestBenchmark:
         mock_custom = MagicMock()
         mock_feast = MagicMock()
         mock_feast.initialize = AsyncMock()
-        mock_feast.get_online_features = AsyncMock(
-            return_value={"test__feature": [0.5] * 10}
-        )
+        mock_feast.get_online_features = AsyncMock(return_value={"test__feature": [0.5] * 10})
 
         validator = MigrationValidator(
             custom_client=mock_custom,

@@ -108,7 +108,9 @@ class DataPreparerState(TypedDict, total=False):
     error_type: Optional[str]
 
     # QC Remediation Loop
-    remediation_status: Literal["not_needed", "applied", "failed", "manual_required", "exhausted", "error"]
+    remediation_status: Literal[
+        "not_needed", "applied", "failed", "manual_required", "exhausted", "error"
+    ]
     remediation_attempts: int  # Count of remediation attempts
     remediation_actions_taken: List[str]  # Actions applied during remediation
     remediation_error: Optional[str]  # Error message if remediation failed

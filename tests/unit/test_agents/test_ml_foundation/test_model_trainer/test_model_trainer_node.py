@@ -7,16 +7,16 @@ import numpy as np
 import pytest
 
 from src.agents.ml_foundation.model_trainer.nodes.model_trainer_node import (
-    train_model,
-    _get_model_class_dynamic,
     _filter_hyperparameters,
     _get_framework,
+    _get_model_class_dynamic,
+    train_model,
 )
-
 
 # ============================================================================
 # Test fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def binary_classification_state():
@@ -51,6 +51,7 @@ def regression_state():
 # ============================================================================
 # Test train_model function
 # ============================================================================
+
 
 @pytest.mark.asyncio
 class TestTrainModel:
@@ -190,6 +191,7 @@ class TestTrainModel:
 # Test helper functions
 # ============================================================================
 
+
 class TestGetModelClassDynamic:
     """Test model class lookup."""
 
@@ -208,9 +210,7 @@ class TestGetModelClassDynamic:
 
     def test_gets_logistic_regression(self):
         """Should get LogisticRegression."""
-        model_class = _get_model_class_dynamic(
-            "LogisticRegression", "binary_classification"
-        )
+        model_class = _get_model_class_dynamic("LogisticRegression", "binary_classification")
         assert model_class is not None
 
     def test_gets_ridge(self):
@@ -220,9 +220,7 @@ class TestGetModelClassDynamic:
 
     def test_gets_gradient_boosting_classifier(self):
         """Should get GradientBoostingClassifier."""
-        model_class = _get_model_class_dynamic(
-            "GradientBoosting", "binary_classification"
-        )
+        model_class = _get_model_class_dynamic("GradientBoosting", "binary_classification")
         assert model_class is not None
 
     def test_returns_none_for_unknown_algorithm(self):

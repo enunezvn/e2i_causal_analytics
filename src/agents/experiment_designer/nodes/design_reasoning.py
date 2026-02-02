@@ -16,14 +16,13 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from src.utils.llm_factory import get_chat_llm, get_fast_llm, get_llm_provider
-
 from src.agents.experiment_designer.state import (
     ErrorDetails,
     ExperimentDesignState,
     OutcomeDefinition,
     TreatmentDefinition,
 )
+from src.utils.llm_factory import get_chat_llm, get_fast_llm, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +101,10 @@ class DesignReasoningNode:
                         model=self.model_name,
                         provider=self._provider,
                         prompt_template="experiment_design_reasoning",
-                        input_data={"prompt": prompt[:500], "business_question": state.get("business_question", "")},
+                        input_data={
+                            "prompt": prompt[:500],
+                            "business_question": state.get("business_question", ""),
+                        },
                         metadata={"agent": "experiment_designer", "operation": "design_reasoning"},
                     ) as llm_span:
                         response = await asyncio.wait_for(
@@ -131,7 +133,10 @@ class DesignReasoningNode:
                         provider=self._provider,
                         prompt_template="experiment_design_reasoning_fallback",
                         input_data={"prompt": fallback_prompt[:500]},
-                        metadata={"agent": "experiment_designer", "operation": "design_reasoning_fallback"},
+                        metadata={
+                            "agent": "experiment_designer",
+                            "operation": "design_reasoning_fallback",
+                        },
                     ) as llm_span:
                         response = await self.fallback_llm.ainvoke(fallback_prompt)
                         usage = response.response_metadata.get("usage", {})
@@ -236,13 +241,13 @@ class DesignReasoningNode:
 
 ## Current Design Request
 
-**Business Question:** {state['business_question']}
+**Business Question:** {state["business_question"]}
 
 **Constraints:**
-{json.dumps(state.get('constraints', {}), indent=2)}
+{json.dumps(state.get("constraints", {}), indent=2)}
 
 **Available Data:**
-{json.dumps(state.get('available_data', {}), indent=2)}
+{json.dumps(state.get("available_data", {}), indent=2)}
 
 ---
 
@@ -333,9 +338,9 @@ Based on trade-offs, recommend ONE design with full specification.
                 defaults = domain["organizational_defaults"]
                 parts.append(
                     f"""### Organizational Defaults
-- Default effect size: {defaults.get('effect_size', 0.25)}
-- Default ICC for clusters: {defaults.get('icc', 0.05)}
-- Standard confounders: {defaults.get('standard_confounders', [])}"""
+- Default effect size: {defaults.get("effect_size", 0.25)}
+- Default ICC for clusters: {defaults.get("icc", 0.05)}
+- Standard confounders: {defaults.get("standard_confounders", [])}"""
                 )
 
         if state.get("warnings"):
@@ -358,9 +363,9 @@ Based on trade-offs, recommend ONE design with full specification.
         Returns:
             Simplified prompt string
         """
-        return f"""Design an experiment for: {state['business_question']}
+        return f"""Design an experiment for: {state["business_question"]}
 
-Constraints: {json.dumps(state.get('constraints', {}))}
+Constraints: {json.dumps(state.get("constraints", {}))}
 
 Provide JSON with:
 - refined_hypothesis

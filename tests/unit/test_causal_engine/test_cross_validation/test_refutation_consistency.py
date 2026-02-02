@@ -14,10 +14,11 @@ Assertions:
 - Random common cause test consistency
 """
 
+from typing import Dict, Tuple
+
 import numpy as np
 import pandas as pd
 import pytest
-from typing import Dict, Tuple, List
 
 # Mark all tests in this module for the dspy_integration xdist group
 pytestmark = pytest.mark.xdist_group(name="cross_validation")
@@ -56,12 +57,14 @@ def generate_robust_causal_data(
         + np.random.normal(0, 0.3, n_samples)  # Low noise
     )
 
-    data = pd.DataFrame({
-        "X1": X1,
-        "X2": X2,
-        "treatment": treatment,
-        "outcome": outcome,
-    })
+    data = pd.DataFrame(
+        {
+            "X1": X1,
+            "X2": X2,
+            "treatment": treatment,
+            "outcome": outcome,
+        }
+    )
 
     return data, {"true_ate": true_ate, "expected_gate": "proceed"}
 
@@ -92,11 +95,13 @@ def generate_spurious_correlation_data(
         + np.random.normal(0, 0.5, n_samples)
     )
 
-    data = pd.DataFrame({
-        "treatment": treatment,
-        "outcome": outcome,
-        # Note: confounder is NOT included - simulating unmeasured confounding
-    })
+    data = pd.DataFrame(
+        {
+            "treatment": treatment,
+            "outcome": outcome,
+            # Note: confounder is NOT included - simulating unmeasured confounding
+        }
+    )
 
     return data, {"true_ate": 0.0, "expected_gate": "review"}
 
@@ -124,11 +129,13 @@ def generate_edge_case_data(
         + np.random.normal(0, 2.0, n_samples)  # High noise
     )
 
-    data = pd.DataFrame({
-        "X1": X1,
-        "treatment": treatment,
-        "outcome": outcome,
-    })
+    data = pd.DataFrame(
+        {
+            "X1": X1,
+            "treatment": treatment,
+            "outcome": outcome,
+        }
+    )
 
     return data, {"true_ate": 0.1, "expected_gate": "review"}
 
@@ -170,7 +177,6 @@ def run_dowhy_refutation(
         Dict with passed, p_value, effect_change, gate_decision
     """
     try:
-        import dowhy
         from dowhy import CausalModel
 
         confounders = [c for c in data.columns if c not in ["treatment", "outcome"]]
@@ -263,7 +269,7 @@ def run_bootstrap_refutation(
         bootstrap_estimates = []
         n_samples = len(data)
 
-        for i in range(n_bootstrap):
+        for _i in range(n_bootstrap):
             # Bootstrap sample
             indices = np.random.choice(n_samples, n_samples, replace=True)
             bootstrap_data = data.iloc[indices].reset_index(drop=True)

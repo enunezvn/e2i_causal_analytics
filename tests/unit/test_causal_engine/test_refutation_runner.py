@@ -10,24 +10,25 @@ Tests cover:
 - Scoring and gate decisions
 """
 
-import pytest
-import numpy as np
-from unittest.mock import MagicMock, patch, AsyncMock
-from src.causal_engine.refutation_runner import (
-    RefutationRunner,
-    RefutationResult,
-    RefutationSuite,
-    RefutationStatus,
-    RefutationTestType,
-    GateDecision,
-    run_refutation_suite,
-    is_estimate_valid,
-)
+from unittest.mock import patch
 
+import pytest
+
+from src.causal_engine.refutation_runner import (
+    GateDecision,
+    RefutationResult,
+    RefutationRunner,
+    RefutationStatus,
+    RefutationSuite,
+    RefutationTestType,
+    is_estimate_valid,
+    run_refutation_suite,
+)
 
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def runner():
@@ -66,6 +67,7 @@ def custom_thresholds():
 # ============================================================================
 # RefutationResult TESTS
 # ============================================================================
+
 
 class TestRefutationResult:
     """Tests for RefutationResult dataclass."""
@@ -107,6 +109,7 @@ class TestRefutationResult:
 # ============================================================================
 # RefutationSuite TESTS
 # ============================================================================
+
 
 class TestRefutationSuite:
     """Tests for RefutationSuite dataclass."""
@@ -274,13 +277,16 @@ class TestRefutationSuite:
 
         assert "individual_tests" in legacy
         assert "placebo_treatment" in legacy["individual_tests"]
-        assert "unobserved_common_cause" in legacy["individual_tests"]  # Mapped from sensitivity_e_value
+        assert (
+            "unobserved_common_cause" in legacy["individual_tests"]
+        )  # Mapped from sensitivity_e_value
         assert legacy["overall_robust"] is True
 
 
 # ============================================================================
 # RefutationRunner INITIALIZATION TESTS
 # ============================================================================
+
 
 class TestRefutationRunnerInit:
     """Tests for RefutationRunner initialization."""
@@ -310,6 +316,7 @@ class TestRefutationRunnerInit:
 # PLACEBO TEST TESTS
 # ============================================================================
 
+
 class TestPlaceboTest:
     """Tests for placebo treatment refutation test."""
 
@@ -324,13 +331,17 @@ class TestPlaceboTest:
         )
 
         assert result.test_name == RefutationTestType.PLACEBO_TREATMENT
-        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert result.status in [
+            RefutationStatus.PASSED,
+            RefutationStatus.WARNING,
+            RefutationStatus.FAILED,
+        ]
         assert result.original_effect == 0.15
         assert result.p_value is not None
 
     def test_run_placebo_test_passed(self, runner):
         """Test placebo test that passes."""
-        with patch.object(runner, '_mock_placebo_test', return_value=(0.01, 0.85)):
+        with patch.object(runner, "_mock_placebo_test", return_value=(0.01, 0.85)):
             result = runner._run_placebo_test(
                 original_effect=0.15,
                 causal_model=None,
@@ -344,7 +355,7 @@ class TestPlaceboTest:
 
     def test_run_placebo_test_failed(self, runner):
         """Test placebo test that fails."""
-        with patch.object(runner, '_mock_placebo_test', return_value=(0.12, 0.02)):
+        with patch.object(runner, "_mock_placebo_test", return_value=(0.12, 0.02)):
             result = runner._run_placebo_test(
                 original_effect=0.15,
                 causal_model=None,
@@ -361,6 +372,7 @@ class TestPlaceboTest:
 # RANDOM COMMON CAUSE TEST TESTS
 # ============================================================================
 
+
 class TestRandomCommonCauseTest:
     """Tests for random common cause refutation test."""
 
@@ -375,12 +387,16 @@ class TestRandomCommonCauseTest:
         )
 
         assert result.test_name == RefutationTestType.RANDOM_COMMON_CAUSE
-        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert result.status in [
+            RefutationStatus.PASSED,
+            RefutationStatus.WARNING,
+            RefutationStatus.FAILED,
+        ]
         assert result.delta_percent >= 0
 
     def test_run_random_common_cause_test_passed(self, runner):
         """Test random common cause test that passes."""
-        with patch.object(runner, '_mock_random_common_cause_test', return_value=(0.14, 0.70)):
+        with patch.object(runner, "_mock_random_common_cause_test", return_value=(0.14, 0.70)):
             result = runner._run_random_common_cause_test(
                 original_effect=0.15,
                 causal_model=None,
@@ -393,7 +409,7 @@ class TestRandomCommonCauseTest:
 
     def test_run_random_common_cause_test_failed(self, runner):
         """Test random common cause test that fails."""
-        with patch.object(runner, '_mock_random_common_cause_test', return_value=(0.05, 0.60)):
+        with patch.object(runner, "_mock_random_common_cause_test", return_value=(0.05, 0.60)):
             result = runner._run_random_common_cause_test(
                 original_effect=0.15,
                 causal_model=None,
@@ -410,6 +426,7 @@ class TestRandomCommonCauseTest:
 # DATA SUBSET TEST TESTS
 # ============================================================================
 
+
 class TestDataSubsetTest:
     """Tests for data subset refutation test."""
 
@@ -425,12 +442,16 @@ class TestDataSubsetTest:
         )
 
         assert result.test_name == RefutationTestType.DATA_SUBSET
-        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert result.status in [
+            RefutationStatus.PASSED,
+            RefutationStatus.WARNING,
+            RefutationStatus.FAILED,
+        ]
         assert "ci_coverage" in result.details
 
     def test_run_data_subset_test_passed(self, runner):
         """Test data subset test that passes."""
-        with patch.object(runner, '_mock_data_subset_test', return_value=(0.15, 0.75, 0.85)):
+        with patch.object(runner, "_mock_data_subset_test", return_value=(0.15, 0.75, 0.85)):
             result = runner._run_data_subset_test(
                 original_effect=0.15,
                 original_ci=(0.10, 0.20),
@@ -447,6 +468,7 @@ class TestDataSubsetTest:
 # BOOTSTRAP TEST TESTS
 # ============================================================================
 
+
 class TestBootstrapTest:
     """Tests for bootstrap refutation test."""
 
@@ -462,7 +484,11 @@ class TestBootstrapTest:
         )
 
         assert result.test_name == RefutationTestType.BOOTSTRAP
-        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert result.status in [
+            RefutationStatus.PASSED,
+            RefutationStatus.WARNING,
+            RefutationStatus.FAILED,
+        ]
         assert "bootstrap_ci" in result.details
 
     def test_run_bootstrap_test_passed(self, runner):
@@ -471,7 +497,9 @@ class TestBootstrapTest:
         # original_ci width = 0.20 - 0.10 = 0.10
         # bootstrap_ci width must be <= 0.05 (50% of 0.10)
         # So bootstrap_ci = (0.125, 0.175) gives width = 0.05, ci_ratio = 0.5
-        with patch.object(runner, '_mock_bootstrap_test', return_value=(0.15, (0.125, 0.175), 0.85)):
+        with patch.object(
+            runner, "_mock_bootstrap_test", return_value=(0.15, (0.125, 0.175), 0.85)
+        ):
             result = runner._run_bootstrap_test(
                 original_effect=0.15,
                 original_ci=(0.10, 0.20),
@@ -488,6 +516,7 @@ class TestBootstrapTest:
 # SENSITIVITY E-VALUE TEST TESTS
 # ============================================================================
 
+
 class TestSensitivityTest:
     """Tests for sensitivity E-value test."""
 
@@ -499,7 +528,11 @@ class TestSensitivityTest:
         )
 
         assert result.test_name == RefutationTestType.SENSITIVITY_E_VALUE
-        assert result.status in [RefutationStatus.PASSED, RefutationStatus.WARNING, RefutationStatus.FAILED]
+        assert result.status in [
+            RefutationStatus.PASSED,
+            RefutationStatus.WARNING,
+            RefutationStatus.FAILED,
+        ]
         assert "e_value" in result.details
 
     def test_run_sensitivity_test_high_e_value(self, runner):
@@ -527,6 +560,7 @@ class TestSensitivityTest:
 # MOCK IMPLEMENTATIONS TESTS
 # ============================================================================
 
+
 class TestMockImplementations:
     """Tests for mock refutation implementations."""
 
@@ -546,10 +580,7 @@ class TestMockImplementations:
 
     def test_mock_data_subset_test(self, runner):
         """Test mock data subset test."""
-        refuted_effect, p_value, ci_coverage = runner._mock_data_subset_test(
-            0.15,
-            (0.10, 0.20)
-        )
+        refuted_effect, p_value, ci_coverage = runner._mock_data_subset_test(0.15, (0.10, 0.20))
 
         assert abs(refuted_effect - 0.15) < 0.1
         assert 0 < p_value < 1
@@ -566,6 +597,7 @@ class TestMockImplementations:
 # ============================================================================
 # CONFIDENCE SCORE TESTS
 # ============================================================================
+
 
 class TestConfidenceScore:
     """Tests for confidence score calculation."""
@@ -622,6 +654,7 @@ class TestConfidenceScore:
 # ============================================================================
 # GATE DECISION TESTS
 # ============================================================================
+
 
 class TestGateDecision:
     """Tests for gate decision logic."""
@@ -691,6 +724,7 @@ class TestGateDecision:
 # FULL SUITE TESTS
 # ============================================================================
 
+
 class TestRunAllTests:
     """Tests for run_all_tests method."""
 
@@ -703,7 +737,11 @@ class TestRunAllTests:
 
         assert isinstance(suite, RefutationSuite)
         assert len(suite.tests) > 0
-        assert suite.gate_decision in [GateDecision.PROCEED, GateDecision.REVIEW, GateDecision.BLOCK]
+        assert suite.gate_decision in [
+            GateDecision.PROCEED,
+            GateDecision.REVIEW,
+            GateDecision.BLOCK,
+        ]
 
     def test_run_all_tests_with_disabled_tests(self):
         """Test running with some tests disabled."""
@@ -742,6 +780,7 @@ class TestRunAllTests:
 # ============================================================================
 # CONVENIENCE FUNCTION TESTS
 # ============================================================================
+
 
 class TestConvenienceFunctions:
     """Tests for convenience functions."""

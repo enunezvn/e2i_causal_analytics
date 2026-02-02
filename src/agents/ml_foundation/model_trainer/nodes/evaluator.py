@@ -18,7 +18,6 @@ from sklearn.metrics import (
     f1_score,
     mean_absolute_error,
     mean_squared_error,
-    precision_recall_curve,
     precision_score,
     r2_score,
     recall_score,
@@ -334,10 +333,9 @@ def _make_causal_predictions(
         logger.warning(f"Failed to compute CATE for test set: {e}")
         # Fall back to random predictions for evaluation to proceed
         predictions["y_test_pred"] = np.zeros(len(X_test), dtype=int)
-        predictions["y_test_proba"] = np.column_stack([
-            np.ones(len(X_test)) * 0.5,
-            np.ones(len(X_test)) * 0.5
-        ])
+        predictions["y_test_proba"] = np.column_stack(
+            [np.ones(len(X_test)) * 0.5, np.ones(len(X_test)) * 0.5]
+        )
 
     return predictions
 
@@ -394,9 +392,7 @@ def _compute_classification_metrics(
     # Training metrics
     train_metrics = {}
     if y_train is not None and y_train_pred is not None:
-        train_metrics = _compute_split_classification_metrics(
-            y_train, y_train_pred, y_train_proba
-        )
+        train_metrics = _compute_split_classification_metrics(y_train, y_train_pred, y_train_proba)
 
     # Validation metrics
     validation_metrics = {}
@@ -420,14 +416,11 @@ def _compute_classification_metrics(
         # Apply optimal threshold
         y_test_pred_optimal = (y_proba_pos >= optimal_threshold).astype(int)
         logger.info(
-            f"Using optimal threshold {optimal_threshold:.4f} for predictions "
-            f"(vs default 0.5)"
+            f"Using optimal threshold {optimal_threshold:.4f} for predictions (vs default 0.5)"
         )
 
     # Test metrics at 0.5 threshold (standard)
-    test_metrics_standard = _compute_split_classification_metrics(
-        y_test, y_test_pred, y_test_proba
-    )
+    test_metrics_standard = _compute_split_classification_metrics(y_test, y_test_pred, y_test_proba)
 
     # Test metrics at optimal threshold (for imbalanced data)
     test_metrics_optimal = _compute_split_classification_metrics(
@@ -611,7 +604,9 @@ def _compute_multiclass_metrics(
         train_metrics = {
             "accuracy": float(accuracy_score(y_train, y_train_pred)),
             "f1_macro": float(f1_score(y_train, y_train_pred, average="macro", zero_division=0)),
-            "f1_weighted": float(f1_score(y_train, y_train_pred, average="weighted", zero_division=0)),
+            "f1_weighted": float(
+                f1_score(y_train, y_train_pred, average="weighted", zero_division=0)
+            ),
         }
 
     # Validation metrics
@@ -619,14 +614,20 @@ def _compute_multiclass_metrics(
     if y_validation is not None and y_validation_pred is not None:
         validation_metrics = {
             "accuracy": float(accuracy_score(y_validation, y_validation_pred)),
-            "f1_macro": float(f1_score(y_validation, y_validation_pred, average="macro", zero_division=0)),
-            "f1_weighted": float(f1_score(y_validation, y_validation_pred, average="weighted", zero_division=0)),
+            "f1_macro": float(
+                f1_score(y_validation, y_validation_pred, average="macro", zero_division=0)
+            ),
+            "f1_weighted": float(
+                f1_score(y_validation, y_validation_pred, average="weighted", zero_division=0)
+            ),
         }
 
     # Test metrics
     test_metrics = {
         "accuracy": float(accuracy_score(y_test, y_test_pred)),
-        "precision_macro": float(precision_score(y_test, y_test_pred, average="macro", zero_division=0)),
+        "precision_macro": float(
+            precision_score(y_test, y_test_pred, average="macro", zero_division=0)
+        ),
         "recall_macro": float(recall_score(y_test, y_test_pred, average="macro", zero_division=0)),
         "f1_macro": float(f1_score(y_test, y_test_pred, average="macro", zero_division=0)),
         "f1_weighted": float(f1_score(y_test, y_test_pred, average="weighted", zero_division=0)),
@@ -1019,6 +1020,7 @@ def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
     # Try pandas conversion
     try:
         import pandas as pd
+
         if isinstance(data, (pd.DataFrame, pd.Series)):
             return data.values
     except ImportError:

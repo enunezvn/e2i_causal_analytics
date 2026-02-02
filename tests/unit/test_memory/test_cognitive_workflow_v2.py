@@ -13,11 +13,9 @@ Tests cover:
 """
 
 import importlib
-import json
 import sys
-from datetime import datetime, timezone
-from typing import List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -206,9 +204,7 @@ async def test_detect_intent():
 @patch.object(cw, "extract_entities")
 @patch.object(cw, "detect_intent")
 @pytest.mark.asyncio
-async def test_summarizer_node(
-    mock_intent, mock_entities, mock_llm_service, mock_embed_service
-):
+async def test_summarizer_node(mock_intent, mock_entities, mock_llm_service, mock_embed_service):
     """Test summarizer_node function."""
     # Setup mocks
     mock_embed = AsyncMock()
@@ -285,9 +281,7 @@ async def test_summarizer_node_compression(
         cw.Message(role="user", content=f"User message {i} with some actual content here")
         for i in range(5)
     ] + [
-        cw.Message(
-            role="assistant", content=f"Assistant response {i} with more content"
-        )
+        cw.Message(role="assistant", content=f"Assistant response {i} with more content")
         for i in range(5)
     ]
 
@@ -433,9 +427,7 @@ async def test_agent_node(mock_viz, mock_invoke, mock_llm_service):
 @patch("src.memory.memory_backends.insert_procedural_memory")
 @patch("src.memory.memory_backends.insert_episodic_memory")
 @pytest.mark.asyncio
-async def test_reflector_node(
-    mock_episodic, mock_procedural, mock_semantic, mock_llm_service
-):
+async def test_reflector_node(mock_episodic, mock_procedural, mock_semantic, mock_llm_service):
     """Test reflector_node function."""
     # Setup mocks
     mock_llm = AsyncMock()
@@ -620,6 +612,7 @@ async def test_run_cognitive_cycle_mocked(
     mock_reflector, mock_agent, mock_investigator, mock_summarizer
 ):
     """Test full cognitive cycle with mocked nodes."""
+
     # Setup mock nodes to pass state through
     async def pass_through(state):
         return state

@@ -98,7 +98,9 @@ class GapAnalysisTrainingSignal:
         roi_score = 0.0
         if self.roi_estimates_count > 0:
             # Higher avg ROI is better (target: 2.0)
-            roi_quality = min(1.0, self.avg_expected_roi / 2.0) if self.avg_expected_roi > 0 else 0.0
+            roi_quality = (
+                min(1.0, self.avg_expected_roi / 2.0) if self.avg_expected_roi > 0 else 0.0
+            )
             roi_score += 0.5 * roi_quality
             # High ROI opportunities found
             high_roi_ratio = self.high_roi_count / self.roi_estimates_count
@@ -367,11 +369,7 @@ class GapAnalyzerSignalCollector:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get signals suitable for DSPy training."""
-        signals = [
-            s.to_dict()
-            for s in self._signals_buffer
-            if s.compute_reward() >= min_reward
-        ]
+        signals = [s.to_dict() for s in self._signals_buffer if s.compute_reward() >= min_reward]
         return signals[-limit:]
 
     def get_high_roi_examples(

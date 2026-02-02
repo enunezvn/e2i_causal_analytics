@@ -1,8 +1,8 @@
 """Tests for KPI Calculator."""
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
 
 from src.kpi.calculator import KPICalculator, KPICalculatorBase
 from src.kpi.models import (
@@ -159,57 +159,69 @@ class TestKPICalculator:
 
     def test_list_kpis_by_workstream(self, calculator, mock_registry):
         """Test listing KPIs by workstream."""
-        kpis = calculator.list_kpis(workstream=Workstream.WS1_DATA_QUALITY)
+        calculator.list_kpis(workstream=Workstream.WS1_DATA_QUALITY)
 
         mock_registry.get_by_workstream.assert_called_with(Workstream.WS1_DATA_QUALITY)
 
     def test_is_lower_better_detection(self, calculator):
         """Test detection of lower-is-better KPIs."""
         # Test KPIs where lower is better
-        assert calculator._is_lower_better(
-            KPIMetadata(
-                id="test",
-                name="Brier Score",
-                definition="",
-                formula="",
-                calculation_type=CalculationType.DIRECT,
-                workstream=Workstream.WS1_MODEL_PERFORMANCE,
+        assert (
+            calculator._is_lower_better(
+                KPIMetadata(
+                    id="test",
+                    name="Brier Score",
+                    definition="",
+                    formula="",
+                    calculation_type=CalculationType.DIRECT,
+                    workstream=Workstream.WS1_MODEL_PERFORMANCE,
+                )
             )
-        ) is True
+            is True
+        )
 
-        assert calculator._is_lower_better(
-            KPIMetadata(
-                id="test",
-                name="Feature Drift PSI",
-                definition="",
-                formula="",
-                calculation_type=CalculationType.DIRECT,
-                workstream=Workstream.WS1_MODEL_PERFORMANCE,
+        assert (
+            calculator._is_lower_better(
+                KPIMetadata(
+                    id="test",
+                    name="Feature Drift PSI",
+                    definition="",
+                    formula="",
+                    calculation_type=CalculationType.DIRECT,
+                    workstream=Workstream.WS1_MODEL_PERFORMANCE,
+                )
             )
-        ) is True
+            is True
+        )
 
-        assert calculator._is_lower_better(
-            KPIMetadata(
-                id="test",
-                name="False Alert Rate",
-                definition="",
-                formula="",
-                calculation_type=CalculationType.DIRECT,
-                workstream=Workstream.WS2_TRIGGERS,
+        assert (
+            calculator._is_lower_better(
+                KPIMetadata(
+                    id="test",
+                    name="False Alert Rate",
+                    definition="",
+                    formula="",
+                    calculation_type=CalculationType.DIRECT,
+                    workstream=Workstream.WS2_TRIGGERS,
+                )
             )
-        ) is True
+            is True
+        )
 
         # Test KPIs where higher is better
-        assert calculator._is_lower_better(
-            KPIMetadata(
-                id="test",
-                name="ROC-AUC",
-                definition="",
-                formula="",
-                calculation_type=CalculationType.DIRECT,
-                workstream=Workstream.WS1_MODEL_PERFORMANCE,
+        assert (
+            calculator._is_lower_better(
+                KPIMetadata(
+                    id="test",
+                    name="ROC-AUC",
+                    definition="",
+                    formula="",
+                    calculation_type=CalculationType.DIRECT,
+                    workstream=Workstream.WS1_MODEL_PERFORMANCE,
+                )
             )
-        ) is False
+            is False
+        )
 
 
 class TestKPICalculatorCacheTTL:

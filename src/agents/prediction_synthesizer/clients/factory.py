@@ -183,14 +183,10 @@ class ModelEndpointsConfig:
         for model_id, model_config in data.get("endpoints", {}).items():
             endpoints[model_id] = ModelEndpointConfig(
                 model_id=model_id,
-                endpoint_url=model_config.get(
-                    "url", f"{base_url}/{model_id}"
-                ),
+                endpoint_url=model_config.get("url", f"{base_url}/{model_id}"),
                 client_type=model_config.get("client_type", "http"),
                 timeout=model_config.get("timeout", data.get("default_timeout", 5.0)),
-                max_retries=model_config.get(
-                    "max_retries", data.get("default_max_retries", 3)
-                ),
+                max_retries=model_config.get("max_retries", data.get("default_max_retries", 3)),
                 enabled=model_config.get("enabled", True),
                 default_prediction=model_config.get("default_prediction", 0.5),
                 default_confidence=model_config.get("default_confidence", 0.8),
@@ -289,7 +285,9 @@ class ModelClientFactory:
                 model_id=model_id,
                 endpoint_url=endpoint_url,
                 timeout=endpoint_config.timeout if endpoint_config else self.config.default_timeout,
-                max_retries=endpoint_config.max_retries if endpoint_config else self.config.default_max_retries,
+                max_retries=endpoint_config.max_retries
+                if endpoint_config
+                else self.config.default_max_retries,
             )
 
             client = HTTPModelClient(
@@ -302,9 +300,7 @@ class ModelClientFactory:
         await client.initialize()
         self._clients[model_id] = client
 
-        logger.info(
-            f"Created {type(client).__name__} for model={model_id}"
-        )
+        logger.info(f"Created {type(client).__name__} for model={model_id}")
 
         return client
 
@@ -343,11 +339,7 @@ class ModelClientFactory:
         Returns:
             List of model identifiers
         """
-        return [
-            model_id
-            for model_id, config in self.config.endpoints.items()
-            if config.enabled
-        ]
+        return [model_id for model_id, config in self.config.endpoints.items() if config.enabled]
 
 
 # =============================================================================

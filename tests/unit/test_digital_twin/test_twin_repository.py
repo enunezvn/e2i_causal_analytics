@@ -10,17 +10,20 @@ Tests cover:
 - MLflow integration
 """
 
-import pytest
 from datetime import datetime, timezone
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from uuid import UUID, uuid4
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
-from src.digital_twin.twin_repository import (
-    TwinModelRepository,
-    SimulationRepository,
-    FidelityRepository,
-    TwinRepository,
+import pytest
+
+from src.digital_twin.models.simulation_models import (
+    EffectHeterogeneity,
+    FidelityRecord,
+    InterventionConfig,
+    PopulationFilter,
+    SimulationRecommendation,
+    SimulationResult,
+    SimulationStatus,
 )
 from src.digital_twin.models.twin_models import (
     Brand,
@@ -28,15 +31,11 @@ from src.digital_twin.models.twin_models import (
     TwinModelMetrics,
     TwinType,
 )
-from src.digital_twin.models.simulation_models import (
-    FidelityGrade,
-    FidelityRecord,
-    SimulationResult,
-    SimulationStatus,
-    InterventionConfig,
-    PopulationFilter,
-    EffectHeterogeneity,
-    SimulationRecommendation,
+from src.digital_twin.twin_repository import (
+    FidelityRepository,
+    SimulationRepository,
+    TwinModelRepository,
+    TwinRepository,
 )
 
 
@@ -117,10 +116,14 @@ class TestTwinModelRepository:
     """Tests for TwinModelRepository."""
 
     @pytest.mark.asyncio
-    async def test_save_model(self, mock_supabase, mock_mlflow, mock_redis, twin_model_config, twin_model_metrics):
+    async def test_save_model(
+        self, mock_supabase, mock_mlflow, mock_redis, twin_model_config, twin_model_metrics
+    ):
         """Test saving a twin model."""
         repo = TwinModelRepository(mock_supabase, mock_mlflow, mock_redis)
-        mock_supabase.execute.return_value = MagicMock(data=[{"model_id": str(twin_model_metrics.model_id)}])
+        mock_supabase.execute.return_value = MagicMock(
+            data=[{"model_id": str(twin_model_metrics.model_id)}]
+        )
 
         model_id = await repo.save_model(twin_model_config, twin_model_metrics)
 
@@ -157,10 +160,9 @@ class TestTwinModelRepository:
         """Test getting model from database."""
         repo = TwinModelRepository(mock_supabase, None, None)
         model_id = uuid4()
-        mock_supabase.execute.return_value = MagicMock(data=[{
-            "model_id": str(model_id),
-            "model_name": "Test Model"
-        }])
+        mock_supabase.execute.return_value = MagicMock(
+            data=[{"model_id": str(model_id), "model_name": "Test Model"}]
+        )
 
         result = await repo.get_model(model_id)
 
@@ -184,10 +186,12 @@ class TestTwinModelRepository:
     async def test_list_active_models(self, mock_supabase):
         """Test listing active models."""
         repo = TwinModelRepository(mock_supabase, None, None)
-        mock_supabase.execute.return_value = MagicMock(data=[
-            {"model_id": str(uuid4()), "is_active": True},
-            {"model_id": str(uuid4()), "is_active": True},
-        ])
+        mock_supabase.execute.return_value = MagicMock(
+            data=[
+                {"model_id": str(uuid4()), "is_active": True},
+                {"model_id": str(uuid4()), "is_active": True},
+            ]
+        )
 
         result = await repo.list_active_models(twin_type=TwinType.HCP, brand="Kisqali", limit=10)
 
@@ -284,16 +288,15 @@ class TestSimulationRepository:
         """Test listing simulations with filters."""
         repo = SimulationRepository(mock_supabase)
         model_id = uuid4()
-        mock_supabase.execute.return_value = MagicMock(data=[
-            {"simulation_id": str(uuid4())},
-            {"simulation_id": str(uuid4())},
-        ])
+        mock_supabase.execute.return_value = MagicMock(
+            data=[
+                {"simulation_id": str(uuid4())},
+                {"simulation_id": str(uuid4())},
+            ]
+        )
 
         result = await repo.list_simulations(
-            model_id=model_id,
-            brand="Kisqali",
-            status=SimulationStatus.COMPLETED,
-            limit=50
+            model_id=model_id, brand="Kisqali", status=SimulationStatus.COMPLETED, limit=50
         )
 
         assert len(result) == 2
@@ -364,17 +367,21 @@ class TestFidelityRepository:
         """Test updating fidelity validation."""
         repo = FidelityRepository(mock_supabase)
         tracking_id = uuid4()
-        mock_supabase.execute.return_value = MagicMock(data=[{
-            "tracking_id": str(tracking_id),
-            "actual_ate": 0.09,
-        }])
+        mock_supabase.execute.return_value = MagicMock(
+            data=[
+                {
+                    "tracking_id": str(tracking_id),
+                    "actual_ate": 0.09,
+                }
+            ]
+        )
 
         result = await repo.update_fidelity_validation(
             tracking_id,
             actual_ate=0.09,
             actual_ci_lower=0.06,
             actual_ci_upper=0.12,
-            validated_by="admin"
+            validated_by="admin",
         )
 
         assert result is not None
@@ -388,12 +395,16 @@ class TestFidelityRepository:
         """Test getting fidelity record by simulation ID."""
         repo = FidelityRepository(mock_supabase)
         sim_id = uuid4()
-        mock_supabase.execute.return_value = MagicMock(data=[{
-            "tracking_id": str(uuid4()),
-            "simulation_id": str(sim_id),
-            "simulated_ate": 0.08,
-            "fidelity_grade": "good",
-        }])
+        mock_supabase.execute.return_value = MagicMock(
+            data=[
+                {
+                    "tracking_id": str(uuid4()),
+                    "simulation_id": str(sim_id),
+                    "simulated_ate": 0.08,
+                    "fidelity_grade": "good",
+                }
+            ]
+        )
 
         result = await repo.get_fidelity_by_simulation(sim_id)
 
@@ -406,22 +417,24 @@ class TestFidelityRepository:
         """Test getting fidelity records for a model."""
         repo = FidelityRepository(mock_supabase)
         model_id = uuid4()
-        mock_supabase.execute.return_value = MagicMock(data=[
-            {
-                "tracking_id": str(uuid4()),
-                "simulation_id": str(uuid4()),
-                "simulated_ate": 0.08,
-                "fidelity_grade": "good",
-                "validated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            {
-                "tracking_id": str(uuid4()),
-                "simulation_id": str(uuid4()),
-                "simulated_ate": 0.10,
-                "fidelity_grade": "excellent",
-                "validated_at": datetime.now(timezone.utc).isoformat(),
-            },
-        ])
+        mock_supabase.execute.return_value = MagicMock(
+            data=[
+                {
+                    "tracking_id": str(uuid4()),
+                    "simulation_id": str(uuid4()),
+                    "simulated_ate": 0.08,
+                    "fidelity_grade": "good",
+                    "validated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                {
+                    "tracking_id": str(uuid4()),
+                    "simulation_id": str(uuid4()),
+                    "simulated_ate": 0.10,
+                    "fidelity_grade": "excellent",
+                    "validated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            ]
+        )
 
         result = await repo.get_model_fidelity_records(model_id, validated_only=True, limit=50)
 
@@ -441,12 +454,14 @@ class TestTwinRepository:
         assert isinstance(repo.fidelity, FidelityRepository)
 
     @pytest.mark.asyncio
-    async def test_save_model_delegation(self, mock_supabase, twin_model_config, twin_model_metrics):
+    async def test_save_model_delegation(
+        self, mock_supabase, twin_model_config, twin_model_metrics
+    ):
         """Test save_model delegates to models repository."""
         repo = TwinRepository(mock_supabase, None, None)
         mock_supabase.execute.return_value = MagicMock()
 
-        with patch.object(repo.models, 'save_model', new_callable=AsyncMock) as mock_save:
+        with patch.object(repo.models, "save_model", new_callable=AsyncMock) as mock_save:
             mock_save.return_value = twin_model_metrics.model_id
             result = await repo.save_model(twin_model_config, twin_model_metrics)
 
@@ -459,7 +474,7 @@ class TestTwinRepository:
         repo = TwinRepository(mock_supabase, None, None)
         model_id = uuid4()
 
-        with patch.object(repo.models, 'get_model', new_callable=AsyncMock) as mock_get:
+        with patch.object(repo.models, "get_model", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"model_id": str(model_id)}
             result = await repo.get_model(model_id)
 
@@ -471,7 +486,7 @@ class TestTwinRepository:
         """Test list_active_models delegates to models repository."""
         repo = TwinRepository(mock_supabase, None, None)
 
-        with patch.object(repo.models, 'list_active_models', new_callable=AsyncMock) as mock_list:
+        with patch.object(repo.models, "list_active_models", new_callable=AsyncMock) as mock_list:
             mock_list.return_value = [{"model_id": str(uuid4())}]
             result = await repo.list_active_models(twin_type=TwinType.HCP, brand="Kisqali")
 

@@ -141,13 +141,10 @@ class TrainingSignalReceiver:
                     self._stats["signals_received"] += 1
 
                 logger.debug(
-                    f"Received {len(signals)} signals from {agent_name}, "
-                    f"buffer_size={len(buffer)}"
+                    f"Received {len(signals)} signals from {agent_name}, buffer_size={len(buffer)}"
                 )
 
-        logger.info(
-            f"Received {received} training signals from {len(signals_by_agent)} agents"
-        )
+        logger.info(f"Received {received} training signals from {len(signals_by_agent)} agents")
         return received
 
     async def get_pending_signals(
@@ -171,13 +168,9 @@ class TrainingSignalReceiver:
             signals = []
 
             # Collect from specified agent or all agents
-            buffers = (
-                {agent: self._buffers[agent]}
-                if agent
-                else self._buffers
-            )
+            buffers = {agent: self._buffers[agent]} if agent else self._buffers
 
-            for agent_name, buffer in buffers.items():
+            for _agent_name, buffer in buffers.items():
                 for signal in buffer:
                     if signal.processed:
                         continue
@@ -309,10 +302,7 @@ class TrainingSignalReceiver:
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get receiver statistics."""
-        buffer_sizes = {
-            agent: len(buffer)
-            for agent, buffer in self._buffers.items()
-        }
+        buffer_sizes = {agent: len(buffer) for agent, buffer in self._buffers.items()}
 
         return {
             **self._stats,
@@ -407,7 +397,7 @@ def get_pending_training_signals(
         else receiver._buffers
     )
 
-    for agent_name, buffer in buffers.items():
+    for _agent_name, buffer in buffers.items():
         for signal in buffer:
             if not signal.processed:
                 signals.append(signal.signal_data)

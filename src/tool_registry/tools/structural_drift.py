@@ -81,9 +81,7 @@ class StructuralDriftOutput(BaseModel):
     """Output schema for detect_structural_drift tool."""
 
     success: bool = Field(..., description="Whether detection succeeded")
-    detected: bool = Field(
-        default=False, description="Whether structural drift was detected"
-    )
+    detected: bool = Field(default=False, description="Whether structural drift was detected")
     drift_score: float = Field(
         default=0.0,
         description="Proportion of edges changed (0-1)",
@@ -255,18 +253,14 @@ class StructuralDriftTool:
         if removed_edges:
             edge_preview = removed_edges[:3]
             if len(removed_edges) > 3:
-                recommendations.append(
-                    f"Removed edges ({len(removed_edges)}): {edge_preview}..."
-                )
+                recommendations.append(f"Removed edges ({len(removed_edges)}): {edge_preview}...")
             else:
                 recommendations.append(f"Removed edges: {removed_edges}")
 
         if added_edges:
             edge_preview = added_edges[:3]
             if len(added_edges) > 3:
-                recommendations.append(
-                    f"Added edges ({len(added_edges)}): {edge_preview}..."
-                )
+                recommendations.append(f"Added edges ({len(added_edges)}): {edge_preview}...")
             else:
                 recommendations.append(f"Added edges: {added_edges}")
 
@@ -318,12 +312,8 @@ class StructuralDriftTool:
                 )
 
             # Build NetworkX graphs
-            baseline_dag = self._adjacency_to_graph(
-                params.baseline_dag_adjacency, params.dag_nodes
-            )
-            current_dag = self._adjacency_to_graph(
-                params.current_dag_adjacency, params.dag_nodes
-            )
+            baseline_dag = self._adjacency_to_graph(params.baseline_dag_adjacency, params.dag_nodes)
+            current_dag = self._adjacency_to_graph(params.current_dag_adjacency, params.dag_nodes)
 
             # Get edge sets
             baseline_edges = set(baseline_dag.edges())

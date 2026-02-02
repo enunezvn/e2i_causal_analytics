@@ -4,14 +4,13 @@ Business Outcome Generator.
 Generates synthetic business outcomes linked to patient journeys.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
-from scipy.special import expit
 
+from ..config import DGP_CONFIGS, Brand
 from .base import BaseGenerator, GeneratorConfig
-from ..config import Brand, DGPType, DGP_CONFIGS
 
 
 class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
@@ -36,10 +35,10 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
     # Outcome type probabilities (conditional on treatment initiation)
     OUTCOME_PROBS = {
         "prescription_written": 0.95,  # Almost all initiated get Rx
-        "prescription_filled": 0.80,   # 80% fill rate
-        "treatment_adherent": 0.65,    # 65% adherent at 6 months
-        "treatment_switch": 0.15,      # 15% switch therapy
-        "treatment_discontinue": 0.20, # 20% discontinue
+        "prescription_filled": 0.80,  # 80% fill rate
+        "treatment_adherent": 0.65,  # 65% adherent at 6 months
+        "treatment_switch": 0.15,  # 15% switch therapy
+        "treatment_discontinue": 0.20,  # 20% discontinue
     }
 
     @property
@@ -77,9 +76,7 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
 
         if self.patient_df is not None:
             # Generate outcomes for initiated patients
-            initiated = self.patient_df[
-                self.patient_df["treatment_initiated"] == 1
-            ].copy()
+            initiated = self.patient_df[self.patient_df["treatment_initiated"] == 1].copy()
 
             if len(initiated) == 0:
                 self._log("Warning: No patients initiated treatment")
@@ -155,7 +152,11 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
         for outcome_type in self.OUTCOME_TYPES:
             base_prob = self.OUTCOME_PROBS[outcome_type]
 
-            if outcome_type in ["prescription_written", "prescription_filled", "treatment_adherent"]:
+            if outcome_type in [
+                "prescription_written",
+                "prescription_filled",
+                "treatment_adherent",
+            ]:
                 # Positive outcomes increase with engagement
                 adjusted_prob = base_prob * (0.7 + 0.3 * engagement_factor)
             elif outcome_type in ["treatment_switch", "treatment_discontinue"]:
@@ -213,15 +214,14 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
         disease_severities = self._random_normal(5.0, 2.0, n, clip_min=0, clip_max=10)
 
         # Generate outcome types
-        outcome_types = [
-            self._select_outcome_type(eng)
-            for eng in engagement_scores
-        ]
+        outcome_types = [self._select_outcome_type(eng) for eng in engagement_scores]
 
         # Generate outcome values
         outcome_values = [
             self._calculate_outcome_value(ot, eng, sev)
-            for ot, eng, sev in zip(outcome_types, engagement_scores, disease_severities)
+            for ot, eng, sev in zip(
+                outcome_types, engagement_scores, disease_severities, strict=False
+            )
         ]
 
         # Generate dates
@@ -233,14 +233,16 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
         else:
             brands = self._random_choice([b.value for b in Brand], n)
 
-        return pd.DataFrame({
-            "patient_journey_id": journey_ids,
-            "patient_id": patient_ids,
-            "hcp_id": self._random_choice(hcp_ids, n).tolist(),
-            "brand": brands,
-            "outcome_type": outcome_types,
-            "outcome_date": outcome_dates,
-            "outcome_value": outcome_values,
-            "engagement_at_outcome": np.round(engagement_scores, 1),
-            "disease_severity_at_outcome": np.round(disease_severities, 1),
-        })
+        return pd.DataFrame(
+            {
+                "patient_journey_id": journey_ids,
+                "patient_id": patient_ids,
+                "hcp_id": self._random_choice(hcp_ids, n).tolist(),
+                "brand": brands,
+                "outcome_type": outcome_types,
+                "outcome_date": outcome_dates,
+                "outcome_value": outcome_values,
+                "engagement_at_outcome": np.round(engagement_scores, 1),
+                "disease_severity_at_outcome": np.round(disease_severities, 1),
+            }
+        )

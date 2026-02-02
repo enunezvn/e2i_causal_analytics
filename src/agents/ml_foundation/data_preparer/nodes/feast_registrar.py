@@ -21,7 +21,6 @@ def _get_feature_analyzer_adapter():
     try:
         from src.feature_store.client import FeatureStoreClient
         from src.feature_store.feature_analyzer_adapter import (
-            FeatureAnalyzerAdapter,
             get_feature_analyzer_adapter,
         )
 
@@ -89,21 +88,21 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
         generated_features = []
         for feature_name in required_features:
             if feature_name in train_df.columns:
-                generated_features.append({
-                    "name": feature_name,
-                    "type": "prepared",
-                    "transformation": "data_preparer",
-                    "source": state.get("data_source", "unknown"),
-                })
+                generated_features.append(
+                    {
+                        "name": feature_name,
+                        "type": "prepared",
+                        "transformation": "data_preparer",
+                        "source": state.get("data_source", "unknown"),
+                    }
+                )
 
         # Build state dict for adapter
         adapter_state = {
             "generated_features": generated_features,
             "selected_features": required_features,
             "feature_importance": {},  # Not computed yet
-            "X_train_selected": train_df[
-                [f for f in required_features if f in train_df.columns]
-            ]
+            "X_train_selected": train_df[[f for f in required_features if f in train_df.columns]]
             if required_features
             else train_df,
         }
@@ -117,9 +116,7 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
             tags=["data_preparer", "validated", f"exp_{experiment_id}"],
         )
 
-        updates["feast_features_registered"] = registration_result.get(
-            "features_registered", 0
-        )
+        updates["feast_features_registered"] = registration_result.get("features_registered", 0)
         updates["feast_registration_status"] = (
             "completed" if registration_result.get("features_registered", 0) > 0 else "empty"
         )
@@ -131,9 +128,7 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
                 )
 
         # Check feature freshness (if features are already in Feast)
-        freshness_result = await _check_feature_freshness(
-            adapter, experiment_id, required_features
-        )
+        freshness_result = await _check_feature_freshness(adapter, experiment_id, required_features)
         updates["feast_freshness_check"] = freshness_result
 
         # Add freshness warnings to state

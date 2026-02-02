@@ -119,11 +119,15 @@ class EstimationNode:
         outcome_col = data.get(outcome, data.iloc[:, 1]).values
 
         # Get covariates (use adjustment set if available, else all other columns)
-        covariate_cols = adjustment_set if adjustment_set else [
-            c for c in data.columns if c not in [treatment, outcome]
-        ]
-        covariates = data[covariate_cols] if covariate_cols else data.drop(
-            columns=[treatment, outcome], errors='ignore'
+        covariate_cols = (
+            adjustment_set
+            if adjustment_set
+            else [c for c in data.columns if c not in [treatment, outcome]]
+        )
+        covariates = (
+            data[covariate_cols]
+            if covariate_cols
+            else data.drop(columns=[treatment, outcome], errors="ignore")
         )
 
         # Convert treatment to binary if continuous
@@ -163,22 +167,18 @@ class EstimationNode:
         }
 
         result: EstimationResult = {
-            "method": estimator_to_method.get(
-                selected.estimator_type.value, "CausalForestDML"
-            ),
+            "method": estimator_to_method.get(selected.estimator_type.value, "CausalForestDML"),
             "ate": float(selected.ate) if selected.ate is not None else 0.0,
             "ate_ci_lower": float(selected.ate_ci_lower) if selected.ate_ci_lower else 0.0,
             "ate_ci_upper": float(selected.ate_ci_upper) if selected.ate_ci_upper else 0.0,
             "standard_error": float(selected.ate_std) if selected.ate_std else 0.0,
             "effect_size": self._classify_effect_size(selected.ate or 0.0),
             "statistical_significance": bool(
-                selected.ate and selected.ate_std and
-                abs(selected.ate) > 1.96 * selected.ate_std
+                selected.ate and selected.ate_std and abs(selected.ate) > 1.96 * selected.ate_std
             ),
-            "p_value": 0.001 if (
-                selected.ate and selected.ate_std and
-                abs(selected.ate) > 1.96 * selected.ate_std
-            ) else 0.15,
+            "p_value": 0.001
+            if (selected.ate and selected.ate_std and abs(selected.ate) > 1.96 * selected.ate_std)
+            else 0.15,
             "sample_size": len(data),
             "covariates_adjusted": covariate_cols,
             "heterogeneity_detected": False,
@@ -190,36 +190,38 @@ class EstimationNode:
                 "score": float(energy_score),
                 "treatment_balance_score": float(
                     selected.energy_score_result.treatment_balance_score
-                ) if selected.energy_score_result else 0.0,
-                "outcome_fit_score": float(
-                    selected.energy_score_result.outcome_fit_score
-                ) if selected.energy_score_result else 0.0,
-                "propensity_calibration": float(
-                    selected.energy_score_result.propensity_calibration
-                ) if selected.energy_score_result else 0.0,
-                "computation_time_ms": float(
-                    selected.energy_score_result.computation_time_ms
-                ) if selected.energy_score_result else 0.0,
+                )
+                if selected.energy_score_result
+                else 0.0,
+                "outcome_fit_score": float(selected.energy_score_result.outcome_fit_score)
+                if selected.energy_score_result
+                else 0.0,
+                "propensity_calibration": float(selected.energy_score_result.propensity_calibration)
+                if selected.energy_score_result
+                else 0.0,
+                "computation_time_ms": float(selected.energy_score_result.computation_time_ms)
+                if selected.energy_score_result
+                else 0.0,
                 "quality_tier": quality_tier,
             },
             "selection_reason": selection_result.selection_reason,
             "energy_score_gap": float(selection_result.energy_score_gap),
             "n_estimators_evaluated": len(selection_result.all_results),
-            "n_estimators_succeeded": sum(
-                1 for r in selection_result.all_results if r.success
-            ),
+            "n_estimators_succeeded": sum(1 for r in selection_result.all_results if r.success),
         }
 
         # Include all estimator results for logging
         all_results = []
         for r in selection_result.all_results:
-            all_results.append({
-                "estimator": r.estimator_type.value,
-                "success": r.success,
-                "energy_score": float(r.energy_score) if r.success else None,
-                "ate": float(r.ate) if r.ate is not None else None,
-                "error": r.error_message if not r.success else None,
-            })
+            all_results.append(
+                {
+                    "estimator": r.estimator_type.value,
+                    "success": r.success,
+                    "energy_score": float(r.energy_score) if r.success else None,
+                    "ate": float(r.ate) if r.ate is not None else None,
+                    "error": r.error_message if not r.success else None,
+                }
+            )
         result["all_estimators_evaluated"] = all_results
 
         # Selection result dict for state
@@ -231,9 +233,7 @@ class EstimationNode:
             "selection_reason": selection_result.selection_reason,
             "n_evaluated": len(selection_result.all_results),
             "n_succeeded": sum(1 for r in selection_result.all_results if r.success),
-            "energy_scores": {
-                k: float(v) for k, v in selection_result.energy_scores.items()
-            },
+            "energy_scores": {k: float(v) for k, v in selection_result.energy_scores.items()},
         }
 
         return result, selection_dict, latency_ms
@@ -282,8 +282,10 @@ class EstimationNode:
                 # V4.2: Energy score-based selection
                 logger.info(f"Using energy score selection with strategy: {selection_strategy}")
                 try:
-                    result, selection_dict, energy_latency_ms = self._select_estimator_with_energy_score(
-                        data, treatment, outcome, adjustment_set, selection_strategy
+                    result, selection_dict, energy_latency_ms = (
+                        self._select_estimator_with_energy_score(
+                            data, treatment, outcome, adjustment_set, selection_strategy
+                        )
                     )
                     latency_ms = (time.time() - start_time) * 1000
 
@@ -320,7 +322,9 @@ class EstimationNode:
                 elif method == "LinearDML":
                     result = self._estimate_linear_dml(data, treatment, outcome, adjustment_set)
                 elif method == "linear_regression":
-                    result = self._estimate_linear_regression(data, treatment, outcome, adjustment_set)
+                    result = self._estimate_linear_regression(
+                        data, treatment, outcome, adjustment_set
+                    )
                 elif method == "propensity_score_weighting":
                     result = self._estimate_propensity_weighting(
                         data, treatment, outcome, adjustment_set

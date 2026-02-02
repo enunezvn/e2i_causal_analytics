@@ -9,7 +9,7 @@ Tests:
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest

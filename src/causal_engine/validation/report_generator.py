@@ -11,7 +11,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from src.causal_engine.validation.state import (
     ABReconciliationResult,
@@ -63,13 +63,13 @@ class ValidationReportGenerator:
         generated_at = datetime.now(timezone.utc).isoformat() + "Z"
 
         # Generate sections
-        cross_validation_section = self._generate_cross_validation_section(
-            cross_validation_result
-        )
+        cross_validation_section = self._generate_cross_validation_section(cross_validation_result)
 
-        ab_reconciliation_section = self._generate_ab_reconciliation_section(
-            ab_reconciliation_result
-        ) if ab_reconciliation_result else None
+        ab_reconciliation_section = (
+            self._generate_ab_reconciliation_section(ab_reconciliation_result)
+            if ab_reconciliation_result
+            else None
+        )
 
         confidence_section = self._generate_confidence_section(
             cross_validation_result,
@@ -181,9 +181,15 @@ class ValidationReportGenerator:
             "libraries_count": len(libraries),
             "pairwise_comparisons": len(pairwise_results),
             "overall_agreement": overall_agreement,
-            "passed_count": sum(1 for p in pairwise_results if p.get("validation_status") == "passed"),
-            "warning_count": sum(1 for p in pairwise_results if p.get("validation_status") == "warning"),
-            "failed_count": sum(1 for p in pairwise_results if p.get("validation_status") == "failed"),
+            "passed_count": sum(
+                1 for p in pairwise_results if p.get("validation_status") == "passed"
+            ),
+            "warning_count": sum(
+                1 for p in pairwise_results if p.get("validation_status") == "warning"
+            ),
+            "failed_count": sum(
+                1 for p in pairwise_results if p.get("validation_status") == "failed"
+            ),
             "consensus_effect": summary_data.get("consensus_effect"),
             "consensus_confidence": summary_data.get("consensus_confidence", 0.0),
         }
@@ -244,8 +250,12 @@ class ValidationReportGenerator:
         details.append(f"Observed vs estimated gap: {estimated_gap:.4f}")
         details.append(f"Ratio (observed/estimated): {ratio:.2f}x")
         details.append(f"Within CI: {'Yes' if result.get('within_ci', False) else 'No'}")
-        details.append(f"Direction match: {'Yes' if result.get('direction_match', False) else 'No'}")
-        details.append(f"Magnitude match: {'Yes' if result.get('magnitude_match', False) else 'No'}")
+        details.append(
+            f"Direction match: {'Yes' if result.get('direction_match', False) else 'No'}"
+        )
+        details.append(
+            f"Magnitude match: {'Yes' if result.get('magnitude_match', False) else 'No'}"
+        )
 
         # Add recommendations
         adjustments = result.get("recommended_adjustments", [])
@@ -349,20 +359,29 @@ class ValidationReportGenerator:
         if overall_confidence >= 0.8:
             details.append("HIGH CONFIDENCE: Effect estimates are well-validated and reliable.")
         elif overall_confidence >= 0.6:
-            details.append("MODERATE CONFIDENCE: Effect estimates are reasonably reliable with some uncertainty.")
+            details.append(
+                "MODERATE CONFIDENCE: Effect estimates are reasonably reliable with some uncertainty."
+            )
         elif overall_confidence >= 0.4:
-            details.append("LOW CONFIDENCE: Effect estimates have significant uncertainty. Use with caution.")
+            details.append(
+                "LOW CONFIDENCE: Effect estimates have significant uncertainty. Use with caution."
+            )
         else:
-            details.append("VERY LOW CONFIDENCE: Effect estimates are unreliable. Additional validation required.")
+            details.append(
+                "VERY LOW CONFIDENCE: Effect estimates are unreliable. Additional validation required."
+            )
 
         metrics = {
             "overall_confidence": overall_confidence,
             "cross_validation_confidence": cv_confidence,
             "ab_reconciliation_confidence": ab_confidence,
             "confidence_tier": (
-                "high" if overall_confidence >= 0.8
-                else "moderate" if overall_confidence >= 0.6
-                else "low" if overall_confidence >= 0.4
+                "high"
+                if overall_confidence >= 0.8
+                else "moderate"
+                if overall_confidence >= 0.6
+                else "low"
+                if overall_confidence >= 0.4
                 else "very_low"
             ),
         }
@@ -542,7 +561,13 @@ class ValidationReportGenerator:
 
         # Effect estimate
         if consensus_effect is not None:
-            direction = "positive" if consensus_effect > 0 else "negative" if consensus_effect < 0 else "zero"
+            direction = (
+                "positive"
+                if consensus_effect > 0
+                else "negative"
+                if consensus_effect < 0
+                else "zero"
+            )
             parts.append(
                 f"The consensus effect estimate is {consensus_effect:.4f} ({direction} effect)."
             )
@@ -620,18 +645,12 @@ class ValidationReportGenerator:
             direction_match = ab_reconciliation.get("direction_match", False)
 
             if status in ["excellent", "good"]:
-                findings.append(
-                    "Observational estimates closely match A/B experimental results"
-                )
+                findings.append("Observational estimates closely match A/B experimental results")
             elif status == "acceptable":
-                findings.append(
-                    "Observational estimates show moderate alignment with A/B results"
-                )
+                findings.append("Observational estimates show moderate alignment with A/B results")
 
             if within_ci:
-                findings.append(
-                    "Estimated effect falls within experimental confidence interval"
-                )
+                findings.append("Estimated effect falls within experimental confidence interval")
 
             if not direction_match:
                 findings.append(
@@ -717,14 +736,10 @@ class ValidationReportGenerator:
 
             errors = cross_validation.get("errors", [])
             if errors:
-                limitations.append(
-                    f"Some library comparisons failed ({len(errors)} errors)"
-                )
+                limitations.append(f"Some library comparisons failed ({len(errors)} errors)")
 
         if not ab_reconciliation:
-            limitations.append(
-                "No A/B experiment available for ground truth validation"
-            )
+            limitations.append("No A/B experiment available for ground truth validation")
         else:
             experiment = ab_reconciliation.get("experiment", {})
             duration = experiment.get("experiment_duration_days", 0)
@@ -751,7 +766,9 @@ class ValidationReportGenerator:
         md = []
 
         # Header
-        md.append(f"# Validation Report: {report.get('treatment_var', '?')} → {report.get('outcome_var', '?')}")
+        md.append(
+            f"# Validation Report: {report.get('treatment_var', '?')} → {report.get('outcome_var', '?')}"
+        )
         md.append("")
         md.append(f"**Report ID:** {report.get('report_id', 'N/A')}")
         md.append(f"**Generated:** {report.get('generated_at', 'N/A')}")
@@ -773,7 +790,12 @@ class ValidationReportGenerator:
         md.append("")
 
         # Sections
-        for section_key in ["cross_validation_section", "ab_reconciliation_section", "confidence_section", "discrepancy_section"]:
+        for section_key in [
+            "cross_validation_section",
+            "ab_reconciliation_section",
+            "confidence_section",
+            "discrepancy_section",
+        ]:
             section = report.get(section_key)
             if section:
                 md.append(f"## {section.get('title', 'Section')}")

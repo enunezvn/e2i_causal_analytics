@@ -416,9 +416,7 @@ class TestRefutationComparison:
             "subset_uplift_std": 0.03,
         }
 
-        validations = await validator.compare_refutations(
-            dowhy_refutations, causalml_stability
-        )
+        validations = await validator.compare_refutations(dowhy_refutations, causalml_stability)
 
         assert len(validations) == 2
         assert all(v["cross_validation_passed"] for v in validations)
@@ -439,9 +437,7 @@ class TestRefutationComparison:
             "placebo_uplift_std": 0.15,
         }
 
-        validations = await validator.compare_refutations(
-            dowhy_refutations, causalml_stability
-        )
+        validations = await validator.compare_refutations(dowhy_refutations, causalml_stability)
 
         assert len(validations) == 1
         assert validations[0]["cross_validation_passed"] is False

@@ -6,7 +6,7 @@ Tests metrics caching with mocked Redis dependencies.
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,7 +19,6 @@ from src.agents.ml_foundation.observability_connector.cache import (
     get_metrics_cache,
     reset_metrics_cache,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -473,9 +472,7 @@ class TestMetricsCacheGetSet:
 
         # Pre-populate memory cache
         key = cache._make_key("1h", "orchestrator")
-        cache._memory_cache[key] = CacheEntry(
-            value=sample_metrics, expires_at=time.time() + 60
-        )
+        cache._memory_cache[key] = CacheEntry(value=sample_metrics, expires_at=time.time() + 60)
 
         result = await cache.get_metrics("1h", "orchestrator")
 

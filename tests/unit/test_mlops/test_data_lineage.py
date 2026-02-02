@@ -16,8 +16,8 @@ Coverage:
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -33,7 +33,6 @@ from src.mlops.data_lineage import (
     TransformationType,
     get_lineage_tracker,
 )
-
 
 # ============================================================================
 # SOURCETYPE ENUM TESTS
@@ -556,11 +555,13 @@ class TestLineageTrackerRecordSourceFromDataFrame:
     def test_record_from_dataframe(self):
         """Test recording source from DataFrame."""
         tracker = LineageTracker()
-        df = pd.DataFrame({
-            "id": [1, 2, 3, 4, 5],
-            "value": [10.0, 20.0, 30.0, 40.0, 50.0],
-            "category": ["A", "B", "A", "B", "A"],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1, 2, 3, 4, 5],
+                "value": [10.0, 20.0, 30.0, 40.0, 50.0],
+                "category": ["A", "B", "A", "B", "A"],
+            }
+        )
 
         source_id = tracker.record_source_from_dataframe(
             df=df,
@@ -656,7 +657,7 @@ class TestLineageTrackerRecordTransformation:
             source_name="features.parquet",
         )
 
-        step_id = tracker.record_transformation(
+        tracker.record_transformation(
             source_id=source_id,
             transformation_type=TransformationType.ENCODING,
             transformation_name="one_hot_encode",
@@ -690,7 +691,7 @@ class TestLineageTrackerRecordTransformation:
             transformation_name="standardize",
         )
 
-        step3_id = tracker.record_transformation(
+        tracker.record_transformation(
             source_id=step2_id,
             transformation_type=TransformationType.FEATURE_ENGINEERING,
             transformation_name="create_features",
@@ -708,7 +709,7 @@ class TestLineageTrackerRecordTransformation:
             source_name="data.csv",
         )
 
-        step_id = tracker.record_transformation(
+        tracker.record_transformation(
             source_id=source_id,
             transformation_type="scaling",
             transformation_name="min_max_scale",
@@ -725,7 +726,7 @@ class TestLineageTrackerRecordTransformation:
             source_name="data.csv",
         )
 
-        step_id = tracker.record_transformation(
+        tracker.record_transformation(
             source_id=source_id,
             transformation_type=TransformationType.CUSTOM,
             transformation_name="custom_transform",
@@ -765,7 +766,7 @@ class TestLineageTrackerRecordSplit:
             source_name="metrics",
         )
 
-        split_id = tracker.record_split(
+        tracker.record_split(
             source_id=source_id,
             split_type=SplitType.TEMPORAL,
             ratios={"train": 0.6, "val": 0.2, "test": 0.15, "holdout": 0.05},
@@ -789,7 +790,7 @@ class TestLineageTrackerRecordSplit:
             source_name="data.csv",
         )
 
-        split_id = tracker.record_split(
+        tracker.record_split(
             source_id=source_id,
             split_type=SplitType.ENTITY,
             entity_column="patient_id",
@@ -814,7 +815,7 @@ class TestLineageTrackerRecordSplit:
             source_name="data.parquet",
         )
 
-        split_id = tracker.record_split(
+        tracker.record_split(
             source_id=source_id,
             split_type="stratified",
             stratify_column="target",
@@ -1158,7 +1159,7 @@ class TestLineageTrackerIntegration:
         )
 
         # Record split
-        split_id = tracker.record_split(
+        tracker.record_split(
             source_id=step3_id,
             split_type=SplitType.TEMPORAL,
             ratios={"train": 0.6, "val": 0.2, "test": 0.15, "holdout": 0.05},
@@ -1208,7 +1209,7 @@ class TestLineageTrackerIntegration:
         )
 
         # Record merge transformation
-        merge_id = tracker.record_transformation(
+        tracker.record_transformation(
             source_id=source1_id,
             transformation_type=TransformationType.MERGE,
             transformation_name="join_features",
@@ -1226,12 +1227,14 @@ class TestLineageTrackerIntegration:
         tracker = LineageTracker(graph_id="df_pipeline")
 
         # Create sample DataFrame
-        df = pd.DataFrame({
-            "patient_id": range(1, 101),
-            "age": [25 + i % 50 for i in range(100)],
-            "metric1": [10.0 + i * 0.5 for i in range(100)],
-            "category": ["A", "B", "C", "D"] * 25,
-        })
+        df = pd.DataFrame(
+            {
+                "patient_id": range(1, 101),
+                "age": [25 + i % 50 for i in range(100)],
+                "metric1": [10.0 + i * 0.5 for i in range(100)],
+                "category": ["A", "B", "C", "D"] * 25,
+            }
+        )
 
         # Record from DataFrame
         source_id = tracker.record_source_from_dataframe(

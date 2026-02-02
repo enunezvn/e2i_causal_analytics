@@ -26,14 +26,15 @@ if TYPE_CHECKING:
 try:
     from prometheus_client import (
         CONTENT_TYPE_LATEST,
+        REGISTRY,
         CollectorRegistry,
         Counter,
         Gauge,
         Histogram,
         generate_latest,
-        multiprocess,
-        REGISTRY,
+        multiprocess,  # noqa: F401
     )
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -259,5 +260,7 @@ async def metrics_health() -> Dict[str, Any]:
         "status": "healthy" if PROMETHEUS_AVAILABLE and _metrics_initialized else "degraded",
         "prometheus_available": PROMETHEUS_AVAILABLE,
         "metrics_initialized": _metrics_initialized,
-        "registry_collectors": len(list(_metrics_registry._names_to_collectors.keys())) if _metrics_registry else 0,
+        "registry_collectors": len(list(_metrics_registry._names_to_collectors.keys()))
+        if _metrics_registry
+        else 0,
     }

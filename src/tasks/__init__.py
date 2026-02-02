@@ -11,42 +11,41 @@ Task Categories:
 """
 
 # Import tasks for auto-discovery
-from src.tasks.feast_tasks import (
-    materialize_features,
-    materialize_incremental_features,
-    check_feature_freshness,
+# A/B Testing Tasks (Phase 15)
+from src.tasks.ab_testing_tasks import (
+    check_all_active_experiments,
+    cleanup_old_ab_results,
+    compute_experiment_results,
+    enrollment_health_check,
+    fidelity_tracking_update,
+    scheduled_interim_analysis,
+    srm_detection_sweep,
 )
 
 # Drift Monitoring Tasks (Phase 14)
 from src.tasks.drift_monitoring_tasks import (
-    run_drift_detection,
     check_all_production_models,
-    cleanup_old_drift_history,
-    send_drift_alert_notifications,
-    track_model_performance,
     check_model_performance_alerts,
+    check_retraining_for_all_models,
+    cleanup_old_drift_history,
     evaluate_retraining_need,
     execute_model_retraining,
-    check_retraining_for_all_models,
+    run_drift_detection,
+    send_drift_alert_notifications,
+    track_model_performance,
 )
-
-# A/B Testing Tasks (Phase 15)
-from src.tasks.ab_testing_tasks import (
-    scheduled_interim_analysis,
-    enrollment_health_check,
-    srm_detection_sweep,
-    compute_experiment_results,
-    fidelity_tracking_update,
-    check_all_active_experiments,
-    cleanup_old_ab_results,
+from src.tasks.feast_tasks import (
+    check_feature_freshness,
+    materialize_features,
+    materialize_incremental_features,
 )
 
 # Feedback Loop Tasks (Concept Drift Detection)
 from src.tasks.feedback_loop_tasks import (
-    run_feedback_loop_short_window,
-    run_feedback_loop_medium_window,
-    run_feedback_loop_long_window,
     analyze_concept_drift_from_truth,
+    run_feedback_loop_long_window,
+    run_feedback_loop_medium_window,
+    run_feedback_loop_short_window,
     run_full_feedback_loop,
 )
 

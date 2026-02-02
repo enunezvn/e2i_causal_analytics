@@ -73,9 +73,7 @@ class ModelTrainerPreprocessor:
 
         # Numeric transformer: impute then scale
         if self.numeric_features:
-            numeric_steps = [
-                ("imputer", SimpleImputer(strategy=self.imputation_strategy))
-            ]
+            numeric_steps = [("imputer", SimpleImputer(strategy=self.imputation_strategy))]
             if self.scaling_method == "standard":
                 numeric_steps.append(("scaler", StandardScaler()))
 
@@ -90,9 +88,7 @@ class ModelTrainerPreprocessor:
                     ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
                 ]
             )
-            transformers.append(
-                ("categorical", categorical_transformer, self.categorical_features)
-            )
+            transformers.append(("categorical", categorical_transformer, self.categorical_features))
 
         return ColumnTransformer(
             transformers=transformers,
@@ -166,17 +162,13 @@ class ModelTrainerPreprocessor:
         for col in X.columns:
             if pd.api.types.is_numeric_dtype(X[col]):
                 self.numeric_features.append(col)
-            elif pd.api.types.is_object_dtype(X[col]) or pd.api.types.is_categorical_dtype(
-                X[col]
-            ):
+            elif pd.api.types.is_object_dtype(X[col]) or pd.api.types.is_categorical_dtype(X[col]):
                 # Only treat as categorical if cardinality is reasonable
                 n_unique = X[col].nunique()
                 if n_unique <= 50:
                     self.categorical_features.append(col)
                 else:
-                    logger.warning(
-                        f"Skipping high-cardinality column: {col} ({n_unique} unique)"
-                    )
+                    logger.warning(f"Skipping high-cardinality column: {col} ({n_unique} unique)")
 
     def _compute_train_statistics(self, X: pd.DataFrame) -> None:
         """Compute statistics from training data ONLY."""

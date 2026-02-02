@@ -117,9 +117,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1] * 100)
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         assert result is not None
@@ -142,9 +144,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1] * 100)
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         assert result is not None
@@ -166,9 +170,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1] * 500)
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         assert result is not None
@@ -188,9 +194,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1] * 100)
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         # Minimal drop should not be significant
@@ -206,9 +214,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1, 0, 1])
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         assert result is None
@@ -221,9 +231,7 @@ class TestPerformanceDegradation:
         current_predicted = np.array([1, 0, 1])
 
         result = node._detect_performance_degradation(
-            baseline_predicted, None,
-            current_predicted, np.array([1, 0, 1]),
-            significance=0.05
+            baseline_predicted, None, current_predicted, np.array([1, 0, 1]), significance=0.05
         )
 
         assert result is None
@@ -239,9 +247,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1] * 30)
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         assert result is None
@@ -257,9 +267,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1] * 100)
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         # Should handle p_pooled = 1 edge case
@@ -276,9 +288,11 @@ class TestPerformanceDegradation:
         current_actual = np.array([1] * 100)
 
         result = node._detect_performance_degradation(
-            baseline_predicted, baseline_actual,
-            current_predicted, current_actual,
-            significance=0.05
+            baseline_predicted,
+            baseline_actual,
+            current_predicted,
+            current_actual,
+            significance=0.05,
         )
 
         # Should handle p_pooled = 0 edge case
@@ -581,10 +595,7 @@ class TestConceptDriftEdgeCases:
     async def test_single_feature_scenario(self):
         """Test with single feature."""
         node = ConceptDriftNode()
-        state = self._create_test_state(
-            features_to_monitor=["feature1"],
-            model_id="test_model"
-        )
+        state = self._create_test_state(features_to_monitor=["feature1"], model_id="test_model")
 
         result = await node.execute(state)
 
@@ -596,10 +607,7 @@ class TestConceptDriftEdgeCases:
         """Test with many features (100+)."""
         node = ConceptDriftNode()
         features = [f"feature_{i}" for i in range(100)]
-        state = self._create_test_state(
-            features_to_monitor=features,
-            model_id="test_model"
-        )
+        state = self._create_test_state(features_to_monitor=features, model_id="test_model")
 
         result = await node.execute(state)
 
@@ -611,10 +619,7 @@ class TestConceptDriftEdgeCases:
     async def test_brand_filter_applied(self):
         """Test brand filter is applied."""
         node = ConceptDriftNode()
-        state = self._create_test_state(
-            brand="Remibrutinib",
-            model_id="test_model"
-        )
+        state = self._create_test_state(brand="Remibrutinib", model_id="test_model")
 
         result = await node.execute(state)
 
@@ -627,7 +632,7 @@ class TestConceptDriftEdgeCases:
         node = ConceptDriftNode()
         state = self._create_test_state(
             significance_level=0.01,  # More strict
-            model_id="test_model"
+            model_id="test_model",
         )
 
         result = await node.execute(state)
@@ -638,10 +643,7 @@ class TestConceptDriftEdgeCases:
     async def test_30_day_time_window(self):
         """Test with 30 day time window."""
         node = ConceptDriftNode()
-        state = self._create_test_state(
-            time_window="30d",
-            model_id="test_model"
-        )
+        state = self._create_test_state(time_window="30d", model_id="test_model")
 
         result = await node.execute(state)
 
@@ -652,10 +654,7 @@ class TestConceptDriftEdgeCases:
         """Test graceful error handling."""
         node = ConceptDriftNode()
         # Use a malformed time_window to trigger error path
-        state = self._create_test_state(
-            time_window="invalid",
-            model_id="test_model"
-        )
+        state = self._create_test_state(time_window="invalid", model_id="test_model")
 
         # Should not raise, should handle gracefully
         result = await node.execute(state)

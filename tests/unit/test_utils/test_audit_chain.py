@@ -11,7 +11,6 @@ Covers:
 """
 
 import hashlib
-import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
@@ -26,7 +25,6 @@ from src.utils.audit_chain import (
     RefutationResults,
     create_audit_chain_service,
 )
-
 
 # =============================================================================
 # AgentTier Tests
@@ -444,9 +442,7 @@ class TestAuditChainService:
         # Mock database returns empty result (workflow not found)
         mock_result = MagicMock()
         mock_result.data = []
-        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_result
 
         with pytest.raises(ValueError, match="Workflow .* not found"):
             service.add_entry(
@@ -611,9 +607,7 @@ class TestAuditChainService:
             }
         ]
 
-        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_result
 
         result = service._get_last_entry(workflow_id)
 
@@ -627,9 +621,7 @@ class TestAuditChainService:
         mock_result = MagicMock()
         mock_result.data = []
 
-        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = mock_result
 
         result = service._get_last_entry(uuid4())
 
@@ -703,9 +695,7 @@ class TestAuditChainService:
             },
         ]
 
-        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = mock_result
 
         result = service.verify_workflow_local(workflow_id)
 
@@ -717,9 +707,7 @@ class TestAuditChainService:
         mock_result = MagicMock()
         mock_result.data = []
 
-        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = mock_result
 
         result = service.verify_workflow_local(uuid4())
 
@@ -773,9 +761,7 @@ class TestAuditChainService:
             },
         ]
 
-        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = mock_result
 
         result = service.verify_workflow_local(workflow_id)
 
@@ -800,9 +786,7 @@ class TestAuditChainService:
             }
         ]
 
-        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mock_result
 
         result = service.get_workflow_summary(workflow_id)
 
@@ -815,9 +799,7 @@ class TestAuditChainService:
         mock_result = MagicMock()
         mock_result.data = []
 
-        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = (
-            mock_result
-        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mock_result
 
         result = service.get_workflow_summary(uuid4())
 
@@ -866,6 +848,4 @@ class TestCreateAuditChainService:
 
             assert isinstance(service, AuditChainService)
             assert service.db == mock_client
-            mock_create_client.assert_called_once_with(
-                "https://test.supabase.co", "test-key"
-            )
+            mock_create_client.assert_called_once_with("https://test.supabase.co", "test-key")

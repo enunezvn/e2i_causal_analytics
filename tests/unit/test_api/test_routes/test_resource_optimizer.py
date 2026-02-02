@@ -4,40 +4,38 @@ Tests all endpoints and helper functions in src/api/routes/resource_optimizer.py
 Mocks all external dependencies to ensure unit test isolation.
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock, AsyncMock
-from typing import Dict, Any, List
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi import BackgroundTasks
 
 # Import route functions and models
 from src.api.routes.resource_optimizer import (
-    # Endpoints
-    run_optimization,
-    get_optimization,
-    list_scenarios,
-    get_resource_health,
-    # Helper functions
-    _run_optimization_task,
-    _execute_optimization,
-    _convert_allocations,
-    _convert_scenarios,
-    _generate_mock_response,
-    # Enums
-    OptimizationObjective,
-    SolverType,
-    OptimizationStatus,
-    ResourceType,
-    ConstraintType,
-    ConstraintScope,
-    # Models
-    RunOptimizationRequest,
     AllocationTarget,
     Constraint,
+    ConstraintScope,
+    ConstraintType,
+    # Enums
+    OptimizationObjective,
+    OptimizationStatus,
+    ResourceType,
+    # Models
+    RunOptimizationRequest,
+    _convert_allocations,
+    _convert_scenarios,
+    _execute_optimization,
+    _generate_mock_response,
     # Module-level storage
     _optimizations_store,
+    # Helper functions
+    _run_optimization_task,
+    get_optimization,
+    get_resource_health,
+    list_scenarios,
+    # Endpoints
+    run_optimization,
 )
-from fastapi import BackgroundTasks
-
 
 # =============================================================================
 # FIXTURES
@@ -153,9 +151,7 @@ async def test_run_optimization_sync_mode(sample_request):
     """Test run_optimization in sync mode executes immediately."""
     background_tasks = BackgroundTasks()
 
-    with patch(
-        "src.api.routes.resource_optimizer._execute_optimization"
-    ) as mock_execute:
+    with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
         mock_result = MagicMock(
             optimization_id="",
             status=OptimizationStatus.COMPLETED,
@@ -178,9 +174,7 @@ async def test_run_optimization_sync_mode_exception(sample_request):
     """Test run_optimization handles exceptions in sync mode."""
     background_tasks = BackgroundTasks()
 
-    with patch(
-        "src.api.routes.resource_optimizer._execute_optimization"
-    ) as mock_execute:
+    with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
         mock_execute.side_effect = RuntimeError("Test error")
 
         with pytest.raises(Exception) as exc_info:
@@ -198,9 +192,7 @@ async def test_run_optimization_stores_result(sample_request):
     """Test run_optimization stores result in store."""
     background_tasks = BackgroundTasks()
 
-    with patch(
-        "src.api.routes.resource_optimizer._execute_optimization"
-    ) as mock_execute:
+    with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
         mock_result = MagicMock(
             optimization_id="",
             status=OptimizationStatus.COMPLETED,
@@ -222,9 +214,7 @@ async def test_run_optimization_preserves_request_params(sample_request):
     """Test run_optimization preserves request parameters in response."""
     background_tasks = BackgroundTasks()
 
-    with patch(
-        "src.api.routes.resource_optimizer._execute_optimization"
-    ) as mock_execute:
+    with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
         mock_result = MagicMock(
             optimization_id="",
             status=OptimizationStatus.COMPLETED,
@@ -528,9 +518,7 @@ async def test_run_optimization_task_success(sample_request, mock_agent_result):
         objective=OptimizationObjective.MAXIMIZE_OUTCOME,
     )
 
-    with patch(
-        "src.api.routes.resource_optimizer._execute_optimization"
-    ) as mock_execute:
+    with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
         mock_result = MagicMock(
             optimization_id="",
             status=OptimizationStatus.COMPLETED,
@@ -556,9 +544,7 @@ async def test_run_optimization_task_handles_error(sample_request):
         objective=OptimizationObjective.MAXIMIZE_OUTCOME,
     )
 
-    with patch(
-        "src.api.routes.resource_optimizer._execute_optimization"
-    ) as mock_execute:
+    with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
         mock_execute.side_effect = RuntimeError("Test error")
 
         await _run_optimization_task(optimization_id, sample_request)
@@ -756,9 +742,7 @@ def test_generate_mock_response_respects_min_allocation(sample_request):
 
     for allocation in result.optimal_allocations:
         target = next(
-            t
-            for t in sample_request.allocation_targets
-            if t.entity_id == allocation.entity_id
+            t for t in sample_request.allocation_targets if t.entity_id == allocation.entity_id
         )
         if target.min_allocation:
             assert allocation.optimized_allocation >= target.min_allocation
@@ -773,9 +757,7 @@ def test_generate_mock_response_respects_max_allocation(sample_request):
 
     for allocation in result.optimal_allocations:
         target = next(
-            t
-            for t in sample_request.allocation_targets
-            if t.entity_id == allocation.entity_id
+            t for t in sample_request.allocation_targets if t.entity_id == allocation.entity_id
         )
         if target.max_allocation:
             assert allocation.optimized_allocation <= target.max_allocation

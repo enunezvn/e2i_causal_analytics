@@ -3,20 +3,16 @@
 import pytest
 
 from src.agents.cohort_constructor import (
-    CohortConfig,
-    Criterion,
-    CriterionType,
     Operator,
-    TemporalRequirements,
 )
 from src.agents.cohort_constructor.configs import (
-    get_brand_config,
-    list_available_configs,
-    get_config_for_brand_indication,
-    _get_remibrutinib_csu_config,
-    _get_fabhalta_pnh_config,
     _get_fabhalta_c3g_config,
+    _get_fabhalta_pnh_config,
     _get_kisqali_hr_her2_bc_config,
+    _get_remibrutinib_csu_config,
+    get_brand_config,
+    get_config_for_brand_indication,
+    list_available_configs,
 )
 
 
@@ -103,7 +99,7 @@ class TestListAvailableConfigs:
         """Test that config summaries have required keys."""
         configs = list_available_configs()
 
-        for key, summary in configs.items():
+        for _key, summary in configs.items():
             assert "cohort_name" in summary
             assert "brand" in summary
             assert "indication" in summary
@@ -146,7 +142,9 @@ class TestRemibrutinibCSUConfig:
 
     def test_age_criterion(self, remibrutinib_config):
         """Test age inclusion criterion."""
-        age_criteria = [c for c in remibrutinib_config.inclusion_criteria if c.field == "age_at_diagnosis"]
+        age_criteria = [
+            c for c in remibrutinib_config.inclusion_criteria if c.field == "age_at_diagnosis"
+        ]
 
         assert len(age_criteria) == 1
         assert age_criteria[0].operator == Operator.GREATER_EQUAL
@@ -154,7 +152,9 @@ class TestRemibrutinibCSUConfig:
 
     def test_diagnosis_code_criterion(self, remibrutinib_config):
         """Test diagnosis code criterion includes CSU codes."""
-        dx_criteria = [c for c in remibrutinib_config.inclusion_criteria if c.field == "diagnosis_code"]
+        dx_criteria = [
+            c for c in remibrutinib_config.inclusion_criteria if c.field == "diagnosis_code"
+        ]
 
         assert len(dx_criteria) == 1
         assert dx_criteria[0].operator == Operator.IN
@@ -162,7 +162,11 @@ class TestRemibrutinibCSUConfig:
 
     def test_uas7_criterion(self, remibrutinib_config):
         """Test UAS7 severity criterion."""
-        uas7_criteria = [c for c in remibrutinib_config.inclusion_criteria if c.field == "urticaria_severity_uas7"]
+        uas7_criteria = [
+            c
+            for c in remibrutinib_config.inclusion_criteria
+            if c.field == "urticaria_severity_uas7"
+        ]
 
         assert len(uas7_criteria) == 1
         assert uas7_criteria[0].operator == Operator.GREATER_EQUAL
@@ -195,7 +199,9 @@ class TestFabhaltaPNHConfig:
 
     def test_diagnosis_code_criterion(self, fabhalta_pnh_config):
         """Test PNH diagnosis codes."""
-        dx_criteria = [c for c in fabhalta_pnh_config.inclusion_criteria if c.field == "diagnosis_code"]
+        dx_criteria = [
+            c for c in fabhalta_pnh_config.inclusion_criteria if c.field == "diagnosis_code"
+        ]
 
         assert len(dx_criteria) == 1
         assert "D59.5" in dx_criteria[0].value  # PNH code
@@ -209,7 +215,11 @@ class TestFabhaltaPNHConfig:
 
     def test_complement_inhibitor_criterion(self, fabhalta_pnh_config):
         """Test complement inhibitor status criterion."""
-        ci_criteria = [c for c in fabhalta_pnh_config.inclusion_criteria if c.field == "complement_inhibitor_status"]
+        ci_criteria = [
+            c
+            for c in fabhalta_pnh_config.inclusion_criteria
+            if c.field == "complement_inhibitor_status"
+        ]
 
         assert len(ci_criteria) == 1
         assert "current" in ci_criteria[0].value
@@ -217,10 +227,14 @@ class TestFabhaltaPNHConfig:
 
     def test_meningococcal_exclusion(self, fabhalta_pnh_config):
         """Test meningococcal vaccination exclusion criterion."""
-        mening_criteria = [c for c in fabhalta_pnh_config.exclusion_criteria if c.field == "meningococcal_vaccination_current"]
+        mening_criteria = [
+            c
+            for c in fabhalta_pnh_config.exclusion_criteria
+            if c.field == "meningococcal_vaccination_current"
+        ]
 
         assert len(mening_criteria) == 1
-        assert mening_criteria[0].value == False  # Excluded if NOT current
+        assert not mening_criteria[0].value  # Excluded if NOT current
 
     def test_temporal_requirements(self, fabhalta_pnh_config):
         """Test temporal requirements for PNH."""
@@ -247,7 +261,9 @@ class TestFabhaltaC3GConfig:
 
     def test_proteinuria_criterion(self, fabhalta_c3g_config):
         """Test proteinuria criterion."""
-        prot_criteria = [c for c in fabhalta_c3g_config.inclusion_criteria if c.field == "proteinuria_g_day"]
+        prot_criteria = [
+            c for c in fabhalta_c3g_config.inclusion_criteria if c.field == "proteinuria_g_day"
+        ]
 
         assert len(prot_criteria) == 1
         assert prot_criteria[0].value == 1.0
@@ -292,7 +308,9 @@ class TestKisqaliConfig:
 
     def test_ecog_criterion(self, kisqali_config):
         """Test ECOG performance status criterion."""
-        ecog_criteria = [c for c in kisqali_config.inclusion_criteria if c.field == "ecog_performance_status"]
+        ecog_criteria = [
+            c for c in kisqali_config.inclusion_criteria if c.field == "ecog_performance_status"
+        ]
 
         assert len(ecog_criteria) == 1
         assert ecog_criteria[0].operator == Operator.LESS_EQUAL
@@ -300,7 +318,9 @@ class TestKisqaliConfig:
 
     def test_disease_stage_criterion(self, kisqali_config):
         """Test disease stage criterion."""
-        stage_criteria = [c for c in kisqali_config.inclusion_criteria if c.field == "disease_stage"]
+        stage_criteria = [
+            c for c in kisqali_config.inclusion_criteria if c.field == "disease_stage"
+        ]
 
         assert len(stage_criteria) == 1
         assert "metastatic" in stage_criteria[0].value
@@ -308,14 +328,18 @@ class TestKisqaliConfig:
 
     def test_cdk46_inhibitor_exclusion(self, kisqali_config):
         """Test prior CDK4/6 inhibitor exclusion."""
-        cdk_criteria = [c for c in kisqali_config.exclusion_criteria if c.field == "prior_cdk46_inhibitor"]
+        cdk_criteria = [
+            c for c in kisqali_config.exclusion_criteria if c.field == "prior_cdk46_inhibitor"
+        ]
 
         assert len(cdk_criteria) == 1
-        assert cdk_criteria[0].value == True  # Excluded if prior CDK4/6
+        assert cdk_criteria[0].value  # Excluded if prior CDK4/6
 
     def test_qtc_exclusion(self, kisqali_config):
         """Test QTc prolongation exclusion."""
-        qtc_criteria = [c for c in kisqali_config.exclusion_criteria if c.field == "qtc_prolongation"]
+        qtc_criteria = [
+            c for c in kisqali_config.exclusion_criteria if c.field == "qtc_prolongation"
+        ]
 
         assert len(qtc_criteria) == 1
 
@@ -367,7 +391,7 @@ class TestConfigConsistency:
         """Test all configurations have version."""
         configs = list_available_configs()
 
-        for key, summary in configs.items():
+        for _key, summary in configs.items():
             assert summary["version"] is not None
             assert summary["version"] != ""
 

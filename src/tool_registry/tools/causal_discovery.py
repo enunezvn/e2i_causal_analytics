@@ -330,13 +330,15 @@ class CausalDiscoveryTool:
             # Build edge list
             edge_list = []
             for edge in result.edges:
-                edge_list.append({
-                    "source": edge.source,
-                    "target": edge.target,
-                    "confidence": edge.confidence,
-                    "type": edge.edge_type.value,
-                    "algorithms": list(edge.algorithms),
-                })
+                edge_list.append(
+                    {
+                        "source": edge.source,
+                        "target": edge.target,
+                        "confidence": edge.confidence,
+                        "type": edge.edge_type.value,
+                        "algorithms": list(edge.algorithms),
+                    }
+                )
 
             # Build algorithm results
             algorithm_results = {}
@@ -349,9 +351,7 @@ class CausalDiscoveryTool:
                 }
 
             # Compute total runtime from algorithm results
-            total_runtime = sum(
-                ar.runtime_seconds for ar in result.algorithm_results
-            )
+            total_runtime = sum(ar.runtime_seconds for ar in result.algorithm_results)
 
             # Get algorithms used from results
             algorithms_used = [ar.algorithm.value for ar in result.algorithm_results]

@@ -1,8 +1,8 @@
 """Unit tests for data quality module (Great Expectations integration)."""
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from src.mlops.data_quality import (
     DataQualityResult,
@@ -13,29 +13,29 @@ from src.mlops.data_quality import (
 
 # Check if Great Expectations is actually available (not just a namespace package)
 try:
-    from great_expectations.core import ExpectationSuite
+    from great_expectations.core import ExpectationSuite  # noqa: F401
+
     GE_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     GE_AVAILABLE = False
 
 # Skip marker for tests requiring Great Expectations
-requires_ge = pytest.mark.skipif(
-    not GE_AVAILABLE,
-    reason="Great Expectations not installed"
-)
+requires_ge = pytest.mark.skipif(not GE_AVAILABLE, reason="Great Expectations not installed")
 
 
 @pytest.fixture
 def sample_df():
     """Create a sample DataFrame for testing."""
     np.random.seed(42)
-    return pd.DataFrame({
-        "id": range(100),
-        "brand": np.random.choice(["Remibrutinib", "Fabhalta", "Kisqali"], 100),
-        "metric_value": np.random.uniform(0, 100, 100),
-        "created_at": pd.date_range("2024-01-01", periods=100, freq="D"),
-        "region": np.random.choice(["US", "EU", "APAC"], 100),
-    })
+    return pd.DataFrame(
+        {
+            "id": range(100),
+            "brand": np.random.choice(["Remibrutinib", "Fabhalta", "Kisqali"], 100),
+            "metric_value": np.random.uniform(0, 100, 100),
+            "created_at": pd.date_range("2024-01-01", periods=100, freq="D"),
+            "region": np.random.choice(["US", "EU", "APAC"], 100),
+        }
+    )
 
 
 @pytest.fixture
@@ -77,9 +77,7 @@ class TestExpectationSuiteBuilder:
     def test_expect_column_values_to_be_in_set(self):
         """Test building expectation for value set."""
         builder = ExpectationSuiteBuilder("test_suite")
-        builder.expect_column_values_to_be_in_set(
-            "brand", ["A", "B", "C"], mostly=0.95
-        )
+        builder.expect_column_values_to_be_in_set("brand", ["A", "B", "C"], mostly=0.95)
         expectations = builder.build()
 
         assert len(expectations) == 1
@@ -139,12 +137,14 @@ class TestDataQualityValidator:
     @pytest.mark.asyncio
     async def test_validate_with_nulls(self, validator):
         """Test validation detects null values."""
-        df_with_nulls = pd.DataFrame({
-            "id": [1, 2, None, 4, 5],
-            "brand": ["Remibrutinib", None, "Kisqali", "Fabhalta", None],
-            "metric_value": [10.0, 20.0, 30.0, None, 50.0],
-            "created_at": pd.date_range("2024-01-01", periods=5, freq="D"),
-        })
+        df_with_nulls = pd.DataFrame(
+            {
+                "id": [1, 2, None, 4, 5],
+                "brand": ["Remibrutinib", None, "Kisqali", "Fabhalta", None],
+                "metric_value": [10.0, 20.0, 30.0, None, 50.0],
+                "created_at": pd.date_range("2024-01-01", periods=5, freq="D"),
+            }
+        )
 
         result = await validator.validate(
             df=df_with_nulls,

@@ -19,20 +19,22 @@ import pytest
 # Check for matplotlib availability
 try:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 from src.agents.ml_foundation.feature_analyzer.nodes.feature_visualizer import (
-    generate_visualizations,
     _create_importance_chart,
     _create_selection_funnel,
-    _create_statistics_table,
     _create_shap_summary,
+    _create_statistics_table,
     _fig_to_base64,
     _get_output_path,
+    generate_visualizations,
 )
 
 
@@ -147,9 +149,7 @@ class TestCreateSelectionFunnel:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "funnel.png"
-            result = _create_selection_funnel(
-                selection_history, original_count=100, output_path=output_path
-            )
+            _create_selection_funnel(selection_history, original_count=100, output_path=output_path)
 
             assert os.path.exists(output_path)
 
@@ -193,7 +193,11 @@ class TestCreateStatisticsTable:
         """Should truncate long feature names."""
         feature_statistics = {
             "this_is_a_very_long_feature_name_that_exceeds_thirty_characters": {
-                "mean": 0.5, "std": 0.1, "min": 0, "max": 1, "null_pct": 0
+                "mean": 0.5,
+                "std": 0.1,
+                "min": 0,
+                "max": 1,
+                "null_pct": 0,
             },
         }
 
@@ -234,9 +238,12 @@ class TestCreateShapSummary:
         """Should sort features by mean absolute SHAP value."""
         np.random.seed(42)
         # Create SHAP values with known ordering
-        shap_values = np.array([
-            [0.1, 0.5, 0.3],  # feat_0 has low, feat_1 high, feat_2 medium
-        ] * 100)
+        shap_values = np.array(
+            [
+                [0.1, 0.5, 0.3],  # feat_0 has low, feat_1 high, feat_2 medium
+            ]
+            * 100
+        )
         feature_names = ["low", "high", "medium"]
 
         result = _create_shap_summary(shap_values, feature_names)
@@ -273,7 +280,7 @@ class TestFigToBase64:
         decoded = base64.b64decode(result)
         assert len(decoded) > 0
         # Should be PNG
-        assert decoded[:8] == b'\x89PNG\r\n\x1a\n'
+        assert decoded[:8] == b"\x89PNG\r\n\x1a\n"
 
         plt.close(fig)
 
@@ -394,7 +401,7 @@ class TestWithoutMatplotlib:
     @pytest.mark.asyncio
     async def test_returns_error_without_matplotlib(self):
         """Should return error when matplotlib not available."""
-        with patch.dict('sys.modules', {'matplotlib': None}):
+        with patch.dict("sys.modules", {"matplotlib": None}):
             state = {"feature_importance": {"feat_1": 0.5}}
 
             result = await generate_visualizations(state)

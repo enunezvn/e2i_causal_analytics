@@ -159,7 +159,8 @@ class RubricEvaluator:
             self.thresholds = DEFAULT_THRESHOLDS.copy()
 
         self.override_conditions = (
-            override_conditions if override_conditions is not None
+            override_conditions
+            if override_conditions is not None
             else DEFAULT_OVERRIDE_CONDITIONS.copy()
         )
         self.model = model
@@ -267,22 +268,20 @@ class RubricEvaluator:
         criteria_text = "\n".join(
             [
                 f"""
-**{c.name.replace('_', ' ').title()}** (Weight: {c.weight*100:.0f}%)
+**{c.name.replace("_", " ").title()}** (Weight: {c.weight * 100:.0f}%)
 {c.description}
 Scoring Guide:
-- 5: {c.scoring_guide.get(5, 'Excellent')}
-- 4: {c.scoring_guide.get(4, 'Good')}
-- 3: {c.scoring_guide.get(3, 'Acceptable')}
-- 2: {c.scoring_guide.get(2, 'Poor')}
-- 1: {c.scoring_guide.get(1, 'Very Poor')}
+- 5: {c.scoring_guide.get(5, "Excellent")}
+- 4: {c.scoring_guide.get(4, "Good")}
+- 3: {c.scoring_guide.get(3, "Acceptable")}
+- 2: {c.scoring_guide.get(2, "Poor")}
+- 1: {c.scoring_guide.get(1, "Very Poor")}
 """
                 for c in self.criteria
             ]
         )
 
-        agent_info = (
-            ", ".join(context.agent_names) if context.agent_names else "Orchestrator"
-        )
+        agent_info = ", ".join(context.agent_names) if context.agent_names else "Orchestrator"
 
         return f"""You are an expert evaluator for an E2I Causal Analytics chatbot used in pharmaceutical commercial operations.
 
@@ -317,9 +316,7 @@ Format your response as JSON:
 }}
 ```"""
 
-    def _parse_evaluation_response(
-        self, response_text: str
-    ) -> tuple[List[CriterionScore], str]:
+    def _parse_evaluation_response(self, response_text: str) -> tuple[List[CriterionScore], str]:
         """Parse AI evaluation response into structured scores."""
         try:
             # Find JSON block
@@ -355,9 +352,7 @@ Format your response as JSON:
                     )
                 )
 
-        overall_analysis = parsed.get(
-            "overall_analysis", self._summarize_evaluation(scores)
-        )
+        overall_analysis = parsed.get("overall_analysis", self._summarize_evaluation(scores))
 
         return scores, overall_analysis
 
@@ -378,9 +373,7 @@ Format your response as JSON:
         """Calculate weighted average score."""
         total = 0.0
         for score in scores:
-            criterion = next(
-                (c for c in self.criteria if c.name == score.criterion), None
-            )
+            criterion = next((c for c in self.criteria if c.name == score.criterion), None)
             if criterion:
                 total += score.score * criterion.weight
         return round(total, 2)
@@ -494,9 +487,7 @@ Keep the improvement concise (2-3 sentences max)."""
                 f"Weaknesses: {', '.join(s.criterion.replace('_', ' ') for s in weaknesses)}"
             )
 
-        return (
-            " | ".join(summary_parts) if summary_parts else "Adequate across all criteria"
-        )
+        return " | ".join(summary_parts) if summary_parts else "Adequate across all criteria"
 
     def evaluate_sync(self, context: EvaluationContext) -> RubricEvaluation:
         """

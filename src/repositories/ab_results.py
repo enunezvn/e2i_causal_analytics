@@ -11,7 +11,7 @@ Data access layer for:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -113,6 +113,7 @@ class ABResultsRepository(BaseRepository):
         if self.client is None:
             try:
                 from src.repositories import get_supabase_client
+
                 self.client = get_supabase_client()
             except ImportError:
                 logger.warning("Supabase client not available, running in mock mode")
@@ -203,9 +204,7 @@ class ABResultsRepository(BaseRepository):
             return []
 
         query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("experiment_id", str(experiment_id))
+            self.client.table(self.table_name).select("*").eq("experiment_id", str(experiment_id))
         )
 
         if analysis_type:
@@ -537,7 +536,9 @@ class ABResultsRepository(BaseRepository):
             id=UUID(data["id"]),
             experiment_id=UUID(data["experiment_id"]),
             twin_simulation_id=UUID(data["twin_simulation_id"]),
-            comparison_timestamp=datetime.fromisoformat(data["comparison_timestamp"].replace("Z", "+00:00")),
+            comparison_timestamp=datetime.fromisoformat(
+                data["comparison_timestamp"].replace("Z", "+00:00")
+            ),
             predicted_effect=data["predicted_effect"],
             actual_effect=data["actual_effect"],
             prediction_error=data["prediction_error"],
@@ -589,20 +590,27 @@ class ABResultsRepository(BaseRepository):
                 "p_value": latest_results.p_value if latest_results else None,
                 "is_significant": latest_results.is_significant if latest_results else None,
                 "computed_at": latest_results.computed_at.isoformat() if latest_results else None,
-            } if latest_results else None,
+            }
+            if latest_results
+            else None,
             "srm_status": {
                 "is_srm_detected": latest_srm.is_srm_detected if latest_srm else False,
                 "severity": latest_srm.severity if latest_srm else None,
                 "checked_at": latest_srm.checked_at.isoformat() if latest_srm else None,
-            } if latest_srm else None,
+            }
+            if latest_srm
+            else None,
             "fidelity_summary": {
                 "num_comparisons": len(fidelity_records),
                 "average_score": (
                     sum(r.fidelity_score for r in fidelity_records) / len(fidelity_records)
-                    if fidelity_records else None
+                    if fidelity_records
+                    else None
                 ),
                 "latest_grade": fidelity_records[0].fidelity_grade if fidelity_records else None,
-            } if fidelity_records else None,
+            }
+            if fidelity_records
+            else None,
         }
 
 

@@ -7,7 +7,7 @@ Tests cover:
 - Agent run_async and run methods
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -16,7 +16,6 @@ from src.agents.experiment_monitor.agent import (
     ExperimentMonitorInput,
     ExperimentMonitorOutput,
 )
-from src.agents.experiment_monitor.state import ExperimentSummary, MonitorAlert
 
 
 class TestExperimentMonitorInput:

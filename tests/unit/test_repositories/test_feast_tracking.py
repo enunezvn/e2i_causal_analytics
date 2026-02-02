@@ -7,10 +7,11 @@ Tests cover:
 - Data class serialization/deserialization
 """
 
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
+from uuid import UUID, uuid4
+
 import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
-from uuid import uuid4, UUID
 
 from src.repositories.feast_tracking import (
     FeastFeatureFreshness,
@@ -24,7 +25,6 @@ from src.repositories.feast_tracking import (
     MaterializationStatus,
     SourceType,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -120,7 +120,9 @@ def sample_freshness_data():
         "feature_view_id": str(uuid4()),
         "feature_view_name": "patient_features",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
-        "last_materialization_time": (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(),
+        "last_materialization_time": (
+            datetime.now(timezone.utc) - timedelta(minutes=30)
+        ).isoformat(),
         "staleness_seconds": 1800,
         "data_lag_seconds": 300,
         "null_rate": 0.02,
@@ -241,7 +243,9 @@ class TestFeastFeatureViewRepository:
     """Tests for FeastFeatureViewRepository."""
 
     @pytest.mark.asyncio
-    async def test_create_feature_view(self, view_repo, mock_supabase_client, sample_feature_view_data):
+    async def test_create_feature_view(
+        self, view_repo, mock_supabase_client, sample_feature_view_data
+    ):
         """Test feature view creation."""
         mock_supabase_client.table.return_value.insert.return_value.execute.return_value.data = [
             sample_feature_view_data
@@ -279,7 +283,9 @@ class TestFeastFeatureViewRepository:
         assert view.name == "patient_features"
 
     @pytest.mark.asyncio
-    async def test_get_active_views(self, view_repo, mock_supabase_client, sample_feature_view_data):
+    async def test_get_active_views(
+        self, view_repo, mock_supabase_client, sample_feature_view_data
+    ):
         """Test getting active feature views."""
         mock_supabase_client.table.return_value.select.return_value.is_.return_value.execute.return_value.data = [
             sample_feature_view_data
@@ -290,7 +296,9 @@ class TestFeastFeatureViewRepository:
         assert views[0].name == "patient_features"
 
     @pytest.mark.asyncio
-    async def test_get_active_views_online_only(self, view_repo, mock_supabase_client, sample_feature_view_data):
+    async def test_get_active_views_online_only(
+        self, view_repo, mock_supabase_client, sample_feature_view_data
+    ):
         """Test getting online-enabled feature views."""
         mock_supabase_client.table.return_value.select.return_value.is_.return_value.eq.return_value.execute.return_value.data = [
             sample_feature_view_data
@@ -301,7 +309,9 @@ class TestFeastFeatureViewRepository:
         assert views[0].online_enabled is True
 
     @pytest.mark.asyncio
-    async def test_update_feature_view(self, view_repo, mock_supabase_client, sample_feature_view_data):
+    async def test_update_feature_view(
+        self, view_repo, mock_supabase_client, sample_feature_view_data
+    ):
         """Test updating feature view."""
         sample_feature_view_data["ttl_seconds"] = 172800
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [
@@ -337,7 +347,9 @@ class TestFeastMaterializationRepository:
     """Tests for FeastMaterializationRepository."""
 
     @pytest.mark.asyncio
-    async def test_create_job(self, materialization_repo, mock_supabase_client, sample_materialization_data):
+    async def test_create_job(
+        self, materialization_repo, mock_supabase_client, sample_materialization_data
+    ):
         """Test materialization job creation."""
         mock_supabase_client.table.return_value.insert.return_value.execute.return_value.data = [
             sample_materialization_data
@@ -369,7 +381,9 @@ class TestFeastMaterializationRepository:
         assert job is None
 
     @pytest.mark.asyncio
-    async def test_update_status_running(self, materialization_repo, mock_supabase_client, sample_materialization_data):
+    async def test_update_status_running(
+        self, materialization_repo, mock_supabase_client, sample_materialization_data
+    ):
         """Test updating job to running status."""
         sample_materialization_data["status"] = "running"
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [
@@ -386,7 +400,9 @@ class TestFeastMaterializationRepository:
         assert job.status == "running"
 
     @pytest.mark.asyncio
-    async def test_update_status_success(self, materialization_repo, mock_supabase_client, sample_materialization_data):
+    async def test_update_status_success(
+        self, materialization_repo, mock_supabase_client, sample_materialization_data
+    ):
         """Test updating job to success status with metrics."""
         sample_materialization_data["status"] = "success"
         sample_materialization_data["rows_materialized"] = 100000
@@ -407,7 +423,9 @@ class TestFeastMaterializationRepository:
         assert job.rows_materialized == 100000
 
     @pytest.mark.asyncio
-    async def test_update_status_failed(self, materialization_repo, mock_supabase_client, sample_materialization_data):
+    async def test_update_status_failed(
+        self, materialization_repo, mock_supabase_client, sample_materialization_data
+    ):
         """Test updating job to failed status with error."""
         sample_materialization_data["status"] = "failed"
         sample_materialization_data["error_message"] = "Connection timeout"
@@ -427,7 +445,9 @@ class TestFeastMaterializationRepository:
         assert job.error_message == "Connection timeout"
 
     @pytest.mark.asyncio
-    async def test_get_jobs_for_view(self, materialization_repo, mock_supabase_client, sample_materialization_data):
+    async def test_get_jobs_for_view(
+        self, materialization_repo, mock_supabase_client, sample_materialization_data
+    ):
         """Test getting jobs for a feature view."""
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
             sample_materialization_data
@@ -440,7 +460,9 @@ class TestFeastMaterializationRepository:
         assert jobs[0].feature_view_name == "patient_features"
 
     @pytest.mark.asyncio
-    async def test_get_recent_jobs(self, materialization_repo, mock_supabase_client, sample_materialization_data):
+    async def test_get_recent_jobs(
+        self, materialization_repo, mock_supabase_client, sample_materialization_data
+    ):
         """Test getting recent jobs."""
         mock_supabase_client.table.return_value.select.return_value.gte.return_value.order.return_value.execute.return_value.data = [
             sample_materialization_data
@@ -451,7 +473,9 @@ class TestFeastMaterializationRepository:
         assert len(jobs) == 1
 
     @pytest.mark.asyncio
-    async def test_get_summary_with_rpc(self, materialization_repo, mock_supabase_client, sample_materialization_data):
+    async def test_get_summary_with_rpc(
+        self, materialization_repo, mock_supabase_client, sample_materialization_data
+    ):
         """Test getting materialization summary using RPC."""
         mock_supabase_client.rpc.return_value.execute.return_value.data = {
             "total_jobs": 10,
@@ -478,7 +502,9 @@ class TestFeastFreshnessRepository:
     """Tests for FeastFreshnessRepository."""
 
     @pytest.mark.asyncio
-    async def test_record_freshness(self, freshness_repo, mock_supabase_client, sample_freshness_data):
+    async def test_record_freshness(
+        self, freshness_repo, mock_supabase_client, sample_freshness_data
+    ):
         """Test recording freshness check."""
         mock_supabase_client.table.return_value.insert.return_value.execute.return_value.data = [
             sample_freshness_data
@@ -520,7 +546,9 @@ class TestFeastFreshnessRepository:
         assert freshness.freshness_status == "fresh"
 
     @pytest.mark.asyncio
-    async def test_get_stale_views(self, freshness_repo, mock_supabase_client, sample_freshness_data):
+    async def test_get_stale_views(
+        self, freshness_repo, mock_supabase_client, sample_freshness_data
+    ):
         """Test getting stale feature views."""
         sample_freshness_data["freshness_status"] = "stale"
         mock_supabase_client.table.return_value.select.return_value.in_.return_value.order.return_value.execute.return_value.data = [
@@ -533,7 +561,9 @@ class TestFeastFreshnessRepository:
         assert stale[0].freshness_status == "stale"
 
     @pytest.mark.asyncio
-    async def test_get_freshness_history(self, freshness_repo, mock_supabase_client, sample_freshness_data):
+    async def test_get_freshness_history(
+        self, freshness_repo, mock_supabase_client, sample_freshness_data
+    ):
         """Test getting freshness history."""
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.gte.return_value.order.return_value.execute.return_value.data = [
             sample_freshness_data

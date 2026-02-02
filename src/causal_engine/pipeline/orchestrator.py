@@ -4,11 +4,10 @@ This module provides the base orchestrator for coordinating multi-library
 causal analysis pipelines per the Data Architecture & Integration documentation.
 """
 
-import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .router import CausalLibrary, LibraryRouter, RoutingDecision
 from .state import (
@@ -92,9 +91,7 @@ class NetworkXExecutor(LibraryExecutor):
             if state.get("confounders"):
                 result["nodes"] = list(state["confounders"])
             if state.get("treatment_var") and state.get("outcome_var"):
-                result["edges"].append(
-                    {"from": state["treatment_var"], "to": state["outcome_var"]}
-                )
+                result["edges"].append({"from": state["treatment_var"], "to": state["outcome_var"]})
                 result["nodes"].extend([state["treatment_var"], state["outcome_var"]])
                 result["nodes"] = list(set(result["nodes"]))
 
@@ -447,9 +444,7 @@ class PipelineOrchestrator(ABC):
             if result["success"] and result["result"]:
                 state["causal_effect"] = result["result"].get("causal_effect")
                 state["refutation_results"] = result["result"].get("refutation_results")
-                state["identification_method"] = result["result"].get(
-                    "identified_estimand"
-                )
+                state["identification_method"] = result["result"].get("identified_estimand")
         elif library == CausalLibrary.ECONML:
             state["econml_result"] = result
             if result["success"] and result["result"]:
@@ -471,9 +466,7 @@ class PipelineOrchestrator(ABC):
         state["stage_latencies"][library.value] = result["latency_ms"]
 
         if not result["success"]:
-            state["errors"].append(
-                {"library": library.value, "error": result["error"]}
-            )
+            state["errors"].append({"library": library.value, "error": result["error"]})
 
         if result["warnings"]:
             state["warnings"].extend(result["warnings"])

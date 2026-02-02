@@ -198,8 +198,7 @@ class ProblemFormulatorNode:
         # Check for integer/binary variables or cardinality constraints
         has_integer = problem.get("has_integer_vars", False)
         has_cardinality = (
-            problem.get("min_entities") is not None
-            or problem.get("max_entities") is not None
+            problem.get("min_entities") is not None or problem.get("max_entities") is not None
         )
 
         if has_integer or has_cardinality:

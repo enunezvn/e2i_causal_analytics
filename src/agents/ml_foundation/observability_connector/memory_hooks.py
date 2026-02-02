@@ -201,15 +201,13 @@ class ObservabilityConnectorMemoryHooks:
 
             # Query recent health snapshots
             snapshots = self.semantic_memory.query(
-                "MATCH (h:HealthSnapshot) "
-                "RETURN h ORDER BY h.timestamp DESC LIMIT 10"
+                "MATCH (h:HealthSnapshot) RETURN h ORDER BY h.timestamp DESC LIMIT 10"
             )
             context["health_snapshots"] = snapshots
 
             # Query anomalies
             anomalies = self.semantic_memory.query(
-                "MATCH (a:Anomaly) "
-                "RETURN a ORDER BY a.timestamp DESC LIMIT 10"
+                "MATCH (a:Anomaly) RETURN a ORDER BY a.timestamp DESC LIMIT 10"
             )
             context["anomalies"] = anomalies
 
@@ -343,7 +341,9 @@ class ObservabilityConnectorMemoryHooks:
 
             # Store anomalies if detected
             for anomaly in anomalies_detected[:10]:
-                anomaly_id = f"anomaly:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}:{anomaly[:20]}"
+                anomaly_id = (
+                    f"anomaly:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}:{anomaly[:20]}"
+                )
                 self.semantic_memory.add_e2i_entity(
                     entity_type="Anomaly",
                     entity_id=anomaly_id,

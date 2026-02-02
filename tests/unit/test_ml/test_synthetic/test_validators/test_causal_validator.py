@@ -4,19 +4,19 @@ Tests for CausalValidator.
 Tests causal effect recovery validation.
 """
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 from scipy.special import expit
 
-from src.ml.synthetic.validators.causal_validator import (
-    CausalValidator,
-    CausalValidationResult,
-)
-from src.ml.synthetic.config import DGPType, Brand
+from src.ml.synthetic.config import Brand, DGPType
 from src.ml.synthetic.ground_truth.causal_effects import (
     GroundTruthEffect,
     create_ground_truth_from_dgp_config,
+)
+from src.ml.synthetic.validators.causal_validator import (
+    CausalValidationResult,
+    CausalValidator,
 )
 
 
@@ -49,12 +49,14 @@ class TestCausalValidator:
         # Binarize outcome for consistency
         outcome_binary = (outcome > np.median(outcome)).astype(int)
 
-        return pd.DataFrame({
-            "engagement_score": treatment,
-            "treatment_initiated": outcome_binary,
-            "disease_severity": np.random.uniform(0, 10, n),  # Not a confounder
-            "academic_hcp": np.random.binomial(1, 0.3, n),  # Not a confounder
-        })
+        return pd.DataFrame(
+            {
+                "engagement_score": treatment,
+                "treatment_initiated": outcome_binary,
+                "disease_severity": np.random.uniform(0, 10, n),  # Not a confounder
+                "academic_hcp": np.random.binomial(1, 0.3, n),  # Not a confounder
+            }
+        )
 
     @pytest.fixture
     def confounded_data(self):
@@ -73,29 +75,28 @@ class TestCausalValidator:
 
         # Treatment influenced by confounders
         treatment_propensity = (
-            3.0 +
-            0.3 * disease_severity +
-            2.0 * academic_hcp +
-            np.random.normal(0, 1, n)
+            3.0 + 0.3 * disease_severity + 2.0 * academic_hcp + np.random.normal(0, 1, n)
         )
         treatment = expit(treatment_propensity / 3) * 10
 
         # Outcome influenced by confounders AND treatment
         outcome_propensity = (
-            -2.0 +
-            0.25 * treatment +  # TRUE CAUSAL EFFECT
-            0.4 * disease_severity +  # Confounding
-            0.6 * academic_hcp +  # Confounding
-            np.random.normal(0, 1, n)
+            -2.0
+            + 0.25 * treatment  # TRUE CAUSAL EFFECT
+            + 0.4 * disease_severity  # Confounding
+            + 0.6 * academic_hcp  # Confounding
+            + np.random.normal(0, 1, n)
         )
         outcome = (expit(outcome_propensity) > 0.5).astype(int)
 
-        return pd.DataFrame({
-            "engagement_score": treatment,
-            "treatment_initiated": outcome,
-            "disease_severity": disease_severity,
-            "academic_hcp": academic_hcp,
-        })
+        return pd.DataFrame(
+            {
+                "engagement_score": treatment,
+                "treatment_initiated": outcome,
+                "disease_severity": disease_severity,
+                "academic_hcp": academic_hcp,
+            }
+        )
 
     @pytest.fixture
     def ground_truth_confounded(self):
@@ -133,9 +134,7 @@ class TestCausalValidator:
         assert result.dgp_type == "simple_linear"
         assert result.true_ate == 0.40
 
-    def test_validate_confounded_data(
-        self, validator, confounded_data, ground_truth_confounded
-    ):
+    def test_validate_confounded_data(self, validator, confounded_data, ground_truth_confounded):
         """Test validation with confounded data."""
         result = validator.validate(
             df=confounded_data,
@@ -234,17 +233,21 @@ class TestCausalValidationResult:
             true_ate=0.25,
         )
 
-        result.add_refutation(RefutationResult(
-            test_name="test1",
-            passed=True,
-        ))
+        result.add_refutation(
+            RefutationResult(
+                test_name="test1",
+                passed=True,
+            )
+        )
 
         assert result.refutation_pass_rate == 1.0
 
-        result.add_refutation(RefutationResult(
-            test_name="test2",
-            passed=False,
-        ))
+        result.add_refutation(
+            RefutationResult(
+                test_name="test2",
+                passed=False,
+            )
+        )
 
         assert result.refutation_pass_rate == 0.5
 

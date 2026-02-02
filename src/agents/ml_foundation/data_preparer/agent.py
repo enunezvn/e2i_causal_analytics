@@ -19,6 +19,7 @@ def _get_dq_repository():
     """Get DataQualityReportRepository (lazy import to avoid circular deps)."""
     try:
         from src.repositories.data_quality_report import get_data_quality_report_repository
+
         return get_data_quality_report_repository()
     except Exception as e:
         logger.warning(f"Could not get DQ repository: {e}")
@@ -29,6 +30,7 @@ def _get_opik_connector():
     """Get OpikConnector (lazy import to avoid circular deps)."""
     try:
         from src.mlops.opik_connector import get_opik_connector
+
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
@@ -135,11 +137,13 @@ class DataPreparerAgent:
                 ) as span:
                     final_state = await self.graph.ainvoke(initial_state)
                     # Set output on span
-                    span.set_output({
-                        "gate_passed": final_state.get("gate_passed"),
-                        "qc_status": final_state.get("qc_status"),
-                        "overall_score": final_state.get("overall_score"),
-                    })
+                    span.set_output(
+                        {
+                            "gate_passed": final_state.get("gate_passed"),
+                            "qc_status": final_state.get("qc_status"),
+                            "overall_score": final_state.get("overall_score"),
+                        }
+                    )
             else:
                 final_state = await self.graph.ainvoke(initial_state)
 
@@ -215,9 +219,7 @@ class DataPreparerAgent:
 
             # Log execution time
             duration = (datetime.now() - start_time).total_seconds()
-            logger.info(
-                f"Data preparation completed in {duration:.2f}s " f"(SLA: {self.sla_seconds}s)"
-            )
+            logger.info(f"Data preparation completed in {duration:.2f}s (SLA: {self.sla_seconds}s)")
 
             # Check SLA
             if duration > self.sla_seconds:
@@ -232,9 +234,7 @@ class DataPreparerAgent:
             logger.error(f"Data preparation failed: {e}", exc_info=True)
             raise RuntimeError(f"Data preparation failed: {str(e)}") from e
 
-    async def _persist_qc_report(
-        self, qc_report: Dict[str, Any], data_source: str
-    ) -> None:
+    async def _persist_qc_report(self, qc_report: Dict[str, Any], data_source: str) -> None:
         """Persist QC report to database.
 
         Args:

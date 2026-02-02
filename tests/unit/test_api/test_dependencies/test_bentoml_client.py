@@ -14,8 +14,6 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
-import asyncio
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -79,6 +77,7 @@ class TestCircuitBreaker:
 
         # Wait for reset timeout
         import time
+
         time.sleep(0.15)
 
         # Should enter half-open state
@@ -96,6 +95,7 @@ class TestCircuitBreaker:
 
         # Wait for reset timeout
         import time
+
         time.sleep(0.15)
 
         # Enter half-open
@@ -550,6 +550,7 @@ class TestBentoMLDependencyInjection:
     async def reset_global_client(self):
         """Reset global client before each test."""
         import src.api.dependencies.bentoml_client as bentoml_module
+
         bentoml_module._bentoml_client = None
         yield
         if bentoml_module._bentoml_client:
@@ -581,21 +582,24 @@ class TestBentoMLDependencyInjection:
 
         # Verify cleanup
         import src.api.dependencies.bentoml_client as bentoml_module
+
         assert bentoml_module._bentoml_client is None
 
     def test_configure_bentoml_endpoints(self):
         """Test configure_bentoml_endpoints updates config."""
-        from src.api.dependencies.bentoml_client import BentoMLClient, configure_bentoml_endpoints
         import src.api.dependencies.bentoml_client as bentoml_module
+        from src.api.dependencies.bentoml_client import BentoMLClient, configure_bentoml_endpoints
 
         # Set up a client first
         client = BentoMLClient()
         bentoml_module._bentoml_client = client
 
-        configure_bentoml_endpoints({
-            "churn_model": "http://custom:9000/churn",
-            "conversion_model": "http://custom:9001/conversion",
-        })
+        configure_bentoml_endpoints(
+            {
+                "churn_model": "http://custom:9000/churn",
+                "conversion_model": "http://custom:9001/conversion",
+            }
+        )
 
         assert client.config.model_endpoints["churn_model"] == "http://custom:9000/churn"
         assert client.config.model_endpoints["conversion_model"] == "http://custom:9001/conversion"

@@ -12,7 +12,7 @@ Version: 3.0.0 (Phase 3 Production Features)
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
@@ -84,9 +84,7 @@ class BatchMetrics:
             "total_opik_failures": self.total_opik_failures,
             "total_db_successes": self.total_db_successes,
             "total_db_failures": self.total_db_failures,
-            "last_flush_time": (
-                self.last_flush_time.isoformat() if self.last_flush_time else None
-            ),
+            "last_flush_time": (self.last_flush_time.isoformat() if self.last_flush_time else None),
             "last_flush_duration_ms": self.last_flush_duration_ms,
             "last_batch_size": self.last_batch_size,
             "avg_batch_size": self.avg_batch_size,
@@ -469,7 +467,9 @@ class BatchProcessor:
         # Parse agent name
         agent_name = event.get("agent_name", "")
         try:
-            agent_name_enum = AgentNameEnum(agent_name) if agent_name else AgentNameEnum.ORCHESTRATOR
+            agent_name_enum = (
+                AgentNameEnum(agent_name) if agent_name else AgentNameEnum.ORCHESTRATOR
+            )
         except ValueError:
             agent_name_enum = AgentNameEnum.ORCHESTRATOR
 

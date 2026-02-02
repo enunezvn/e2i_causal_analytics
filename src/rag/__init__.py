@@ -35,16 +35,6 @@ _logger = logging.getLogger(__name__)
 # =============================================================================
 # Core Types (always available - minimal dependencies)
 # =============================================================================
-from src.rag.types import (
-    BackendHealth,
-    BackendStatus,
-    ExtractedEntities,
-    GraphPath,
-    RetrievalResult,
-    RetrievalSource,
-    SearchStats,
-)
-
 from src.rag.config import RAGConfig
 
 # =============================================================================
@@ -55,6 +45,15 @@ from src.rag.evaluation import (
     EvaluationSample,
     RAGASEvaluator,
     RAGEvaluationPipeline,
+)
+from src.rag.types import (
+    BackendHealth,
+    BackendStatus,
+    ExtractedEntities,
+    GraphPath,
+    RetrievalResult,
+    RetrievalSource,
+    SearchStats,
 )
 
 # =============================================================================
@@ -68,54 +67,63 @@ _CORE_RAG_EXPORTS: list[str] = []
 
 try:
     from src.rag.causal_rag import CausalRAG
+
     _CORE_RAG_EXPORTS.append("CausalRAG")
 except ImportError as e:
     _logger.debug(f"CausalRAG not available: {e}")
 
 try:
     from src.rag.chunk_processor import ChunkProcessor
+
     _CORE_RAG_EXPORTS.append("ChunkProcessor")
 except ImportError as e:
     _logger.debug(f"ChunkProcessor not available: {e}")
 
 try:
     from src.rag.entity_extractor import EntityExtractor
+
     _CORE_RAG_EXPORTS.append("EntityExtractor")
 except ImportError as e:
     _logger.debug(f"EntityExtractor not available: {e}")
 
 try:
     from src.rag.health_monitor import HealthMonitor
+
     _CORE_RAG_EXPORTS.append("HealthMonitor")
 except ImportError as e:
     _logger.debug(f"HealthMonitor not available: {e}")
 
 try:
     from src.rag.insight_enricher import InsightEnricher
+
     _CORE_RAG_EXPORTS.append("InsightEnricher")
 except ImportError as e:
     _logger.debug(f"InsightEnricher not available: {e}")
 
 try:
     from src.rag.query_optimizer import QueryOptimizer
+
     _CORE_RAG_EXPORTS.append("QueryOptimizer")
 except ImportError as e:
     _logger.debug(f"QueryOptimizer not available: {e}")
 
 try:
     from src.rag.reranker import CrossEncoderReranker
+
     _CORE_RAG_EXPORTS.append("CrossEncoderReranker")
 except ImportError as e:
     _logger.debug(f"CrossEncoderReranker not available: {e}")
 
 try:
     from src.rag.retriever import HybridRetriever
+
     _CORE_RAG_EXPORTS.append("HybridRetriever")
 except ImportError as e:
     _logger.debug(f"HybridRetriever not available: {e}")
 
 try:
     from src.rag.search_logger import SearchLogger
+
     _CORE_RAG_EXPORTS.append("SearchLogger")
 except ImportError as e:
     _logger.debug(f"SearchLogger not available: {e}")
@@ -129,6 +137,7 @@ try:
         create_dspy_cognitive_workflow,
         create_production_cognitive_workflow,
     )
+
     _COGNITIVE_EXPORTS = [
         "CognitiveState",
         "create_dspy_cognitive_workflow",
@@ -148,6 +157,7 @@ try:
         SignalCollectorAdapter,
         create_memory_adapters,
     )
+
     _MEMORY_EXPORTS = [
         "EpisodicMemoryAdapter",
         "SemanticMemoryAdapter",
@@ -167,6 +177,7 @@ try:
         log_ragas_scores_to_opik,
         log_rubric_scores_to_opik,
     )
+
     _OPIK_EXPORTS = [
         "OpikEvaluationTracer",
         "CombinedEvaluationResult",
@@ -176,19 +187,25 @@ try:
 except ImportError as e:
     _logger.debug(f"Opik integration not available: {e}")
 
-__all__ = [
-    # Types (always available)
-    "RetrievalResult",
-    "RetrievalSource",
-    "ExtractedEntities",
-    "BackendStatus",
-    "BackendHealth",
-    "SearchStats",
-    "GraphPath",
-    "RAGConfig",
-    # RAGAS Evaluation (always available - needed for CI)
-    "RAGASEvaluator",
-    "RAGEvaluationPipeline",
-    "EvaluationResult",
-    "EvaluationSample",
-] + _CORE_RAG_EXPORTS + _COGNITIVE_EXPORTS + _MEMORY_EXPORTS + _OPIK_EXPORTS
+__all__ = (
+    [
+        # Types (always available)
+        "RetrievalResult",
+        "RetrievalSource",
+        "ExtractedEntities",
+        "BackendStatus",
+        "BackendHealth",
+        "SearchStats",
+        "GraphPath",
+        "RAGConfig",
+        # RAGAS Evaluation (always available - needed for CI)
+        "RAGASEvaluator",
+        "RAGEvaluationPipeline",
+        "EvaluationResult",
+        "EvaluationSample",
+    ]
+    + _CORE_RAG_EXPORTS
+    + _COGNITIVE_EXPORTS
+    + _MEMORY_EXPORTS
+    + _OPIK_EXPORTS
+)

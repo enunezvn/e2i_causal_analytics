@@ -17,8 +17,7 @@ Example:
 """
 
 import logging
-import os
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 

@@ -129,6 +129,8 @@ include = '\.pyi?$'
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -139,11 +141,18 @@ select = [
 ]
 ignore = [
     "E501",  # line too long (handled by black)
+    "E402",  # module-import-not-at-top (common in conditional imports)
+    "E711",  # none-comparison (SQLAlchemy uses `== None`)
+    "E721",  # type-comparison
+    "E741",  # ambiguous-variable-name (e.g., l, O)
+    "B007",  # unused-loop-control-variable
     "B008",  # do not perform function calls in argument defaults
+    "B904",  # raise-without-from-inside-except
 ]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"tests/**" = ["B017", "E722", "F811"]
 
 [tool.mypy]
 python_version = "3.12"

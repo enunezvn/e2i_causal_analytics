@@ -29,9 +29,8 @@ Version: 4.2.0
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
-from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -244,15 +243,17 @@ class GEPAMLflowCallback:
                         "total_generations": total_generations,
                         "total_metric_calls": total_metric_calls,
                         "total_seconds": total_seconds,
-                        "improvement_rate": best_score / total_metric_calls if total_metric_calls > 0 else 0,
+                        "improvement_rate": best_score / total_metric_calls
+                        if total_metric_calls > 0
+                        else 0,
                         **kwargs,
                     }
                 )
 
                 # Log optimized instructions as artifact
                 if self.log_instructions and optimized_instructions:
-                    import tempfile
                     import os
+                    import tempfile
 
                     with tempfile.NamedTemporaryFile(
                         mode="w", suffix="_instructions.txt", delete=False
@@ -268,8 +269,8 @@ class GEPAMLflowCallback:
                 # Log optimized tool descriptions
                 if self.log_tool_descriptions and optimized_tools:
                     import json
-                    import tempfile
                     import os
+                    import tempfile
 
                     with tempfile.NamedTemporaryFile(
                         mode="w", suffix="_tools.json", delete=False
@@ -285,8 +286,8 @@ class GEPAMLflowCallback:
                 # Log Pareto frontier
                 if pareto_frontier:
                     import json
-                    import tempfile
                     import os
+                    import tempfile
 
                     with tempfile.NamedTemporaryFile(
                         mode="w", suffix="_pareto.json", delete=False
@@ -398,8 +399,8 @@ async def log_optimization_run(
             # Log Pareto frontier as artifact
             if pareto_frontier:
                 import json
-                import tempfile
                 import os
+                import tempfile
 
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix="_pareto.json", delete=False

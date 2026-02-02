@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 class EnergyScoreVariant(str, Enum):
     """Variants of energy score computation."""
 
-    STANDARD = "standard"           # Classic energy distance
-    WEIGHTED = "weighted"           # IPW-weighted energy distance
-    DOUBLY_ROBUST = "doubly_robust" # DR-adjusted energy distance
+    STANDARD = "standard"  # Classic energy distance
+    WEIGHTED = "weighted"  # IPW-weighted energy distance
+    DOUBLY_ROBUST = "doubly_robust"  # DR-adjusted energy distance
 
 
 @dataclass
@@ -114,9 +114,9 @@ class EnergyScoreConfig:
     def __post_init__(self):
         """Validate configuration."""
         total_weight = (
-            self.weight_treatment_balance +
-            self.weight_outcome_fit +
-            self.weight_propensity_calibration
+            self.weight_treatment_balance
+            + self.weight_outcome_fit
+            + self.weight_propensity_calibration
         )
         if not np.isclose(total_weight, 1.0, atol=0.01):
             raise ValueError(f"Component weights must sum to 1.0, got {total_weight}")
@@ -171,6 +171,7 @@ class EnergyScoreCalculator:
             EnergyScoreResult with composite score and components
         """
         import time
+
         start_time = time.perf_counter()
 
         # Validate inputs
@@ -199,9 +200,7 @@ class EnergyScoreCalculator:
 
         # Clip propensity scores for stability
         propensity_scores = np.clip(
-            propensity_scores,
-            self.config.propensity_clip_min,
-            self.config.propensity_clip_max
+            propensity_scores, self.config.propensity_clip_min, self.config.propensity_clip_max
         )
 
         # Compute component scores
@@ -213,23 +212,29 @@ class EnergyScoreCalculator:
             outcome, treatment, estimated_effects, propensity_scores
         )
 
-        propensity_cal = self._compute_propensity_calibration(
-            treatment, propensity_scores
-        )
+        propensity_cal = self._compute_propensity_calibration(treatment, propensity_scores)
 
         # Compute weighted composite score
         energy_score = (
-            self.config.weight_treatment_balance * treatment_balance +
-            self.config.weight_outcome_fit * outcome_fit +
-            self.config.weight_propensity_calibration * propensity_cal
+            self.config.weight_treatment_balance * treatment_balance
+            + self.config.weight_outcome_fit * outcome_fit
+            + self.config.weight_propensity_calibration * propensity_cal
         )
 
         # Bootstrap confidence interval if enabled
         ci_lower, ci_upper, bootstrap_std = None, None, None
-        if self.config.enable_bootstrap and not _skip_bootstrap and n <= self.config.max_samples_for_exact:
+        if (
+            self.config.enable_bootstrap
+            and not _skip_bootstrap
+            and n <= self.config.max_samples_for_exact
+        ):
             adaptive_n_bootstrap = min(self.config.n_bootstrap, max(20, n // 30))
             ci_lower, ci_upper, bootstrap_std = self._bootstrap_ci(
-                treatment, outcome, covariates, estimated_effects, propensity_scores,
+                treatment,
+                outcome,
+                covariates,
+                estimated_effects,
+                propensity_scores,
                 n_bootstrap=adaptive_n_bootstrap,
             )
 
@@ -254,14 +259,12 @@ class EnergyScoreCalculator:
                     "treatment_balance": self.config.weight_treatment_balance,
                     "outcome_fit": self.config.weight_outcome_fit,
                     "propensity_calibration": self.config.weight_propensity_calibration,
-                }
-            }
+                },
+            },
         )
 
     def _estimate_propensity(
-        self,
-        covariates: pd.DataFrame,
-        treatment: NDArray[np.int_]
+        self, covariates: pd.DataFrame, treatment: NDArray[np.int_]
     ) -> NDArray[np.float64]:
         """Estimate propensity scores using logistic regression."""
         from sklearn.linear_model import LogisticRegressionCV
@@ -273,11 +276,7 @@ class EnergyScoreCalculator:
 
         # Fit logistic regression with cross-validation
         lr = LogisticRegressionCV(
-            cv=5,
-            penalty='l2',
-            solver='lbfgs',
-            max_iter=1000,
-            random_state=42
+            cv=5, penalty="l2", solver="lbfgs", max_iter=1000, random_state=42
         )
         lr.fit(X_scaled, treatment)
 
@@ -288,7 +287,7 @@ class EnergyScoreCalculator:
         covariates: pd.DataFrame,
         treated_mask: NDArray[np.bool_],
         control_mask: NDArray[np.bool_],
-        propensity_scores: NDArray[np.float64]
+        propensity_scores: NDArray[np.float64],
     ) -> float:
         """
         Compute treatment balance score using energy distance.
@@ -327,7 +326,7 @@ class EnergyScoreCalculator:
         X1: NDArray[np.float64],
         X2: NDArray[np.float64],
         w1: NDArray[np.float64],
-        w2: NDArray[np.float64]
+        w2: NDArray[np.float64],
     ) -> float:
         """
         Compute weighted energy distance between two samples.
@@ -344,14 +343,14 @@ class EnergyScoreCalculator:
             w2 = np.ones(len(X2)) / len(X2)
 
         # Cross-group distances
-        D12 = cdist(X1, X2, 'euclidean')
+        D12 = cdist(X1, X2, "euclidean")
         cross_term = 2.0 * float(w1 @ D12 @ w2)
 
         # Within-group distances
-        D11 = cdist(X1, X1, 'euclidean')
+        D11 = cdist(X1, X1, "euclidean")
         within1 = float(w1 @ D11 @ w1)
 
-        D22 = cdist(X2, X2, 'euclidean')
+        D22 = cdist(X2, X2, "euclidean")
         within2 = float(w2 @ D22 @ w2)
 
         return float(cross_term - within1 - within2)
@@ -361,7 +360,7 @@ class EnergyScoreCalculator:
         outcome: NDArray[np.float64],
         treatment: NDArray[np.int_],
         estimated_effects: NDArray[np.float64],
-        propensity_scores: NDArray[np.float64]
+        propensity_scores: NDArray[np.float64],
     ) -> float:
         """
         Compute outcome fit score using doubly-robust residuals.
@@ -376,7 +375,6 @@ class EnergyScoreCalculator:
         tau = estimated_effects
 
         # Estimate outcome models (simplified: use linear regression)
-        from sklearn.linear_model import Ridge
 
         # We need mu_0 and mu_1 estimates - approximate with simple model
         # In practice, these would come from the estimator
@@ -388,16 +386,16 @@ class EnergyScoreCalculator:
 
         # DR pseudo-outcome
         pseudo_outcome = (
-            (T * (Y - mu_1_estimate)) / ps -
-            ((1 - T) * (Y - mu_0_estimate)) / (1 - ps) +
-            (mu_1_estimate - mu_0_estimate)
+            (T * (Y - mu_1_estimate)) / ps
+            - ((1 - T) * (Y - mu_0_estimate)) / (1 - ps)
+            + (mu_1_estimate - mu_0_estimate)
         )
 
         # Residual: how far is our CATE estimate from pseudo-outcome
         residuals = pseudo_outcome - tau
 
         # Normalized RMSE
-        rmse = np.sqrt(np.mean(residuals ** 2))
+        rmse = np.sqrt(np.mean(residuals**2))
         outcome_std = np.std(Y) + 1e-8
         normalized_rmse = rmse / outcome_std
 
@@ -405,9 +403,7 @@ class EnergyScoreCalculator:
         return float(min(normalized_rmse, 1.0))
 
     def _compute_propensity_calibration(
-        self,
-        treatment: NDArray[np.int_],
-        propensity_scores: NDArray[np.float64]
+        self, treatment: NDArray[np.int_], propensity_scores: NDArray[np.float64]
     ) -> float:
         """
         Compute propensity score calibration.
@@ -450,6 +446,7 @@ class EnergyScoreCalculator:
     ) -> tuple[float, float, float]:
         """Compute bootstrap confidence interval for energy score."""
         import time as _time
+
         start = _time.perf_counter()
         n = len(treatment)
         n_bootstrap = n_bootstrap or self.config.n_bootstrap
@@ -459,7 +456,9 @@ class EnergyScoreCalculator:
             if _time.perf_counter() - start > time_budget_s:
                 logger.info(
                     "Bootstrap stopped at %d/%d iterations (time budget %.1fs)",
-                    i, n_bootstrap, time_budget_s,
+                    i,
+                    n_bootstrap,
+                    time_budget_s,
                 )
                 break
             # Resample with replacement
@@ -496,7 +495,7 @@ def compute_energy_score(
     estimated_effects: NDArray[np.float64],
     propensity_scores: Optional[NDArray[np.float64]] = None,
     estimator_name: str = "unknown",
-    config: Optional[EnergyScoreConfig] = None
+    config: Optional[EnergyScoreConfig] = None,
 ) -> EnergyScoreResult:
     """
     Convenience function for computing energy score.
@@ -518,5 +517,5 @@ def compute_energy_score(
         covariates=covariates,
         estimated_effects=estimated_effects,
         propensity_scores=propensity_scores,
-        estimator_name=estimator_name
+        estimator_name=estimator_name,
     )

@@ -4,10 +4,11 @@ Version: 1.0.0
 Tests the PC algorithm wrapper for constraint-based causal discovery.
 """
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock, patch
 
 from src.causal_engine.discovery.algorithms.pc_wrapper import PCAlgorithm
 from src.causal_engine.discovery.base import (
@@ -15,7 +16,6 @@ from src.causal_engine.discovery.base import (
     DiscoveryAlgorithmType,
     DiscoveryConfig,
 )
-
 
 # =============================================================================
 # PCAlgorithm Basic Properties Tests
@@ -184,10 +184,12 @@ class TestPCIndependenceTest:
         with few unique values.
         """
         # Use object dtype to avoid being classified as continuous
-        df = pd.DataFrame({
-            "A": pd.Categorical(["a", "b", "a", "b"]),
-            "B": pd.Categorical(["x", "y", "x", "y"]),
-        })
+        df = pd.DataFrame(
+            {
+                "A": pd.Categorical(["a", "b", "a", "b"]),
+                "B": pd.Categorical(["x", "y", "x", "y"]),
+            }
+        )
         config = DiscoveryConfig(assume_gaussian=False)
 
         test_name = pc._select_independence_test(df, config)
@@ -205,10 +207,12 @@ class TestPCIndependenceTest:
 
     def test_mixed_data_uses_fisherz(self, pc):
         """Test mixed data types default to Fisher's z."""
-        df = pd.DataFrame({
-            "A": [1.0, 2.0, 3.0, 4.0],
-            "B": [0, 1, 0, 1],
-        })
+        df = pd.DataFrame(
+            {
+                "A": [1.0, 2.0, 3.0, 4.0],
+                "B": [0, 1, 0, 1],
+            }
+        )
         config = DiscoveryConfig()
 
         test_name = pc._select_independence_test(df, config)
@@ -251,11 +255,9 @@ class TestPCErrorHandling:
 
         # Force the import to fail by making causallearn unavailable
         import sys
+
         original_modules = {}
-        modules_to_remove = [
-            k for k in sys.modules.keys()
-            if k.startswith("causallearn")
-        ]
+        modules_to_remove = [k for k in sys.modules.keys() if k.startswith("causallearn")]
         for mod in modules_to_remove:
             original_modules[mod] = sys.modules.pop(mod)
 
@@ -270,9 +272,12 @@ class TestPCErrorHandling:
                 pc.discover(df, config)
         finally:
             # Restore original modules
-            for mod in ["causallearn", "causallearn.search",
-                       "causallearn.search.ConstraintBased",
-                       "causallearn.search.ConstraintBased.PC"]:
+            for mod in [
+                "causallearn",
+                "causallearn.search",
+                "causallearn.search.ConstraintBased",
+                "causallearn.search.ConstraintBased.PC",
+            ]:
                 sys.modules.pop(mod, None)
             sys.modules.update(original_modules)
 
@@ -294,11 +299,13 @@ class TestPCAdjacencyConversion:
         """Test adjacency matrix has correct shape."""
         mock_graph = MagicMock()
         # 3x3 graph with one directed edge (0 -> 1)
-        mock_graph.graph = np.array([
-            [0, -1, 0],  # Row 0: tail at 1
-            [1, 0, 0],   # Row 1: arrow at 0
-            [0, 0, 0],   # Row 2
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],  # Row 0: tail at 1
+                [1, 0, 0],  # Row 1: arrow at 0
+                [0, 0, 0],  # Row 2
+            ]
+        )
 
         adj = pc._graph_to_adjacency(mock_graph, 3)
 
@@ -310,11 +317,13 @@ class TestPCAdjacencyConversion:
         # Directed edge 0 -> 1:
         # - graph[0,1] = -1 (tail at node 0)
         # - graph[1,0] = 1 (arrow at node 1)
-        mock_graph.graph = np.array([
-            [0, -1, 0],
-            [1, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],
+                [1, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj = pc._graph_to_adjacency(mock_graph, 3)
 
@@ -325,11 +334,13 @@ class TestPCAdjacencyConversion:
         """Test detection of undirected edges in CPDAG."""
         mock_graph = MagicMock()
         # Undirected edge 0 - 1: tails at both ends
-        mock_graph.graph = np.array([
-            [0, -1, 0],
-            [-1, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, -1, 0],
+                [-1, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj = pc._graph_to_adjacency(mock_graph, 3)
 
@@ -340,11 +351,13 @@ class TestPCAdjacencyConversion:
     def test_empty_graph_returns_zeros(self, pc):
         """Test empty graph returns zero adjacency matrix."""
         mock_graph = MagicMock()
-        mock_graph.graph = np.array([
-            [0, 0, 0],
-            [0, 0, 0],
-            [0, 0, 0],
-        ])
+        mock_graph.graph = np.array(
+            [
+                [0, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0],
+            ]
+        )
 
         adj = pc._graph_to_adjacency(mock_graph, 3)
 

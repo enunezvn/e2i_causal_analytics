@@ -3,12 +3,12 @@
 Defines the core data structures for explicit rule-based patient cohort construction.
 """
 
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, List, Optional, Union
 import hashlib
 import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class Operator(str, Enum):
@@ -107,9 +107,7 @@ class CohortConfig:
     indication: str
     inclusion_criteria: List[Criterion]
     exclusion_criteria: List[Criterion]
-    temporal_requirements: TemporalRequirements = field(
-        default_factory=TemporalRequirements
-    )
+    temporal_requirements: TemporalRequirements = field(default_factory=TemporalRequirements)
     required_fields: List[str] = field(default_factory=list)
     version: str = "1.0.0"
     status: str = "active"  # active, draft, archived, locked
@@ -182,12 +180,8 @@ class CohortConfig:
             cohort_name=data["cohort_name"],
             brand=data["brand"],
             indication=data["indication"],
-            inclusion_criteria=[
-                Criterion.from_dict(c) for c in data.get("inclusion_criteria", [])
-            ],
-            exclusion_criteria=[
-                Criterion.from_dict(c) for c in data.get("exclusion_criteria", [])
-            ],
+            inclusion_criteria=[Criterion.from_dict(c) for c in data.get("inclusion_criteria", [])],
+            exclusion_criteria=[Criterion.from_dict(c) for c in data.get("exclusion_criteria", [])],
             temporal_requirements=temporal_req,
             required_fields=data.get("required_fields", []),
             version=data.get("version", "1.0.0"),

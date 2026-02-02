@@ -13,7 +13,7 @@ The metric optimizes for:
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 from dspy import Example, Prediction
 
@@ -164,10 +164,7 @@ class EvidenceSynthesisGEPAMetric:
         # Check if it's a list
         if isinstance(findings, list):
             # Count valid findings (non-empty strings)
-            valid_findings = [
-                f for f in findings
-                if isinstance(f, str) and len(f.strip()) > 10
-            ]
+            valid_findings = [f for f in findings if isinstance(f, str) and len(f.strip()) > 10]
 
             # Ideal: 3-5 findings
             count = len(valid_findings)
@@ -226,8 +223,13 @@ class EvidenceSynthesisGEPAMetric:
                     expected_lower = str(expected).lower().strip()
                     if confidence_lower == expected_lower:
                         score += 0.5
-                    elif abs(valid_levels.index(confidence_lower) -
-                             valid_levels.index(expected_lower)) == 1:
+                    elif (
+                        abs(
+                            valid_levels.index(confidence_lower)
+                            - valid_levels.index(expected_lower)
+                        )
+                        == 1
+                    ):
                         # Adjacent level (e.g., medium vs high) - partial credit
                         score += 0.25
                 else:
@@ -260,10 +262,7 @@ class EvidenceSynthesisGEPAMetric:
 
         if isinstance(recommendations, list):
             # Count valid recommendations
-            valid_recs = [
-                r for r in recommendations
-                if isinstance(r, str) and len(r.strip()) > 10
-            ]
+            valid_recs = [r for r in recommendations if isinstance(r, str) and len(r.strip()) > 10]
 
             # Ideal: 3-5 recommendations
             count = len(valid_recs)
@@ -276,9 +275,23 @@ class EvidenceSynthesisGEPAMetric:
 
             # Actionability check - look for action verbs
             action_verbs = [
-                "increase", "decrease", "monitor", "implement", "consider",
-                "scale", "optimize", "test", "analyze", "review", "continue",
-                "expand", "reduce", "focus", "invest", "develop", "maintain"
+                "increase",
+                "decrease",
+                "monitor",
+                "implement",
+                "consider",
+                "scale",
+                "optimize",
+                "test",
+                "analyze",
+                "review",
+                "continue",
+                "expand",
+                "reduce",
+                "focus",
+                "invest",
+                "develop",
+                "maintain",
             ]
 
             actionable_count = 0
@@ -318,8 +331,7 @@ class EvidenceSynthesisGEPAMetric:
         if isinstance(limitations, list):
             # Count valid limitations
             valid_lims = [
-                lim for lim in limitations
-                if isinstance(lim, str) and len(lim.strip()) > 10
+                lim for lim in limitations if isinstance(lim, str) and len(lim.strip()) > 10
             ]
 
             # Any limitations acknowledged is good

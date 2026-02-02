@@ -263,9 +263,7 @@ class RAGASFeedbackProvider:
                     scores.get("context_precision", 0), "precision"
                 ),
                 context_recall=scores.get("context_recall", 0),
-                recall_feedback=self._get_feedback_text(
-                    scores.get("context_recall", 0), "recall"
-                ),
+                recall_feedback=self._get_feedback_text(scores.get("context_recall", 0), "recall"),
                 overall_feedback=self._generate_overall_feedback(weighted_score, scores),
             )
 

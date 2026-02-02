@@ -201,15 +201,13 @@ class ModelDeployerMemoryHooks:
 
             # Query past deployments
             deployments = self.semantic_memory.query(
-                "MATCH (d:Deployment) "
-                "RETURN d ORDER BY d.timestamp DESC LIMIT 10"
+                "MATCH (d:Deployment) RETURN d ORDER BY d.timestamp DESC LIMIT 10"
             )
             context["deployments"] = deployments
 
             # Query rollback incidents
             rollbacks = self.semantic_memory.query(
-                "MATCH (r:Rollback) "
-                "RETURN r ORDER BY r.timestamp DESC LIMIT 5"
+                "MATCH (r:Rollback) RETURN r ORDER BY r.timestamp DESC LIMIT 5"
             )
             context["rollback_incidents"] = rollbacks
 

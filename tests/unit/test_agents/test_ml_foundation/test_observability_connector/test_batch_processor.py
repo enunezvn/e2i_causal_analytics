@@ -184,9 +184,7 @@ class TestBatchProcessor:
         assert processor.metrics.total_batches_flushed == 0
 
     @pytest.mark.asyncio
-    async def test_add_span(
-        self, mock_opik_connector, mock_span_repository, sample_span_event
-    ):
+    async def test_add_span(self, mock_opik_connector, mock_span_repository, sample_span_event):
         """Test adding a span to the buffer."""
         processor = BatchProcessor(
             opik_connector=mock_opik_connector,
@@ -208,10 +206,7 @@ class TestBatchProcessor:
             span_repository=mock_span_repository,
         )
 
-        spans = [
-            {**sample_span_event, "span_id": f"span_{i}"}
-            for i in range(3)
-        ]
+        spans = [{**sample_span_event, "span_id": f"span_{i}"} for i in range(3)]
 
         count = await processor.add_spans(spans)
 
@@ -338,9 +333,7 @@ class TestBatchProcessor:
         assert processor.metrics.total_spans_processed == 2
 
     @pytest.mark.asyncio
-    async def test_get_status(
-        self, mock_opik_connector, mock_span_repository, sample_span_event
-    ):
+    async def test_get_status(self, mock_opik_connector, mock_span_repository, sample_span_event):
         """Test getting processor status."""
         processor = BatchProcessor(
             opik_connector=mock_opik_connector,
@@ -401,9 +394,7 @@ class TestBatchProcessorPartialFailures:
     """Test partial failure handling."""
 
     @pytest.mark.asyncio
-    async def test_opik_failure_continues_to_db(
-        self, mock_span_repository, sample_span_event
-    ):
+    async def test_opik_failure_continues_to_db(self, mock_span_repository, sample_span_event):
         """Test that DB write continues even if Opik fails."""
         mock_opik = MagicMock()
         mock_opik.is_enabled = True
@@ -441,7 +432,7 @@ class TestBatchProcessorPartialFailures:
         await processor.flush()
 
         # Failed spans should be in retry queue
-        status = processor.get_status()
+        processor.get_status()
         # Note: The model conversion might succeed, so failed_queue depends on that
         assert processor.metrics.total_batches_flushed == 1
 

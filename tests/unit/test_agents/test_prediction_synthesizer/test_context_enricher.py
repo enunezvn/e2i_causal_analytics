@@ -366,9 +366,7 @@ class TestFeastOnlineFeatureIntegration:
 
         mock_feast_store = MagicMock()
         mock_feast_store.get_importance = AsyncMock(return_value={})
-        mock_feast_store.get_online_features = AsyncMock(
-            return_value={"new_feature": 42.0}
-        )
+        mock_feast_store.get_online_features = AsyncMock(return_value={"new_feature": 42.0})
         mock_feast_store.check_feature_freshness = AsyncMock(
             return_value={"fresh": True, "stale_features": []}
         )
@@ -413,9 +411,7 @@ class TestFeastOnlineFeatureIntegration:
 
         mock_feast_store = MagicMock()
         mock_feast_store.get_importance = AsyncMock(return_value={})
-        mock_feast_store.get_online_features = AsyncMock(
-            return_value={"feature": 100.0}
-        )
+        mock_feast_store.get_online_features = AsyncMock(return_value={"feature": 100.0})
 
         state_with_ensemble["entity_id"] = "hcp_123"
 
@@ -503,9 +499,7 @@ class TestFeastOnlineFeatureIntegration:
 
         mock_feast_store = MagicMock()
         mock_feast_store.get_importance = AsyncMock(return_value={})
-        mock_feast_store.get_online_features = AsyncMock(
-            side_effect=Exception("Feast unavailable")
-        )
+        mock_feast_store.get_online_features = AsyncMock(side_effect=Exception("Feast unavailable"))
 
         state_with_ensemble["entity_id"] = "hcp_123"
 

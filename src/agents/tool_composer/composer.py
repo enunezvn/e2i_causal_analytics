@@ -23,16 +23,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from src.agents.base.audit_chain_mixin import get_audit_chain_service
-from src.tool_registry.registry import ToolRegistry, get_registry
-from src.utils.audit_chain import AgentTier
-
 # Import tool modules to ensure tools are registered in the global registry
 # These imports trigger the auto-registration decorators
 import src.tool_registry.tools  # noqa: F401
+from src.agents.base.audit_chain_mixin import get_audit_chain_service
+from src.tool_registry.registry import ToolRegistry, get_registry
 from src.tool_registry.tools.causal_discovery import register_all_discovery_tools
 from src.tool_registry.tools.model_inference import register_model_inference_tool
 from src.tool_registry.tools.structural_drift import register_structural_drift_tool
+from src.utils.audit_chain import AgentTier
 
 from .decomposer import DecompositionError, QueryDecomposer
 from .executor import ExecutionError, PlanExecutor
@@ -214,9 +213,11 @@ class ToolComposer:
 
             # Record audit entry for decompose phase
             self._record_audit_entry(
-                audit_service, audit_workflow_id, "decompose",
+                audit_service,
+                audit_workflow_id,
+                "decompose",
                 phase_durations["decompose"],
-                {"sub_questions_count": decomposition.question_count}
+                {"sub_questions_count": decomposition.question_count},
             )
 
             # ================================================================
@@ -229,15 +230,16 @@ class ToolComposer:
 
             phase_durations["plan"] = self._elapsed_ms(phase_start)
             logger.info(
-                f"Phase 2 complete: {plan.step_count} steps planned "
-                f"({phase_durations['plan']}ms)"
+                f"Phase 2 complete: {plan.step_count} steps planned ({phase_durations['plan']}ms)"
             )
 
             # Record audit entry for plan phase
             self._record_audit_entry(
-                audit_service, audit_workflow_id, "plan",
+                audit_service,
+                audit_workflow_id,
+                "plan",
                 phase_durations["plan"],
-                {"steps_planned": plan.step_count}
+                {"steps_planned": plan.step_count},
             )
 
             # ================================================================
@@ -257,13 +259,15 @@ class ToolComposer:
 
             # Record audit entry for execute phase
             self._record_audit_entry(
-                audit_service, audit_workflow_id, "execute",
+                audit_service,
+                audit_workflow_id,
+                "execute",
                 phase_durations["execute"],
                 {
                     "tools_executed": execution_trace.tools_executed,
                     "tools_succeeded": execution_trace.tools_succeeded,
                 },
-                validation_passed=execution_trace.tools_succeeded == execution_trace.tools_executed
+                validation_passed=execution_trace.tools_succeeded == execution_trace.tools_executed,
             )
 
             # ================================================================
@@ -286,10 +290,12 @@ class ToolComposer:
 
             # Record audit entry for synthesize phase
             self._record_audit_entry(
-                audit_service, audit_workflow_id, "synthesize",
+                audit_service,
+                audit_workflow_id,
+                "synthesize",
                 phase_durations["synthesize"],
                 {"confidence": response.confidence},
-                confidence_score=response.confidence
+                confidence_score=response.confidence,
             )
 
             # ================================================================

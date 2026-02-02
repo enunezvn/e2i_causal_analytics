@@ -118,7 +118,7 @@ class SkillLoader:
         # Fallback to current working directory
         return Path.cwd()
 
-    @lru_cache(maxsize=50)
+    @lru_cache(maxsize=50)  # noqa: B019
     def load(self, skill_path: str) -> Skill:
         """Load a skill from a file path.
 

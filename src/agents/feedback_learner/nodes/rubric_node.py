@@ -128,10 +128,8 @@ class RubricNode:
                 **state,
                 "rubric_evaluation": None,
                 "rubric_error": str(e),
-                "errors": (state.get("errors") or [])
-                + [{"node": "rubric_node", "error": str(e)}],
-                "warnings": (state.get("warnings") or [])
-                + [f"Rubric evaluation failed: {e}"],
+                "errors": (state.get("errors") or []) + [{"node": "rubric_node", "error": str(e)}],
+                "warnings": (state.get("warnings") or []) + [f"Rubric evaluation failed: {e}"],
             }
 
     async def _store_evaluation(
@@ -187,9 +185,7 @@ class RubricNode:
             return "none"
 
         # Check which criteria scored lowest
-        lowest_score = min(
-            evaluation.criterion_scores, key=lambda s: s.score
-        )
+        lowest_score = min(evaluation.criterion_scores, key=lambda s: s.score)
 
         # Map criteria to improvement types
         criteria_to_type = {

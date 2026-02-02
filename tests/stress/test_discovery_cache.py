@@ -240,7 +240,7 @@ class TestCacheEviction:
         data = generate_causal_data()
 
         # One miss, four hits
-        for i in range(5):
+        for _i in range(5):
             run_discovery_with_cache(data, cache)
 
         assert cache._misses == 1

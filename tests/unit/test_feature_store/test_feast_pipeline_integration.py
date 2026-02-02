@@ -8,9 +8,9 @@ Tests cover:
 - Pipeline result contains Feast metadata
 """
 
-import pytest
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.agents.tier_0 import MLFoundationPipeline, PipelineConfig, PipelineResult
 
@@ -106,11 +106,12 @@ class TestGetFeastAdapter:
         pipeline = MLFoundationPipeline(config=config)
 
         # Patch where the imports actually come from
-        with patch(
-            "src.feature_store.client.FeatureStoreClient"
-        ) as mock_fs_client, patch(
-            "src.feature_store.feature_analyzer_adapter.get_feature_analyzer_adapter"
-        ) as mock_get_adapter:
+        with (
+            patch("src.feature_store.client.FeatureStoreClient") as mock_fs_client,
+            patch(
+                "src.feature_store.feature_analyzer_adapter.get_feature_analyzer_adapter"
+            ) as mock_get_adapter,
+        ):
             mock_adapter = MagicMock()
             mock_get_adapter.return_value = mock_adapter
             mock_fs_client.return_value = MagicMock()
@@ -243,9 +244,7 @@ class TestCheckFeatureFreshness:
         pipeline = MLFoundationPipeline(config=config)
 
         mock_adapter = AsyncMock()
-        mock_adapter.check_feature_freshness = AsyncMock(
-            side_effect=Exception("Network error")
-        )
+        mock_adapter.check_feature_freshness = AsyncMock(side_effect=Exception("Network error"))
         pipeline._feast_adapter = mock_adapter
         pipeline._feast_initialized = True
 
@@ -323,13 +322,18 @@ class TestPipelineRunWithFeast:
         pipeline = MLFoundationPipeline(config=config)
 
         # Mock all agents
-        with patch.object(
-            pipeline, "_get_agent", side_effect=lambda name: MagicMock(
-                run=mock_agents.get(name, AsyncMock(return_value={}))
-            )
-        ), patch.object(
-            pipeline, "_get_feast_adapter", new_callable=AsyncMock
-        ) as mock_get_adapter:
+        with (
+            patch.object(
+                pipeline,
+                "_get_agent",
+                side_effect=lambda name: MagicMock(
+                    run=mock_agents.get(name, AsyncMock(return_value={}))
+                ),
+            ),
+            patch.object(
+                pipeline, "_get_feast_adapter", new_callable=AsyncMock
+            ) as mock_get_adapter,
+        ):
             mock_adapter = AsyncMock()
             mock_adapter.check_feature_freshness = AsyncMock(
                 return_value={"fresh": True, "stale_features": [], "recommendations": []}
@@ -353,13 +357,18 @@ class TestPipelineRunWithFeast:
         )
         pipeline = MLFoundationPipeline(config=config)
 
-        with patch.object(
-            pipeline, "_get_agent", side_effect=lambda name: MagicMock(
-                run=mock_agents.get(name, AsyncMock(return_value={}))
-            )
-        ), patch.object(
-            pipeline, "_check_feature_freshness", new_callable=AsyncMock
-        ) as mock_freshness:
+        with (
+            patch.object(
+                pipeline,
+                "_get_agent",
+                side_effect=lambda name: MagicMock(
+                    run=mock_agents.get(name, AsyncMock(return_value={}))
+                ),
+            ),
+            patch.object(
+                pipeline, "_check_feature_freshness", new_callable=AsyncMock
+            ) as mock_freshness,
+        ):
             mock_freshness.return_value = {
                 "fresh": True,
                 "stale_features": [],
@@ -384,13 +393,18 @@ class TestPipelineRunWithFeast:
         )
         pipeline = MLFoundationPipeline(config=config)
 
-        with patch.object(
-            pipeline, "_get_agent", side_effect=lambda name: MagicMock(
-                run=mock_agents.get(name, AsyncMock(return_value={}))
-            )
-        ), patch.object(
-            pipeline, "_check_feature_freshness", new_callable=AsyncMock
-        ) as mock_freshness:
+        with (
+            patch.object(
+                pipeline,
+                "_get_agent",
+                side_effect=lambda name: MagicMock(
+                    run=mock_agents.get(name, AsyncMock(return_value={}))
+                ),
+            ),
+            patch.object(
+                pipeline, "_check_feature_freshness", new_callable=AsyncMock
+            ) as mock_freshness,
+        ):
             mock_freshness.return_value = {
                 "fresh": False,
                 "stale_features": ["hcp_conversion_features:engagement_score"],
@@ -415,13 +429,18 @@ class TestPipelineRunWithFeast:
         )
         pipeline = MLFoundationPipeline(config=config)
 
-        with patch.object(
-            pipeline, "_get_agent", side_effect=lambda name: MagicMock(
-                run=mock_agents.get(name, AsyncMock(return_value={}))
-            )
-        ), patch.object(
-            pipeline, "_check_feature_freshness", new_callable=AsyncMock
-        ) as mock_freshness:
+        with (
+            patch.object(
+                pipeline,
+                "_get_agent",
+                side_effect=lambda name: MagicMock(
+                    run=mock_agents.get(name, AsyncMock(return_value={}))
+                ),
+            ),
+            patch.object(
+                pipeline, "_check_feature_freshness", new_callable=AsyncMock
+            ) as mock_freshness,
+        ):
             result = await pipeline.run(sample_input)
 
             # Freshness should NOT be checked
@@ -464,9 +483,7 @@ class TestTrainerReceivesFeatureRefs:
             }
         )
 
-        with patch.object(
-            pipeline, "_get_agent", return_value=mock_trainer
-        ):
+        with patch.object(pipeline, "_get_agent", return_value=mock_trainer):
             await pipeline._run_model_training(
                 input_data={},
                 result=pipeline_result,

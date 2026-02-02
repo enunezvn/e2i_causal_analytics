@@ -275,7 +275,7 @@ class PatternAnalyzerNode:
 
         feedback_str = "\n\n".join(
             [
-                f"**Feedback {i+1}** (Type: {fb['feedback_type']}, Agent: {fb['source_agent']})\n"
+                f"**Feedback {i + 1}** (Type: {fb['feedback_type']}, Agent: {fb['source_agent']})\n"
                 f"Query: {fb['query'][:200]}\n"
                 f"Response: {fb['agent_response'][:300]}\n"
                 f"Feedback: {fb['user_feedback']}"
@@ -286,10 +286,10 @@ class PatternAnalyzerNode:
         return f"""Analyze feedback to identify systematic patterns.
 
 ## Summary
-- Total: {summary.get('total_count', 0)}
-- By type: {json.dumps(summary.get('by_type', {}))}
-- By agent: {json.dumps(summary.get('by_agent', {}))}
-- Avg rating: {summary.get('average_rating', 'N/A')}
+- Total: {summary.get("total_count", 0)}
+- By type: {json.dumps(summary.get("by_type", {}))}
+- By agent: {json.dumps(summary.get("by_agent", {}))}
+- Avg rating: {summary.get("average_rating", "N/A")}
 
 ## Sample Feedback
 

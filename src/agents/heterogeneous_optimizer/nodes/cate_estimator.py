@@ -9,7 +9,7 @@ import logging
 import os
 import time
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -143,7 +143,9 @@ class CATEEstimatorNode:
                     "Y_mean": float(np.mean(Y)),
                     "Y_std": float(np.std(Y)),
                     "Y_unique": int(len(np.unique(Y))),
-                    "correlation_T_Y": float(np.corrcoef(T, Y)[0, 1]) if len(np.unique(T)) > 1 else 0.0,
+                    "correlation_T_Y": float(np.corrcoef(T, Y)[0, 1])
+                    if len(np.unique(T)) > 1
+                    else 0.0,
                 },
             )
 
@@ -166,7 +168,9 @@ class CATEEstimatorNode:
             subforest_size = 4
             raw_n_estimators = state.get("n_estimators", 100)
             # Round up to nearest multiple of subforest_size
-            n_estimators = ((raw_n_estimators + subforest_size - 1) // subforest_size) * subforest_size
+            n_estimators = (
+                (raw_n_estimators + subforest_size - 1) // subforest_size
+            ) * subforest_size
 
             if n_estimators != raw_n_estimators:
                 logger.info(
@@ -227,7 +231,8 @@ class CATEEstimatorNode:
                         cf.feature_importances_.tolist()
                         if hasattr(cf, "feature_importances_")
                         else [0] * len(state["effect_modifiers"])
-                    ), strict=False,
+                    ),
+                    strict=False,
                 )
             )
 

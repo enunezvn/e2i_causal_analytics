@@ -4,26 +4,26 @@ Tests for Batch Loader.
 Tests batch loading functionality with dry run mode.
 """
 
-import pytest
 import pandas as pd
+import pytest
 
-from src.ml.synthetic.loaders import (
-    BatchLoader,
-    AsyncBatchLoader,
-    LoadResult,
-    LoaderConfig,
-    LOADING_ORDER,
-    TABLE_COLUMNS,
-)
+from src.ml.synthetic.config import DGPType
 from src.ml.synthetic.generators import (
+    GeneratorConfig,
     HCPGenerator,
     PatientGenerator,
-    TreatmentGenerator,
     PredictionGenerator,
+    TreatmentGenerator,
     TriggerGenerator,
-    GeneratorConfig,
 )
-from src.ml.synthetic.config import DGPType
+from src.ml.synthetic.loaders import (
+    LOADING_ORDER,
+    TABLE_COLUMNS,
+    AsyncBatchLoader,
+    BatchLoader,
+    LoaderConfig,
+    LoadResult,
+)
 
 
 class TestLoadResult:
@@ -206,11 +206,15 @@ class TestBatchLoader:
         prediction_df = PredictionGenerator(prediction_config, patient_df=patient_df).generate()
         # Rename columns to match database schema
         if "prediction_date" in prediction_df.columns:
-            prediction_df = prediction_df.rename(columns={"prediction_date": "prediction_timestamp"})
+            prediction_df = prediction_df.rename(
+                columns={"prediction_date": "prediction_timestamp"}
+            )
 
         # Generate triggers
         trigger_config = GeneratorConfig(seed=42, n_records=40)
-        trigger_df = TriggerGenerator(trigger_config, patient_df=patient_df, hcp_df=hcp_df).generate()
+        trigger_df = TriggerGenerator(
+            trigger_config, patient_df=patient_df, hcp_df=hcp_df
+        ).generate()
 
         return {
             "hcp_profiles": hcp_df,
@@ -334,8 +338,7 @@ class TestAsyncBatchLoader:
     async def test_load_table_async_dry_run(self, async_loader, sample_datasets):
         """Test async table loading in dry run mode."""
         result = await async_loader.load_table_async(
-            "hcp_profiles",
-            sample_datasets["hcp_profiles"]
+            "hcp_profiles", sample_datasets["hcp_profiles"]
         )
 
         assert result.table_name == "hcp_profiles"
@@ -377,7 +380,9 @@ class TestBatchLoaderIntegration:
         ).generate()
         # Rename columns to match database schema
         if "prediction_date" in prediction_df.columns:
-            prediction_df = prediction_df.rename(columns={"prediction_date": "prediction_timestamp"})
+            prediction_df = prediction_df.rename(
+                columns={"prediction_date": "prediction_timestamp"}
+            )
 
         # Triggers
         trigger_df = TriggerGenerator(

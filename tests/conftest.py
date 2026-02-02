@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 import pytest
 import pytest_asyncio
@@ -58,6 +58,7 @@ os.environ["E2I_TESTING_MODE"] = "1"
 def pytest_configure(config):
     """Run load_dotenv again at configure time for safety."""
     load_dotenv(override=True)
+
 
 # =============================================================================
 # CONFIGURATION
@@ -123,6 +124,7 @@ async def _check_redis_service(url: str, timeout: float = SERVICE_CHECK_TIMEOUT)
     except Exception as e:
         # Debug: print exception to help diagnose connectivity issues
         import sys
+
         print(f"  DEBUG _check_redis_service({url}): {type(e).__name__}: {e}", file=sys.stderr)
         return False
 
@@ -154,10 +156,12 @@ def _run_service_checks() -> Dict[str, bool]:
     try:
         # Check Redis
         import sys as _debug_sys
+
         print(f"  DEBUG _run_service_checks: REDIS_URL={REDIS_URL}", file=_debug_sys.stderr)
         results["redis"] = loop.run_until_complete(_check_redis_service(REDIS_URL))
     except Exception as e:
         import sys
+
         print(f"  DEBUG: Redis check failed: {e}", file=sys.stderr)
         results["redis"] = False
 
@@ -166,6 +170,7 @@ def _run_service_checks() -> Dict[str, bool]:
         results["falkordb"] = loop.run_until_complete(_check_redis_service(FALKORDB_URL))
     except Exception as e:
         import sys
+
         print(f"  DEBUG: FalkorDB check failed: {e}", file=sys.stderr)
         results["falkordb"] = False
     finally:
@@ -218,9 +223,7 @@ def pytest_configure(config: pytest.Config) -> None:
         print("=" * 60 + "\n")
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Modify test collection to skip tests based on service availability.
 
     This automatically skips tests marked with requires_* markers
@@ -391,6 +394,7 @@ def async_timeout():
     Returns:
         Callable that wraps coroutines with asyncio.wait_for
     """
+
     async def _timeout_wrapper(coro, timeout: float = 5.0):
         return await asyncio.wait_for(coro, timeout=timeout)
 
@@ -434,6 +438,7 @@ def timer():
             elapsed = timer.stop()
             assert elapsed < 1.0, "Too slow!"
     """
+
     class Timer:
         def __init__(self):
             self._start: Optional[float] = None

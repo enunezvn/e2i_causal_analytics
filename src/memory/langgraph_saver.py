@@ -60,7 +60,7 @@ def create_checkpointer(redis_url: Optional[str] = None, fallback_to_memory: boo
             ) from e
 
         logger.warning(
-            "langgraph-checkpoint-redis not installed, " "falling back to in-memory checkpointer"
+            "langgraph-checkpoint-redis not installed, falling back to in-memory checkpointer"
         )
 
     except Exception as e:
@@ -106,7 +106,7 @@ def create_async_checkpointer(redis_url: Optional[str] = None, fallback_to_memor
             ) from e
 
         logger.warning(
-            "langgraph-checkpoint-redis not installed, " "falling back to in-memory checkpointer"
+            "langgraph-checkpoint-redis not installed, falling back to in-memory checkpointer"
         )
 
     except Exception as e:

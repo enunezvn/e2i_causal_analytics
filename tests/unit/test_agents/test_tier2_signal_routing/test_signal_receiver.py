@@ -14,10 +14,10 @@ Verifies:
 Run: pytest tests/unit/test_agents/test_tier2_signal_routing/test_signal_receiver.py -v
 """
 
-import asyncio
-import pytest
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
+import pytest
 
 # Mark all tests in this module for the tier2 xdist group
 pytestmark = pytest.mark.xdist_group(name="tier2_signal_routing")
@@ -81,6 +81,7 @@ def sample_signals() -> Dict[str, List[Dict[str, Any]]]:
 def signal_receiver():
     """Create a fresh signal receiver instance."""
     from src.agents.feedback_learner.dspy_receiver import TrainingSignalReceiver
+
     return TrainingSignalReceiver()
 
 
@@ -88,6 +89,7 @@ def signal_receiver():
 def reset_receiver_singleton():
     """Reset the receiver singleton before and after each test."""
     from src.agents.feedback_learner.dspy_receiver import reset_signal_receiver
+
     reset_signal_receiver()
     yield
     reset_signal_receiver()
@@ -102,9 +104,7 @@ class TestSignalBuffering:
     """Tests for signal buffering by agent."""
 
     @pytest.mark.asyncio
-    async def test_receive_signals_from_multiple_agents(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_receive_signals_from_multiple_agents(self, signal_receiver, sample_signals):
         """Should buffer signals from multiple agents."""
         received = await signal_receiver.receive_signals(sample_signals)
 
@@ -123,12 +123,7 @@ class TestSignalBuffering:
         receiver = TrainingSignalReceiver(max_signals_per_agent=3)
 
         # Add more signals than max
-        signals = {
-            "causal_impact": [
-                {"signal_id": f"ci_{i}", "reward": 0.5}
-                for i in range(5)
-            ]
-        }
+        signals = {"causal_impact": [{"signal_id": f"ci_{i}", "reward": 0.5} for i in range(5)]}
 
         await receiver.receive_signals(signals)
 
@@ -140,12 +135,8 @@ class TestSignalBuffering:
     async def test_unknown_agent_signals_skipped(self, signal_receiver):
         """Signals from unknown agents should be skipped."""
         signals = {
-            "unknown_agent": [
-                {"signal_id": "unk_001", "reward": 0.5}
-            ],
-            "causal_impact": [
-                {"signal_id": "ci_001", "reward": 0.6}
-            ],
+            "unknown_agent": [{"signal_id": "unk_001", "reward": 0.5}],
+            "causal_impact": [{"signal_id": "ci_001", "reward": 0.6}],
         }
 
         received = await signal_receiver.receive_signals(signals)
@@ -163,9 +154,7 @@ class TestSignalRetrieval:
     """Tests for signal retrieval."""
 
     @pytest.mark.asyncio
-    async def test_get_pending_signals_all_agents(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_get_pending_signals_all_agents(self, signal_receiver, sample_signals):
         """Should get pending signals from all agents."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -176,38 +165,28 @@ class TestSignalRetrieval:
         assert all(not s.processed for s in signals)
 
     @pytest.mark.asyncio
-    async def test_get_pending_signals_by_agent(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_get_pending_signals_by_agent(self, signal_receiver, sample_signals):
         """Should filter signals by agent."""
         await signal_receiver.receive_signals(sample_signals)
 
-        signals = await signal_receiver.get_pending_signals(
-            limit=10, agent="causal_impact"
-        )
+        signals = await signal_receiver.get_pending_signals(limit=10, agent="causal_impact")
 
         assert len(signals) == 2
         assert all(s.source_agent == "causal_impact" for s in signals)
 
     @pytest.mark.asyncio
-    async def test_get_pending_signals_by_min_reward(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_get_pending_signals_by_min_reward(self, signal_receiver, sample_signals):
         """Should filter signals by minimum reward."""
         await signal_receiver.receive_signals(sample_signals)
 
-        signals = await signal_receiver.get_pending_signals(
-            limit=10, min_reward=0.7
-        )
+        signals = await signal_receiver.get_pending_signals(limit=10, min_reward=0.7)
 
         # Only ci_001 (0.75) and ga_001 (0.82) should pass
         assert len(signals) == 2
         assert all(s.signal_data["reward"] >= 0.7 for s in signals)
 
     @pytest.mark.asyncio
-    async def test_get_pending_signals_respects_limit(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_get_pending_signals_respects_limit(self, signal_receiver, sample_signals):
         """Should respect limit parameter."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -239,9 +218,7 @@ class TestMarkProcessed:
         assert len(remaining) == 2
 
     @pytest.mark.asyncio
-    async def test_processed_signals_not_returned(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_processed_signals_not_returned(self, signal_receiver, sample_signals):
         """Processed signals should not be returned by get_pending."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -254,9 +231,7 @@ class TestMarkProcessed:
         assert len(pending) == 0
 
     @pytest.mark.asyncio
-    async def test_clear_processed_removes_signals(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_clear_processed_removes_signals(self, signal_receiver, sample_signals):
         """clear_processed should remove processed signals."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -282,9 +257,7 @@ class TestFeedbackItemConversion:
     """Tests for converting signals to FeedbackItem format."""
 
     @pytest.mark.asyncio
-    async def test_get_signals_as_feedback_items(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_get_signals_as_feedback_items(self, signal_receiver, sample_signals):
         """Should convert signals to FeedbackItem format."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -304,9 +277,7 @@ class TestFeedbackItemConversion:
             assert "metadata" in item
 
     @pytest.mark.asyncio
-    async def test_feedback_item_has_reward(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_feedback_item_has_reward(self, signal_receiver, sample_signals):
         """FeedbackItem should include reward from signal."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -317,9 +288,7 @@ class TestFeedbackItemConversion:
             assert 0.0 <= item["user_feedback"]["reward"] <= 1.0
 
     @pytest.mark.asyncio
-    async def test_feedback_item_has_raw_signal(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_feedback_item_has_raw_signal(self, signal_receiver, sample_signals):
         """FeedbackItem metadata should include raw signal."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -338,9 +307,7 @@ class TestTrainingDataExtraction:
     """Tests for extracting training data for DSPy optimization."""
 
     @pytest.mark.asyncio
-    async def test_get_training_data_filters_by_reward(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_get_training_data_filters_by_reward(self, signal_receiver, sample_signals):
         """Should filter training data by minimum reward."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -356,9 +323,7 @@ class TestTrainingDataExtraction:
         assert training_data[0]["reward"] >= 0.7
 
     @pytest.mark.asyncio
-    async def test_get_training_data_sorted_by_reward(
-        self, signal_receiver, sample_signals
-    ):
+    async def test_get_training_data_sorted_by_reward(self, signal_receiver, sample_signals):
         """Training data should be sorted by reward (best first)."""
         await signal_receiver.receive_signals(sample_signals)
 
@@ -420,8 +385,8 @@ class TestConvenienceFunctions:
     async def test_receive_training_signals(self, sample_signals):
         """receive_training_signals should use singleton receiver."""
         from src.agents.feedback_learner.dspy_receiver import (
-            receive_training_signals,
             get_signal_receiver,
+            receive_training_signals,
             reset_signal_receiver,
         )
 
@@ -439,8 +404,8 @@ class TestConvenienceFunctions:
     def test_get_pending_training_signals(self, sample_signals):
         """get_pending_training_signals should return signal dicts."""
         from src.agents.feedback_learner.dspy_receiver import (
-            get_signal_receiver,
             get_pending_training_signals,
+            get_signal_receiver,
             reset_signal_receiver,
         )
 
@@ -451,6 +416,7 @@ class TestConvenienceFunctions:
         for agent, signals in sample_signals.items():
             for signal_data in signals:
                 from src.agents.feedback_learner.dspy_receiver import ReceivedSignal
+
                 received_signal = ReceivedSignal(
                     source_agent=agent,
                     signal_data=signal_data,
@@ -465,8 +431,8 @@ class TestConvenienceFunctions:
     def test_get_feedback_items_from_signals(self, sample_signals):
         """get_feedback_items_from_signals should return FeedbackItem dicts."""
         from src.agents.feedback_learner.dspy_receiver import (
-            get_signal_receiver,
             get_feedback_items_from_signals,
+            get_signal_receiver,
             reset_signal_receiver,
         )
 
@@ -477,6 +443,7 @@ class TestConvenienceFunctions:
         for agent, signals in sample_signals.items():
             for signal_data in signals:
                 from src.agents.feedback_learner.dspy_receiver import ReceivedSignal
+
                 received_signal = ReceivedSignal(
                     source_agent=agent,
                     signal_data=signal_data,
@@ -504,6 +471,7 @@ class TestConvenienceFunctions:
         for agent, signals in sample_signals.items():
             for signal_data in signals:
                 from src.agents.feedback_learner.dspy_receiver import ReceivedSignal
+
                 received_signal = ReceivedSignal(
                     source_agent=agent,
                     signal_data=signal_data,

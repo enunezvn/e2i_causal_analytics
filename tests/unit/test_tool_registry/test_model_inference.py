@@ -14,13 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.tool_registry.tools.model_inference import (
-    ModelInferenceTool,
     ModelInferenceInput,
     ModelInferenceOutput,
+    ModelInferenceTool,
     model_inference,
     register_model_inference_tool,
 )
-
 
 # =============================================================================
 # INPUT/OUTPUT SCHEMA TESTS
@@ -228,7 +227,6 @@ class TestModelInferenceTool:
         tool._feast_store = mock_feast
 
         # Patch _fetch_feast_features to raise an exception that gets caught
-        original_fetch = tool._fetch_feast_features
 
         async def failing_fetch(*args, **kwargs):
             raise Exception("Feast down")

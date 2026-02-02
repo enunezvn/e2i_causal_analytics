@@ -17,13 +17,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.agents.health_score.mlflow_tracker import (
+    EXPERIMENT_PREFIX,
     HealthScoreContext,
     HealthScoreMetrics,
     HealthScoreMLflowTracker,
-    EXPERIMENT_PREFIX,
     create_tracker,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -77,7 +76,9 @@ def mock_health_output():
     output.critical_issues = []
     output.warnings = ["Model 'churn_predictor' has degraded accuracy (0.72)"]
     output.total_latency_ms = 1250
-    output.health_summary = "System health is good (Grade: B, Score: 85.5/100). All systems operational."
+    output.health_summary = (
+        "System health is good (Grade: B, Score: 85.5/100). All systems operational."
+    )
     output.timestamp = datetime.now(timezone.utc).isoformat()
     return output
 

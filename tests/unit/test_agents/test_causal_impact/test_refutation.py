@@ -79,7 +79,7 @@ class TestRefutationNode:
         # Contract: individual_tests is Dict, not List
         assert isinstance(ref["individual_tests"], dict)
 
-        for test_key, test in ref["individual_tests"].items():
+        for _test_key, test in ref["individual_tests"].items():
             assert "test_name" in test
             assert test["test_name"] in [
                 "placebo_treatment",
@@ -498,7 +498,7 @@ class TestRefutationWithDifferentEffectSizes:
         ref = result["refutation_results"]
 
         # Contract: individual_tests is Dict, iterate over values
-        for test_key, test in ref["individual_tests"].items():
+        for _test_key, test in ref["individual_tests"].items():
             # Original effect should be preserved
             assert test["original_effect"] == -0.5
 

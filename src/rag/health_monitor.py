@@ -147,8 +147,7 @@ class CircuitBreaker:
             self._success_count = 0
 
         logger.info(
-            f"Circuit breaker '{self.name}' transitioned: "
-            f"{old_state.value} -> {new_state.value}"
+            f"Circuit breaker '{self.name}' transitioned: {old_state.value} -> {new_state.value}"
         )
 
     def get_stats(self) -> Dict[str, Any]:

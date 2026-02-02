@@ -9,12 +9,10 @@ Tests end-to-end GEPA optimization workflows:
 Version: 4.3
 """
 
-import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # Mark all tests in this module to run on the same worker (DSPy import safety)
 pytestmark = pytest.mark.xdist_group(name="gepa_integration")
@@ -333,9 +331,7 @@ class TestGEPAEndToEnd:
             assert optimizer is not None, f"Failed for {agent}"
 
     @pytest.mark.asyncio
-    async def test_feedback_learner_gepa_optimization_dispatch(
-        self, sample_training_signals
-    ):
+    async def test_feedback_learner_gepa_optimization_dispatch(self, sample_training_signals):
         """Test Feedback Learner dispatches to GEPA when available."""
         from src.agents.feedback_learner.dspy_integration import (
             GEPA_AVAILABLE,
@@ -345,9 +341,7 @@ class TestGEPAEndToEnd:
         optimizer = FeedbackLearnerOptimizer(optimizer_type="gepa")
 
         # Mock the internal optimization methods
-        with patch.object(
-            optimizer, "_optimize_with_gepa", new_callable=AsyncMock
-        ) as mock_gepa:
+        with patch.object(optimizer, "_optimize_with_gepa", new_callable=AsyncMock) as mock_gepa:
             with patch.object(
                 optimizer, "_optimize_with_miprov2", new_callable=AsyncMock
             ) as mock_miprov2:
@@ -402,9 +396,7 @@ class TestGEPADatabaseSchema:
             ]
 
             for table in expected_tables:
-                assert (
-                    table in content.lower()
-                ), f"Missing table {table} in {migration.name}"
+                assert table in content.lower(), f"Missing table {table} in {migration.name}"
 
 
 class TestGEPAVocabulary:
@@ -416,11 +408,7 @@ class TestGEPAVocabulary:
 
         import yaml
 
-        vocab_path = (
-            Path(__file__).parent.parent.parent
-            / "config"
-            / "domain_vocabulary.yaml"
-        )
+        vocab_path = Path(__file__).parent.parent.parent / "config" / "domain_vocabulary.yaml"
 
         if not vocab_path.exists():
             pytest.skip("Domain vocabulary file not found")
@@ -431,9 +419,7 @@ class TestGEPAVocabulary:
         # Check for GEPA-related entries
         vocab_str = str(vocab).lower()
 
-        assert "gepa" in vocab_str or "optimizer" in vocab_str, (
-            "GEPA vocabulary not found"
-        )
+        assert "gepa" in vocab_str or "optimizer" in vocab_str, "GEPA vocabulary not found"
 
     def test_gepa_config_yaml_exists(self):
         """Test GEPA config YAML exists."""

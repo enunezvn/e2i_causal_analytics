@@ -4,41 +4,39 @@ Tests all endpoints and helper functions in src/api/routes/health_score.py.
 Mocks all external dependencies to ensure unit test isolation.
 """
 
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock, AsyncMock, call
-from typing import Dict, Any
 
 # Import route functions and models
 from src.api.routes.health_score import (
-    # Endpoints
-    run_health_check,
-    quick_health_check,
-    full_health_check,
-    get_component_health,
-    get_model_health,
-    get_pipeline_health,
-    get_agent_health,
-    get_health_history,
-    get_service_status,
+    # Enums
+    CheckScope,
+    HealthGrade,
+    ModelStatus,
+    PipelineStatus,
     # Helper functions
     _execute_health_check,
     _generate_mock_health_response,
+    _generate_recommendations,
+    _get_mock_agent_health,
     _get_mock_component_health,
     _get_mock_model_health,
     _get_mock_pipeline_health,
-    _get_mock_agent_health,
-    _generate_recommendations,
-    # Enums
-    CheckScope,
-    ComponentStatus,
-    ModelStatus,
-    PipelineStatus,
-    HealthGrade,
     # Module-level storage
     _health_history,
+    full_health_check,
+    get_agent_health,
+    get_component_health,
+    get_health_history,
+    get_model_health,
+    get_pipeline_health,
+    get_service_status,
+    quick_health_check,
+    # Endpoints
+    run_health_check,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -603,9 +601,7 @@ async def test_execute_health_check_with_real_agent(mock_agent_result):
     mock_agent = MagicMock()
     mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
 
-    with patch(
-        "src.agents.health_score.HealthScoreAgent", return_value=mock_agent
-    ):
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
         result = await _execute_health_check(CheckScope.FULL)
 
         assert result.overall_health_score == 85.5
@@ -619,10 +615,8 @@ async def test_execute_health_check_quick_mode(mock_agent_result):
     mock_agent = MagicMock()
     mock_agent.quick_check = AsyncMock(return_value=mock_agent_result)
 
-    with patch(
-        "src.agents.health_score.HealthScoreAgent", return_value=mock_agent
-    ):
-        result = await _execute_health_check(CheckScope.QUICK)
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+        await _execute_health_check(CheckScope.QUICK)
 
         mock_agent.quick_check.assert_called_once()
 
@@ -630,9 +624,7 @@ async def test_execute_health_check_quick_mode(mock_agent_result):
 @pytest.mark.asyncio
 async def test_execute_health_check_falls_back_to_mock():
     """Test _execute_health_check falls back to mock when agent unavailable."""
-    with patch(
-        "src.agents.health_score.HealthScoreAgent", side_effect=ImportError
-    ):
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
         result = await _execute_health_check(CheckScope.FULL)
 
         assert result.overall_health_score > 0
@@ -645,9 +637,7 @@ async def test_execute_health_check_agent_exception():
     mock_agent = MagicMock()
     mock_agent.check_health = AsyncMock(side_effect=RuntimeError("Agent error"))
 
-    with patch(
-        "src.agents.health_score.HealthScoreAgent", return_value=mock_agent
-    ):
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
         with pytest.raises(RuntimeError):
             await _execute_health_check(CheckScope.FULL)
 
@@ -757,7 +747,11 @@ def test_get_mock_pipeline_health():
     assert len(pipelines) > 0
     for pipeline in pipelines:
         assert pipeline.pipeline_name is not None
-        assert pipeline.status in [PipelineStatus.HEALTHY, PipelineStatus.STALE, PipelineStatus.FAILED]
+        assert pipeline.status in [
+            PipelineStatus.HEALTHY,
+            PipelineStatus.STALE,
+            PipelineStatus.FAILED,
+        ]
         assert pipeline.rows_processed >= 0
 
 

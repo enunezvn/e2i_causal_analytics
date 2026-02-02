@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
 from uuid_utils import uuid7 as uuid7_func
 
 if TYPE_CHECKING:
-    from src.mlops.opik_connector import OpikConnector, SpanContext
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -98,13 +98,15 @@ class NodeSpanContext:
             avg_gap_percentage: Average gap percentage across all gaps
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "gaps_detected": gaps_detected,
-            "segments_analyzed": segments_analyzed,
-            "gap_types": gap_types or [],
-            "avg_gap_percentage": avg_gap_percentage,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "gaps_detected": gaps_detected,
+                "segments_analyzed": segments_analyzed,
+                "gap_types": gap_types or [],
+                "avg_gap_percentage": avg_gap_percentage,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("gaps_detected", gaps_detected)
@@ -119,8 +121,7 @@ class NodeSpanContext:
             )
 
         logger.debug(
-            f"[GAP_DETECTOR] {gaps_detected} gaps detected across "
-            f"{segments_analyzed} segments"
+            f"[GAP_DETECTOR] {gaps_detected} gaps detected across {segments_analyzed} segments"
         )
 
     def log_roi_calculation(
@@ -140,13 +141,15 @@ class NodeSpanContext:
             roi_confidence: Average confidence in ROI estimates
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "opportunities_analyzed": opportunities_analyzed,
-            "total_addressable_value": total_addressable_value,
-            "avg_roi": avg_roi,
-            "roi_confidence": roi_confidence,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "opportunities_analyzed": opportunities_analyzed,
+                "total_addressable_value": total_addressable_value,
+                "avg_roi": avg_roi,
+                "roi_confidence": roi_confidence,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("opportunities_analyzed", opportunities_analyzed)
@@ -183,13 +186,15 @@ class NodeSpanContext:
             top_priority_value: Value of the top priority opportunity
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "total_opportunities": total_opportunities,
-            "quick_wins": quick_wins,
-            "strategic_bets": strategic_bets,
-            "top_priority_value": top_priority_value,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "total_opportunities": total_opportunities,
+                "quick_wins": quick_wins,
+                "strategic_bets": strategic_bets,
+                "top_priority_value": top_priority_value,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("total_opportunities", total_opportunities)
@@ -224,12 +229,14 @@ class NodeSpanContext:
             recommendations_count: Number of recommendations
             **kwargs: Additional metrics
         """
-        self.metadata.update({
-            "summary_length": summary_length,
-            "insights_count": insights_count,
-            "recommendations_count": recommendations_count,
-            **kwargs,
-        })
+        self.metadata.update(
+            {
+                "summary_length": summary_length,
+                "insights_count": insights_count,
+                "recommendations_count": recommendations_count,
+                **kwargs,
+            }
+        )
 
         if self._opik_span:
             self._opik_span.set_attribute("summary_length", summary_length)
@@ -243,10 +250,7 @@ class NodeSpanContext:
                 },
             )
 
-        logger.debug(
-            f"[FORMATTER] {summary_length} char summary, "
-            f"{insights_count} insights"
-        )
+        logger.debug(f"[FORMATTER] {summary_length} char summary, {insights_count} insights")
 
     def set_output(self, output: Dict[str, Any]) -> None:
         """Set the output data for this node span."""
@@ -355,9 +359,7 @@ class GapAnalysisTraceContext:
             # Store in parent context
             self.node_spans[node_name] = node_ctx
 
-            logger.debug(
-                f"Node {node_name} completed in {node_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"Node {node_name} completed in {node_ctx.duration_ms:.2f}ms")
 
     def _get_node_index(self, node_name: str) -> int:
         """Get numeric index for node ordering."""
@@ -497,11 +499,7 @@ class GapAnalyzerOpikTracer:
     def is_enabled(self) -> bool:
         """Check if tracing is enabled and available."""
         self._ensure_initialized()
-        return (
-            self.enabled
-            and self._opik_connector is not None
-            and self._opik_connector.is_enabled
-        )
+        return self.enabled and self._opik_connector is not None and self._opik_connector.is_enabled
 
     def _should_trace(self) -> bool:
         """Determine if this analysis should be traced."""
@@ -570,33 +568,32 @@ class GapAnalyzerOpikTracer:
             _tracer=self,
         )
 
-        error_occurred = False
-        error_info = None
-
         try:
             # Create Opik trace if enabled and sampled
             if self.is_enabled and self._should_trace():
                 try:
-                    async with self._opik_connector.trace_agent(
-                        agent_name="gap_analyzer",
-                        operation="analyze",
-                        trace_id=trace_id,
-                        metadata={
-                            "pipeline": AGENT_METADATA["pipeline"],
-                            "tier": AGENT_METADATA["tier"],
-                            "agent_type": AGENT_METADATA["type"],
-                            **trace_metadata,
-                        },
-                        tags=["gap_analyzer", "analysis", "tier2", brand],
-                        input_data={
-                            "query": query[:500],  # Truncate for Opik
-                            "brand": brand,
-                            "gap_type": gap_type,
-                            "metrics": metrics[:10] if metrics else [],
-                            "segments": segments[:10] if segments else [],
-                        },
-                        force_new_trace=True,
-                    ) as span:
+                    async with (
+                        self._opik_connector.trace_agent(
+                            agent_name="gap_analyzer",
+                            operation="analyze",
+                            trace_id=trace_id,
+                            metadata={
+                                "pipeline": AGENT_METADATA["pipeline"],
+                                "tier": AGENT_METADATA["tier"],
+                                "agent_type": AGENT_METADATA["type"],
+                                **trace_metadata,
+                            },
+                            tags=["gap_analyzer", "analysis", "tier2", brand],
+                            input_data={
+                                "query": query[:500],  # Truncate for Opik
+                                "brand": brand,
+                                "gap_type": gap_type,
+                                "metrics": metrics[:10] if metrics else [],
+                                "segments": segments[:10] if segments else [],
+                            },
+                            force_new_trace=True,
+                        ) as span
+                    ):
                         trace_ctx._opik_span = span
                         yield trace_ctx
                         return
@@ -607,8 +604,7 @@ class GapAnalyzerOpikTracer:
             yield trace_ctx
 
         except Exception as e:
-            error_occurred = True
-            error_info = {"type": type(e).__name__, "message": str(e)}
+            {"type": type(e).__name__, "message": str(e)}
             raise
 
         finally:
@@ -617,9 +613,7 @@ class GapAnalyzerOpikTracer:
             trace_ctx.end_time = end_time
             trace_ctx.duration_ms = (end_time - start_time).total_seconds() * 1000
 
-            logger.debug(
-                f"Gap analysis trace completed in {trace_ctx.duration_ms:.2f}ms"
-            )
+            logger.debug(f"Gap analysis trace completed in {trace_ctx.duration_ms:.2f}ms")
 
 
 def trace_gap_analysis(

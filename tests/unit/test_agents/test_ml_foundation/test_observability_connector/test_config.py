@@ -12,31 +12,24 @@ Phase 3.4 Configuration tests.
 
 import os
 import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import yaml
 
 from src.agents.ml_foundation.observability_connector.config import (
-    AgentTierSettings,
     BatchingSettings,
     CacheSettings,
     CacheTTLSettings,
     CircuitBreakerFallback,
     CircuitBreakerSettings,
-    DatabaseSettings,
-    LoggingSettings,
     ObservabilityConfig,
     OpikSettings,
-    RetentionSettings,
     RetrySettings,
     SamplingSettings,
-    SpanSettings,
     get_observability_config,
     reset_observability_config,
 )
-
 
 # ============================================================================
 # FIXTURES
@@ -135,9 +128,7 @@ def sample_config_yaml():
 @pytest.fixture
 def temp_config_file(sample_config_yaml):
     """Create a temporary config file."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         yaml.dump(sample_config_yaml, f)
         yield f.name
     os.unlink(f.name)
@@ -373,9 +364,7 @@ class TestObservabilityConfig:
 
     def test_from_yaml_environment_override(self, sample_config_yaml):
         """Test environment-specific overrides."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(sample_config_yaml, f)
             temp_path = f.name
 
@@ -458,7 +447,7 @@ class TestSingleton:
     def test_force_reload(self, temp_config_file):
         """Test force reload."""
         # Get initial config (defaults)
-        config1 = get_observability_config()
+        get_observability_config()
 
         # Force reload with file
         config2 = get_observability_config(temp_config_file, force_reload=True)
@@ -522,9 +511,7 @@ class TestEdgeCases:
 
     def test_empty_yaml(self):
         """Test loading empty YAML."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("")
             temp_path = f.name
 
@@ -541,9 +528,7 @@ class TestEdgeCases:
             "opik": {"enabled": False},
             # Other sections missing
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(partial_config, f)
             temp_path = f.name
 
@@ -557,9 +542,7 @@ class TestEdgeCases:
 
     def test_invalid_yaml(self):
         """Test loading invalid YAML."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("invalid: yaml: content: [")
             temp_path = f.name
 
@@ -579,9 +562,7 @@ class TestEdgeCases:
                 "another_unknown": 123,
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_with_unknown, f)
             temp_path = f.name
 

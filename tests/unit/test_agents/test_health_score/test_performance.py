@@ -13,7 +13,6 @@ without external service calls.
 import asyncio
 import time
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -276,7 +275,7 @@ class TestHealthScoreParallelism:
         state = _create_mock_state(scope="full")
 
         start = time.perf_counter()
-        result = await node.execute(state)
+        await node.execute(state)
         elapsed = time.perf_counter() - start
 
         # Should still complete reasonably fast due to parallelism

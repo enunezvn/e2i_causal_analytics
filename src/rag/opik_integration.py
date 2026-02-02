@@ -27,12 +27,11 @@ Version: 4.3.0
 """
 
 import logging
-import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +150,7 @@ class EvaluationTraceContext:
             "started_at": self.start_time.isoformat(),
             "ended_at": self.end_time.isoformat() if self.end_time else None,
             "duration_ms": (
-                (self.end_time - self.start_time).total_seconds() * 1000
-                if self.end_time
-                else None
+                (self.end_time - self.start_time).total_seconds() * 1000 if self.end_time else None
             ),
             "sample_count": self.sample_count,
             "ragas_scores": self.scores,
@@ -226,11 +223,7 @@ class OpikEvaluationTracer:
     def is_enabled(self) -> bool:
         """Check if tracing is enabled and available."""
         self._ensure_initialized()
-        return (
-            self.enabled
-            and self._opik_connector is not None
-            and self._opik_connector.is_enabled
-        )
+        return self.enabled and self._opik_connector is not None and self._opik_connector.is_enabled
 
     @property
     def circuit_breaker_status(self) -> Dict[str, Any]:
@@ -274,8 +267,6 @@ class OpikEvaluationTracer:
             start_time=start_time,
             metadata=metadata or {},
         )
-
-        opik_trace = None
 
         try:
             # Create Opik trace if enabled and circuit breaker allows

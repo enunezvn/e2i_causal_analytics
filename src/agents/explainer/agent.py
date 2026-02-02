@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from src.agents.base import SkillsMixin
+
 from .config import ComplexityScorer, ExplainerConfig, get_default_config
 from .graph import build_explainer_graph
 from .state import ExplainerState, Insight, NarrativeSection
@@ -229,10 +230,7 @@ class ExplainerAgent(SkillsMixin):
         try:
             # Check if results include causal analysis
             has_causal = any(
-                any(
-                    key in result
-                    for key in ["causal_effect", "treatment_effect", "ate", "cate"]
-                )
+                any(key in result for key in ["causal_effect", "treatment_effect", "ate", "cate"])
                 for result in analysis_results
             )
 

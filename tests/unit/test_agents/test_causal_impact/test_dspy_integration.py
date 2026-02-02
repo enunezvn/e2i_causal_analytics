@@ -12,17 +12,16 @@ the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
-from datetime import datetime, timezone
 
 # Mark entire module to run on same worker - prevents import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.causal_impact.dspy_integration import (
+    DSPY_AVAILABLE,
     CausalAnalysisTrainingSignal,
     CausalImpactSignalCollector,
     get_causal_impact_signal_collector,
     reset_dspy_integration,
-    DSPY_AVAILABLE,
 )
 
 
@@ -470,26 +469,29 @@ class TestDSPySignatures:
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_causal_graph_signature_fields(self):
         """Test CausalGraphSignature has expected fields."""
-        from src.agents.causal_impact.dspy_integration import CausalGraphSignature
-
         # Verify it's a DSPy signature
         import dspy
+
+        from src.agents.causal_impact.dspy_integration import CausalGraphSignature
+
         assert issubclass(CausalGraphSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_evidence_synthesis_signature_fields(self):
         """Test EvidenceSynthesisSignature has expected fields."""
+        import dspy
+
         from src.agents.causal_impact.dspy_integration import EvidenceSynthesisSignature
 
-        import dspy
         assert issubclass(EvidenceSynthesisSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_causal_interpretation_signature_fields(self):
         """Test CausalInterpretationSignature has expected fields."""
+        import dspy
+
         from src.agents.causal_impact.dspy_integration import CausalInterpretationSignature
 
-        import dspy
         assert issubclass(CausalInterpretationSignature, dspy.Signature)
 
 

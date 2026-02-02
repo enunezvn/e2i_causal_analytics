@@ -12,17 +12,16 @@ the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
-from datetime import datetime, timezone
 
 # Mark entire module to run on same worker - prevents import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.heterogeneous_optimizer.dspy_integration import (
+    DSPY_AVAILABLE,
     HeterogeneousOptimizationTrainingSignal,
     HeterogeneousOptimizerSignalCollector,
     get_heterogeneous_optimizer_signal_collector,
     reset_dspy_integration,
-    DSPY_AVAILABLE,
 )
 
 
@@ -436,25 +435,30 @@ class TestDSPySignatures:
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_cate_interpretation_signature(self):
         """Test CATEInterpretationSignature exists."""
+        import dspy
+
         from src.agents.heterogeneous_optimizer.dspy_integration import CATEInterpretationSignature
 
-        import dspy
         assert issubclass(CATEInterpretationSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_policy_recommendation_signature(self):
         """Test PolicyRecommendationSignature exists."""
-        from src.agents.heterogeneous_optimizer.dspy_integration import PolicyRecommendationSignature
-
         import dspy
+
+        from src.agents.heterogeneous_optimizer.dspy_integration import (
+            PolicyRecommendationSignature,
+        )
+
         assert issubclass(PolicyRecommendationSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_segment_profile_signature(self):
         """Test SegmentProfileSignature exists."""
+        import dspy
+
         from src.agents.heterogeneous_optimizer.dspy_integration import SegmentProfileSignature
 
-        import dspy
         assert issubclass(SegmentProfileSignature, dspy.Signature)
 
 

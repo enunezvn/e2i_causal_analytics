@@ -46,7 +46,7 @@ class TestInMemoryBackend:
         backend = InMemoryBackend()
 
         # Make requests up to the limit
-        for i in range(10):
+        for _i in range(10):
             is_limited, remaining = backend.is_rate_limited("client-1", limit=10, window=60)
             assert is_limited is False
 
@@ -61,7 +61,7 @@ class TestInMemoryBackend:
         backend = InMemoryBackend()
 
         # Exhaust limit
-        for i in range(5):
+        for _i in range(5):
             backend.is_rate_limited("client-1", limit=5, window=1)
 
         # Verify limited
@@ -82,7 +82,7 @@ class TestInMemoryBackend:
         backend = InMemoryBackend()
 
         # Exhaust limit for client-1
-        for i in range(5):
+        for _i in range(5):
             backend.is_rate_limited("client-1", limit=5, window=60)
 
         is_limited_1, _ = backend.is_rate_limited("client-1", limit=5, window=60)
@@ -99,14 +99,14 @@ class TestInMemoryBackend:
         backend = InMemoryBackend()
 
         # Make 3 requests
-        for i in range(3):
+        for _i in range(3):
             backend.is_rate_limited("client-1", limit=5, window=1)
 
         # Wait for partial window expiration
         time.sleep(0.6)
 
         # Make 2 more requests (now at 5 total, but some expired)
-        for i in range(2):
+        for _i in range(2):
             is_limited, _ = backend.is_rate_limited("client-1", limit=5, window=1)
 
         # Should still be allowed (old requests sliding out)
@@ -479,7 +479,9 @@ class TestRateLimitMiddleware:
         await middleware.dispatch(mock_request, call_next)
 
         # Second request triggers rate limit
-        with patch("src.api.middleware.rate_limit_middleware.get_security_audit_service") as mock_audit:
+        with patch(
+            "src.api.middleware.rate_limit_middleware.get_security_audit_service"
+        ) as mock_audit:
             mock_audit_service = MagicMock()
             mock_audit.return_value = mock_audit_service
 

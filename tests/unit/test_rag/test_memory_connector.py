@@ -354,9 +354,7 @@ class TestGraphTraverse:
             "src.rag.memory_connector.get_semantic_memory", return_value=mock_semantic_memory
         ):
             connector = MemoryConnector()
-            connector.graph_traverse(
-                entity_id="hcp_1", relationship="hcp_network", max_depth=2
-            )
+            connector.graph_traverse(entity_id="hcp_1", relationship="hcp_network", max_depth=2)
 
         mock_semantic_memory.get_hcp_influence_network.assert_called_once_with("hcp_1", max_depth=2)
 

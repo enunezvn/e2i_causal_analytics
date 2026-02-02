@@ -12,19 +12,17 @@ Tests cover:
 Phase 1 G03 from observability audit remediation plan.
 """
 
-import json
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.agents.gap_analyzer.mlflow_tracker import (
+    EXPERIMENT_PREFIX,
     GapAnalysisContext,
     GapAnalyzerMetrics,
     GapAnalyzerMLflowTracker,
-    EXPERIMENT_PREFIX,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -43,7 +41,9 @@ def mock_mlflow():
     mock.log_metric = MagicMock()
     mock.log_metrics = MagicMock()
     mock.log_artifact = MagicMock()
-    mock.search_runs = MagicMock(return_value=MagicMock(to_dict=MagicMock(return_value={"run_id": []})))
+    mock.search_runs = MagicMock(
+        return_value=MagicMock(to_dict=MagicMock(return_value={"run_id": []}))
+    )
     mock.get_experiment_by_name = MagicMock(return_value=MagicMock(experiment_id="test_exp_id"))
     return mock
 
@@ -311,7 +311,7 @@ class TestLogParams:
 
     def test_log_params_from_output(self, tracker, sample_result):
         """Test parameter logging from output dict."""
-        with patch("mlflow.log_param") as mock_log_param:
+        with patch("mlflow.log_param"):
             tracker._log_params(sample_result)
             # Should not fail, logging is called
 

@@ -158,9 +158,7 @@ class InMemoryValidationOutcomeStore(ValidationOutcomeStoreBase):
             key = f"{pattern.category.value}:{pattern.test_name}"
             self._pattern_counts[key] += 1
 
-        logger.info(
-            f"Stored validation outcome {outcome.outcome_id}: " f"{outcome.outcome_type.value}"
-        )
+        logger.info(f"Stored validation outcome {outcome.outcome_id}: {outcome.outcome_type.value}")
 
         return outcome.outcome_id
 
@@ -427,8 +425,7 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
 
             if result.data:
                 logger.info(
-                    f"Stored validation outcome {outcome.outcome_id}: "
-                    f"{outcome.outcome_type.value}"
+                    f"Stored validation outcome {outcome.outcome_id}: {outcome.outcome_type.value}"
                 )
                 return outcome.outcome_id
             else:
@@ -508,7 +505,8 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
             # Post-filter by failure category if specified (needs JSONB containment)
             if failure_category:
                 outcomes = [
-                    o for o in outcomes
+                    o
+                    for o in outcomes
                     if any(p.category == failure_category for p in o.failure_patterns)
                 ]
 
@@ -533,9 +531,7 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
         """Get aggregated failure patterns for learning."""
         client = self._get_client()
         if not client:
-            return await self._get_fallback().get_failure_patterns(
-                limit=limit, category=category
-            )
+            return await self._get_fallback().get_failure_patterns(limit=limit, category=category)
 
         try:
             # Use the v_validation_failure_patterns view
@@ -549,21 +545,21 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
 
             patterns = []
             for row in result.data:
-                patterns.append({
-                    "category": row.get("category", "unknown"),
-                    "test_name": row.get("test_name", ""),
-                    "count": row.get("failure_count", 0),
-                    "avg_delta_percent": float(row.get("avg_delta_percent", 0) or 0),
-                    "recommendations": row.get("recommendations", []),
-                })
+                patterns.append(
+                    {
+                        "category": row.get("category", "unknown"),
+                        "test_name": row.get("test_name", ""),
+                        "count": row.get("failure_count", 0),
+                        "avg_delta_percent": float(row.get("avg_delta_percent", 0) or 0),
+                        "recommendations": row.get("recommendations", []),
+                    }
+                )
 
             return patterns
 
         except Exception as e:
             logger.error(f"Failed to get failure patterns from Supabase: {e}")
-            return await self._get_fallback().get_failure_patterns(
-                limit=limit, category=category
-            )
+            return await self._get_fallback().get_failure_patterns(limit=limit, category=category)
 
     async def get_similar_failures(
         self,
@@ -885,9 +881,7 @@ def get_validation_outcome_store(
                 logger.info("Using Supabase validation outcome store")
                 _global_outcome_store = SupabaseValidationOutcomeStore()
             else:
-                logger.info(
-                    "SUPABASE_URL not set, using in-memory validation outcome store"
-                )
+                logger.info("SUPABASE_URL not set, using in-memory validation outcome store")
                 _global_outcome_store = InMemoryValidationOutcomeStore()
         else:
             logger.info("Using in-memory validation outcome store (requested)")

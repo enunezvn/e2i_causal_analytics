@@ -27,7 +27,6 @@ from src.tool_registry.tools.structural_drift import (
     register_structural_drift_tool,
 )
 
-
 # =============================================================================
 # INPUT/OUTPUT SCHEMA TESTS
 # =============================================================================
@@ -432,33 +431,25 @@ class TestRecommendations:
 
     def test_critical_recommendation(self, tool):
         """Test critical severity recommendation."""
-        rec = tool._generate_recommendation(
-            0.35, "critical", ["A->C"], ["B->D"], []
-        )
+        rec = tool._generate_recommendation(0.35, "critical", ["A->C"], ["B->D"], [])
         assert "CRITICAL" in rec
         assert "Re-run causal discovery" in rec
 
     def test_high_recommendation(self, tool):
         """Test high severity recommendation."""
-        rec = tool._generate_recommendation(
-            0.25, "high", ["A->C"], [], []
-        )
+        rec = tool._generate_recommendation(0.25, "high", ["A->C"], [], [])
         assert "HIGH" in rec
         assert "model retraining" in rec
 
     def test_medium_recommendation(self, tool):
         """Test medium severity recommendation."""
-        rec = tool._generate_recommendation(
-            0.15, "medium", [], ["B->D"], []
-        )
+        rec = tool._generate_recommendation(0.15, "medium", [], ["B->D"], [])
         assert "MEDIUM" in rec
         assert "Monitor" in rec
 
     def test_low_recommendation(self, tool):
         """Test low severity recommendation."""
-        rec = tool._generate_recommendation(
-            0.06, "low", [], [], []
-        )
+        rec = tool._generate_recommendation(0.06, "low", [], [], [])
         assert "LOW" in rec
         assert "no immediate action" in rec
 
@@ -471,9 +462,7 @@ class TestRecommendations:
                 current_type="BIDIRECTED",
             )
         ]
-        rec = tool._generate_recommendation(
-            0.01, "low", [], [], edge_changes
-        )
+        rec = tool._generate_recommendation(0.01, "low", [], [], edge_changes)
         assert "Edge type changes" in rec
         assert "IV methods" in rec
 

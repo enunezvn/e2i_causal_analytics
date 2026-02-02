@@ -5,11 +5,10 @@ Central calculation engine for on-demand KPI computation with
 caching, causal library routing, and database integration.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +87,7 @@ class KPICalculator:
 
         logger.info("KPI Calculator initialized")
 
-    def register_calculator(
-        self, workstream: Workstream, calculator: KPICalculatorBase
-    ) -> None:
+    def register_calculator(self, workstream: Workstream, calculator: KPICalculatorBase) -> None:
         """Register a calculator for a workstream.
 
         Args:
@@ -179,16 +176,12 @@ class KPICalculator:
         # Calculate each KPI
         for kpi in kpis:
             if kpi is not None:
-                result = self.calculate(
-                    kpi.id, use_cache=use_cache, context=context
-                )
+                result = self.calculate(kpi.id, use_cache=use_cache, context=context)
                 batch.add_result(result)
 
         return batch
 
-    def _calculate_kpi(
-        self, kpi: KPIMetadata, context: dict[str, Any]
-    ) -> KPIResult:
+    def _calculate_kpi(self, kpi: KPIMetadata, context: dict[str, Any]) -> KPIResult:
         """Internal KPI calculation logic.
 
         Args:
@@ -215,9 +208,7 @@ class KPICalculator:
                 error=str(e),
             )
 
-    def _default_calculate(
-        self, kpi: KPIMetadata, context: dict[str, Any]
-    ) -> KPIResult:
+    def _default_calculate(self, kpi: KPIMetadata, context: dict[str, Any]) -> KPIResult:
         """Default calculation using database views or direct SQL.
 
         Args:

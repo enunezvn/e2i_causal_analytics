@@ -804,13 +804,13 @@ class RefutationRunner:
         # Determine status based on CI coverage
         if ci_coverage >= self.thresholds["subset_ci_coverage"]["pass"]:
             status = RefutationStatus.PASSED
-            message = f"Effect consistent across {int(ci_coverage*100)}% of data subsets"
+            message = f"Effect consistent across {int(ci_coverage * 100)}% of data subsets"
         elif ci_coverage >= self.thresholds["subset_ci_coverage"]["warning"]:
             status = RefutationStatus.WARNING
-            message = f"Effect varies in {int((1-ci_coverage)*100)}% of subsets"
+            message = f"Effect varies in {int((1 - ci_coverage) * 100)}% of subsets"
         else:
             status = RefutationStatus.FAILED
-            message = f"WARNING: Effect inconsistent across data subsets ({int(ci_coverage*100)}% coverage)"
+            message = f"WARNING: Effect inconsistent across data subsets ({int(ci_coverage * 100)}% coverage)"
 
         execution_time = (time.time() - start_time) * 1000
 

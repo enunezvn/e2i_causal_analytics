@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.main import app
 from src.api.dependencies.bentoml_client import get_bentoml_client
+from src.api.main import app
 
 client = TestClient(app)
 
@@ -91,7 +91,9 @@ def mock_model_info():
 
 
 @pytest.fixture
-def mock_bentoml_client(mock_prediction_result, mock_batch_result, mock_health_result, mock_model_info):
+def mock_bentoml_client(
+    mock_prediction_result, mock_batch_result, mock_health_result, mock_model_info
+):
     """Mock BentoMLClient instance."""
     client_mock = MagicMock()
     client_mock.predict = AsyncMock(return_value=mock_prediction_result)
@@ -186,9 +188,7 @@ class TestSinglePrediction:
 
     def test_predict_circuit_breaker_open(self, mock_bentoml_client):
         """Should return 503 when circuit breaker is open."""
-        mock_bentoml_client.predict = AsyncMock(
-            side_effect=RuntimeError("Circuit breaker open")
-        )
+        mock_bentoml_client.predict = AsyncMock(side_effect=RuntimeError("Circuit breaker open"))
 
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
@@ -201,9 +201,7 @@ class TestSinglePrediction:
 
     def test_predict_internal_error(self, mock_bentoml_client):
         """Should return 500 for other prediction failures."""
-        mock_bentoml_client.predict = AsyncMock(
-            side_effect=Exception("Model inference failed")
-        )
+        mock_bentoml_client.predict = AsyncMock(side_effect=Exception("Model inference failed"))
 
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
@@ -306,9 +304,7 @@ class TestModelInfo:
 
     def test_get_model_info_not_found(self, mock_bentoml_client):
         """Should return 404 for unknown model."""
-        mock_bentoml_client.get_model_info = AsyncMock(
-            side_effect=Exception("Model not found")
-        )
+        mock_bentoml_client.get_model_info = AsyncMock(side_effect=Exception("Model not found"))
 
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.get("/api/models/nonexistent_model/info")

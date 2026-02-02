@@ -327,9 +327,7 @@ class LineageTracker:
         Args:
             graph_id: Optional graph ID (auto-generated if not provided)
         """
-        self.graph = LineageGraph(
-            graph_id=graph_id or f"lineage_{uuid.uuid4().hex[:12]}"
-        )
+        self.graph = LineageGraph(graph_id=graph_id or f"lineage_{uuid.uuid4().hex[:12]}")
         logger.info(f"Initialized lineage tracker: {self.graph.graph_id}")
 
     @property
@@ -443,7 +441,6 @@ class LineageTracker:
 
     def _compute_dataframe_hash(self, df: Any) -> str:
         """Compute hash of DataFrame for integrity checking."""
-        import pandas as pd
 
         # Hash the shape and column names
         shape_str = f"{df.shape}"
@@ -629,9 +626,7 @@ class LineageTracker:
             "combined": SplitType.COMBINED,
         }
 
-        split_type = split_type_map.get(
-            split_result.config.split_type, SplitType.RANDOM
-        )
+        split_type = split_type_map.get(split_result.config.split_type, SplitType.RANDOM)
 
         # Get sizes
         train_size = len(split_result.train) if split_result.train is not None else None
@@ -706,8 +701,8 @@ class LineageTracker:
             True if successful
         """
         import json
-        import tempfile
         import os
+        import tempfile
 
         if mlflow_connector is None:
             from src.mlops.mlflow_connector import get_mlflow_connector
@@ -720,9 +715,7 @@ class LineageTracker:
 
         try:
             # Create temporary file with lineage JSON
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                 json.dump(self.graph.to_dict(), f, indent=2)
                 temp_path = f.name
 
@@ -813,16 +806,12 @@ class LineageTracker:
         # Check for splits without leakage checks
         for split in self.graph.splits:
             if not split.leakage_checked:
-                issues.append(
-                    f"Split {split.split_id} was not checked for leakage"
-                )
+                issues.append(f"Split {split.split_id} was not checked for leakage")
 
         # Check for detected leakage
         for split in self.graph.splits:
             if split.leakage_detected:
-                issues.append(
-                    f"CRITICAL: Split {split.split_id} has detected data leakage"
-                )
+                issues.append(f"CRITICAL: Split {split.split_id} has detected data leakage")
 
         # Check for validation failures
         for transform in self.graph.transformations:
@@ -899,8 +888,12 @@ class LineageTracker:
                     transformation_type=TransformationType(step_data["transformation_type"]),
                     transformation_name=step_data["transformation_name"],
                     created_at=datetime.fromisoformat(step_data["created_at"]),
-                    input_shape=tuple(step_data["input_shape"]) if step_data.get("input_shape") else None,
-                    output_shape=tuple(step_data["output_shape"]) if step_data.get("output_shape") else None,
+                    input_shape=tuple(step_data["input_shape"])
+                    if step_data.get("input_shape")
+                    else None,
+                    output_shape=tuple(step_data["output_shape"])
+                    if step_data.get("output_shape")
+                    else None,
                     parameters=step_data.get("parameters", {}),
                     rows_affected=step_data.get("rows_affected"),
                     columns_added=step_data.get("columns_added"),

@@ -19,7 +19,7 @@ Integration:
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from .graph import create_model_trainer_graph
 from .state import ModelTrainerState
@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 async def _get_training_run_repository():
     """Get MLTrainingRunRepository with async client (lazy import to avoid circular deps)."""
     try:
-        from src.repositories.ml_experiment import MLTrainingRunRepository
         from src.memory.services.factories import get_async_supabase_client
+        from src.repositories.ml_experiment import MLTrainingRunRepository
 
         client = await get_async_supabase_client()
         return MLTrainingRunRepository(supabase_client=client)
@@ -44,6 +44,7 @@ def _get_opik_connector():
     """Get OpikConnector (lazy import to avoid circular deps)."""
     try:
         from src.mlops.opik_connector import get_opik_connector
+
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
@@ -54,6 +55,7 @@ def _get_procedural_memory():
     """Get procedural memory client (lazy import with graceful degradation)."""
     try:
         from src.memory.procedural_memory import get_procedural_memory_client
+
         return get_procedural_memory_client()
     except Exception as e:
         logger.debug(f"Procedural memory not available: {e}")
@@ -232,12 +234,14 @@ class ModelTrainerAgent:
                     final_state = await self.graph.ainvoke(initial_state)
                     # Set output on span
                     if span and not final_state.get("error"):
-                        span.set_output({
-                            "training_run_id": training_run_id,
-                            "model_id": model_id,
-                            "success_criteria_met": final_state.get("success_criteria_met"),
-                            "hpo_trials_run": final_state.get("hpo_trials_run", 0),
-                        })
+                        span.set_output(
+                            {
+                                "training_run_id": training_run_id,
+                                "model_id": model_id,
+                                "success_criteria_met": final_state.get("success_criteria_met"),
+                                "hpo_trials_run": final_state.get("hpo_trials_run", 0),
+                            }
+                        )
             else:
                 final_state = await self.graph.ainvoke(initial_state)
         except Exception as e:
@@ -464,8 +468,8 @@ class ModelTrainerAgent:
             if experiment_id_str:
                 try:
                     # Get the experiment repository to look up by mlflow_id
-                    from src.repositories.ml_experiment import MLExperimentRepository
                     from src.memory.services.factories import get_async_supabase_client
+                    from src.repositories.ml_experiment import MLExperimentRepository
 
                     client = await get_async_supabase_client()
                     exp_repo = MLExperimentRepository(supabase_client=client)
@@ -473,7 +477,9 @@ class ModelTrainerAgent:
 
                     if experiment and experiment.id:
                         experiment_uuid = experiment.id
-                        logger.debug(f"Found experiment {experiment_id_str} with UUID {experiment_uuid}")
+                        logger.debug(
+                            f"Found experiment {experiment_id_str} with UUID {experiment_uuid}"
+                        )
                     else:
                         logger.debug(
                             f"Experiment {experiment_id_str} not found in database, "
@@ -515,8 +521,7 @@ class ModelTrainerAgent:
                 )
 
                 logger.info(
-                    f"Persisted training run: {result.run_name} "
-                    f"for experiment {experiment_uuid}"
+                    f"Persisted training run: {result.run_name} for experiment {experiment_uuid}"
                 )
                 return True
 

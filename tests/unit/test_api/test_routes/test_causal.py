@@ -9,23 +9,11 @@ Tests cover:
 - Health check
 """
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes.causal import router
-from src.api.schemas.causal import (
-    AnalysisStatus,
-    CausalLibrary,
-    EstimatorType,
-    PipelineMode,
-    QuestionType,
-    SegmentationMethod,
-)
-
 
 # =============================================================================
 # FIXTURES
@@ -592,7 +580,11 @@ class TestRequestValidation:
                 "outcome_var": "outcome",
                 "data_source": "mock_data",
                 "stages": [
-                    {"library": "dowhy", "estimator": "propensity_score_matching", "parameters": {}},
+                    {
+                        "library": "dowhy",
+                        "estimator": "propensity_score_matching",
+                        "parameters": {},
+                    },
                 ],
             },
         )

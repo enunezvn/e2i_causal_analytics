@@ -18,14 +18,13 @@ from src.services.alert_routing import (
     AlertPayload,
     AlertRouter,
     AlertRoutingConfig,
+    EmailNotificationProvider,
     NotificationChannel,
     SlackNotificationProvider,
-    EmailNotificationProvider,
     WebhookNotificationProvider,
     get_alert_router,
     route_drift_alerts,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -315,7 +314,9 @@ class TestWebhookNotificationProvider:
         provider = WebhookNotificationProvider(config)
         assert provider.is_enabled() is False
 
-    def test_format_payload(self, default_config: AlertRoutingConfig, sample_alert_payload: AlertPayload):
+    def test_format_payload(
+        self, default_config: AlertRoutingConfig, sample_alert_payload: AlertPayload
+    ):
         """Test webhook payload formatting."""
         provider = WebhookNotificationProvider(default_config)
         payload = provider._format_payload(sample_alert_payload)
@@ -434,9 +435,7 @@ class TestAlertRouter:
         assert result["alert_id"] == "test-123"
 
     @pytest.mark.asyncio
-    async def test_route_batch(
-        self, alert_router: AlertRouter
-    ):
+    async def test_route_batch(self, alert_router: AlertRouter):
         """Test routing multiple alerts."""
         # Mock providers
         for provider in alert_router._providers.values():
@@ -484,9 +483,7 @@ class TestHelperFunctions:
     @pytest.mark.asyncio
     async def test_route_drift_alerts_with_no_drift(self):
         """Test routing when no drift is detected."""
-        drift_results = [
-            {"feature": "feature_1", "drift_detected": False}
-        ]
+        drift_results = [{"feature": "feature_1", "drift_detected": False}]
 
         result = await route_drift_alerts(
             model_version="test_v1.0",

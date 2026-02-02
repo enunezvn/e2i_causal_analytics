@@ -9,8 +9,9 @@ Tests the Sender role implementation including:
 - Full signal lifecycle
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 # Mark all tests in this module as dspy_integration to group them
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
@@ -243,8 +244,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_update_model_orchestration(self):
         """Test updating signal with orchestration results."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -266,8 +267,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_update_ensemble_results(self):
         """Test updating signal with ensemble results."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -291,8 +292,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_update_context_enrichment_adds_to_buffer(self):
         """Test that context enrichment update adds signal to buffer."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -315,8 +316,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_buffer_limit_enforcement(self):
         """Test that buffer respects size limit."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -342,8 +343,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_update_with_accuracy(self):
         """Test delayed accuracy update."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -361,8 +362,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_get_signals_for_training(self):
         """Test getting signals filtered by min reward."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -401,8 +402,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_get_accurate_examples(self):
         """Test getting examples with high accuracy."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -423,8 +424,8 @@ class TestPredictionSynthesizerSignalCollector:
     def test_clear_buffer(self):
         """Test buffer clearing."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesizerSignalCollector,
             PredictionSynthesisTrainingSignal,
+            PredictionSynthesizerSignalCollector,
         )
 
         collector = PredictionSynthesizerSignalCollector()
@@ -486,8 +487,8 @@ class TestDSPySignatures:
     def test_prediction_synthesis_signature(self):
         """Test PredictionSynthesisSignature is valid DSPy signature."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionSynthesisSignature,
             DSPY_AVAILABLE,
+            PredictionSynthesisSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -504,8 +505,8 @@ class TestDSPySignatures:
     def test_prediction_interpretation_signature(self):
         """Test PredictionInterpretationSignature is valid DSPy signature."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            PredictionInterpretationSignature,
             DSPY_AVAILABLE,
+            PredictionInterpretationSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -522,8 +523,8 @@ class TestDSPySignatures:
     def test_uncertainty_quantification_signature(self):
         """Test UncertaintyQuantificationSignature is valid DSPy signature."""
         from src.agents.prediction_synthesizer.dspy_integration import (
-            UncertaintyQuantificationSignature,
             DSPY_AVAILABLE,
+            UncertaintyQuantificationSignature,
         )
 
         if not DSPY_AVAILABLE:
@@ -693,7 +694,8 @@ class TestSignalEmission:
     @pytest.mark.asyncio
     async def test_emit_training_signal_above_threshold(self):
         """Test signal emission above threshold."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
+
         from src.agents.prediction_synthesizer.dspy_integration import (
             PredictionSynthesisTrainingSignal,
             emit_training_signal,
@@ -733,7 +735,6 @@ class TestSignalEmission:
     @pytest.mark.asyncio
     async def test_emit_training_signal_import_error(self):
         """Test graceful handling when feedback learner not available."""
-        from unittest.mock import patch
         from src.agents.prediction_synthesizer.dspy_integration import (
             PredictionSynthesisTrainingSignal,
             emit_training_signal,
@@ -761,7 +762,8 @@ class TestSignalEmission:
     @pytest.mark.asyncio
     async def test_emit_training_signal_exception(self):
         """Test graceful handling of exceptions."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
+
         from src.agents.prediction_synthesizer.dspy_integration import (
             PredictionSynthesisTrainingSignal,
             emit_training_signal,
@@ -903,7 +905,8 @@ class TestCollectAndEmitSignal:
     @pytest.mark.asyncio
     async def test_collect_and_emit_success(self):
         """Test successful signal collection and emission."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
+
         from src.agents.prediction_synthesizer.dspy_integration import (
             collect_and_emit_signal,
             reset_dspy_integration,
@@ -963,7 +966,8 @@ class TestCollectAndEmitSignal:
     @pytest.mark.asyncio
     async def test_collect_and_emit_adds_to_buffer(self):
         """Test that signal is added to collector buffer."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
+
         from src.agents.prediction_synthesizer.dspy_integration import (
             collect_and_emit_signal,
             get_prediction_synthesizer_signal_collector,
@@ -1002,7 +1006,8 @@ class TestCollectAndEmitSignal:
     @pytest.mark.asyncio
     async def test_collect_and_emit_not_emitted_returns_none(self):
         """Test return value when signal not emitted."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
+
         from src.agents.prediction_synthesizer.dspy_integration import (
             collect_and_emit_signal,
             reset_dspy_integration,

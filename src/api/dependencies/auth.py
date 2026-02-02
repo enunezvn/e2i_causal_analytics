@@ -137,6 +137,7 @@ def has_role(user: Dict[str, Any], required_role: UserRole) -> bool:
     required_level = ROLE_LEVELS.get(required_role, 0)
     return user_level >= required_level
 
+
 # Security scheme for OpenAPI docs
 security = HTTPBearer(auto_error=False)
 

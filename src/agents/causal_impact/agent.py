@@ -6,7 +6,7 @@ Estimates causal effects using DoWhy/EconML with natural language interpretation
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from src.agents.base import SkillsMixin
 from src.agents.causal_impact.graph import create_causal_impact_graph
@@ -708,7 +708,9 @@ class CausalImpactAgent(SkillsMixin):
                 min_similarity=min_similarity,
             )
 
-            logger.debug(f"Episodic memory query for '{query[:50]}...': found {len(memories)} memories")
+            logger.debug(
+                f"Episodic memory query for '{query[:50]}...': found {len(memories)} memories"
+            )
             return memories
 
         except Exception as e:

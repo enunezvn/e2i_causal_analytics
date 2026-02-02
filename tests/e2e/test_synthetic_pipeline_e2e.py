@@ -21,24 +21,24 @@ import pandas as pd
 import pytest
 
 from src.ml.synthetic.config import (
+    DGP_CONFIGS,
     Brand,
     DataSplit,
     DGPType,
-    DGP_CONFIGS,
-)
-from src.ml.synthetic.loaders import (
-    get_dataset_stats,
-    validate_supabase_data,
-    DatasetStats,
 )
 from src.ml.synthetic.ground_truth.causal_effects import (
     GroundTruthStore,
-    GroundTruthEffect,
     create_ground_truth_from_dgp_config,
+)
+from src.ml.synthetic.loaders import (
+    DatasetStats,
+    get_dataset_stats,
+    validate_supabase_data,
 )
 
 try:
-    from dowhy import CausalModel
+    from dowhy import CausalModel  # noqa: F401
+
     DOWHY_AVAILABLE = True
 except ImportError:
     DOWHY_AVAILABLE = False
@@ -84,13 +84,15 @@ class PipelineResult:
     @property
     def all_stages_passed(self) -> bool:
         """Check if all pipeline stages passed."""
-        return all([
-            self.generation_success,
-            self.validation_success,
-            self.load_success,
-            self.train_success,
-            self.causal_success,
-        ])
+        return all(
+            [
+                self.generation_success,
+                self.validation_success,
+                self.load_success,
+                self.train_success,
+                self.causal_success,
+            ]
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for reporting."""
@@ -151,18 +153,20 @@ def generate_synthetic_data(
     Y = true_ate * T + 0.3 * C1 + 0.2 * C2 + noise
 
     # Create DataFrame with all required columns
-    df = pd.DataFrame({
-        "T": T,
-        "Y": Y,
-        "C1": C1,
-        "C2": C2,
-        "brand": np.random.choice([b.value for b in Brand], n_samples),
-        "data_split": np.random.choice(
-            [s.value for s in DataSplit],
-            n_samples,
-            p=[0.60, 0.20, 0.15, 0.05],  # 60/20/15/5 ratio
-        ),
-    })
+    df = pd.DataFrame(
+        {
+            "T": T,
+            "Y": Y,
+            "C1": C1,
+            "C2": C2,
+            "brand": np.random.choice([b.value for b in Brand], n_samples),
+            "data_split": np.random.choice(
+                [s.value for s in DataSplit],
+                n_samples,
+                p=[0.60, 0.20, 0.15, 0.05],  # 60/20/15/5 ratio
+            ),
+        }
+    )
 
     return df
 
@@ -244,7 +248,7 @@ def train_causal_model(
     return {
         "model": model,
         "estimated_ate": estimated_ate,
-        "feature_importance": dict(zip(X_cols, model.coef_)),
+        "feature_importance": dict(zip(X_cols, model.coef_, strict=False)),
     }
 
 
@@ -381,13 +385,16 @@ class TestSyntheticPipelineE2E:
         """Initialize ground truth store for testing."""
         return GroundTruthStore()
 
-    @pytest.mark.parametrize("dgp_type", [
-        DGPType.SIMPLE_LINEAR,
-        DGPType.CONFOUNDED,
-        DGPType.HETEROGENEOUS,
-        DGPType.TIME_SERIES,
-        DGPType.SELECTION_BIAS,
-    ])
+    @pytest.mark.parametrize(
+        "dgp_type",
+        [
+            DGPType.SIMPLE_LINEAR,
+            DGPType.CONFOUNDED,
+            DGPType.HETEROGENEOUS,
+            DGPType.TIME_SERIES,
+            DGPType.SELECTION_BIAS,
+        ],
+    )
     def test_pipeline_for_dgp(self, dgp_type: DGPType):
         """Test complete pipeline for each DGP type.
 
@@ -411,9 +418,7 @@ class TestSyntheticPipelineE2E:
         assert result.train_success, f"Training failed for {dgp_type.value}"
 
         # Check causal recovery
-        assert result.estimated_ate is not None, (
-            f"No ATE estimate for {dgp_type.value}"
-        )
+        assert result.estimated_ate is not None, f"No ATE estimate for {dgp_type.value}"
         assert result.within_tolerance, (
             f"ATE outside tolerance for {dgp_type.value}: "
             f"true={result.true_ate:.4f}, est={result.estimated_ate:.4f}, "
@@ -443,7 +448,8 @@ class TestSyntheticPipelineE2E:
             status = "✓ PASS" if r.all_stages_passed else "✗ FAIL"
             ate_info = (
                 f"ATE: true={r.true_ate:.3f}, est={r.estimated_ate:.3f}"
-                if r.estimated_ate else "ATE: N/A"
+                if r.estimated_ate
+                else "ATE: N/A"
             )
             print(f"  {r.dgp_type.value:20s} {status:10s} {ate_info}")
         print("=" * 70)
@@ -457,14 +463,16 @@ class TestSyntheticPipelineE2E:
     def test_validation_catches_bad_data(self):
         """Verify validation stage catches schema violations."""
         # Create data with invalid brand
-        df = pd.DataFrame({
-            "T": [0, 1, 0, 1],
-            "Y": [0.1, 0.5, 0.2, 0.6],
-            "C1": [0.0, 0.5, -0.5, 1.0],
-            "C2": [0.2, -0.2, 0.1, -0.1],
-            "brand": ["invalid_brand", "invalid_brand", "bad", "wrong"],
-            "data_split": ["train", "train", "validation", "test"],
-        })
+        df = pd.DataFrame(
+            {
+                "T": [0, 1, 0, 1],
+                "Y": [0.1, 0.5, 0.2, 0.6],
+                "C1": [0.0, 0.5, -0.5, 1.0],
+                "C2": [0.2, -0.2, 0.1, -0.1],
+                "brand": ["invalid_brand", "invalid_brand", "bad", "wrong"],
+                "data_split": ["train", "train", "validation", "test"],
+            }
+        )
 
         validation = validate_data(df)
 
@@ -542,9 +550,7 @@ class TestSyntheticPipelineE2E:
             results.append(result.estimated_ate)
 
         # All estimates should be identical
-        assert len(set(results)) == 1, (
-            f"Estimates should be identical with same seed: {results}"
-        )
+        assert len(set(results)) == 1, f"Estimates should be identical with same seed: {results}"
 
 
 class TestPipelineStageIsolation:

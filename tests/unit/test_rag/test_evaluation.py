@@ -9,14 +9,11 @@ Tests cover:
 - MLflow and Opik integration
 """
 
-import asyncio
 import json
 import sys
 import tempfile
-import time
 from pathlib import Path
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -46,7 +43,6 @@ from src.rag.evaluation import (
     quick_evaluate,
     save_evaluation_dataset,
 )
-
 
 # =============================================================================
 # Test Data Models
@@ -78,9 +74,7 @@ class TestEvaluationSample:
         assert sample.metadata == {}
 
     def test_sample_serialization(self):
-        sample = EvaluationSample(
-            query="test", ground_truth="truth", metadata={"key": "value"}
-        )
+        sample = EvaluationSample(query="test", ground_truth="truth", metadata={"key": "value"})
 
         data = sample.model_dump()
         assert data["query"] == "test"
@@ -109,7 +103,9 @@ class TestEvaluationResult:
         # Scores must be between 0 and 1
         with pytest.raises(Exception):
             EvaluationResult(
-                sample_id="test", query="test", faithfulness=1.5  # Invalid
+                sample_id="test",
+                query="test",
+                faithfulness=1.5,  # Invalid
             )
 
     def test_result_defaults(self):
@@ -169,9 +165,7 @@ class TestEvaluationConfig:
 
     def test_custom_config(self):
         custom_thresholds = {"faithfulness": 0.95}
-        config = EvaluationConfig(
-            thresholds=custom_thresholds, batch_size=20, log_to_mlflow=False
-        )
+        config = EvaluationConfig(thresholds=custom_thresholds, batch_size=20, log_to_mlflow=False)
 
         assert config.thresholds == custom_thresholds
         assert config.batch_size == 20
@@ -205,14 +199,10 @@ class TestDatasetFunctions:
                 contexts=["ctx1"],
                 metadata={"brand": "Kisqali"},
             ),
-            EvaluationSample(
-                query="test2", ground_truth="truth2", contexts=["ctx2"]
-            ),
+            EvaluationSample(query="test2", ground_truth="truth2", contexts=["ctx2"]),
         ]
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             temp_path = f.name
 
         try:
@@ -365,9 +355,7 @@ class TestRAGASEvaluator:
     @pytest.mark.asyncio
     async def test_evaluate_batch_with_run_id(self, evaluator):
         samples = [
-            EvaluationSample(
-                query="test", ground_truth="truth", answer="ans", contexts=["ctx"]
-            )
+            EvaluationSample(query="test", ground_truth="truth", answer="ans", contexts=["ctx"])
         ]
 
         evaluator._ragas_available = False
@@ -397,9 +385,7 @@ class TestRAGEvaluationPipeline:
     @pytest.fixture
     def pipeline(self, mock_config):
         with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
-            return RAGEvaluationPipeline(
-                config=mock_config, enable_opik_tracing=False
-            )
+            return RAGEvaluationPipeline(config=mock_config, enable_opik_tracing=False)
 
     def test_init(self, pipeline):
         assert pipeline.config is not None
@@ -450,13 +436,9 @@ class TestRAGEvaluationPipeline:
     async def test_run_evaluation_with_pipeline(self, pipeline):
         # Mock RAG pipeline
         mock_rag = AsyncMock()
-        mock_rag.query = AsyncMock(
-            return_value={"answer": "test answer", "contexts": ["context1"]}
-        )
+        mock_rag.query = AsyncMock(return_value={"answer": "test answer", "contexts": ["context1"]})
 
-        pipeline.dataset = [
-            EvaluationSample(query="test", ground_truth="truth", contexts=["ctx"])
-        ]
+        pipeline.dataset = [EvaluationSample(query="test", ground_truth="truth", contexts=["ctx"])]
         pipeline.evaluator._ragas_available = False
 
         report = await pipeline.run_evaluation(rag_pipeline=mock_rag)
@@ -471,9 +453,7 @@ class TestRAGEvaluationPipeline:
             return_value={"answer": "generated answer", "contexts": ["ctx1", "ctx2"]}
         )
 
-        pipeline.dataset = [
-            EvaluationSample(query="test", ground_truth="truth", contexts=[])
-        ]
+        pipeline.dataset = [EvaluationSample(query="test", ground_truth="truth", contexts=[])]
 
         await pipeline._generate_answers(mock_rag)
 
@@ -485,9 +465,7 @@ class TestRAGEvaluationPipeline:
         mock_rag = AsyncMock()
         mock_rag.query = AsyncMock(side_effect=Exception("API error"))
 
-        pipeline.dataset = [
-            EvaluationSample(query="test", ground_truth="truth", contexts=[])
-        ]
+        pipeline.dataset = [EvaluationSample(query="test", ground_truth="truth", contexts=[])]
 
         await pipeline._generate_answers(mock_rag)
 

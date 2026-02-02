@@ -47,9 +47,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """Check if this calculator supports the given KPI."""
         return kpi.workstream == Workstream.WS2_TRIGGERS
 
-    def calculate(
-        self, kpi: KPIMetadata, context: dict[str, Any] | None = None
-    ) -> KPIResult:
+    def calculate(self, kpi: KPIMetadata, context: dict[str, Any] | None = None) -> KPIResult:
         """Calculate a trigger performance KPI.
 
         Args:
@@ -291,9 +289,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
             return result[0]["cfr"]
         return 0.0
 
-    def _execute_query(
-        self, query: str, params: list[Any]
-    ) -> list[dict[str, Any]] | None:
+    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()

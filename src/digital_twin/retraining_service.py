@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -330,9 +330,7 @@ class TwinRetrainingService:
             )
             logger.info(f"Queued retraining task: {task.id}")
         except ImportError:
-            logger.warning(
-                "Celery tasks not available, retraining job created but not queued"
-            )
+            logger.warning("Celery tasks not available, retraining job created but not queued")
         except Exception as e:
             logger.error(f"Failed to queue retraining task: {e}")
 
@@ -406,9 +404,7 @@ class TwinRetrainingService:
         job.new_model_id = new_model_id
         job.fidelity_after = fidelity_after
         job.completed_at = datetime.now(timezone.utc)
-        job.status = (
-            TwinRetrainingStatus.COMPLETED if success else TwinRetrainingStatus.FAILED
-        )
+        job.status = TwinRetrainingStatus.COMPLETED if success else TwinRetrainingStatus.FAILED
 
         logger.info(
             f"Completed retraining job {job_id}: "
@@ -454,9 +450,7 @@ class TwinRetrainingService:
 
                 # Calculate metrics
                 errors = [
-                    abs(r.prediction_error)
-                    for r in records
-                    if r.prediction_error is not None
+                    abs(r.prediction_error) for r in records if r.prediction_error is not None
                 ]
                 coverages = [r.ci_coverage for r in records if r.ci_coverage is not None]
 
@@ -500,9 +494,7 @@ class TwinRetrainingService:
                 ):
                     return job.created_at
                 if job.completed_at:
-                    cooldown_end = job.completed_at + timedelta(
-                        hours=self.config.cooldown_hours
-                    )
+                    cooldown_end = job.completed_at + timedelta(hours=self.config.cooldown_hours)
                     if datetime.now(timezone.utc) < cooldown_end:
                         return job.completed_at
 

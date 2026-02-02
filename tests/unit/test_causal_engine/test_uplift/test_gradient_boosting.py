@@ -21,7 +21,6 @@ from src.causal_engine.uplift.gradient_boosting import (
     UpliftGradientBoosting,
 )
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -33,11 +32,13 @@ def sample_data():
     np.random.seed(42)
     n = 200
 
-    X = pd.DataFrame({
-        "feature_1": np.random.randn(n),
-        "feature_2": np.random.randn(n),
-        "feature_3": np.random.randn(n),
-    })
+    X = pd.DataFrame(
+        {
+            "feature_1": np.random.randn(n),
+            "feature_2": np.random.randn(n),
+            "feature_3": np.random.randn(n),
+        }
+    )
     treatment = np.random.binomial(1, 0.5, n)
     y = np.random.binomial(1, 0.5, n).astype(float)
 
@@ -91,9 +92,9 @@ def mock_causalml_modules():
     mock_causalml.inference.meta = mock_causalml_inference_meta
 
     return {
-        'causalml': mock_causalml,
-        'causalml.inference': mock_causalml_inference,
-        'causalml.inference.meta': mock_causalml_inference_meta,
+        "causalml": mock_causalml,
+        "causalml.inference": mock_causalml_inference,
+        "causalml.inference.meta": mock_causalml_inference_meta,
     }
 
 
@@ -111,13 +112,13 @@ def mock_meta_classifier(mock_causalml_modules):
     mock_model_1.feature_importances_ = np.array([0.4, 0.4, 0.2])
     mock_clf.models_t = {"0": mock_model_0, "1": mock_model_1}
 
-    mock_causalml_modules['causalml.inference.meta'].BaseTClassifier = MagicMock(
+    mock_causalml_modules["causalml.inference.meta"].BaseTClassifier = MagicMock(
         return_value=mock_clf
     )
-    mock_causalml_modules['causalml.inference.meta'].BaseXClassifier = MagicMock(
+    mock_causalml_modules["causalml.inference.meta"].BaseXClassifier = MagicMock(
         return_value=mock_clf
     )
-    mock_causalml_modules['causalml.inference.meta'].BaseSClassifier = MagicMock(
+    mock_causalml_modules["causalml.inference.meta"].BaseSClassifier = MagicMock(
         return_value=mock_clf
     )
 
@@ -301,16 +302,14 @@ class TestUpliftGradientBoosting:
 
             assert result.success is True
 
-    def test_estimate_handles_errors(
-        self, sample_data, t_learner_config, mock_causalml_modules
-    ):
+    def test_estimate_handles_errors(self, sample_data, t_learner_config, mock_causalml_modules):
         """Test estimate handles fitting errors gracefully."""
         X, treatment, y = sample_data
 
         # Setup mock to raise error
         mock_clf = MagicMock()
         mock_clf.fit = MagicMock(side_effect=ValueError("Fitting failed"))
-        mock_causalml_modules['causalml.inference.meta'].BaseTClassifier = MagicMock(
+        mock_causalml_modules["causalml.inference.meta"].BaseTClassifier = MagicMock(
             return_value=mock_clf
         )
 
@@ -327,6 +326,7 @@ class TestUpliftGradientBoosting:
         base_learner = model._create_base_learner()
 
         from sklearn.ensemble import GradientBoostingClassifier
+
         assert isinstance(base_learner, GradientBoostingClassifier)
 
     def test_create_base_learner_xgboost(self):
@@ -338,8 +338,8 @@ class TestUpliftGradientBoosting:
         mock_xgb = MagicMock()
         mock_xgb.XGBClassifier = MagicMock(return_value=MagicMock())
 
-        with patch.dict(sys.modules, {'xgboost': mock_xgb}):
-            base_learner = model._create_base_learner()
+        with patch.dict(sys.modules, {"xgboost": mock_xgb}):
+            model._create_base_learner()
             mock_xgb.XGBClassifier.assert_called_once()
 
     def test_feature_importances_from_models(
@@ -389,8 +389,12 @@ class TestGradientBoostingIntegration:
         with patch.dict(sys.modules, mock_causalml_modules):
             model = UpliftGradientBoosting(t_learner_config)
             result = model.estimate(
-                X_train, treatment_train, y_train,
-                X_test=X_test, treatment_test=treatment_test, y_test=y_test
+                X_train,
+                treatment_train,
+                y_train,
+                X_test=X_test,
+                treatment_test=treatment_test,
+                y_test=y_test,
             )
 
             assert result.success is True

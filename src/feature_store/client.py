@@ -84,7 +84,9 @@ class FeatureStoreClient:
         """
         # Read from environment variables if not provided
         supabase_url = supabase_url or os.environ.get("SUPABASE_URL")
-        supabase_key = supabase_key or os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
+        supabase_key = (
+            supabase_key or os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
+        )
         redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
 
         if not supabase_url or not supabase_key:
@@ -510,7 +512,7 @@ class FeatureStoreClient:
 
         # Compute unique count
         try:
-            stats.unique_count = len(set(str(v) for v in non_null_values))
+            stats.unique_count = len({str(v) for v in non_null_values})
         except Exception:
             stats.unique_count = None
 
@@ -546,9 +548,7 @@ class FeatureStoreClient:
                     "p99": sorted_values[int(n * 0.99)] if n >= 100 else None,
                 }
                 # Remove None percentiles
-                stats.percentiles = {
-                    k: v for k, v in stats.percentiles.items() if v is not None
-                }
+                stats.percentiles = {k: v for k, v in stats.percentiles.items() if v is not None}
 
         logger.debug(
             f"Computed statistics for {feature_group_name}.{feature_name}: "
@@ -557,9 +557,7 @@ class FeatureStoreClient:
 
         return stats
 
-    def get_feature_group_statistics(
-        self, feature_group_name: str
-    ) -> Dict[str, FeatureStatistics]:
+    def get_feature_group_statistics(self, feature_group_name: str) -> Dict[str, FeatureStatistics]:
         """
         Get statistics for all features in a feature group.
 
@@ -581,8 +579,7 @@ class FeatureStoreClient:
                 stats_dict[feature.name] = stats
 
         logger.info(
-            f"Computed statistics for {len(stats_dict)} features "
-            f"in group {feature_group_name}"
+            f"Computed statistics for {len(stats_dict)} features in group {feature_group_name}"
         )
         return stats_dict
 

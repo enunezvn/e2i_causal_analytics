@@ -66,9 +66,7 @@ def build_feedback_learner_graph(
         Compiled LangGraph workflow
     """
     # Create audit workflow initializer
-    audit_initializer = create_workflow_initializer(
-        "feedback_learner", AgentTier.SELF_IMPROVEMENT
-    )
+    audit_initializer = create_workflow_initializer("feedback_learner", AgentTier.SELF_IMPROVEMENT)
 
     # Initialize nodes
     collector = FeedbackCollectorNode(feedback_store, outcome_store)
@@ -282,7 +280,9 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
 
     rubric_info = ""
     if rubric_weighted_score is not None:
-        rubric_info = f", rubric_score={rubric_weighted_score:.2f}, rubric_decision={rubric_decision}"
+        rubric_info = (
+            f", rubric_score={rubric_weighted_score:.2f}, rubric_decision={rubric_decision}"
+        )
 
     logger.info(
         f"Training signal finalized: reward={training_signal.compute_reward():.3f}, "

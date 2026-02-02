@@ -12,17 +12,16 @@ the dspy import has race conditions during parallel pytest-xdist execution.
 """
 
 import pytest
-from datetime import datetime, timezone
 
 # Mark entire module to run on same worker - prevents import race conditions
 pytestmark = pytest.mark.xdist_group(name="dspy_integration")
 
 from src.agents.drift_monitor.dspy_integration import (
+    DSPY_AVAILABLE,
     DriftDetectionTrainingSignal,
     DriftMonitorSignalCollector,
     get_drift_monitor_signal_collector,
     reset_dspy_integration,
-    DSPY_AVAILABLE,
 )
 
 
@@ -438,25 +437,28 @@ class TestDSPySignatures:
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_drift_detection_signature(self):
         """Test DriftDetectionSignature exists."""
+        import dspy
+
         from src.agents.drift_monitor.dspy_integration import DriftDetectionSignature
 
-        import dspy
         assert issubclass(DriftDetectionSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_hop_decision_signature(self):
         """Test HopDecisionSignature exists."""
+        import dspy
+
         from src.agents.drift_monitor.dspy_integration import HopDecisionSignature
 
-        import dspy
         assert issubclass(HopDecisionSignature, dspy.Signature)
 
     @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
     def test_drift_interpretation_signature(self):
         """Test DriftInterpretationSignature exists."""
+        import dspy
+
         from src.agents.drift_monitor.dspy_integration import DriftInterpretationSignature
 
-        import dspy
         assert issubclass(DriftInterpretationSignature, dspy.Signature)
 
 

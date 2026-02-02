@@ -199,7 +199,9 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # "warning" is acceptable if score meets threshold (checked below)
         if qc_status not in ("passed", "warning"):
             gate_passed = False
-            logger.warning(f"QC gate BLOCKED: qc_status='{qc_status}' (must be 'passed' or 'warning')")
+            logger.warning(
+                f"QC gate BLOCKED: qc_status='{qc_status}' (must be 'passed' or 'warning')"
+            )
 
         if blocking_issues:
             gate_passed = False

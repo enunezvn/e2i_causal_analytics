@@ -4,12 +4,10 @@ Version: 1.0.0
 Tests the base types, enums, and dataclasses for causal discovery.
 """
 
-import numpy as np
-import pandas as pd
-import pytest
-import networkx as nx
-from datetime import datetime, timezone
 from uuid import uuid4
+
+import networkx as nx
+import numpy as np
 
 from src.causal_engine.discovery.base import (
     AlgorithmResult,
@@ -294,17 +292,17 @@ class TestDiscoveryResult:
             DiscoveredEdge(source="B", target="C"),
         ]
 
-        result = DiscoveryResult(
-            success=True, config=config, ensemble_dag=dag, edges=edges
-        )
+        result = DiscoveryResult(success=True, config=config, ensemble_dag=dag, edges=edges)
 
         adj = result.to_adjacency_matrix(node_order=["A", "B", "C"])
 
-        expected = np.array([
-            [0, 1, 1],  # A -> B, A -> C
-            [0, 0, 1],  # B -> C
-            [0, 0, 0],  # C has no outgoing
-        ])
+        expected = np.array(
+            [
+                [0, 1, 1],  # A -> B, A -> C
+                [0, 0, 1],  # B -> C
+                [0, 0, 0],  # C has no outgoing
+            ]
+        )
 
         np.testing.assert_array_equal(adj, expected)
 

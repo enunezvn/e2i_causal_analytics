@@ -326,8 +326,9 @@ class ModelInferenceTool:
     def _start_trace(self, params: ModelInferenceInput) -> Optional[str]:
         """Start an Opik trace."""
         try:
-            import opik
             import uuid
+
+            import opik
 
             trace_id = str(uuid.uuid4())
             opik.track(
@@ -350,7 +351,7 @@ class ModelInferenceTool:
             import opik
 
             opik.track(
-                name=f"model_inference.complete",
+                name="model_inference.complete",
                 output={
                     "prediction": str(output.prediction)[:100],
                     "confidence": output.confidence,

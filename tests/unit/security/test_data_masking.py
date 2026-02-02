@@ -4,8 +4,9 @@ This module tests the data masking functions that protect
 patient and HCP identifiers in API responses.
 """
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from src.api.utils.data_masking import (
     DEFAULT_PII_FIELDS,

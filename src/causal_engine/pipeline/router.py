@@ -349,7 +349,7 @@ class LibraryRouter:
         query_lower = query.lower().strip()
 
         # Score each question type
-        type_scores: Dict[QuestionType, float] = {qt: 0.0 for qt in QuestionType}
+        type_scores: Dict[QuestionType, float] = dict.fromkeys(QuestionType, 0.0)
         matched_patterns: List[str] = []
 
         for pattern_obj in self.QUESTION_PATTERNS:
@@ -396,7 +396,9 @@ class LibraryRouter:
         scores = {
             QuestionType.CAUSAL_RELATIONSHIP: sum(1 for k in causal_keywords if k in query_lower),
             QuestionType.EFFECT_HETEROGENEITY: sum(1 for k in hetero_keywords if k in query_lower),
-            QuestionType.TARGETING_OPTIMIZATION: sum(1 for k in targeting_keywords if k in query_lower),
+            QuestionType.TARGETING_OPTIMIZATION: sum(
+                1 for k in targeting_keywords if k in query_lower
+            ),
             QuestionType.IMPACT_FLOW: sum(1 for k in flow_keywords if k in query_lower),
         }
 
@@ -427,7 +429,11 @@ class LibraryRouter:
         """
         # Handle forced libraries
         if force_libraries:
-            libraries = [CausalLibrary(lib) for lib in force_libraries if lib in [e.value for e in CausalLibrary]]
+            libraries = [
+                CausalLibrary(lib)
+                for lib in force_libraries
+                if lib in [e.value for e in CausalLibrary]
+            ]
             if libraries:
                 return RoutingDecision(
                     question_type=QuestionType.COMPREHENSIVE,

@@ -231,7 +231,9 @@ class NarrativeGeneratorNode:
             "detailed_explanation": detailed,
             "narrative_sections": sections,
             "recommendations": recommendations_list,  # Exposed for quality gates
-            "recommendations_text": "\n".join(f"- {r}" for r in recommendations_list) if recommendations_list else None,
+            "recommendations_text": "\n".join(f"- {r}" for r in recommendations_list)
+            if recommendations_list
+            else None,
         }
 
     def _generate_brief(self, state: ExplainerState) -> Dict[str, Any]:
@@ -534,8 +536,7 @@ class NarrativeGeneratorNode:
         """
         # Check for ranking data
         has_rankings = (
-            state.get("causal_rankings") is not None
-            or state.get("divergent_features") is not None
+            state.get("causal_rankings") is not None or state.get("divergent_features") is not None
         )
 
         # Check for DAG data
@@ -587,25 +588,19 @@ class NarrativeGeneratorNode:
         # Divergent features explanation
         divergent = state.get("divergent_features")
         if divergent:
-            divergent_explanation = self._explain_divergent_features(
-                divergent, state, expertise
-            )
+            divergent_explanation = self._explain_divergent_features(divergent, state, expertise)
             content_parts.append(divergent_explanation)
 
         # Causal-only features
         causal_only = state.get("causal_only_features")
         if causal_only:
-            causal_only_explanation = self._explain_causal_only_features(
-                causal_only, expertise
-            )
+            causal_only_explanation = self._explain_causal_only_features(causal_only, expertise)
             content_parts.append(causal_only_explanation)
 
         # Latent confounders (from FCI bidirected edges)
         latent_confounders = self._extract_latent_confounders(state)
         if latent_confounders:
-            latent_explanation = self._explain_latent_confounders(
-                latent_confounders, expertise
-            )
+            latent_explanation = self._explain_latent_confounders(latent_confounders, expertise)
             content_parts.append(latent_explanation)
 
         if not content_parts:
@@ -708,9 +703,7 @@ class NarrativeGeneratorNode:
 
         return translations.get(decision, f"**Discovery Status:** {decision}")
 
-    def _generate_ranking_comparison(
-        self, state: ExplainerState, expertise: str
-    ) -> str:
+    def _generate_ranking_comparison(self, state: ExplainerState, expertise: str) -> str:
         """Generate comparison of causal vs predictive rankings.
 
         Args:
@@ -746,9 +739,7 @@ class NarrativeGeneratorNode:
 
         elif expertise == "data_scientist":
             if rank_corr is not None:
-                parts.append(
-                    f"**Causal vs Predictive Ranking Correlation:** ρ = {rank_corr:.3f}"
-                )
+                parts.append(f"**Causal vs Predictive Ranking Correlation:** ρ = {rank_corr:.3f}")
 
             if causal_rankings:
                 top_causal = [r.get("feature_name", "unknown") for r in causal_rankings[:3]]
@@ -761,9 +752,7 @@ class NarrativeGeneratorNode:
         else:  # analyst
             if rank_corr is not None:
                 correlation_desc = (
-                    "strong" if rank_corr > 0.7
-                    else "moderate" if rank_corr > 0.3
-                    else "weak"
+                    "strong" if rank_corr > 0.7 else "moderate" if rank_corr > 0.3 else "weak"
                 )
                 parts.append(
                     f"**Feature Importance Analysis:** There is a {correlation_desc} "
@@ -824,9 +813,7 @@ class NarrativeGeneratorNode:
                 + "\n\nThis may indicate indirect relationships or confounding factors."
             )
 
-    def _explain_causal_only_features(
-        self, causal_only: List[str], expertise: str
-    ) -> str:
+    def _explain_causal_only_features(self, causal_only: List[str], expertise: str) -> str:
         """Explain features that appear in causal but not predictive rankings.
 
         Args:
@@ -881,9 +868,7 @@ class NarrativeGeneratorNode:
 
         return latent
 
-    def _explain_latent_confounders(
-        self, latent_pairs: List[str], expertise: str
-    ) -> str:
+    def _explain_latent_confounders(self, latent_pairs: List[str], expertise: str) -> str:
         """Explain latent confounders detected by FCI algorithm.
 
         Args:
@@ -976,10 +961,7 @@ class NarrativeGeneratorNode:
                 region=region,
             )
 
-            logger.debug(
-                f"Explanation stored: cache={cache_success}, "
-                f"episodic_id={memory_id}"
-            )
+            logger.debug(f"Explanation stored: cache={cache_success}, episodic_id={memory_id}")
 
         except Exception as e:
             # Non-fatal: log warning but don't fail the generation

@@ -19,7 +19,7 @@ Author: E2I Causal Analytics Team
 """
 
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -112,21 +112,15 @@ class FCIAlgorithm(BaseDiscoveryAlgorithm):
                 graph = result
 
             # Extract adjacency matrix and edge types
-            adj_matrix, edge_types = self._graph_to_adjacency_with_types(
-                graph, len(node_names)
-            )
+            adj_matrix, edge_types = self._graph_to_adjacency_with_types(graph, len(node_names))
 
             # Convert to edge list
             edge_list = self._adjacency_to_edge_list(adj_matrix, node_names)
 
             # Count edge types for metadata
             n_directed = sum(1 for et in edge_types.values() if et == EdgeType.DIRECTED)
-            n_bidirected = sum(
-                1 for et in edge_types.values() if et == EdgeType.BIDIRECTED
-            )
-            n_undirected = sum(
-                1 for et in edge_types.values() if et == EdgeType.UNDIRECTED
-            )
+            n_bidirected = sum(1 for et in edge_types.values() if et == EdgeType.BIDIRECTED)
+            n_undirected = sum(1 for et in edge_types.values() if et == EdgeType.UNDIRECTED)
 
             runtime = time.time() - start_time
 
@@ -145,9 +139,7 @@ class FCIAlgorithm(BaseDiscoveryAlgorithm):
                     "n_directed_edges": n_directed,
                     "n_bidirected_edges": n_bidirected,
                     "n_undirected_edges": n_undirected,
-                    "edge_types": {
-                        f"{s}->{t}": et.value for (s, t), et in edge_types.items()
-                    },
+                    "edge_types": {f"{s}->{t}": et.value for (s, t), et in edge_types.items()},
                     "supports_latent_confounders": True,
                 },
             )
@@ -156,9 +148,7 @@ class FCIAlgorithm(BaseDiscoveryAlgorithm):
             runtime = time.time() - start_time
             return AlgorithmResult(
                 algorithm=self.algorithm_type,
-                adjacency_matrix=np.zeros(
-                    (len(data.columns), len(data.columns)), dtype=int
-                ),
+                adjacency_matrix=np.zeros((len(data.columns), len(data.columns)), dtype=int),
                 edge_list=[],
                 runtime_seconds=runtime,
                 converged=False,
@@ -184,20 +174,14 @@ class FCIAlgorithm(BaseDiscoveryAlgorithm):
             return "fisherz"
 
         # Check if data is float (treat as continuous regardless of cardinality)
-        is_float = all(
-            data[col].dtype in [np.float64, np.float32]
-            for col in data.columns
-        )
+        is_float = all(data[col].dtype in [np.float64, np.float32] for col in data.columns)
 
         # Float data is treated as continuous
         if is_float:
             return "fisherz"
 
         # Check for integer columns with low cardinality (treat as discrete)
-        is_integer = all(
-            data[col].dtype in [np.int64, np.int32]
-            for col in data.columns
-        )
+        is_integer = all(data[col].dtype in [np.int64, np.int32] for col in data.columns)
         n_unique_per_col = [data[col].nunique() for col in data.columns]
         is_low_cardinality = all(n <= 10 for n in n_unique_per_col)
 

@@ -163,7 +163,7 @@ def transform_for_supabase(table_name: str, records: List[Dict]) -> List[Dict]:
                 if isinstance(rec[field], str):
                     try:
                         rec[field] = json.loads(rec[field])
-                    except:
+                    except:  # noqa: E722
                         pass
 
         # Handle None values for optional fields

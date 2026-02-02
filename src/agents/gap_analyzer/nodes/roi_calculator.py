@@ -351,8 +351,13 @@ class ROICalculatorNode:
         """
         # Only add uplift value for metrics that benefit from targeting
         targeting_metrics = {
-            "trx", "nrx", "patient_count", "patient_identification",
-            "trigger_acceptance", "conversion_rate", "hcp_engagement_score",
+            "trx",
+            "nrx",
+            "patient_count",
+            "patient_identification",
+            "trigger_acceptance",
+            "conversion_rate",
+            "hcp_engagement_score",
         }
 
         if gap["metric"] not in targeting_metrics:
@@ -361,14 +366,13 @@ class ROICalculatorNode:
         gap_size = abs(gap["gap_size"])
 
         # Get segment-specific uplift if available
-        segment_uplift = None
         if uplift_context.get("uplift_by_segment"):
             segment_key = gap["segment_value"]
             segment_data = uplift_context["uplift_by_segment"].get(segment_key, [])
             if segment_data:
                 # Get average uplift score for segment
                 scores = [s.get("mean_uplift_score", 0) for s in segment_data]
-                segment_uplift = sum(scores) / len(scores) if scores else None
+                sum(scores) / len(scores) if scores else None
 
         # Calculate baseline treatment value from gap size
         # Assume $850/unit (TRx equivalent)

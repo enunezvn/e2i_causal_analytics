@@ -182,13 +182,15 @@ async def _execute_feedback_loop(
                 total_labeled += labeled_count
                 total_skipped += skipped_count
 
-                results.append({
-                    "prediction_type": prediction_type,
-                    "predictions_labeled": labeled_count,
-                    "predictions_skipped": skipped_count,
-                    "status": "completed",
-                    "run_id": result_data.get("run_id"),
-                })
+                results.append(
+                    {
+                        "prediction_type": prediction_type,
+                        "predictions_labeled": labeled_count,
+                        "predictions_skipped": skipped_count,
+                        "status": "completed",
+                        "run_id": result_data.get("run_id"),
+                    }
+                )
 
                 logger.info(
                     f"Feedback loop completed for {prediction_type}: "
@@ -197,10 +199,12 @@ async def _execute_feedback_loop(
 
             except Exception as e:
                 logger.error(f"Feedback loop failed for {prediction_type}: {e}")
-                errors.append({
-                    "prediction_type": prediction_type,
-                    "error": str(e),
-                })
+                errors.append(
+                    {
+                        "prediction_type": prediction_type,
+                        "error": str(e),
+                    }
+                )
 
         duration_ms = int((time.time() - start_time) * 1000)
 
@@ -286,9 +290,7 @@ def run_feedback_loop_medium_window(
     config = load_config()
     schedule_config = config.get("feedback_loop", {}).get("schedule", {})
 
-    types_to_process = prediction_types or schedule_config.get(
-        "medium_window_types", ["churn"]
-    )
+    types_to_process = prediction_types or schedule_config.get("medium_window_types", ["churn"])
 
     return run_async(
         _execute_feedback_loop(
@@ -416,35 +418,36 @@ def analyze_concept_drift_from_truth(
                 threshold_calibration = alert_thresholds.get("calibration_error", 0.10)
 
                 if accuracy_status == "ALERT" or accuracy_drop >= threshold_accuracy:
-                    alerts_triggered.append({
-                        "type": "accuracy_degradation",
-                        "prediction_type": drift_type,
-                        "severity": "critical" if accuracy_drop >= 0.10 else "high",
-                        "metric": "accuracy_drop",
-                        "value": accuracy_drop,
-                        "threshold": threshold_accuracy,
-                        "message": (
-                            f"Accuracy dropped by {accuracy_drop:.1%} for {drift_type} "
-                            f"predictions (threshold: {threshold_accuracy:.1%})"
-                        ),
-                    })
+                    alerts_triggered.append(
+                        {
+                            "type": "accuracy_degradation",
+                            "prediction_type": drift_type,
+                            "severity": "critical" if accuracy_drop >= 0.10 else "high",
+                            "metric": "accuracy_drop",
+                            "value": accuracy_drop,
+                            "threshold": threshold_accuracy,
+                            "message": (
+                                f"Accuracy dropped by {accuracy_drop:.1%} for {drift_type} "
+                                f"predictions (threshold: {threshold_accuracy:.1%})"
+                            ),
+                        }
+                    )
 
-                if (
-                    calibration_status == "ALERT"
-                    or calibration_error >= threshold_calibration
-                ):
-                    alerts_triggered.append({
-                        "type": "calibration_drift",
-                        "prediction_type": drift_type,
-                        "severity": "high" if calibration_error >= 0.15 else "medium",
-                        "metric": "calibration_error",
-                        "value": calibration_error,
-                        "threshold": threshold_calibration,
-                        "message": (
-                            f"Calibration error of {calibration_error:.1%} for {drift_type} "
-                            f"predictions (threshold: {threshold_calibration:.1%})"
-                        ),
-                    })
+                if calibration_status == "ALERT" or calibration_error >= threshold_calibration:
+                    alerts_triggered.append(
+                        {
+                            "type": "calibration_drift",
+                            "prediction_type": drift_type,
+                            "severity": "high" if calibration_error >= 0.15 else "medium",
+                            "metric": "calibration_error",
+                            "value": calibration_error,
+                            "threshold": threshold_calibration,
+                            "message": (
+                                f"Calibration error of {calibration_error:.1%} for {drift_type} "
+                                f"predictions (threshold: {threshold_calibration:.1%})"
+                            ),
+                        }
+                    )
 
             # Route alerts if any were triggered
             if alerts_triggered:
@@ -467,9 +470,7 @@ def analyze_concept_drift_from_truth(
                     logger.error(f"Failed to route concept drift alerts: {e}")
 
             # Query concept drift metrics for summary
-            metrics_result = await client.table("v_concept_drift_metrics").select(
-                "*"
-            ).execute()
+            metrics_result = await client.table("v_concept_drift_metrics").select("*").execute()
             metrics = metrics_result.data if metrics_result.data else []
 
             duration_ms = int((time.time() - start_time) * 1000)

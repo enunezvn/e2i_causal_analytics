@@ -11,10 +11,10 @@ TypedDict state enables consistent contract validation across all agents.
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
-from typing_extensions import NotRequired
+from typing import Annotated, Any, Dict, List, Literal, TypedDict
 from uuid import UUID
 
+from typing_extensions import NotRequired
 
 # Type aliases
 CompositionStatusType = Literal[

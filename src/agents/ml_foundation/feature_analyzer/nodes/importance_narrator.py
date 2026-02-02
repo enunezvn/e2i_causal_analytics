@@ -7,7 +7,7 @@ V4.4: Added causal discovery integration for causal vs predictive comparison.
 """
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from anthropic import Anthropic
 
@@ -56,7 +56,7 @@ async def narrate_importance(state: Dict[str, Any]) -> Dict[str, Any]:
             return {
                 "interpretation": f"Feature interpretation unavailable: {skip_reason}",
                 "executive_summary": "SHAP analysis was not performed due to missing model_uri. "
-                    "This step requires a trained model to compute feature importance.",
+                "This step requires a trained model to compute feature importance.",
                 "key_insights": ["SHAP analysis requires a model_uri to load the trained model"],
                 "recommendations": ["Ensure model training logs model_uri to MLflow"],
                 "cautions": ["Feature importance data is not available for this run"],
@@ -167,7 +167,7 @@ Format your response as JSON with this structure:
   }},
   "key_insights": ["insight 1", "insight 2", ...],
   "recommendations": ["rec 1", "rec 2", ...],
-  "cautions": ["caution 1", "caution 2", ...]{', "causal_interpretation": "..."' if has_causal_results else ''}
+  "cautions": ["caution 1", "caution 2", ...]{', "causal_interpretation": "..."' if has_causal_results else ""}
 }}"""
 
         response = client.messages.create(
@@ -307,7 +307,9 @@ def _prepare_causal_context(
     parts = []
 
     # Discovery quality
-    parts.append(f"**Discovery Quality**: {discovery_gate_decision} (confidence: {discovery_gate_confidence:.2f})")
+    parts.append(
+        f"**Discovery Quality**: {discovery_gate_decision} (confidence: {discovery_gate_confidence:.2f})"
+    )
     parts.append(f"**Causal-Predictive Rank Correlation**: {rank_correlation:.3f}")
     parts.append("")
 
@@ -331,16 +333,22 @@ def _prepare_causal_context(
 
     # Feature categorization
     if direct_cause_features:
-        parts.append(f"**Direct Cause Features** (direct edge to target): {', '.join(direct_cause_features)}")
+        parts.append(
+            f"**Direct Cause Features** (direct edge to target): {', '.join(direct_cause_features)}"
+        )
 
     if divergent_features:
         parts.append(f"**Divergent Features** (|rank_diff| > 3): {', '.join(divergent_features)}")
 
     if causal_only_features:
-        parts.append(f"**Causal-Only Features** (causal signal, no predictive): {', '.join(causal_only_features)}")
+        parts.append(
+            f"**Causal-Only Features** (causal signal, no predictive): {', '.join(causal_only_features)}"
+        )
 
     if predictive_only_features:
-        parts.append(f"**Predictive-Only Features** (predictive signal, no causal): {', '.join(predictive_only_features)}")
+        parts.append(
+            f"**Predictive-Only Features** (predictive signal, no causal): {', '.join(predictive_only_features)}"
+        )
 
     return "\n".join(parts)
 

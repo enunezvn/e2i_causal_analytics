@@ -151,7 +151,9 @@ class TestCreateModelInstance:
     def test_respects_hyperparameters(self):
         """Should apply hyperparameters."""
         hyperparams = {"n_estimators": 50, "max_depth": 3}
-        model = _create_model_instance("RandomForest", "sklearn", hyperparams, "binary_classification")
+        model = _create_model_instance(
+            "RandomForest", "sklearn", hyperparams, "binary_classification"
+        )
         assert model is not None
         assert model.n_estimators == 50
         assert model.max_depth == 3
@@ -179,9 +181,7 @@ class TestRunCrossValidation:
         X, y = sample_regression_data
         model = _create_model_instance("Ridge", "sklearn", {}, "regression")
 
-        cv_scores, cv_metrics = _run_cross_validation(
-            model, X, y, "regression", cv_folds=3
-        )
+        cv_scores, cv_metrics = _run_cross_validation(model, X, y, "regression", cv_folds=3)
 
         # Should return RMSE values (converted from negative MSE)
         assert isinstance(cv_scores, list)
@@ -213,9 +213,7 @@ class TestBenchmarkAlgorithm:
             "default_hyperparameters": {"n_estimators": 10},
         }
 
-        result = await _benchmark_algorithm(
-            candidate, X, y, "binary_classification", cv_folds=3
-        )
+        result = await _benchmark_algorithm(candidate, X, y, "binary_classification", cv_folds=3)
 
         assert "cv_score_mean" in result
         assert "cv_score_std" in result
@@ -231,9 +229,7 @@ class TestBenchmarkAlgorithm:
             "default_hyperparameters": {},
         }
 
-        result = await _benchmark_algorithm(
-            candidate, X, y, "binary_classification", cv_folds=3
-        )
+        result = await _benchmark_algorithm(candidate, X, y, "binary_classification", cv_folds=3)
 
         assert "error" in result
 

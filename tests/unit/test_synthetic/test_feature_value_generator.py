@@ -325,9 +325,7 @@ class TestEntityValuesJSONBStructure:
             right_on="id",
         )
 
-        patient_records = df_merged[
-            df_merged["entity_keys"].apply(lambda x: "patient_id" in x)
-        ]
+        patient_records = df_merged[df_merged["entity_keys"].apply(lambda x: "patient_id" in x)]
 
         if len(patient_records) > 0:
             for entity_values in patient_records["entity_values"].head(10):
@@ -529,10 +527,12 @@ class TestPatientDFIntegration:
     @pytest.fixture
     def patient_df(self):
         """Create mock patient DataFrame."""
-        return pd.DataFrame({
-            "patient_id": ["pt_000001", "pt_000002", "pt_000003", "pt_000004", "pt_000005"],
-            "hcp_id": ["hcp_00001", "hcp_00002", "hcp_00003", "hcp_00004", "hcp_00005"],
-        })
+        return pd.DataFrame(
+            {
+                "patient_id": ["pt_000001", "pt_000002", "pt_000003", "pt_000004", "pt_000005"],
+                "hcp_id": ["hcp_00001", "hcp_00002", "hcp_00003", "hcp_00004", "hcp_00005"],
+            }
+        )
 
     def test_uses_patient_df_ids(self, features_df, patient_df):
         """Test generator uses patient_df IDs when provided."""

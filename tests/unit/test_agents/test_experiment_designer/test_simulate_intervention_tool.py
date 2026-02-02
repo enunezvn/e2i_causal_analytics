@@ -7,18 +7,20 @@ NOTE: Uses direct module imports to avoid triggering LLM initialization
 in the experiment_designer package __init__.py.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
+
+import pytest
 
 
 # Direct module import to avoid package __init__.py side effects
 def _import_tool_module():
     """Import tool module directly, bypassing package __init__."""
     import importlib.util
+
     spec = importlib.util.spec_from_file_location(
         "simulate_intervention_tool",
-        "src/agents/experiment_designer/tools/simulate_intervention_tool.py"
+        "src/agents/experiment_designer/tools/simulate_intervention_tool.py",
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -126,10 +128,12 @@ class TestSimulateIntervention:
         """Test tool returns deploy recommendation for high-effect intervention."""
         simulate_intervention = tool_module.simulate_intervention
         # Use mock result generator with known intervention type
-        result = simulate_intervention.invoke({
-            "intervention_type": "speaker_program_invitation",  # High base effect
-            "brand": "Kisqali",
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "speaker_program_invitation",  # High base effect
+                "brand": "Kisqali",
+            }
+        )
 
         assert "recommendation" in result
         assert result["recommendation"] in ["deploy", "skip", "refine"]
@@ -139,10 +143,12 @@ class TestSimulateIntervention:
     def test_returns_required_output_fields(self, tool_module):
         """Test all required output fields are present."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "email_campaign",
-            "brand": "Fabhalta",
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "email_campaign",
+                "brand": "Fabhalta",
+            }
+        )
 
         # Check all required fields
         required_fields = [
@@ -165,11 +171,13 @@ class TestSimulateIntervention:
     def test_confidence_interval_calculated(self, tool_module):
         """Test confidence interval is properly calculated."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "call_frequency_increase",
-            "brand": "Remibrutinib",
-            "confidence_level": 0.95,
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "call_frequency_increase",
+                "brand": "Remibrutinib",
+                "confidence_level": 0.95,
+            }
+        )
 
         ci = result["confidence_interval"]
         assert isinstance(ci, tuple) or isinstance(ci, list)
@@ -179,10 +187,12 @@ class TestSimulateIntervention:
     def test_top_segments_returned(self, tool_module):
         """Test top performing segments are returned."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "peer_influence_activation",
-            "brand": "Kisqali",
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "peer_influence_activation",
+                "brand": "Kisqali",
+            }
+        )
 
         top_segments = result["top_segments"]
         assert isinstance(top_segments, list)
@@ -196,24 +206,30 @@ class TestSimulateIntervention:
     def test_handles_invalid_brand(self, tool_module):
         """Test handling of invalid brand."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "email_campaign",
-            "brand": "InvalidBrand",
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "email_campaign",
+                "brand": "InvalidBrand",
+            }
+        )
 
         # Should return refine recommendation with error
         assert result["recommendation"] == "refine"
-        assert "error" in result.get("recommendation_rationale", "").lower() or \
-               "failed" in result.get("recommendation_rationale", "").lower()
+        assert (
+            "error" in result.get("recommendation_rationale", "").lower()
+            or "failed" in result.get("recommendation_rationale", "").lower()
+        )
 
     def test_handles_invalid_population(self, tool_module):
         """Test handling of invalid target population."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "email_campaign",
-            "brand": "Kisqali",
-            "target_population": "invalid_population",
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "email_campaign",
+                "brand": "Kisqali",
+                "target_population": "invalid_population",
+            }
+        )
 
         # Should return error response
         assert result["recommendation"] == "refine"
@@ -221,10 +237,12 @@ class TestSimulateIntervention:
     def test_fidelity_warning_included(self, tool_module):
         """Test fidelity warning field is included in response."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "sample_distribution",
-            "brand": "Fabhalta",
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "sample_distribution",
+                "brand": "Fabhalta",
+            }
+        )
 
         assert "fidelity_warning" in result
         assert isinstance(result["fidelity_warning"], bool)
@@ -240,9 +258,7 @@ class TestDigitalTwinWorkflow:
         workflow = DigitalTwinWorkflow()
 
         # Mock simulate_intervention to return skip
-        with patch.object(
-            tool_module, "simulate_intervention"
-        ) as mock_sim:
+        with patch.object(tool_module, "simulate_intervention") as mock_sim:
             # Note: simulate_intervention is called directly (not .invoke())
             mock_sim.return_value = {
                 "simulation_id": str(uuid4()),
@@ -272,9 +288,7 @@ class TestDigitalTwinWorkflow:
         workflow = DigitalTwinWorkflow()
 
         # Mock simulate_intervention to return deploy
-        with patch.object(
-            tool_module, "simulate_intervention"
-        ) as mock_sim:
+        with patch.object(tool_module, "simulate_intervention") as mock_sim:
             # Note: simulate_intervention is called directly (not .invoke())
             mock_sim.return_value = {
                 "simulation_id": str(uuid4()),
@@ -287,9 +301,7 @@ class TestDigitalTwinWorkflow:
                 "simulation_confidence": 0.85,
                 "fidelity_warning": False,
                 "fidelity_warning_reason": None,
-                "top_segments": [
-                    {"dimension": "decile", "segment": "1-2", "ate": 0.15, "n": 1000}
-                ],
+                "top_segments": [{"dimension": "decile", "segment": "1-2", "ate": 0.15, "n": 1000}],
             }
 
             result = workflow.propose_experiment(
@@ -306,9 +318,7 @@ class TestDigitalTwinWorkflow:
         DigitalTwinWorkflow = tool_module.DigitalTwinWorkflow
         workflow = DigitalTwinWorkflow()
 
-        with patch.object(
-            tool_module, "simulate_intervention"
-        ) as mock_sim:
+        with patch.object(tool_module, "simulate_intervention") as mock_sim:
             expected_ate = 0.10
             # Note: simulate_intervention is called directly (not .invoke())
             mock_sim.return_value = {
@@ -338,13 +348,9 @@ class TestDigitalTwinWorkflow:
         DigitalTwinWorkflow = tool_module.DigitalTwinWorkflow
         workflow = DigitalTwinWorkflow()
 
-        segments = [
-            {"dimension": "specialty", "segment": "oncology", "ate": 0.14, "n": 500}
-        ]
+        segments = [{"dimension": "specialty", "segment": "oncology", "ate": 0.14, "n": 500}]
 
-        with patch.object(
-            tool_module, "simulate_intervention"
-        ) as mock_sim:
+        with patch.object(tool_module, "simulate_intervention") as mock_sim:
             # Note: simulate_intervention is called directly (not .invoke())
             mock_sim.return_value = {
                 "simulation_id": str(uuid4()),
@@ -451,11 +457,13 @@ class TestSimulateInterventionEdgeCases:
     def test_minimal_twin_count(self, tool_module):
         """Test simulation with minimal twin count."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "email_campaign",
-            "brand": "Kisqali",
-            "twin_count": 100,
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "email_campaign",
+                "brand": "Kisqali",
+                "twin_count": 100,
+            }
+        )
 
         assert "simulation_id" in result
         assert result["simulation_confidence"] >= 0
@@ -463,11 +471,13 @@ class TestSimulateInterventionEdgeCases:
     def test_maximum_twin_count(self, tool_module):
         """Test simulation with high twin count."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "email_campaign",
-            "brand": "Fabhalta",
-            "twin_count": 50000,
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "email_campaign",
+                "brand": "Fabhalta",
+                "twin_count": 50000,
+            }
+        )
 
         assert "simulation_id" in result
 
@@ -477,13 +487,16 @@ class TestSimulateInterventionEdgeCases:
         brands = ["Remibrutinib", "Fabhalta", "Kisqali"]
 
         for brand in brands:
-            result = simulate_intervention.invoke({
-                "intervention_type": "email_campaign",
-                "brand": brand,
-            })
+            result = simulate_intervention.invoke(
+                {
+                    "intervention_type": "email_campaign",
+                    "brand": brand,
+                }
+            )
 
-            assert result["recommendation"] in ["deploy", "skip", "refine"], \
+            assert result["recommendation"] in ["deploy", "skip", "refine"], (
                 f"Failed for brand: {brand}"
+            )
 
     def test_all_intervention_types(self, tool_module):
         """Test all known intervention types."""
@@ -498,21 +511,26 @@ class TestSimulateInterventionEdgeCases:
         ]
 
         for itype in intervention_types:
-            result = simulate_intervention.invoke({
-                "intervention_type": itype,
-                "brand": "Kisqali",
-            })
+            result = simulate_intervention.invoke(
+                {
+                    "intervention_type": itype,
+                    "brand": "Kisqali",
+                }
+            )
 
-            assert result["recommendation"] in ["deploy", "skip", "refine"], \
+            assert result["recommendation"] in ["deploy", "skip", "refine"], (
                 f"Failed for intervention type: {itype}"
+            )
 
     def test_unknown_intervention_type(self, tool_module):
         """Test handling of unknown intervention type."""
         simulate_intervention = tool_module.simulate_intervention
-        result = simulate_intervention.invoke({
-            "intervention_type": "unknown_intervention",
-            "brand": "Kisqali",
-        })
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "unknown_intervention",
+                "brand": "Kisqali",
+            }
+        )
 
         # Should still return valid result with default effect
         assert "simulation_id" in result

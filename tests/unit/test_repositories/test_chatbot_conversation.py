@@ -52,9 +52,7 @@ class TestCreateConversation(TestChatbotConversationRepository):
     """Tests for create_conversation method."""
 
     @pytest.mark.asyncio
-    async def test_creates_conversation_successfully(
-        self, repo, mock_client, sample_conversation
-    ):
+    async def test_creates_conversation_successfully(self, repo, mock_client, sample_conversation):
         """Test creating a new conversation."""
         mock_result = MagicMock()
         mock_result.data = [sample_conversation]
@@ -90,9 +88,7 @@ class TestGetBySessionId(TestChatbotConversationRepository):
     """Tests for get_by_session_id method."""
 
     @pytest.mark.asyncio
-    async def test_returns_conversation_when_found(
-        self, repo, mock_client, sample_conversation
-    ):
+    async def test_returns_conversation_when_found(self, repo, mock_client, sample_conversation):
         """Test that conversation is returned when found."""
         mock_result = MagicMock()
         # .single() returns data directly, not as a list
@@ -199,9 +195,7 @@ class TestArchiveConversation(TestChatbotConversationRepository):
     """Tests for archive_conversation method."""
 
     @pytest.mark.asyncio
-    async def test_archives_conversation_successfully(
-        self, repo, mock_client, sample_conversation
-    ):
+    async def test_archives_conversation_successfully(self, repo, mock_client, sample_conversation):
         """Test archiving a conversation."""
         archived_conv = {**sample_conversation, "is_archived": True}
         mock_result = MagicMock()

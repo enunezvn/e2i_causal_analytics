@@ -23,7 +23,7 @@ Author: E2I Causal Analytics Team
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,7 +45,6 @@ from src.agents.ml_foundation.observability_connector import (
 from src.agents.ml_foundation.scope_definer import memory_hooks as sd_hooks
 from src.agents.orchestrator import memory_hooks as orch_hooks
 
-
 # ===========================================================================
 # Fixtures
 # ===========================================================================
@@ -61,8 +60,17 @@ def reset_all_singletons():
     bypasses the property lazy-load entirely.
     """
     modules = [
-        ci_hooks, cc_hooks, orch_hooks, hs_hooks, dp_hooks,
-        sd_hooks, oc_hooks, fa_hooks, md_hooks, ms_hooks, mt_hooks,
+        ci_hooks,
+        cc_hooks,
+        orch_hooks,
+        hs_hooks,
+        dp_hooks,
+        sd_hooks,
+        oc_hooks,
+        fa_hooks,
+        md_hooks,
+        ms_hooks,
+        mt_hooks,
     ]
     for mod in modules:
         mod.reset_memory_hooks()
@@ -130,9 +138,14 @@ class TestDataclassConstruction:
 
     def test_causal_analysis_record(self):
         rec = ci_hooks.CausalAnalysisRecord(
-            session_id="s1", query="test", treatment_var="t",
-            outcome_var="o", ate_estimate=0.5, confidence_interval=(0.1, 0.9),
-            refutation_passed=True, confidence=0.8,
+            session_id="s1",
+            query="test",
+            treatment_var="t",
+            outcome_var="o",
+            ate_estimate=0.5,
+            confidence_interval=(0.1, 0.9),
+            refutation_passed=True,
+            confidence=0.8,
             executive_summary="summary",
         )
         assert rec.treatment_var == "t"
@@ -142,9 +155,14 @@ class TestDataclassConstruction:
 
     def test_causal_path_record(self):
         rec = ci_hooks.CausalPathRecord(
-            path_id="p1", treatment_var="t", outcome_var="o",
-            confounders=["c1"], ate_estimate=0.3,
-            effect_size="medium", confidence=0.7, refutation_passed=True,
+            path_id="p1",
+            treatment_var="t",
+            outcome_var="o",
+            confounders=["c1"],
+            ate_estimate=0.3,
+            effect_size="medium",
+            confidence=0.7,
+            refutation_passed=True,
         )
         assert rec.path_id == "p1"
         assert rec.confounders == ["c1"]
@@ -156,19 +174,28 @@ class TestDataclassConstruction:
 
     def test_orchestration_record(self):
         rec = orch_hooks.OrchestrationRecord(
-            session_id="s2", query_id="q1", query="test",
-            intent="analysis", agents_dispatched=["a1"],
-            response_summary="ok", confidence=0.9,
-            total_latency_ms=100, success=True,
+            session_id="s2",
+            query_id="q1",
+            query="test",
+            intent="analysis",
+            agents_dispatched=["a1"],
+            response_summary="ok",
+            confidence=0.9,
+            total_latency_ms=100,
+            success=True,
         )
         assert rec.query_id == "q1"
         assert rec.agents_dispatched == ["a1"]
 
     def test_routing_decision_record(self):
         rec = orch_hooks.RoutingDecisionRecord(
-            query_pattern="trend", intent_classified="analysis",
-            agents_selected=["causal_impact"], execution_mode="sequential",
-            success=True, latency_ms=200, confidence=0.85,
+            query_pattern="trend",
+            intent_classified="analysis",
+            agents_selected=["causal_impact"],
+            execution_mode="sequential",
+            success=True,
+            latency_ms=200,
+            confidence=0.85,
         )
         assert rec.execution_mode == "sequential"
 
@@ -179,10 +206,17 @@ class TestDataclassConstruction:
 
     def test_health_record(self):
         rec = hs_hooks.HealthRecord(
-            session_id="s3", overall_score=85.0, health_grade="B",
-            component_score=0.9, model_score=0.8, pipeline_score=0.85,
-            agent_score=0.9, critical_issues_count=0, warnings_count=1,
-            check_scope="full", total_latency_ms=1200,
+            session_id="s3",
+            overall_score=85.0,
+            health_grade="B",
+            component_score=0.9,
+            model_score=0.8,
+            pipeline_score=0.85,
+            agent_score=0.9,
+            critical_issues_count=0,
+            warnings_count=1,
+            check_scope="full",
+            total_latency_ms=1200,
         )
         assert rec.health_grade == "B"
 
@@ -192,11 +226,17 @@ class TestDataclassConstruction:
 
     def test_cohort_construction_record(self):
         rec = cc_hooks.CohortConstructionRecord(
-            session_id="s4", cohort_id="c1", cohort_name="test_cohort",
-            brand="Kisqali", indication="breast_cancer",
-            total_patients=1000, eligible_patients=800,
-            eligibility_rate=0.8, criteria_count=5,
-            config_hash="abc123", execution_time_ms=500,
+            session_id="s4",
+            cohort_id="c1",
+            cohort_name="test_cohort",
+            brand="Kisqali",
+            indication="breast_cancer",
+            total_patients=1000,
+            eligible_patients=800,
+            eligibility_rate=0.8,
+            criteria_count=5,
+            config_hash="abc123",
+            execution_time_ms=500,
         )
         assert rec.brand == "Kisqali"
         assert rec.eligibility_rate == 0.8
@@ -207,9 +247,13 @@ class TestDataclassConstruction:
 
     def test_qc_report_record(self):
         rec = dp_hooks.QCReportRecord(
-            session_id="s5", experiment_id="exp1", report_id="rpt1",
-            qc_status="passed", overall_score=0.95,
-            gate_passed=True, leakage_detected=False,
+            session_id="s5",
+            experiment_id="exp1",
+            report_id="rpt1",
+            qc_status="passed",
+            overall_score=0.95,
+            gate_passed=True,
+            leakage_detected=False,
         )
         assert rec.qc_status == "passed"
 
@@ -219,10 +263,14 @@ class TestDataclassConstruction:
 
     def test_scope_definition_record(self):
         rec = sd_hooks.ScopeDefinitionRecord(
-            session_id="s6", experiment_id="exp1",
-            experiment_name="churn_model", problem_type="classification",
-            target_variable="churned", business_objective="reduce churn",
-            success_criteria={"auc": 0.8}, scope_spec={"features": []},
+            session_id="s6",
+            experiment_id="exp1",
+            experiment_name="churn_model",
+            problem_type="classification",
+            target_variable="churned",
+            business_objective="reduce churn",
+            success_criteria={"auc": 0.8},
+            scope_spec={"features": []},
         )
         assert rec.problem_type == "classification"
 
@@ -232,9 +280,12 @@ class TestDataclassConstruction:
 
     def test_observability_record(self):
         rec = oc_hooks.ObservabilityRecord(
-            session_id="s7", time_window="24h",
-            overall_success_rate=0.95, overall_p95_latency_ms=250.0,
-            quality_score=0.88, error_rate_by_agent={"agent1": 0.02},
+            session_id="s7",
+            time_window="24h",
+            overall_success_rate=0.95,
+            overall_p95_latency_ms=250.0,
+            quality_score=0.88,
+            error_rate_by_agent={"agent1": 0.02},
         )
         assert rec.overall_success_rate == 0.95
 
@@ -244,8 +295,10 @@ class TestDataclassConstruction:
 
     def test_feature_importance_record(self):
         rec = fa_hooks.FeatureImportanceRecord(
-            session_id="s8", experiment_id="exp1",
-            shap_analysis_id="shap1", top_features=["f1", "f2"],
+            session_id="s8",
+            experiment_id="exp1",
+            shap_analysis_id="shap1",
+            top_features=["f1", "f2"],
             global_importance={"f1": 0.5, "f2": 0.3},
             interactions=[("f1", "f2", 0.4)],
         )
@@ -257,9 +310,12 @@ class TestDataclassConstruction:
 
     def test_deployment_record(self):
         rec = md_hooks.DeploymentRecord(
-            session_id="s9", experiment_id="exp1",
-            deployment_id="dep1", model_version=3,
-            target_environment="staging", deployment_status="success",
+            session_id="s9",
+            experiment_id="exp1",
+            deployment_id="dep1",
+            model_version=3,
+            target_environment="staging",
+            deployment_status="success",
         )
         assert rec.model_version == 3
 
@@ -269,9 +325,12 @@ class TestDataclassConstruction:
 
     def test_model_selection_record(self):
         rec = ms_hooks.ModelSelectionRecord(
-            session_id="s10", experiment_id="exp1",
-            algorithm_name="xgboost", algorithm_family="gradient_boosting",
-            selection_score=0.92, selection_rationale="best AUC",
+            session_id="s10",
+            experiment_id="exp1",
+            algorithm_name="xgboost",
+            algorithm_family="gradient_boosting",
+            selection_score=0.92,
+            selection_rationale="best AUC",
         )
         assert rec.algorithm_name == "xgboost"
 
@@ -281,9 +340,12 @@ class TestDataclassConstruction:
 
     def test_training_result_record(self):
         rec = mt_hooks.TrainingResultRecord(
-            session_id="s11", experiment_id="exp1",
-            training_run_id="run1", algorithm_name="xgboost",
-            test_metrics={"auc_roc": 0.88}, success_criteria_met=True,
+            session_id="s11",
+            experiment_id="exp1",
+            training_run_id="run1",
+            algorithm_name="xgboost",
+            test_metrics={"auc_roc": 0.88},
+            success_criteria_met=True,
         )
         assert rec.success_criteria_met is True
 
@@ -523,10 +585,12 @@ class TestCausalImpactMemoryHooks:
     @pytest.mark.asyncio
     async def test_get_episodic_context_with_filter(self):
         hooks = ci_hooks.CausalImpactMemoryHooks()
-        mock_search = AsyncMock(return_value=[
-            {"raw_content": {"treatment_var": "hcp_visits", "outcome_var": "trx"}},
-            {"raw_content": {"treatment_var": "other", "outcome_var": "trx"}},
-        ])
+        mock_search = AsyncMock(
+            return_value=[
+                {"raw_content": {"treatment_var": "hcp_visits", "outcome_var": "trx"}},
+                {"raw_content": {"treatment_var": "other", "outcome_var": "trx"}},
+            ]
+        )
         with patch(
             "src.agents.causal_impact.memory_hooks.search_episodic_by_text",
             mock_search,
@@ -538,7 +602,9 @@ class TestCausalImpactMemoryHooks:
             ):
                 # Call with treatment filter -- exercises the filter branch
                 result = await hooks._get_episodic_context(
-                    query="test", treatment_var="hcp_visits", outcome_var="trx",
+                    query="test",
+                    treatment_var="hcp_visits",
+                    outcome_var="trx",
                 )
                 # Should filter to only matching results
                 assert isinstance(result, list)
@@ -554,7 +620,8 @@ class TestCausalImpactMemoryHooks:
         hooks = ci_hooks.CausalImpactMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks._get_semantic_context(
-            treatment_var="hcp_visits", outcome_var="trx",
+            treatment_var="hcp_visits",
+            outcome_var="trx",
         )
         assert "graph_stats" in result
         mock_semantic_memory.get_graph_stats.assert_called_once()
@@ -664,7 +731,13 @@ class TestCausalImpactMemoryHooks:
     async def test_store_causal_path_no_client(self):
         hooks = ci_hooks.CausalImpactMemoryHooks()
         result = await hooks.store_causal_path(
-            "t", "o", ["c1"], 0.5, 0.8, True, "medium",
+            "t",
+            "o",
+            ["c1"],
+            0.5,
+            0.8,
+            True,
+            "medium",
         )
         assert result is False
 
@@ -673,7 +746,13 @@ class TestCausalImpactMemoryHooks:
         hooks = ci_hooks.CausalImpactMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_causal_path(
-            "hcp_visits", "trx", ["region"], 0.3, 0.85, True, "small",
+            "hcp_visits",
+            "trx",
+            ["region"],
+            0.3,
+            0.85,
+            True,
+            "small",
         )
         assert result is True
         assert mock_semantic_memory.add_entity.call_count == 2
@@ -685,7 +764,13 @@ class TestCausalImpactMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("error"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_causal_path(
-            "t", "o", [], 0.0, 0.0, False, "none",
+            "t",
+            "o",
+            [],
+            0.0,
+            0.0,
+            False,
+            "none",
         )
         assert result is False
 
@@ -697,8 +782,10 @@ class TestCausalImpactMemoryHooks:
 
         with patch.object(hooks, "_get_episodic_context", new_callable=AsyncMock, return_value=[]):
             context = await hooks.get_context(
-                session_id="s1", query="test query",
-                treatment_var="t", outcome_var="o",
+                session_id="s1",
+                query="test query",
+                treatment_var="t",
+                outcome_var="o",
             )
         assert isinstance(context, ci_hooks.CausalAnalysisContext)
         assert context.session_id == "s1"
@@ -738,7 +825,8 @@ class TestOrchestratorMemoryHooks:
 
         with patch.object(hooks, "_get_episodic_context", new_callable=AsyncMock, return_value=[]):
             ctx = await hooks.get_context(
-                session_id="s1", query="what drives trx?",
+                session_id="s1",
+                query="what drives trx?",
                 entities={"kpi": ["trx"], "brand": ["Kisqali"]},
             )
         assert isinstance(ctx, orch_hooks.OrchestrationContext)
@@ -762,10 +850,16 @@ class TestOrchestratorMemoryHooks:
         hooks._semantic_memory = mock_semantic_memory
 
         with patch.object(
-            hooks, "_get_causal_paths_for_kpi", new_callable=AsyncMock, return_value=[],
+            hooks,
+            "_get_causal_paths_for_kpi",
+            new_callable=AsyncMock,
+            return_value=[],
         ):
             with patch.object(
-                hooks, "_get_brand_context", new_callable=AsyncMock, return_value=[],
+                hooks,
+                "_get_brand_context",
+                new_callable=AsyncMock,
+                return_value=[],
             ):
                 result = await hooks._get_semantic_context(
                     entities={"kpi": ["trx"], "brand": ["Kisqali"]},
@@ -811,8 +905,11 @@ class TestOrchestratorMemoryHooks:
         hooks = orch_hooks.OrchestratorMemoryHooks()
         hooks._working_memory = mock_working_memory
         result = await hooks.store_conversation_turn(
-            "s1", "what drives trx?", "HCP visits are key.",
-            intent="analysis", agents_used=["causal_impact"],
+            "s1",
+            "what drives trx?",
+            "HCP visits are key.",
+            intent="analysis",
+            agents_used=["causal_impact"],
         )
         assert result is True
         assert mock_working_memory.add_message.await_count == 2
@@ -880,7 +977,14 @@ class TestOrchestratorMemoryHooks:
     async def test_track_routing_decision_no_client(self):
         hooks = orch_hooks.OrchestratorMemoryHooks()
         result = await hooks.track_routing_decision(
-            "s1", "trend", "analysis", ["ci"], "sequential", True, 200, 0.9,
+            "s1",
+            "trend",
+            "analysis",
+            ["ci"],
+            "sequential",
+            True,
+            200,
+            0.9,
         )
         assert result is False
 
@@ -889,7 +993,14 @@ class TestOrchestratorMemoryHooks:
         hooks = orch_hooks.OrchestratorMemoryHooks()
         hooks._working_memory = mock_working_memory
         result = await hooks.track_routing_decision(
-            "s1", "trend", "analysis", ["ci"], "sequential", True, 200, 0.9,
+            "s1",
+            "trend",
+            "analysis",
+            ["ci"],
+            "sequential",
+            True,
+            200,
+            0.9,
         )
         assert result is True
 
@@ -900,7 +1011,14 @@ class TestOrchestratorMemoryHooks:
         redis.lpush = AsyncMock(side_effect=Exception("error"))
         hooks._working_memory = mock_working_memory
         result = await hooks.track_routing_decision(
-            "s1", "p", "i", [], "seq", True, 0, 0.0,
+            "s1",
+            "p",
+            "i",
+            [],
+            "seq",
+            True,
+            0,
+            0.0,
         )
         assert result is False
 
@@ -914,9 +1032,11 @@ class TestOrchestratorMemoryHooks:
     async def test_get_routing_decisions_success(self, mock_working_memory):
         hooks = orch_hooks.OrchestratorMemoryHooks()
         redis = await mock_working_memory.get_client()
-        redis.lrange = AsyncMock(return_value=[
-            json.dumps({"intent": "analysis"}),
-        ])
+        redis.lrange = AsyncMock(
+            return_value=[
+                json.dumps({"intent": "analysis"}),
+            ]
+        )
         hooks._working_memory = mock_working_memory
         result = await hooks.get_routing_decisions(limit=10)
         assert len(result) == 1
@@ -936,7 +1056,8 @@ class TestOrchestratorMemoryHooks:
         hooks = orch_hooks.OrchestratorMemoryHooks()
         with patch.dict("sys.modules", {"src.memory.episodic_memory": None}):
             result = await hooks.store_orchestration(
-                session_id="s1", result={"status": "completed"},
+                session_id="s1",
+                result={"status": "completed"},
             )
             assert result is None
 
@@ -966,7 +1087,9 @@ class TestHealthScoreMemoryHooks:
         hooks._working_memory = mock_working_memory
 
         with patch.object(hooks, "_get_cached_health", new_callable=AsyncMock, return_value=None):
-            with patch.object(hooks, "_get_health_trends", new_callable=AsyncMock, return_value=[{"score": 85}]):
+            with patch.object(
+                hooks, "_get_health_trends", new_callable=AsyncMock, return_value=[{"score": 85}]
+            ):
                 ctx = await hooks.get_context("s1", include_history=True)
         assert len(ctx.historical_trends) == 1
 
@@ -1065,9 +1188,12 @@ class TestHealthScoreMemoryHooks:
 
     def test_is_significant_critical_issues(self):
         hooks = hs_hooks.HealthScoreMemoryHooks()
-        assert hooks._is_significant_health_event(
-            {"critical_issues": ["db down"]},
-        ) is True
+        assert (
+            hooks._is_significant_health_event(
+                {"critical_issues": ["db down"]},
+            )
+            is True
+        )
 
     def test_is_significant_failing_grade(self):
         hooks = hs_hooks.HealthScoreMemoryHooks()
@@ -1076,15 +1202,21 @@ class TestHealthScoreMemoryHooks:
 
     def test_is_significant_low_score(self):
         hooks = hs_hooks.HealthScoreMemoryHooks()
-        assert hooks._is_significant_health_event(
-            {"overall_health_score": 65},
-        ) is True
+        assert (
+            hooks._is_significant_health_event(
+                {"overall_health_score": 65},
+            )
+            is True
+        )
 
     def test_is_not_significant(self):
         hooks = hs_hooks.HealthScoreMemoryHooks()
-        assert hooks._is_significant_health_event(
-            {"health_grade": "A", "overall_health_score": 95},
-        ) is False
+        assert (
+            hooks._is_significant_health_event(
+                {"health_grade": "A", "overall_health_score": 95},
+            )
+            is False
+        )
 
     def test_calculate_importance_high_score(self):
         hooks = hs_hooks.HealthScoreMemoryHooks()
@@ -1161,7 +1293,8 @@ class TestCohortConstructorMemoryHooks:
         hooks = cc_hooks.CohortConstructorMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks._get_semantic_context(
-            brand="Kisqali", indication="breast_cancer",
+            brand="Kisqali",
+            indication="breast_cancer",
         )
         assert "eligibility_rules" in result
         assert "prior_cohorts" in result
@@ -1205,7 +1338,11 @@ class TestCohortConstructorMemoryHooks:
     async def test_store_eligibility_rule_no_client(self):
         hooks = cc_hooks.CohortConstructorMemoryHooks()
         result = await hooks.store_eligibility_rule(
-            "rule1", {"field": "age"}, "Kisqali", 0.8, "cohort1",
+            "rule1",
+            {"field": "age"},
+            "Kisqali",
+            0.8,
+            "cohort1",
         )
         assert result is False
 
@@ -1214,8 +1351,11 @@ class TestCohortConstructorMemoryHooks:
         hooks = cc_hooks.CohortConstructorMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_eligibility_rule(
-            "age_filter", {"field": "age", "operator": "gte", "value": 18},
-            "Kisqali", 0.85, "cohort_abc",
+            "age_filter",
+            {"field": "age", "operator": "gte", "value": 18},
+            "Kisqali",
+            0.85,
+            "cohort_abc",
         )
         assert result is True
         assert mock_semantic_memory.add_entity.call_count >= 2
@@ -1227,7 +1367,11 @@ class TestCohortConstructorMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("error"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_eligibility_rule(
-            "rule", {}, "brand", 0.5, "cohort",
+            "rule",
+            {},
+            "brand",
+            0.5,
+            "cohort",
         )
         assert result is False
 
@@ -1235,7 +1379,12 @@ class TestCohortConstructorMemoryHooks:
     async def test_store_cohort_pattern_no_client(self):
         hooks = cc_hooks.CohortConstructorMemoryHooks()
         result = await hooks.store_cohort_pattern(
-            "c1", "test", "Kisqali", "bc", {}, 0.8,
+            "c1",
+            "test",
+            "Kisqali",
+            "bc",
+            {},
+            0.8,
         )
         assert result is False
 
@@ -1244,8 +1393,12 @@ class TestCohortConstructorMemoryHooks:
         hooks = cc_hooks.CohortConstructorMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_cohort_pattern(
-            "c1", "test", "Kisqali", "breast_cancer",
-            {"inclusion_count": 3, "exclusion_count": 2}, 0.8,
+            "c1",
+            "test",
+            "Kisqali",
+            "breast_cancer",
+            {"inclusion_count": 3, "exclusion_count": 2},
+            0.8,
         )
         assert result is True
 
@@ -1322,7 +1475,12 @@ class TestMLFoundationMemoryHooks:
     async def test_data_preparer_store_quality_pattern_no_client(self):
         hooks = dp_hooks.DataPreparerMemoryHooks()
         result = await hooks.store_data_quality_pattern(
-            "exp1", "supabase", "passed", 0.95, False, [],
+            "exp1",
+            "supabase",
+            "passed",
+            0.95,
+            False,
+            [],
         )
         assert result is False
 
@@ -1331,12 +1489,19 @@ class TestMLFoundationMemoryHooks:
         hooks = dp_hooks.DataPreparerMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_data_quality_pattern(
-            "exp1", "supabase", "failed", 0.6, True, ["leakage found"],
+            "exp1",
+            "supabase",
+            "failed",
+            0.6,
+            True,
+            ["leakage found"],
         )
         assert result is True
         # Should create LeakageIncident entity when leakage_detected
-        entity_calls = [c[1].get("entity_type", c[0][0] if c[0] else "")
-                        for c in mock_semantic_memory.add_entity.call_args_list]
+        entity_calls = [
+            c[1].get("entity_type", c[0][0] if c[0] else "")
+            for c in mock_semantic_memory.add_entity.call_args_list
+        ]
         assert "LeakageIncident" in entity_calls
 
     @pytest.mark.asyncio
@@ -1345,7 +1510,12 @@ class TestMLFoundationMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_data_quality_pattern(
-            "exp1", "src", "passed", 0.9, False, [],
+            "exp1",
+            "src",
+            "passed",
+            0.9,
+            False,
+            [],
         )
         assert result is False
 
@@ -1359,7 +1529,8 @@ class TestMLFoundationMemoryHooks:
 
         with patch.object(hooks, "_get_episodic_context", new_callable=AsyncMock, return_value=[]):
             ctx = await hooks.get_context(
-                "s1", problem_description="predict churn",
+                "s1",
+                problem_description="predict churn",
             )
         assert isinstance(ctx, sd_hooks.ScopeDefinitionContext)
 
@@ -1374,7 +1545,8 @@ class TestMLFoundationMemoryHooks:
         hooks = sd_hooks.ScopeDefinerMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks._get_semantic_context(
-            problem_type="classification", target_variable="churned",
+            problem_type="classification",
+            target_variable="churned",
         )
         assert "experiments" in result
         assert "target_variable_history" in result
@@ -1396,7 +1568,12 @@ class TestMLFoundationMemoryHooks:
     async def test_scope_definer_store_experiment_pattern_no_client(self):
         hooks = sd_hooks.ScopeDefinerMemoryHooks()
         result = await hooks.store_experiment_pattern(
-            "exp1", "test", "classification", "churned", ["f1"], {},
+            "exp1",
+            "test",
+            "classification",
+            "churned",
+            ["f1"],
+            {},
         )
         assert result is False
 
@@ -1405,8 +1582,12 @@ class TestMLFoundationMemoryHooks:
         hooks = sd_hooks.ScopeDefinerMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_experiment_pattern(
-            "exp1", "churn_model", "classification", "churned",
-            ["age", "tenure"], {"auc": 0.8},
+            "exp1",
+            "churn_model",
+            "classification",
+            "churned",
+            ["age", "tenure"],
+            {"auc": 0.8},
         )
         assert result is True
         # Should create Experiment, ProblemType, Variable, ScopeSpec nodes
@@ -1418,7 +1599,12 @@ class TestMLFoundationMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_experiment_pattern(
-            "exp1", "test", "classification", "target", [], {},
+            "exp1",
+            "test",
+            "classification",
+            "target",
+            [],
+            {},
         )
         assert result is False
 
@@ -1465,7 +1651,12 @@ class TestMLFoundationMemoryHooks:
     async def test_observability_store_health_snapshot_no_client(self):
         hooks = oc_hooks.ObservabilityConnectorMemoryHooks()
         result = await hooks.store_health_snapshot(
-            "24h", 0.95, 250.0, 0.88, {}, [],
+            "24h",
+            0.95,
+            250.0,
+            0.88,
+            {},
+            [],
         )
         assert result is False
 
@@ -1474,7 +1665,10 @@ class TestMLFoundationMemoryHooks:
         hooks = oc_hooks.ObservabilityConnectorMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_health_snapshot(
-            "24h", 0.95, 250.0, 0.88,
+            "24h",
+            0.95,
+            250.0,
+            0.88,
             {"agent_a": 0.15},  # >10% error, should create AgentPattern
             ["low success rate"],  # anomaly
         )
@@ -1488,17 +1682,24 @@ class TestMLFoundationMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_health_snapshot(
-            "1h", 0.9, 100.0, None, {}, [],
+            "1h",
+            0.9,
+            100.0,
+            None,
+            {},
+            [],
         )
         assert result is False
 
     def test_detect_anomalies_all_ok(self):
-        result = oc_hooks._detect_anomalies({
-            "overall_success_rate": 0.98,
-            "overall_p95_latency_ms": 200,
-            "quality_score": 0.9,
-            "error_rate_by_agent": {"a": 0.01},
-        })
+        result = oc_hooks._detect_anomalies(
+            {
+                "overall_success_rate": 0.98,
+                "overall_p95_latency_ms": 200,
+                "quality_score": 0.9,
+                "error_rate_by_agent": {"a": 0.01},
+            }
+        )
         assert result == []
 
     def test_detect_anomalies_low_success(self):
@@ -1507,24 +1708,30 @@ class TestMLFoundationMemoryHooks:
         assert "Low success rate" in result[0]
 
     def test_detect_anomalies_high_latency(self):
-        result = oc_hooks._detect_anomalies({
-            "overall_success_rate": 0.99,
-            "overall_p95_latency_ms": 10000,
-        })
+        result = oc_hooks._detect_anomalies(
+            {
+                "overall_success_rate": 0.99,
+                "overall_p95_latency_ms": 10000,
+            }
+        )
         assert any("High P95 latency" in a for a in result)
 
     def test_detect_anomalies_low_quality(self):
-        result = oc_hooks._detect_anomalies({
-            "overall_success_rate": 0.99,
-            "quality_score": 0.5,
-        })
+        result = oc_hooks._detect_anomalies(
+            {
+                "overall_success_rate": 0.99,
+                "quality_score": 0.5,
+            }
+        )
         assert any("Low quality score" in a for a in result)
 
     def test_detect_anomalies_high_agent_error(self):
-        result = oc_hooks._detect_anomalies({
-            "overall_success_rate": 0.99,
-            "error_rate_by_agent": {"bad_agent": 0.3},
-        })
+        result = oc_hooks._detect_anomalies(
+            {
+                "overall_success_rate": 0.99,
+                "error_rate_by_agent": {"bad_agent": 0.3},
+            }
+        )
         assert any("bad_agent" in a for a in result)
 
     # --- Feature Analyzer ---
@@ -1581,7 +1788,9 @@ class TestMLFoundationMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_feature_importance_patterns(
-            "exp1", {"f1": 0.5}, [],
+            "exp1",
+            {"f1": 0.5},
+            [],
         )
         assert result is False
 
@@ -1613,7 +1822,12 @@ class TestMLFoundationMemoryHooks:
     async def test_model_deployer_store_pattern_no_client(self):
         hooks = md_hooks.ModelDeployerMemoryHooks()
         result = await hooks.store_deployment_pattern(
-            "exp1", "dep1", 1, "staging", "success", "direct",
+            "exp1",
+            "dep1",
+            1,
+            "staging",
+            "success",
+            "direct",
         )
         assert result is False
 
@@ -1622,13 +1836,20 @@ class TestMLFoundationMemoryHooks:
         hooks = md_hooks.ModelDeployerMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_deployment_pattern(
-            "exp1", "dep1", 2, "production", "rolled_back",
-            "canary", rollback_occurred=True,
+            "exp1",
+            "dep1",
+            2,
+            "production",
+            "rolled_back",
+            "canary",
+            rollback_occurred=True,
         )
         assert result is True
         # Should create Rollback entity when rollback_occurred
-        entity_calls = [c[1].get("entity_type", c[0][0] if c[0] else "")
-                        for c in mock_semantic_memory.add_entity.call_args_list]
+        entity_calls = [
+            c[1].get("entity_type", c[0][0] if c[0] else "")
+            for c in mock_semantic_memory.add_entity.call_args_list
+        ]
         assert "Rollback" in entity_calls
 
     @pytest.mark.asyncio
@@ -1637,7 +1858,12 @@ class TestMLFoundationMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_deployment_pattern(
-            "exp1", "dep1", 1, "staging", "success", "direct",
+            "exp1",
+            "dep1",
+            1,
+            "staging",
+            "success",
+            "direct",
         )
         assert result is False
 
@@ -1669,7 +1895,12 @@ class TestMLFoundationMemoryHooks:
     async def test_model_selector_store_algorithm_pattern_no_client(self):
         hooks = ms_hooks.ModelSelectorMemoryHooks()
         result = await hooks.store_algorithm_pattern(
-            "exp1", "xgboost", "gradient_boosting", "classification", 0.9, {},
+            "exp1",
+            "xgboost",
+            "gradient_boosting",
+            "classification",
+            0.9,
+            {},
         )
         assert result is False
 
@@ -1678,8 +1909,12 @@ class TestMLFoundationMemoryHooks:
         hooks = ms_hooks.ModelSelectorMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_algorithm_pattern(
-            "exp1", "xgboost", "gradient_boosting", "classification",
-            0.92, {"score": 0.88},
+            "exp1",
+            "xgboost",
+            "gradient_boosting",
+            "classification",
+            0.92,
+            {"score": 0.88},
         )
         assert result is True
 
@@ -1689,7 +1924,12 @@ class TestMLFoundationMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_algorithm_pattern(
-            "exp1", "xgb", "gb", "cls", 0.0, {},
+            "exp1",
+            "xgb",
+            "gb",
+            "cls",
+            0.0,
+            {},
         )
         assert result is False
 
@@ -1721,7 +1961,12 @@ class TestMLFoundationMemoryHooks:
     async def test_model_trainer_store_model_pattern_no_client(self):
         hooks = mt_hooks.ModelTrainerMemoryHooks()
         result = await hooks.store_model_pattern(
-            "exp1", "run1", "xgboost", {"auc_roc": 0.88}, {}, True,
+            "exp1",
+            "run1",
+            "xgboost",
+            {"auc_roc": 0.88},
+            {},
+            True,
         )
         assert result is False
 
@@ -1730,15 +1975,19 @@ class TestMLFoundationMemoryHooks:
         hooks = mt_hooks.ModelTrainerMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_model_pattern(
-            "exp1", "run1", "xgboost",
+            "exp1",
+            "run1",
+            "xgboost",
             {"auc_roc": 0.88, "f1_score": 0.82},
             {"n_estimators": 100, "max_depth": 5},
             success_criteria_met=True,
         )
         assert result is True
         # Should create Hyperparameters when success_criteria_met
-        entity_calls = [c[1].get("entity_type", c[0][0] if c[0] else "")
-                        for c in mock_semantic_memory.add_entity.call_args_list]
+        entity_calls = [
+            c[1].get("entity_type", c[0][0] if c[0] else "")
+            for c in mock_semantic_memory.add_entity.call_args_list
+        ]
         assert "Hyperparameters" in entity_calls
 
     @pytest.mark.asyncio
@@ -1746,14 +1995,19 @@ class TestMLFoundationMemoryHooks:
         hooks = mt_hooks.ModelTrainerMemoryHooks()
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_model_pattern(
-            "exp1", "run1", "xgboost",
-            {"auc_roc": 0.60}, {},
+            "exp1",
+            "run1",
+            "xgboost",
+            {"auc_roc": 0.60},
+            {},
             success_criteria_met=False,
         )
         assert result is True
         # Should NOT create Hyperparameters when success_criteria_met=False
-        entity_calls = [c[1].get("entity_type", c[0][0] if c[0] else "")
-                        for c in mock_semantic_memory.add_entity.call_args_list]
+        entity_calls = [
+            c[1].get("entity_type", c[0][0] if c[0] else "")
+            for c in mock_semantic_memory.add_entity.call_args_list
+        ]
         assert "Hyperparameters" not in entity_calls
 
     @pytest.mark.asyncio
@@ -1762,7 +2016,12 @@ class TestMLFoundationMemoryHooks:
         mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_model_pattern(
-            "exp1", "run1", "xgb", {}, {}, False,
+            "exp1",
+            "run1",
+            "xgb",
+            {},
+            {},
+            False,
         )
         assert result is False
 
@@ -1795,11 +2054,15 @@ class TestContributeToMemory:
         hooks._working_memory = mock_working_memory
         hooks._semantic_memory = mock_semantic_memory
 
-        with patch.object(hooks, "store_causal_analysis", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_causal_analysis", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await ci_hooks.contribute_to_memory(
                 result={
-                    "status": "completed", "ate_estimate": 0.3,
-                    "confidence": 0.8, "refutation_passed": True,
+                    "status": "completed",
+                    "ate_estimate": 0.3,
+                    "confidence": 0.8,
+                    "refutation_passed": True,
                     "effect_size": "small",
                 },
                 state={
@@ -1845,10 +2108,13 @@ class TestContributeToMemory:
         hooks = orch_hooks.OrchestratorMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_orchestration", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_orchestration", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await orch_hooks.contribute_to_memory(
                 result={
-                    "status": "completed", "query_id": "q1",
+                    "status": "completed",
+                    "query_id": "q1",
                     "response_text": "HCP visits drive TRx.",
                     "intent_classified": "analysis",
                     "agents_dispatched": ["causal_impact"],
@@ -1908,12 +2174,19 @@ class TestContributeToMemory:
         hooks._working_memory = mock_working_memory
         hooks._semantic_memory = mock_semantic_memory
 
-        with patch.object(hooks, "store_cohort_result", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_cohort_pattern", new_callable=AsyncMock, return_value=True):
-                with patch.object(hooks, "store_eligibility_rule", new_callable=AsyncMock, return_value=True):
+        with patch.object(
+            hooks, "store_cohort_result", new_callable=AsyncMock, return_value="mem1"
+        ):
+            with patch.object(
+                hooks, "store_cohort_pattern", new_callable=AsyncMock, return_value=True
+            ):
+                with patch.object(
+                    hooks, "store_eligibility_rule", new_callable=AsyncMock, return_value=True
+                ):
                     counts = await cc_hooks.contribute_to_memory(
                         result={
-                            "status": "success", "cohort_id": "c1",
+                            "status": "success",
+                            "cohort_id": "c1",
                         },
                         state={
                             "config": {
@@ -1952,7 +2225,9 @@ class TestContributeToMemory:
         hooks._semantic_memory = mock_semantic_memory
 
         with patch.object(hooks, "store_qc_report", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_data_quality_pattern", new_callable=AsyncMock, return_value=True):
+            with patch.object(
+                hooks, "store_data_quality_pattern", new_callable=AsyncMock, return_value=True
+            ):
                 counts = await dp_hooks.contribute_to_memory(
                     result={"report_id": "r1", "qc_status": "passed", "gate_passed": True},
                     state={
@@ -1987,12 +2262,18 @@ class TestContributeToMemory:
         hooks._working_memory = mock_working_memory
         hooks._semantic_memory = mock_semantic_memory
 
-        with patch.object(hooks, "store_scope_definition", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_experiment_pattern", new_callable=AsyncMock, return_value=True):
+        with patch.object(
+            hooks, "store_scope_definition", new_callable=AsyncMock, return_value="mem1"
+        ):
+            with patch.object(
+                hooks, "store_experiment_pattern", new_callable=AsyncMock, return_value=True
+            ):
                 counts = await sd_hooks.contribute_to_memory(
                     result={
-                        "experiment_id": "exp1", "experiment_name": "churn",
-                        "scope_spec": {}, "success_criteria": {"auc": 0.8},
+                        "experiment_id": "exp1",
+                        "experiment_name": "churn",
+                        "scope_spec": {},
+                        "success_criteria": {"auc": 0.8},
                     },
                     state={
                         "validation_passed": True,
@@ -2025,8 +2306,12 @@ class TestContributeToMemory:
         hooks._working_memory = mock_working_memory
         hooks._semantic_memory = mock_semantic_memory
 
-        with patch.object(hooks, "store_observability_event", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_health_snapshot", new_callable=AsyncMock, return_value=True):
+        with patch.object(
+            hooks, "store_observability_event", new_callable=AsyncMock, return_value="mem1"
+        ):
+            with patch.object(
+                hooks, "store_health_snapshot", new_callable=AsyncMock, return_value=True
+            ):
                 counts = await oc_hooks.contribute_to_memory(
                     result={
                         "overall_success_rate": 0.98,
@@ -2061,8 +2346,15 @@ class TestContributeToMemory:
         hooks._working_memory = mock_working_memory
         hooks._semantic_memory = mock_semantic_memory
 
-        with patch.object(hooks, "store_feature_analysis", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_feature_importance_patterns", new_callable=AsyncMock, return_value=True):
+        with patch.object(
+            hooks, "store_feature_analysis", new_callable=AsyncMock, return_value="mem1"
+        ):
+            with patch.object(
+                hooks,
+                "store_feature_importance_patterns",
+                new_callable=AsyncMock,
+                return_value=True,
+            ):
                 counts = await fa_hooks.contribute_to_memory(
                     result={
                         "status": "completed",
@@ -2101,7 +2393,9 @@ class TestContributeToMemory:
         hooks._semantic_memory = mock_semantic_memory
 
         with patch.object(hooks, "store_deployment", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_deployment_pattern", new_callable=AsyncMock, return_value=True):
+            with patch.object(
+                hooks, "store_deployment_pattern", new_callable=AsyncMock, return_value=True
+            ):
                 counts = await md_hooks.contribute_to_memory(
                     result={
                         "overall_status": "success",
@@ -2140,8 +2434,12 @@ class TestContributeToMemory:
         hooks._working_memory = mock_working_memory
         hooks._semantic_memory = mock_semantic_memory
 
-        with patch.object(hooks, "store_model_selection", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_algorithm_pattern", new_callable=AsyncMock, return_value=True):
+        with patch.object(
+            hooks, "store_model_selection", new_callable=AsyncMock, return_value="mem1"
+        ):
+            with patch.object(
+                hooks, "store_algorithm_pattern", new_callable=AsyncMock, return_value=True
+            ):
                 counts = await ms_hooks.contribute_to_memory(
                     result={
                         "algorithm_name": "xgboost",
@@ -2178,8 +2476,12 @@ class TestContributeToMemory:
         hooks._working_memory = mock_working_memory
         hooks._semantic_memory = mock_semantic_memory
 
-        with patch.object(hooks, "store_training_result", new_callable=AsyncMock, return_value="mem1"):
-            with patch.object(hooks, "store_model_pattern", new_callable=AsyncMock, return_value=True):
+        with patch.object(
+            hooks, "store_training_result", new_callable=AsyncMock, return_value="mem1"
+        ):
+            with patch.object(
+                hooks, "store_model_pattern", new_callable=AsyncMock, return_value=True
+            ):
                 counts = await mt_hooks.contribute_to_memory(
                     result={
                         "training_status": "completed",
@@ -2215,14 +2517,18 @@ class TestEdgeCases:
         hooks = ci_hooks.CausalImpactMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_causal_analysis", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_causal_analysis", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await ci_hooks.contribute_to_memory(
                 result={
-                    "status": "completed", "ate_estimate": 0.3,
+                    "status": "completed",
+                    "ate_estimate": 0.3,
                     "refutation_passed": False,
                 },
                 state={
-                    "treatment_var": "t", "outcome_var": "o",
+                    "treatment_var": "t",
+                    "outcome_var": "o",
                     "confounders": [],
                 },
                 memory_hooks=hooks,
@@ -2236,10 +2542,13 @@ class TestEdgeCases:
         hooks = orch_hooks.OrchestratorMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_orchestration", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_orchestration", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await orch_hooks.contribute_to_memory(
                 result={
-                    "status": "completed", "query_id": "q1",
+                    "status": "completed",
+                    "query_id": "q1",
                     "response_text": "",  # empty response
                     "intent_classified": "unknown",
                     "agents_dispatched": [],
@@ -2259,7 +2568,9 @@ class TestEdgeCases:
         hooks = cc_hooks.CohortConstructorMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_cohort_result", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_cohort_result", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await cc_hooks.contribute_to_memory(
                 result={"status": "success"},  # no cohort_id
                 state={"config": {"brand": "Kisqali"}},
@@ -2289,7 +2600,9 @@ class TestEdgeCases:
         hooks = sd_hooks.ScopeDefinerMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_scope_definition", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_scope_definition", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await sd_hooks.contribute_to_memory(
                 result={"scope_spec": {}},  # no experiment_id
                 state={"validation_passed": True},
@@ -2304,7 +2617,9 @@ class TestEdgeCases:
         hooks = fa_hooks.FeatureAnalyzerMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_feature_analysis", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_feature_analysis", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await fa_hooks.contribute_to_memory(
                 result={"status": "completed"},
                 state={},  # no experiment_id, no global_importance
@@ -2334,7 +2649,9 @@ class TestEdgeCases:
         hooks = ms_hooks.ModelSelectorMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_model_selection", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_model_selection", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await ms_hooks.contribute_to_memory(
                 result={},  # no algorithm_name
                 state={},  # no experiment_id
@@ -2349,7 +2666,9 @@ class TestEdgeCases:
         hooks = mt_hooks.ModelTrainerMemoryHooks()
         hooks._working_memory = mock_working_memory
 
-        with patch.object(hooks, "store_training_result", new_callable=AsyncMock, return_value="mem1"):
+        with patch.object(
+            hooks, "store_training_result", new_callable=AsyncMock, return_value="mem1"
+        ):
             counts = await mt_hooks.contribute_to_memory(
                 result={"training_status": "completed"},  # no training_run_id
                 state={},  # no experiment_id
@@ -2364,9 +2683,13 @@ class TestEdgeCases:
         hooks = hs_hooks.HealthScoreMemoryHooks()
 
         with patch.object(hooks, "cache_health_check", new_callable=AsyncMock, return_value=False):
-            with patch.object(hooks, "store_health_check", new_callable=AsyncMock, return_value=None):
+            with patch.object(
+                hooks, "store_health_check", new_callable=AsyncMock, return_value=None
+            ):
                 counts = await hs_hooks.contribute_to_memory(
-                    result={}, state={}, memory_hooks=hooks,
+                    result={},
+                    state={},
+                    memory_hooks=hooks,
                 )
         assert counts["working_cached"] == 0
 

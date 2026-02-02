@@ -377,12 +377,8 @@ class CompositionResult(BaseModel):
     error: Optional[str] = None
 
     # Observability fields (Gap G5 - Opik integration)
-    span_id: Optional[str] = Field(
-        default=None, description="Opik span ID for tracing"
-    )
-    trace_id: Optional[str] = Field(
-        default=None, description="Opik trace ID for tracing"
-    )
+    span_id: Optional[str] = Field(default=None, description="Opik span ID for tracing")
+    trace_id: Optional[str] = Field(default=None, description="Opik trace ID for tracing")
 
     # DSPy/GEPA training signals (Gap G4)
     training_signals: List[Dict[str, Any]] = Field(

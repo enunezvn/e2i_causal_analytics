@@ -11,13 +11,11 @@ from src.agents.feedback_learner.evaluation import (
     CriterionScore,
     EvaluationContext,
     ImprovementDecision,
-    PatternFlag,
     RubricEvaluation,
     RubricEvaluator,
 )
 from src.agents.feedback_learner.nodes.rubric_node import RubricNode
 from src.agents.feedback_learner.state import FeedbackLearnerState
-
 
 # =============================================================================
 # Fixtures
@@ -417,7 +415,9 @@ class TestRubricNodeEvaluateAndDecide:
     """Tests for RubricNode.evaluate_and_decide()."""
 
     @pytest.mark.asyncio
-    async def test_evaluate_and_decide(self, sample_evaluation_context, mock_evaluator, sample_rubric_evaluation):
+    async def test_evaluate_and_decide(
+        self, sample_evaluation_context, mock_evaluator, sample_rubric_evaluation
+    ):
         """Test the standalone evaluation method."""
         node = RubricNode(evaluator=mock_evaluator)
 

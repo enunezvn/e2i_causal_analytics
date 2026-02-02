@@ -18,7 +18,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from src.agents.experiment_designer.state import (
     ErrorDetails,
@@ -59,9 +59,7 @@ def _get_validity_llm() -> tuple[Any, str, bool]:
         from langchain_anthropic import ChatAnthropic
 
         # Use Claude Sonnet 4 for validity assessment
-        model_name = os.environ.get(
-            "VALIDITY_AUDIT_MODEL", "claude-sonnet-4-20250514"
-        )
+        model_name = os.environ.get("VALIDITY_AUDIT_MODEL", "claude-sonnet-4-20250514")
         llm = ChatAnthropic(
             model=model_name,
             max_tokens=4096,
@@ -342,8 +340,8 @@ class ValidityAuditNode:
 
 ## Proposed Experiment
 
-**Design Type:** {state.get('design_type', 'Not specified')}
-**Design Rationale:** {state.get('design_rationale', 'Not specified')}
+**Design Type:** {state.get("design_type", "Not specified")}
+**Design Rationale:** {state.get("design_rationale", "Not specified")}
 
 **Treatment:**
 {treatment_json}
@@ -351,12 +349,12 @@ class ValidityAuditNode:
 **Outcome:**
 {outcome_json}
 
-**Sample Size:** {power_analysis.get('required_sample_size', 'Not calculated')}
-**Randomization Unit:** {state.get('randomization_unit', 'individual')}
-**Randomization Method:** {state.get('randomization_method', 'simple')}
-**Stratification:** {state.get('stratification_variables', [])}
-**Blocking Variables:** {state.get('blocking_variables', [])}
-**Causal Assumptions:** {json.dumps(state.get('causal_assumptions', []), indent=2)}
+**Sample Size:** {power_analysis.get("required_sample_size", "Not calculated")}
+**Randomization Unit:** {state.get("randomization_unit", "individual")}
+**Randomization Method:** {state.get("randomization_method", "simple")}
+**Stratification:** {state.get("stratification_variables", [])}
+**Blocking Variables:** {state.get("blocking_variables", [])}
+**Causal Assumptions:** {json.dumps(state.get("causal_assumptions", []), indent=2)}
 
 ---
 
@@ -501,7 +499,7 @@ For each threat, assess severity (low/medium/high/critical) and mitigation:
         warnings: list[str] = []
 
         dag_nodes = state.get("discovered_dag_nodes", [])
-        dag_nodes_set = set(dag_nodes)
+        set(dag_nodes)
         causal_assumptions = state.get("causal_assumptions", [])
 
         # Extract potential confounder variables from assumptions
@@ -590,7 +588,7 @@ For each threat, assess severity (low/medium/high/critical) and mitigation:
             return candidates
 
         node_to_idx = {node: idx for idx, node in enumerate(dag_nodes)}
-        n_nodes = len(dag_nodes)
+        len(dag_nodes)
 
         treatment_idx = node_to_idx.get(treatment_var)
         outcome_idx = node_to_idx.get(outcome_var)
@@ -640,7 +638,7 @@ For each threat, assess severity (low/medium/high/critical) and mitigation:
             return modifiers
 
         node_to_idx = {node: idx for idx, node in enumerate(dag_nodes)}
-        n_nodes = len(dag_nodes)
+        len(dag_nodes)
 
         treatment_idx = node_to_idx.get(treatment_var)
         outcome_idx = node_to_idx.get(outcome_var)
@@ -654,7 +652,7 @@ For each threat, assess severity (low/medium/high/critical) and mitigation:
                 continue
 
             # Check if connected to treatment (as cause of treatment OR common cause)
-            connected_to_treatment = (
+            (
                 dag_adjacency[node_idx][treatment_idx] == 1  # Node -> Treatment
                 or dag_adjacency[treatment_idx][node_idx] == 1  # Treatment -> Node
             )

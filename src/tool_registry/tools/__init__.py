@@ -24,9 +24,9 @@ from src.tool_registry.tools.causal_discovery import (
     register_all_discovery_tools,
 )
 from src.tool_registry.tools.model_inference import (
-    ModelInferenceTool,
     ModelInferenceInput,
     ModelInferenceOutput,
+    ModelInferenceTool,
     get_model_inference_tool,
     model_inference,
 )

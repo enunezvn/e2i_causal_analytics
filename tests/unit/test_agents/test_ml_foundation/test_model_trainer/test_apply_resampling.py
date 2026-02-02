@@ -3,17 +3,17 @@
 Tests the apply_resampling function and its helper functions.
 """
 
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import patch
 
 from src.agents.ml_foundation.model_trainer.nodes.apply_resampling import (
-    apply_resampling,
-    _ensure_numpy,
     _apply_strategy,
+    _ensure_numpy,
+    apply_resampling,
 )
-
 
 # ============================================================================
 # Test fixtures

@@ -4,13 +4,8 @@ Version: 1.0.0
 Tests the DiscoveryCache class with Redis + in-memory fallback.
 """
 
-import asyncio
-import json
-import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import numpy as np
 import pandas as pd
 import pytest
 
