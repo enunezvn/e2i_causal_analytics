@@ -198,11 +198,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if user_id:
             return f"user:{user_id}"
 
-        # Fall back to IP address
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            ip = forwarded.split(",")[0].strip()
-        else:
+        # Fall back to IP address — prefer X-Real-IP (set by nginx to $remote_addr, not spoofable)
+        ip = request.headers.get("X-Real-IP")
+        if not ip:
             ip = request.client.host if request.client else "unknown"
 
         return f"ip:{ip}"
