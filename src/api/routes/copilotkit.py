@@ -325,6 +325,13 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
     if event_dict.get("source") is None:
         event_dict["source"] = "e2i-copilot"
 
+    # CRITICAL FIX (v1.24.0): Fix null parentMessageId on ANY event
+    # ag_ui_langgraph emits parentMessageId=null on TEXT_MESSAGE_START and other events.
+    # CopilotKit frontend Zod schema requires it to be a string, not null.
+    # Apply universally since event type strings may vary (SCREAMING_SNAKE vs PascalCase).
+    if "parentMessageId" in event_dict and event_dict["parentMessageId"] is None:
+        event_dict["parentMessageId"] = ""
+
     # Lifecycle-specific fields (preserved from v1.17.0 and v1.18.0)
     if event_type in ("RUN_STARTED", "RUN_FINISHED"):
         # Ensure parentRunId is a string (empty string if null)
@@ -408,6 +415,9 @@ def _fix_all_events(event_dict: dict, thread_id: str, run_id: str) -> dict:
                     else:
                         # Generate a new UUID for other messages with invalid ID
                         msg["id"] = f"msg-{uuid.uuid4()}"
+                # CRITICAL FIX (v1.24.0): Fix null parentMessageId in snapshot messages
+                if "parentMessageId" in msg and msg["parentMessageId"] is None:
+                    msg["parentMessageId"] = ""
 
     return event_dict
 
@@ -540,6 +550,16 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                 dbg(f"Added LangChain message: role={role}, content={msg.content[:50]}...")
 
         dbg(f"Converted to {len(agui_messages)} AG-UI messages")
+
+        # Extract last user message ID for parentMessageId in response events
+        last_user_msg_id = ""
+        for msg in reversed(messages or []):
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                last_user_msg_id = msg.get("id", "")
+                break
+            elif hasattr(msg, "type") and msg.type == "human":
+                last_user_msg_id = getattr(msg, "id", "") or ""
+                break
 
         # Build RunAgentInput
         # Generate run_id if not provided (SDK doesn't always pass it)
@@ -741,7 +761,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                         logger.error(f"[CopilotKit] TEXT_MESSAGE_START: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, completed_count={len(completed_message_ids)}")
                         if message_lifecycle_count > 1:
                             logger.warning(f"[CopilotKit] DUPLICATE LIFECYCLE DETECTED: This is lifecycle #{message_lifecycle_count}, previous completed: {completed_message_ids}")
-                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': streaming_message_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
+                        yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': streaming_message_id, 'parentMessageId': last_user_msg_id, 'role': 'assistant', 'timestamp': current_ts, 'source': source})}\n\n"
                         event_count += 1
                         dbg(f"Started streaming message_id={streaming_message_id}")
 
@@ -1777,18 +1797,19 @@ def create_e2i_chat_agent():
                     logger.warning(f"[CopilotKit] Failed to persist greeting: {e}")
             return {"messages": [AIMessage(content=greeting)]}
 
-        # Get LLM via factory (supports dynamic provider switching)
+        # Get LLM via factory — use Anthropic for reliable tool calling
         try:
             llm = get_chat_llm(
                 model_tier="standard",
                 max_tokens=2048,
                 temperature=0.3,
+                provider="anthropic",
             )
-            provider = get_llm_provider()
+            provider = "anthropic"
             logger.info(f"[CopilotKit] Using {provider} LLM for chat")
 
-            # Bind E2I tools to LLM
-            llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS)
+            # Bind E2I tools to LLM with tool_choice="auto" to encourage tool use
+            llm_with_tools = llm.bind_tools(E2I_CHATBOT_TOOLS, tool_choice="auto")
 
             # Build messages for LLM
             system_msg = SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT)
@@ -1829,9 +1850,16 @@ def create_e2i_chat_agent():
             async for chunk in llm_with_tools.astream(llm_messages):
                 # Accumulate content chunks (DON'T emit yet - wait to check for tool calls)
                 if hasattr(chunk, 'content') and chunk.content:
-                    full_content += chunk.content
-                    content_chunks.append(chunk.content)
-                    logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk.content)} chars")
+                    # Anthropic returns content as list of blocks, OpenAI returns str
+                    chunk_text = chunk.content
+                    if isinstance(chunk_text, list):
+                        chunk_text = "".join(
+                            block.get("text", "") if isinstance(block, dict) else str(block)
+                            for block in chunk_text
+                        )
+                    full_content += chunk_text
+                    content_chunks.append(chunk_text)
+                    logger.debug(f"[CopilotKit] Accumulated chunk: {len(chunk_text)} chars")
 
                 # Accumulate tool calls (they may come in chunks)
                 # STREAMING PATTERN: Anthropic/LangChain sends tool calls in two parts:
@@ -2123,14 +2151,15 @@ def create_e2i_chat_agent():
             except Exception as e:
                 logger.warning(f"[CopilotKit] Failed to persist tool results: {e}")
 
-        # Get LLM via factory to synthesize tool results
+        # Get LLM via factory to synthesize tool results — use Anthropic for consistency
         try:
             llm = get_chat_llm(
                 model_tier="standard",
                 max_tokens=2048,
                 temperature=0.3,
+                provider="anthropic",
             )
-            provider = get_llm_provider()
+            provider = "anthropic"
             logger.info(f"[CopilotKit] Using {provider} LLM for synthesis")
 
             # Ask LLM to synthesize the results
@@ -2149,9 +2178,16 @@ Synthesize these results into a natural, conversational response. Include specif
                 HumanMessage(content=synthesis_prompt)
             ]):
                 if hasattr(chunk, 'content') and chunk.content:
-                    full_content += chunk.content
-                    await copilotkit_emit_message(config, chunk.content)
-                    logger.debug(f"[CopilotKit] Streamed synthesis chunk: {len(chunk.content)} chars")
+                    # Anthropic returns content as list of blocks, OpenAI returns str
+                    chunk_text = chunk.content
+                    if isinstance(chunk_text, list):
+                        chunk_text = "".join(
+                            block.get("text", "") if isinstance(block, dict) else str(block)
+                            for block in chunk_text
+                        )
+                    full_content += chunk_text
+                    await copilotkit_emit_message(config, chunk_text)
+                    logger.debug(f"[CopilotKit] Streamed synthesis chunk: {len(chunk_text)} chars")
 
             logger.debug(f"[CopilotKit] Synthesis streaming complete: {len(full_content)} chars")
             response = AIMessage(content=full_content)
