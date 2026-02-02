@@ -37,16 +37,10 @@ def base_state():
 
 
 @pytest.mark.asyncio
-async def test_qc_gate_passes_with_good_quality(base_state, mocker):
+async def test_qc_gate_passes_with_good_quality(base_state):
     """Test that QC gate passes with good data quality."""
-    # Mock the train_df
     import pandas as pd
 
-    mocker.patch.object(
-        pd,
-        "DataFrame",
-        return_value=pd.DataFrame({"feature1": [1, 2], "feature2": [3, 4]}),
-    )
     base_state["train_df"] = pd.DataFrame({"feature1": [1, 2], "feature2": [3, 4]})
 
     result = await finalize_output(base_state)
@@ -59,7 +53,7 @@ async def test_qc_gate_passes_with_good_quality(base_state, mocker):
 
 
 @pytest.mark.asyncio
-async def test_qc_gate_blocks_on_failed_status(base_state, mocker):
+async def test_qc_gate_blocks_on_failed_status(base_state):
     """Test that QC gate blocks when status is 'failed'.
 
     Per tier0-contracts.md:
@@ -80,7 +74,7 @@ async def test_qc_gate_blocks_on_failed_status(base_state, mocker):
 
 
 @pytest.mark.asyncio
-async def test_qc_gate_blocks_on_blocking_issues(base_state, mocker):
+async def test_qc_gate_blocks_on_blocking_issues(base_state):
     """Test that QC gate blocks when there are blocking issues.
 
     Per tier0-contracts.md:
@@ -101,7 +95,7 @@ async def test_qc_gate_blocks_on_blocking_issues(base_state, mocker):
 
 
 @pytest.mark.asyncio
-async def test_qc_gate_blocks_on_low_score(base_state, mocker):
+async def test_qc_gate_blocks_on_low_score(base_state):
     """Test that QC gate blocks when overall score < 0.80.
 
     Per tier0-contracts.md:
@@ -121,7 +115,7 @@ async def test_qc_gate_blocks_on_low_score(base_state, mocker):
 
 
 @pytest.mark.asyncio
-async def test_qc_gate_threshold_exactly_080(base_state, mocker):
+async def test_qc_gate_threshold_exactly_080(base_state):
     """Test QC gate behavior at exactly 0.80 threshold."""
     import pandas as pd
 
@@ -135,7 +129,7 @@ async def test_qc_gate_threshold_exactly_080(base_state, mocker):
 
 
 @pytest.mark.asyncio
-async def test_data_readiness_checks_missing_features(base_state, mocker):
+async def test_data_readiness_checks_missing_features(base_state):
     """Test that data readiness checks for missing required features."""
     import pandas as pd
 
@@ -157,7 +151,7 @@ async def test_data_readiness_checks_missing_features(base_state, mocker):
 
 
 @pytest.mark.asyncio
-async def test_data_readiness_sample_counts(mocker):
+async def test_data_readiness_sample_counts():
     """Test that data readiness correctly counts samples across splits."""
     import pandas as pd
 
@@ -211,7 +205,7 @@ async def test_finalize_output_error_handling():
 
 
 @pytest.mark.asyncio
-async def test_qc_gate_contract_compliance(base_state, mocker):
+async def test_qc_gate_contract_compliance(base_state):
     """Integration test: Verify QC gate matches tier0-contracts.md specification.
 
     This test verifies the three blocking conditions from the contract:
