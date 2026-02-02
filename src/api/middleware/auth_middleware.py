@@ -130,11 +130,9 @@ def _get_client_info(request: Request) -> tuple[str, str]:
     Returns:
         Tuple of (client_ip, user_agent)
     """
-    # Get client IP (check X-Forwarded-For for proxied requests)
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
-    else:
+    # Get client IP — prefer X-Real-IP (set by nginx to $remote_addr, not spoofable)
+    client_ip = request.headers.get("X-Real-IP")
+    if not client_ip:
         client_ip = request.client.host if request.client else "unknown"
 
     user_agent = request.headers.get("User-Agent", "unknown")

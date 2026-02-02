@@ -366,13 +366,13 @@ class TestRateLimitMiddleware:
         assert client_key == "ip:192.168.1.1"
 
     @pytest.mark.asyncio
-    async def test_get_client_key_from_forwarded_header(self):
-        """Test client identification from X-Forwarded-For header."""
+    async def test_get_client_key_from_real_ip_header(self):
+        """Test client identification from X-Real-IP header (set by nginx)."""
         app = MagicMock()
         middleware = RateLimitMiddleware(app, use_redis=False)
 
         mock_request = MagicMock(spec=Request)
-        mock_request.headers = {"X-Forwarded-For": "203.0.113.1, 198.51.100.1"}
+        mock_request.headers = {"X-Real-IP": "203.0.113.1"}
         mock_request.client = None
         # Explicitly set state.user_id to None
         mock_request.state = MagicMock()
@@ -380,7 +380,7 @@ class TestRateLimitMiddleware:
 
         client_key = middleware._get_client_key(mock_request)
 
-        assert client_key == "ip:203.0.113.1"  # First IP in list
+        assert client_key == "ip:203.0.113.1"
 
     def test_get_limit_for_path_health(self):
         """Test health endpoints get higher rate limit."""
