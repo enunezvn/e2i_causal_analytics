@@ -139,6 +139,9 @@ class ToolComposerState(TypedDict):
     status: CompositionStatusType
     success: bool
     composition_id: NotRequired[str]
+    sub_questions_count: NotRequired[int]
+    metadata: NotRequired[Dict[str, Any]]
+    total_duration_ms: NotRequired[int]
 
     # ===== TIMING (Contract-required output fields) =====
     decompose_latency_ms: NotRequired[int]

@@ -425,7 +425,7 @@ class CohortConstructorMemoryHooks:
             rule_id = f"rule:{brand}:{criterion.get('field', 'unknown')}:{criterion.get('operator', 'eq')}"
 
             # Create eligibility rule node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="EligibilityRule",
                 entity_id=rule_id,
                 properties={
@@ -444,7 +444,7 @@ class CohortConstructorMemoryHooks:
 
             # Create brand node and relationship
             brand_id = f"brand:{brand}"
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Brand",
                 entity_id=brand_id,
                 properties={
@@ -508,7 +508,7 @@ class CohortConstructorMemoryHooks:
             cohort_entity_id = f"cohort:{cohort_id}"
 
             # Create cohort config node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="CohortConfig",
                 entity_id=cohort_entity_id,
                 properties={
@@ -526,7 +526,7 @@ class CohortConstructorMemoryHooks:
 
             # Link to brand
             brand_id = f"brand:{brand}"
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Brand",
                 entity_id=brand_id,
                 properties={

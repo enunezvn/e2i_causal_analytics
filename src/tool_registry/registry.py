@@ -194,7 +194,7 @@ class ToolRegistry:
         tool_name = schema.name
 
         if tool_name in self._tools:
-            logger.warning(f"Tool '{tool_name}' already registered, overwriting")
+            return  # Already registered, skip silently
 
         registered = RegisteredTool(
             schema=schema,

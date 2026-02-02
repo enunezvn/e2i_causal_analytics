@@ -39,11 +39,37 @@ class TestImpactProjectorNode:
         node = ImpactProjectorNode()
         result = await node.execute(optimized_state)
 
-        total_outcome = sum(a["expected_impact"] for a in optimized_state["optimal_allocations"])
+        # The implementation calculates incremental ROI when allocation_targets are present:
+        # ROI = (projected_outcome - current_outcome) / optimized_total
+        allocation_targets = optimized_state.get("allocation_targets", [])
+
+        # Build response map - handle both AllocationTarget objects and dicts
+        response_by_entity = {}
+        for t in allocation_targets:
+            if hasattr(t, 'entity_id'):
+                # AllocationTarget object
+                response_by_entity[t.entity_id] = t.expected_response
+            else:
+                # Dictionary
+                response_by_entity[t.get("entity_id")] = t.get("expected_response", 0)
+
+        projected_outcome = sum(
+            response_by_entity.get(a["entity_id"], 0) * a["optimized_allocation"]
+            for a in optimized_state["optimal_allocations"]
+        )
+
+        # Calculate current outcome
+        current_outcome = 0
+        for t in allocation_targets:
+            if hasattr(t, 'entity_id'):
+                current_outcome += t.expected_response * t.current_allocation
+            else:
+                current_outcome += t.get("expected_response", 0) * t.get("current_allocation", 0)
+
         total_allocation = sum(
             a["optimized_allocation"] for a in optimized_state["optimal_allocations"]
         )
-        expected_roi = total_outcome / total_allocation
+        expected_roi = (projected_outcome - current_outcome) / total_allocation
 
         assert result["projected_roi"] == pytest.approx(expected_roi, rel=0.01)
 

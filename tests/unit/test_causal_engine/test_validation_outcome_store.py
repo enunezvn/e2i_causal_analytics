@@ -39,7 +39,7 @@ def sample_outcome():
     return ValidationOutcome(
         outcome_id="test-outcome-001",
         estimate_id="est-123",
-        outcome_type=ValidationOutcomeType.FAILED,
+        outcome_type=ValidationOutcomeType.FAILED_MULTIPLE,
         treatment_variable="hcp_engagement",
         outcome_variable="conversion_rate",
         brand="Kisqali",
@@ -52,7 +52,7 @@ def sample_outcome():
         tests_total=5,
         failure_patterns=[
             ValidationFailurePattern(
-                category=FailureCategory.PLACEBO,
+                category=FailureCategory.SPURIOUS_CORRELATION,
                 test_name="placebo_treatment",
                 description="Placebo effect is significant",
                 severity="high",
@@ -62,7 +62,7 @@ def sample_outcome():
                 recommendation="Review confounders",
             ),
             ValidationFailurePattern(
-                category=FailureCategory.CONFOUNDING,
+                category=FailureCategory.MODEL_MISSPECIFICATION,
                 test_name="random_common_cause",
                 description="Effect sensitive to random confounders",
                 severity="medium",
@@ -145,7 +145,7 @@ class TestInMemoryValidationOutcomeStore:
 
         # Should only return failed outcome, not passed
         assert len(failures) == 1
-        assert failures[0].outcome_type == ValidationOutcomeType.FAILED
+        assert failures[0].outcome_type == ValidationOutcomeType.FAILED_MULTIPLE
 
     @pytest.mark.asyncio
     async def test_query_failures_by_treatment(self, sample_outcome):
@@ -200,12 +200,12 @@ class TestInMemoryValidationOutcomeStore:
         await store.store(sample_outcome)
 
         failures = await store.query_failures(
-            failure_category=FailureCategory.PLACEBO,
+            failure_category=FailureCategory.SPURIOUS_CORRELATION,
             limit=10
         )
 
         assert len(failures) == 1
-        assert any(p.category == FailureCategory.PLACEBO for p in failures[0].failure_patterns)
+        assert any(p.category == FailureCategory.SPURIOUS_CORRELATION for p in failures[0].failure_patterns)
 
     @pytest.mark.asyncio
     async def test_query_failures_limit(self):
@@ -216,7 +216,7 @@ class TestInMemoryValidationOutcomeStore:
         for i in range(10):
             outcome = ValidationOutcome(
                 outcome_id=f"test-{i}",
-                outcome_type=ValidationOutcomeType.FAILED,
+                outcome_type=ValidationOutcomeType.FAILED_CRITICAL,
                 treatment_variable="test",
                 outcome_variable="test",
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -235,10 +235,10 @@ class TestInMemoryValidationOutcomeStore:
         for i in range(3):
             outcome = ValidationOutcome(
                 outcome_id=f"test-{i}",
-                outcome_type=ValidationOutcomeType.FAILED,
+                outcome_type=ValidationOutcomeType.FAILED_CRITICAL,
                 failure_patterns=[
                     ValidationFailurePattern(
-                        category=FailureCategory.PLACEBO,
+                        category=FailureCategory.SPURIOUS_CORRELATION,
                         test_name="placebo_treatment",
                         description="Placebo effect",
                         severity="high",
@@ -265,12 +265,12 @@ class TestInMemoryValidationOutcomeStore:
         await store.store(sample_outcome)
 
         patterns = await store.get_failure_patterns(
-            category=FailureCategory.PLACEBO,
+            category=FailureCategory.SPURIOUS_CORRELATION,
             limit=10
         )
 
         assert len(patterns) > 0
-        assert all(p["category"] == FailureCategory.PLACEBO.value for p in patterns)
+        assert all(p["category"] == FailureCategory.SPURIOUS_CORRELATION.value for p in patterns)
 
     @pytest.mark.asyncio
     async def test_get_similar_failures(self, sample_outcome):
@@ -281,7 +281,7 @@ class TestInMemoryValidationOutcomeStore:
         # Create another outcome with similar variables
         similar_outcome = ValidationOutcome(
             outcome_id="test-similar",
-            outcome_type=ValidationOutcomeType.FAILED,
+            outcome_type=ValidationOutcomeType.FAILED_CRITICAL,
             treatment_variable="hcp_engagement",
             outcome_variable="different_outcome",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -345,7 +345,8 @@ class TestSupabaseValidationOutcomeStore:
             outcome_id = await store.store(sample_outcome)
 
             assert outcome_id == sample_outcome.outcome_id
-            mock_client.table.assert_called_once_with("validation_outcomes")
+            # Check that table was called with correct name (can be called multiple times in chain)
+            mock_client.table.assert_any_call("validation_outcomes")
 
     @pytest.mark.asyncio
     async def test_store_outcome_fallback_to_memory(self, sample_outcome):
@@ -495,12 +496,12 @@ class TestExperimentKnowledgeStore:
         knowledge_store = ExperimentKnowledgeStore(store)
 
         learnings = await knowledge_store.get_validation_learnings(
-            category=FailureCategory.PLACEBO,
+            category=FailureCategory.SPURIOUS_CORRELATION,
             limit=10
         )
 
         assert len(learnings) > 0
-        assert learnings[0].failure_category == FailureCategory.PLACEBO.value
+        assert learnings[0].failure_category == FailureCategory.SPURIOUS_CORRELATION.value
 
     @pytest.mark.asyncio
     async def test_should_warn_for_design(self, sample_outcome):

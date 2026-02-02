@@ -115,20 +115,24 @@ class TestHeterogeneousOptimizerAgent:
 
     @pytest.mark.asyncio
     async def test_input_validation_empty_segment_vars(self):
-        """Test empty segment_vars list."""
+        """Test empty segment_vars list is allowed for overall ATE estimation."""
         agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
 
-        with pytest.raises(ValueError, match="segment_vars must be a non-empty list"):
-            await agent.run(
-                {
-                    "query": "test",
-                    "treatment_var": "treatment",
-                    "outcome_var": "outcome",
-                    "segment_vars": [],
-                    "effect_modifiers": ["modifier1"],
-                    "data_source": "test",
-                }
-            )
+        # Empty segment_vars is now allowed - agent will compute overall ATE only
+        result = await agent.run(
+            {
+                "query": "test",
+                "treatment_var": "hcp_engagement_frequency",
+                "outcome_var": "trx_total",
+                "segment_vars": [],
+                "effect_modifiers": ["hcp_tenure"],
+                "data_source": "test",
+            }
+        )
+
+        # Should complete successfully with overall ATE but no segment analysis
+        assert "overall_ate" in result
+        assert result["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_input_validation_empty_effect_modifiers(self):

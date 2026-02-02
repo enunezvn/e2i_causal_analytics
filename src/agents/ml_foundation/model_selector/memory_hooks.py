@@ -318,7 +318,7 @@ class ModelSelectorMemoryHooks:
 
         try:
             # Create algorithm node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Algorithm",
                 entity_id=f"algo:{algorithm_name}",
                 properties={

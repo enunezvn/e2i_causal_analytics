@@ -244,7 +244,7 @@ class TestLLMExpansion:
             yield mock
 
     def test_get_client(self, optimizer):
-        with patch("anthropic.Anthropic") as mock_anthropic:
+        with patch("src.rag.query_optimizer.anthropic.Anthropic") as mock_anthropic:
             mock_client = Mock()
             mock_anthropic.return_value = mock_client
 

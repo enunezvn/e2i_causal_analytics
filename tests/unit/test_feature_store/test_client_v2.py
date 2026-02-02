@@ -72,6 +72,7 @@ def test_client_init_without_redis(mock_supabase):
         assert client.enable_cache is False
 
 
+@patch.dict("os.environ", {}, clear=True)
 def test_client_init_missing_credentials():
     """Test initialization fails without credentials."""
     with pytest.raises(ValueError, match="Supabase URL and key are required"):

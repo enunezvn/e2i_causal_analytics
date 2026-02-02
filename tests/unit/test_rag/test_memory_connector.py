@@ -4,10 +4,28 @@ Unit tests for RAG Memory Connector.
 Tests the bridge between RAG retriever and memory backends.
 """
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# ============================================================================
+# MODULE ISOLATION FIX
+# ============================================================================
+# CRITICAL: test_cognitive_backends.py pollutes sys.modules by replacing
+# 'src.rag.memory_connector' with a MagicMock at import time. This causes
+# all tests in this file to fail when run as part of the full suite.
+# Solution: Force re-import of the real module before running tests.
+
+# Store reference to real module (if already imported)
+_real_memory_connector_module = sys.modules.get("src.rag.memory_connector")
+
+# Remove any mock from sys.modules and force real import
+if "src.rag.memory_connector" in sys.modules:
+    if isinstance(sys.modules["src.rag.memory_connector"], MagicMock):
+        del sys.modules["src.rag.memory_connector"]
+
+# Import the real module
 from src.rag.memory_connector import (
     MemoryConnector,
     get_memory_connector,
@@ -18,6 +36,30 @@ from src.rag.types import RetrievalSource
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def ensure_real_module():
+    """
+    Ensure real memory_connector module is loaded before each test.
+
+    Protects against pollution from test_cognitive_backends.py which
+    replaces sys.modules['src.rag.memory_connector'] with a MagicMock.
+    """
+    # Store original (should be real module now after import above)
+    original = sys.modules.get("src.rag.memory_connector")
+
+    # Force real module if it got replaced
+    if isinstance(sys.modules.get("src.rag.memory_connector"), MagicMock):
+        sys.modules["src.rag.memory_connector"] = original
+
+    # Reset singleton state before each test
+    reset_memory_connector()
+
+    yield
+
+    # Reset singleton state after each test
+    reset_memory_connector()
 
 
 @pytest.fixture

@@ -385,7 +385,7 @@ class ScopeDefinerMemoryHooks:
 
         try:
             # Create experiment node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Experiment",
                 entity_id=f"exp:{experiment_id}",
                 properties={
@@ -397,7 +397,7 @@ class ScopeDefinerMemoryHooks:
             )
 
             # Create problem type node and relationship
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="ProblemType",
                 entity_id=f"ptype:{problem_type}",
                 properties={
@@ -413,7 +413,7 @@ class ScopeDefinerMemoryHooks:
             )
 
             # Create target variable node and relationship
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="Variable",
                 entity_id=f"var:{target_variable}",
                 properties={
@@ -431,7 +431,7 @@ class ScopeDefinerMemoryHooks:
             )
 
             # Create scope spec node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="ScopeSpec",
                 entity_id=f"scope:{experiment_id}",
                 properties={

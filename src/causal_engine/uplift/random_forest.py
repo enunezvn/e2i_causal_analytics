@@ -67,7 +67,6 @@ class UpliftRandomForest(BaseUpliftModel):
             control_name=self.config.control_name,
             random_state=self.config.random_state,
             honesty=self.config.honesty,
-            inference=self.config.inference,
             evaluationFunction=self.config.evaluationFunction,
         )
 

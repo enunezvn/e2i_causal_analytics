@@ -106,17 +106,16 @@ class TestComputeSHAP:
         assert "shap_values" in result
         assert len(result["top_features"]) == 3
 
-    async def test_error_when_missing_model_uri(self):
-        """Should return error when model_uri is missing."""
+    async def test_skips_when_missing_model_uri(self):
+        """Should skip SHAP computation when model_uri is missing."""
         state = {
             "experiment_id": "exp_003",
         }
 
         result = await compute_shap(state)
 
-        assert "error" in result
-        assert result["error_type"] == "missing_model_uri"
-        assert result["status"] == "failed"
+        assert result["shap_skipped"] is True
+        assert result["status"] == "skipped"
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")

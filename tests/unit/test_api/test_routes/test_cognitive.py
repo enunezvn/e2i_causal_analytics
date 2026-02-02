@@ -297,7 +297,7 @@ class TestCognitiveRAGSearchEndpoint:
             "latency_ms": 1250.5,
         })
 
-        with patch("src.api.routes.cognitive.CausalRAG", return_value=mock_rag):
+        with patch("src.rag.causal_rag.CausalRAG", return_value=mock_rag):
             response = await cognitive_rag_search(request)
 
             assert response.response == "Adoption increased due to increased engagement"
@@ -311,7 +311,7 @@ class TestCognitiveRAGSearchEndpoint:
 
         request = CognitiveRAGRequest(query="test")
 
-        with patch("src.api.routes.cognitive.CausalRAG", side_effect=ImportError("No module")):
+        with patch("src.rag.causal_rag.CausalRAG", side_effect=ImportError("No module")):
             with pytest.raises(HTTPException) as exc_info:
                 await cognitive_rag_search(request)
 
@@ -324,7 +324,7 @@ class TestCognitiveRAGSearchEndpoint:
 
         request = CognitiveRAGRequest(query="test")
 
-        with patch("src.api.routes.cognitive.CausalRAG", side_effect=ValueError("Config error")):
+        with patch("src.rag.causal_rag.CausalRAG", side_effect=ValueError("Config error")):
             with pytest.raises(HTTPException) as exc_info:
                 await cognitive_rag_search(request)
 
@@ -423,7 +423,7 @@ class TestGetOrchestratorFunction:
         import src.api.routes.cognitive as cognitive_module
         cognitive_module._orchestrator_instance = None
 
-        with patch("src.api.routes.cognitive.OrchestratorAgent") as mock_orch_class:
+        with patch("src.agents.orchestrator.OrchestratorAgent") as mock_orch_class:
             mock_orch_class.return_value = MagicMock()
 
             orchestrator = get_orchestrator()
@@ -436,7 +436,7 @@ class TestGetOrchestratorFunction:
         import src.api.routes.cognitive as cognitive_module
         cognitive_module._orchestrator_instance = None
 
-        with patch("src.api.routes.cognitive.OrchestratorAgent", side_effect=Exception("Init error")):
+        with patch("src.agents.orchestrator.OrchestratorAgent", side_effect=Exception("Init error")):
             orchestrator = get_orchestrator()
 
             assert orchestrator is None
@@ -484,8 +484,11 @@ class TestEdgeCases:
             max_memory_results=50,  # Max allowed
         )
 
+        # Wrap the async function in AsyncMock to track calls
+        mock_search = AsyncMock(side_effect=mock_hybrid_search)
+
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory), \
-             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search) as mock_search, \
+             patch("src.api.routes.cognitive.hybrid_search", new=mock_search), \
              patch("src.api.routes.cognitive.get_orchestrator", return_value=None):
 
             await process_cognitive_query(request, BackgroundTasks())

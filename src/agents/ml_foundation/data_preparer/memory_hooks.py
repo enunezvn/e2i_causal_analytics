@@ -339,7 +339,7 @@ class DataPreparerMemoryHooks:
 
         try:
             # Create data source node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="DataSource",
                 entity_id=f"ds:{data_source}",
                 properties={
@@ -350,7 +350,7 @@ class DataPreparerMemoryHooks:
             )
 
             # Create QC report node
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="QCReport",
                 entity_id=f"qc:{experiment_id}",
                 properties={
@@ -374,7 +374,7 @@ class DataPreparerMemoryHooks:
 
             # Store leakage incident if detected
             if leakage_detected:
-                self.semantic_memory.add_entity(
+                self.semantic_memory.add_e2i_entity(
                     entity_type="LeakageIncident",
                     entity_id=f"leak:{experiment_id}",
                     properties={

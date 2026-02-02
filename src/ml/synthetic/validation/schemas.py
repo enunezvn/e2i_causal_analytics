@@ -7,7 +7,7 @@ Validates DataFrame structure, data types, and value constraints.
 from typing import Dict, List, Optional, Tuple, Type
 
 import pandas as pd
-import pandera as pa
+import pandera.pandas as pa
 from pandera import Column, Check, DataFrameSchema
 from pandera.typing import Series
 

@@ -29,14 +29,18 @@ def mock_opik_feedback():
         with patch("src.api.routes.feedback.log_user_feedback") as mock_log:
             with patch("src.api.routes.feedback.get_feedback_collector") as mock_get_collector:
                 with patch("src.api.routes.feedback.get_feedback_signals_for_gepa") as mock_get_signals:
-                    mock_record = MagicMock()
-                    mock_record.feedback_id = "fb_test123"
-                    mock_record.trace_id = "trace_test"
-                    mock_record.agent_name = "causal_impact"
-                    mock_record.score = 0.8
-                    mock_record.timestamp = datetime.now(timezone.utc)
+                    # Create async mock that returns trace_id based on input
+                    async def mock_log_feedback(**kwargs):
+                        mock_record = MagicMock()
+                        mock_record.feedback_id = "fb_test123"
+                        mock_record.trace_id = kwargs.get("trace_id", "trace_test")
+                        mock_record.agent_name = kwargs.get("agent_name", "causal_impact")
+                        # Always return 0.8 for score (simulates normalized score)
+                        mock_record.score = 0.8
+                        mock_record.timestamp = datetime.now(timezone.utc)
+                        return mock_record
 
-                    mock_log.return_value = mock_record
+                    mock_log.side_effect = mock_log_feedback
 
                     mock_collector = MagicMock()
                     mock_collector.opik_enabled = True
@@ -54,24 +58,32 @@ def mock_opik_feedback():
 @pytest.fixture
 def mock_feedback_learner_agent():
     """Mock the Feedback Learner agent."""
-    with patch("src.api.routes.feedback.create_feedback_learner_graph") as mock_create:
-        mock_graph = AsyncMock()
-        mock_result = {
-            "status": "completed",
-            "detected_patterns": [],
-            "learning_recommendations": [],
-            "priority_improvements": [],
-            "proposed_updates": [],
-            "applied_updates": [],
-            "learning_summary": "Test summary",
-            "collection_latency_ms": 100,
-            "analysis_latency_ms": 200,
-            "errors": [],
-            "warnings": [],
-        }
-        mock_graph.ainvoke.return_value = mock_result
-        mock_create.return_value = mock_graph
-        yield mock_graph
+    # Import the graph module to patch it
+    import src.agents.feedback_learner.graph as graph_module
+
+    mock_graph = AsyncMock()
+    mock_result = {
+        "status": "completed",
+        "detected_patterns": [],
+        "learning_recommendations": [],
+        "priority_improvements": [],
+        "proposed_updates": [],
+        "applied_updates": [],
+        "learning_summary": "Test summary",
+        "collection_latency_ms": 100,
+        "analysis_latency_ms": 200,
+        "errors": [],
+        "warnings": [],
+    }
+    mock_graph.ainvoke.return_value = mock_result
+
+    # Patch the function that the route tries to import (use create=True for non-existent attr)
+    def mock_create():
+        return mock_graph
+
+    with patch.object(graph_module, 'create_feedback_learner_graph', mock_create, create=True):
+        with patch("src.agents.feedback_learner.state.FeedbackLearnerState", dict):
+            yield mock_graph
 
 
 @pytest.fixture
@@ -340,7 +352,7 @@ async def test_list_patterns_all(sample_detected_pattern):
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
-    result = await list_patterns()
+    result = await list_patterns(severity=None, pattern_type=None, agent=None, limit=50)
 
     assert result.total_count >= 1
     assert any(p.pattern_id == sample_detected_pattern.pattern_id for p in result.patterns)
@@ -356,7 +368,7 @@ async def test_list_patterns_filter_by_severity(sample_detected_pattern):
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
-    result = await list_patterns(severity=PatternSeverity.HIGH)
+    result = await list_patterns(severity=PatternSeverity.HIGH, pattern_type=None, agent=None, limit=50)
 
     assert all(p.severity == PatternSeverity.HIGH for p in result.patterns)
 
@@ -371,7 +383,7 @@ async def test_list_patterns_filter_by_type(sample_detected_pattern):
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
-    result = await list_patterns(pattern_type=PatternType.ACCURACY_ISSUE)
+    result = await list_patterns(severity=None, pattern_type=PatternType.ACCURACY_ISSUE, agent=None, limit=50)
 
     assert all(p.pattern_type == PatternType.ACCURACY_ISSUE for p in result.patterns)
 
@@ -386,7 +398,7 @@ async def test_list_patterns_filter_by_agent(sample_detected_pattern):
 
     _patterns_store[sample_detected_pattern.pattern_id] = sample_detected_pattern
 
-    result = await list_patterns(agent="causal_impact")
+    result = await list_patterns(severity=None, pattern_type=None, agent="causal_impact", limit=50)
 
     assert all("causal_impact" in p.affected_agents for p in result.patterns)
 
@@ -426,7 +438,7 @@ async def test_list_updates_all(sample_knowledge_update):
 
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
 
-    result = await list_updates()
+    result = await list_updates(status=None, update_type=None, agent=None, limit=50)
 
     assert result.total_count >= 1
     assert any(u.update_id == sample_knowledge_update.update_id for u in result.updates)
@@ -442,7 +454,7 @@ async def test_list_updates_filter_by_status(sample_knowledge_update):
 
     _updates_store[sample_knowledge_update.update_id] = sample_knowledge_update
 
-    result = await list_updates(status=UpdateStatus.PROPOSED)
+    result = await list_updates(status=UpdateStatus.PROPOSED, update_type=None, agent=None, limit=50)
 
     assert all(u.status == UpdateStatus.PROPOSED for u in result.updates)
 
@@ -568,7 +580,7 @@ async def test_get_feedback_health():
     """Test feedback service health check."""
     from src.api.routes.feedback import get_feedback_health
 
-    with patch("src.api.routes.feedback.FeedbackLearnerAgent"):
+    with patch("src.agents.feedback_learner.FeedbackLearnerAgent"):
         result = await get_feedback_health()
 
         assert result.status in ["healthy", "degraded"]

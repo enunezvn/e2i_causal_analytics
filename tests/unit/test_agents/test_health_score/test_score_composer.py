@@ -32,7 +32,7 @@ class TestScoreComposerNode:
             "critical_issues": None,
             "warnings": None,
             "health_summary": None,
-            "check_latency_ms": 100,
+            "total_latency_ms": 100,
             "timestamp": "",
             "errors": [],
             "status": "checking",
@@ -139,7 +139,7 @@ class TestScoreComposerNode:
         minimal_state = {
             "query": "",
             "check_scope": "full",
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -166,7 +166,7 @@ class TestIssueIdentification:
             "model_metrics": [],
             "pipeline_statuses": [],
             "agent_statuses": [],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -186,7 +186,7 @@ class TestIssueIdentification:
             "model_metrics": [],
             "pipeline_statuses": [],
             "agent_statuses": [],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -206,7 +206,7 @@ class TestIssueIdentification:
             ],
             "pipeline_statuses": [],
             "agent_statuses": [],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -226,7 +226,7 @@ class TestIssueIdentification:
                 {"pipeline_name": "etl", "status": "failed"},
             ],
             "agent_statuses": [],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -246,7 +246,7 @@ class TestIssueIdentification:
             "agent_statuses": [
                 {"agent_name": "agent_1", "available": False, "success_rate": 0.0},
             ],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -266,7 +266,7 @@ class TestIssueIdentification:
             "agent_statuses": [
                 {"agent_name": "agent_1", "available": True, "success_rate": 0.7},
             ],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -292,7 +292,7 @@ class TestSummaryGeneration:
             "model_metrics": [],
             "pipeline_statuses": [],
             "agent_statuses": [],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -318,7 +318,7 @@ class TestSummaryGeneration:
             "model_metrics": [],
             "pipeline_statuses": [],
             "agent_statuses": [],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }
@@ -346,7 +346,7 @@ class TestCustomWeightsAndGrades:
             "model_metrics": [],
             "pipeline_statuses": [],
             "agent_statuses": [],
-            "check_latency_ms": 0,
+            "total_latency_ms": 0,
             "errors": [],
             "status": "checking",
         }

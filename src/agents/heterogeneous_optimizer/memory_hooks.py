@@ -531,7 +531,7 @@ class HeterogeneousOptimizerMemoryHooks:
 
             # Store as segment effect entity in graph
             # This creates a node that can be linked to KPIs, treatments, etc.
-            self.semantic_memory.add_entity(
+            self.semantic_memory.add_e2i_entity(
                 entity_type="SegmentEffect",
                 entity_id=f"segment_effect:{segment_id}:{treatment_var}:{outcome_var}",
                 properties=node_properties,

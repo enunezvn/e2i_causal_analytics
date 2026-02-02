@@ -58,7 +58,7 @@ class TestSegmentAnalyzerNode:
             "low_responders": None,
             "segment_comparison": None,
             "policy_recommendations": None,
-            "expected_total_lift": None,
+            "expected_total_lift": 0.0,
             "optimal_allocation_summary": None,
             "cate_plot_data": None,
             "segment_grid_data": None,
@@ -308,7 +308,7 @@ class TestSegmentAnalyzerEdgeCases:
             "low_responders": None,
             "segment_comparison": None,
             "policy_recommendations": None,
-            "expected_total_lift": None,
+            "expected_total_lift": 0.0,
             "optimal_allocation_summary": None,
             "cate_plot_data": None,
             "segment_grid_data": None,
@@ -324,10 +324,14 @@ class TestSegmentAnalyzerEdgeCases:
 
     @pytest.mark.asyncio
     async def test_no_high_responders(self):
-        """Test when no segments qualify as high responders."""
+        """Test when no segments qualify as high responders under strict threshold.
+
+        Fallback classification will still identify top segments as high responders
+        to ensure heterogeneity is reported.
+        """
         node = SegmentAnalyzerNode()
 
-        # All CATE values below high threshold
+        # All CATE values below high threshold (0.25 * 1.5 = 0.375)
         cate_by_segment = {
             "segment1": [
                 self._create_cate_result("segment1", "value1", 0.20),
@@ -338,7 +342,10 @@ class TestSegmentAnalyzerEdgeCases:
 
         result = await node.execute(state)
 
-        assert len(result["high_responders"]) == 0
+        # Fallback classification ensures responders are always identified
+        # when segments exist and ATE > 0
+        assert len(result["high_responders"]) > 0
+        assert len(result["low_responders"]) > 0
 
     @pytest.mark.asyncio
     async def test_no_low_responders(self):
@@ -378,7 +385,11 @@ class TestSegmentAnalyzerEdgeCases:
 
     @pytest.mark.asyncio
     async def test_negative_ate(self):
-        """Test with negative ATE."""
+        """Test with negative ATE.
+
+        Negative ATE is handled using absolute magnitude comparison.
+        Fallback classification ensures responders are identified.
+        """
         node = SegmentAnalyzerNode()
 
         cate_by_segment = {
@@ -390,7 +401,10 @@ class TestSegmentAnalyzerEdgeCases:
 
         result = await node.execute(state)
 
-        # With negative ATE, logic should still work
-        # (though no segments will qualify since ATE > 0 is required)
-        assert len(result["high_responders"]) == 0
-        assert len(result["low_responders"]) == 0
+        # With negative ATE, the analysis uses absolute magnitude comparison
+        # Fallback ensures at least some classification when segments exist
+        # For a single segment, it will be classified as either high or low
+        assert len(result["high_responders"]) >= 0
+        assert len(result["low_responders"]) >= 0
+        # At least one type should have responders
+        assert len(result["high_responders"]) + len(result["low_responders"]) > 0

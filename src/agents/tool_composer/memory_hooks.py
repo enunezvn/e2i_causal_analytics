@@ -18,11 +18,28 @@ Version: 1.0.0
 
 import json
 import logging
+import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# UUID CONVERSION HELPER
+# =============================================================================
+
+
+def _ensure_uuid(value: str) -> str:
+    """Convert a non-UUID string to a deterministic UUID v5."""
+    if not value:
+        return str(_uuid.uuid4())
+    try:
+        _uuid.UUID(value)
+        return value  # Already a valid UUID
+    except ValueError:
+        return str(_uuid.uuid5(_uuid.NAMESPACE_DNS, value))
 
 
 # =============================================================================
@@ -210,13 +227,12 @@ class ToolComposerMemoryHooks:
     ) -> List[Dict[str, Any]]:
         """Retrieve successful composition patterns from procedural memory."""
         try:
-            from src.memory.procedural_memory import search_procedures
+            from src.memory.procedural_memory import find_relevant_procedures_by_text
 
             # Search for successful composition patterns
-            patterns = await search_procedures(
+            patterns = await find_relevant_procedures_by_text(
                 query_text=query,
                 procedure_type="tool_composition",
-                min_success_rate=0.8,
                 limit=limit,
             )
 
@@ -426,7 +442,7 @@ class ToolComposerMemoryHooks:
             memory_id = await insert_episodic_memory_with_text(
                 memory=memory_input,
                 text_to_embed=f"{query} {description}",
-                session_id=session_id,
+                session_id=_ensure_uuid(session_id),
             )
 
             logger.info(f"Stored composition in episodic memory: {memory_id}")
@@ -464,7 +480,8 @@ class ToolComposerMemoryHooks:
             return False
 
         try:
-            from src.memory.procedural_memory import store_procedure
+            from src.memory.procedural_memory import ProceduralMemoryInput, insert_procedural_memory
+            from src.memory.services.factories import get_embedding_service
 
             # Extract pattern
             decomposition = result.get("decomposition", {})
@@ -475,17 +492,25 @@ class ToolComposerMemoryHooks:
                 "decomposition_strategy": decomposition.get("decomposition_reasoning", "")[:100],
                 "tool_sequence": [s.get("tool_name") for s in plan.get("steps", [])],
                 "parallel_groups": plan.get("parallel_groups", []),
-                "step_count": len(plan.get("steps", [])),
-                "total_duration_ms": result.get("total_duration_ms", 0),
-                "confidence": response.get("confidence", 0),
             }
 
-            # Store in procedural memory
-            await store_procedure(
+            # Build procedure input
+            procedure = ProceduralMemoryInput(
+                procedure_name=f"composition_{result.get('composition_id', 'unknown')}",
+                tool_sequence=plan.get("steps", []),
                 procedure_type="tool_composition",
-                procedure_data=pattern,
-                success_rate=1.0,  # This is a single successful instance
-                agent_name="tool_composer",
+                trigger_pattern=pattern.get("query_intent", ""),
+                applicable_agents=["tool_composer"],
+            )
+
+            # Generate embedding and store
+            embedding_service = get_embedding_service()
+            trigger_embedding = await embedding_service.embed(
+                pattern.get("query_intent", "tool composition")
+            )
+            await insert_procedural_memory(
+                procedure=procedure,
+                trigger_embedding=trigger_embedding,
             )
 
             logger.info("Stored composition pattern in procedural memory")

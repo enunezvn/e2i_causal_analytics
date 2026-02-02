@@ -11,9 +11,35 @@ Tests cover:
 Part of Phase 1, Checkpoint 1.2 validation.
 """
 
+import importlib
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+def _ensure_real_openai():
+    """Restore real openai module if polluted by other test modules (e.g. test_evaluation.py)."""
+    openai_mod = sys.modules.get("openai")
+    if openai_mod is not None and isinstance(openai_mod, MagicMock):
+        # Remove mock and all submodules
+        del sys.modules["openai"]
+        for key in list(sys.modules):
+            if key.startswith("openai."):
+                del sys.modules[key]
+    # Import the real openai
+    import openai
+
+    if isinstance(openai, MagicMock) or not hasattr(openai, "RateLimitError"):
+        importlib.reload(openai)
+    # Reload embeddings so it picks up real openai (only if already loaded)
+    if "src.rag.embeddings" in sys.modules:
+        importlib.reload(sys.modules["src.rag.embeddings"])
+    return openai
+
+
+# Ensure real openai at import time
+_ensure_real_openai()
 
 from src.rag.config import EmbeddingConfig
 from src.rag.embeddings import (
@@ -391,9 +417,21 @@ class TestAsyncEncoding:
 class TestRetryLogic:
     """Tests for retry logic on rate limits."""
 
+    @pytest.fixture(autouse=True)
+    def _restore_openai(self):
+        """Ensure real openai module is loaded (guards against test_evaluation pollution)."""
+        real_openai = _ensure_real_openai()
+        # Re-import OpenAIEmbeddingClient after reload
+        from src.rag.embeddings import OpenAIEmbeddingClient as _Client  # noqa: F811
+
+        self._Client = _Client
+        self._openai = real_openai
+        yield
+
     def test_retry_on_rate_limit(self, embedding_config, mock_embedding_response):
         """Test retry on rate limit error."""
-        import openai
+        openai = self._openai
+        Client = self._Client
 
         with (
             patch("src.rag.embeddings.OpenAI") as mock_openai,
@@ -411,7 +449,7 @@ class TestRetryLogic:
             ]
             mock_openai.return_value = mock_client
 
-            client = OpenAIEmbeddingClient(embedding_config)
+            client = Client(embedding_config)
             result = client.encode("Hello")
 
             assert len(result) == 1536
@@ -419,7 +457,8 @@ class TestRetryLogic:
 
     def test_max_retries_exceeded(self, embedding_config):
         """Test error raised when max retries exceeded."""
-        import openai
+        openai = self._openai
+        Client = self._Client
 
         with (
             patch("src.rag.embeddings.OpenAI") as mock_openai,
@@ -434,7 +473,7 @@ class TestRetryLogic:
             )
             mock_openai.return_value = mock_client
 
-            client = OpenAIEmbeddingClient(embedding_config)
+            client = Client(embedding_config)
 
             with pytest.raises(EmbeddingError) as exc_info:
                 client.encode("Hello")
@@ -444,7 +483,8 @@ class TestRetryLogic:
 
     def test_api_error_not_retried(self, embedding_config):
         """Test API errors (non-rate-limit) are not retried."""
-        import openai
+        openai = self._openai
+        Client = self._Client
 
         with (
             patch("src.rag.embeddings.OpenAI") as mock_openai,
@@ -457,7 +497,7 @@ class TestRetryLogic:
             )
             mock_openai.return_value = mock_client
 
-            client = OpenAIEmbeddingClient(embedding_config)
+            client = Client(embedding_config)
 
             with pytest.raises(EmbeddingError):
                 client.encode("Hello")

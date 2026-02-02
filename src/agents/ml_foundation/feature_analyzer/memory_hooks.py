@@ -318,7 +318,7 @@ class FeatureAnalyzerMemoryHooks:
             for feature_name, importance in sorted(
                 global_importance.items(), key=lambda x: x[1], reverse=True
             )[:10]:
-                self.semantic_memory.add_entity(
+                self.semantic_memory.add_e2i_entity(
                     entity_type="Feature",
                     entity_id=f"feat:{feature_name}",
                     properties={

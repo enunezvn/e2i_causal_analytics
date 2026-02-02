@@ -69,11 +69,11 @@ class TestAgentHealthNode:
     @pytest.mark.asyncio
     async def test_accumulates_latency(self, mock_agent_registry, initial_state):
         """Test that latency is accumulated"""
-        initial_state["check_latency_ms"] = 100
+        initial_state["total_latency_ms"] = 100
         node = AgentHealthNode(agent_registry=mock_agent_registry)
         result = await node.execute(initial_state)
 
-        assert result["check_latency_ms"] >= 100
+        assert result["total_latency_ms"] >= 100
 
 
 class TestAgentStatusFields:

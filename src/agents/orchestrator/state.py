@@ -3,6 +3,7 @@
 import operator
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing_extensions import NotRequired
 from uuid import UUID
 
 
@@ -246,6 +247,21 @@ class OrchestratorState(TypedDict, total=False):
 
     # Agents used
     agents_dispatched: List[str]
+
+    # ========================================================================
+    # OUTPUT TRANSFORMATION (returned by run())
+    # ========================================================================
+
+    response_text: NotRequired[Optional[str]]
+    successful_agents: NotRequired[List[str]]
+    failed_agents: NotRequired[List[str]]
+    has_partial_failure: NotRequired[bool]
+    failure_details: NotRequired[Optional[Dict[str, Any]]]
+    orchestrator_error: NotRequired[Optional[str]]
+    orchestrator_error_type: NotRequired[Optional[str]]
+    timestamp: NotRequired[Optional[str]]
+    intent_classified: NotRequired[Optional[str]]
+    intent_confidence: NotRequired[Optional[float]]
 
     # ========================================================================
     # ERROR HANDLING

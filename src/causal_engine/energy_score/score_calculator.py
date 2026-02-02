@@ -154,6 +154,7 @@ class EnergyScoreCalculator:
         estimated_effects: NDArray[np.float64],
         propensity_scores: Optional[NDArray[np.float64]] = None,
         estimator_name: str = "unknown",
+        _skip_bootstrap: bool = False,
     ) -> EnergyScoreResult:
         """
         Compute energy score for an estimator's output.
@@ -225,9 +226,11 @@ class EnergyScoreCalculator:
 
         # Bootstrap confidence interval if enabled
         ci_lower, ci_upper, bootstrap_std = None, None, None
-        if self.config.enable_bootstrap and n <= self.config.max_samples_for_exact:
+        if self.config.enable_bootstrap and not _skip_bootstrap and n <= self.config.max_samples_for_exact:
+            adaptive_n_bootstrap = min(self.config.n_bootstrap, max(20, n // 30))
             ci_lower, ci_upper, bootstrap_std = self._bootstrap_ci(
-                treatment, outcome, covariates, estimated_effects, propensity_scores
+                treatment, outcome, covariates, estimated_effects, propensity_scores,
+                n_bootstrap=adaptive_n_bootstrap,
             )
 
         computation_time = (time.perf_counter() - start_time) * 1000
@@ -342,14 +345,14 @@ class EnergyScoreCalculator:
 
         # Cross-group distances
         D12 = cdist(X1, X2, 'euclidean')
-        cross_term = 2.0 * np.sum(np.outer(w1, w2) * D12)
+        cross_term = 2.0 * float(w1 @ D12 @ w2)
 
         # Within-group distances
         D11 = cdist(X1, X1, 'euclidean')
-        within1 = np.sum(np.outer(w1, w1) * D11)
+        within1 = float(w1 @ D11 @ w1)
 
         D22 = cdist(X2, X2, 'euclidean')
-        within2 = np.sum(np.outer(w2, w2) * D22)
+        within2 = float(w2 @ D22 @ w2)
 
         return float(cross_term - within1 - within2)
 
@@ -441,13 +444,24 @@ class EnergyScoreCalculator:
         outcome: NDArray[np.float64],
         covariates: pd.DataFrame,
         estimated_effects: NDArray[np.float64],
-        propensity_scores: NDArray[np.float64]
+        propensity_scores: NDArray[np.float64],
+        n_bootstrap: int | None = None,
+        time_budget_s: float = 5.0,
     ) -> tuple[float, float, float]:
         """Compute bootstrap confidence interval for energy score."""
+        import time as _time
+        start = _time.perf_counter()
         n = len(treatment)
+        n_bootstrap = n_bootstrap or self.config.n_bootstrap
         bootstrap_scores = []
 
-        for _ in range(self.config.n_bootstrap):
+        for i in range(n_bootstrap):
+            if _time.perf_counter() - start > time_budget_s:
+                logger.info(
+                    "Bootstrap stopped at %d/%d iterations (time budget %.1fs)",
+                    i, n_bootstrap, time_budget_s,
+                )
+                break
             # Resample with replacement
             idx = np.random.choice(n, n, replace=True)
 
@@ -457,7 +471,8 @@ class EnergyScoreCalculator:
                 covariates=covariates.iloc[idx].reset_index(drop=True),
                 estimated_effects=estimated_effects[idx],
                 propensity_scores=propensity_scores[idx],
-                estimator_name="bootstrap"
+                estimator_name="bootstrap",
+                _skip_bootstrap=True,
             )
 
             if result.is_valid:

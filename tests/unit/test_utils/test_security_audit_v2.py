@@ -660,18 +660,19 @@ def test_count_events_by_type():
 # =============================================================================
 
 
-@patch("src.utils.security_audit.get_supabase")
-def test_get_security_audit_service_singleton(mock_get_supabase):
+def test_get_security_audit_service_singleton():
     """Test singleton pattern for get_security_audit_service."""
-    mock_get_supabase.return_value = None
+    try:
+        # Reset first
+        reset_security_audit_service()
 
-    # Reset first
-    reset_security_audit_service()
+        service1 = get_security_audit_service()
+        service2 = get_security_audit_service()
 
-    service1 = get_security_audit_service()
-    service2 = get_security_audit_service()
-
-    assert service1 is service2
+        assert service1 is service2
+    finally:
+        # Clean up after test
+        reset_security_audit_service()
 
 
 def test_reset_security_audit_service():

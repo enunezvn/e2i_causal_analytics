@@ -80,7 +80,7 @@ class TestComponentHealthNode:
         node = ComponentHealthNode(health_client=mock_health_client)
         result = await node.execute(initial_state)
 
-        assert result["check_latency_ms"] >= 0
+        assert result["total_latency_ms"] >= 0
         for status in result["component_statuses"]:
             assert status["latency_ms"] is not None
             assert status["latency_ms"] >= 0

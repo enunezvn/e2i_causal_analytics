@@ -1,73 +1,13 @@
 """Tests for Design Reasoning Node.
 
 Tests the LLM-based experiment design reasoning functionality.
+LLM calls are mocked via the conftest.py autouse fixture (mock_llm_factory).
 """
-
-import json
 
 import pytest
 
 from src.agents.experiment_designer.graph import create_initial_state
 from src.agents.experiment_designer.nodes.design_reasoning import DesignReasoningNode
-
-
-class MockLLM:
-    """Mock LLM for testing."""
-
-    def __init__(self, response: dict = None, raise_error: bool = False):
-        """Initialize mock LLM."""
-        self.response = response or self._default_response()
-        self.raise_error = raise_error
-        self.call_count = 0
-        self.last_prompt = None
-
-    def _default_response(self) -> dict:
-        """Return default design response."""
-        return {
-            "design_type": "RCT",
-            "design_rationale": "RCT is appropriate for this intervention study",
-            "treatments": [
-                {
-                    "name": "Treatment",
-                    "description": "Increased visit frequency",
-                    "implementation_details": "Weekly visits",
-                    "target_population": "All HCPs",
-                },
-                {
-                    "name": "Control",
-                    "description": "Standard visit frequency",
-                    "implementation_details": "Bi-weekly visits",
-                    "target_population": "All HCPs",
-                },
-            ],
-            "outcomes": [
-                {
-                    "name": "Engagement Score",
-                    "metric_type": "continuous",
-                    "measurement_method": "CRM index",
-                    "measurement_frequency": "weekly",
-                    "is_primary": True,
-                }
-            ],
-            "randomization_unit": "individual",
-            "randomization_method": "stratified",
-            "stratification_variables": ["territory", "specialty"],
-            "blocking_variables": ["region"],
-            "causal_assumptions": ["No unmeasured confounding", "SUTVA holds"],
-            "identified_confounders": ["territory_size", "baseline_engagement"],
-        }
-
-    def invoke(self, prompt: str) -> str:
-        """Mock LLM invocation."""
-        self.call_count += 1
-        self.last_prompt = prompt
-        if self.raise_error:
-            raise Exception("LLM error")
-        return json.dumps(self.response)
-
-    async def ainvoke(self, prompt: str) -> str:
-        """Mock async LLM invocation."""
-        return self.invoke(prompt)
 
 
 @pytest.mark.xdist_group(name="design_reasoning")

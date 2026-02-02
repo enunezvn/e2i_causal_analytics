@@ -243,23 +243,32 @@ class CausalForestWrapper(BaseEstimatorWrapper):
         **kwargs
     ) -> EstimatorResult:
         import time
+        import warnings
         start = time.perf_counter()
 
         try:
             from econml.dml import CausalForestDML
 
             # Extract parameters
+            base_min_leaf = self.config.params.get("min_samples_leaf", 10)
+
+            # Fix 5A: Adaptive min_samples_leaf based on control group size
+            n_control = int((1 - treatment.mean()) * len(treatment))
+            adaptive_min_leaf = max(5, min(base_min_leaf, n_control // 10))
+
             params = {
                 "n_estimators": self.config.params.get("n_estimators", 100),
-                "min_samples_leaf": self.config.params.get("min_samples_leaf", 10),
+                "min_samples_leaf": adaptive_min_leaf,
                 "max_depth": self.config.params.get("max_depth", None),
                 "random_state": self.config.params.get("random_state", 42),
             }
 
-            # Fit model
+            # Fit model with warning suppression for small control groups
             model = CausalForestDML(**params)
             X = covariates.values
-            model.fit(outcome, treatment, X=X, W=X)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Too few control units")
+                model.fit(outcome, treatment, X=X, W=X)
 
             # Get estimates
             cate = model.effect(X)
@@ -1013,19 +1022,33 @@ class EstimatorSelector:
 
             # Compute energy score for successful estimations
             if result.success and result.cate is not None:
-                energy_result = self.energy_calculator.compute(
-                    treatment=treatment,
-                    outcome=outcome,
-                    covariates=covariates,
-                    estimated_effects=result.cate,
-                    propensity_scores=result.propensity_scores,
-                    estimator_name=wrapper.estimator_type.value,
-                )
-                result.energy_score_result = energy_result
-                logger.info(
-                    f"  {wrapper.estimator_type.value}: "
-                    f"ATE={result.ate:.4f}, Energy={energy_result.energy_score:.4f}"
-                )
+                # Fix 5B: Recursion guard for energy score computation
+                import sys
+                old_limit = sys.getrecursionlimit()
+                sys.setrecursionlimit(max(old_limit, 5000))
+                try:
+                    energy_result = self.energy_calculator.compute(
+                        treatment=treatment,
+                        outcome=outcome,
+                        covariates=covariates,
+                        estimated_effects=result.cate,
+                        propensity_scores=result.propensity_scores,
+                        estimator_name=wrapper.estimator_type.value,
+                    )
+                    result.energy_score_result = energy_result
+                    logger.info(
+                        f"  {wrapper.estimator_type.value}: "
+                        f"ATE={result.ate:.4f}, Energy={energy_result.energy_score:.4f}"
+                    )
+                except RecursionError:
+                    logger.warning(
+                        f"Energy score selection hit recursion limit for "
+                        f"{wrapper.estimator_type.value}, using legacy path"
+                    )
+                    energy_result = None
+                    result.energy_score_result = None
+                finally:
+                    sys.setrecursionlimit(old_limit)
 
             results.append(result)
 
