@@ -27,7 +27,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.api.dependencies.auth import require_auth
+from src.api.dependencies.auth import get_current_user, require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -336,7 +336,7 @@ async def get_analytics_dashboard(
         regex="^(1d|7d|30d|90d)$",
     ),
     brand: Optional[str] = Query(default=None, description="Filter by brand"),
-    user: Dict[str, Any] = Depends(require_auth),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user),
 ) -> AnalyticsDashboardResponse:
     """Get complete analytics dashboard data."""
     db = _get_supabase_client()
