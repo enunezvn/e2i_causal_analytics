@@ -241,7 +241,7 @@ describe('E2ICopilotProvider', () => {
       expect(screen.getByTestId('detail-level')).toHaveTextContent('detailed');
     });
 
-    it('provides sample agents (19 agents)', () => {
+    it('provides sample agents (20 agents)', () => {
       render(
         <CopilotKitWrapper enabled={false}>
           <E2ICopilotProvider>
@@ -250,7 +250,7 @@ describe('E2ICopilotProvider', () => {
         </CopilotKitWrapper>
       );
 
-      expect(screen.getByTestId('agent-count')).toHaveTextContent('19');
+      expect(screen.getByTestId('agent-count')).toHaveTextContent('20');
     });
 
     it('provides default chat state (closed)', () => {
@@ -422,7 +422,7 @@ describe('CopilotHooksConnector', () => {
       call[0]?.description?.includes('agent tier hierarchy')
     );
     expect(agentsCall).toBeDefined();
-    expect(agentsCall![0].value.length).toBe(19);
+    expect(agentsCall![0].value.length).toBe(20);
 
     // Check preferences readable
     const prefsCall = mockUseCopilotReadable.mock.calls.find((call) =>
@@ -691,7 +691,7 @@ describe('Type Exports', () => {
 // =============================================================================
 
 describe('Agent Data', () => {
-  it('provides all 19 agents across 6 tiers', () => {
+  it('provides all 20 agents across 6 tiers', () => {
     render(
       <CopilotKitWrapper enabled={false}>
         <E2ICopilotProvider>
@@ -700,7 +700,7 @@ describe('Agent Data', () => {
       </CopilotKitWrapper>
     );
 
-    expect(screen.getByTestId('agent-count')).toHaveTextContent('19');
+    expect(screen.getByTestId('agent-count')).toHaveTextContent('20');
   });
 
   it('agents have correct tier distribution', () => {
@@ -720,8 +720,8 @@ describe('Agent Data', () => {
       {} as Record<number, number>
     );
 
-    // Tier 0: 7 agents (ML Foundation)
-    expect(tierCounts[0]).toBe(7);
+    // Tier 0: 8 agents (ML Foundation)
+    expect(tierCounts[0]).toBe(8);
     // Tier 1: 2 agents (Orchestration)
     expect(tierCounts[1]).toBe(2);
     // Tier 2: 3 agents (Causal Analytics)
