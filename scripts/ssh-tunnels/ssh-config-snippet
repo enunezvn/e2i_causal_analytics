@@ -1,0 +1,22 @@
+# Add to ~/.ssh/config on your LOCAL machine
+# Then: ssh e2i-tunnels (opens all tunnels in one connection)
+
+Host e2i-tunnels
+    HostName 138.197.4.36
+    User enunez
+    IdentityFile ~/.ssh/id_ed25519
+    LocalForward 8443 localhost:443
+    LocalForward 5000 localhost:5000
+    LocalForward 5173 localhost:5173
+    LocalForward 3030 localhost:3030
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+    ExitOnForwardFailure yes
+    # Run with: ssh -N e2i-tunnels (no shell, just tunnels)
+
+Host e2i
+    HostName 138.197.4.36
+    User enunez
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
