@@ -138,12 +138,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/healthz",
         "/ready",
         "/metrics",
+        "/api/kpis/health",  # KPI system health check (polled by frontend)
     }
 
     # Path prefixes that are exempt from rate limiting
     EXEMPT_PREFIXES = (
         "/api/copilotkit",  # CopilotKit AI assistant - needs frequent requests
     )
+
+    # IPs exempt from rate limiting (internal/self traffic)
+    EXEMPT_IPS = {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+        "138.197.4.36",  # Droplet's own public IP (self-traffic via nginx)
+    }
 
     def __init__(
         self,
@@ -248,6 +257,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Skip rate limiting for exempt path prefixes
         if path.startswith(self.EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # Skip rate limiting for internal/self IPs
+        client_ip = request.headers.get("X-Real-IP") or (
+            request.client.host if request.client else None
+        )
+        if client_ip in self.EXEMPT_IPS:
             return await call_next(request)
 
         # Get client identifier and limits

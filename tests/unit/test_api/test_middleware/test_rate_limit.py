@@ -280,7 +280,7 @@ class TestRateLimitMiddleware:
         mock_request.url.path = "/api/test"
         mock_request.method = "GET"
         mock_request.client = MagicMock()
-        mock_request.client.host = "127.0.0.1"
+        mock_request.client.host = "203.0.113.50"
         mock_request.headers = {}
 
         mock_response = Response()
@@ -302,7 +302,7 @@ class TestRateLimitMiddleware:
         mock_request.url.path = "/api/test"
         mock_request.method = "GET"
         mock_request.client = MagicMock()
-        mock_request.client.host = "127.0.0.1"
+        mock_request.client.host = "203.0.113.50"
         mock_request.headers = {}
         mock_request.state = MagicMock()
 
@@ -466,7 +466,7 @@ class TestRateLimitMiddleware:
         mock_request.url.path = "/api/test"
         mock_request.method = "GET"
         mock_request.client = MagicMock()
-        mock_request.client.host = "127.0.0.1"
+        mock_request.client.host = "203.0.113.50"
         mock_request.headers = {}
         mock_request.state = MagicMock()
         mock_request.state.request_id = "req-123"
@@ -501,7 +501,7 @@ class TestRateLimitMiddleware:
         mock_request.url.path = "/api/test"
         mock_request.method = "GET"
         mock_request.client = MagicMock()
-        mock_request.client.host = "127.0.0.1"
+        mock_request.client.host = "203.0.113.50"
         mock_request.headers = {}
         mock_request.state = MagicMock()
 
@@ -517,3 +517,66 @@ class TestRateLimitMiddleware:
         assert response.status_code == 429
         assert "Retry-After" in response.headers
         assert response.headers["Retry-After"] == "60"
+
+    @pytest.mark.asyncio
+    async def test_exempt_kpi_health_path(self):
+        """Test /api/kpis/health is exempt from rate limiting."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.url.path = "/api/kpis/health"
+        mock_request.method = "GET"
+
+        mock_response = Response()
+        call_next = AsyncMock(return_value=mock_response)
+
+        response = await middleware.dispatch(mock_request, call_next)
+
+        call_next.assert_called_once()
+        assert response == mock_response
+
+    @pytest.mark.asyncio
+    async def test_exempt_localhost_ip(self):
+        """Test localhost IP is exempt from rate limiting."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False, default_limit=1, default_window=60)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.url.path = "/api/test"
+        mock_request.method = "GET"
+        mock_request.client = MagicMock()
+        mock_request.client.host = "127.0.0.1"
+        mock_request.headers = {}
+
+        mock_response = Response()
+        call_next = AsyncMock(return_value=mock_response)
+
+        # Even after exceeding what would be the limit, localhost is exempt
+        await middleware.dispatch(mock_request, call_next)
+        response = await middleware.dispatch(mock_request, call_next)
+
+        assert response == mock_response
+        assert call_next.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_exempt_ip_via_x_real_ip_header(self):
+        """Test exempt IP detected from X-Real-IP header."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False, default_limit=1, default_window=60)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.url.path = "/api/test"
+        mock_request.method = "GET"
+        mock_request.client = MagicMock()
+        mock_request.client.host = "172.21.0.1"
+        mock_request.headers = {"X-Real-IP": "127.0.0.1"}
+
+        mock_response = Response()
+        call_next = AsyncMock(return_value=mock_response)
+
+        await middleware.dispatch(mock_request, call_next)
+        response = await middleware.dispatch(mock_request, call_next)
+
+        assert response == mock_response
+        assert call_next.call_count == 2
