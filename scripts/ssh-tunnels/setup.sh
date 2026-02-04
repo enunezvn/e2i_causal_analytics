@@ -8,7 +8,7 @@
 #   localhost:5000  → MLflow
 #   localhost:5173  → Opik
 #   localhost:3030  → FalkorDB Browser
-#   localhost:3000  → Supabase Studio
+#   localhost:3001  → Supabase Studio
 #   localhost:3100  → Grafana
 #
 # Prerequisites:
@@ -30,7 +30,7 @@ declare -A TUNNELS=(
   ["e2i-mlflow"]="5000:localhost:5000"
   ["e2i-opik"]="5173:localhost:5173"
   ["e2i-falkordb"]="3030:localhost:3030"
-  ["e2i-supabase"]="3000:localhost:3000"
+  ["e2i-supabase"]="3001:localhost:3001"
   ["e2i-grafana"]="3100:localhost:3100"
 )
 
@@ -100,7 +100,7 @@ UNIT
   echo "  MLflow:           http://localhost:5000"
   echo "  Opik:             http://localhost:5173"
   echo "  FalkorDB Browser: http://localhost:3030"
-  echo "  Supabase Studio:  http://localhost:3000"
+  echo "  Supabase Studio:  http://localhost:3001"
   echo "  Grafana:          http://localhost:3100"
   echo ""
   echo "Management:"

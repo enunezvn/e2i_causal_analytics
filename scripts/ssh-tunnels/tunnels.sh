@@ -15,7 +15,7 @@ start_tunnels() {
   echo "  MLflow:           http://localhost:5000"
   echo "  Opik:             http://localhost:5173"
   echo "  FalkorDB Browser: http://localhost:3030"
-  echo "  Supabase Studio:  http://localhost:3000"
+  echo "  Supabase Studio:  http://localhost:3001"
   echo "  Grafana:          http://localhost:3100"
   echo ""
   echo "Press Ctrl+C to stop."
@@ -26,7 +26,7 @@ start_tunnels() {
     -L 5000:localhost:5000 \
     -L 5173:localhost:5173 \
     -L 3030:localhost:3030 \
-    -L 3000:localhost:3000 \
+    -L 3001:localhost:3001 \
     -L 3100:localhost:3100 \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
