@@ -8,6 +8,8 @@
 #   localhost:5000  → MLflow
 #   localhost:5173  → Opik
 #   localhost:3030  → FalkorDB Browser
+#   localhost:3000  → Supabase Studio
+#   localhost:3100  → Grafana
 #
 # Prerequisites:
 #   - autossh installed (brew install autossh / apt install autossh)
@@ -28,6 +30,8 @@ declare -A TUNNELS=(
   ["e2i-mlflow"]="5000:localhost:5000"
   ["e2i-opik"]="5173:localhost:5173"
   ["e2i-falkordb"]="3030:localhost:3030"
+  ["e2i-supabase"]="3000:localhost:3000"
+  ["e2i-grafana"]="3100:localhost:3100"
 )
 
 check_deps() {
@@ -92,10 +96,12 @@ UNIT
 
   echo ""
   echo "All tunnels active. Access:"
-  echo "  Frontend:        https://localhost:8443  (accept cert warning)"
-  echo "  MLflow:          http://localhost:5000"
-  echo "  Opik:            http://localhost:5173"
+  echo "  Frontend:         https://localhost:8443  (accept cert warning)"
+  echo "  MLflow:           http://localhost:5000"
+  echo "  Opik:             http://localhost:5173"
   echo "  FalkorDB Browser: http://localhost:3030"
+  echo "  Supabase Studio:  http://localhost:3000"
+  echo "  Grafana:          http://localhost:3100"
   echo ""
   echo "Management:"
   echo "  Status:  systemctl --user status e2i-*-tunnel"
