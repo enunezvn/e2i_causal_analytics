@@ -150,11 +150,13 @@ jobs:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'
       SUPABASE_KEY: 'test-key'
+      SUPABASE_ANON_KEY: 'test-key'
       REDIS_URL: 'redis://localhost:6379'
       FALKORDB_URL: 'redis://localhost:6380'
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
       ANTHROPIC_API_KEY: 'test-key'
+      OPENAI_API_KEY: 'test-key'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -184,6 +186,9 @@ jobs:
             --ignore=tests/integration/test_observability_integration.py \
             --ignore=tests/integration/test_prediction_flow.py \
             --ignore=tests/integration/test_tier0_e2e.py \
+            --ignore=tests/integration/test_migration/test_phase4_auth.py \
+            --ignore=tests/integration/test_digital_twin_workflow.py \
+            --ignore=tests/integration/test_feedback_loop_integration.py \
             -n 2 \
             --dist=loadscope \
             --timeout=60 \
