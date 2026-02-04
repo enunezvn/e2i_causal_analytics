@@ -330,10 +330,9 @@ class TestErrorHandling:
             input_data = {"query": "Test with RAG failure"}
 
             # Should not raise, workflow should handle gracefully
+            result = None
             try:
                 result = await orchestrator.run(input_data)
-                # If we get here, workflow handled the error
-                assert True
             except Exception as e:
                 # Some error handling is expected
                 assert "RAG" in str(e) or result is not None

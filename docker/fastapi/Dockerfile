@@ -7,7 +7,7 @@
 # ------------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 # Set working directory
 WORKDIR /build
@@ -25,15 +25,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 COPY patches/ ./patches/
 
-# Install Python dependencies
-# Use pip cache to speed up rebuilds
+# Install CPU-only PyTorch first (saves ~4GB vs CUDA version; no GPU on droplet)
+# Strip torch, NVIDIA CUDA libs, and triton from requirements (CUDA-only deps)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --user --no-warn-script-location -r requirements.txt
+    pip install --user --no-warn-script-location \
+    torch --index-url https://download.pytorch.org/whl/cpu && \
+    grep -vE '^(torch|nvidia-|triton)==' requirements.txt > requirements-cpu.txt && \
+    pip install --user --no-warn-script-location --no-cache-dir \
+    -r requirements-cpu.txt
 
 # ------------------------------------------------------------------------------
 # Stage 2: Runtime - Create minimal production image
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
