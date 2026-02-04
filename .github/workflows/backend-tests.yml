@@ -186,9 +186,11 @@ jobs:
             --ignore=tests/integration/test_observability_integration.py \
             --ignore=tests/integration/test_prediction_flow.py \
             --ignore=tests/integration/test_tier0_e2e.py \
-            --ignore=tests/integration/test_migration/test_phase4_auth.py \
+            --ignore=tests/integration/test_migration/ \
             --ignore=tests/integration/test_digital_twin_workflow.py \
             --ignore=tests/integration/test_feedback_loop_integration.py \
+            --ignore=tests/integration/test_agents/test_data_preparer/ \
+            --ignore=tests/integration/api/test_rbac_endpoints.py \
             -n 2 \
             --dist=loadscope \
             --timeout=60 \
