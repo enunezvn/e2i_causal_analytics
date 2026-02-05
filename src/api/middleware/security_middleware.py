@@ -66,7 +66,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         directives = [
             "default-src 'self'",
             "script-src 'self'",
-            "style-src 'self' 'unsafe-inline'",  # Allow inline styles for docs
+            "style-src 'self' 'unsafe-inline'",  # Allow inline styles for API responses
             "img-src 'self' data: https:",
             "font-src 'self'",
             "connect-src 'self'",
@@ -106,8 +106,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "magnetometer=(), microphone=(), payment=(), usb=()"
         )
 
-        # Content Security Policy
-        response.headers["Content-Security-Policy"] = self.csp_policy
+        # Content Security Policy (skip for docs — nginx provides a CDN-permissive CSP)
+        docs_paths = ("/api/docs", "/api/redoc", "/api/openapi.json")
+        if not request.url.path.startswith(docs_paths):
+            response.headers["Content-Security-Policy"] = self.csp_policy
 
         # HSTS - only enable in production with HTTPS
         if self.enable_hsts:
