@@ -33,7 +33,6 @@ ENV/
 *.swp
 *.swo
 *~
-.DS_Store
 
 # Environment Variables
 .env
@@ -112,12 +111,14 @@ docs/
 Thumbs.db
 .DS_Store
 
-
 # Git worktrees
 .worktrees/
 
 # Windows NTFS alternate data streams
 *.html:*
+*:Zone.Identifier
+*:sec.endpointdlp
+
 # Downloaded/exported documentation files
 docs/*.html
 
@@ -128,6 +129,24 @@ PyCausalSim/
 # Optuna journal files
 optuna_studies.db-journal
 
-# Windows NTFS alternate data streams
-*:Zone.Identifier
-*:sec.endpointdlp
+# Node.js
+node_modules/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Backup files
+*.backup
+*.backup-*
+
+# Stray pip install output
+=*
+
+# Local orchestrator / auto-build artifacts
+build-progress.txt
+context.json
+implementation_plan.json
+project_index.json
+
+# Script caches
+scripts/tier0_output_cache/
