@@ -353,9 +353,7 @@ class TestErrorMessageSanitization:
 
         with patch("src.api.dependencies.redis_client.get_redis") as mock_get:
             # Simulate error with sensitive info
-            mock_get.side_effect = Exception(
-                "AUTH failed: password=secret123 host=internal.server"
-            )
+            mock_get.side_effect = Exception("AUTH failed: password=secret123 host=internal.server")
 
             result = await redis_health_check()
 
