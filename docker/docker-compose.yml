@@ -449,7 +449,7 @@ services:
       - feature_cache:/app/data/feature_cache:ro  # Read from Feast
     environment:
       <<: *common-env
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3002}
       WORKERS: 4
     command: >
       gunicorn src.api.main:app
@@ -699,7 +699,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "3001:80"
+      - "3002:80"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 30s

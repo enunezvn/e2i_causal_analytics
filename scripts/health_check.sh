@@ -58,7 +58,7 @@ check_http "http://localhost:3000/healthz" "BentoML" 10
 check_http "http://localhost:6566/health" "Feast"
 check_http "http://localhost:5173/health" "Opik (UI)" 5 || \
   check_http "http://localhost:5174/health" "Opik (API)" 5
-check_http "http://localhost:3001/health" "Frontend"
+check_http "http://localhost:3002/health" "Frontend"
 
 # =============================================================================
 # REDIS SERVICES

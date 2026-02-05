@@ -6,7 +6,9 @@ Host e2i-tunnels
     User enunez
     IdentityFile ~/.ssh/id_ed25519
     LocalForward 8443 localhost:443
+    LocalForward 3002 localhost:3002
     LocalForward 5000 localhost:5000
+    LocalForward 3000 localhost:3000
     LocalForward 5173 localhost:5173
     LocalForward 3030 localhost:3030
     LocalForward 3001 localhost:3001

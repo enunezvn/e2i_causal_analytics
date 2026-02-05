@@ -11,8 +11,10 @@ DROPLET="enunez@138.197.4.36"
 start_tunnels() {
   echo "Starting SSH tunnels to ${DROPLET}..."
   echo ""
-  echo "  Frontend:         https://localhost:8443"
+  echo "  Frontend (HTTPS): https://localhost:8443"
+  echo "  Frontend (HTTP):  http://localhost:3002"
   echo "  MLflow:           http://localhost:5000"
+  echo "  BentoML:          http://localhost:3000"
   echo "  Opik:             http://localhost:5173"
   echo "  FalkorDB Browser: http://localhost:3030"
   echo "  Supabase Studio:  http://localhost:3001"
@@ -23,7 +25,9 @@ start_tunnels() {
 
   ssh -N \
     -L 8443:localhost:443 \
+    -L 3002:localhost:3002 \
     -L 5000:localhost:5000 \
+    -L 3000:localhost:3000 \
     -L 5173:localhost:5173 \
     -L 3030:localhost:3030 \
     -L 3001:localhost:3001 \

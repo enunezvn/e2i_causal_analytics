@@ -5,7 +5,9 @@
 #
 # Tunnels:
 #   localhost:8443  → Droplet nginx (frontend + API via HTTPS)
+#   localhost:3002  → E2I Frontend (HTTP)
 #   localhost:5000  → MLflow
+#   localhost:3000  → BentoML
 #   localhost:5173  → Opik
 #   localhost:3030  → FalkorDB Browser
 #   localhost:3001  → Supabase Studio
@@ -26,8 +28,10 @@ DROPLET_USER="enunez"
 SERVICE_DIR="${HOME}/.config/systemd/user"
 
 declare -A TUNNELS=(
-  ["e2i-frontend"]="8443:localhost:443"
+  ["e2i-frontend-https"]="8443:localhost:443"
+  ["e2i-frontend"]="3002:localhost:3002"
   ["e2i-mlflow"]="5000:localhost:5000"
+  ["e2i-bentoml"]="3000:localhost:3000"
   ["e2i-opik"]="5173:localhost:5173"
   ["e2i-falkordb"]="3030:localhost:3030"
   ["e2i-supabase"]="3001:localhost:3001"
@@ -96,8 +100,10 @@ UNIT
 
   echo ""
   echo "All tunnels active. Access:"
-  echo "  Frontend:         https://localhost:8443  (accept cert warning)"
+  echo "  Frontend (HTTPS): https://localhost:8443  (accept cert warning)"
+  echo "  Frontend (HTTP):  http://localhost:3002"
   echo "  MLflow:           http://localhost:5000"
+  echo "  BentoML:          http://localhost:3000"
   echo "  Opik:             http://localhost:5173"
   echo "  FalkorDB Browser: http://localhost:3030"
   echo "  Supabase Studio:  http://localhost:3001"

@@ -199,7 +199,7 @@ services:
       target: development
     container_name: e2i_frontend_dev
     ports:
-      - "3001:5173"  # Vite dev server port
+      - "3002:5173"  # Vite dev server port
     volumes:
       # -----------------------------------------------------------------------
       # BIND MOUNTS - React source for hot-reloading

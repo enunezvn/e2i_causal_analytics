@@ -205,4 +205,4 @@ health: ## Check health of all services
 	@echo "Opik:     $$(curl -s http://localhost:5173/health || echo 'DOWN')"
 	@echo "Redis:    $$(docker exec e2i_redis_dev redis-cli ping 2>/dev/null || echo 'DOWN')"
 	@echo "FalkorDB: $$(docker exec e2i_falkordb_dev redis-cli ping 2>/dev/null || echo 'DOWN')"
-	@echo "Frontend: $$(curl -s http://localhost:3001/health || echo 'DOWN')"
+	@echo "Frontend: $$(curl -s http://localhost:3002/health || echo 'DOWN')"
