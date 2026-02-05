@@ -22,6 +22,14 @@ services:
       - RELOAD=true
       # Permissive CORS for local development
       - CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000
+      # Docker-internal service URLs (override .env localhost values)
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - FALKORDB_URL=redis://falkordb:6379
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
     # No resource limits in development
 
   # Frontend - Development Configuration
@@ -65,6 +73,11 @@ services:
       - "6379:6379"  # Expose for debugging tools (e.g., Redis Commander)
     command: redis-server --appendonly yes --requirepass devpassword
 
+  # FalkorDB - Development Configuration
+  falkordb:
+    ports:
+      - "6381:6379"  # Expose for host debugging tools
+
   # Agent Worker - Development Configuration
   agent-worker:
     env_file:
@@ -77,6 +90,14 @@ services:
     environment:
       - DEBUG=true
       - LOG_LEVEL=DEBUG
+      # Docker-internal service URLs (override .env localhost values)
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - FALKORDB_URL=redis://falkordb:6379
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
 
   # Nginx - Disabled in Development (access services directly)
   nginx:
@@ -126,3 +147,4 @@ networks:
 volumes:
   mlflow-data:
   redis-data:
+  falkordb-data:
