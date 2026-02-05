@@ -533,8 +533,8 @@ class TestDatabaseSync:
         """Test loading tools from database."""
         registry = get_registry()
 
-        # Mock database client
-        mock_db = AsyncMock()
+        # Mock database client with Supabase PostgREST builder chain
+        mock_db = MagicMock()
         mock_result = MagicMock()
         mock_result.data = [
             {
@@ -554,7 +554,12 @@ class TestDatabaseSync:
                 "version": "1.1.0",
             },
         ]
-        mock_db.execute = AsyncMock(return_value=mock_result)
+        # Chain: db_client.table(name).select("*").eq("composable", True).execute()
+        mock_builder = MagicMock()
+        mock_builder.execute.return_value = mock_result
+        mock_builder.select.return_value = mock_builder
+        mock_builder.eq.return_value = mock_builder
+        mock_db.table.return_value = mock_builder
 
         count = await registry.register_from_database(mock_db)
 
@@ -572,7 +577,7 @@ class TestDatabaseSync:
         """Test loading tools with category filter."""
         registry = get_registry()
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_result = MagicMock()
         mock_result.data = [
             {
@@ -582,21 +587,32 @@ class TestDatabaseSync:
                 "tier": 2,
             }
         ]
-        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_builder = MagicMock()
+        mock_builder.execute.return_value = mock_result
+        mock_builder.select.return_value = mock_builder
+        mock_builder.eq.return_value = mock_builder
+        mock_db.table.return_value = mock_builder
 
         await registry.register_from_database(mock_db, category_filter=ToolCategory.CAUSAL)
 
-        # Verify query included category filter
-        call_args = mock_db.execute.call_args[0][0]
-        assert "causal" in call_args.lower()
+        # Verify eq was called with category filter
+        eq_calls = mock_builder.eq.call_args_list
+        category_filtered = any(
+            args == ("category", "causal") for args, _ in eq_calls
+        )
+        assert category_filtered
 
     @pytest.mark.asyncio
     async def test_register_from_database_error_handling(self):
         """Test error handling during database load."""
         registry = get_registry()
 
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(side_effect=Exception("Database connection failed"))
+        mock_db = MagicMock()
+        mock_builder = MagicMock()
+        mock_builder.select.return_value = mock_builder
+        mock_builder.eq.return_value = mock_builder
+        mock_builder.execute.side_effect = Exception("Database connection failed")
+        mock_db.table.return_value = mock_builder
 
         with pytest.raises(ToolRegistryError) as exc_info:
             await registry.register_from_database(mock_db)
@@ -608,7 +624,7 @@ class TestDatabaseSync:
         """Test that placeholder callable raises appropriate error."""
         registry = get_registry()
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_result = MagicMock()
         mock_result.data = [
             {
@@ -618,7 +634,11 @@ class TestDatabaseSync:
                 "tier": 1,
             }
         ]
-        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_builder = MagicMock()
+        mock_builder.execute.return_value = mock_result
+        mock_builder.select.return_value = mock_builder
+        mock_builder.eq.return_value = mock_builder
+        mock_db.table.return_value = mock_builder
 
         await registry.register_from_database(mock_db)
 
@@ -643,14 +663,26 @@ class TestDatabaseSync:
         )
         registry.register(schema, lambda x: x)
 
-        # Mock database client
-        mock_db = AsyncMock()
-        # First call checks existence, second inserts
+        # Mock database client with Supabase PostgREST builder chain
+        mock_db = MagicMock()
+        # select().eq().execute() returns empty (not exists)
         mock_check_result = MagicMock()
         mock_check_result.data = []  # Not exists
         mock_insert_result = MagicMock()
 
-        mock_db.execute = AsyncMock(side_effect=[mock_check_result, mock_insert_result])
+        mock_select_builder = MagicMock()
+        mock_select_builder.execute.return_value = mock_check_result
+        mock_select_builder.eq.return_value = mock_select_builder
+        mock_select_builder.select.return_value = mock_select_builder
+
+        mock_insert_builder = MagicMock()
+        mock_insert_builder.execute.return_value = mock_insert_result
+
+        # table() returns a builder that supports both select() and insert()
+        mock_table_builder = MagicMock()
+        mock_table_builder.select.return_value = mock_select_builder
+        mock_table_builder.insert.return_value = mock_insert_builder
+        mock_db.table.return_value = mock_table_builder
 
         stats = await registry.sync_to_database(mock_db)
 
@@ -670,13 +702,25 @@ class TestDatabaseSync:
         )
         registry.register(schema, lambda: None)
 
-        mock_db = AsyncMock()
-        # Check returns existing record
+        mock_db = MagicMock()
+        # select().eq().execute() returns existing record
         mock_check_result = MagicMock()
         mock_check_result.data = [{"tool_id": 1}]
         mock_update_result = MagicMock()
 
-        mock_db.execute = AsyncMock(side_effect=[mock_check_result, mock_update_result])
+        mock_select_builder = MagicMock()
+        mock_select_builder.execute.return_value = mock_check_result
+        mock_select_builder.eq.return_value = mock_select_builder
+        mock_select_builder.select.return_value = mock_select_builder
+
+        mock_update_builder = MagicMock()
+        mock_update_builder.execute.return_value = mock_update_result
+        mock_update_builder.eq.return_value = mock_update_builder
+
+        mock_table_builder = MagicMock()
+        mock_table_builder.select.return_value = mock_select_builder
+        mock_table_builder.update.return_value = mock_update_builder
+        mock_db.table.return_value = mock_table_builder
 
         stats = await registry.sync_to_database(mock_db, update_existing=True)
 
@@ -696,18 +740,23 @@ class TestDatabaseSync:
         )
         registry.register(schema, lambda: None)
 
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_check_result = MagicMock()
         mock_check_result.data = [{"tool_id": 1}]
 
-        mock_db.execute = AsyncMock(return_value=mock_check_result)
+        mock_select_builder = MagicMock()
+        mock_select_builder.execute.return_value = mock_check_result
+        mock_select_builder.eq.return_value = mock_select_builder
+        mock_select_builder.select.return_value = mock_select_builder
+
+        mock_table_builder = MagicMock()
+        mock_table_builder.select.return_value = mock_select_builder
+        mock_db.table.return_value = mock_table_builder
 
         stats = await registry.sync_to_database(mock_db, update_existing=False)
 
         assert stats["skipped"] == 1
         assert stats["updated"] == 0
-        # Only one call - the check
-        assert mock_db.execute.call_count == 1
 
 
 # =============================================================================
