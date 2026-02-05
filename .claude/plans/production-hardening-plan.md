@@ -5,6 +5,7 @@
 **Droplet**: e2i-analytics-prod (138.197.4.36)
 **Registry**: GitHub Container Registry (ghcr.io)
 **Overall Score**: 87/100 → Target 95/100
+**Last Reviewed**: 2026-02-05
 
 ---
 
@@ -287,7 +288,7 @@ pytest tests/unit/ --cov=src --cov-report=term -n 4 | grep TOTAL
 | 2 | Firewall Hardening | P0 | ✅ Done | Droplet: UFW 22/80/443 only |
 | 3 | Health Check + cohort_constructor | P1 | ✅ Done | Commit 26855c9 |
 | 4 | Backend CI Workflow | P1 | ✅ Done | Commit 26855c9 |
-| 5 | Docker CD Pipeline (GHCR) | P2 | ✅ Done | Commit 26855c9 |
+| 5 | Docker CD Pipeline (GHCR) | P2 | ✅ Done | Commit 26855c9 — E2E verified run 21693497515 |
 | 6 | Test Coverage to 70% | P2 | ✅ Done | 70.59% — batch 1 (aa5cf9d), batch 2 (8e99ecf), batch 3 (memory_hooks + fixes) |
 | 7 | Documentation Update | — | ✅ Done | Commit 26855c9 |
 
@@ -298,78 +299,83 @@ pytest tests/unit/ --cov=src --cov-report=term -n 4 | grep TOTAL
 - [x] Generate deploy SSH key pair on droplet (`~/.ssh/deploy_ed25519`, added to `authorized_keys`)
 - [x] GitHub: Add repository secrets (`DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`) — set 2026-02-02
 - [x] GitHub: Create `production` environment (reviewer gate requires paid plan — environment exists without approval step)
+- [ ] GitHub: Add required reviewer to `production` environment (no protection rules currently set)
 - [x] GHCR: No action needed (automatic via `GITHUB_TOKEN`)
 - [x] Fix lint: resolved all 2,589 ruff errors (auto-fix + config update + noqa directives)
-- [x] Fix CI tests: scoped to 13 lightweight dirs, 3,275 tests pass in ~4 min
+- [x] Fix CI tests: scoped to 13 lightweight dirs, 3,275 tests pass in ~4 min — Backend CI green (8d6c60b)
 - [x] Fix Docker build: added patches/ to build context, local build succeeds
-- [ ] Test CD pipeline end-to-end (blocked by GitHub Actions free tier minutes — check billing)
+- [x] Test CD pipeline end-to-end — run 21693497515 passed all 6 jobs (2026-02-05)
+
+## Current Infrastructure Status (2026-02-05)
+
+| Component | Status | Details |
+|-----------|--------|---------|
+| API Health | ✅ Healthy | All 4 components operational (api, workers, memory_systems, bentoml) |
+| Redis | ✅ Connected | 0.78 ms latency |
+| Supabase | ✅ Connected | 630 ms latency (monitor baseline) |
+| FalkorDB | ✅ Connected | 0.60 ms, 3 graphs, 86 nodes, 77 edges |
+| SSL Certificate | ✅ Valid | Let's Encrypt, expires Apr 30, 2026 (auto-renewal active) |
+| Security Headers | ✅ All present | HSTS (2yr+preload), X-Frame, X-Content-Type, CSP, Permissions-Policy |
+| Docker Containers | ✅ 27 running | All healthy (Supabase, Opik, MLflow, FalkorDB, Redis, Monitoring) |
+| Backend CI | ✅ Green | Latest run (8d6c60b) passes lint + unit tests + integration tests. Fixed circular import in causal_validation.py |
+| Deploy Pipeline | ✅ Passed | Run 21693497515: test→build→push→deploy→health check (30 min total) |
+| Ruff (local) | ✅ Clean | 1,289 files formatted, all checks passed |
+| Coverage | ✅ 70%+ | `fail_under = 70` in pyproject.toml |
 
 ---
 
 ## Phase 8: Complete CD Pipeline Prerequisites
 
-> **Last reviewed**: 2026-02-02
+> **Last reviewed**: 2026-02-05
 
-All 7 phases are code-complete and merged. The CD pipeline (`deploy.yml`) needs 3 configuration steps before it can run end-to-end.
+All 7 phases are code-complete and merged. The CD pipeline (`deploy.yml`) needs end-to-end validation.
 
-### Step 1: Generate deploy SSH key (automated)
+### Step 1: Generate deploy SSH key — ✅ Done
 
-Create a dedicated key pair for GitHub Actions — separate from personal keys.
+Key pair exists at `~/.ssh/deploy_ed25519` (created 2026-02-02). Public key in `authorized_keys`.
 
-```bash
-ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/deploy_ed25519 -N ""
-cat ~/.ssh/deploy_ed25519.pub >> ~/.ssh/authorized_keys
-```
+### Step 2: Add GitHub repository secrets — ✅ Done
 
-**Current state**: `~/.ssh/authorized_keys` has 1 entry (workstation key `enunez@PHUSEH-L88724`). This adds a second entry for CI.
+All 3 secrets set on 2026-02-02:
+- `DEPLOY_SSH_KEY` ✅
+- `DEPLOY_HOST` ✅
+- `DEPLOY_USER` ✅
 
-Get the private key to paste in Step 2:
-```bash
-cat ~/.ssh/deploy_ed25519
-```
-Copy the full output including `-----BEGIN/END OPENSSH PRIVATE KEY-----` lines.
+### Step 3: Create `production` environment — ⚠️ Partial
 
-### Step 2: Add GitHub repository secrets (manual — GitHub UI)
+The `production` environment exists (created 2026-02-02) but has **no protection rules**.
+Required reviewers are not configured — any push to main deploys without approval.
 
-Go to: **https://github.com/enunezvn/e2i_causal_analytics/settings/secrets/actions**
+**Action needed (manual — GitHub UI)**:
+Go to: https://github.com/enunezvn/e2i_causal_analytics/settings/environments
+→ Edit `production` → Add required reviewer (`enunezvn`)
 
-Click **New repository secret** for each:
+> Note: Required reviewers may require a paid GitHub plan. If unavailable, accept the risk or add a `workflow_dispatch`-only trigger instead of auto-deploy on push.
 
-| Secret Name | Value |
-|-------------|-------|
-| `DEPLOY_SSH_KEY` | Contents of `~/.ssh/deploy_ed25519` (private key from Step 1) |
-| `DEPLOY_HOST` | `138.197.4.36` |
-| `DEPLOY_USER` | `enunez` |
+### Step 4: GHCR — ✅ No action needed
 
-These are referenced in `.github/workflows/deploy.yml` lines 78-80.
+Automatic via `GITHUB_TOKEN` with `packages: write`.
 
-### Step 3: Create `production` environment (manual — GitHub UI)
+### Step 5: Test the pipeline — ✅ PASSED (2026-02-05)
 
-The deploy job specifies `environment: production` (deploy.yml line 70). GitHub needs this environment to exist.
+**Successful run**: `21693497515` (workflow_dispatch, 30 min total)
 
-Go to: **https://github.com/enunezvn/e2i_causal_analytics/settings/environments**
+| Job | Duration | Status |
+|-----|----------|--------|
+| Lint (Ruff) | 9s | ✅ |
+| Unit Tests | 8m52s | ✅ |
+| Integration Tests | 7m58s | ✅ |
+| Backend CI Success | 2s | ✅ |
+| Build & Push Docker Image | 16m48s | ✅ |
+| Deploy to Droplet | 2m7s | ✅ |
 
-1. Click **New environment** → name it `production`
-2. Enable **Required reviewers** → add yourself (`enunezvn`) as a reviewer
-3. No other settings needed
+**Verified on droplet**:
+- Docker image: `ghcr.io/enunezvn/e2i-api:latest` (e2801976a856, 7.33 GB)
+- Tagged as `e2i-api:current` for rollback support
+- Health check: `https://eznomics.site/health` returns healthy
+- All 4 components operational (api, workers, memory_systems, bentoml)
 
-Each deploy will pause at the `deploy` job and wait for your approval in the GitHub Actions UI before SSHing into the droplet.
-
-### Step 4: GHCR (no action needed)
-
-GHCR works automatically via `GITHUB_TOKEN` with `packages: write` permission (declared in `deploy.yml` line 29). The deploy job uses the same token for `docker login` on the droplet (line 93). No extra configuration required.
-
-### Step 5: Test the pipeline
-
-Trigger the workflow via one of:
-- **Manual**: Go to Actions → "Deploy to Production" → "Run workflow" (workflow_dispatch)
-- **Automatic**: Push any change to `src/` on `main`
-
-**Expected flow**:
-1. `test` job runs backend-tests ✅
-2. `build-and-push` builds image, pushes to `ghcr.io/enunezvn/e2i-api:latest` ✅
-3. `deploy` job pauses for your approval (production environment gate)
-4. After approval: SSHes into droplet, pulls image, restarts service, health check passes ✅
+**Note**: First build took 16m48s (cold cache). Subsequent builds will use GHA layer cache and be faster.
 
 ### Step 6: Update checklist
 
