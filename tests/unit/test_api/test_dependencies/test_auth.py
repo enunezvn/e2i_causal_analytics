@@ -340,19 +340,12 @@ class TestAuthenticationFunctions:
     @pytest.mark.asyncio
     async def test_require_auth_testing_mode(self):
         """Test require_auth returns test user in testing mode."""
+        from src.api.dependencies.auth import require_auth
 
         mock_request = MagicMock()
 
-        with patch.dict("os.environ", {"E2I_TESTING_MODE": "true"}):
-            # Re-import to pick up environment change
-            import importlib
-
-            import src.api.dependencies.auth
-
-            importlib.reload(src.api.dependencies.auth)
-            from src.api.dependencies.auth import require_auth as require_auth_reload
-
-            result = await require_auth_reload(mock_request, None)
+        with patch("src.api.dependencies.auth.TESTING_MODE", True):
+            result = await require_auth(mock_request, None)
 
             assert result is not None
             assert result["id"] == "test-user-id"
@@ -361,19 +354,13 @@ class TestAuthenticationFunctions:
     @pytest.mark.asyncio
     async def test_require_auth_no_credentials(self):
         """Test require_auth raises error without credentials."""
+        from src.api.dependencies.auth import require_auth
+
         mock_request = MagicMock()
 
-        with patch.dict("os.environ", {"E2I_TESTING_MODE": "false"}):
-            # Re-import to pick up environment change
-            import importlib
-
-            import src.api.dependencies.auth
-
-            importlib.reload(src.api.dependencies.auth)
-            from src.api.dependencies.auth import require_auth as require_auth_reload
-
+        with patch("src.api.dependencies.auth.TESTING_MODE", False):
             with pytest.raises(HTTPException) as exc_info:
-                await require_auth_reload(mock_request, None)
+                await require_auth(mock_request, None)
 
             assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
             assert "Missing authorization header" in str(exc_info.value.detail)
@@ -381,24 +368,18 @@ class TestAuthenticationFunctions:
     @pytest.mark.asyncio
     async def test_require_auth_invalid_token(self):
         """Test require_auth raises error with invalid token."""
+        from src.api.dependencies.auth import require_auth
+
         mock_request = MagicMock()
         mock_credentials = MagicMock()
         mock_credentials.credentials = "invalid-token"
 
-        with patch.dict("os.environ", {"E2I_TESTING_MODE": "false"}):
-            # Re-import to pick up environment change
-            import importlib
-
-            import src.api.dependencies.auth
-
-            importlib.reload(src.api.dependencies.auth)
-            from src.api.dependencies.auth import require_auth as require_auth_reload
-
+        with patch("src.api.dependencies.auth.TESTING_MODE", False):
             with patch("src.api.dependencies.auth.verify_supabase_token") as mock_verify:
                 mock_verify.return_value = None
 
                 with pytest.raises(HTTPException) as exc_info:
-                    await require_auth_reload(mock_request, mock_credentials)
+                    await require_auth(mock_request, mock_credentials)
 
                 assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
                 assert "Invalid or expired token" in str(exc_info.value.detail)
@@ -493,29 +474,17 @@ class TestAuthUtilityFunctions:
 
     def test_is_auth_enabled_with_credentials(self):
         """Test is_auth_enabled returns True with credentials."""
-        with patch.dict(
-            "os.environ",
-            {
-                "SUPABASE_URL": "https://test.supabase.co",
-                "SUPABASE_ANON_KEY": "test-key",
-                "E2I_TESTING_MODE": "false",
-            },
-        ):
-            # Re-import to pick up environment change
-            import importlib
+        from src.api.dependencies.auth import is_auth_enabled
 
-            import src.api.dependencies.auth
-
-            importlib.reload(src.api.dependencies.auth)
-            from src.api.dependencies.auth import is_auth_enabled as is_auth_enabled_reload
-
-            assert is_auth_enabled_reload() is True
+        with patch("src.api.dependencies.auth.TESTING_MODE", False):
+            with patch("src.api.dependencies.auth.SUPABASE_URL", "https://test.supabase.co"):
+                with patch("src.api.dependencies.auth.SUPABASE_ANON_KEY", "test-key"):
+                    assert is_auth_enabled() is True
 
     def test_is_auth_enabled_without_credentials(self):
         """Test is_auth_enabled returns False without credentials."""
         from src.api.dependencies.auth import is_auth_enabled
 
-        # Patch module-level variables to simulate no credentials and no testing mode
         with patch("src.api.dependencies.auth.TESTING_MODE", False):
             with patch("src.api.dependencies.auth.SUPABASE_URL", ""):
                 with patch("src.api.dependencies.auth.SUPABASE_ANON_KEY", ""):
@@ -523,45 +492,19 @@ class TestAuthUtilityFunctions:
 
     def test_is_auth_enabled_testing_mode(self):
         """Test is_auth_enabled returns False in testing mode."""
+        from src.api.dependencies.auth import is_auth_enabled
 
-        with patch.dict(
-            "os.environ",
-            {
-                "SUPABASE_URL": "https://test.supabase.co",
-                "SUPABASE_ANON_KEY": "test-key",
-                "E2I_TESTING_MODE": "true",
-            },
-        ):
-            # Re-import to pick up environment change
-            import importlib
-
-            import src.api.dependencies.auth
-
-            importlib.reload(src.api.dependencies.auth)
-            from src.api.dependencies.auth import is_auth_enabled as is_auth_enabled_reload
-
-            assert is_auth_enabled_reload() is False
+        with patch("src.api.dependencies.auth.TESTING_MODE", True):
+            with patch("src.api.dependencies.auth.SUPABASE_URL", "https://test.supabase.co"):
+                with patch("src.api.dependencies.auth.SUPABASE_ANON_KEY", "test-key"):
+                    assert is_auth_enabled() is False
 
     def test_is_testing_mode(self):
         """Test is_testing_mode detection."""
+        from src.api.dependencies.auth import is_testing_mode
 
-        with patch.dict("os.environ", {"E2I_TESTING_MODE": "true"}):
-            # Re-import to pick up environment change
-            import importlib
+        with patch("src.api.dependencies.auth.TESTING_MODE", True):
+            assert is_testing_mode() is True
 
-            import src.api.dependencies.auth
-
-            importlib.reload(src.api.dependencies.auth)
-            from src.api.dependencies.auth import is_testing_mode as is_testing_mode_reload
-
-            assert is_testing_mode_reload() is True
-
-        with patch.dict("os.environ", {"E2I_TESTING_MODE": "false"}):
-            import importlib
-
-            import src.api.dependencies.auth
-
-            importlib.reload(src.api.dependencies.auth)
-            from src.api.dependencies.auth import is_testing_mode as is_testing_mode_reload2
-
-            assert is_testing_mode_reload2() is False
+        with patch("src.api.dependencies.auth.TESTING_MODE", False):
+            assert is_testing_mode() is False
