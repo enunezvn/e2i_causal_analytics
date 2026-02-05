@@ -19,6 +19,7 @@ services:
       - APP_ENV=${APP_ENV:-development}
     depends_on:
       - redis
+      - falkordb
     networks:
       - frontend-network
       - backend-network
@@ -90,6 +91,22 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FalkorDB Graph Database
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: e2i-falkordb
+    command: redis-server --loadmodule /usr/lib/redis/modules/falkordb.so --maxmemory 1gb
+    volumes:
+      - falkordb-data:/data
+    networks:
+      - backend-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -212,3 +229,6 @@ volumes:
 
   grafana-data:
     name: e2i-grafana-data
+
+  falkordb-data:
+    name: e2i-falkordb-data

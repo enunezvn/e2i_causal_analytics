@@ -1,233 +1,157 @@
-# E2I Causal Analytics - Docker Setup
+# E2I Causal Analytics - Docker Development Setup
 
-## Directory Structure
+How to run the full stack locally using the **root-level** compose files.
 
-```
-docker/
-├── docker-compose.yml          # Production compose (no bind mounts)
-├── docker-compose.dev.yml      # Development overrides (bind mounts + dev tools)
-├── Dockerfile                  # Multi-stage: API + Worker
-├── Dockerfile.feast            # Feast feature store
-├── .env.example                # Environment template
-├── Makefile                    # Convenience commands
-│
-└── frontend/
-    ├── Dockerfile              # Multi-stage: React dev + prod
-    └── nginx.conf              # Production nginx config
-```
+> **Note**: Production runs on systemd (DigitalOcean droplet). These Docker files are for local development only.
+
+## Prerequisites
+
+- Docker Engine 24+
+- Docker Compose v2+
+- Git
 
 ## Quick Start
 
-### 1. Setup Environment
-
 ```bash
-cd docker
-cp .env.example .env
-# Edit .env with your Supabase and Anthropic credentials
+# 1. Clone
+git clone git@github.com:enunezvn/e2i_causal_analytics.git
+cd e2i_causal_analytics
+
+# 2. Create env file from template
+cp .env.example .env.dev
+# Edit .env.dev — fill in required keys (see Environment Variables below)
+
+# 3. Start everything
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+# 4. Verify
+curl -s http://localhost:8000/health | python3 -m json.tool
 ```
 
-### 2. Development Mode
+First build pulls PyTorch + ML dependencies — subsequent starts use cached layers.
 
-```bash
-# Start with hot-reloading (bind mounts enabled)
-make dev
+## Services
 
-# Or in detached mode
-make dev-d
+| Service | Port | URL | Description |
+|---------|------|-----|-------------|
+| API (FastAPI) | 8000 | http://localhost:8000 | Backend + 21 agents |
+| API Docs | 8000 | http://localhost:8000/docs | Swagger UI |
+| Frontend | 3000 | http://localhost:3000 | React app |
+| MLflow | 5000 | http://localhost:5000 | Experiment tracking |
+| Redis | 6379 | redis://localhost:6379 | Cache + task queue |
+| FalkorDB | 6381 | redis://localhost:6381 | Graph database |
+| Grafana | 3100 | http://localhost:3100 | Dashboards |
+| Prometheus | 9091 | http://localhost:9091 | Metrics |
+| Redis Commander* | 8081 | http://localhost:8081 | Redis web UI |
 
-# With dev tools (Flower, Redis Commander)
-make dev-tools
-```
+\* Debug profile only — start with `--profile debug`
 
-### 3. Production Mode
+## Environment Variables
 
-```bash
-# Build and start production containers
-make prod
+### Required (must set in `.env.dev`)
 
-# View logs
-make prod-logs
-```
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Claude API key for agents |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_ANON_KEY` | Supabase anonymous key |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key |
 
-## Volume Strategy
+### Auto-configured (set by compose, no action needed)
 
-### Bind Mounts (Development Only)
-Hot-reload code changes without rebuilding:
+These are overridden in `docker-compose.dev.yml` to use Docker-internal DNS names:
 
-| Local Path | Container Path | Purpose |
-|------------|----------------|---------|
-| `./src` | `/app/src` | Python source |
-| `./config` | `/app/config` | YAML configs |
-| `./frontend/src` | `/app/src` | React source |
+| Variable | Docker Value | Why |
+|----------|-------------|-----|
+| `REDIS_URL` | `redis://redis:6379` | Container-to-container networking |
+| `FALKORDB_HOST` | `falkordb` | Docker DNS resolution |
+| `FALKORDB_URL` | `redis://falkordb:6379` | Docker DNS resolution |
+| `MLFLOW_TRACKING_URI` | `http://mlflow:5000` | Docker DNS resolution |
+| `CELERY_BROKER_URL` | `redis://redis:6379/1` | Task queue broker |
+| `CELERY_RESULT_BACKEND` | `redis://redis:6379/2` | Task results store |
 
-### Shared Volumes (Data Exchange)
-Containers passing data to each other:
-
-| Volume | Producers | Consumers | Data |
-|--------|-----------|-----------|------|
-| `ml_artifacts` | worker | mlflow | Trained models, metrics |
-| `model_registry` | mlflow | bentoml (ro) | Registered models |
-| `causal_outputs` | api, worker | api | DAGs, effect estimates |
-| `feature_cache` | feast | api (ro), worker (ro) | Materialized features |
-
-### Persistent Volumes (State)
-Data that survives container restarts:
-
-| Volume | Container | Data |
-|--------|-----------|------|
-| `redis_data` | redis | Working memory, LangGraph checkpoints |
-| `falkordb_data` | falkordb | Semantic memory graph |
-| `mlflow_db` | mlflow | Experiment metadata |
-| `opik_data` | opik | LLM observability traces |
-
-## Service Ports
-
-| Service | Port | URL |
-|---------|------|-----|
-| API | 8000 | http://localhost:8000 |
-| Frontend | 3001 | http://localhost:3001 |
-| MLflow | 5000 | http://localhost:5000 |
-| BentoML | 3000 | http://localhost:3000 |
-| Feast | 6566 | http://localhost:6566 |
-| Opik | 5173 | http://localhost:5173 |
-| Redis | 6379 | redis://localhost:6379 |
-| FalkorDB | 6380 | redis://localhost:6380 |
-| Flower* | 5555 | http://localhost:5555 |
-| Redis Commander* | 8081 | http://localhost:8081 |
-
-*Dev tools only (use `make dev-tools`)
+> The `.env.example` file has `localhost` values which work for host-based development. The compose file overrides these with Docker DNS names so containers can talk to each other.
 
 ## Common Commands
 
 ```bash
-# View all commands
-make help
+# Start in foreground (see logs)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 
-# Check health of all services
-make health
+# Start detached
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # View logs
-make logs          # All containers
-make logs-api      # API only
-make logs-worker   # Worker only
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f fastapi
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f agent-worker
 
-# Shell access
-make shell-api     # Bash in API container
-make shell-worker  # Bash in Worker container
+# Rebuild a single service
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build fastapi
 
-# Testing
-make test          # Run all tests
-make test-unit     # Unit tests only
-make test-cov      # With coverage report
+# Shell into API container
+docker exec -it e2i-fastapi bash
 
-# Cleanup
-make down          # Stop containers
-make down-v        # Stop + remove volumes
-make clean         # Full cleanup
-```
+# Stop everything
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 
-## Architecture
+# Stop and remove volumes (reset data)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (React)                         │
-│                      http://localhost:3001                      │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      API (FastAPI + 18 Agents)                  │
-│                      http://localhost:8000                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ Orchestrator │  │Causal Impact │  │ Experiment Designer  │  │
-│  │   (Tier 1)   │  │   (Tier 2)   │  │      (Tier 3)        │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-         │                    │                    │
-         │ Celery Queue       │ Shared Volumes     │
-         ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────────────────────────────────┐
-│     WORKER      │  │              SHARED VOLUMES                 │
-│  (Long Tasks)   │  │  ml_artifacts │ causal_outputs │ features  │
-└─────────────────┘  └─────────────────────────────────────────────┘
-         │                    │
-         ▼                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        MLOPS SERVICES                           │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────────┐│
-│  │ MLflow  │  │ BentoML │  │  Feast  │  │        Opik         ││
-│  │ :5000   │  │  :3000  │  │  :6566  │  │       :5173         ││
-│  └─────────┘  └─────────┘  └─────────┘  └─────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      INFRASTRUCTURE                             │
-│  ┌──────────────────────┐  ┌──────────────────────────────────┐│
-│  │        Redis         │  │           FalkorDB               ││
-│  │   Working Memory     │  │       Semantic Memory            ││
-│  │   :6379              │  │       :6380                      ││
-│  └──────────────────────┘  └──────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    SUPABASE CLOUD                               │
-│               PostgreSQL + pgvector (28 tables)                 │
-│              Episodic + Procedural Memory                       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Debugging
-
-### VS Code Remote Debugging
-
-1. Start dev environment: `make dev`
-2. Attach VS Code debugger to port 5678
-3. Set breakpoints in your code
-
-### Celery Task Debugging
-
-```bash
-# Start with dev tools to access Flower
-make dev-tools
-
-# Open Flower UI
-make flower-ui
-```
-
-### Redis Inspection
-
-```bash
-# Connect to Redis CLI
-docker exec -it e2i_redis_dev redis-cli
-
-# Or use Redis Commander
-make dev-tools
-# Open http://localhost:8081
+# Start with debug tools (Redis Commander)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile debug up
 ```
 
 ## Troubleshooting
 
-### "Permission denied" on bind mounts
+### Port conflicts
+
+If a port is already in use, stop the conflicting service or change the port mapping in `docker-compose.dev.yml`.
+
+Common conflicts: port 3000 (React/BentoML), port 5000 (MLflow/macOS AirPlay).
+
+### First build is slow
+
+Normal — the Dockerfile installs PyTorch, scikit-learn, and other ML dependencies. Subsequent builds use Docker layer caching.
+
+### Supabase connection errors
+
+Verify your `.env.dev` has correct Supabase credentials. The database is hosted externally (not in Docker), so your machine needs internet access.
+
+### Container can't reach Redis/FalkorDB
+
+The dev compose sets Docker-internal URLs automatically. If you see connection errors, make sure you're using both compose files:
+
 ```bash
-# Fix ownership
-sudo chown -R $USER:$USER ./src ./config
+# Correct (both files)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+# Wrong (missing dev overrides)
+docker compose up
 ```
 
-### Container won't start
-```bash
-# Check logs
-docker logs e2i_api_dev
+### Hot reload not working
 
-# Rebuild from scratch
-make clean
-make dev
-```
+Source code is bind-mounted as read-only. The uvicorn `--reload` flag watches for changes. If reload stops working, restart the fastapi service.
 
-### Database connection issues
-```bash
-# Verify Supabase credentials in .env
-# Check if services are healthy
-make health
-```
+## Architecture: Docker Dev vs Production
+
+| Aspect | Docker Dev (this setup) | Production (droplet) |
+|--------|------------------------|---------------------|
+| Orchestration | Docker Compose | systemd |
+| API server | Container (uvicorn --reload) | systemd service |
+| Redis | Container (port 6379) | Docker container (port 6382) |
+| FalkorDB | Container (port 6381) | Docker container (port 6381) |
+| MLflow | Container (SQLite backend) | Docker container (PostgreSQL backend) |
+| Frontend | Container (dev server) | nginx serving static build |
+| Config | `.env.dev` + compose overrides | `.env` + systemd env files |
+
+## File Reference
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.yml` | Base service definitions (shared across environments) |
+| `docker-compose.dev.yml` | Dev overrides: ports, hot reload, debug settings, Docker DNS URLs |
+| `docker/fastapi/Dockerfile` | Multi-stage build for API + worker |
+| `docker/frontend/Dockerfile` | Multi-stage build for React app |
+| `docker/mlflow/Dockerfile` | MLflow tracking server |
+| `.env.example` | Template for environment variables |
