@@ -211,7 +211,7 @@ class SlowQueryDetector:
         self.config = config or SlowQueryConfig()
         self.alert_callback = alert_callback
         self._slow_queries: List[SlowQueryRecord] = []
-        self._lock = asyncio.Lock() if asyncio.get_event_loop().is_running() else None
+        self._lock = None  # Lazily created on first async use
 
     def check_query(
         self,

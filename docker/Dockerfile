@@ -54,6 +54,7 @@ FROM base AS dependencies
 
 # Copy dependency files
 COPY requirements.txt pyproject.toml ./
+COPY patches/ ./patches/
 
 # Create virtual environment and install dependencies
 RUN python -m venv /app/.venv && \
@@ -67,6 +68,7 @@ FROM base AS development
 
 # Install dev dependencies
 COPY requirements.txt pyproject.toml ./
+COPY patches/ ./patches/
 
 RUN python -m venv /app/.venv && \
     . /app/.venv/bin/activate && \
