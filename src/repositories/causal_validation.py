@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.causal_engine import (
+from src.causal_engine.refutation_runner import (
     GateDecision,
     RefutationResult,
     RefutationSuite,
