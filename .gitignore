@@ -55,10 +55,16 @@ htmlcov/
 playwright-report/
 test-results/
 
-# Claude auto-generated stubs
+# Claude Code - all artifacts
+.claude/
+CLAUDE.md
 **/CLAUDE.md
-!.claude/CLAUDE.md
-!CLAUDE.md
+.claude_settings.json
+.auto-claude-status
+.auto-claude/
+.playwright-mcp/
+.github/workflows/claude.yml
+.github/workflows/claude-code-review.yml
 
 # MyPy
 .mypy_cache/
@@ -103,13 +109,6 @@ archive/
 Thumbs.db
 .DS_Store
 
-# Claude Code
-.claude/settings.local.json
-.claude_settings.json
-
-# Auto Claude data directory
-.auto-claude/
-.playwright-mcp/
 
 # Git worktrees
 .worktrees/
