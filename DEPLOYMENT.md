@@ -2,6 +2,8 @@
 
 This document provides step-by-step instructions for deploying the E2I Causal Analytics application to the production droplet.
 
+> **For Team Members**: If you're setting up a local development environment using Docker, see [Docker Deployment for Team](#docker-deployment-for-team) at the end of this document. The sections below describe the production droplet deployment (systemd + nginx), which is managed by the project maintainer.
+
 ## ⚠️ Important: Access Methods
 
 | Service | Method | Local URL |
@@ -307,4 +309,79 @@ ssh -i ~/.ssh/replit enunez@138.197.4.36 "sudo tail -50 /var/log/nginx/access.lo
 
 ---
 
-*Last Updated: 2026-01-21*
+## Docker Deployment for Team
+
+Team members can run the full stack locally using Docker Compose. This is independent of the production droplet deployment above.
+
+### Prerequisites
+
+- Docker Desktop (or Docker Engine + Docker Compose v2)
+- 8GB+ RAM recommended for builds
+- Credentials: Supabase URL/keys, Anthropic API key
+
+### Quick Start
+
+```bash
+# Clone the repo
+git clone https://github.com/enunezvn/e2i_causal_analytics.git
+cd e2i_causal_analytics/docker
+
+# Create environment file from template
+cp env.example .env
+
+# Edit .env with your credentials
+# Required: SUPABASE_URL, SUPABASE_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY
+# Change REDIS_PASSWORD from 'changeme' for any non-local deployment
+
+# Build and start all services
+docker compose up -d
+
+# Check service status
+docker compose ps
+
+# View logs
+docker compose logs -f api frontend
+```
+
+### Services & Ports
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Frontend | http://localhost:3001 | React dashboard |
+| API | http://localhost:8000 | FastAPI backend |
+| MLflow | http://localhost:5000 | Experiment tracking (localhost only) |
+| Opik | http://localhost:5173 | Agent observability (localhost only) |
+| FalkorDB Browser | http://localhost:3030 | Graph UI (debug profile only) |
+
+Management UIs (MLflow, Opik, etc.) are bound to `127.0.0.1` and not accessible from other machines.
+
+### Debug Tools
+
+To include FalkorDB Browser:
+
+```bash
+docker compose --profile debug up -d
+```
+
+### Stopping
+
+```bash
+docker compose down          # Stop containers, keep volumes
+docker compose down -v       # Stop and remove volumes (data loss!)
+```
+
+### Troubleshooting
+
+**Build fails with OOM**: Increase Docker memory limit or build services one at a time:
+```bash
+docker compose build api
+docker compose build frontend
+```
+
+**Redis authentication errors**: Ensure all `REDIS_URL`, `CELERY_BROKER_URL`, and `CELERY_RESULT_BACKEND` use the password format: `redis://:${REDIS_PASSWORD}@redis:6379/N`
+
+**Feast service fails**: Feast requires `docker/Dockerfile.feast`. If not needed, comment out the `feast` service in `docker-compose.yml`.
+
+---
+
+*Last Updated: 2026-02-05*
