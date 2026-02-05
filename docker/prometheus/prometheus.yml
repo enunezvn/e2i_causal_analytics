@@ -5,11 +5,14 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - 'alerts.yml'
+
 scrape_configs:
-  # E2I API metrics (running on host as systemd service)
+  # E2I API metrics (container hostname)
   - job_name: 'e2i-api'
     static_configs:
-      - targets: ['host.docker.internal:8000']
+      - targets: ['api:8000']
     metrics_path: '/metrics'
     scrape_interval: 15s
     scrape_timeout: 10s

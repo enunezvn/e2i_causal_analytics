@@ -178,3 +178,16 @@ jobs:
               sudo systemctl restart e2i-api
             fi
             exit 1
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "## Deployment Succeeded" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Deployment Failed — Rollback Triggered" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Actor:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

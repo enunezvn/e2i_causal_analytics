@@ -15,7 +15,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Base Image
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS base
+FROM python:3.12-slim-bookworm AS base
 
 # Prevent Python from writing pyc files and buffering stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -104,7 +104,7 @@ CMD ["uvicorn", "src.api.main:app", "--reload", "--host", "0.0.0.0", "--port", "
 # -----------------------------------------------------------------------------
 # Stage 4: Production
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS production
+FROM python:3.12-slim-bookworm AS production
 
 # Runtime-only system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
