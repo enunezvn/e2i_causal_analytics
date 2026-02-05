@@ -348,27 +348,52 @@ class SemanticGraphSeeder:
         logger.info("Clearing existing graph data...")
         return self.execute_query("MATCH (n) DETACH DELETE n", "Clear graph")
 
+    def execute_constraint(self, node_type: str, prop: str, description: str = "") -> bool:
+        """Create a unique constraint via the GRAPH.CONSTRAINT Redis command."""
+        if self.dry_run:
+            logger.info("[DRY RUN] %s: GRAPH.CONSTRAINT CREATE %s UNIQUE NODE %s PROPERTIES 1 %s",
+                        description, self.graph_name, node_type, prop)
+            return True
+
+        try:
+            self.client.connection.execute_command(
+                "GRAPH.CONSTRAINT", "CREATE", self.graph_name,
+                "UNIQUE", "NODE", node_type, "PROPERTIES", 1, prop,
+            )
+            logger.debug("Created constraint: %s", description)
+            return True
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                logger.debug("Skipped (already exists): %s", description)
+                return True
+            logger.error("Constraint failed: %s\nError: %s", description, e)
+            return False
+
     def apply_schema(self) -> bool:
-        """Apply constraints and indexes from schema configuration."""
-        logger.info("Applying schema constraints and indexes...")
+        """Apply indexes then unique constraints from schema configuration.
+
+        FalkorDB requires an exact-match index to exist before a unique
+        constraint can be created, so indexes are applied first.
+        """
+        logger.info("Applying schema indexes...")
         success = True
 
-        # Apply unique constraints
-        constraints = self.schema_config.get("constraints", {}).get("unique_properties", [])
-        for constraint in constraints:
-            node_type = constraint.get("node")
-            prop = constraint.get("property")
-            if node_type and prop:
-                # FalkorDB constraint syntax
-                query = f"CREATE CONSTRAINT ON (n:{node_type}) ASSERT n.{prop} IS UNIQUE"
-                success = self.execute_query(query, f"Constraint: {node_type}.{prop}") and success
-
-        # Apply indexes
+        # 1. Indexes first (required before constraints)
         indexes = self.schema_config.get("indexes", {})
         for node_type, properties in indexes.items():
             for prop in properties:
                 query = f"CREATE INDEX ON :{node_type}({prop})"
                 success = self.execute_query(query, f"Index: {node_type}.{prop}") and success
+
+        # 2. Unique constraints via GRAPH.CONSTRAINT CREATE
+        logger.info("Applying schema constraints...")
+        constraints = self.schema_config.get("constraints", {}).get("unique_properties", [])
+        for constraint in constraints:
+            node_type = constraint.get("node")
+            prop = constraint.get("property")
+            if node_type and prop:
+                success = self.execute_constraint(node_type, prop,
+                                                  f"Constraint: {node_type}.{prop}") and success
 
         return success
 
