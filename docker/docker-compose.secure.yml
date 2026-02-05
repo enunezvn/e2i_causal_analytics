@@ -229,7 +229,7 @@ services:
       - "e2i.network.access=data,celery"
 
   falkordb:
-    image: falkordb/falkordb:latest
+    image: falkordb/falkordb:v4.14.11
     container_name: e2i-falkordb
     restart: unless-stopped
     # NO PORTS EXPOSED - Internal network only
@@ -265,7 +265,7 @@ services:
   # ===========================================================================
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.16.0
+    image: ghcr.io/mlflow/mlflow:v3.1.0
     container_name: e2i-mlflow
     restart: unless-stopped
     # Port exposed through nginx proxy only
@@ -309,7 +309,7 @@ services:
       - "e2i.network.access=monitoring,app"
 
   opik:
-    image: comet-ml/opik:latest
+    image: comet-ml/opik:1.10.2
     container_name: e2i-opik
     restart: unless-stopped
     # Port exposed through nginx proxy only
@@ -370,7 +370,7 @@ services:
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
 
       # Internal service URLs (container names on internal networks)
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
       - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
       - FALKORDB_URL=redis://falkordb:6379/0
 
@@ -433,17 +433,16 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../docker/frontend/Dockerfile
+      context: ..
+      dockerfile: docker/frontend/Dockerfile
       target: production
     container_name: e2i-frontend
     restart: unless-stopped
     # No direct port exposure - through nginx only
     expose:
       - "80"
-    environment:
-      - VITE_API_URL=/api  # Relative URL through nginx
-      - VITE_WS_URL=/ws
+    # Note: Vite env vars are baked at build time, not runtime.
+    # The frontend defaults to /api (see frontend/src/config/env.ts).
     networks:
       - app-network  # Only app network, communicates via nginx
     security_opt:
@@ -491,7 +490,7 @@ services:
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
       - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
       - FALKORDB_URL=redis://falkordb:6379/0
       - MLFLOW_TRACKING_URI=http://mlflow:5000
@@ -557,7 +556,7 @@ services:
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
       - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
       - FALKORDB_URL=redis://falkordb:6379/0
       - MLFLOW_TRACKING_URI=http://mlflow:5000
@@ -658,7 +657,7 @@ services:
   # ===========================================================================
 
   falkordb-browser:
-    image: falkordb/falkordb-browser:latest
+    image: falkordb/falkordb-browser:v1.7.1
     container_name: e2i-falkordb-browser
     restart: unless-stopped
     ports:
@@ -681,7 +680,7 @@ services:
       - "e2i.network.access=data"
 
   redis-commander:
-    image: rediscommander/redis-commander:latest
+    image: rediscommander/redis-commander:0.8.1
     container_name: e2i-redis-commander
     restart: unless-stopped
     ports:

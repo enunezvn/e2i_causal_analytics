@@ -4,8 +4,8 @@
 # 18-Agent 6-Tier Architecture | Tri-Memory System | MLOps Integration
 #
 # Usage:
-#   Production:  docker compose up -d
-#   Development: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#   Production:  docker compose -f docker/docker-compose.yml up -d
+#   With debug:  docker compose -f docker/docker-compose.yml --profile debug up -d
 #
 # External Dependencies:
 #   - Supabase Cloud (PostgreSQL + pgvector)
@@ -15,59 +15,81 @@
 name: e2i-causal-analytics
 
 # =============================================================================
+# EXTENSION FIELDS (Shared configuration)
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-common-env: &common-env
+  SUPABASE_URL: ${SUPABASE_URL}
+  SUPABASE_KEY: ${SUPABASE_KEY}
+  SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+  REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+  FALKORDB_URL: redis://falkordb:6379/0
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  BENTOML_URL: http://bentoml:3000
+  FEAST_URL: http://feast:6566
+  OPIK_URL: http://opik:5174
+  CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/1
+  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/2
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+
+x-common-worker: &common-worker
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+    target: production
+  restart: unless-stopped
+  networks:
+    - e2i_network
+    - mlops_network
+
+# =============================================================================
 # VOLUMES
 # =============================================================================
 volumes:
-  # ---------------------------------------------------------------------------
-  # PERSISTENT VOLUMES (State - survives container restarts)
-  # ---------------------------------------------------------------------------
+  # Persistent volumes (state - survives container restarts)
   redis_data:
     driver: local
     name: e2i_redis_data
-    
   falkordb_data:
     driver: local
     name: e2i_falkordb_data
-    
   mlflow_db:
     driver: local
     name: e2i_mlflow_db
-    
   mlflow_artifacts:
     driver: local
     name: e2i_mlflow_artifacts
-    
   opik_data:
     driver: local
     name: e2i_opik_data
-    
   bentoml_models:
     driver: local
     name: e2i_bentoml_models
 
-  # ---------------------------------------------------------------------------
-  # SHARED VOLUMES (Inter-container data exchange)
-  # ---------------------------------------------------------------------------
+  # Shared volumes (inter-container data exchange)
   ml_artifacts:
     driver: local
     name: e2i_ml_artifacts
-    
   model_registry:
     driver: local
     name: e2i_model_registry
-    
   causal_outputs:
     driver: local
     name: e2i_causal_outputs
-    
   feature_cache:
     driver: local
     name: e2i_feature_cache
-    
   agent_outputs:
     driver: local
     name: e2i_agent_outputs
-    
   experiment_designs:
     driver: local
     name: e2i_experiment_designs
@@ -79,7 +101,6 @@ networks:
   e2i_network:
     driver: bridge
     name: e2i_network
-    
   # Isolated network for MLOps services
   mlops_network:
     driver: bridge
@@ -92,21 +113,25 @@ services:
   # ===========================================================================
   # TIER 1: INFRASTRUCTURE (Memory Systems)
   # ===========================================================================
-  
-  # ---------------------------------------------------------------------------
+
   # Redis - Working Memory + LangGraph Checkpointing + Celery Broker
-  # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: e2i_redis
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "6382:6379"  # 6382 external to avoid conflict with archon Redis (6379)
+      - "6382:6379"  # 6382 external to avoid conflict with host Redis on 6379
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-changeme}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -125,15 +150,14 @@ services:
       - "e2i.service=infrastructure"
       - "e2i.memory=working"
 
-  # ---------------------------------------------------------------------------
   # FalkorDB - Semantic Memory (Graphity Auto-Extraction)
-  # ---------------------------------------------------------------------------
   falkordb:
-    image: falkordb/falkordb:latest
+    image: falkordb/falkordb:v4.14.11
     container_name: e2i_falkordb
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "6381:6379"  # 6381 to avoid conflict with Redis (6379) and auto-claude-falkordb (6380)
+      - "6381:6379"  # 6381 external to avoid conflict with Redis
     volumes:
       - falkordb_data:/data
     environment:
@@ -158,15 +182,16 @@ services:
       - "e2i.service=infrastructure"
       - "e2i.memory=semantic"
 
-  # ---------------------------------------------------------------------------
-  # FalkorDB Browser - Interactive Graph Visualization
-  # ---------------------------------------------------------------------------
+  # FalkorDB Browser - Interactive Graph Visualization (debug only)
   falkordb-browser:
-    image: falkordb/falkordb-browser:latest
+    image: falkordb/falkordb-browser:v1.7.1
     container_name: e2i_falkordb_browser
     restart: unless-stopped
+    logging: *default-logging
+    profiles:
+      - debug
     ports:
-      - "3030:3000"  # FalkorDB Browser (Port 3000 internal)
+      - "127.0.0.1:3030:3000"
     environment:
       - FALKORDB_HOST=falkordb
       - FALKORDB_PORT=6379
@@ -196,16 +221,15 @@ services:
   # ===========================================================================
   # TIER 2: MLOPS SERVICES
   # ===========================================================================
-  
-  # ---------------------------------------------------------------------------
+
   # MLflow - Experiment Tracking & Model Registry
-  # ---------------------------------------------------------------------------
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.1.0
     container_name: e2i_mlflow
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       - mlflow_db:/mlflow/db
       - mlflow_artifacts:/mlflow/artifacts
@@ -243,15 +267,14 @@ services:
       - "e2i.service=mlops"
       - "e2i.component=experiment-tracking"
 
-  # ---------------------------------------------------------------------------
   # BentoML - Model Serving (Decoupled from Agents)
-  # ---------------------------------------------------------------------------
   bentoml:
-    image: bentoml/bentoml:latest
+    image: bentoml/bento-server:1.4.0
     container_name: e2i_bentoml
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - bentoml_models:/home/bentoml/bentos
       - model_registry:/models:ro  # Read-only: receives from MLflow
@@ -282,15 +305,14 @@ services:
       - "e2i.service=mlops"
       - "e2i.component=model-serving"
 
-  # ---------------------------------------------------------------------------
   # Feast - Feature Store (Online + Offline Serving)
-  # ---------------------------------------------------------------------------
   feast:
     build:
       context: .
       dockerfile: Dockerfile.feast
     container_name: e2i_feast
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "6566:6566"
     volumes:
@@ -324,16 +346,15 @@ services:
       - "e2i.service=mlops"
       - "e2i.component=feature-store"
 
-  # ---------------------------------------------------------------------------
   # Opik - LLM & Agent Observability (Self-Hosted)
-  # ---------------------------------------------------------------------------
   opik:
-    image: comet-ml/opik:latest
+    image: comet-ml/opik:1.10.2
     container_name: e2i_opik
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "5173:5173"  # UI
-      - "5174:5174"  # API
+      - "127.0.0.1:5173:5173"  # UI
+      - "127.0.0.1:5174:5174"  # API
     volumes:
       - opik_data:/app/data
     environment:
@@ -363,10 +384,8 @@ services:
   # ===========================================================================
   # TIER 3: APPLICATION SERVICES
   # ===========================================================================
-  
-  # ---------------------------------------------------------------------------
+
   # FastAPI Backend - 18-Agent Orchestration Layer
-  # ---------------------------------------------------------------------------
   api:
     build:
       context: ..
@@ -374,42 +393,19 @@ services:
       target: production
     container_name: e2i_api
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "8000:8000"
     volumes:
-      # Shared volumes for data exchange
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro  # Read from Feast
     environment:
-      # Supabase Cloud Connection
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      
-      # Memory Systems
-      - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port (6380 is external only)
-      
-      # MLOps Services
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - BENTOML_URL=http://bentoml:3000
-      - FEAST_URL=http://feast:6566
-      - OPIK_URL=http://opik:5174
-      
-      # Celery Configuration
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      
-      # Claude API
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      
-      # Application Settings
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - WORKERS=4
+      <<: *common-env
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+      WORKERS: 4
     command: >
       gunicorn src.api.main:app
       --workers 4
@@ -452,13 +448,9 @@ services:
   # ---------------------------------------------------------------------------
 
   # Worker Light - Quick tasks (API calls, cache updates, notifications)
-  # ---------------------------------------------------------------------------
   worker_light:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      target: production
-    restart: unless-stopped
+    <<: *common-worker
+    logging: *default-logging
     volumes:
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
@@ -468,21 +460,8 @@ services:
     tmpfs:
       - /app/tmp:size=256M,mode=1777
     environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - BENTOML_URL=http://bentoml:3000
-      - FEAST_URL=http://feast:6566
-      - OPIK_URL=http://opik:5174
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - WORKER_TYPE=light
+      <<: *common-env
+      WORKER_TYPE: light
     command: >
       celery -A src.workers.celery_app worker
       --loglevel=INFO
@@ -497,9 +476,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    networks:
-      - e2i_network
-      - mlops_network
     deploy:
       resources:
         limits:
@@ -520,13 +496,9 @@ services:
       - "e2i.worker_tier=light"
 
   # Worker Medium - Standard analytics (reports, aggregations, dashboards)
-  # ---------------------------------------------------------------------------
   worker_medium:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      target: production
-    restart: unless-stopped
+    <<: *common-worker
+    logging: *default-logging
     volumes:
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
@@ -536,21 +508,8 @@ services:
     tmpfs:
       - /app/tmp:size=2G,mode=1777
     environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - BENTOML_URL=http://bentoml:3000
-      - FEAST_URL=http://feast:6566
-      - OPIK_URL=http://opik:5174
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - WORKER_TYPE=medium
+      <<: *common-env
+      WORKER_TYPE: medium
     command: >
       celery -A src.workers.celery_app worker
       --loglevel=INFO
@@ -565,9 +524,6 @@ services:
       timeout: 15s
       retries: 3
       start_period: 30s
-    networks:
-      - e2i_network
-      - mlops_network
     deploy:
       resources:
         limits:
@@ -588,13 +544,9 @@ services:
       - "e2i.worker_tier=medium"
 
   # Worker Heavy - Compute-intensive tasks (SHAP, causal refutation, ML, twins)
-  # ---------------------------------------------------------------------------
   worker_heavy:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      target: production
-    restart: unless-stopped
+    <<: *common-worker
+    logging: *default-logging
     volumes:
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
@@ -604,25 +556,12 @@ services:
     tmpfs:
       - /app/tmp:size=8G,mode=1777  # Large scratch space for heavy computation
     environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6379/0  # Internal port
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - BENTOML_URL=http://bentoml:3000
-      - FEAST_URL=http://feast:6566
-      - OPIK_URL=http://opik:5174
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - WORKER_TYPE=heavy
+      <<: *common-env
+      WORKER_TYPE: heavy
       # Performance tuning for heavy tasks
-      - OMP_NUM_THREADS=16  # OpenMP threads for numpy/scipy
-      - OPENBLAS_NUM_THREADS=16  # BLAS parallelization
-      - MKL_NUM_THREADS=16  # Intel MKL if available
+      OMP_NUM_THREADS: 16  # OpenMP threads for numpy/scipy
+      OPENBLAS_NUM_THREADS: 16  # BLAS parallelization
+      MKL_NUM_THREADS: 16  # Intel MKL if available
     command: >
       celery -A src.workers.celery_app worker
       --loglevel=INFO
@@ -639,9 +578,6 @@ services:
       timeout: 30s
       retries: 3
       start_period: 60s
-    networks:
-      - e2i_network
-      - mlops_network
     deploy:
       resources:
         limits:
@@ -662,9 +598,7 @@ services:
       - "e2i.worker_tier=heavy"
       - "e2i.autoscale=true"
 
-  # ---------------------------------------------------------------------------
   # Celery Beat - Scheduled Tasks (Drift Monitoring, Health Checks)
-  # ---------------------------------------------------------------------------
   scheduler:
     build:
       context: ..
@@ -672,13 +606,14 @@ services:
       target: production
     container_name: e2i_scheduler
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - causal_outputs:/app/data/causal_outputs:ro  # Read-only for monitoring
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/2
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_KEY: ${SUPABASE_KEY}
     command: >
       celery -A src.workers.celery_app beat
       --loglevel=INFO
@@ -702,21 +637,20 @@ services:
       - "e2i.service=application"
       - "e2i.component=scheduler"
 
-  # ---------------------------------------------------------------------------
   # Frontend - React Dashboard (Production Build)
-  # ---------------------------------------------------------------------------
+  # Note: Vite env vars (VITE_*) are baked at build time, not runtime.
+  # The frontend defaults to /api for API requests (see frontend/src/config/env.ts),
+  # which is correct when served behind nginx.
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../docker/frontend/Dockerfile
+      context: ..
+      dockerfile: docker/frontend/Dockerfile
       target: production
     container_name: e2i_frontend
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "3001:80"
-    environment:
-      - VITE_API_URL=http://api:8000
-      - VITE_WS_URL=ws://api:8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 30s
@@ -743,7 +677,7 @@ services:
   # ===========================================================================
   # OPTIONAL: REVERSE PROXY (Uncomment for Production)
   # ===========================================================================
-  
+
   # nginx:
   #   image: nginx:alpine
   #   container_name: e2i_nginx

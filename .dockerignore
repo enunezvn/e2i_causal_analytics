@@ -101,6 +101,8 @@ data/
 !pyproject.toml
 !package.json
 !package-lock.json
+!tsconfig.json
+!config/**/*.json
 
 # ML artifacts
 models/
