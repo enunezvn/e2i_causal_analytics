@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 
 # Testing mode - bypasses authentication for integration/e2e tests
 # Set E2I_TESTING_MODE=true to disable auth during testing
-TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
+_TESTING_RAW = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
+_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+TESTING_MODE = _TESTING_RAW and _ENVIRONMENT != "production"
 
 # Get allowed origins for CORS headers on error responses
 ALLOWED_ORIGINS = os.environ.get(

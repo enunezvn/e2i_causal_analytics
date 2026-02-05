@@ -69,6 +69,22 @@ jobs:
             -x '**/test_*.py,**/*_test.py,**/tests/**' \
             || true  # Don't fail CI, just report
 
+      - name: Check for HIGH/CRITICAL findings
+        run: |
+          if [ -f bandit-results.json ]; then
+            HIGH_COUNT=$(python -c "
+          import json, sys
+          data = json.load(open('bandit-results.json'))
+          results = data.get('results', [])
+          high_crit = [r for r in results if r.get('issue_severity') in ('HIGH', 'CRITICAL')]
+          print(len(high_crit))
+          " 2>/dev/null || echo "0")
+            if [ "$HIGH_COUNT" -gt 0 ]; then
+              echo "::error::Bandit found $HIGH_COUNT HIGH/CRITICAL severity findings"
+              exit 1
+            fi
+          fi
+
       - name: Upload Bandit JSON results
         uses: actions/upload-artifact@v4
         if: always()
@@ -117,6 +133,22 @@ jobs:
             --exclude='**/.worktrees/**' \
             || true
 
+      - name: Check for ERROR/WARNING findings
+        run: |
+          if [ -f semgrep-results.json ]; then
+            FINDING_COUNT=$(python3 -c "
+          import json
+          data = json.load(open('semgrep-results.json'))
+          results = data.get('results', [])
+          severe = [r for r in results if r.get('extra', {}).get('severity') in ('ERROR', 'WARNING')]
+          print(len(severe))
+          " 2>/dev/null || echo "0")
+            if [ "$FINDING_COUNT" -gt 0 ]; then
+              echo "::error::Semgrep found $FINDING_COUNT ERROR/WARNING findings"
+              exit 1
+            fi
+          fi
+
       - name: Upload Semgrep artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -151,6 +183,21 @@ jobs:
             --output pip-audit-results.json \
             --desc on \
             || true  # Don't fail CI, just report
+
+      - name: Check for known vulnerabilities
+        run: |
+          if [ -f pip-audit-results.json ]; then
+            VULN_COUNT=$(python -c "
+          import json
+          data = json.load(open('pip-audit-results.json'))
+          vulns = [d for d in data.get('dependencies', []) if d.get('vulns')]
+          print(len(vulns))
+          " 2>/dev/null || echo "0")
+            if [ "$VULN_COUNT" -gt 0 ]; then
+              echo "::error::pip-audit found $VULN_COUNT packages with known vulnerabilities"
+              exit 1
+            fi
+          fi
 
       - name: Upload pip-audit results
         uses: actions/upload-artifact@v4
@@ -196,7 +243,7 @@ jobs:
       - name: Run npm audit
         working-directory: frontend
         run: |
-          npm audit --json > npm-audit-results.json || true
+          npm audit --audit-level=high --json > npm-audit-results.json || true
 
       - name: Upload npm audit results
         uses: actions/upload-artifact@v4
@@ -232,7 +279,7 @@ jobs:
         run: |
           docker build \
             -t e2i-api:scan \
-            -f docker/fastapi/Dockerfile \
+            -f docker/Dockerfile \
             .
 
       - name: Run Trivy vulnerability scanner
@@ -277,9 +324,8 @@ jobs:
 
       - name: Run Hadolint on all Dockerfiles
         uses: hadolint/hadolint-action@v3.1.0
-        continue-on-error: true
         with:
-          dockerfile: docker/fastapi/Dockerfile
+          dockerfile: docker/Dockerfile
           failure-threshold: warning
           format: json
           output-file: hadolint-results.json

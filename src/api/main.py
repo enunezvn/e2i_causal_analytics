@@ -389,6 +389,11 @@ _DEFAULT_ORIGINS = [
 _env_origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
 if _env_origins:
     if _env_origins == "*":
+        if os.environ.get("ENVIRONMENT", "development") == "production":
+            raise RuntimeError(
+                "CORS: Wildcard origin (*) is not allowed when ENVIRONMENT=production. "
+                "Set ALLOWED_ORIGINS to a comma-separated list of specific origins."
+            )
         logger.warning("CORS: Wildcard origin (*) configured - this is insecure for production!")
         ALLOWED_ORIGINS = ["*"]
     else:
@@ -765,7 +770,11 @@ from src.api.errors import (
 )
 
 # Determine if debug mode is enabled
-DEBUG_MODE = os.environ.get("E2I_DEBUG_MODE", "").lower() in ("true", "1", "yes")
+_debug_requested = os.environ.get("E2I_DEBUG_MODE", "").lower() in ("true", "1", "yes")
+_environment = os.environ.get("ENVIRONMENT", "development")
+DEBUG_MODE = _debug_requested and _environment != "production"
+if _debug_requested and _environment == "production":
+    logger.warning("E2I_DEBUG_MODE is set but ENVIRONMENT=production -- debug mode DISABLED")
 
 
 @app.exception_handler(E2IError)

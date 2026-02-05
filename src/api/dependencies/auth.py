@@ -72,6 +72,15 @@ SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 
 # Testing mode - bypasses authentication for integration/e2e tests
 TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
+_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+if TESTING_MODE and _ENVIRONMENT == "production":
+    import warnings
+
+    warnings.warn(
+        "E2I_TESTING_MODE is set but ENVIRONMENT=production -- testing mode DISABLED",
+        RuntimeWarning,
+    )
+    TESTING_MODE = False
 
 # Mock user for testing mode (defaults to admin for full access in tests)
 TEST_USER: Dict[str, Any] = {
@@ -250,9 +259,8 @@ async def require_auth(
     Raises:
         AuthError: If not authenticated
     """
-    # In testing mode, return mock user (check env at runtime to avoid
-    # import-order issues with xdist workers and conftest.py)
-    if os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes"):
+    # In testing mode, return mock user
+    if TESTING_MODE:
         request.state.user = TEST_USER
         return TEST_USER
 
@@ -380,4 +388,4 @@ def is_auth_enabled() -> bool:
 
 def is_testing_mode() -> bool:
     """Check if running in testing mode."""
-    return os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
+    return TESTING_MODE

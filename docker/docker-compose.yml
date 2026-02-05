@@ -46,6 +46,8 @@ x-common-worker: &common-worker
     dockerfile: docker/Dockerfile
     target: production
   restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
   networks:
     - e2i_network
     - mlops_network
@@ -111,6 +113,32 @@ networks:
 # =============================================================================
 services:
   # ===========================================================================
+  # TIER 0: CONFIGURATION VALIDATION
+  # ===========================================================================
+
+  config-check:
+    image: alpine:3.19
+    container_name: e2i_config_check
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        if [ "$$REDIS_PASSWORD" = "changeme" ] || [ -z "$$REDIS_PASSWORD" ]; then
+          if [ "$$ENVIRONMENT" = "production" ]; then
+            echo "ERROR: REDIS_PASSWORD must be set to a secure value in production"
+            exit 1
+          else
+            echo "WARNING: Using default Redis password - acceptable for development only"
+          fi
+        fi
+        echo "Configuration validation passed"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    restart: "no"
+    networks: []
+
+  # ===========================================================================
   # TIER 1: INFRASTRUCTURE (Memory Systems)
   # ===========================================================================
 
@@ -138,6 +166,11 @@ services:
       start_period: 10s
     networks:
       - e2i_network
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      config-check:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
@@ -170,6 +203,8 @@ services:
       start_period: 15s
     networks:
       - e2i_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -203,6 +238,8 @@ services:
       start_period: 15s
     networks:
       - e2i_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -255,6 +292,8 @@ services:
     networks:
       - e2i_network
       - mlops_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -290,6 +329,8 @@ services:
     networks:
       - e2i_network
       - mlops_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -331,6 +372,8 @@ services:
     networks:
       - e2i_network
       - mlops_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -369,6 +412,8 @@ services:
     networks:
       - e2i_network
       - mlops_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -424,6 +469,8 @@ services:
     networks:
       - e2i_network
       - mlops_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -620,6 +667,8 @@ services:
       --scheduler=celery.beat:PersistentScheduler
     networks:
       - e2i_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -659,6 +708,8 @@ services:
       start_period: 15s
     networks:
       - e2i_network
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:

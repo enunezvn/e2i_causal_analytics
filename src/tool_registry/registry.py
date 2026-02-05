@@ -398,13 +398,15 @@ class ToolRegistry:
             This registers tool metadata only. Actual callables must be
             provided separately via register() or @composable_tool decorator.
         """
-        # Build query
-        query = f"SELECT * FROM {table_name} WHERE composable = true"
-        if category_filter:
-            query += f" AND category = '{category_filter.value}'"
+        if not table_name.isidentifier():
+            raise ToolRegistryError(f"Invalid table name: {table_name}")
 
+        # Build query using Supabase PostgREST builder
         try:
-            result = await db_client.execute(query)
+            query = db_client.table(table_name).select("*").eq("composable", True)
+            if category_filter:
+                query = query.eq("category", category_filter.value)
+            result = query.execute()
             rows = result.data if hasattr(result, "data") else result
 
             registered_count = 0
@@ -477,6 +479,9 @@ class ToolRegistry:
         Returns:
             Dict with counts: {"inserted": N, "updated": N, "skipped": N}
         """
+        if not table_name.isidentifier():
+            raise ToolRegistryError(f"Invalid table name: {table_name}")
+
         stats = {"inserted": 0, "updated": 0, "skipped": 0}
 
         for _tool_name, registered_tool in self._tools.items():
@@ -497,48 +502,36 @@ class ToolRegistry:
 
             try:
                 # Check if exists
-                check_query = f"SELECT tool_id FROM {table_name} WHERE name = '{schema.name}'"
-                result = await db_client.execute(check_query)
+                result = db_client.table(table_name).select("tool_id").eq("name", schema.name).execute()
                 exists = bool(result.data if hasattr(result, "data") else result)
 
                 if exists:
                     if update_existing:
                         # Update existing
-                        update_query = f"""
-                            UPDATE {table_name}
-                            SET description = '{schema.description}',
-                                source_agent = '{schema.source_agent}',
-                                tier = {schema.tier},
-                                avg_latency_ms = {schema.avg_execution_ms},
-                                version = '{schema.version}',
-                                updated_at = NOW()
-                            WHERE name = '{schema.name}'
-                        """
-                        await db_client.execute(update_query)
+                        db_client.table(table_name).update({
+                            "description": schema.description,
+                            "source_agent": schema.source_agent,
+                            "tier": schema.tier,
+                            "avg_latency_ms": schema.avg_execution_ms,
+                            "version": schema.version,
+                        }).eq("name", schema.name).execute()
                         stats["updated"] += 1
                         logger.debug(f"Updated tool in DB: {schema.name}")
                     else:
                         stats["skipped"] += 1
                 else:
                     # Insert new
-                    import json
-
-                    insert_query = f"""
-                        INSERT INTO {table_name} (name, description, source_agent, tier,
-                            input_schema, output_schema, composable, avg_latency_ms, version)
-                        VALUES (
-                            '{schema.name}',
-                            '{schema.description}',
-                            '{schema.source_agent}',
-                            {schema.tier},
-                            '{json.dumps(record["input_schema"])}',
-                            '{json.dumps(record["output_schema"])}',
-                            true,
-                            {schema.avg_execution_ms},
-                            '{schema.version}'
-                        )
-                    """
-                    await db_client.execute(insert_query)
+                    db_client.table(table_name).insert({
+                        "name": schema.name,
+                        "description": schema.description,
+                        "source_agent": schema.source_agent,
+                        "tier": schema.tier,
+                        "input_schema": record["input_schema"],
+                        "output_schema": record["output_schema"],
+                        "composable": True,
+                        "avg_latency_ms": schema.avg_execution_ms,
+                        "version": schema.version,
+                    }).execute()
                     stats["inserted"] += 1
                     logger.debug(f"Inserted tool to DB: {schema.name}")
 
