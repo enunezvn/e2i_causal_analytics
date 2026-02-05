@@ -235,15 +235,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return self.DEFAULT_LIMITS["auth"]
         if "/batch" in path:
             return self.DEFAULT_LIMITS["batch"]
-        if "/calculate" in path or method == "POST":
-            return self.DEFAULT_LIMITS["calculate"]
-
         if "/copilotkit" in path:
             if "/chat" in path:
                 return self.DEFAULT_LIMITS["copilotkit_chat"]
             elif "/status" in path or "/info" in path:
                 return self.DEFAULT_LIMITS["copilotkit_status"]
             return self.DEFAULT_LIMITS["copilotkit_other"]
+        if "/calculate" in path or method == "POST":
+            return self.DEFAULT_LIMITS["calculate"]
 
         return self.DEFAULT_LIMITS["default"]
 

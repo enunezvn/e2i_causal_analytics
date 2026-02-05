@@ -502,36 +502,42 @@ class ToolRegistry:
 
             try:
                 # Check if exists
-                result = db_client.table(table_name).select("tool_id").eq("name", schema.name).execute()
+                result = (
+                    db_client.table(table_name).select("tool_id").eq("name", schema.name).execute()
+                )
                 exists = bool(result.data if hasattr(result, "data") else result)
 
                 if exists:
                     if update_existing:
                         # Update existing
-                        db_client.table(table_name).update({
-                            "description": schema.description,
-                            "source_agent": schema.source_agent,
-                            "tier": schema.tier,
-                            "avg_latency_ms": schema.avg_execution_ms,
-                            "version": schema.version,
-                        }).eq("name", schema.name).execute()
+                        db_client.table(table_name).update(
+                            {
+                                "description": schema.description,
+                                "source_agent": schema.source_agent,
+                                "tier": schema.tier,
+                                "avg_latency_ms": schema.avg_execution_ms,
+                                "version": schema.version,
+                            }
+                        ).eq("name", schema.name).execute()
                         stats["updated"] += 1
                         logger.debug(f"Updated tool in DB: {schema.name}")
                     else:
                         stats["skipped"] += 1
                 else:
                     # Insert new
-                    db_client.table(table_name).insert({
-                        "name": schema.name,
-                        "description": schema.description,
-                        "source_agent": schema.source_agent,
-                        "tier": schema.tier,
-                        "input_schema": record["input_schema"],
-                        "output_schema": record["output_schema"],
-                        "composable": True,
-                        "avg_latency_ms": schema.avg_execution_ms,
-                        "version": schema.version,
-                    }).execute()
+                    db_client.table(table_name).insert(
+                        {
+                            "name": schema.name,
+                            "description": schema.description,
+                            "source_agent": schema.source_agent,
+                            "tier": schema.tier,
+                            "input_schema": record["input_schema"],
+                            "output_schema": record["output_schema"],
+                            "composable": True,
+                            "avg_latency_ms": schema.avg_execution_ms,
+                            "version": schema.version,
+                        }
+                    ).execute()
                     stats["inserted"] += 1
                     logger.debug(f"Inserted tool to DB: {schema.name}")
 

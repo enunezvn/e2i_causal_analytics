@@ -8,10 +8,13 @@ Covers:
 - Beat schedule
 - Debug task
 - Worker info
+- Dead letter queue (DLQ)
+- Task failure signal handler
+- DLQ monitor beat schedule
 """
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 # =============================================================================
 # Celery App Configuration Tests
@@ -98,6 +101,12 @@ class TestCeleryAppConfiguration:
         assert celery_app.conf.worker_send_task_events is True
         assert celery_app.conf.task_send_sent_event is True
 
+    def test_result_expires_24_hours(self):
+        """Test result expiration is set to 24 hours."""
+        from src.workers.celery_app import celery_app
+
+        assert celery_app.conf.result_expires == 86400  # 24 hours
+
 
 # =============================================================================
 # Queue Definition Tests
@@ -144,6 +153,14 @@ class TestQueueDefinitions:
         assert "causal" in queue_names
         assert "ml" in queue_names
         assert "twins" in queue_names
+
+    def test_dead_letter_queue_exists(self):
+        """Test dead letter queue is defined."""
+        from src.workers.celery_app import celery_app
+
+        queue_names = [q.name for q in celery_app.conf.task_queues]
+
+        assert "dead_letter" in queue_names
 
     def test_default_queue_is_default(self):
         """Test default queue is 'default'."""
@@ -437,3 +454,102 @@ class TestModuleExports:
 
         assert hasattr(workers, "__all__")
         assert "celery_app" in workers.__all__
+
+
+# =============================================================================
+# Dead Letter Queue Tests
+# =============================================================================
+
+
+class TestDeadLetterQueue:
+    """Tests for dead letter queue functionality."""
+
+    def test_dead_letter_entry_task_exists(self):
+        """Test dead_letter_entry task is registered."""
+        from src.workers.celery_app import dead_letter_entry
+
+        assert dead_letter_entry is not None
+        assert dead_letter_entry.name == "src.tasks.dead_letter_entry"
+
+    def test_monitor_dead_letter_queue_task_exists(self):
+        """Test monitor_dead_letter_queue task is registered."""
+        from src.workers.celery_app import monitor_dead_letter_queue
+
+        assert monitor_dead_letter_queue is not None
+        assert monitor_dead_letter_queue.name == "src.tasks.monitor_dead_letter_queue"
+
+    def test_dlq_monitor_beat_schedule(self):
+        """Test DLQ monitor is in the beat schedule."""
+        from src.workers.celery_app import celery_app
+
+        schedule = celery_app.conf.beat_schedule.get("monitor-dead-letter-queue")
+        assert schedule is not None
+        assert schedule["task"] == "src.tasks.monitor_dead_letter_queue"
+        assert schedule["schedule"] == 1800.0  # 30 minutes
+        assert schedule["options"]["queue"] == "quick"
+
+    def test_handle_task_failure_signal_connected(self):
+        """Test task_failure signal handler is connected."""
+        from src.workers.celery_app import handle_task_failure
+
+        assert handle_task_failure is not None
+        assert callable(handle_task_failure)
+
+    def test_handle_task_failure_routes_max_retries_to_dlq(self):
+        """Test failure handler routes MaxRetriesExceededError to DLQ."""
+        from celery.exceptions import MaxRetriesExceededError
+
+        from src.workers.celery_app import celery_app, handle_task_failure
+
+        mock_sender = MagicMock()
+        mock_sender.name = "src.tasks.some_task"
+
+        with patch.object(celery_app, "send_task") as mock_send:
+            handle_task_failure(
+                sender=mock_sender,
+                task_id="task-123",
+                exception=MaxRetriesExceededError("Max retries"),
+                args=["arg1"],
+                kwargs={"key": "value"},
+            )
+
+            mock_send.assert_called_once()
+            call_kwargs = mock_send.call_args
+            assert call_kwargs[0][0] == "src.tasks.dead_letter_entry"
+            assert call_kwargs[1]["queue"] == "dead_letter"
+            assert call_kwargs[1]["kwargs"]["original_task"] == "src.tasks.some_task"
+            assert call_kwargs[1]["kwargs"]["original_task_id"] == "task-123"
+
+    def test_handle_task_failure_ignores_non_max_retry_errors(self):
+        """Test failure handler ignores exceptions that are not MaxRetriesExceededError."""
+        from src.workers.celery_app import celery_app, handle_task_failure
+
+        mock_sender = MagicMock()
+        mock_sender.name = "src.tasks.some_task"
+
+        with patch.object(celery_app, "send_task") as mock_send:
+            handle_task_failure(
+                sender=mock_sender,
+                task_id="task-456",
+                exception=ValueError("Some error"),
+                args=[],
+                kwargs={},
+            )
+
+            # Should NOT route to DLQ for non-MaxRetriesExceededError
+            mock_send.assert_not_called()
+
+    def test_dead_letter_entry_returns_kwargs(self):
+        """Test dead_letter_entry task returns its kwargs for inspection."""
+        from src.workers.celery_app import dead_letter_entry
+
+        test_kwargs = {
+            "original_task": "src.tasks.some_task",
+            "original_task_id": "task-789",
+            "exception": "MaxRetriesExceededError",
+        }
+
+        # Call the underlying function (not via celery)
+        result = dead_letter_entry.run(**test_kwargs)
+
+        assert result == test_kwargs

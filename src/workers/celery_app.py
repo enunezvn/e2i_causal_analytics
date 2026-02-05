@@ -346,13 +346,22 @@ _dlq_logger = logging.getLogger("e2i.celery.dlq")
 
 
 @task_failure.connect
-def handle_task_failure(sender=None, task_id=None, exception=None, args=None,
-                        kwargs=None, traceback=None, einfo=None, **kw):
+def handle_task_failure(
+    sender=None,
+    task_id=None,
+    exception=None,
+    args=None,
+    kwargs=None,
+    traceback=None,
+    einfo=None,
+    **kw,
+):
     """Route permanently failed tasks to the dead letter queue."""
     if isinstance(exception, MaxRetriesExceededError):
         _dlq_logger.warning(
             "Task %s (%s) exceeded max retries — routing to dead_letter queue",
-            task_id, sender.name if sender else "unknown",
+            task_id,
+            sender.name if sender else "unknown",
         )
         celery_app.send_task(
             "src.tasks.dead_letter_entry",
@@ -380,9 +389,7 @@ def monitor_dead_letter_queue(self):
     try:
         with celery_app.connection_or_acquire() as conn:
             channel = conn.default_channel
-            _, queue_depth, _ = channel.queue_declare(
-                queue="dead_letter", passive=True
-            )
+            _, queue_depth, _ = channel.queue_declare(queue="dead_letter", passive=True)
             if queue_depth > 10:
                 _dlq_logger.warning(
                     "Dead letter queue depth is %d — review failed tasks", queue_depth

@@ -21,6 +21,13 @@ Author: E2I Causal Analytics Team
 Version: 4.9.0 (SLO Monitoring - G26)
 """
 
+from src.utils.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerMetrics,
+    CircuitState,
+)
+
 from .agent_cost_tracker import (
     # Pricing
     MODEL_PRICING,
@@ -77,10 +84,6 @@ from .data_quality import (
     get_default_alerter,
 )
 from .opik_connector import (
-    CircuitBreaker,
-    CircuitBreakerConfig,
-    CircuitBreakerMetrics,
-    CircuitState,
     LLMSpanContext,
     OpikConfig,
     OpikConnector,

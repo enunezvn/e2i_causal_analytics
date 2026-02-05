@@ -758,6 +758,7 @@ def get_falkordb_client():
     falkordb_url = os.environ.get("FALKORDB_URL")
     if falkordb_url:
         from urllib.parse import urlparse
+
         _parsed = urlparse(falkordb_url)
         host = _parsed.hostname or "localhost"
         port = _parsed.port or 6379

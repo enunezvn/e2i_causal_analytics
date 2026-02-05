@@ -79,6 +79,7 @@ if TESTING_MODE and _ENVIRONMENT == "production":
     warnings.warn(
         "E2I_TESTING_MODE is set but ENVIRONMENT=production -- testing mode DISABLED",
         RuntimeWarning,
+        stacklevel=2,
     )
     TESTING_MODE = False
 

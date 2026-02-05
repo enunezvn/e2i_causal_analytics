@@ -7,7 +7,7 @@ Tests the circuit breaker implementation for fault tolerance.
 import threading
 import time
 
-from src.mlops.opik_connector import (
+from src.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerMetrics,

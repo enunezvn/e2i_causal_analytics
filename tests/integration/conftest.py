@@ -10,6 +10,8 @@ Author: E2I Causal Analytics Team
 """
 
 import os
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,3 +60,28 @@ def auth_headers():
     to verify header handling logic.
     """
     return {"Authorization": "Bearer test-token"}
+
+
+# =============================================================================
+# SKILLS FIXTURES
+# =============================================================================
+
+# Use the same fixtures as unit tests for skill loading
+FIXTURES_SKILLS_DIR = Path(__file__).parent.parent / "unit" / "test_skills" / "fixtures" / "skills"
+
+
+@pytest.fixture(autouse=True)
+def _use_fixture_skills():
+    """Redirect SkillLoader to use test fixtures instead of .claude/skills/.
+
+    This is required because .claude/skills/ is gitignored and not available in CI.
+    The fixture skills directory contains all the skill files needed for testing.
+    """
+    with patch(
+        "src.skills.loader.SkillLoader.DEFAULT_BASE_PATH",
+        str(FIXTURES_SKILLS_DIR),
+    ):
+        # Reset the module-level cached instances so they pick up the patched path
+        with patch("src.skills.loader._default_loader", None):
+            with patch("src.skills.matcher._default_matcher", None):
+                yield

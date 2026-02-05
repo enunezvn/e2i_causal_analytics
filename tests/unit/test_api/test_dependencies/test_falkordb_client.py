@@ -8,15 +8,19 @@ Tests cover:
 - Missing package handling
 - Singleton pattern behavior
 - Node and edge counting
+- Tenacity retry decorator behavior
+- Circuit breaker on health checks
 
 Author: E2I Causal Analytics Team
-Version: 1.0.0
+Version: 2.0.0
 """
 
 import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from src.utils.circuit_breaker import CircuitState
 
 
 @pytest.mark.unit
@@ -25,11 +29,15 @@ class TestFalkorDBClient:
 
     @pytest.fixture(autouse=True)
     def reset_client(self):
-        """Reset global client before each test."""
+        """Reset global client and circuit breaker before each test."""
         import src.api.dependencies.falkordb_client as falkordb_module
+        from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 
         falkordb_module._falkordb_client = None
         falkordb_module._graph = None
+        falkordb_module._health_circuit_breaker = CircuitBreaker(
+            CircuitBreakerConfig(failure_threshold=3, reset_timeout_seconds=30.0)
+        )
         yield
         falkordb_module._falkordb_client = None
         falkordb_module._graph = None
@@ -44,15 +52,24 @@ class TestFalkorDBClient:
         mock_client.select_graph.return_value = mock_graph
         mock_client.list_graphs.return_value = ["e2i_causal", "other_graph"]
 
+        # Remove env vars so defaults apply (host=localhost, port=6379)
+        import os
+
+        env_clean = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT", "FALKORDB_GRAPH_NAME")
+        }
         with patch("falkordb.FalkorDB") as mock_falkordb:
-            mock_falkordb.return_value = mock_client
+            with patch.dict("os.environ", env_clean, clear=True):
+                mock_falkordb.return_value = mock_client
 
-            client = await init_falkordb()
+                client = await init_falkordb()
 
-            assert client is not None
-            mock_falkordb.assert_called_once_with(host="localhost", port=6381)
-            mock_client.select_graph.assert_called_once_with("e2i_causal")
-            mock_client.list_graphs.assert_called_once()
+                assert client is not None
+                mock_falkordb.assert_called_once_with(host="localhost", port=6379)
+                mock_client.select_graph.assert_called_once_with("e2i_causal")
+                mock_client.list_graphs.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_init_falkordb_uses_environment_config(self):
@@ -64,15 +81,23 @@ class TestFalkorDBClient:
         mock_client.select_graph.return_value = mock_graph
         mock_client.list_graphs.return_value = []
 
+        # Clear FALKORDB_URL so individual HOST/PORT vars are used
+        import os
+
+        env_clean = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT", "FALKORDB_GRAPH_NAME")
+        }
+        env_clean.update(
+            {
+                "FALKORDB_HOST": "custom-host",
+                "FALKORDB_PORT": "7000",
+                "FALKORDB_GRAPH_NAME": "custom_graph",
+            }
+        )
         with patch("falkordb.FalkorDB") as mock_falkordb:
-            with patch.dict(
-                "os.environ",
-                {
-                    "FALKORDB_HOST": "custom-host",
-                    "FALKORDB_PORT": "7000",
-                    "FALKORDB_GRAPH_NAME": "custom_graph",
-                },
-            ):
+            with patch.dict("os.environ", env_clean, clear=True):
                 mock_falkordb.return_value = mock_client
 
                 await init_falkordb()
@@ -416,3 +441,160 @@ class TestFalkorDBClient:
                     await init_falkordb()
 
                 assert any("Failed to connect to FalkorDB" in msg for msg in caplog.messages)
+
+    # =========================================================================
+    # Stale reference handling tests
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_init_falkordb_stale_reference_reconnects(self):
+        """Test init_falkordb reconnects when existing client list_graphs fails."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import init_falkordb
+
+        # Set a stale client that fails list_graphs
+        stale_client = MagicMock()
+        stale_client.list_graphs.side_effect = Exception("Connection lost")
+        falkordb_module._falkordb_client = stale_client
+
+        # New client that works
+        new_client = MagicMock()
+        new_graph = MagicMock()
+        new_client.select_graph.return_value = new_graph
+        new_client.list_graphs.return_value = ["e2i_causal"]
+
+        with patch("falkordb.FalkorDB") as mock_falkordb:
+            mock_falkordb.return_value = new_client
+
+            client = await init_falkordb()
+
+            assert client is new_client
+            mock_falkordb.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_init_falkordb_healthy_reference_reuses_client(self):
+        """Test init_falkordb reuses existing client when list_graphs succeeds."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import init_falkordb
+
+        existing_client = MagicMock()
+        existing_client.list_graphs.return_value = ["e2i_causal"]
+        falkordb_module._falkordb_client = existing_client
+
+        with patch("falkordb.FalkorDB") as mock_falkordb:
+            client = await init_falkordb()
+
+            assert client is existing_client
+            mock_falkordb.assert_not_called()
+
+    # =========================================================================
+    # Retry decorator tests
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_init_falkordb_retries_on_connection_error(self):
+        """Test init_falkordb retries on ConnectionError via tenacity."""
+        from src.api.dependencies.falkordb_client import init_falkordb
+
+        mock_client = MagicMock()
+        mock_graph = MagicMock()
+        mock_client.select_graph.return_value = mock_graph
+        mock_client.list_graphs.return_value = ["e2i_causal"]
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("Connection refused")
+            return mock_client
+
+        with patch("falkordb.FalkorDB") as mock_falkordb:
+            mock_falkordb.side_effect = side_effect
+
+            client = await init_falkordb()
+
+            assert client is mock_client
+            assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_init_falkordb_does_not_retry_on_import_error(self):
+        """Test init_falkordb does NOT retry on ImportError (returns None)."""
+        from src.api.dependencies.falkordb_client import init_falkordb
+
+        with patch("falkordb.FalkorDB") as mock_falkordb:
+            mock_falkordb.side_effect = ImportError("No module")
+
+            result = await init_falkordb()
+
+            assert result is None
+            assert mock_falkordb.call_count == 1
+
+    # =========================================================================
+    # Circuit breaker health check tests
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_health_check_circuit_open_returns_circuit_status(self):
+        """Test health check returns circuit_open when breaker is tripped."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_health_check
+
+        falkordb_module._health_circuit_breaker.force_open()
+
+        result = await falkordb_health_check()
+
+        assert result["status"] == "circuit_open"
+
+    @pytest.mark.asyncio
+    async def test_health_check_records_success_on_breaker(self):
+        """Test health check records success on circuit breaker."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_health_check
+
+        mock_client = MagicMock()
+        mock_graph = MagicMock()
+        mock_client.list_graphs.return_value = ["e2i_causal"]
+        mock_result = MagicMock()
+        mock_result.result_set = []
+        mock_graph.query.return_value = mock_result
+
+        with patch("src.api.dependencies.falkordb_client.get_falkordb") as mock_get_client:
+            with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+                mock_get_client.return_value = mock_client
+                mock_get_graph.return_value = mock_graph
+
+                await falkordb_health_check()
+
+                assert falkordb_module._health_circuit_breaker.metrics.successful_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_health_check_records_failure_on_breaker(self):
+        """Test health check records failure on circuit breaker."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_health_check
+
+        with patch("src.api.dependencies.falkordb_client.get_falkordb") as mock_get:
+            mock_get.side_effect = Exception("Connection failed")
+
+            await falkordb_health_check()
+
+            assert falkordb_module._health_circuit_breaker.metrics.failed_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_health_check_circuit_opens_after_repeated_failures(self):
+        """Test circuit breaker opens after repeated health check failures."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_health_check
+
+        with patch("src.api.dependencies.falkordb_client.get_falkordb") as mock_get:
+            mock_get.side_effect = Exception("Connection failed")
+
+            for _ in range(3):
+                await falkordb_health_check()
+
+            assert falkordb_module._health_circuit_breaker.state == CircuitState.OPEN
+
+            result = await falkordb_health_check()
+            assert result["status"] == "circuit_open"

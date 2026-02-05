@@ -10,7 +10,6 @@ G13 from observability audit remediation plan:
 Version: 1.0.0
 """
 
-import asyncio
 import functools
 import logging
 import time

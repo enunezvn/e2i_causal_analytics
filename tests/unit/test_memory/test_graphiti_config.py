@@ -238,7 +238,7 @@ class TestGraphitiConfig:
         assert config.model == "claude-3-5-sonnet-latest"
         assert config.graph_name == "e2i_semantic"
         assert config.falkordb_host == "localhost"
-        assert config.falkordb_port == 6381
+        assert config.falkordb_port == 6379
         assert config.episode_batch_size == 5
         assert config.min_confidence_for_extraction == 0.6
         assert config.cache_enabled is True
@@ -494,10 +494,10 @@ class TestModelConfiguration:
 class TestPortConfiguration:
     """Tests for FalkorDB port configuration."""
 
-    def test_default_port_is_6381(self):
+    def test_default_port_is_6379(self):
         """Test default port for e2i FalkorDB instance."""
         config = GraphitiConfig()
-        assert config.falkordb_port == 6381
+        assert config.falkordb_port == 6379
 
     def test_port_from_environment(self):
         """Test port can be overridden via environment."""

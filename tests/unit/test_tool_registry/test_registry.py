@@ -9,7 +9,7 @@ Tests cover:
 - Category filtering
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -597,9 +597,7 @@ class TestDatabaseSync:
 
         # Verify eq was called with category filter
         eq_calls = mock_builder.eq.call_args_list
-        category_filtered = any(
-            args == ("category", "causal") for args, _ in eq_calls
-        )
+        category_filtered = any(args == ("category", "causal") for args, _ in eq_calls)
         assert category_filtered
 
     @pytest.mark.asyncio

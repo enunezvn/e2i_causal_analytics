@@ -10,7 +10,7 @@ Version: 4.3.0
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
 
@@ -248,6 +248,7 @@ class CircuitBreaker:
         """Manually force the circuit to open state."""
         with self._lock:
             if self._state != CircuitState.OPEN:
+                self._last_failure_time = time.time()
                 self._transition_to(CircuitState.OPEN)
                 logger.warning("Circuit breaker manually forced to OPEN")
 

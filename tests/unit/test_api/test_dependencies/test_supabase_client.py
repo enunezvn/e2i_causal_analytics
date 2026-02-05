@@ -8,15 +8,19 @@ Tests cover:
 - Error handling
 - Singleton pattern behavior
 - Missing package handling
+- Tenacity retry decorator behavior
+- Circuit breaker on health checks
 
 Author: E2I Causal Analytics Team
-Version: 1.0.0
+Version: 2.0.0
 """
 
 import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from src.utils.circuit_breaker import CircuitState
 
 
 @pytest.mark.unit
@@ -25,10 +29,14 @@ class TestSupabaseClient:
 
     @pytest.fixture(autouse=True)
     def reset_client(self):
-        """Reset global client before each test."""
+        """Reset global client and circuit breaker before each test."""
         import src.api.dependencies.supabase_client as supabase_module
+        from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 
         supabase_module._supabase_client = None
+        supabase_module._health_circuit_breaker = CircuitBreaker(
+            CircuitBreakerConfig(failure_threshold=3, reset_timeout_seconds=30.0)
+        )
         yield
         supabase_module._supabase_client = None
 
@@ -394,3 +402,108 @@ class TestSupabaseClient:
                         mock_create.assert_called_once_with(
                             "https://test.supabase.co", "test-anon-key"
                         )
+
+    # =========================================================================
+    # Retry decorator tests
+    # =========================================================================
+
+    def test_init_supabase_retries_on_connection_error(self):
+        """Test init_supabase retries on ConnectionError via tenacity."""
+        from src.api.dependencies.supabase_client import init_supabase
+
+        mock_client = MagicMock()
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("Connection refused")
+            return mock_client
+
+        with patch("src.api.dependencies.supabase_client.SUPABASE_URL", "https://test.supabase.co"):
+            with patch("src.api.dependencies.supabase_client.SUPABASE_KEY", "test-key"):
+                with patch("src.api.dependencies.supabase_client.SUPABASE_SERVICE_KEY", ""):
+                    with patch("supabase.create_client") as mock_create:
+                        mock_create.side_effect = side_effect
+
+                        client = init_supabase()
+
+                        assert client is mock_client
+                        assert call_count == 3
+
+    def test_init_supabase_does_not_retry_on_import_error(self):
+        """Test init_supabase does NOT retry on ImportError (returns None)."""
+        from src.api.dependencies.supabase_client import init_supabase
+
+        with patch("src.api.dependencies.supabase_client.SUPABASE_URL", "https://test.supabase.co"):
+            with patch("src.api.dependencies.supabase_client.SUPABASE_KEY", "test-key"):
+                with patch("supabase.create_client") as mock_create:
+                    mock_create.side_effect = ImportError("No module")
+
+                    result = init_supabase()
+
+                    assert result is None
+                    assert mock_create.call_count == 1
+
+    # =========================================================================
+    # Circuit breaker health check tests
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_health_check_circuit_open_returns_circuit_status(self):
+        """Test health check returns circuit_open when breaker is tripped."""
+        import src.api.dependencies.supabase_client as supabase_module
+        from src.api.dependencies.supabase_client import supabase_health_check
+
+        supabase_module._health_circuit_breaker.force_open()
+
+        result = await supabase_health_check()
+
+        assert result["status"] == "circuit_open"
+
+    @pytest.mark.asyncio
+    async def test_health_check_records_success_on_breaker(self):
+        """Test health check records success on circuit breaker."""
+        import src.api.dependencies.supabase_client as supabase_module
+        from src.api.dependencies.supabase_client import supabase_health_check
+
+        mock_client = MagicMock()
+        mock_client.rpc.return_value.execute.return_value = None
+
+        with patch("src.api.dependencies.supabase_client.get_supabase") as mock_get:
+            mock_get.return_value = mock_client
+
+            await supabase_health_check()
+
+            assert supabase_module._health_circuit_breaker.metrics.successful_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_health_check_records_failure_on_breaker(self):
+        """Test health check records failure on circuit breaker."""
+        import src.api.dependencies.supabase_client as supabase_module
+        from src.api.dependencies.supabase_client import supabase_health_check
+
+        with patch("src.api.dependencies.supabase_client.get_supabase") as mock_get:
+            mock_get.side_effect = Exception("Connection failed")
+
+            await supabase_health_check()
+
+            assert supabase_module._health_circuit_breaker.metrics.failed_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_health_check_circuit_opens_after_repeated_failures(self):
+        """Test circuit breaker opens after repeated health check failures."""
+        import src.api.dependencies.supabase_client as supabase_module
+        from src.api.dependencies.supabase_client import supabase_health_check
+
+        with patch("src.api.dependencies.supabase_client.get_supabase") as mock_get:
+            mock_get.side_effect = Exception("Connection failed")
+
+            for _ in range(3):
+                await supabase_health_check()
+
+            assert supabase_module._health_circuit_breaker.state == CircuitState.OPEN
+
+            result = await supabase_health_check()
+            assert result["status"] == "circuit_open"

@@ -253,22 +253,27 @@ class TestRateLimitMiddleware:
         assert response == mock_response
 
     @pytest.mark.asyncio
-    async def test_exempt_copilotkit_prefix(self):
-        """Test CopilotKit paths are exempt from rate limiting."""
+    async def test_copilotkit_no_longer_exempt(self):
+        """Test CopilotKit paths are rate-limited (not exempt)."""
         app = MagicMock()
         middleware = RateLimitMiddleware(app, use_redis=False)
 
         mock_request = MagicMock(spec=Request)
         mock_request.url.path = "/api/copilotkit/chat"
         mock_request.method = "POST"
+        mock_request.client = MagicMock()
+        mock_request.client.host = "203.0.113.50"
+        mock_request.headers = {}
+        mock_request.state = MagicMock()
 
         mock_response = Response()
         call_next = AsyncMock(return_value=mock_response)
 
         response = await middleware.dispatch(mock_request, call_next)
 
+        # Should still call next (under limit) but with rate limit headers
         call_next.assert_called_once()
-        assert response == mock_response
+        assert "X-RateLimit-Limit" in response.headers
 
     @pytest.mark.asyncio
     async def test_rate_limit_headers_added(self):
@@ -580,3 +585,73 @@ class TestRateLimitMiddleware:
 
         assert response == mock_response
         assert call_next.call_count == 2
+
+    def test_exempt_prefixes_is_empty(self):
+        """Test EXEMPT_PREFIXES is empty (CopilotKit removed)."""
+        assert RateLimitMiddleware.EXEMPT_PREFIXES == ()
+
+    def test_get_limit_for_copilotkit_chat(self):
+        """Test CopilotKit chat endpoint gets specific rate limit (30/hour)."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False)
+
+        limit, window = middleware._get_limit_for_path("/api/copilotkit/chat", "POST")
+
+        assert limit == 30
+        assert window == 3600  # 1 hour
+
+    def test_get_limit_for_copilotkit_status(self):
+        """Test CopilotKit status endpoint gets specific rate limit (100/min)."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False)
+
+        limit, window = middleware._get_limit_for_path("/api/copilotkit/status", "GET")
+
+        assert limit == 100
+        assert window == 60
+
+    def test_get_limit_for_copilotkit_info(self):
+        """Test CopilotKit info endpoint gets status rate limit (100/min)."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False)
+
+        limit, window = middleware._get_limit_for_path("/api/copilotkit/info", "GET")
+
+        assert limit == 100
+        assert window == 60
+
+    def test_get_limit_for_copilotkit_other(self):
+        """Test CopilotKit other endpoints get default CopilotKit limit (60/min)."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False)
+
+        limit, window = middleware._get_limit_for_path("/api/copilotkit/analytics", "POST")
+
+        assert limit == 60
+        assert window == 60
+
+    @pytest.mark.asyncio
+    async def test_copilotkit_chat_rate_limit_enforced(self):
+        """Test CopilotKit chat rate limit is actually enforced at 30 req/hour."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.url.path = "/api/copilotkit/chat"
+        mock_request.method = "POST"
+        mock_request.client = MagicMock()
+        mock_request.client.host = "203.0.113.50"
+        mock_request.headers = {}
+        mock_request.state = MagicMock()
+
+        mock_response = Response()
+        call_next = AsyncMock(return_value=mock_response)
+
+        # Make 30 requests (the limit)
+        for _ in range(30):
+            response = await middleware.dispatch(mock_request, call_next)
+            assert response.status_code != 429
+
+        # 31st request should be rate limited
+        response = await middleware.dispatch(mock_request, call_next)
+        assert response.status_code == 429
