@@ -89,9 +89,8 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
 PUBLIC_PATH_PATTERNS: List[Tuple[str, str]] = [
     # KPI metadata by ID is public
     ("GET", r"^/api/kpis/[^/]+/metadata$"),
-    # CopilotKit - ONLY status endpoint is public (see PUBLIC_PATHS above)
-    # All other CopilotKit endpoints (chat, feedback, analytics) require authentication
-    # The frontend includes Authorization header via axios interceptors
+    # CopilotKit - all endpoints are public (rate-limited instead of auth-gated)
+    # Rate limiting is enforced by RateLimitMiddleware with per-endpoint limits
 ]
 
 

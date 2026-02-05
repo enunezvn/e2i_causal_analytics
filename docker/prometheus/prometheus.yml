@@ -8,6 +8,11 @@ global:
 rule_files:
   - 'alerts.yml'
 
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
 scrape_configs:
   # E2I API metrics (container hostname)
   - job_name: 'e2i-api'

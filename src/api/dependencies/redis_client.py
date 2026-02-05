@@ -7,7 +7,7 @@ Provides async Redis connection pool management for:
 - Pub/Sub messaging
 
 Author: E2I Causal Analytics Team
-Version: 4.1.0
+Version: 4.2.0
 """
 
 import logging
@@ -16,6 +16,15 @@ from typing import Optional
 
 import redis.asyncio as aioredis
 from redis.asyncio import Redis
+from tenacity import (
+    before_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +36,19 @@ REDIS_MAX_CONNECTIONS = int(os.environ.get("REDIS_MAX_CONNECTIONS", "10"))
 # Global client reference
 _redis_client: Optional[Redis] = None
 
+# Circuit breaker for health checks
+_health_circuit_breaker = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=3, reset_timeout_seconds=30.0)
+)
 
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
+    before=before_log(logger, logging.WARNING),
+    reraise=True,
+)
 async def init_redis() -> Redis:
     """
     Initialize Redis connection pool.
@@ -36,12 +57,17 @@ async def init_redis() -> Redis:
         Redis client instance
 
     Raises:
-        ConnectionError: If Redis connection fails
+        ConnectionError: If Redis connection fails after retries
     """
     global _redis_client
 
+    # Reset stale reference so retries don't short-circuit
     if _redis_client is not None:
-        return _redis_client
+        try:
+            await _redis_client.ping()
+            return _redis_client
+        except Exception:
+            _redis_client = None
 
     logger.info(f"Initializing Redis connection to {REDIS_URL}")
 
@@ -60,6 +86,7 @@ async def init_redis() -> Redis:
         return _redis_client
 
     except Exception as e:
+        _redis_client = None
         logger.error(f"Failed to connect to Redis: {e}")
         raise ConnectionError(f"Redis connection failed: {e}") from e
 
@@ -102,6 +129,9 @@ async def redis_health_check() -> dict:
     """
     import time
 
+    if not _health_circuit_breaker.allow_request():
+        return {"status": "circuit_open"}
+
     try:
         client = await get_redis()
         start = time.time()
@@ -111,6 +141,8 @@ async def redis_health_check() -> dict:
         # Get info for additional metrics
         info = await client.info("clients")
 
+        _health_circuit_breaker.record_success()
+
         return {
             "status": "healthy",
             "latency_ms": round(latency_ms, 2),
@@ -118,6 +150,7 @@ async def redis_health_check() -> dict:
         }
 
     except Exception as e:
+        _health_circuit_breaker.record_failure()
         return {
             "status": "unhealthy",
             "error": str(e),

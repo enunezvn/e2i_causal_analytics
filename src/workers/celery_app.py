@@ -32,7 +32,7 @@ celery_app.conf.update(
     broker_connection_max_retries=10,
     # Result backend
     result_backend=REDIS_BACKEND,
-    result_expires=3600,  # 1 hour
+    result_expires=86400,  # 24 hours
     result_extended=True,
     # Task settings
     task_serializer="json",
@@ -78,6 +78,8 @@ celery_app.conf.task_queues = (
     Queue("causal", exchange=default_exchange, routing_key="causal"),
     Queue("ml", exchange=default_exchange, routing_key="ml"),
     Queue("twins", exchange=default_exchange, routing_key="twins"),
+    # Dead letter queue for failed tasks
+    Queue("dead_letter", exchange=default_exchange, routing_key="dead_letter"),
 )
 
 # Default queue
@@ -329,3 +331,71 @@ def get_worker_info():
             "heavy": ["shap", "causal", "ml", "twins"],
         }.get(worker_type, []),
     }
+
+
+# =============================================================================
+# DEAD LETTER QUEUE
+# =============================================================================
+
+import logging
+
+from celery.exceptions import MaxRetriesExceededError
+from celery.signals import task_failure
+
+_dlq_logger = logging.getLogger("e2i.celery.dlq")
+
+
+@task_failure.connect
+def handle_task_failure(sender=None, task_id=None, exception=None, args=None,
+                        kwargs=None, traceback=None, einfo=None, **kw):
+    """Route permanently failed tasks to the dead letter queue."""
+    if isinstance(exception, MaxRetriesExceededError):
+        _dlq_logger.warning(
+            "Task %s (%s) exceeded max retries — routing to dead_letter queue",
+            task_id, sender.name if sender else "unknown",
+        )
+        celery_app.send_task(
+            "src.tasks.dead_letter_entry",
+            queue="dead_letter",
+            kwargs={
+                "original_task": sender.name if sender else "unknown",
+                "original_task_id": task_id,
+                "original_args": str(args),
+                "original_kwargs": str(kwargs),
+                "exception": str(exception),
+            },
+        )
+
+
+@celery_app.task(bind=True, name="src.tasks.dead_letter_entry")
+def dead_letter_entry(self, **kwargs):
+    """Placeholder task that sits in the dead_letter queue for inspection."""
+    _dlq_logger.info("Dead letter entry: %s", kwargs)
+    return kwargs
+
+
+@celery_app.task(bind=True, name="src.tasks.monitor_dead_letter_queue")
+def monitor_dead_letter_queue(self):
+    """Monitor dead letter queue depth and log warnings."""
+    try:
+        with celery_app.connection_or_acquire() as conn:
+            channel = conn.default_channel
+            _, queue_depth, _ = channel.queue_declare(
+                queue="dead_letter", passive=True
+            )
+            if queue_depth > 10:
+                _dlq_logger.warning(
+                    "Dead letter queue depth is %d — review failed tasks", queue_depth
+                )
+            return {"dead_letter_depth": queue_depth}
+    except Exception as e:
+        _dlq_logger.debug("Could not check DLQ depth: %s", e)
+        return {"error": str(e)}
+
+
+# Add DLQ monitor to beat schedule
+celery_app.conf.beat_schedule["monitor-dead-letter-queue"] = {
+    "task": "src.tasks.monitor_dead_letter_queue",
+    "schedule": 1800.0,  # 30 minutes
+    "options": {"queue": "quick"},
+}

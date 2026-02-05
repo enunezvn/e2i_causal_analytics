@@ -91,6 +91,9 @@ data/cache/
 *.log
 logs/
 
+# Authentication files
+*.htpasswd
+
 # Database
 *.db
 *.sqlite

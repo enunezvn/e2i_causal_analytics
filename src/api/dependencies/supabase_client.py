@@ -7,12 +7,22 @@ Provides database connection for:
 - Realtime subscriptions
 
 Author: E2I Causal Analytics Team
-Version: 4.1.0
+Version: 4.2.0
 """
 
 import logging
 import os
 from typing import Any, Dict, Optional
+
+from tenacity import (
+    before_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +34,19 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 # Global client reference
 _supabase_client: Optional[Any] = None
 
+# Circuit breaker for health checks
+_health_circuit_breaker = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=3, reset_timeout_seconds=30.0)
+)
 
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
+    before=before_log(logger, logging.WARNING),
+    reraise=True,
+)
 def init_supabase() -> Optional[Any]:
     """
     Initialize Supabase client.
@@ -63,6 +85,7 @@ def init_supabase() -> Optional[Any]:
         return None
 
     except Exception as e:
+        _supabase_client = None
         logger.error(f"Failed to connect to Supabase: {e}")
         raise ConnectionError(f"Supabase connection failed: {e}") from e
 
@@ -105,6 +128,9 @@ async def supabase_health_check() -> Dict[str, Any]:
     """
     import time
 
+    if not _health_circuit_breaker.allow_request():
+        return {"status": "circuit_open"}
+
     try:
         client = get_supabase()
 
@@ -131,6 +157,8 @@ async def supabase_health_check() -> Dict[str, Any]:
 
         latency_ms = (time.time() - start) * 1000
 
+        _health_circuit_breaker.record_success()
+
         return {
             "status": "healthy",
             "latency_ms": round(latency_ms, 2),
@@ -138,6 +166,7 @@ async def supabase_health_check() -> Dict[str, Any]:
         }
 
     except Exception as e:
+        _health_circuit_breaker.record_failure()
         return {
             "status": "unhealthy",
             "error": str(e),

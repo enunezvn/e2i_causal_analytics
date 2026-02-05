@@ -8,13 +8,23 @@ Provides graph database connection for:
 Note: FalkorDB uses Redis protocol on a different port.
 
 Author: E2I Causal Analytics Team
-Version: 4.1.0
+Version: 4.2.0
 """
 
 import logging
 import os
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+
+from tenacity import (
+    before_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +49,19 @@ FALKORDB_GRAPH_NAME = os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")
 _falkordb_client: Optional[Any] = None
 _graph: Optional[Any] = None
 
+# Circuit breaker for health checks
+_health_circuit_breaker = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=3, reset_timeout_seconds=30.0)
+)
 
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
+    before=before_log(logger, logging.WARNING),
+    reraise=True,
+)
 async def init_falkordb() -> Any:
     """
     Initialize FalkorDB connection.
@@ -48,12 +70,17 @@ async def init_falkordb() -> Any:
         FalkorDB client instance
 
     Raises:
-        ConnectionError: If FalkorDB connection fails
+        ConnectionError: If FalkorDB connection fails after retries
     """
     global _falkordb_client, _graph
 
     if _falkordb_client is not None:
-        return _falkordb_client
+        try:
+            _falkordb_client.list_graphs()
+            return _falkordb_client
+        except Exception:
+            _falkordb_client = None
+            _graph = None
 
     # Read env vars at call time to support runtime configuration
     host, port = _parse_falkordb_config()
@@ -78,6 +105,8 @@ async def init_falkordb() -> Any:
         return None
 
     except Exception as e:
+        _falkordb_client = None
+        _graph = None
         logger.error(f"Failed to connect to FalkorDB: {e}")
         raise ConnectionError(f"FalkorDB connection failed: {e}") from e
 
@@ -139,6 +168,9 @@ async def falkordb_health_check() -> Dict[str, Any]:
     """
     import time
 
+    if not _health_circuit_breaker.allow_request():
+        return {"status": "circuit_open"}
+
     try:
         client = await get_falkordb()
 
@@ -168,6 +200,8 @@ async def falkordb_health_check() -> Dict[str, Any]:
             except Exception:
                 pass  # Graph may be empty
 
+        _health_circuit_breaker.record_success()
+
         return {
             "status": "healthy",
             "latency_ms": round(latency_ms, 2),
@@ -178,6 +212,7 @@ async def falkordb_health_check() -> Dict[str, Any]:
         }
 
     except Exception as e:
+        _health_circuit_breaker.record_failure()
         return {
             "status": "unhealthy",
             "error": str(e),

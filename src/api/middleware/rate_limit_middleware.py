@@ -130,6 +130,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "auth": (20, 60),  # 20 requests per minute for auth endpoints
         "calculate": (30, 60),  # 30 requests per minute for calculations
         "batch": (10, 60),  # 10 requests per minute for batch operations
+        "copilotkit_chat": (30, 3600),  # 30 req/hour for chat endpoints
+        "copilotkit_status": (100, 60),  # 100 req/min for status/info
+        "copilotkit_other": (60, 60),  # 60 req/min for analytics/feedback
     }
 
     # Paths that are exempt from rate limiting
@@ -142,9 +145,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     }
 
     # Path prefixes that are exempt from rate limiting
-    EXEMPT_PREFIXES = (
-        "/api/copilotkit",  # CopilotKit AI assistant - needs frequent requests
-    )
+    EXEMPT_PREFIXES = ()
 
     # IPs exempt from rate limiting (internal/self traffic)
     EXEMPT_IPS = {
@@ -236,6 +237,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return self.DEFAULT_LIMITS["batch"]
         if "/calculate" in path or method == "POST":
             return self.DEFAULT_LIMITS["calculate"]
+
+        if "/copilotkit" in path:
+            if "/chat" in path:
+                return self.DEFAULT_LIMITS["copilotkit_chat"]
+            elif "/status" in path or "/info" in path:
+                return self.DEFAULT_LIMITS["copilotkit_status"]
+            return self.DEFAULT_LIMITS["copilotkit_other"]
 
         return self.DEFAULT_LIMITS["default"]
 

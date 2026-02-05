@@ -488,6 +488,10 @@ services:
       - mlops_network
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=50M,mode=1770
+      - /app/tmp:size=100M,mode=1770
     deploy:
       resources:
         limits:
@@ -650,7 +654,7 @@ services:
         reservations:
           cpus: '8'
           memory: 16G
-      replicas: 0  # Start with 0, scale on-demand (0-4)
+      replicas: 1  # Start with 1, scale on-demand (1-4)
     depends_on:
       redis:
         condition: service_healthy
@@ -692,6 +696,9 @@ services:
       - e2i_network
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=50M,mode=1770
     deploy:
       resources:
         limits:
@@ -733,6 +740,10 @@ services:
       - e2i_network
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=10M,mode=0770
+      - /var/run:size=5M,mode=0770
     deploy:
       resources:
         limits:
@@ -780,6 +791,9 @@ services:
       - mlops_network
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=10M,mode=1770
     deploy:
       resources:
         limits:
@@ -791,6 +805,41 @@ services:
     labels:
       - "e2i.service=observability"
       - "e2i.component=prometheus"
+
+  # Alertmanager - Alert Routing & Notification
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: e2i_alertmanager
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - e2i_network
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    labels:
+      - "e2i.service=observability"
+      - "e2i.component=alertmanager"
 
   # Node Exporter - Host System Metrics
   node-exporter:
@@ -822,6 +871,30 @@ services:
     labels:
       - "e2i.service=observability"
       - "e2i.component=node-exporter"
+
+  # Postgres Exporter - Supabase Database Metrics
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    container_name: e2i_postgres_exporter
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DATA_SOURCE_NAME: ${SUPABASE_DB_URL:?SUPABASE_DB_URL must be set for postgres-exporter}
+    networks:
+      - e2i_network
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    labels:
+      - "e2i.service=observability"
+      - "e2i.component=postgres-exporter"
 
   # Loki - Log Aggregation
   loki:
@@ -913,6 +986,9 @@ services:
       - mlops_network
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=10M,mode=1770
     depends_on:
       prometheus:
         condition: service_healthy

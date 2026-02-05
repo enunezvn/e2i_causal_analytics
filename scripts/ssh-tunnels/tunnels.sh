@@ -19,6 +19,7 @@ start_tunnels() {
   echo "  FalkorDB Browser: http://localhost:3030"
   echo "  Supabase Studio:  http://localhost:3001"
   echo "  Grafana:          http://localhost:3100"
+  echo "  Alertmanager:     http://localhost:9093"
   echo ""
   echo "Press Ctrl+C to stop."
   echo ""
@@ -32,6 +33,7 @@ start_tunnels() {
     -L 3030:localhost:3030 \
     -L 3001:localhost:3001 \
     -L 3100:localhost:3100 \
+    -L 9093:localhost:9093 \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \
