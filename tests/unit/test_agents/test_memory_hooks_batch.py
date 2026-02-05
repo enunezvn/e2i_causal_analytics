@@ -114,6 +114,7 @@ def mock_semantic_memory():
     mock = MagicMock()
     mock.query = MagicMock(return_value=[])
     mock.add_entity = MagicMock(return_value=True)
+    mock.add_e2i_entity = MagicMock(return_value=True)
     mock.add_relationship = MagicMock(return_value=True)
     mock.get_graph_stats = MagicMock(return_value={"nodes": 10, "edges": 20})
     mock.find_causal_paths_for_kpi = MagicMock(return_value=[])
@@ -755,13 +756,13 @@ class TestCausalImpactMemoryHooks:
             "small",
         )
         assert result is True
-        assert mock_semantic_memory.add_entity.call_count == 2
+        assert mock_semantic_memory.add_e2i_entity.call_count == 2
         mock_semantic_memory.add_relationship.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_store_causal_path_error(self, mock_semantic_memory):
         hooks = ci_hooks.CausalImpactMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("error"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("error"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_causal_path(
             "t",
@@ -1358,13 +1359,13 @@ class TestCohortConstructorMemoryHooks:
             "cohort_abc",
         )
         assert result is True
-        assert mock_semantic_memory.add_entity.call_count >= 2
+        assert mock_semantic_memory.add_e2i_entity.call_count >= 2
         assert mock_semantic_memory.add_relationship.call_count >= 2
 
     @pytest.mark.asyncio
     async def test_store_eligibility_rule_error(self, mock_semantic_memory):
         hooks = cc_hooks.CohortConstructorMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("error"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("error"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_eligibility_rule(
             "rule",
@@ -1500,14 +1501,14 @@ class TestMLFoundationMemoryHooks:
         # Should create LeakageIncident entity when leakage_detected
         entity_calls = [
             c[1].get("entity_type", c[0][0] if c[0] else "")
-            for c in mock_semantic_memory.add_entity.call_args_list
+            for c in mock_semantic_memory.add_e2i_entity.call_args_list
         ]
         assert "LeakageIncident" in entity_calls
 
     @pytest.mark.asyncio
     async def test_data_preparer_store_quality_pattern_error(self, mock_semantic_memory):
         hooks = dp_hooks.DataPreparerMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_data_quality_pattern(
             "exp1",
@@ -1591,12 +1592,12 @@ class TestMLFoundationMemoryHooks:
         )
         assert result is True
         # Should create Experiment, ProblemType, Variable, ScopeSpec nodes
-        assert mock_semantic_memory.add_entity.call_count >= 4
+        assert mock_semantic_memory.add_e2i_entity.call_count >= 4
 
     @pytest.mark.asyncio
     async def test_scope_definer_store_experiment_pattern_error(self, mock_semantic_memory):
         hooks = sd_hooks.ScopeDefinerMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_experiment_pattern(
             "exp1",
@@ -1674,12 +1675,12 @@ class TestMLFoundationMemoryHooks:
         )
         assert result is True
         # Should create HealthSnapshot + Anomaly + AgentPattern
-        assert mock_semantic_memory.add_entity.call_count >= 3
+        assert mock_semantic_memory.add_e2i_entity.call_count >= 3
 
     @pytest.mark.asyncio
     async def test_observability_store_health_snapshot_error(self, mock_semantic_memory):
         hooks = oc_hooks.ObservabilityConnectorMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_health_snapshot(
             "1h",
@@ -1785,7 +1786,7 @@ class TestMLFoundationMemoryHooks:
     @pytest.mark.asyncio
     async def test_feature_analyzer_store_patterns_error(self, mock_semantic_memory):
         hooks = fa_hooks.FeatureAnalyzerMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_feature_importance_patterns(
             "exp1",
@@ -1848,14 +1849,14 @@ class TestMLFoundationMemoryHooks:
         # Should create Rollback entity when rollback_occurred
         entity_calls = [
             c[1].get("entity_type", c[0][0] if c[0] else "")
-            for c in mock_semantic_memory.add_entity.call_args_list
+            for c in mock_semantic_memory.add_e2i_entity.call_args_list
         ]
         assert "Rollback" in entity_calls
 
     @pytest.mark.asyncio
     async def test_model_deployer_store_pattern_error(self, mock_semantic_memory):
         hooks = md_hooks.ModelDeployerMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_deployment_pattern(
             "exp1",
@@ -1921,7 +1922,7 @@ class TestMLFoundationMemoryHooks:
     @pytest.mark.asyncio
     async def test_model_selector_store_algorithm_pattern_error(self, mock_semantic_memory):
         hooks = ms_hooks.ModelSelectorMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_algorithm_pattern(
             "exp1",
@@ -1986,7 +1987,7 @@ class TestMLFoundationMemoryHooks:
         # Should create Hyperparameters when success_criteria_met
         entity_calls = [
             c[1].get("entity_type", c[0][0] if c[0] else "")
-            for c in mock_semantic_memory.add_entity.call_args_list
+            for c in mock_semantic_memory.add_e2i_entity.call_args_list
         ]
         assert "Hyperparameters" in entity_calls
 
@@ -2006,14 +2007,14 @@ class TestMLFoundationMemoryHooks:
         # Should NOT create Hyperparameters when success_criteria_met=False
         entity_calls = [
             c[1].get("entity_type", c[0][0] if c[0] else "")
-            for c in mock_semantic_memory.add_entity.call_args_list
+            for c in mock_semantic_memory.add_e2i_entity.call_args_list
         ]
         assert "Hyperparameters" not in entity_calls
 
     @pytest.mark.asyncio
     async def test_model_trainer_store_model_pattern_error(self, mock_semantic_memory):
         hooks = mt_hooks.ModelTrainerMemoryHooks()
-        mock_semantic_memory.add_entity = MagicMock(side_effect=Exception("err"))
+        mock_semantic_memory.add_e2i_entity = MagicMock(side_effect=Exception("err"))
         hooks._semantic_memory = mock_semantic_memory
         result = await hooks.store_model_pattern(
             "exp1",
