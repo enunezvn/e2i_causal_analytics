@@ -14,12 +14,25 @@ Version: 4.1.0
 import logging
 import os
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_falkordb_config() -> tuple[str, int]:
+    """Derive host/port from FALKORDB_URL if set, else fall back to FALKORDB_HOST/PORT."""
+    url = os.environ.get("FALKORDB_URL")
+    if url:
+        parsed = urlparse(url)
+        return parsed.hostname or "localhost", parsed.port or 6379
+    return (
+        os.environ.get("FALKORDB_HOST", "localhost"),
+        int(os.environ.get("FALKORDB_PORT", "6379")),
+    )
+
+
 # Configuration from environment
-FALKORDB_HOST = os.environ.get("FALKORDB_HOST", "localhost")
-FALKORDB_PORT = int(os.environ.get("FALKORDB_PORT", "6381"))
+FALKORDB_HOST, FALKORDB_PORT = _parse_falkordb_config()
 FALKORDB_GRAPH_NAME = os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")
 
 # Global client reference
@@ -43,8 +56,7 @@ async def init_falkordb() -> Any:
         return _falkordb_client
 
     # Read env vars at call time to support runtime configuration
-    host = os.environ.get("FALKORDB_HOST", "localhost")
-    port = int(os.environ.get("FALKORDB_PORT", "6381"))
+    host, port = _parse_falkordb_config()
     graph_name = os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")
 
     logger.info(f"Initializing FalkorDB connection to {host}:{port}")

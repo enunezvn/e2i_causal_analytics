@@ -754,8 +754,16 @@ def get_falkordb_client():
             "FalkorDB", "falkordb package is not installed. Run: pip install falkordb"
         ) from e
 
-    host = os.environ.get("FALKORDB_HOST", "localhost")
-    port = int(os.environ.get("FALKORDB_PORT", "6381"))  # 6381 external (e2i), 6379 internal
+    # Parse FALKORDB_URL (set by docker-compose) or fall back to FALKORDB_HOST/PORT
+    falkordb_url = os.environ.get("FALKORDB_URL")
+    if falkordb_url:
+        from urllib.parse import urlparse
+        _parsed = urlparse(falkordb_url)
+        host = _parsed.hostname or "localhost"
+        port = _parsed.port or 6379
+    else:
+        host = os.environ.get("FALKORDB_HOST", "localhost")
+        port = int(os.environ.get("FALKORDB_PORT", "6379"))
 
     logger.info(f"Creating FalkorDB client for: {host}:{port}")
 
