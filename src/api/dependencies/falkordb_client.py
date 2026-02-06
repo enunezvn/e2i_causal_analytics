@@ -29,20 +29,21 @@ from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 logger = logging.getLogger(__name__)
 
 
-def _parse_falkordb_config() -> tuple[str, int]:
-    """Derive host/port from FALKORDB_URL if set, else fall back to FALKORDB_HOST/PORT."""
+def _parse_falkordb_config() -> tuple[str, int, str | None]:
+    """Derive host/port/password from FALKORDB_URL if set, else fall back to individual env vars."""
     url = os.environ.get("FALKORDB_URL")
     if url:
         parsed = urlparse(url)
-        return parsed.hostname or "localhost", parsed.port or 6379
+        return parsed.hostname or "localhost", parsed.port or 6379, parsed.password
     return (
         os.environ.get("FALKORDB_HOST", "localhost"),
         int(os.environ.get("FALKORDB_PORT", "6379")),
+        os.environ.get("FALKORDB_PASSWORD"),
     )
 
 
 # Configuration from environment
-FALKORDB_HOST, FALKORDB_PORT = _parse_falkordb_config()
+FALKORDB_HOST, FALKORDB_PORT, FALKORDB_PASSWORD = _parse_falkordb_config()
 FALKORDB_GRAPH_NAME = os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")
 
 # Global client reference
@@ -83,7 +84,7 @@ async def init_falkordb() -> Any:
             _graph = None
 
     # Read env vars at call time to support runtime configuration
-    host, port = _parse_falkordb_config()
+    host, port, password = _parse_falkordb_config()
     graph_name = os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")
 
     logger.info(f"Initializing FalkorDB connection to {host}:{port}")
@@ -91,7 +92,7 @@ async def init_falkordb() -> Any:
     try:
         from falkordb import FalkorDB
 
-        _falkordb_client = FalkorDB(host=host, port=port)
+        _falkordb_client = FalkorDB(host=host, port=port, password=password)
         _graph = _falkordb_client.select_graph(graph_name)
 
         # Verify connection by listing graphs

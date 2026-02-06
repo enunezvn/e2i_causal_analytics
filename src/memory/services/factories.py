@@ -762,14 +762,16 @@ def get_falkordb_client():
         _parsed = urlparse(falkordb_url)
         host = _parsed.hostname or "localhost"
         port = _parsed.port or 6379
+        password = _parsed.password
     else:
         host = os.environ.get("FALKORDB_HOST", "localhost")
         port = int(os.environ.get("FALKORDB_PORT", "6379"))
+        password = os.environ.get("FALKORDB_PASSWORD")
 
     logger.info(f"Creating FalkorDB client for: {host}:{port}")
 
     try:
-        _falkordb_client = FalkorDB(host=host, port=port)
+        _falkordb_client = FalkorDB(host=host, port=port, password=password)
         return _falkordb_client
     except Exception as e:
         raise ServiceConnectionError("FalkorDB", f"Failed to create client: {e}", e) from e

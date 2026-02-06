@@ -298,8 +298,9 @@ def get_falkordb_client():
     port = int(
         os.environ.get("FALKORDB_PORT", "6379")
     )  # 6379 internal (docker), 6381 external (host)
+    password = os.environ.get("FALKORDB_PASSWORD")
 
-    return FalkorDB(host=host, port=port)
+    return FalkorDB(host=host, port=port, password=password)
 
 
 # ============================================================================
