@@ -585,7 +585,7 @@ class TestLiveModelServing:
         """Test Prometheus metrics are collected."""
         import httpx
 
-        prometheus_url = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+        prometheus_url = os.getenv("PROMETHEUS_URL", "http://localhost:9091")
 
         async with httpx.AsyncClient() as http_client:
             # Query Prometheus for BentoML metrics

@@ -142,7 +142,7 @@ monitoring:
   # Metrics collection
   metrics:
     enabled: true
-    prometheus_port: 9090  # Expose metrics for Prometheus
+    prometheus_port: 9091  # Expose metrics for Prometheus (host port; 9090 taken by Opik MinIO)
     export_to_file: false
     file_path: /var/log/autoscaler_metrics.json
 
