@@ -374,6 +374,7 @@ services:
     ports:
       - "6566:6566"
     volumes:
+      - ../feature_repo:/feast  # Feature store config + definitions
       - feature_cache:/feast/data  # Shared: feature materialization
     environment:
       - FEAST_OFFLINE_STORE_TYPE=file
@@ -657,7 +658,7 @@ services:
         reservations:
           cpus: '8'
           memory: 16G
-      replicas: 1  # Start with 1, scale on-demand (1-4)
+      replicas: 0  # Start with 0, scale on-demand (0-4)
     depends_on:
       redis:
         condition: service_healthy
@@ -773,7 +774,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:9091:9090"  # 9090 taken by Opik MinIO
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro

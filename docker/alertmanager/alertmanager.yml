@@ -11,7 +11,8 @@ route:
 receivers:
   - name: 'webhook'
     webhook_configs:
-      - send_resolved: true
+      - url: 'http://api:8000/api/v1/webhooks/alertmanager'
+        send_resolved: true
         max_alerts: 10
 
 inhibit_rules:

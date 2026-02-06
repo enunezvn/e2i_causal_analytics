@@ -9,20 +9,19 @@ registry: data/registry.db
 # Used for historical feature retrieval and training data generation
 offline_store:
   type: postgres
-  host: ${SUPABASE_DB_HOST:-localhost}
-  port: ${SUPABASE_DB_PORT:-5432}
-  database: ${SUPABASE_DB_NAME:-postgres}
-  user: ${SUPABASE_DB_USER:-postgres}
-  password: ${SUPABASE_DB_PASSWORD:-}
-  sslmode: ${SUPABASE_DB_SSLMODE:-prefer}
-  # Use public schema for feature tables
+  host: supabase-db
+  port: 5432
+  database: postgres
+  user: postgres
+  password: ""
+  sslmode: prefer
   db_schema: public
 
 # Online store: Redis
 # Used for low-latency feature serving during inference
 online_store:
   type: redis
-  connection_string: ${REDIS_URL:-redis://localhost:6382}
+  connection_string: redis://redis:6379
 
 # Entity key serialization
 entity_key_serialization_version: 3
