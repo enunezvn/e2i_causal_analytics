@@ -52,10 +52,12 @@ check_http() {
 echo "--- HTTP Services ---"
 check_http "http://localhost:8000/health" "API (FastAPI)" || true
 check_http "http://localhost:5000/health" "MLflow" || true
+
 check_http "http://localhost:3000/healthz" "BentoML" 10 || true
 check_http "http://localhost:6566/health" "Feast" || true
-check_http "http://localhost:5173/health" "Opik (UI)" 5 || \
-  check_http "http://localhost:5174/health" "Opik (API)" 5 || true
+check_http "http://localhost:5173/health" "Opik (UI)" 5 || true
+check_http "http://localhost:8084/health-check" "Opik (Backend)" 10 || true
+
 check_http "http://localhost:3002" "Frontend (Vite Dev)" || true
 
 # =============================================================================

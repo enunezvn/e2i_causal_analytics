@@ -39,9 +39,9 @@ scrape_configs:
       - targets: ['postgres-exporter:9187']
     scrape_interval: 30s
 
-  # BentoML model serving (disabled - not currently deployed)
-  # - job_name: 'bentoml'
-  #   static_configs:
-  #     - targets: ['bentoml:3000']
-  #   metrics_path: '/metrics'
-  #   scrape_interval: 30s
+  # BentoML model serving
+  - job_name: 'bentoml'
+    static_configs:
+      - targets: ['bentoml:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s

@@ -11,7 +11,7 @@
 #   make down      - Stop all containers
 # =============================================================================
 
-.PHONY: help dev prod down logs shell test clean build push
+.PHONY: help dev prod down logs shell test clean build push up-opik down-opik opik-logs up-full
 
 # Default target
 .DEFAULT_GOAL := help
@@ -21,6 +21,7 @@
 # -----------------------------------------------------------------------------
 COMPOSE := docker compose
 COMPOSE_DEV := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
+COMPOSE_FULL := $(COMPOSE_DEV) -f docker-compose.opik.yml
 PROJECT_NAME := e2i-causal-analytics
 
 # Colors for output
@@ -159,8 +160,23 @@ clean-all: ## Full cleanup including images
 up-infra: ## Start only infrastructure (Redis, FalkorDB)
 	$(COMPOSE_DEV) up -d redis falkordb
 
-up-mlops: ## Start MLOps services (MLflow, BentoML, Feast, Opik)
-	$(COMPOSE_DEV) up -d mlflow bentoml feast opik
+up-mlops: ## Start MLOps services (MLflow, BentoML, Feast)
+	$(COMPOSE_DEV) up -d mlflow bentoml feast
+
+up-opik: ## Start Opik stack (all 10 Opik services)
+	@echo "$(GREEN)Starting Opik observability stack...$(RESET)"
+	$(COMPOSE_FULL) up -d
+
+down-opik: ## Stop Opik stack
+	@echo "$(YELLOW)Stopping Opik services...$(RESET)"
+	$(COMPOSE_FULL) down
+
+opik-logs: ## View Opik service logs
+	$(COMPOSE_FULL) logs -f opik-backend opik-frontend opik-python-backend
+
+up-full: ## Start full stack (dev + Opik)
+	@echo "$(GREEN)Starting full E2I stack with Opik...$(RESET)"
+	$(COMPOSE_FULL) up --build -d
 
 restart-api: ## Restart API container
 	$(COMPOSE_DEV) restart api
@@ -198,11 +214,12 @@ flower-ui: ## Open Flower (Celery monitoring) in browser
 health: ## Check health of all services
 	@echo "$(CYAN)Checking service health...$(RESET)"
 	@echo ""
-	@echo "API:      $$(curl -s http://localhost:8000/health || echo 'DOWN')"
-	@echo "MLflow:   $$(curl -s http://localhost:5000/health || echo 'DOWN')"
-	@echo "BentoML:  $$(curl -s http://localhost:3000/healthz || echo 'DOWN')"
-	@echo "Feast:    $$(curl -s http://localhost:6566/health || echo 'DOWN')"
-	@echo "Opik:     $$(curl -s http://localhost:5173/health || echo 'DOWN')"
-	@echo "Redis:    $$(docker exec e2i_redis_dev redis-cli ping 2>/dev/null || echo 'DOWN')"
-	@echo "FalkorDB: $$(docker exec e2i_falkordb_dev redis-cli ping 2>/dev/null || echo 'DOWN')"
-	@echo "Frontend: $$(curl -s http://localhost:3002/health || echo 'DOWN')"
+	@echo "API:         $$(curl -s http://localhost:8000/health || echo 'DOWN')"
+	@echo "MLflow:      $$(curl -s http://localhost:5000/health || echo 'DOWN')"
+	@echo "BentoML:     $$(curl -s http://localhost:3000/healthz || echo 'DOWN')"
+	@echo "Feast:       $$(curl -s http://localhost:6566/health || echo 'DOWN')"
+	@echo "Opik UI:     $$(curl -s http://localhost:5173/health || echo 'DOWN')"
+	@echo "Opik API:    $$(curl -s http://localhost:8084/health-check || echo 'DOWN')"
+	@echo "Redis:       $$(docker exec e2i_redis_dev redis-cli ping 2>/dev/null || echo 'DOWN')"
+	@echo "FalkorDB:    $$(docker exec e2i_falkordb_dev redis-cli ping 2>/dev/null || echo 'DOWN')"
+	@echo "Frontend:    $$(curl -s http://localhost:3002/health || echo 'DOWN')"

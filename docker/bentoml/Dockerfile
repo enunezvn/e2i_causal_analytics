@@ -5,7 +5,7 @@
 # Build: docker build -t e2i-model-server -f docker/bentoml/Dockerfile .
 # Run: docker run -p 3000:3000 e2i-model-server
 
-FROM python:3.11-slim as base
+FROM python:3.12-slim as base
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -31,12 +31,15 @@ RUN pip install --no-cache-dir -r requirements-bentoml.txt
 # Production stage
 FROM dependencies as production
 
-# Copy application code
+# Copy real serving service (self-contained, no src.* imports)
+COPY --chown=bentoml:bentoml scripts/bentoml/e2i_serving_service.py ./e2i_serving_service.py
+
+# Copy supporting code for reference/packaging workflows
 COPY --chown=bentoml:bentoml src/mlops/bentoml_service.py ./src/mlops/
 COPY --chown=bentoml:bentoml src/mlops/bentoml_templates/ ./src/mlops/bentoml_templates/
 COPY --chown=bentoml:bentoml src/mlops/bentoml_packaging.py ./src/mlops/
 
-# Copy mock service for development/testing
+# Copy mock service for testing fallback
 COPY --chown=bentoml:bentoml docker/bentoml/mock_service.py ./mock_service.py
 
 # Create directories for models and data
@@ -53,5 +56,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3000/healthz || exit 1
 
-# Default command - use mock service for testing (override for production)
-CMD ["bentoml", "serve", "mock_service:svc", "--host", "0.0.0.0", "--port", "3000"]
+# Default command - serve the real E2I model service (starts in degraded mode if no models)
+CMD ["bentoml", "serve", "e2i_serving_service.py:E2IModelService", "--host", "0.0.0.0", "--port", "3000"]

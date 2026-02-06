@@ -33,7 +33,7 @@ x-common-env: &common-env
   MLFLOW_TRACKING_URI: http://mlflow:5000
   BENTOML_URL: http://bentoml:3000
   FEAST_URL: http://feast:6566
-  OPIK_URL: http://opik:5174
+  OPIK_URL: http://opik-backend:8080
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -69,9 +69,6 @@ volumes:
   mlflow_artifacts:
     driver: local
     name: e2i_mlflow_artifacts
-  opik_data:
-    driver: local
-    name: e2i_opik_data
   bentoml_models:
     driver: local
     name: e2i_bentoml_models
@@ -325,7 +322,10 @@ services:
 
   # BentoML - Model Serving (Decoupled from Agents)
   bentoml:
-    image: bentoml/bento-server:1.4.0
+    build:
+      context: ..
+      dockerfile: docker/bentoml/Dockerfile
+      target: production
     container_name: e2i_bentoml
     restart: unless-stopped
     logging: *default-logging
@@ -407,42 +407,10 @@ services:
       - "e2i.service=mlops"
       - "e2i.component=feature-store"
 
-  # Opik - LLM & Agent Observability (Self-Hosted)
-  opik:
-    image: comet-ml/opik:1.10.2
-    container_name: e2i_opik
-    restart: unless-stopped
-    logging: *default-logging
-    ports:
-      - "127.0.0.1:5173:5173"  # UI
-      - "127.0.0.1:5174:5174"  # API
-    volumes:
-      - opik_data:/app/data
-    environment:
-      - OPIK_BASE_URL=http://localhost:5173
-      - OPIK_BACKEND_URL=http://localhost:5174
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5173/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 45s
-    networks:
-      - e2i_network
-      - mlops_network
-    security_opt:
-      - no-new-privileges:true
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 1G
-    labels:
-      - "e2i.service=mlops"
-      - "e2i.component=observability"
+  # Opik - LLM & Agent Observability
+  # Real Opik requires 7+ services (MySQL, ClickHouse, ZooKeeper, MinIO, etc.)
+  # Defined in docker-compose.opik.yml as a separate overlay file
+  # Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.opik.yml up -d
 
   # ===========================================================================
   # TIER 3: APPLICATION SERVICES

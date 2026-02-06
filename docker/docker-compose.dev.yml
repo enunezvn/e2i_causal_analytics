@@ -240,10 +240,23 @@ services:
       - MLFLOW_TRACKING_URI=sqlite:///mlflow/db/mlflow.db
     # Port 5000 already exposed by base compose (127.0.0.1:5000:5000)
 
-  opik:
-    container_name: e2i_opik_dev
+  bentoml:
+    container_name: e2i_bentoml_dev
+    build:
+      context: ..
+      dockerfile: docker/bentoml/Dockerfile
+      target: production
+    volumes:
+      - ../scripts/bentoml/e2i_serving_service.py:/home/bentoml/e2i_serving_service.py
+      - ../src/mlops/bentoml_service.py:/home/bentoml/src/mlops/bentoml_service.py
+      - ../src/mlops/bentoml_templates:/home/bentoml/src/mlops/bentoml_templates
     environment:
       - LOG_LEVEL=DEBUG
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
 
   # ===========================================================================
   # Infrastructure - No changes needed (Redis, FalkorDB)
