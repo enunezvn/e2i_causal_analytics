@@ -576,19 +576,19 @@ def _get_fixed_params(
     if algorithm_name == "XGBoost":
         fixed_params = {
             "random_state": 42,
-            "n_jobs": -1,
+            "n_jobs": 1,
             "verbosity": 0,
         }
     elif algorithm_name == "LightGBM":
         fixed_params = {
             "random_state": 42,
-            "n_jobs": -1,
+            "n_jobs": 1,
             "verbose": -1,
         }
     elif algorithm_name == "RandomForest":
         fixed_params = {
             "random_state": 42,
-            "n_jobs": -1,
+            "n_jobs": 1,
         }
     elif algorithm_name == "LogisticRegression":
         fixed_params = {
@@ -601,7 +601,7 @@ def _get_fixed_params(
         }
     elif algorithm_name == "CausalForest":
         fixed_params = {
-            "n_jobs": -1,
+            "n_jobs": 1,
             "inference": True,
             "random_state": 42,
         }

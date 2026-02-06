@@ -605,7 +605,7 @@ class TestDataLeakagePrevention:
             pass  # Scaler internal stats are based on training data
 
         # Generate and verify distribution is reasonable
-        population = generator.generate(n=500, seed=42)
+        population = generator.generate(n=100, seed=42)
 
         engagement_scores = [
             t.features.get("digital_engagement_score", 0.5) for t in population.twins

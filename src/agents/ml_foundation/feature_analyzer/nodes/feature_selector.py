@@ -419,14 +419,14 @@ def _compute_model_importance(
                 n_estimators=50,
                 max_depth=10,
                 random_state=42,
-                n_jobs=-1,
+                n_jobs=1,
             )
         else:
             model = RandomForestRegressor(
                 n_estimators=50,
                 max_depth=10,
                 random_state=42,
-                n_jobs=-1,
+                n_jobs=1,
             )
 
         model.fit(X_filled, y_values)

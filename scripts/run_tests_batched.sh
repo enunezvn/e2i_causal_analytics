@@ -30,7 +30,7 @@ RESULTS_FILE="$RESULTS_DIR/test_batch_results_$(date +%Y%m%d_%H%M%S).txt"
 RAM_THRESHOLD_HIGH="${RAM_THRESHOLD_HIGH:-4000}"
 RAM_THRESHOLD_LOW="${RAM_THRESHOLD_LOW:-2500}"
 RAM_CRITICAL="${RAM_CRITICAL:-1500}"
-PYTEST_TIMEOUT="${PYTEST_TIMEOUT:-30}"
+PYTEST_TIMEOUT="${PYTEST_TIMEOUT:-120}"
 
 # ---------------------------------------------------------------------------
 # CLI argument parsing

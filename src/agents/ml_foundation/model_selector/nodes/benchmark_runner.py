@@ -174,8 +174,8 @@ def _create_model_instance(
             from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
             if "classification" in problem_type:
-                return RandomForestClassifier(**params, n_jobs=-1)
-            return RandomForestRegressor(**params, n_jobs=-1)
+                return RandomForestClassifier(**params, n_jobs=1)
+            return RandomForestRegressor(**params, n_jobs=1)
 
         if algo_name == "LogisticRegression":
             from sklearn.linear_model import LogisticRegression
@@ -243,7 +243,7 @@ def _run_cross_validation(
             y = y.values
 
         # Run CV
-        cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring=scoring, n_jobs=-1)
+        cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring=scoring, n_jobs=1)
 
         # For regression, convert negative MSE to RMSE
         if scoring == "neg_mean_squared_error":

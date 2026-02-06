@@ -322,7 +322,7 @@ def _filter_hyperparameters(
     # Base parameters that most sklearn models accept
     common_params = {
         "random_state": 42,
-        "n_jobs": -1,
+        "n_jobs": 1,
     }
 
     # Algorithm-specific allowed parameters
