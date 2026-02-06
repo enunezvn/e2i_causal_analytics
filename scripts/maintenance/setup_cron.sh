@@ -41,6 +41,7 @@ chmod 755 "$LOG_DIR"
 log_info "Making maintenance scripts executable..."
 chmod +x "$SCRIPT_DIR/cleanup_orphans.sh"
 chmod +x "$SCRIPT_DIR/memory_monitor.sh"
+chmod +x "$SCRIPT_DIR/docker_cleanup.sh"
 
 # Create cron file
 log_info "Installing cron jobs to $CRON_FILE"
@@ -61,6 +62,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Daily log rotation at 2am
 0 2 * * * root find /var/log/e2i -name "*.log" -size +10M -exec truncate -s 1M {} \;
+
+# Docker disk cleanup - every Sunday at 3am
+0 3 * * 0 root /home/enunez/Projects/e2i_causal_analytics/scripts/maintenance/docker_cleanup.sh >> /var/log/e2i/docker_cleanup.log 2>&1
 EOF
 
 chmod 644 "$CRON_FILE"
@@ -91,6 +95,8 @@ alias e2i-cleanup-dry='/home/enunez/Projects/e2i_causal_analytics/scripts/mainte
 alias e2i-memcheck='/home/enunez/Projects/e2i_causal_analytics/scripts/maintenance/memory_monitor.sh'
 alias e2i-logs='tail -f /var/log/e2i/*.log'
 alias e2i-orphans='ps aux | grep -E "exec\(eval|esbuild.*service" | grep -v grep'
+alias e2i-docker-cleanup='/home/enunez/Projects/e2i_causal_analytics/scripts/maintenance/docker_cleanup.sh'
+alias e2i-docker-cleanup-dry='/home/enunez/Projects/e2i_causal_analytics/scripts/maintenance/docker_cleanup.sh --dry-run'
 EOF
 chown enunez:enunez /home/enunez/.bash_aliases 2>/dev/null || true
 
@@ -115,11 +121,14 @@ echo "Cron jobs installed:"
 echo "  - Orphan cleanup:    Every 15 minutes"
 echo "  - Memory monitoring: Every 5 minutes (with auto-cleanup)"
 echo "  - Log rotation:      Daily at 2am"
+echo "  - Docker cleanup:    Weekly, Sundays at 3am"
 echo ""
 echo "Convenience aliases (after re-login):"
 echo "  - e2i-cleanup      Run orphan cleanup"
 echo "  - e2i-cleanup-dry  Dry run (show what would be killed)"
 echo "  - e2i-memcheck     Run memory check"
+echo "  - e2i-docker-cleanup  Run Docker disk cleanup"
+echo "  - e2i-docker-cleanup-dry  Dry run Docker cleanup"
 echo "  - e2i-logs         Tail all maintenance logs"
 echo "  - e2i-orphans      List current orphan processes"
 echo ""
@@ -129,3 +138,4 @@ echo ""
 echo "Log files:"
 echo "  - /var/log/e2i/orphan_cleanup.log"
 echo "  - /var/log/e2i/memory_monitor.log"
+echo "  - /var/log/e2i/docker_cleanup.log"
