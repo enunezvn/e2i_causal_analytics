@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from src.api.dependencies.auth import require_auth
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,11 @@ router = APIRouter(
     prefix="/api/models",
     tags=["Model Predictions"],
     responses={
-        404: {"description": "Model not found"},
-        503: {"description": "Model service unavailable"},
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        404: {"model": ErrorResponse, "description": "Model not found"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+        503: {"model": ErrorResponse, "description": "Model service unavailable"},
     },
 )
 
@@ -150,6 +154,7 @@ class ModelsStatusResponse(BaseModel):
     "/predict/{model_name}",
     response_model=PredictionResponse,
     summary="Make a single prediction",
+    operation_id="predict_single",
     description="Call a BentoML model endpoint for prediction",
 )
 async def predict(
@@ -219,6 +224,7 @@ async def predict(
     "/predict/{model_name}/batch",
     response_model=BatchPredictionResponse,
     summary="Make batch predictions",
+    operation_id="predict_batch",
     description="Call a BentoML model endpoint for multiple predictions",
 )
 async def predict_batch(
@@ -309,6 +315,7 @@ async def predict_batch(
     "/{model_name}/health",
     response_model=ModelHealthResponse,
     summary="Check model health",
+    operation_id="get_prediction_model_health",
     description="Check the health status of a specific BentoML model service",
 )
 async def model_health(
@@ -338,6 +345,7 @@ async def model_health(
 @router.get(
     "/{model_name}/info",
     summary="Get model metadata",
+    operation_id="get_model_info",
     description="Get metadata and configuration for a deployed model",
 )
 async def model_info(
@@ -367,6 +375,7 @@ async def model_info(
     "/status",
     response_model=ModelsStatusResponse,
     summary="Get all models status",
+    operation_id="get_models_status",
     description="Get health status of all registered BentoML model services",
 )
 async def models_status(

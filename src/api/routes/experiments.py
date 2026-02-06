@@ -40,10 +40,19 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_auth, require_operator
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/experiments", tags=["A/B Testing"])
+router = APIRouter(
+    prefix="/experiments",
+    tags=["A/B Testing"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -390,7 +399,12 @@ class MonitorResponse(BaseModel):
 # =============================================================================
 
 
-@router.post("/{experiment_id}/randomize", response_model=RandomizeResponse)
+@router.post(
+    "/{experiment_id}/randomize",
+    response_model=RandomizeResponse,
+    summary="Randomize units to variants",
+    operation_id="randomize_experiment_units",
+)
 async def randomize_units(
     experiment_id: str,
     request: RandomizeRequest,
@@ -472,7 +486,11 @@ async def randomize_units(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{experiment_id}/assignments")
+@router.get(
+    "/{experiment_id}/assignments",
+    summary="Get experiment assignments",
+    operation_id="get_experiment_assignments",
+)
 async def get_assignments(
     experiment_id: str,
     variant: Optional[str] = Query(None, description="Filter by variant"),
@@ -531,7 +549,12 @@ async def get_assignments(
 # =============================================================================
 
 
-@router.post("/{experiment_id}/enroll", response_model=EnrollmentResult)
+@router.post(
+    "/{experiment_id}/enroll",
+    response_model=EnrollmentResult,
+    summary="Enroll unit in experiment",
+    operation_id="enroll_experiment_unit",
+)
 async def enroll_unit(
     experiment_id: str,
     request: EnrollUnitRequest,
@@ -583,7 +606,11 @@ async def enroll_unit(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{experiment_id}/enrollments/{enrollment_id}")
+@router.delete(
+    "/{experiment_id}/enrollments/{enrollment_id}",
+    summary="Withdraw unit from experiment",
+    operation_id="withdraw_experiment_unit",
+)
 async def withdraw_unit(
     experiment_id: str,
     enrollment_id: str,
@@ -627,7 +654,12 @@ async def withdraw_unit(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{experiment_id}/enrollments", response_model=EnrollmentStatsResponse)
+@router.get(
+    "/{experiment_id}/enrollments",
+    response_model=EnrollmentStatsResponse,
+    summary="Get enrollment statistics",
+    operation_id="get_experiment_enrollment_stats",
+)
 async def get_enrollment_stats(
     experiment_id: str,
 ) -> EnrollmentStatsResponse:
@@ -667,7 +699,12 @@ async def get_enrollment_stats(
 # =============================================================================
 
 
-@router.post("/{experiment_id}/interim-analysis", response_model=InterimAnalysisResult)
+@router.post(
+    "/{experiment_id}/interim-analysis",
+    response_model=InterimAnalysisResult,
+    summary="Trigger interim analysis",
+    operation_id="trigger_experiment_interim_analysis",
+)
 async def trigger_interim_analysis(
     experiment_id: str,
     request: TriggerInterimAnalysisRequest,
@@ -742,7 +779,11 @@ async def trigger_interim_analysis(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{experiment_id}/interim-analyses")
+@router.get(
+    "/{experiment_id}/interim-analyses",
+    summary="List interim analyses",
+    operation_id="list_experiment_interim_analyses",
+)
 async def list_interim_analyses(
     experiment_id: str,
 ) -> Dict[str, Any]:
@@ -787,7 +828,12 @@ async def list_interim_analyses(
 # =============================================================================
 
 
-@router.get("/{experiment_id}/results", response_model=ExperimentResults)
+@router.get(
+    "/{experiment_id}/results",
+    response_model=ExperimentResults,
+    summary="Get experiment results",
+    operation_id="get_experiment_results",
+)
 async def get_experiment_results(
     experiment_id: str,
     analysis_type: AnalysisType = Query(default=AnalysisType.FINAL),
@@ -861,7 +907,11 @@ async def get_experiment_results(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{experiment_id}/results/segments")
+@router.get(
+    "/{experiment_id}/results/segments",
+    summary="Get segment results",
+    operation_id="get_experiment_segment_results",
+)
 async def get_segment_results(
     experiment_id: str,
     segments: List[str] = Query(default=["region", "specialty"], description="Segments to analyze"),
@@ -901,7 +951,11 @@ async def get_segment_results(
 # =============================================================================
 
 
-@router.get("/{experiment_id}/srm-checks")
+@router.get(
+    "/{experiment_id}/srm-checks",
+    summary="Get SRM check history",
+    operation_id="get_experiment_srm_checks",
+)
 async def get_srm_checks(
     experiment_id: str,
     limit: int = Query(default=10, ge=1, le=100, description="Max checks"),
@@ -945,7 +999,12 @@ async def get_srm_checks(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{experiment_id}/srm-check", response_model=SRMCheckResult)
+@router.post(
+    "/{experiment_id}/srm-check",
+    response_model=SRMCheckResult,
+    summary="Run SRM check",
+    operation_id="run_experiment_srm_check",
+)
 async def run_srm_check(
     experiment_id: str,
     user: Dict[str, Any] = Depends(require_auth),
@@ -987,7 +1046,11 @@ async def run_srm_check(
 # =============================================================================
 
 
-@router.get("/{experiment_id}/fidelity")
+@router.get(
+    "/{experiment_id}/fidelity",
+    summary="Get fidelity comparisons",
+    operation_id="get_experiment_fidelity_comparisons",
+)
 async def get_fidelity_comparisons(
     experiment_id: str,
     limit: int = Query(default=10, ge=1, le=100, description="Max comparisons"),
@@ -1035,7 +1098,12 @@ async def get_fidelity_comparisons(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{experiment_id}/fidelity/{twin_simulation_id}", response_model=FidelityComparison)
+@router.post(
+    "/{experiment_id}/fidelity/{twin_simulation_id}",
+    response_model=FidelityComparison,
+    summary="Update fidelity comparison",
+    operation_id="update_experiment_fidelity_comparison",
+)
 async def update_fidelity_comparison(
     experiment_id: str,
     twin_simulation_id: str,
@@ -1083,7 +1151,12 @@ async def update_fidelity_comparison(
 # =============================================================================
 
 
-@router.post("/monitor", response_model=MonitorResponse)
+@router.post(
+    "/monitor",
+    response_model=MonitorResponse,
+    summary="Trigger experiment monitoring",
+    operation_id="trigger_experiment_monitoring_sweep",
+)
 async def trigger_experiment_monitoring(
     request: TriggerMonitorRequest,
     background_tasks: BackgroundTasks,
@@ -1187,7 +1260,12 @@ async def trigger_experiment_monitoring(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{experiment_id}/health", response_model=ExperimentHealthSummary)
+@router.get(
+    "/{experiment_id}/health",
+    response_model=ExperimentHealthSummary,
+    summary="Get experiment health",
+    operation_id="get_experiment_health_summary",
+)
 async def get_experiment_health(
     experiment_id: str,
 ) -> ExperimentHealthSummary:
@@ -1236,7 +1314,11 @@ async def get_experiment_health(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{experiment_id}/alerts")
+@router.get(
+    "/{experiment_id}/alerts",
+    summary="Get experiment alerts",
+    operation_id="get_experiment_alerts",
+)
 async def get_experiment_alerts(
     experiment_id: str,
     severity: Optional[AlertSeverity] = Query(None, description="Filter by severity"),

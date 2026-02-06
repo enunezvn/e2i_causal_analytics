@@ -1,0 +1,18 @@
+extends:
+  - "spectral:oas"
+
+rules:
+  # --- Enforced (error) ---
+  operation-tags: error            # Every operation must have at least one tag
+  operation-tag-defined: error     # Tags used by operations must be declared in top-level tags
+  tag-description: error           # Every tag must have a description
+  path-params: error               # Path parameters must be defined
+
+  # --- Advisory (warn) ---
+  operation-description: warn      # Operations should have a description
+  operation-operationId: warn      # Operations should have an operationId
+
+  # --- Disabled (handled elsewhere or not applicable) ---
+  info-contact: off                # Internal API — contact set in custom openapi()
+  info-license: off                # Proprietary — license set in custom openapi()
+  info-description: off            # Already provided in FastAPI constructor

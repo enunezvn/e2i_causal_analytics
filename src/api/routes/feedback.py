@@ -38,6 +38,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_operator
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 # Opik Feedback Loop imports (Phase 4 - G23)
 try:
@@ -57,7 +58,15 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/feedback", tags=["Feedback Learning"])
+router = APIRouter(
+    prefix="/feedback",
+    tags=["Feedback Learning"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -382,6 +391,7 @@ _feedback_store: List[FeedbackItem] = []
     response_model=LearningResponse,
     summary="Run feedback learning cycle",
     description="Process accumulated feedback and extract improvement patterns.",
+    operation_id="run_feedback_learning_cycle",
 )
 async def run_learning_cycle(
     request: RunLearningRequest,
@@ -449,6 +459,7 @@ async def run_learning_cycle(
     response_model=LearningResponse,
     summary="Get learning results",
     description="Retrieve results of a learning cycle by batch ID.",
+    operation_id="get_feedback_learning_results",
 )
 async def get_learning_results(batch_id: str) -> LearningResponse:
     """
@@ -477,6 +488,7 @@ async def get_learning_results(batch_id: str) -> LearningResponse:
     response_model=LearningResponse,
     summary="Process feedback items",
     description="Process specific feedback items and detect patterns.",
+    operation_id="process_feedback_items",
 )
 async def process_feedback(
     request: ProcessFeedbackRequest,
@@ -562,6 +574,7 @@ async def process_feedback(
     response_model=PatternListResponse,
     summary="List detected patterns",
     description="List all detected patterns with optional filtering.",
+    operation_id="list_feedback_patterns",
 )
 async def list_patterns(
     severity: Optional[PatternSeverity] = Query(default=None, description="Filter by severity"),
@@ -618,6 +631,7 @@ async def list_patterns(
     response_model=UpdateListResponse,
     summary="List knowledge updates",
     description="List all proposed and applied knowledge updates.",
+    operation_id="list_knowledge_updates",
 )
 async def list_updates(
     status: Optional[UpdateStatus] = Query(default=None, description="Filter by status"),
@@ -667,6 +681,7 @@ async def list_updates(
     response_model=KnowledgeUpdate,
     summary="Apply knowledge update",
     description="Apply a proposed knowledge update to the system.",
+    operation_id="apply_knowledge_update",
 )
 async def apply_update(
     update_id: str,
@@ -719,6 +734,7 @@ async def apply_update(
     response_model=KnowledgeUpdate,
     summary="Rollback knowledge update",
     description="Rollback a previously applied knowledge update.",
+    operation_id="rollback_knowledge_update",
 )
 async def rollback_update(
     update_id: str,
@@ -767,6 +783,7 @@ async def rollback_update(
     response_model=FeedbackHealthResponse,
     summary="Feedback learning service health",
     description="Check health status of the feedback learning service.",
+    operation_id="get_feedback_service_health",
 )
 async def get_feedback_health() -> FeedbackHealthResponse:
     """
@@ -901,6 +918,7 @@ class OptimizationSignalsResponse(BaseModel):
     response_model=TraceFeedbackResponse,
     summary="Record feedback for Opik trace (G23)",
     description="Record user feedback and associate it with an Opik trace for observability.",
+    operation_id="record_opik_trace_feedback",
 )
 async def record_trace_feedback(
     request: TraceFeedbackRequest,
@@ -968,6 +986,7 @@ async def record_trace_feedback(
     response_model=AgentFeedbackStatsResponse,
     summary="Get agent feedback statistics (G23)",
     description="Get aggregated feedback statistics for an agent.",
+    operation_id="get_agent_feedback_stats",
 )
 async def get_agent_feedback_stats(
     agent_name: str,
@@ -1016,6 +1035,7 @@ async def get_agent_feedback_stats(
     response_model=OptimizationSignalsResponse,
     summary="Get GEPA optimization signals (G23)",
     description="Get feedback-derived optimization signals for GEPA prompt improvement.",
+    operation_id="get_gepa_optimization_signals",
 )
 async def get_optimization_signals(
     agent_name: str,
@@ -1072,6 +1092,7 @@ async def get_optimization_signals(
     "/agent/{agent_name}/gepa-batch",
     summary="Get GEPA training batch (G23)",
     description="Get a batch of feedback examples for GEPA training.",
+    operation_id="get_gepa_training_batch",
 )
 async def get_gepa_training_batch(
     agent_name: str,

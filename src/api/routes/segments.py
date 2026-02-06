@@ -32,10 +32,19 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_analyst
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/segments", tags=["Segment Analysis"])
+router = APIRouter(
+    prefix="/segments",
+    tags=["Segment Analysis"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -306,6 +315,7 @@ _analyses_store: Dict[str, SegmentAnalysisResponse] = {}
     "/analyze",
     response_model=SegmentAnalysisResponse,
     summary="Run segment analysis",
+    operation_id="run_segment_analysis",
     description="Analyze treatment effect heterogeneity across segments using CATE/uplift modeling.",
 )
 async def run_segment_analysis(
@@ -374,6 +384,7 @@ async def run_segment_analysis(
     "/{analysis_id}",
     response_model=SegmentAnalysisResponse,
     summary="Get segment analysis results",
+    operation_id="get_segment_analysis",
     description="Retrieve results of a segment analysis by ID.",
 )
 async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
@@ -402,6 +413,7 @@ async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
     "/policies",
     response_model=PolicyListResponse,
     summary="List targeting recommendations",
+    operation_id="list_policies",
     description="List all targeting policy recommendations.",
 )
 async def list_policies(
@@ -454,6 +466,7 @@ async def list_policies(
     "/health",
     response_model=SegmentHealthResponse,
     summary="Segment analysis service health",
+    operation_id="get_segment_health",
     description="Check health status of the segment analysis service.",
 )
 async def get_segment_health() -> SegmentHealthResponse:

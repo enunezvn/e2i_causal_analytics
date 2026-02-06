@@ -28,13 +28,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
 from src.api.dependencies.auth import require_auth
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.utils.audit_chain import (
     AuditChainService,
 )
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/audit", tags=["Audit Chain"])
+router = APIRouter(
+    prefix="/audit",
+    tags=["Audit Chain"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -140,6 +149,7 @@ def get_audit_service() -> Optional[AuditChainService]:
     "/workflow/{workflow_id}",
     response_model=List[AuditEntryResponse],
     summary="Get workflow audit entries",
+    operation_id="get_workflow_entries",
     description="Retrieve all audit chain entries for a specific workflow, ordered by sequence number.",
 )
 async def get_workflow_entries(
@@ -186,6 +196,7 @@ async def get_workflow_entries(
     "/workflow/{workflow_id}/verify",
     response_model=ChainVerificationResponse,
     summary="Verify chain integrity",
+    operation_id="verify_workflow_chain",
     description="Verify the cryptographic integrity of a workflow's audit chain.",
 )
 async def verify_workflow_chain(
@@ -221,6 +232,7 @@ async def verify_workflow_chain(
     "/workflow/{workflow_id}/summary",
     response_model=WorkflowSummaryResponse,
     summary="Get workflow summary",
+    operation_id="get_workflow_summary",
     description="Get a summary of a workflow including agents involved and aggregated metrics.",
 )
 async def get_workflow_summary(
@@ -302,6 +314,7 @@ async def get_workflow_summary(
     "/recent",
     response_model=List[RecentWorkflowResponse],
     summary="Get recent workflows",
+    operation_id="get_recent_workflows",
     description="Get a list of recent audit workflows with basic info.",
 )
 async def get_recent_workflows(

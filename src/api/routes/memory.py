@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.episodic_memory import (
     E2IEntityReferences,
     count_memories_by_type,
@@ -41,7 +42,15 @@ from src.rag.retriever import hybrid_search
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/memory", tags=["Memory System"])
+router = APIRouter(
+    prefix="/memory",
+    tags=["Memory System"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -262,7 +271,12 @@ class SemanticPathResponse(BaseModel):
 # =============================================================================
 
 
-@router.post("/search", response_model=MemorySearchResponse)
+@router.post(
+    "/search",
+    response_model=MemorySearchResponse,
+    summary="Search memory systems",
+    operation_id="search_memory",
+)
 async def search_memory(request: MemorySearchRequest) -> MemorySearchResponse:
     """
     Execute hybrid search across memory systems.
@@ -320,7 +334,12 @@ async def search_memory(request: MemorySearchRequest) -> MemorySearchResponse:
         raise HTTPException(status_code=500, detail=f"Memory search failed: {str(e)}") from e
 
 
-@router.post("/episodic", response_model=EpisodicMemoryResponse)
+@router.post(
+    "/episodic",
+    response_model=EpisodicMemoryResponse,
+    summary="Create episodic memory",
+    operation_id="create_episodic_memory",
+)
 async def create_episodic_memory(
     memory: EpisodicMemoryInput, background_tasks: BackgroundTasks
 ) -> EpisodicMemoryResponse:
@@ -371,7 +390,12 @@ async def create_episodic_memory(
         ) from e
 
 
-@router.get("/episodic/{memory_id}", response_model=EpisodicMemoryResponse)
+@router.get(
+    "/episodic/{memory_id}",
+    response_model=EpisodicMemoryResponse,
+    summary="Get episodic memory",
+    operation_id="get_episodic_memory",
+)
 async def get_episodic_memory_endpoint(memory_id: str) -> EpisodicMemoryResponse:
     """
     Retrieve a specific episodic memory by ID.
@@ -401,7 +425,12 @@ async def get_episodic_memory_endpoint(memory_id: str) -> EpisodicMemoryResponse
         raise HTTPException(status_code=500, detail=f"Failed to retrieve memory: {str(e)}") from e
 
 
-@router.post("/procedural/feedback", response_model=ProceduralFeedbackResponse)
+@router.post(
+    "/procedural/feedback",
+    response_model=ProceduralFeedbackResponse,
+    summary="Record procedural feedback",
+    operation_id="record_procedural_feedback",
+)
 async def record_procedural_feedback(
     request: ProceduralFeedbackRequest,
 ) -> ProceduralFeedbackResponse:
@@ -451,7 +480,12 @@ async def record_procedural_feedback(
         raise HTTPException(status_code=500, detail=f"Failed to record feedback: {str(e)}") from e
 
 
-@router.get("/semantic/paths", response_model=SemanticPathResponse)
+@router.get(
+    "/semantic/paths",
+    response_model=SemanticPathResponse,
+    summary="Query semantic paths",
+    operation_id="query_semantic_paths",
+)
 async def query_semantic_paths(
     kpi_name: Optional[str] = None,
     start_entity_id: Optional[str] = None,
@@ -505,7 +539,11 @@ async def query_semantic_paths(
 # =============================================================================
 
 
-@router.get("/stats")
+@router.get(
+    "/stats",
+    summary="Get memory statistics",
+    operation_id="get_memory_stats",
+)
 async def get_memory_stats() -> Dict[str, Any]:
     """
     Get statistics about the memory systems.

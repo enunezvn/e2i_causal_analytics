@@ -178,7 +178,7 @@ class SegmentCATEResult(BaseModel):
     segment_id: int = Field(..., description="Segment identifier")
     segment_name: str = Field(..., description="Segment name (e.g., 'high_uplift')")
     n_samples: int = Field(..., description="Number of samples in segment")
-    uplift_range: tuple[float, float] = Field(..., description="Uplift score range (min, max)")
+    uplift_range: List[float] = Field(..., min_length=2, max_length=2, description="Uplift score range [min, max]")
     cate_mean: Optional[float] = Field(None, description="Mean CATE estimate")
     cate_std: Optional[float] = Field(None, description="CATE standard deviation")
     cate_ci_lower: Optional[float] = Field(None, description="CATE CI lower bound")
@@ -225,6 +225,48 @@ class HierarchicalAnalysisResponse(BaseModel):
     created_at: datetime = Field(..., description="Analysis timestamp")
     warnings: List[str] = Field(default_factory=list, description="Warnings")
     errors: List[str] = Field(default_factory=list, description="Errors")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "analysis_id": "hier_abc12345",
+                "status": "completed",
+                "segment_results": [
+                    {
+                        "segment_id": 0,
+                        "segment_name": "low_uplift",
+                        "n_samples": 150,
+                        "uplift_range": [-0.02, 0.15],
+                        "cate_mean": 0.08,
+                        "cate_std": 0.03,
+                        "cate_ci_lower": 0.02,
+                        "cate_ci_upper": 0.14,
+                        "success": True,
+                    },
+                    {
+                        "segment_id": 1,
+                        "segment_name": "high_uplift",
+                        "n_samples": 120,
+                        "uplift_range": [0.15, 0.45],
+                        "cate_mean": 0.32,
+                        "cate_std": 0.05,
+                        "cate_ci_lower": 0.22,
+                        "cate_ci_upper": 0.42,
+                        "success": True,
+                    },
+                ],
+                "overall_ate": 0.18,
+                "overall_ci_lower": 0.10,
+                "overall_ci_upper": 0.26,
+                "segment_heterogeneity": 62.3,
+                "n_segments_analyzed": 2,
+                "segmentation_method": "quantile",
+                "estimator_type": "causal_forest",
+                "latency_ms": 4520,
+                "created_at": "2026-02-06T12:00:00Z",
+            }
+        }
+    )
 
 
 # =============================================================================
@@ -279,6 +321,24 @@ class RouteQueryResponse(BaseModel):
     )
     routing_rationale: str = Field(..., description="Explanation for routing decision")
     suggested_pipeline: Optional[PipelineMode] = Field(None, description="Suggested pipeline mode")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Does increasing sales rep visits cause higher TRx?",
+                "question_type": "causal_effect",
+                "primary_library": "dowhy",
+                "secondary_libraries": ["econml"],
+                "recommended_estimators": [
+                    "propensity_score_matching",
+                    "causal_forest",
+                ],
+                "routing_confidence": 0.91,
+                "routing_rationale": "Direct causal-effect question best suited for DoWhy identification + EconML estimation.",
+                "suggested_pipeline": "sequential",
+            }
+        }
+    )
 
 
 # =============================================================================
@@ -389,6 +449,23 @@ class SequentialPipelineResponse(BaseModel):
     created_at: datetime = Field(..., description="Pipeline start timestamp")
     warnings: List[str] = Field(default_factory=list, description="Warnings")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "pipeline_id": "pipe_seq_001",
+                "status": "completed",
+                "stages_completed": 3,
+                "stages_total": 3,
+                "consensus_effect": 0.21,
+                "consensus_ci_lower": 0.12,
+                "consensus_ci_upper": 0.30,
+                "library_agreement_score": 0.87,
+                "total_latency_ms": 8900,
+                "created_at": "2026-02-06T12:00:00Z",
+            }
+        }
+    )
+
 
 class ParallelPipelineRequest(BaseModel):
     """Request for parallel multi-library analysis."""
@@ -460,6 +537,24 @@ class ParallelPipelineResponse(BaseModel):
     created_at: datetime = Field(..., description="Analysis timestamp")
     warnings: List[str] = Field(default_factory=list, description="Warnings")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "pipeline_id": "pipe_par_001",
+                "status": "completed",
+                "libraries_succeeded": ["dowhy", "econml", "causalml"],
+                "libraries_failed": [],
+                "consensus_effect": 0.19,
+                "consensus_ci_lower": 0.11,
+                "consensus_ci_upper": 0.27,
+                "library_agreement_score": 0.92,
+                "consensus_method": "variance_weighted",
+                "total_latency_ms": 5200,
+                "created_at": "2026-02-06T12:00:00Z",
+            }
+        }
+    )
+
 
 # =============================================================================
 # CROSS-VALIDATION SCHEMAS
@@ -512,9 +607,9 @@ class CrossValidationResponse(BaseModel):
 
     # Results
     primary_effect: float = Field(..., description="Effect from primary library")
-    primary_ci: tuple[float, float] = Field(..., description="Primary CI")
+    primary_ci: List[float] = Field(..., min_length=2, max_length=2, description="Primary confidence interval [lower, upper]")
     validation_effect: float = Field(..., description="Effect from validation library")
-    validation_ci: tuple[float, float] = Field(..., description="Validation CI")
+    validation_ci: List[float] = Field(..., min_length=2, max_length=2, description="Validation confidence interval [lower, upper]")
 
     # Agreement metrics
     effect_difference: float = Field(..., description="Absolute difference in effects")
@@ -528,6 +623,31 @@ class CrossValidationResponse(BaseModel):
     created_at: datetime = Field(..., description="Validation timestamp")
     recommendations: List[str] = Field(
         default_factory=list, description="Recommendations based on results"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "validation_id": "xval_001",
+                "primary_library": "econml",
+                "validation_library": "causalml",
+                "primary_effect": 0.22,
+                "primary_ci": [0.14, 0.30],
+                "validation_effect": 0.20,
+                "validation_ci": [0.11, 0.29],
+                "effect_difference": 0.02,
+                "relative_difference": 9.1,
+                "ci_overlap_ratio": 0.88,
+                "agreement_score": 0.91,
+                "validation_passed": True,
+                "agreement_threshold": 0.85,
+                "latency_ms": 6300,
+                "created_at": "2026-02-06T12:00:00Z",
+                "recommendations": [
+                    "High cross-library agreement supports causal conclusion.",
+                ],
+            }
+        }
     )
 
 
@@ -560,6 +680,31 @@ class EstimatorListResponse(BaseModel):
         default_factory=dict, description="Estimators grouped by library"
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "estimators": [
+                    {
+                        "name": "causal_forest",
+                        "library": "econml",
+                        "estimator_type": "CATE",
+                        "description": "Generalized Random Forest for heterogeneous treatment effects",
+                        "best_for": ["effect heterogeneity", "targeting"],
+                        "parameters": ["n_estimators", "min_samples_leaf"],
+                        "supports_confidence_intervals": True,
+                        "supports_heterogeneous_effects": True,
+                    }
+                ],
+                "total": 14,
+                "by_library": {
+                    "econml": ["causal_forest", "linear_dml", "dr_learner"],
+                    "causalml": ["uplift_random_forest", "uplift_gradient_boosting"],
+                    "dowhy": ["propensity_score_matching", "inverse_propensity_weighting"],
+                },
+            }
+        }
+    )
+
 
 # =============================================================================
 # HEALTH CHECK SCHEMAS
@@ -586,3 +731,22 @@ class CausalHealthResponse(BaseModel):
     analysis_count_24h: int = Field(0, description="Analyses run in last 24 hours")
     average_latency_ms: Optional[int] = Field(None, description="Average analysis latency")
     error: Optional[str] = Field(None, description="Error message if unhealthy")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "healthy",
+                "libraries_available": {
+                    "dowhy": True,
+                    "econml": True,
+                    "causalml": True,
+                    "networkx": True,
+                },
+                "estimators_loaded": 14,
+                "pipeline_orchestrator_ready": True,
+                "hierarchical_analyzer_ready": True,
+                "analysis_count_24h": 42,
+                "average_latency_ms": 3200,
+            }
+        }
+    )

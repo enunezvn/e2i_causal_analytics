@@ -35,10 +35,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_operator
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/digital-twin", tags=["Digital Twin"])
+router = APIRouter(
+    prefix="/digital-twin",
+    tags=["Digital Twin"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -382,7 +391,12 @@ class DigitalTwinHealthResponse(BaseModel):
     last_simulation_at: Optional[datetime] = Field(None, description="Timestamp of last simulation")
 
 
-@router.get("/health", response_model=DigitalTwinHealthResponse)
+@router.get(
+    "/health",
+    response_model=DigitalTwinHealthResponse,
+    summary="Digital Twin service health",
+    operation_id="get_digital_twin_health",
+)
 async def digital_twin_health() -> DigitalTwinHealthResponse:
     """
     Health check for Digital Twin service.
@@ -406,7 +420,12 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
 # =============================================================================
 
 
-@router.post("/simulate", response_model=SimulationResponse)
+@router.post(
+    "/simulate",
+    response_model=SimulationResponse,
+    summary="Run twin simulation",
+    operation_id="run_digital_twin_simulation",
+)
 async def run_simulation(
     request: SimulateRequest,
     user: Dict[str, Any] = Depends(require_operator),
@@ -525,7 +544,12 @@ async def run_simulation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/simulations", response_model=SimulationListResponse)
+@router.get(
+    "/simulations",
+    response_model=SimulationListResponse,
+    summary="List simulations",
+    operation_id="list_twin_simulations",
+)
 async def list_simulations(
     brand: Optional[BrandEnum] = Query(None, description="Filter by brand"),
     model_id: Optional[str] = Query(None, description="Filter by model ID"),
@@ -593,7 +617,12 @@ async def list_simulations(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/simulations/{simulation_id}", response_model=SimulationDetailResponse)
+@router.get(
+    "/simulations/{simulation_id}",
+    response_model=SimulationDetailResponse,
+    summary="Get simulation details",
+    operation_id="get_twin_simulation",
+)
 async def get_simulation(
     simulation_id: str,
 ) -> SimulationDetailResponse:
@@ -670,7 +699,12 @@ async def get_simulation(
 # =============================================================================
 
 
-@router.post("/validate", response_model=FidelityRecordResponse)
+@router.post(
+    "/validate",
+    response_model=FidelityRecordResponse,
+    summary="Validate simulation fidelity",
+    operation_id="validate_twin_simulation",
+)
 async def validate_simulation(
     request: ValidateFidelityRequest,
     user: Dict[str, Any] = Depends(require_operator),
@@ -790,7 +824,12 @@ async def validate_simulation(
 # =============================================================================
 
 
-@router.get("/models", response_model=ModelListResponse)
+@router.get(
+    "/models",
+    response_model=ModelListResponse,
+    summary="List twin models",
+    operation_id="list_twin_models",
+)
 async def list_models(
     brand: Optional[BrandEnum] = Query(None, description="Filter by brand"),
     twin_type: Optional[TwinTypeEnum] = Query(None, description="Filter by twin type"),
@@ -845,7 +884,12 @@ async def list_models(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/models/{model_id}", response_model=TwinModelDetailResponse)
+@router.get(
+    "/models/{model_id}",
+    response_model=TwinModelDetailResponse,
+    summary="Get twin model details",
+    operation_id="get_twin_model",
+)
 async def get_model(
     model_id: str,
 ) -> TwinModelDetailResponse:

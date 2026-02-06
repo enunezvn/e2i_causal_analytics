@@ -31,10 +31,19 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_analyst
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/gaps", tags=["Gap Analysis"])
+router = APIRouter(
+    prefix="/gaps",
+    tags=["Gap Analysis"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -285,6 +294,7 @@ _analyses_store: Dict[str, GapAnalysisResponse] = {}
     "/analyze",
     response_model=GapAnalysisResponse,
     summary="Run gap analysis",
+    operation_id="run_gap_analysis",
     description="Analyze performance gaps for a brand across segments and calculate ROI.",
 )
 async def run_gap_analysis(
@@ -354,6 +364,7 @@ async def run_gap_analysis(
     "/{analysis_id}",
     response_model=GapAnalysisResponse,
     summary="Get gap analysis results",
+    operation_id="get_gap_analysis",
     description="Retrieve results of a gap analysis by ID.",
 )
 async def get_gap_analysis(analysis_id: str) -> GapAnalysisResponse:
@@ -382,6 +393,7 @@ async def get_gap_analysis(analysis_id: str) -> GapAnalysisResponse:
     "/opportunities",
     response_model=OpportunityListResponse,
     summary="List prioritized opportunities",
+    operation_id="list_opportunities",
     description="List all identified opportunities across analyses.",
 )
 async def list_opportunities(
@@ -448,6 +460,7 @@ async def list_opportunities(
     "/health",
     response_model=GapHealthResponse,
     summary="Gap analysis service health",
+    operation_id="get_gap_health",
     description="Check health status of the gap analysis service.",
 )
 async def get_gap_health() -> GapHealthResponse:

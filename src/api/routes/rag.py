@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.services.factories import get_supabase_client
 from src.rag import (
     EntityExtractor,
@@ -49,7 +50,15 @@ from src.rag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/rag", tags=["Hybrid RAG"])
+router = APIRouter(
+    prefix="/api/v1/rag",
+    tags=["Hybrid RAG"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -399,6 +408,7 @@ def get_rag_service() -> RAGService:
     "/search",
     response_model=SearchResponse,
     summary="Execute hybrid search",
+    operation_id="execute_hybrid_search",
     description="""
     Perform hybrid search across vector, fulltext, and graph backends.
 
@@ -516,6 +526,7 @@ async def search(
     "/graph/{entity}",
     response_model=CausalSubgraphResponse,
     summary="Get causal subgraph",
+    operation_id="get_causal_subgraph",
     description="""
     Retrieve the causal subgraph centered on a specific entity.
 
@@ -589,6 +600,7 @@ async def get_causal_subgraph(
     "/causal-path",
     response_model=CausalPathResponse,
     summary="Find causal paths",
+    operation_id="find_causal_paths",
     description="""
     Find causal paths between two entities in the knowledge graph.
 
@@ -640,6 +652,7 @@ async def get_causal_path(
     "/entities",
     response_model=ExtractedEntitiesResponse,
     summary="Extract entities from query",
+    operation_id="extract_query_entities",
     description="""
     Extract domain-specific entities from a natural language query.
 
@@ -676,6 +689,7 @@ async def extract_entities(
     "/health",
     response_model=HealthResponse,
     summary="RAG backend health",
+    operation_id="get_rag_health",
     description="""
     Get health status of all RAG backends.
 
@@ -731,7 +745,10 @@ async def get_health(
 
 
 @router.get(
-    "/stats", summary="RAG usage statistics", description="Get usage statistics for the RAG system."
+    "/stats",
+    summary="RAG usage statistics",
+    operation_id="get_rag_stats",
+    description="Get usage statistics for the RAG system.",
 )
 async def get_stats(
     hours: int = Query(default=24, ge=1, le=168, description="Hours to look back"),

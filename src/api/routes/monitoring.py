@@ -31,10 +31,19 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_admin
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/monitoring", tags=["Model Monitoring"])
+router = APIRouter(
+    prefix="/monitoring",
+    tags=["Model Monitoring"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -292,7 +301,12 @@ class ModelHealthSummary(BaseModel):
 # =============================================================================
 
 
-@router.post("/drift/detect", response_model=DriftDetectionResponse)
+@router.post(
+    "/drift/detect",
+    response_model=DriftDetectionResponse,
+    summary="Trigger drift detection",
+    operation_id="trigger_drift_detection",
+)
 async def trigger_drift_detection(
     request: TriggerDriftDetectionRequest,
     background_tasks: BackgroundTasks,
@@ -363,7 +377,11 @@ async def trigger_drift_detection(
             raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/drift/status/{task_id}")
+@router.get(
+    "/drift/status/{task_id}",
+    summary="Get drift detection status",
+    operation_id="get_drift_detection_status",
+)
 async def get_drift_detection_status(task_id: str) -> Dict[str, Any]:
     """
     Get status of an async drift detection task.
@@ -395,7 +413,12 @@ async def get_drift_detection_status(task_id: str) -> Dict[str, Any]:
     return response
 
 
-@router.get("/drift/latest/{model_id}", response_model=DriftDetectionResponse)
+@router.get(
+    "/drift/latest/{model_id}",
+    response_model=DriftDetectionResponse,
+    summary="Get latest drift status",
+    operation_id="get_latest_drift_status",
+)
 async def get_latest_drift_status(
     model_id: str,
     limit: int = Query(default=10, ge=1, le=100, description="Max results per type"),
@@ -455,7 +478,12 @@ async def get_latest_drift_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/drift/history/{model_id}", response_model=DriftHistoryResponse)
+@router.get(
+    "/drift/history/{model_id}",
+    response_model=DriftHistoryResponse,
+    summary="Get drift history",
+    operation_id="get_drift_history",
+)
 async def get_drift_history(
     model_id: str,
     feature_name: Optional[str] = Query(None, description="Filter by feature"),
@@ -517,7 +545,12 @@ async def get_drift_history(
 # =============================================================================
 
 
-@router.get("/alerts", response_model=AlertListResponse)
+@router.get(
+    "/alerts",
+    response_model=AlertListResponse,
+    summary="List drift alerts",
+    operation_id="list_drift_alerts",
+)
 async def list_alerts(
     model_id: Optional[str] = Query(None, description="Filter by model"),
     status: Optional[AlertStatus] = Query(None, description="Filter by status"),
@@ -587,7 +620,12 @@ async def list_alerts(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/alerts/{alert_id}", response_model=AlertItem)
+@router.get(
+    "/alerts/{alert_id}",
+    response_model=AlertItem,
+    summary="Get alert details",
+    operation_id="get_drift_alert",
+)
 async def get_alert(alert_id: str) -> AlertItem:
     """
     Get a specific alert by ID.
@@ -629,7 +667,12 @@ async def get_alert(alert_id: str) -> AlertItem:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/alerts/{alert_id}/action", response_model=AlertItem)
+@router.post(
+    "/alerts/{alert_id}/action",
+    response_model=AlertItem,
+    summary="Update alert status",
+    operation_id="update_drift_alert",
+)
 async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
     """
     Perform an action on an alert (acknowledge, resolve, snooze).
@@ -690,7 +733,12 @@ async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
 # =============================================================================
 
 
-@router.get("/runs", response_model=MonitoringRunsResponse)
+@router.get(
+    "/runs",
+    response_model=MonitoringRunsResponse,
+    summary="List monitoring runs",
+    operation_id="list_monitoring_runs",
+)
 async def list_monitoring_runs(
     model_id: Optional[str] = Query(None, description="Filter by model"),
     days: int = Query(default=7, ge=1, le=90, description="Days of history"),
@@ -750,7 +798,12 @@ async def list_monitoring_runs(
 # =============================================================================
 
 
-@router.get("/health/{model_id}", response_model=ModelHealthSummary)
+@router.get(
+    "/health/{model_id}",
+    response_model=ModelHealthSummary,
+    summary="Get model health summary",
+    operation_id="get_model_health_summary",
+)
 async def get_model_health(model_id: str) -> ModelHealthSummary:
     """
     Get overall health summary for a model.
@@ -901,7 +954,12 @@ class PerformanceAlertsResponse(BaseModel):
     alerts: List[PerformanceAlertItem]
 
 
-@router.post("/performance/record", response_model=PerformanceRecordResponse)
+@router.post(
+    "/performance/record",
+    response_model=PerformanceRecordResponse,
+    summary="Record model performance",
+    operation_id="record_model_performance",
+)
 async def record_performance(
     request: RecordPerformanceRequest,
     async_mode: bool = Query(default=True, description="Run asynchronously"),
@@ -960,7 +1018,12 @@ async def record_performance(
             raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/performance/{model_id}/trend", response_model=PerformanceTrendResponse)
+@router.get(
+    "/performance/{model_id}/trend",
+    response_model=PerformanceTrendResponse,
+    summary="Get performance trend",
+    operation_id="get_model_performance_trend",
+)
 async def get_performance_trend(
     model_id: str,
     metric_name: str = Query(default="accuracy", description="Metric to analyze"),
@@ -1016,7 +1079,12 @@ async def get_performance_trend(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/performance/{model_id}/alerts", response_model=PerformanceAlertsResponse)
+@router.get(
+    "/performance/{model_id}/alerts",
+    response_model=PerformanceAlertsResponse,
+    summary="Get performance alerts",
+    operation_id="get_model_performance_alerts",
+)
 async def get_performance_alerts(model_id: str) -> PerformanceAlertsResponse:
     """
     Check for performance-related alerts.
@@ -1059,7 +1127,11 @@ async def get_performance_alerts(model_id: str) -> PerformanceAlertsResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/performance/{model_id}/compare/{other_model_id}")
+@router.get(
+    "/performance/{model_id}/compare/{other_model_id}",
+    summary="Compare model performance",
+    operation_id="compare_model_performance",
+)
 async def compare_model_performance(
     model_id: str,
     other_model_id: str,
@@ -1094,7 +1166,11 @@ async def compare_model_performance(
 # =============================================================================
 
 
-@router.post("/sweep/production")
+@router.post(
+    "/sweep/production",
+    summary="Trigger production model sweep",
+    operation_id="trigger_production_model_sweep",
+)
 async def trigger_production_sweep(
     time_window: str = Query(default="7d", description="Time window for comparison"),
 ) -> Dict[str, Any]:
@@ -1231,7 +1307,12 @@ class RetrainingJobResponse(BaseModel):
     notes: Optional[str] = None
 
 
-@router.post("/retraining/evaluate/{model_id}", response_model=RetrainingDecisionResponse)
+@router.post(
+    "/retraining/evaluate/{model_id}",
+    response_model=RetrainingDecisionResponse,
+    summary="Evaluate retraining need",
+    operation_id="evaluate_model_retraining_need",
+)
 async def evaluate_retraining_need(model_id: str) -> RetrainingDecisionResponse:
     """
     Evaluate whether a model needs retraining.
@@ -1266,7 +1347,12 @@ async def evaluate_retraining_need(model_id: str) -> RetrainingDecisionResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/retraining/trigger/{model_id}", response_model=RetrainingJobResponse)
+@router.post(
+    "/retraining/trigger/{model_id}",
+    response_model=RetrainingJobResponse,
+    summary="Trigger model retraining",
+    operation_id="trigger_model_retraining",
+)
 async def trigger_retraining(
     model_id: str,
     request: TriggerRetrainingRequest,
@@ -1325,7 +1411,12 @@ async def trigger_retraining(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/retraining/status/{job_id}", response_model=RetrainingJobResponse)
+@router.get(
+    "/retraining/status/{job_id}",
+    response_model=RetrainingJobResponse,
+    summary="Get retraining job status",
+    operation_id="get_retraining_job_status",
+)
 async def get_retraining_status(job_id: str) -> RetrainingJobResponse:
     """
     Get status of a retraining job.
@@ -1367,7 +1458,12 @@ async def get_retraining_status(job_id: str) -> RetrainingJobResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/retraining/{job_id}/complete", response_model=RetrainingJobResponse)
+@router.post(
+    "/retraining/{job_id}/complete",
+    response_model=RetrainingJobResponse,
+    summary="Complete retraining job",
+    operation_id="complete_retraining_job",
+)
 async def complete_retraining(
     job_id: str,
     request: CompleteRetrainingRequest,
@@ -1417,7 +1513,12 @@ async def complete_retraining(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/retraining/{job_id}/rollback", response_model=RetrainingJobResponse)
+@router.post(
+    "/retraining/{job_id}/rollback",
+    response_model=RetrainingJobResponse,
+    summary="Rollback retraining job",
+    operation_id="rollback_retraining_job",
+)
 async def rollback_retraining(
     job_id: str,
     request: RollbackRetrainingRequest,
@@ -1469,7 +1570,11 @@ async def rollback_retraining(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/retraining/sweep")
+@router.post(
+    "/retraining/sweep",
+    summary="Evaluate all models for retraining",
+    operation_id="trigger_retraining_sweep",
+)
 async def trigger_retraining_sweep(
     _admin: dict = Depends(require_admin),
 ) -> Dict[str, Any]:

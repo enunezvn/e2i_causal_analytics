@@ -22,6 +22,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
 from src.api.models.graph import (
     AddEpisodeRequest,
     AddEpisodeResponse,
@@ -53,7 +55,15 @@ from src.api.models.graph import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/graph", tags=["Knowledge Graph"])
+router = APIRouter(
+    prefix="/graph",
+    tags=["Knowledge Graph"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # WebSocket connection manager for real-time updates
@@ -223,7 +233,7 @@ def _convert_to_graph_relationship(data: Dict[str, Any]) -> GraphRelationship:
 # =============================================================================
 
 
-@router.get("/nodes", response_model=ListNodesResponse)
+@router.get("/nodes", response_model=ListNodesResponse, summary="List graph nodes", operation_id="list_graph_nodes")
 async def list_nodes(
     entity_types: Optional[str] = Query(None, description="Comma-separated entity types"),
     search: Optional[str] = Query(None, max_length=500, description="Text search"),
@@ -286,7 +296,7 @@ async def list_nodes(
         raise HTTPException(status_code=500, detail=f"Failed to list nodes: {str(e)}") from e
 
 
-@router.get("/nodes/{node_id}", response_model=GraphNode)
+@router.get("/nodes/{node_id}", response_model=GraphNode, summary="Get node by ID", operation_id="get_graph_node")
 async def get_node(node_id: str) -> GraphNode:
     """
     Get a specific node by ID.
@@ -311,7 +321,7 @@ async def get_node(node_id: str) -> GraphNode:
         raise HTTPException(status_code=500, detail=f"Failed to get node: {str(e)}") from e
 
 
-@router.get("/nodes/{node_id}/network", response_model=NodeNetworkResponse)
+@router.get("/nodes/{node_id}/network", response_model=NodeNetworkResponse, summary="Get node relationship network", operation_id="get_node_network")
 async def get_node_network(
     node_id: str, max_depth: int = Query(2, ge=1, le=5, description="Maximum traversal depth")
 ) -> NodeNetworkResponse:
@@ -402,7 +412,7 @@ async def get_node_network(
 # =============================================================================
 
 
-@router.get("/relationships", response_model=ListRelationshipsResponse)
+@router.get("/relationships", response_model=ListRelationshipsResponse, summary="List graph relationships", operation_id="list_graph_relationships")
 async def list_relationships(
     relationship_types: Optional[str] = Query(
         None, description="Comma-separated relationship types"
@@ -478,7 +488,7 @@ async def list_relationships(
 # =============================================================================
 
 
-@router.post("/traverse", response_model=TraverseResponse)
+@router.post("/traverse", response_model=TraverseResponse, summary="Traverse graph from node", operation_id="traverse_graph")
 async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
     """
     Traverse the graph from a starting node.
@@ -562,7 +572,7 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
 # =============================================================================
 
 
-@router.post("/causal-chains", response_model=CausalChainResponse)
+@router.post("/causal-chains", response_model=CausalChainResponse, summary="Query causal chains", operation_id="query_causal_chains")
 async def query_causal_chains(request: CausalChainRequest) -> CausalChainResponse:
     """
     Query causal chains in the knowledge graph.
@@ -665,7 +675,7 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
 # =============================================================================
 
 
-@router.post("/query", response_model=CypherQueryResponse)
+@router.post("/query", response_model=CypherQueryResponse, summary="Execute openCypher query", operation_id="execute_cypher_query")
 async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryResponse:
     """
     Execute an openCypher query against the graph.
@@ -725,7 +735,7 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
 # =============================================================================
 
 
-@router.post("/episodes", response_model=AddEpisodeResponse)
+@router.post("/episodes", response_model=AddEpisodeResponse, summary="Add knowledge episode", operation_id="add_graph_episode")
 async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
     """
     Add a knowledge episode to the graph.
@@ -811,7 +821,7 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
 # =============================================================================
 
 
-@router.post("/search", response_model=SearchGraphResponse)
+@router.post("/search", response_model=SearchGraphResponse, summary="Search knowledge graph", operation_id="search_graph")
 async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
     """
     Natural language search across the knowledge graph.
@@ -888,7 +898,7 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
 # =============================================================================
 
 
-@router.get("/stats", response_model=GraphStatsResponse)
+@router.get("/stats", response_model=GraphStatsResponse, summary="Get graph statistics", operation_id="get_graph_stats")
 async def get_graph_stats() -> GraphStatsResponse:
     """
     Get knowledge graph statistics.
@@ -994,7 +1004,7 @@ async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
 # =============================================================================
 
 
-@router.get("/health")
+@router.get("/health", summary="Graph service health check", operation_id="graph_health_check")
 async def graph_health() -> Dict[str, Any]:
     """
     Health check for graph services.

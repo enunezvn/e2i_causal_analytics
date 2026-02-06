@@ -28,6 +28,7 @@ from src.api.dependencies.auth import require_auth
 
 # Real implementations
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.utils.data_masking import mask_identifier
 from src.feature_store.feast_client import FeastClient, get_feast_client
 from src.mlops.shap_explainer_realtime import RealTimeSHAPExplainer, SHAPResult
@@ -35,7 +36,15 @@ from src.repositories.shap_analysis import ShapAnalysisRepository, get_shap_anal
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/explain", tags=["Model Interpretability"])
+router = APIRouter(
+    prefix="/explain",
+    tags=["Model Interpretability"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -532,6 +541,7 @@ async def get_shap_service() -> RealTimeSHAPService:
     "/predict",
     response_model=ExplainResponse,
     summary="Get prediction with real-time SHAP explanation",
+    operation_id="explain_prediction",
     description="""
     Returns a model prediction along with SHAP-based feature explanations.
 
@@ -641,6 +651,7 @@ async def explain_prediction(
     "/predict/batch",
     response_model=BatchExplainResponse,
     summary="Batch predictions with SHAP explanations",
+    operation_id="explain_batch",
     description="Process up to 50 patients in a single request. Useful for pre-computing explanations.",
 )
 async def explain_batch(
@@ -695,6 +706,7 @@ async def explain_batch(
 @router.get(
     "/history/{patient_id}",
     summary="Get explanation history for a patient",
+    operation_id="get_explanation_history",
     description="Retrieve past explanations for audit or review purposes.",
 )
 async def get_explanation_history(
@@ -757,6 +769,7 @@ async def get_explanation_history(
 @router.get(
     "/models",
     summary="List available models for explanation",
+    operation_id="list_explainable_models",
     description="Returns models that support real-time SHAP explanations.",
 )
 async def list_explainable_models() -> Dict[str, Any]:
@@ -785,7 +798,7 @@ async def list_explainable_models() -> Dict[str, Any]:
     }
 
 
-@router.get("/health", summary="Health check for interpretability service")
+@router.get("/health", summary="Health check for interpretability service", operation_id="health_check")
 async def health_check() -> Dict[str, Any]:
     """
     Health check endpoint for the interpretability service.

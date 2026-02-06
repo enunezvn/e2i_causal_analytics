@@ -24,6 +24,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.dependencies.auth import require_admin, require_auth
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.dependencies.supabase_client import get_supabase
 from src.api.schemas.kpi import (
     BatchKPICalculationRequest,
@@ -49,8 +50,10 @@ router = APIRouter(
     prefix="/api/kpis",
     tags=["KPIs"],
     responses={
-        404: {"description": "KPI not found"},
-        500: {"description": "Internal server error"},
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        404: {"model": ErrorResponse, "description": "KPI not found"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
 
@@ -175,6 +178,7 @@ def _result_to_response(result: Any) -> KPIResultResponse:
     response_model=KPIListResponse,
     summary="List all KPIs",
     description="Get a list of all available KPIs with optional filtering",
+    operation_id="list_kpis",
 )
 async def list_kpis(
     workstream: str | None = Query(
@@ -223,6 +227,7 @@ async def list_kpis(
     response_model=WorkstreamListResponse,
     summary="List workstreams",
     description="Get a list of all available KPI workstreams",
+    operation_id="list_workstreams",
 )
 async def list_workstreams(
     calculator: KPICalculator = Depends(get_kpi_calculator),
@@ -291,6 +296,7 @@ async def list_workstreams(
     response_model=KPIHealthResponse,
     summary="KPI system health",
     description="Check the health of the KPI calculation system",
+    operation_id="kpi_health_check",
 )
 async def health_check(
     calculator: KPICalculator = Depends(get_kpi_calculator),
@@ -361,6 +367,7 @@ async def health_check(
     response_model=KPIMetadataResponse,
     summary="Get KPI metadata",
     description="Get metadata and definition for a specific KPI",
+    operation_id="get_kpi_metadata",
 )
 async def get_kpi_metadata(
     kpi_id: str,
@@ -399,6 +406,7 @@ async def get_kpi_metadata(
     response_model=KPIResultResponse,
     summary="Get KPI value",
     description="Calculate and return the current value for a KPI",
+    operation_id="get_kpi_value",
 )
 async def get_kpi_value(
     kpi_id: str,
@@ -455,6 +463,7 @@ async def get_kpi_value(
     response_model=KPIResultResponse,
     summary="Calculate single KPI",
     description="Calculate a single KPI with full context options",
+    operation_id="calculate_kpi",
 )
 async def calculate_kpi(
     request: KPICalculationRequest,
@@ -516,6 +525,7 @@ async def calculate_kpi(
     response_model=BatchKPICalculationResponse,
     summary="Batch calculate KPIs",
     description="Calculate multiple KPIs in a single request",
+    operation_id="calculate_batch_kpis",
 )
 async def calculate_batch(
     request: BatchKPICalculationRequest,
@@ -581,6 +591,7 @@ async def calculate_batch(
     response_model=CacheInvalidationResponse,
     summary="Invalidate KPI cache",
     description="Invalidate cached KPI values",
+    operation_id="invalidate_kpi_cache",
 )
 async def invalidate_cache(
     request: CacheInvalidationRequest,

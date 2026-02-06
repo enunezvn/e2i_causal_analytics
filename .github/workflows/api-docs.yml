@@ -1,0 +1,59 @@
+name: API Docs Lint
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "src/api/**"
+      - ".spectral.yml"
+  pull_request:
+    paths:
+      - "src/api/**"
+      - ".spectral.yml"
+
+jobs:
+  export-spec:
+    name: Export OpenAPI spec
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Export OpenAPI JSON
+        run: |
+          python -m scripts.export_openapi --output openapi.json
+
+      - name: Upload spec artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-spec
+          path: openapi.json
+          retention-days: 5
+
+  lint-spec:
+    name: Spectral lint
+    needs: export-spec
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download spec artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi-spec
+
+      - name: Install Spectral
+        run: npm install -g @stoplight/spectral-cli
+
+      - name: Lint OpenAPI spec
+        run: spectral lint openapi.json --ruleset .spectral.yml

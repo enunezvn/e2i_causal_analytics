@@ -32,43 +32,20 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install Python dependencies
         run: |
-          pip install fastapi uvicorn pydantic supabase python-dotenv
-          pip install -r requirements.txt || true
+          pip install -r requirements.txt
 
-      - name: Start API server
+      - name: Export OpenAPI spec (static — no server required)
         run: |
-          cd /home/runner/work/e2i_causal_analytics/e2i_causal_analytics
-          # Use mock/minimal startup for type generation only
-          export E2I_TESTING_MODE=true
-          export OPENAI_API_KEY=test-key
-          export ANTHROPIC_API_KEY=test-key
-          python -c "
-          import uvicorn
-          import threading
-          from src.api.main import app
+          python -m scripts.export_openapi --output openapi.json
 
-          def run():
-              uvicorn.run(app, host='127.0.0.1', port=8000, log_level='error')
-
-          thread = threading.Thread(target=run, daemon=True)
-          thread.start()
-          import time
-          time.sleep(10)  # Wait for startup
-          " &
-          sleep 15
-
-      - name: Generate types from local API
+      - name: Generate types from exported spec
         working-directory: frontend
         run: |
-          # Generate types from local API
-          npx openapi-typescript http://localhost:8000/api/openapi.json -o src/types/generated/api.ts.new || {
-            echo "API not available, skipping type verification"
-            exit 0
-          }
+          npx openapi-typescript ../openapi.json -o src/types/generated/api.ts.new
 
       - name: Check for type drift
         working-directory: frontend
@@ -77,9 +54,9 @@ jobs:
             # Compare generated types (ignore timestamps/comments)
             if diff -q <(grep -v "^/\*" src/types/generated/api.ts | grep -v "^\*" | grep -v "^ \*") \
                        <(grep -v "^/\*" src/types/generated/api.ts.new | grep -v "^\*" | grep -v "^ \*") > /dev/null 2>&1; then
-              echo "✅ Types are in sync with OpenAPI spec"
+              echo "Types are in sync with OpenAPI spec"
             else
-              echo "⚠️ Types may be out of sync with OpenAPI spec"
+              echo "Types may be out of sync with OpenAPI spec"
               echo "Run 'npm run generate:types' in frontend/ to update"
               # Don't fail - just warn (types can have minor formatting differences)
             fi

@@ -19,9 +19,19 @@ from typing import List, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/agents", tags=["Agent Orchestration"])
+router = APIRouter(
+    prefix="/agents",
+    tags=["Agent Orchestration"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -236,7 +246,7 @@ AGENT_REGISTRY = [
 # =============================================================================
 
 
-@router.get("/status", response_model=AgentStatusResponse)
+@router.get("/status", response_model=AgentStatusResponse, summary="Get all agents status", operation_id="get_agent_status")
 async def get_agent_status() -> AgentStatusResponse:
     """
     Get status of all agents in the orchestration system.

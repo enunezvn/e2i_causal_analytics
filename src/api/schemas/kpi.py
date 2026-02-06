@@ -7,7 +7,7 @@ Pydantic schemas for KPI API request/response validation.
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class KPICalculationContext(BaseModel):
@@ -38,6 +38,17 @@ class KPICalculationContext(BaseModel):
         description="Additional context parameters",
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "brand": "kisqali",
+                "start_date": "2026-01-01T00:00:00Z",
+                "end_date": "2026-01-31T23:59:59Z",
+                "territory": "Northeast",
+            }
+        }
+    )
+
 
 class KPICalculationRequest(BaseModel):
     """Request schema for calculating a single KPI."""
@@ -58,6 +69,17 @@ class KPICalculationRequest(BaseModel):
     context: KPICalculationContext | None = Field(
         default=None,
         description="Calculation context (filters, date range, etc.)",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kpi_id": "WS1-DQ-001",
+                "use_cache": True,
+                "force_refresh": False,
+                "context": {"brand": "kisqali", "territory": "Northeast"},
+            }
+        }
     )
 
 
@@ -81,6 +103,15 @@ class BatchKPICalculationRequest(BaseModel):
     context: KPICalculationContext | None = Field(
         default=None,
         description="Calculation context for all KPIs",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kpi_ids": ["WS1-DQ-001", "WS1-DQ-002", "WS1-MP-001"],
+                "use_cache": True,
+            }
+        }
     )
 
 
@@ -114,6 +145,22 @@ class KPIResultResponse(BaseModel):
         default_factory=dict, description="Additional calculation metadata"
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kpi_id": "WS1-DQ-001",
+                "value": 0.87,
+                "status": "good",
+                "calculated_at": "2026-02-06T12:00:00Z",
+                "cached": False,
+                "causal_library_used": "dowhy",
+                "confidence_interval": [0.82, 0.92],
+                "p_value": 0.003,
+                "effect_size": 0.15,
+            }
+        }
+    )
+
 
 class BatchKPICalculationResponse(BaseModel):
     """Response schema for batch KPI calculation."""
@@ -127,6 +174,18 @@ class BatchKPICalculationResponse(BaseModel):
     successful: int = Field(..., description="Number of successful calculations")
     failed: int = Field(..., description="Number of failed calculations")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "workstream": "ws1_data_quality",
+                "calculated_at": "2026-02-06T12:00:00Z",
+                "total_kpis": 5,
+                "successful": 4,
+                "failed": 1,
+            }
+        }
+    )
+
 
 class KPIThresholdResponse(BaseModel):
     """Response schema for KPI thresholds."""
@@ -134,6 +193,12 @@ class KPIThresholdResponse(BaseModel):
     target: float | None = Field(None, description="Target threshold value")
     warning: float | None = Field(None, description="Warning threshold value")
     critical: float | None = Field(None, description="Critical threshold value")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"target": 0.90, "warning": 0.75, "critical": 0.60}
+        }
+    )
 
 
 class KPIMetadataResponse(BaseModel):
@@ -159,6 +224,25 @@ class KPIMetadataResponse(BaseModel):
     brand: str | None = Field(None, description="Brand filter if applicable")
     note: str | None = Field(None, description="Additional notes")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "WS1-DQ-001",
+                "name": "Data Completeness Rate",
+                "definition": "Percentage of required fields populated across patient records",
+                "formula": "COUNT(non_null) / COUNT(*) * 100",
+                "calculation_type": "direct",
+                "workstream": "ws1_data_quality",
+                "tables": ["patient_records"],
+                "columns": ["hcp_id", "npi", "specialty"],
+                "threshold": {"target": 0.95, "warning": 0.85, "critical": 0.70},
+                "unit": "%",
+                "frequency": "daily",
+                "primary_causal_library": "none",
+            }
+        }
+    )
+
 
 class KPIListResponse(BaseModel):
     """Response schema for listing KPIs."""
@@ -170,6 +254,15 @@ class KPIListResponse(BaseModel):
     workstream: str | None = Field(None, description="Filtered workstream if any")
     causal_library: str | None = Field(None, description="Filtered causal library if any")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total": 2,
+                "workstream": "ws1_data_quality",
+            }
+        }
+    )
+
 
 class WorkstreamInfo(BaseModel):
     """Information about a workstream."""
@@ -179,6 +272,17 @@ class WorkstreamInfo(BaseModel):
     kpi_count: int = Field(..., description="Number of KPIs in this workstream")
     description: str | None = Field(None, description="Workstream description")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "ws1_data_quality",
+                "name": "WS1 Data Quality",
+                "kpi_count": 8,
+                "description": "Data quality and completeness metrics",
+            }
+        }
+    )
+
 
 class WorkstreamListResponse(BaseModel):
     """Response schema for listing workstreams."""
@@ -187,6 +291,14 @@ class WorkstreamListResponse(BaseModel):
         default_factory=list, description="List of workstreams"
     )
     total: int = Field(..., description="Total number of workstreams")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total": 6,
+            }
+        }
+    )
 
 
 class CacheInvalidationRequest(BaseModel):
@@ -198,12 +310,27 @@ class CacheInvalidationRequest(BaseModel):
     )
     invalidate_all: bool = Field(False, description="Invalidate all cached KPIs (use with caution)")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"kpi_id": "WS1-DQ-001"}
+        }
+    )
+
 
 class CacheInvalidationResponse(BaseModel):
     """Response schema for cache invalidation."""
 
     invalidated_count: int = Field(..., description="Number of cache entries invalidated")
     message: str = Field(..., description="Status message")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "invalidated_count": 3,
+                "message": "Invalidated 3 cache entries for workstream ws1_data_quality",
+            }
+        }
+    )
 
 
 class KPIHealthResponse(BaseModel):
@@ -224,3 +351,21 @@ class KPIHealthResponse(BaseModel):
     )
     last_calculation: datetime | None = Field(None, description="Timestamp of last calculation")
     error: str | None = Field(None, description="Error message if unhealthy")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "healthy",
+                "registry_loaded": True,
+                "total_kpis": 48,
+                "cache_enabled": True,
+                "cache_size": 12,
+                "database_connected": True,
+                "workstreams_available": [
+                    "ws1_data_quality",
+                    "ws2_triggers",
+                    "ws3_market_performance",
+                ],
+            }
+        }
+    )

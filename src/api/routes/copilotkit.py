@@ -240,6 +240,7 @@ from pydantic import BaseModel, Field
 
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
 
 logger = logging.getLogger(__name__)
@@ -2843,10 +2844,18 @@ def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None
 # STANDALONE ROUTER (for testing/info endpoints)
 # =============================================================================
 
-router = APIRouter(prefix="/copilotkit", tags=["copilotkit"])
+router = APIRouter(
+    prefix="/copilotkit",
+    tags=["copilotkit"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
-@router.get("/status")
+@router.get("/status", summary="Get CopilotKit status", operation_id="get_copilotkit_status")
 async def get_copilotkit_status() -> Dict[str, Any]:
     """Get CopilotKit integration status."""
     provider = get_llm_provider()
@@ -3049,7 +3058,7 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
         yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
 
 
-@router.post("/chat/stream")
+@router.post("/chat/stream", summary="Stream chatbot response", operation_id="stream_chat")
 async def stream_chat(chat_request: ChatRequest, request: Request) -> StreamingResponse:
     """
     Stream chatbot response as Server-Sent Events (SSE).
@@ -3101,7 +3110,7 @@ async def stream_chat(chat_request: ChatRequest, request: Request) -> StreamingR
     )
 
 
-@router.post("/chat")
+@router.post("/chat", summary="Non-streaming chatbot", operation_id="chat")
 async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     """
     Non-streaming chatbot endpoint.
@@ -3257,7 +3266,7 @@ class FeedbackResponse(BaseModel):
     error: Optional[str] = None
 
 
-@router.post("/feedback")
+@router.post("/feedback", summary="Submit message feedback", operation_id="submit_feedback")
 async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     """
     Submit feedback (thumbs up/down) for a chatbot message.
@@ -3377,7 +3386,7 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
         )
 
 
-@router.get("/feedback/stats")
+@router.get("/feedback/stats", summary="Get feedback statistics", operation_id="get_feedback_stats")
 async def get_feedback_stats(agent_name: Optional[str] = None, days: int = 30) -> Dict[str, Any]:
     """
     Get feedback statistics for analytics.
@@ -3417,7 +3426,7 @@ async def get_feedback_stats(agent_name: Optional[str] = None, days: int = 30) -
 # ============================================================================
 
 
-@router.get("/analytics/usage")
+@router.get("/analytics/usage", summary="Get usage analytics", operation_id="get_usage_analytics")
 async def get_usage_analytics(
     days: int = 7,
 ) -> Dict[str, Any]:
@@ -3468,7 +3477,7 @@ async def get_usage_analytics(
         }
 
 
-@router.get("/analytics/agents")
+@router.get("/analytics/agents", summary="Get agent analytics", operation_id="get_agent_analytics")
 async def get_agent_analytics(
     agent_name: Optional[str] = None,
     days: int = 30,
@@ -3508,7 +3517,7 @@ async def get_agent_analytics(
         }
 
 
-@router.get("/analytics/errors")
+@router.get("/analytics/errors", summary="Get error analytics", operation_id="get_error_analytics")
 async def get_error_analytics(
     limit: int = 20,
 ) -> Dict[str, Any]:
@@ -3545,7 +3554,7 @@ async def get_error_analytics(
         }
 
 
-@router.get("/analytics/hourly")
+@router.get("/analytics/hourly", summary="Get hourly usage pattern", operation_id="get_hourly_pattern")
 async def get_hourly_pattern(
     days: int = 7,
 ) -> Dict[str, Any]:

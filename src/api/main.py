@@ -349,6 +349,105 @@ async def lifespan(app: FastAPI):
 
 
 # =============================================================================
+# OPENAPI TAG METADATA
+# =============================================================================
+
+openapi_tags = [
+    {
+        "name": "Root",
+        "description": "Service discovery and API version information.",
+    },
+    {
+        "name": "Health",
+        "description": "Liveness, readiness, and dependency health probes for orchestration.",
+    },
+    {
+        "name": "Agent Orchestration",
+        "description": "Manage the 18-agent architecture: status, dispatch, and tier information.",
+    },
+    {
+        "name": "Analytics",
+        "description": "Cross-agent analytics dashboards, trend summaries, and aggregated insights.",
+    },
+    {
+        "name": "Audit Chain",
+        "description": "Immutable audit trail for every causal decision and agent action.",
+    },
+    {
+        "name": "Causal Inference",
+        "description": "Multi-library causal analysis: hierarchical CATE, cross-validation, and pipelines across DoWhy, EconML, CausalML, and NetworkX.",
+    },
+    {
+        "name": "Cognitive Workflow",
+        "description": "Multi-step cognitive workflows combining causal reasoning with domain knowledge.",
+    },
+    {
+        "name": "copilotkit",
+        "description": "CopilotKit AI chat integration for conversational analytics.",
+    },
+    {
+        "name": "Digital Twin",
+        "description": "Patient and HCP digital-twin pre-screening simulations.",
+    },
+    {
+        "name": "A/B Testing",
+        "description": "Experiment design, execution, and Bayesian analysis for A/B and multi-arm tests.",
+    },
+    {
+        "name": "Model Interpretability",
+        "description": "SHAP, LIME, and counterfactual explanations for ML model predictions.",
+    },
+    {
+        "name": "Feedback Learning",
+        "description": "Capture user feedback, compute reward signals, and trigger model retraining.",
+    },
+    {
+        "name": "Gap Analysis",
+        "description": "Identify care gaps, ROI opportunities, and unmet-need hotspots.",
+    },
+    {
+        "name": "Knowledge Graph",
+        "description": "FalkorDB-backed knowledge graph: nodes, relationships, causal chains, and openCypher queries.",
+    },
+    {
+        "name": "Health Score",
+        "description": "Composite health scores for brands, territories, and HCPs.",
+    },
+    {
+        "name": "Memory System",
+        "description": "Tri-memory (episodic, semantic, procedural) read/write operations.",
+    },
+    {
+        "name": "Metrics",
+        "description": "Prometheus-compatible `/metrics` endpoint for platform observability.",
+    },
+    {
+        "name": "Model Monitoring",
+        "description": "Data-drift detection, model performance tracking, and alerting.",
+    },
+    {
+        "name": "Hybrid RAG",
+        "description": "Retrieval-augmented generation combining vector search with knowledge-graph context.",
+    },
+    {
+        "name": "Resource Optimization",
+        "description": "Optimal resource allocation across territories, brands, and channels.",
+    },
+    {
+        "name": "Segment Analysis",
+        "description": "Heterogeneous treatment effect segmentation and targeting optimization.",
+    },
+    {
+        "name": "KPIs",
+        "description": "Causal KPI calculation, caching, and threshold monitoring across workstreams.",
+    },
+    {
+        "name": "Model Predictions",
+        "description": "Churn, conversion, and custom model inference via BentoML serving layer.",
+    },
+]
+
+# =============================================================================
 # FASTAPI APPLICATION
 # =============================================================================
 
@@ -359,8 +458,109 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
+    openapi_tags=openapi_tags,
     lifespan=lifespan,
 )
+
+
+# =============================================================================
+# CUSTOM OPENAPI SCHEMA
+# =============================================================================
+
+
+def custom_openapi():
+    """Extend the default OpenAPI schema with servers, contact, license, and ReDoc tag groups."""
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    from fastapi.openapi.utils import get_openapi
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=openapi_tags,
+    )
+
+    # Server list
+    schema["servers"] = [
+        {
+            "url": "https://eznomics.site",
+            "description": "Production",
+        },
+        {
+            "url": "http://localhost:8000",
+            "description": "Local development",
+        },
+    ]
+
+    # Contact & license
+    schema["info"]["contact"] = {
+        "name": "E2I Causal Analytics Team",
+        "email": "support@eznomics.site",
+    }
+    schema["info"]["license"] = {
+        "name": "Proprietary",
+    }
+
+    # ReDoc x-tagGroups for sidebar organization
+    schema["x-tagGroups"] = [
+        {
+            "name": "Core Analytics",
+            "tags": [
+                "Causal Inference",
+                "KPIs",
+                "Model Predictions",
+                "Model Interpretability",
+                "Analytics",
+            ],
+        },
+        {
+            "name": "ML Operations",
+            "tags": [
+                "A/B Testing",
+                "Model Monitoring",
+                "Feedback Learning",
+            ],
+        },
+        {
+            "name": "Intelligence",
+            "tags": [
+                "Knowledge Graph",
+                "Hybrid RAG",
+                "Memory System",
+                "Cognitive Workflow",
+                "Digital Twin",
+                "Gap Analysis",
+                "Health Score",
+                "Segment Analysis",
+                "Resource Optimization",
+            ],
+        },
+        {
+            "name": "Platform",
+            "tags": [
+                "copilotkit",
+                "Agent Orchestration",
+                "Audit Chain",
+            ],
+        },
+        {
+            "name": "Operations",
+            "tags": [
+                "Root",
+                "Health",
+                "Metrics",
+            ],
+        },
+    ]
+
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
 
 # =============================================================================
 # MIDDLEWARE

@@ -27,10 +27,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import get_current_user, require_auth
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/analytics", tags=["Analytics"])
+router = APIRouter(
+    prefix="/analytics",
+    tags=["Analytics"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -337,6 +346,7 @@ def _build_volume_series(
     "/dashboard",
     response_model=AnalyticsDashboardResponse,
     summary="Get analytics dashboard data",
+    operation_id="get_analytics_dashboard",
     description="Retrieve comprehensive analytics including agent metrics, latency trends, and query volumes.",
 )
 async def get_analytics_dashboard(
@@ -449,6 +459,7 @@ async def get_analytics_dashboard(
     "/agents/{agent_name}",
     response_model=AgentMetrics,
     summary="Get metrics for a specific agent",
+    operation_id="get_agent_metrics",
     description="Retrieve detailed performance metrics for a single agent.",
 )
 async def get_agent_metrics(
@@ -497,6 +508,7 @@ async def get_agent_metrics(
     "/agents/{agent_name}/trend",
     response_model=AgentPerformanceTrend,
     summary="Get performance trend for an agent",
+    operation_id="get_agent_trend",
     description="Retrieve latency trend over time for a specific agent.",
 )
 async def get_agent_trend(
@@ -542,6 +554,7 @@ async def get_agent_trend(
     "/summary",
     response_model=QueryMetricsSummary,
     summary="Get quick metrics summary",
+    operation_id="get_metrics_summary",
     description="Get a quick summary of query execution metrics.",
 )
 async def get_metrics_summary(

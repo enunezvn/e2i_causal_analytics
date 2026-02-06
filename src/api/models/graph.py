@@ -338,6 +338,19 @@ class ListNodesResponse(BaseModel):
     query_latency_ms: float = Field(..., description="Query latency in milliseconds")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "nodes": [{"id": "hcp_001", "type": "HCP", "name": "Dr. Smith", "properties": {"specialty": "Oncology"}}],
+                "total_count": 142,
+                "limit": 50,
+                "offset": 0,
+                "has_more": True,
+                "query_latency_ms": 18.5,
+            }
+        }
+    )
+
 
 class ListRelationshipsResponse(BaseModel):
     """Response for listing graph relationships."""
@@ -350,6 +363,19 @@ class ListRelationshipsResponse(BaseModel):
     query_latency_ms: float = Field(..., description="Query latency in milliseconds")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "relationships": [{"id": "rel_001", "type": "PRESCRIBES", "source_id": "hcp_001", "target_id": "brand_001"}],
+                "total_count": 87,
+                "limit": 50,
+                "offset": 0,
+                "has_more": True,
+                "query_latency_ms": 22.1,
+            }
+        }
+    )
+
 
 class TraverseResponse(BaseModel):
     """Response for graph traversal."""
@@ -361,6 +387,18 @@ class TraverseResponse(BaseModel):
     max_depth_reached: int = Field(..., description="Actual depth reached")
     query_latency_ms: float = Field(..., description="Query latency in milliseconds")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "subgraph": {"nodes": [], "edges": []},
+                "nodes": [],
+                "relationships": [],
+                "max_depth_reached": 2,
+                "query_latency_ms": 35.4,
+            }
+        }
+    )
 
 
 class CausalChainResponse(BaseModel):
@@ -395,6 +433,18 @@ class CypherQueryResponse(BaseModel):
     read_only: bool = Field(..., description="Whether query was read-only")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "results": [{"h.name": "Dr. Smith", "h.specialty": "Oncology"}],
+                "columns": ["h.name", "h.specialty"],
+                "row_count": 10,
+                "query_latency_ms": 12.8,
+                "read_only": True,
+            }
+        }
+    )
+
 
 class AddEpisodeResponse(BaseModel):
     """Response for adding a knowledge episode."""
@@ -410,6 +460,23 @@ class AddEpisodeResponse(BaseModel):
     processing_latency_ms: float = Field(..., description="Processing latency in milliseconds")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "episode_id": "ep_abc123",
+                "extracted_entities": [
+                    {"type": "HCP", "name": "Dr. Smith"},
+                    {"type": "Brand", "name": "Kisqali"},
+                ],
+                "extracted_relationships": [
+                    {"type": "PRESCRIBES", "source": "Dr. Smith", "target": "Kisqali"}
+                ],
+                "content_summary": "HCP prescription event for breast cancer treatment.",
+                "processing_latency_ms": 210.5,
+            }
+        }
+    )
+
 
 class SearchGraphResponse(BaseModel):
     """Response for natural language graph search."""
@@ -419,6 +486,17 @@ class SearchGraphResponse(BaseModel):
     query: str = Field(..., description="Original query")
     query_latency_ms: float = Field(..., description="Query latency in milliseconds")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "results": [{"node_id": "n_001", "label": "KPI", "score": 0.95}],
+                "total_results": 5,
+                "query": "What factors impact TRx in the Northeast?",
+                "query_latency_ms": 95.3,
+            }
+        }
+    )
 
 
 class GraphStatsResponse(BaseModel):
@@ -432,6 +510,19 @@ class GraphStatsResponse(BaseModel):
     total_communities: int = Field(default=0, description="Total communities")
     last_updated: Optional[datetime] = Field(None, description="Last graph update time")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total_nodes": 1250,
+                "total_relationships": 3400,
+                "nodes_by_type": {"HCP": 450, "Brand": 12, "Patient": 600, "KPI": 48},
+                "relationships_by_type": {"PRESCRIBES": 1200, "CAUSES": 800, "IMPACTS": 600},
+                "total_episodes": 320,
+                "total_communities": 15,
+            }
+        }
+    )
 
 
 class NodeNetworkResponse(BaseModel):

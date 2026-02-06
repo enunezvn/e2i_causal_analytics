@@ -30,9 +30,19 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/resources", tags=["Resource Optimization"])
+router = APIRouter(
+    prefix="/resources",
+    tags=["Resource Optimization"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -247,6 +257,8 @@ class OptimizationResponse(BaseModel):
             "example": {
                 "optimization_id": "opt_abc123",
                 "status": "completed",
+                "resource_type": "budget",
+                "objective": "maximize_roi",
                 "objective_value": 450000,
                 "projected_roi": 2.25,
             }
@@ -289,6 +301,7 @@ _optimizations_store: Dict[str, OptimizationResponse] = {}
     "/optimize",
     response_model=OptimizationResponse,
     summary="Run resource optimization",
+    operation_id="run_optimization",
     description="Optimize resource allocation across entities.",
 )
 async def run_optimization(
@@ -357,6 +370,7 @@ async def run_optimization(
     "/{optimization_id}",
     response_model=OptimizationResponse,
     summary="Get optimization results",
+    operation_id="get_optimization",
     description="Retrieve results of an optimization by ID.",
 )
 async def get_optimization(optimization_id: str) -> OptimizationResponse:
@@ -385,6 +399,7 @@ async def get_optimization(optimization_id: str) -> OptimizationResponse:
     "/scenarios",
     response_model=ScenarioListResponse,
     summary="List scenario analyses",
+    operation_id="list_scenarios",
     description="List scenario analyses from all optimizations.",
 )
 async def list_scenarios(
@@ -426,6 +441,7 @@ async def list_scenarios(
     "/health",
     response_model=ResourceHealthResponse,
     summary="Resource optimization service health",
+    operation_id="get_resource_health",
     description="Check health status of the resource optimization service.",
 )
 async def get_resource_health() -> ResourceHealthResponse:

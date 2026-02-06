@@ -35,9 +35,19 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/health-score", tags=["Health Score"])
+router = APIRouter(
+    prefix="/health-score",
+    tags=["Health Score"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -209,6 +219,7 @@ class HealthScoreResponse(BaseModel):
                 "warnings": ["Model 'churn_predictor' has degraded accuracy (0.72)"],
                 "health_summary": "System health is good (Grade: B, Score: 85.5/100).",
                 "check_latency_ms": 1250,
+                "timestamp": "2026-02-06T12:00:00Z",
             }
         }
     )
@@ -307,6 +318,7 @@ _health_history: List[HealthScoreResponse] = []
     "/check",
     response_model=HealthScoreResponse,
     summary="Run health check",
+    operation_id="run_health_check",
     description="Run a health check with specified scope.",
 )
 async def run_health_check(
@@ -352,6 +364,7 @@ async def run_health_check(
     "/quick",
     response_model=HealthScoreResponse,
     summary="Quick health check",
+    operation_id="quick_health_check",
     description="Run a quick health check (<1s target).",
 )
 async def quick_health_check() -> HealthScoreResponse:
@@ -370,6 +383,7 @@ async def quick_health_check() -> HealthScoreResponse:
     "/full",
     response_model=HealthScoreResponse,
     summary="Full health check",
+    operation_id="full_health_check",
     description="Run a comprehensive health check (<5s target).",
 )
 async def full_health_check() -> HealthScoreResponse:
@@ -388,6 +402,7 @@ async def full_health_check() -> HealthScoreResponse:
     "/components",
     response_model=ComponentHealthResponse,
     summary="Component health",
+    operation_id="get_component_health",
     description="Check health of system components.",
 )
 async def get_component_health() -> ComponentHealthResponse:
@@ -427,6 +442,7 @@ async def get_component_health() -> ComponentHealthResponse:
     "/models",
     response_model=ModelHealthResponse,
     summary="Model health",
+    operation_id="get_model_health",
     description="Check health of deployed ML models.",
 )
 async def get_model_health() -> ModelHealthResponse:
@@ -466,6 +482,7 @@ async def get_model_health() -> ModelHealthResponse:
     "/pipelines",
     response_model=PipelineHealthResponse,
     summary="Pipeline health",
+    operation_id="get_pipeline_health",
     description="Check health of data pipelines.",
 )
 async def get_pipeline_health() -> PipelineHealthResponse:
@@ -505,6 +522,7 @@ async def get_pipeline_health() -> PipelineHealthResponse:
     "/agents",
     response_model=AgentHealthResponse,
     summary="Agent health",
+    operation_id="get_agent_health",
     description="Check health of system agents.",
 )
 async def get_agent_health() -> AgentHealthResponse:
@@ -548,6 +566,7 @@ async def get_agent_health() -> AgentHealthResponse:
     "/history",
     response_model=HealthHistoryResponse,
     summary="Health check history",
+    operation_id="get_health_history",
     description="Get history of health checks.",
 )
 async def get_health_history(
@@ -601,6 +620,7 @@ async def get_health_history(
     "/status",
     response_model=HealthServiceStatus,
     summary="Service status",
+    operation_id="get_health_service_status",
     description="Get health score service status.",
 )
 async def get_service_status() -> HealthServiceStatus:

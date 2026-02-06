@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.tool_composer import compose_query
 from src.api.routes.chatbot_dspy import (
@@ -122,6 +122,19 @@ class E2IDataQueryInput(BaseModel):
         description="Additional filters as key-value pairs",
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query_type": "kpi",
+                "brand": "Kisqali",
+                "region": "US",
+                "kpi_name": "TRx",
+                "time_range": "last_30_days",
+                "limit": 10,
+            }
+        }
+    )
+
 
 class CausalAnalysisInput(BaseModel):
     """Input schema for causal_analysis_tool."""
@@ -148,6 +161,18 @@ class CausalAnalysisInput(BaseModel):
         description="Minimum confidence threshold for causal relationships",
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kpi_name": "TRx",
+                "brand": "Kisqali",
+                "region": "US",
+                "time_period": "last_30_days",
+                "min_confidence": 0.7,
+            }
+        }
+    )
+
 
 class AgentRoutingInput(BaseModel):
     """Input schema for agent_routing_tool."""
@@ -160,6 +185,16 @@ class AgentRoutingInput(BaseModel):
     context: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Additional context for routing decision",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Why did TRx drop for Kisqali in Q3?",
+                "target_agent": "causal_impact",
+                "context": {"intent": "causal_analysis", "brand": "Kisqali"},
+            }
+        }
     )
 
 
@@ -176,6 +211,16 @@ class ConversationMemoryInput(BaseModel):
     include_tool_calls: bool = Field(
         default=True,
         description="Whether to include tool call details",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "session_id": "sess_abc123def456",
+                "message_count": 10,
+                "include_tool_calls": True,
+            }
+        }
     )
 
 
@@ -196,6 +241,17 @@ class DocumentRetrievalInput(BaseModel):
     kpi_name: Optional[str] = Field(
         default=None,
         description="KPI name for targeted retrieval",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Kisqali conversion rate trends",
+                "k": 5,
+                "brand": "Kisqali",
+                "kpi_name": "conversion_rate",
+            }
+        }
     )
 
 
@@ -222,6 +278,18 @@ class OrchestratorToolInput(BaseModel):
         description="Session ID for context continuity",
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Analyze the impact of rep visits on Kisqali TRx in the Northeast",
+                "target_agent": "causal_impact",
+                "brand": "Kisqali",
+                "region": "US",
+                "session_id": "sess_abc123",
+            }
+        }
+    )
+
 
 class ToolComposerToolInput(BaseModel):
     """Input schema for tool_composer_tool."""
@@ -246,6 +314,18 @@ class ToolComposerToolInput(BaseModel):
         ge=1,
         le=5,
         description="Maximum number of parallel tool executions",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "Compare TRx trends across Kisqali, Fabhalta, and Remibrutinib, then explain causal factors",
+                "brand": None,
+                "region": "US",
+                "session_id": "sess_abc123",
+                "max_parallel": 3,
+            }
+        }
     )
 
 

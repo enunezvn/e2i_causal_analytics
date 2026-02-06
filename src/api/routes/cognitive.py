@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.working_memory import get_working_memory
 from src.rag.retriever import hybrid_search
 
@@ -50,7 +51,15 @@ def get_orchestrator():
     return _orchestrator_instance
 
 
-router = APIRouter(prefix="/cognitive", tags=["Cognitive Workflow"])
+router = APIRouter(
+    prefix="/cognitive",
+    tags=["Cognitive Workflow"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+        422: {"model": ValidationErrorResponse, "description": "Validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 
 
 # =============================================================================
@@ -217,7 +226,12 @@ class CreateSessionResponse(BaseModel):
 # =============================================================================
 
 
-@router.post("/query", response_model=CognitiveQueryResponse)
+@router.post(
+    "/query",
+    response_model=CognitiveQueryResponse,
+    summary="Process cognitive query",
+    operation_id="process_cognitive_query",
+)
 async def process_cognitive_query(
     request: CognitiveQueryRequest, background_tasks: BackgroundTasks
 ) -> CognitiveQueryResponse:
@@ -391,7 +405,12 @@ async def process_cognitive_query(
         raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}") from e
 
 
-@router.get("/session/{session_id}", response_model=SessionResponse)
+@router.get(
+    "/session/{session_id}",
+    response_model=SessionResponse,
+    summary="Get cognitive session",
+    operation_id="get_cognitive_session",
+)
 async def get_session(session_id: str) -> SessionResponse:
     """
     Get the current state of a cognitive session.
@@ -460,7 +479,12 @@ async def get_session(session_id: str) -> SessionResponse:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve session: {str(e)}") from e
 
 
-@router.post("/session", response_model=CreateSessionResponse)
+@router.post(
+    "/session",
+    response_model=CreateSessionResponse,
+    summary="Create cognitive session",
+    operation_id="create_cognitive_session",
+)
 async def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
     """
     Create a new cognitive session.
@@ -499,7 +523,11 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}") from e
 
 
-@router.delete("/session/{session_id}")
+@router.delete(
+    "/session/{session_id}",
+    summary="Delete cognitive session",
+    operation_id="delete_cognitive_session",
+)
 async def delete_session(session_id: str) -> Dict[str, Any]:
     """
     Delete a cognitive session and its associated data.
@@ -670,7 +698,12 @@ class CognitiveRAGResponse(BaseModel):
     )
 
 
-@router.post("/rag", response_model=CognitiveRAGResponse)
+@router.post(
+    "/rag",
+    response_model=CognitiveRAGResponse,
+    summary="Cognitive RAG search",
+    operation_id="cognitive_rag_search",
+)
 async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResponse:
     """
     Execute DSPy-enhanced 4-phase cognitive RAG workflow.
