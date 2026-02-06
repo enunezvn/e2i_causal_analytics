@@ -408,14 +408,15 @@ class TestFalkorDBCircuitBreakerIntegration:
         """Test that circuit breaker opens after repeated failures."""
         import src.api.dependencies.falkordb_client as falkordb_module
         from src.api.dependencies.falkordb_client import falkordb_health_check
-        from src.utils.circuit_breaker import CircuitState
 
         # Initialize connection first
         await falkordb_module.init_falkordb()
 
         # Reset circuit breaker
-        falkordb_module._health_circuit_breaker._state = CircuitState.CLOSED
-        falkordb_module._health_circuit_breaker._consecutive_failures = 0
+        falkordb_module._health_circuit_breaker._state = (
+            falkordb_module._health_circuit_breaker.CircuitState.CLOSED
+        )
+        falkordb_module._health_circuit_breaker._failure_count = 0
 
         # Simulate failures by patching get_falkordb to fail
         async def failing_get_falkordb():
@@ -436,8 +437,10 @@ class TestFalkorDBCircuitBreakerIntegration:
         assert result["status"] == "circuit_open"
 
         # Reset for other tests
-        falkordb_module._health_circuit_breaker._state = CircuitState.CLOSED
-        falkordb_module._health_circuit_breaker._consecutive_failures = 0
+        falkordb_module._health_circuit_breaker._state = (
+            falkordb_module._health_circuit_breaker.CircuitState.CLOSED
+        )
+        falkordb_module._health_circuit_breaker._failure_count = 0
 
     async def test_circuit_breaker_resets_on_success(self, clean_falkordb_client):
         """Test that circuit breaker resets after successful health check."""
@@ -446,20 +449,21 @@ class TestFalkorDBCircuitBreakerIntegration:
             falkordb_health_check,
             init_falkordb,
         )
-        from src.utils.circuit_breaker import CircuitState
 
         await init_falkordb()
 
         # Reset circuit breaker state with some failures
-        falkordb_module._health_circuit_breaker._state = CircuitState.CLOSED
-        falkordb_module._health_circuit_breaker._consecutive_failures = 2
+        falkordb_module._health_circuit_breaker._state = (
+            falkordb_module._health_circuit_breaker.CircuitState.CLOSED
+        )
+        falkordb_module._health_circuit_breaker._failure_count = 2
 
         # Successful health check should reset failure count
         result = await falkordb_health_check()
         assert result["status"] == "healthy"
 
         # Failure count should be reset
-        assert falkordb_module._health_circuit_breaker._consecutive_failures == 0
+        assert falkordb_module._health_circuit_breaker._failure_count == 0
 
 
 # =============================================================================
