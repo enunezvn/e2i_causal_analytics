@@ -30,14 +30,25 @@ jobs:
 
       - name: Export OpenAPI JSON
         run: |
-          python -m scripts.export_openapi --output openapi.json
+          mkdir -p docs/api
+          python -m scripts.export_openapi --output docs/api/openapi.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v4
         with:
           name: openapi-spec
-          path: openapi.json
+          path: docs/api/openapi.json
           retention-days: 5
+
+      - name: Auto-commit spec to repo
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/api/openapi.json
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: update OpenAPI spec [skip ci]"
+          git push
 
   lint-spec:
     name: Spectral lint
@@ -57,3 +68,26 @@ jobs:
 
       - name: Lint OpenAPI spec
         run: spectral lint openapi.json --ruleset .spectral.yml
+
+  generate-docs:
+    name: Generate Redoc HTML
+    needs: export-spec
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download spec artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi-spec
+
+      - name: Generate Redoc HTML
+        run: |
+          npx --yes @redocly/cli build-docs openapi.json \
+            --output index.html \
+            --title "E2I Causal Analytics API"
+
+      - name: Upload Redoc HTML artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: redoc-html
+          path: index.html
+          retention-days: 30

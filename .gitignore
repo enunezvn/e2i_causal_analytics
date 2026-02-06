@@ -108,7 +108,10 @@ temp/
 archive/
 
 # Documentation (kept locally, not tracked)
-docs/
+docs/*
+!docs/api/
+docs/api/*
+!docs/api/openapi.json
 
 # OS
 Thumbs.db

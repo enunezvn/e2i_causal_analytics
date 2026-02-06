@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate
+.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -14,6 +14,7 @@ help:
 	@echo "  make test-cov      Run tests with full coverage (HTML + XML reports)"
 	@echo "  make lint          Run linting checks"
 	@echo "  make format        Format code with black"
+	@echo "  make api-docs      Generate OpenAPI spec + Redoc HTML"
 	@echo "  make clean         Clean build artifacts"
 	@echo ""
 	@echo "Docker:"
@@ -96,3 +97,6 @@ db-init:
 data-generate:
 	python src/ml/data_generator.py
 	python src/ml/data_loader.py
+
+api-docs:
+	./scripts/generate_api_docs.sh

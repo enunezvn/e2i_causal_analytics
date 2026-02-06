@@ -453,7 +453,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="E2I Causal Analytics Platform",
-    description="18-Agent architecture for causal inference, ML interpretability, and digital twin generation",
+    description="21-Agent architecture for causal inference, ML interpretability, and digital twin generation",
     version="4.2.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
