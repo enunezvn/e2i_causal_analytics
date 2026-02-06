@@ -58,7 +58,14 @@ class TestFalkorDBClient:
         env_clean = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT", "FALKORDB_GRAPH_NAME")
+            if k
+            not in (
+                "FALKORDB_URL",
+                "FALKORDB_HOST",
+                "FALKORDB_PORT",
+                "FALKORDB_PASSWORD",
+                "FALKORDB_GRAPH_NAME",
+            )
         }
         with patch("falkordb.FalkorDB") as mock_falkordb:
             with patch.dict("os.environ", env_clean, clear=True):
@@ -67,7 +74,7 @@ class TestFalkorDBClient:
                 client = await init_falkordb()
 
                 assert client is not None
-                mock_falkordb.assert_called_once_with(host="localhost", port=6379)
+                mock_falkordb.assert_called_once_with(host="localhost", port=6379, password=None)
                 mock_client.select_graph.assert_called_once_with("e2i_causal")
                 mock_client.list_graphs.assert_called_once()
 
@@ -87,7 +94,14 @@ class TestFalkorDBClient:
         env_clean = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT", "FALKORDB_GRAPH_NAME")
+            if k
+            not in (
+                "FALKORDB_URL",
+                "FALKORDB_HOST",
+                "FALKORDB_PORT",
+                "FALKORDB_PASSWORD",
+                "FALKORDB_GRAPH_NAME",
+            )
         }
         env_clean.update(
             {
@@ -102,7 +116,7 @@ class TestFalkorDBClient:
 
                 await init_falkordb()
 
-                mock_falkordb.assert_called_once_with(host="custom-host", port=7000)
+                mock_falkordb.assert_called_once_with(host="custom-host", port=7000, password=None)
                 mock_client.select_graph.assert_called_once_with("custom_graph")
 
     @pytest.mark.asyncio

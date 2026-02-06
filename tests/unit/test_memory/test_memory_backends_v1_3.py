@@ -322,14 +322,18 @@ def test_get_supabase_client_missing_env_vars():
 
 def test_get_falkordb_client():
     """Test get_falkordb_client."""
-    with patch.dict("os.environ", {"FALKORDB_HOST": "test-host", "FALKORDB_PORT": "6381"}):
+    import os
+
+    env_clean = {k: v for k, v in os.environ.items() if k != "FALKORDB_PASSWORD"}
+    env_clean.update({"FALKORDB_HOST": "test-host", "FALKORDB_PORT": "6381"})
+    with patch.dict("os.environ", env_clean, clear=True):
         with patch("falkordb.FalkorDB") as mock_falkordb:
             mock_client = MagicMock()
             mock_falkordb.return_value = mock_client
 
             client = get_falkordb_client()
 
-            mock_falkordb.assert_called_once_with(host="test-host", port=6381)
+            mock_falkordb.assert_called_once_with(host="test-host", port=6381, password=None)
             assert client == mock_client
 
 
