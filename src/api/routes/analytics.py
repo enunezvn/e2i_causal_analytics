@@ -353,7 +353,7 @@ async def get_analytics_dashboard(
     period: str = Query(
         default="7d",
         description="Time period: 1d, 7d, 30d, 90d",
-        regex="^(1d|7d|30d|90d)$",
+        pattern="^(1d|7d|30d|90d)$",
     ),
     brand: Optional[str] = Query(default=None, description="Filter by brand"),
     user: Optional[Dict[str, Any]] = Depends(get_current_user),
@@ -464,7 +464,7 @@ async def get_analytics_dashboard(
 )
 async def get_agent_metrics(
     agent_name: str,
-    period: str = Query(default="7d", regex="^(1d|7d|30d|90d)$"),
+    period: str = Query(default="7d", pattern="^(1d|7d|30d|90d)$"),
     brand: Optional[str] = Query(default=None),
     user: Dict[str, Any] = Depends(require_auth),
 ) -> AgentMetrics:
@@ -513,7 +513,7 @@ async def get_agent_metrics(
 )
 async def get_agent_trend(
     agent_name: str,
-    period: str = Query(default="7d", regex="^(1d|7d|30d|90d)$"),
+    period: str = Query(default="7d", pattern="^(1d|7d|30d|90d)$"),
     brand: Optional[str] = Query(default=None),
     user: Dict[str, Any] = Depends(require_auth),
 ) -> AgentPerformanceTrend:
@@ -558,7 +558,7 @@ async def get_agent_trend(
     description="Get a quick summary of query execution metrics.",
 )
 async def get_metrics_summary(
-    period: str = Query(default="24h", regex="^(1h|6h|24h|7d)$"),
+    period: str = Query(default="24h", pattern="^(1h|6h|24h|7d)$"),
     user: Dict[str, Any] = Depends(require_auth),
 ) -> QueryMetricsSummary:
     """Get quick metrics summary for header/status display."""
