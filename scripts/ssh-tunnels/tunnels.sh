@@ -15,10 +15,15 @@ start_tunnels() {
   echo "  Frontend (HTTP):  http://localhost:3002"
   echo "  MLflow:           http://localhost:5000"
   echo "  BentoML:          http://localhost:3000"
-  echo "  Opik:             http://localhost:5173"
+  echo "  Opik UI:          http://localhost:5173"
+  echo "  Opik Backend:     http://localhost:8084"
+  echo "  Opik Py Backend:  http://localhost:8001"
+  echo "  Opik MinIO:       http://localhost:9090"
   echo "  FalkorDB Browser: http://localhost:3030"
   echo "  Supabase Studio:  http://localhost:3001"
-  echo "  Grafana:          http://localhost:3100"
+  echo "  Prometheus:       http://localhost:9091"
+  echo "  Grafana:          http://localhost:3200"
+  echo "  Loki:             http://localhost:3101"
   echo "  Alertmanager:     http://localhost:9093"
   echo ""
   echo "Press Ctrl+C to stop."
@@ -30,9 +35,14 @@ start_tunnels() {
     -L 5000:localhost:5000 \
     -L 3000:localhost:3000 \
     -L 5173:localhost:5173 \
+    -L 8084:localhost:8084 \
+    -L 8001:localhost:8001 \
+    -L 9090:localhost:9090 \
     -L 3030:localhost:3030 \
     -L 3001:localhost:3001 \
-    -L 3100:localhost:3100 \
+    -L 9091:localhost:9091 \
+    -L 3200:localhost:3200 \
+    -L 3101:localhost:3101 \
     -L 9093:localhost:9093 \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \

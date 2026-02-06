@@ -8,10 +8,16 @@
 #   localhost:3002  → E2I Frontend (HTTP)
 #   localhost:5000  → MLflow
 #   localhost:3000  → BentoML
-#   localhost:5173  → Opik
+#   localhost:5173  → Opik UI
+#   localhost:8084  → Opik Backend
+#   localhost:8001  → Opik Python Backend
+#   localhost:9090  → Opik MinIO Console
 #   localhost:3030  → FalkorDB Browser
 #   localhost:3001  → Supabase Studio
-#   localhost:3100  → Grafana
+#   localhost:9091  → Prometheus
+#   localhost:3200  → Grafana
+#   localhost:3101  → Loki
+#   localhost:9093  → Alertmanager
 #
 # Prerequisites:
 #   - autossh installed (brew install autossh / apt install autossh)
@@ -32,10 +38,16 @@ declare -A TUNNELS=(
   ["e2i-frontend"]="3002:localhost:3002"
   ["e2i-mlflow"]="5000:localhost:5000"
   ["e2i-bentoml"]="3000:localhost:3000"
-  ["e2i-opik"]="5173:localhost:5173"
+  ["e2i-opik-ui"]="5173:localhost:5173"
+  ["e2i-opik-backend"]="8084:localhost:8084"
+  ["e2i-opik-python"]="8001:localhost:8001"
+  ["e2i-opik-minio"]="9090:localhost:9090"
   ["e2i-falkordb"]="3030:localhost:3030"
   ["e2i-supabase"]="3001:localhost:3001"
-  ["e2i-grafana"]="3100:localhost:3100"
+  ["e2i-prometheus"]="9091:localhost:9091"
+  ["e2i-grafana"]="3200:localhost:3200"
+  ["e2i-loki"]="3101:localhost:3101"
+  ["e2i-alertmanager"]="9093:localhost:9093"
 )
 
 check_deps() {
@@ -104,10 +116,16 @@ UNIT
   echo "  Frontend (HTTP):  http://localhost:3002"
   echo "  MLflow:           http://localhost:5000"
   echo "  BentoML:          http://localhost:3000"
-  echo "  Opik:             http://localhost:5173"
+  echo "  Opik UI:          http://localhost:5173"
+  echo "  Opik Backend:     http://localhost:8084"
+  echo "  Opik Py Backend:  http://localhost:8001"
+  echo "  Opik MinIO:       http://localhost:9090"
   echo "  FalkorDB Browser: http://localhost:3030"
   echo "  Supabase Studio:  http://localhost:3001"
-  echo "  Grafana:          http://localhost:3100"
+  echo "  Prometheus:       http://localhost:9091"
+  echo "  Grafana:          http://localhost:3200"
+  echo "  Loki:             http://localhost:3101"
+  echo "  Alertmanager:     http://localhost:9093"
   echo ""
   echo "Management:"
   echo "  Status:  systemctl --user status e2i-*-tunnel"

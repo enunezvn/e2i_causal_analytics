@@ -534,10 +534,15 @@ This forwards:
 | 3002 | 3002 | Frontend (direct Vite) |
 | 5000 | 5000 | MLflow |
 | 3000 | 3000 | BentoML |
-| 5173 | 5173 | Opik |
+| 5173 | 5173 | Opik UI |
+| 8084 | 8084 | Opik Backend |
+| 8001 | 8001 | Opik Python Backend |
+| 9090 | 9090 | Opik MinIO Console |
 | 3030 | 3030 | FalkorDB Browser |
 | 3001 | 3001 | Supabase Studio |
-| 3100 | 3100 | Grafana |
+| 9091 | 9091 | Prometheus |
+| 3200 | 3200 | Grafana |
+| 3101 | 3101 | Loki |
 | 9093 | 9093 | Alertmanager |
 
 **Stop tunnels:**

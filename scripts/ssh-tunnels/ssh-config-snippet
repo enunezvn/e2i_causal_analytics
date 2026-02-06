@@ -10,9 +10,15 @@ Host e2i-tunnels
     LocalForward 5000 localhost:5000
     LocalForward 3000 localhost:3000
     LocalForward 5173 localhost:5173
+    LocalForward 8084 localhost:8084
+    LocalForward 8001 localhost:8001
+    LocalForward 9090 localhost:9090
     LocalForward 3030 localhost:3030
     LocalForward 3001 localhost:3001
-    LocalForward 3100 localhost:3100
+    LocalForward 9091 localhost:9091
+    LocalForward 3200 localhost:3200
+    LocalForward 3101 localhost:3101
+    LocalForward 9093 localhost:9093
     ServerAliveInterval 30
     ServerAliveCountMax 3
     ExitOnForwardFailure yes
