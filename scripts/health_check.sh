@@ -56,13 +56,7 @@ check_http "http://localhost:3000/healthz" "BentoML" 10 || true
 check_http "http://localhost:6566/health" "Feast" || true
 check_http "http://localhost:5173/health" "Opik (UI)" 5 || \
   check_http "http://localhost:5174/health" "Opik (API)" 5 || true
-check_http "http://localhost:3002/health" "Frontend (Docker)" || \
-  check_http "https://localhost" "Frontend (Host Nginx)" || true
-# Undo double-count: fallback chain increments UNHEALTHY for the first check
-# even when the second succeeds; correct by decrementing if nginx is serving
-if curl -sfk --max-time 5 "https://localhost" > /dev/null 2>&1; then
-  ((UNHEALTHY > 0 && UNHEALTHY--)) || true
-fi
+check_http "http://localhost:3002" "Frontend (Vite Dev)" || true
 
 # =============================================================================
 # SUPABASE SERVICES
@@ -102,7 +96,9 @@ echo ""
 echo "--- Memory Systems ---"
 
 # Redis
-if docker exec e2i_redis redis-cli -a "${REDIS_PASSWORD:-changeme}" ping 2>/dev/null | grep -q PONG; then
+REDIS_CONTAINER=$(docker ps --filter "name=redis" --filter "label=e2i.service=infrastructure" --filter "label=e2i.memory=working" --format "{{.Names}}" | head -1)
+REDIS_CONTAINER="${REDIS_CONTAINER:-e2i_redis}"
+if docker exec "$REDIS_CONTAINER" redis-cli -a "${REDIS_PASSWORD:-changeme}" ping 2>/dev/null | grep -q PONG; then
   echo -e "${GREEN}✅ Redis (Working Memory) - HEALTHY${NC}"
   ((HEALTHY++)) || true
 else
@@ -111,7 +107,9 @@ else
 fi
 
 # FalkorDB
-if docker exec e2i_falkordb redis-cli -a "${FALKORDB_PASSWORD:-changeme}" ping 2>/dev/null | grep -q PONG; then
+FALKOR_CONTAINER=$(docker ps --filter "name=falkordb" --filter "label=e2i.service=infrastructure" --filter "label=e2i.memory=semantic" --format "{{.Names}}" | head -1)
+FALKOR_CONTAINER="${FALKOR_CONTAINER:-e2i_falkordb}"
+if docker exec "$FALKOR_CONTAINER" redis-cli -a "${FALKORDB_PASSWORD:-changeme}" ping 2>/dev/null | grep -q PONG; then
   echo -e "${GREEN}✅ FalkorDB (Semantic Memory) - HEALTHY${NC}"
   ((HEALTHY++)) || true
 else
@@ -155,7 +153,7 @@ check_worker "Worker Medium" "worker_medium"
 check_worker "Worker Heavy" "worker_heavy"
 
 # Scheduler
-if docker ps --filter "name=e2i_scheduler" --filter "status=running" -q | grep -q .; then
+if docker ps --filter "name=scheduler" --filter "status=running" -q | grep -q .; then
   echo -e "${GREEN}✅ Celery Beat (Scheduler) - RUNNING${NC}"
   ((HEALTHY++)) || true
 else

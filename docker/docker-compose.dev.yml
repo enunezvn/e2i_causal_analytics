@@ -21,6 +21,14 @@ services:
     build:
       target: development  # Use development stage of Dockerfile
     container_name: e2i_api_dev
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     ports:
       - "8000:8000"
       - "5678:5678"  # debugpy port for VS Code debugging
@@ -73,7 +81,7 @@ services:
   worker_light:
     build:
       target: development
-    container_name: e2i_worker_light_dev
+    # NOTE: no container_name — base compose has replicas: 2, which conflicts with container_name
     volumes:
       - ../src:/app/src
       - ../config:/app/config
@@ -86,7 +94,7 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=512M,mode=1777
+      - /app/tmp:size=512M,mode=1770
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
@@ -120,7 +128,7 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=2G,mode=1777
+      - /app/tmp:size=2G,mode=1770
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
@@ -154,7 +162,7 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=4G,mode=1777
+      - /app/tmp:size=4G,mode=1770
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
@@ -198,7 +206,9 @@ services:
     build:
       target: development
     container_name: e2i_frontend_dev
-    ports:
+    # Override base ports (base has 3002:80, dev needs 3002:5173)
+    # Compose merges port arrays, so we must use !override to replace
+    ports: !override
       - "3002:5173"  # Vite dev server port
     volumes:
       # -----------------------------------------------------------------------
@@ -212,8 +222,8 @@ services:
       - /app/node_modules
     environment:
       - NODE_ENV=development
-      - VITE_API_URL=http://localhost:8000
-      - VITE_WS_URL=ws://localhost:8000
+      - VITE_API_URL=/api
+      - VITE_WS_URL=wss://eznomics.site
     command: npm run dev -- --host 0.0.0.0 --port 5173
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5173"]
@@ -228,9 +238,7 @@ services:
     container_name: e2i_mlflow_dev
     environment:
       - MLFLOW_TRACKING_URI=sqlite:///mlflow/db/mlflow.db
-    # Expose artifact browser in dev
-    ports:
-      - "5000:5000"
+    # Port 5000 already exposed by base compose (127.0.0.1:5000:5000)
 
   opik:
     container_name: e2i_opik_dev
@@ -243,8 +251,14 @@ services:
   
   redis:
     container_name: e2i_redis_dev
-    # Optional: Enable Redis debugging
-    command: redis-server --appendonly yes --loglevel verbose
+    # Preserve auth + memory limit from base, add verbose logging for dev
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      --loglevel verbose
 
   falkordb:
     container_name: e2i_falkordb_dev
@@ -262,7 +276,7 @@ services:
     ports:
       - "5555:5555"
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
       - FLOWER_PORT=5555
       - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
     networks:
@@ -282,7 +296,7 @@ services:
     ports:
       - "8081:8081"
     environment:
-      - REDIS_HOSTS=working:redis:6379:0,celery-broker:redis:6379:1,celery-results:redis:6379:2,semantic:falkordb:6379:0
+      - REDIS_HOSTS=working:redis:6379:0:${REDIS_PASSWORD},celery-broker:redis:6379:1:${REDIS_PASSWORD},celery-results:redis:6379:2:${REDIS_PASSWORD},semantic:falkordb:6379:0:${FALKORDB_PASSWORD}
     networks:
       - e2i_network
     depends_on:
@@ -309,8 +323,8 @@ services:
       - ENVIRONMENT=test
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
-      - REDIS_URL=redis://redis:6379/0
-      - FALKORDB_URL=redis://falkordb:6380/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - FALKORDB_URL=redis://:${FALKORDB_PASSWORD}@falkordb:6379/0
       - PYTHONDONTWRITEBYTECODE=1
     command: pytest tests/ -v --cov=src --cov-report=html
     networks:

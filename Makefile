@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down db-init data-generate
+.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -17,8 +17,11 @@ help:
 	@echo "  make clean         Clean build artifacts"
 	@echo ""
 	@echo "Docker:"
-	@echo "  make docker-up     Start Docker services (Redis, FalkorDB)"
-	@echo "  make docker-down   Stop Docker services"
+	@echo "  make docker-up     Start all services (compose + dev overlay)"
+	@echo "  make docker-down   Stop all services"
+	@echo "  make docker-logs   Tail logs for API + frontend"
+	@echo "  make deploy        Deploy: git pull + restart workers"
+	@echo "  make deploy-build  Deploy with image rebuild"
 	@echo ""
 	@echo "Database:"
 	@echo "  make db-init       Initialize database schemas"
@@ -72,14 +75,19 @@ clean:
 	rm -rf build/ dist/ .pytest_cache/ .mypy_cache/ .ruff_cache/
 
 docker-up:
-	docker run -d --name e2i_redis -p 6382:6379 redis:latest || true
-	docker run -d --name e2i_falkordb -p 6381:6379 falkordb/falkordb:latest || true
-	@echo "Docker services started: Redis (6382), FalkorDB (6381)"
+	docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 
 docker-down:
-	docker stop e2i_redis e2i_falkordb 2>/dev/null || true
-	docker rm e2i_redis e2i_falkordb 2>/dev/null || true
-	@echo "Docker services stopped"
+	docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml down
+
+docker-logs:
+	docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml logs -f api frontend
+
+deploy:
+	./scripts/deploy.sh
+
+deploy-build:
+	./scripts/deploy.sh --build
 
 db-init:
 	@echo "Initializing database schemas..."

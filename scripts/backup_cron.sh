@@ -6,7 +6,7 @@
 # Also invokes data store backups (Redis + FalkorDB).
 #
 # Crontab entry (daily at 2 AM):
-#   0 2 * * * /opt/e2i_causal_analytics/scripts/backup_cron.sh >> /var/log/e2i-backup.log 2>&1
+#   0 2 * * * /home/enunez/Projects/e2i_causal_analytics/scripts/backup_cron.sh >> /var/log/e2i-backup.log 2>&1
 #
 # Environment (set in crontab or sourced from .env):
 #   SUPABASE_DB_URL       - PostgreSQL connection string (for DB backup)

@@ -24,7 +24,7 @@ set -o pipefail
 # Configuration (override via env vars)
 # ---------------------------------------------------------------------------
 PROJECT="${E2I_PROJECT:-$(cd "$(dirname "$0")/.." && pwd)}"
-VENV="${E2I_VENV:-/opt/e2i_causal_analytics/.venv/bin}"
+VENV="${E2I_VENV:-$PROJECT/.venv/bin}"
 RESULTS_DIR="${E2I_RESULTS_DIR:-$PROJECT/docs/results}"
 RESULTS_FILE="$RESULTS_DIR/test_batch_results_$(date +%Y%m%d_%H%M%S).txt"
 RAM_THRESHOLD_HIGH="${RAM_THRESHOLD_HIGH:-4000}"

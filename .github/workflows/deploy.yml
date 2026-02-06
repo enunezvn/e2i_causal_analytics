@@ -128,39 +128,18 @@ jobs:
           script: |
             set -e
 
-            REGISTRY="ghcr.io"
-            IMAGE="${REGISTRY}/${{ env.IMAGE_NAME }}"
-            FRONTEND_IMAGE="${REGISTRY}/${{ env.FRONTEND_IMAGE_NAME }}"
+            PROJECT_DIR="/home/enunez/Projects/e2i_causal_analytics"
+            COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml"
             SHA="${{ github.sha }}"
             SHORT_SHA="${SHA:0:7}"
 
-            echo "==> Deploying ${IMAGE}:${SHORT_SHA}"
+            echo "==> Deploying ${SHORT_SHA}"
 
-            # Authenticate with GHCR
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${REGISTRY} -u ${{ github.actor }} --password-stdin
+            cd "$PROJECT_DIR"
+            git pull origin main
 
-            # Pull new images
-            docker pull "${IMAGE}:latest"
-            docker pull "${FRONTEND_IMAGE}:latest"
-
-            # Tag current running image as previous (for rollback)
-            if docker image inspect e2i-api:current >/dev/null 2>&1; then
-              docker tag e2i-api:current e2i-api:previous
-            fi
-            docker tag "${IMAGE}:latest" e2i-api:current
-
-            if docker image inspect e2i-frontend:current >/dev/null 2>&1; then
-              docker tag e2i-frontend:current e2i-frontend:previous
-            fi
-            docker tag "${FRONTEND_IMAGE}:latest" e2i-frontend:current
-
-            # Restart the services
-            cd /opt/e2i_causal_analytics
-            if docker compose ps --services 2>/dev/null | grep -q api; then
-              docker compose up -d --no-deps api frontend
-            else
-              sudo systemctl restart e2i-api
-            fi
+            # Restart workers and scheduler (API/frontend auto-reload via volume mounts)
+            $COMPOSE_CMD restart worker_light worker_medium scheduler
 
             # Wait for health check
             echo "==> Waiting for health check..."
@@ -172,11 +151,7 @@ jobs:
               sleep 2
             done
 
-            echo "==> Health check failed after 60s — rolling back"
-            if docker image inspect e2i-api:previous >/dev/null 2>&1; then
-              docker tag e2i-api:previous e2i-api:current
-              sudo systemctl restart e2i-api
-            fi
+            echo "==> Health check failed after 60s"
             exit 1
 
       - name: Deployment summary

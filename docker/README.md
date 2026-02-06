@@ -1,8 +1,8 @@
 # E2I Causal Analytics - Docker Development Setup
 
-How to run the full stack locally using the **root-level** compose files.
+How to run the full stack using the compose files with the dev overlay.
 
-> **Note**: Production runs on systemd (DigitalOcean droplet). These Docker files are for local development only.
+> **Note**: Both local development and the production droplet use the same Docker Compose setup (base + dev overlay). The dev overlay provides volume mounts for hot-reloading and debug settings.
 
 ## Prerequisites
 
@@ -18,11 +18,11 @@ git clone git@github.com:enunezvn/e2i_causal_analytics.git
 cd e2i_causal_analytics
 
 # 2. Create env file from template
-cp .env.example .env.dev
-# Edit .env.dev — fill in required keys (see Environment Variables below)
+cp .env.example .env
+# Edit .env — fill in required keys (see Environment Variables below)
 
 # 3. Start everything
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 
 # 4. Verify
 curl -s http://localhost:8000/health | python3 -m json.tool
@@ -34,71 +34,68 @@ First build pulls PyTorch + ML dependencies — subsequent starts use cached lay
 
 | Service | Port | URL | Description |
 |---------|------|-----|-------------|
-| API (FastAPI) | 8000 | http://localhost:8000 | Backend + 21 agents |
+| API (FastAPI) | 8000 | http://localhost:8000 | Backend + agents (auto-reloads) |
 | API Docs | 8000 | http://localhost:8000/docs | Swagger UI |
-| Frontend | 3000 | http://localhost:3000 | React app |
+| Frontend (Vite) | 3002 | http://localhost:3002 | React app (HMR) |
 | MLflow | 5000 | http://localhost:5000 | Experiment tracking |
-| Redis | 6379 | redis://localhost:6379 | Cache + task queue |
+| Redis | 6382 | redis://localhost:6382 | Cache + task queue |
 | FalkorDB | 6381 | redis://localhost:6381 | Graph database |
-| Grafana | 3100 | http://localhost:3100 | Dashboards |
+| Grafana | 3200 | http://localhost:3200 | Dashboards |
 | Prometheus | 9091 | http://localhost:9091 | Metrics |
 | Redis Commander* | 8081 | http://localhost:8081 | Redis web UI |
 
-\* Debug profile only — start with `--profile debug`
+\* Dev-tools profile only — start with `--profile dev-tools`
 
 ## Environment Variables
 
-### Required (must set in `.env.dev`)
+### Required (must set in `.env`)
 
 | Variable | Description |
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Claude API key for agents |
 | `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_ANON_KEY` | Supabase anonymous key |
+| `SUPABASE_KEY` | Supabase anonymous key |
 | `SUPABASE_SERVICE_KEY` | Supabase service role key |
+| `REDIS_PASSWORD` | Redis authentication password |
+| `FALKORDB_PASSWORD` | FalkorDB authentication password |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password |
+| `SUPABASE_DB_URL` | Supabase PostgreSQL connection string |
 
 ### Auto-configured (set by compose, no action needed)
 
-These are overridden in `docker-compose.dev.yml` to use Docker-internal DNS names:
+These are set in `docker-compose.yml` via the `x-common-env` anchor:
 
 | Variable | Docker Value | Why |
 |----------|-------------|-----|
-| `REDIS_URL` | `redis://redis:6379` | Container-to-container networking |
-| `FALKORDB_HOST` | `falkordb` | Docker DNS resolution |
-| `FALKORDB_URL` | `redis://falkordb:6379` | Docker DNS resolution |
+| `REDIS_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/0` | Authenticated container networking |
+| `FALKORDB_URL` | `redis://:${FALKORDB_PASSWORD}@falkordb:6379/0` | Authenticated container networking |
 | `MLFLOW_TRACKING_URI` | `http://mlflow:5000` | Docker DNS resolution |
-| `CELERY_BROKER_URL` | `redis://redis:6379/1` | Task queue broker |
-| `CELERY_RESULT_BACKEND` | `redis://redis:6379/2` | Task results store |
-
-> The `.env.example` file has `localhost` values which work for host-based development. The compose file overrides these with Docker DNS names so containers can talk to each other.
+| `CELERY_BROKER_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/1` | Authenticated task queue |
+| `CELERY_RESULT_BACKEND` | `redis://:${REDIS_PASSWORD}@redis:6379/2` | Authenticated results store |
 
 ## Common Commands
 
 ```bash
-# Start in foreground (see logs)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# Start all services
+make docker-up
 
-# Start detached
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Stop all services
+make docker-down
 
 # View logs
-docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f fastapi
-docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f agent-worker
+make docker-logs
 
-# Rebuild a single service
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build fastapi
+# Deploy (git pull + restart workers)
+make deploy
+
+# Deploy with rebuild
+make deploy-build
 
 # Shell into API container
-docker exec -it e2i-fastapi bash
+docker exec -it e2i_api_dev bash
 
-# Stop everything
-docker compose -f docker-compose.yml -f docker-compose.dev.yml down
-
-# Stop and remove volumes (reset data)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
-
-# Start with debug tools (Redis Commander)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile debug up
+# Start with debug tools (Redis Commander, FalkorDB Browser)
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml --profile dev-tools --profile debug up -d
 ```
 
 ## Troubleshooting
@@ -107,23 +104,23 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile debug u
 
 If a port is already in use, stop the conflicting service or change the port mapping in `docker-compose.dev.yml`.
 
-Common conflicts: port 3000 (React/BentoML), port 5000 (MLflow/macOS AirPlay).
+Common conflicts: port 3000 (BentoML), port 5000 (MLflow/macOS AirPlay), port 3001 (Supabase Studio).
 
 ### First build is slow
 
 Normal — the Dockerfile installs PyTorch, scikit-learn, and other ML dependencies. Subsequent builds use Docker layer caching.
 
-### Supabase connection errors
+### Redis/FalkorDB authentication errors
 
-Verify your `.env.dev` has correct Supabase credentials. The database is hosted externally (not in Docker), so your machine needs internet access.
+Ensure `REDIS_PASSWORD` and `FALKORDB_PASSWORD` are set in your `.env`. All connection URLs include authentication.
 
 ### Container can't reach Redis/FalkorDB
 
-The dev compose sets Docker-internal URLs automatically. If you see connection errors, make sure you're using both compose files:
+Make sure you're using both compose files:
 
 ```bash
 # Correct (both files)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up
 
 # Wrong (missing dev overrides)
 docker compose up
@@ -131,27 +128,19 @@ docker compose up
 
 ### Hot reload not working
 
-Source code is bind-mounted as read-only. The uvicorn `--reload` flag watches for changes. If reload stops working, restart the fastapi service.
-
-## Architecture: Docker Dev vs Production
-
-| Aspect | Docker Dev (this setup) | Production (droplet) |
-|--------|------------------------|---------------------|
-| Orchestration | Docker Compose | systemd |
-| API server | Container (uvicorn --reload) | systemd service |
-| Redis | Container (port 6379) | Docker container (port 6382) |
-| FalkorDB | Container (port 6381) | Docker container (port 6381) |
-| MLflow | Container (SQLite backend) | Docker container (PostgreSQL backend) |
-| Frontend | Container (dev server) | nginx serving static build |
-| Config | `.env.dev` + compose overrides | `.env` + systemd env files |
+Source code is bind-mounted into containers. The uvicorn `--reload` flag watches for changes. If reload stops, restart the service:
+```bash
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml restart api
+```
 
 ## File Reference
 
 | File | Purpose |
 |------|---------|
 | `docker-compose.yml` | Base service definitions (shared across environments) |
-| `docker-compose.dev.yml` | Dev overrides: ports, hot reload, debug settings, Docker DNS URLs |
-| `docker/fastapi/Dockerfile` | Multi-stage build for API + worker |
-| `docker/frontend/Dockerfile` | Multi-stage build for React app |
-| `docker/mlflow/Dockerfile` | MLflow tracking server |
-| `.env.example` | Template for environment variables |
+| `docker-compose.dev.yml` | Dev overlay: volume mounts, hot reload, debug settings |
+| `Dockerfile` | Multi-stage build for API + workers |
+| `frontend/Dockerfile` | Multi-stage build for React app |
+| `Dockerfile.feast` | Feast feature server |
+| `nginx/nginx.conf` | Docker nginx (for full-Docker deployments) |
+| `frontend/nginx.conf` | Frontend nginx (production build serving) |
