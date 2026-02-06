@@ -157,7 +157,6 @@ scripts/tier0_output_cache/
 # Internal / private docs
 product-development/
 INFRASTRUCTURE.md
-DEPLOYMENT.md
 
 # Docker session/progress notes (keep docker/README.md)
 docker/COMPUTATIONAL_RESOURCE_OPTIMIZATION.md
