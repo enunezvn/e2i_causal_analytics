@@ -12,8 +12,6 @@
 # Version: 1.0.0
 # =============================================================================
 
-set -e
-
 # Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -40,49 +38,85 @@ check_http() {
   local name=$2
   local timeout=${3:-5}
 
-  if curl -sf --max-time "$timeout" "$url" > /dev/null 2>&1; then
+  if curl -sfk --max-time "$timeout" "$url" > /dev/null 2>&1; then
     echo -e "${GREEN}✅ $name - HEALTHY${NC}"
-    ((HEALTHY++))
+    ((HEALTHY++)) || true
     return 0
   else
     echo -e "${RED}❌ $name - UNHEALTHY${NC}"
-    ((UNHEALTHY++))
+    ((UNHEALTHY++)) || true
     return 1
   fi
 }
 
 echo "--- HTTP Services ---"
-check_http "http://localhost:8000/health" "API (FastAPI)"
-check_http "http://localhost:5000/health" "MLflow"
-check_http "http://localhost:3000/healthz" "BentoML" 10
-check_http "http://localhost:6566/health" "Feast"
+check_http "http://localhost:8000/health" "API (FastAPI)" || true
+check_http "http://localhost:5000/health" "MLflow" || true
+check_http "http://localhost:3000/healthz" "BentoML" 10 || true
+check_http "http://localhost:6566/health" "Feast" || true
 check_http "http://localhost:5173/health" "Opik (UI)" 5 || \
-  check_http "http://localhost:5174/health" "Opik (API)" 5
-check_http "http://localhost:3002/health" "Frontend"
+  check_http "http://localhost:5174/health" "Opik (API)" 5 || true
+check_http "http://localhost:3002/health" "Frontend (Docker)" || \
+  check_http "https://localhost" "Frontend (Host Nginx)" || true
+# Undo double-count: fallback chain increments UNHEALTHY for the first check
+# even when the second succeeds; correct by decrementing if nginx is serving
+if curl -sfk --max-time 5 "https://localhost" > /dev/null 2>&1; then
+  ((UNHEALTHY > 0 && UNHEALTHY--)) || true
+fi
 
 # =============================================================================
-# REDIS SERVICES
+# SUPABASE SERVICES
+# =============================================================================
+
+echo ""
+echo "--- Supabase ---"
+
+# Supabase Kong requires apikey header; read from env or supabase .env
+SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-$(grep ANON_KEY /opt/supabase/docker/.env 2>/dev/null | head -1 | cut -d= -f2)}"
+
+check_supabase() {
+  local url=$1
+  local name=$2
+  local timeout=${3:-5}
+  if curl -sfk --max-time "$timeout" -H "apikey: ${SUPABASE_ANON_KEY}" "$url" > /dev/null 2>&1; then
+    echo -e "${GREEN}✅ $name - HEALTHY${NC}"
+    ((HEALTHY++)) || true
+    return 0
+  else
+    echo -e "${RED}❌ $name - UNHEALTHY${NC}"
+    ((UNHEALTHY++)) || true
+    return 1
+  fi
+}
+
+check_supabase "http://localhost:54321/rest/v1/" "Supabase REST (PostgREST)" || true
+check_supabase "http://localhost:54321/auth/v1/health" "Supabase Auth (GoTrue)" || true
+check_http "http://localhost:54321/storage/v1/status" "Supabase Storage" || true
+check_http "http://localhost:3001" "Supabase Studio" || true
+
+# =============================================================================
+# MEMORY SYSTEMS
 # =============================================================================
 
 echo ""
 echo "--- Memory Systems ---"
 
 # Redis
-if docker exec e2i_redis redis-cli ping 2>/dev/null | grep -q PONG; then
+if docker exec e2i_redis redis-cli -a "${REDIS_PASSWORD:-changeme}" ping 2>/dev/null | grep -q PONG; then
   echo -e "${GREEN}✅ Redis (Working Memory) - HEALTHY${NC}"
-  ((HEALTHY++))
+  ((HEALTHY++)) || true
 else
   echo -e "${RED}❌ Redis (Working Memory) - UNHEALTHY${NC}"
-  ((UNHEALTHY++))
+  ((UNHEALTHY++)) || true
 fi
 
 # FalkorDB
-if docker exec e2i_falkordb redis-cli ping 2>/dev/null | grep -q PONG; then
+if docker exec e2i_falkordb redis-cli -a "${FALKORDB_PASSWORD:-changeme}" ping 2>/dev/null | grep -q PONG; then
   echo -e "${GREEN}✅ FalkorDB (Semantic Memory) - HEALTHY${NC}"
-  ((HEALTHY++))
+  ((HEALTHY++)) || true
 else
   echo -e "${RED}❌ FalkorDB (Semantic Memory) - UNHEALTHY${NC}"
-  ((UNHEALTHY++))
+  ((UNHEALTHY++)) || true
 fi
 
 # =============================================================================
@@ -105,14 +139,14 @@ check_worker() {
 
     if docker exec "$container" celery -A src.workers.celery_app inspect ping 2>/dev/null | grep -q "pong"; then
       echo -e "${GREEN}✅ $worker_name - HEALTHY ($running_count replicas)${NC}"
-      ((HEALTHY++))
+      ((HEALTHY++)) || true
     else
       echo -e "${RED}❌ $worker_name - UNHEALTHY (container running but not responding)${NC}"
-      ((UNHEALTHY++))
+      ((UNHEALTHY++)) || true
     fi
   else
     echo -e "${YELLOW}⚠️  $worker_name - NOT RUNNING (scaled to 0)${NC}"
-    ((SKIPPED++))
+    ((SKIPPED++)) || true
   fi
 }
 
@@ -123,11 +157,38 @@ check_worker "Worker Heavy" "worker_heavy"
 # Scheduler
 if docker ps --filter "name=e2i_scheduler" --filter "status=running" -q | grep -q .; then
   echo -e "${GREEN}✅ Celery Beat (Scheduler) - RUNNING${NC}"
-  ((HEALTHY++))
+  ((HEALTHY++)) || true
 else
   echo -e "${RED}❌ Celery Beat (Scheduler) - NOT RUNNING${NC}"
-  ((UNHEALTHY++))
+  ((UNHEALTHY++)) || true
 fi
+
+# =============================================================================
+# OBSERVABILITY
+# =============================================================================
+
+echo ""
+echo "--- Observability ---"
+check_http "http://localhost:9091/-/healthy" "Prometheus" || true
+check_http "http://localhost:3200/api/health" "Grafana" || true
+check_http "http://localhost:3101/ready" "Loki" || true
+
+check_container() {
+  local name=$1
+  local container=$2
+  if docker ps --filter "name=${container}" --filter "status=running" -q | grep -q .; then
+    echo -e "${GREEN}✅ $name - RUNNING${NC}"
+    ((HEALTHY++)) || true
+  else
+    echo -e "${RED}❌ $name - NOT RUNNING${NC}"
+    ((UNHEALTHY++)) || true
+  fi
+}
+
+check_container "Alertmanager" "e2i_alertmanager"
+check_container "Promtail" "e2i_promtail"
+check_container "Node Exporter" "e2i_node_exporter"
+check_container "Postgres Exporter" "e2i_postgres_exporter"
 
 # =============================================================================
 # SUMMARY
