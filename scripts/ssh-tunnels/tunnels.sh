@@ -25,6 +25,7 @@ start_tunnels() {
   echo "  Grafana:          http://localhost:3200"
   echo "  Loki:             http://localhost:3101"
   echo "  Alertmanager:     http://localhost:9093"
+  echo "  Feast:            http://localhost:6566"
   echo ""
   echo "Press Ctrl+C to stop."
   echo ""
@@ -44,6 +45,7 @@ start_tunnels() {
     -L 3200:localhost:3200 \
     -L 3101:localhost:3101 \
     -L 9093:localhost:9093 \
+    -L 6566:localhost:6566 \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \

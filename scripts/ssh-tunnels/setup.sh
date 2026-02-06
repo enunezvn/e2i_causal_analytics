@@ -18,6 +18,7 @@
 #   localhost:3200  → Grafana
 #   localhost:3101  → Loki
 #   localhost:9093  → Alertmanager
+#   localhost:6566  → Feast
 #
 # Prerequisites:
 #   - autossh installed (brew install autossh / apt install autossh)
@@ -48,6 +49,7 @@ declare -A TUNNELS=(
   ["e2i-grafana"]="3200:localhost:3200"
   ["e2i-loki"]="3101:localhost:3101"
   ["e2i-alertmanager"]="9093:localhost:9093"
+  ["e2i-feast"]="6566:localhost:6566"
 )
 
 check_deps() {
@@ -126,6 +128,7 @@ UNIT
   echo "  Grafana:          http://localhost:3200"
   echo "  Loki:             http://localhost:3101"
   echo "  Alertmanager:     http://localhost:9093"
+  echo "  Feast:            http://localhost:6566"
   echo ""
   echo "Management:"
   echo "  Status:  systemctl --user status e2i-*-tunnel"

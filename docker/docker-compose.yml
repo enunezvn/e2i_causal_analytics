@@ -374,7 +374,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "6566:6566"
+      - "127.0.0.1:6566:6566"
     volumes:
       - ../feature_repo:/feast  # Feature store config + definitions
       - feature_cache:/feast/data  # Shared: feature materialization
