@@ -224,6 +224,7 @@ services:
       - NODE_ENV=development
       - VITE_API_URL=/api
       - VITE_WS_URL=wss://eznomics.site
+      - VITE_COPILOT_ENABLED=true
     command: npm run dev -- --host 0.0.0.0 --port 5173
     deploy:
       resources:
