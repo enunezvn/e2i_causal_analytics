@@ -27,6 +27,7 @@ x-logging: &default-logging
 x-common-env: &common-env
   SUPABASE_URL: ${SUPABASE_URL}
   SUPABASE_KEY: ${SUPABASE_KEY}
+  SUPABASE_ANON_KEY: ${SUPABASE_KEY}
   SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
   REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
   FALKORDB_URL: redis://:${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}@falkordb:6379/0
