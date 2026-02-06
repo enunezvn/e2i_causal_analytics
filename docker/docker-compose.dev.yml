@@ -225,10 +225,18 @@ services:
       - VITE_API_URL=/api
       - VITE_WS_URL=wss://eznomics.site
     command: npm run dev -- --host 0.0.0.0 --port 5173
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5173"]
       interval: 30s
-      start_period: 60s
+      start_period: 90s
 
   # ===========================================================================
   # MLOps Services - Development Overrides (Optional Debugging)
