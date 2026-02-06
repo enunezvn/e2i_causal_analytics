@@ -156,19 +156,3 @@ scripts/tier0_output_cache/
 
 # Internal / private docs
 product-development/
-INFRASTRUCTURE.md
-
-# Docker session/progress notes (keep docker/README.md)
-docker/COMPUTATIONAL_RESOURCE_OPTIMIZATION.md
-docker/DEPLOYMENT_STRATEGY.md
-docker/DOCKER_ASSESSMENT.md
-docker/FRONTEND_SETUP_REQUIRED.md
-docker/HEALTH_CHECK_VERIFICATION.md
-docker/IMPLEMENTATION_COMPLETE.md
-docker/MULTI_WORKER_AUTOSCALING_GUIDE.md
-docker/OVERALL_PROGRESS_STATUS.md
-docker/PRIORITY_1_COMPLETION_SUMMARY.md
-docker/PRIORITY_2_COMPLETION_SUMMARY.md
-docker/PRIORITY_3_COMPLETION_SUMMARY.md
-docker/PROGRESS_CHECKPOINT.md
-docker/SESSION_COMPLETE.md

@@ -166,67 +166,39 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
 
 ### Prerequisites
 
-- Python 3.12+
-- Docker (for Redis, FalkorDB, and Opik)
-- Supabase account
+- Docker Engine 24+ and Docker Compose v2
+- Supabase account (or self-hosted Supabase)
 - Anthropic API key
-- Opik (optional, for LLM/Agent observability)
+
+All services (API, frontend, workers, Redis, FalkorDB, MLflow, Opik, observability) run in Docker containers via Docker Compose.
 
 ### Installation
 
-1. **Clone and setup environment**
+1. **Clone and configure environment**
    ```bash
+   git clone https://github.com/enunezvn/e2i_causal_analytics.git
    cd e2i_causal_analytics
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-2. **Install dependencies**
-   ```bash
-   make install
-   # Or manually: pip install -r requirements.txt
-   ```
-
-3. **Configure environment**
-   ```bash
    cp .env.example .env
    # Edit .env with your API keys and database URLs
    ```
 
-4. **Start Docker services**
+2. **Start all services**
    ```bash
-   make docker-up
-   # Starts Redis (port 6379) and FalkorDB (port 6380)
+   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
    ```
 
-5. **Setup Opik Observability** (Optional)
+   To include Opik (agent observability):
    ```bash
-   # Clone and start Opik locally
-   git clone https://github.com/comet-ml/opik.git /tmp/opik
-   cd /tmp/opik/deployment/docker-compose
-   docker compose up -d
-
-   # Wait for services to be healthy (~2-3 minutes)
-   docker compose ps
-
-   # Access Opik dashboard at http://localhost:5173
+   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.opik.yml up -d
    ```
 
-   Configure Python SDK:
+3. **Verify services are running**
    ```bash
-   # For local Opik instance (no API key needed)
-   export OPIK_URL_OVERRIDE=http://localhost:5173/api
-   export OPIK_WORKSPACE=default
+   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml ps
+   curl http://localhost:8000/health
    ```
 
-   Or create `~/.opik.config`:
-   ```ini
-   [opik]
-   url_override = http://localhost:5173/api/
-   workspace = default
-   ```
-
-6. **Initialize database**
+4. **Initialize database**
    ```bash
    # Apply schemas in order:
    # 1. database/core/e2i_ml_complete_v3_schema.sql
@@ -235,7 +207,7 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
    # 4. database/ml/011_realtime_shap_audit.sql
    # 5. database/ml/012_digital_twin_tables.sql (v4.2)
    # 6. database/ml/013_tool_composer_tables.sql (v4.2)
-   # 7. database/migrations/004_create_feature_store_schema.sql (v4.2) ⭐ NEW
+   # 7. database/migrations/004_create_feature_store_schema.sql (v4.2)
    # 8. database/memory/ (RAG functions)
    # 9. database/audit/
 
@@ -243,18 +215,13 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
    python scripts/run_migration.py database/migrations/004_create_feature_store_schema.sql
    ```
 
-7. **Generate synthetic data**
+5. **Generate synthetic data**
    ```bash
    make data-generate
    # Or: python src/ml/data_generator.py
    ```
 
-8. **Start API server** (includes Real-Time SHAP endpoints)
-   ```bash
-   # See docs/realtime_shap_api.md for SHAP setup details
-   uvicorn main:app --reload
-   # Test SHAP: curl http://localhost:8000/api/v1/explain/health
-   ```
+See `docker/README.md` for detailed Docker Compose configuration and `DEPLOYMENT.md` for production deployment instructions.
 
 ## Development
 
@@ -481,5 +448,5 @@ For questions or issues, please contact the E2I development team.
 ---
 
 **Version**: 4.2.1
-**Last Updated**: December 2025
-**Recent**: Added Opik LLM/Agent Observability integration
+**Last Updated**: February 2026
+**Recent**: All-Docker deployment, observability stack, production hardening
