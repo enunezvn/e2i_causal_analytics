@@ -194,7 +194,7 @@ class TestGetFixedParams:
         params = _get_fixed_params("XGBoost")
 
         assert params["random_state"] == 42
-        assert params["n_jobs"] == -1
+        assert params["n_jobs"] == 1
         assert params["verbosity"] == 0
 
     def test_lightgbm_fixed_params(self):
@@ -202,7 +202,7 @@ class TestGetFixedParams:
         params = _get_fixed_params("LightGBM")
 
         assert params["random_state"] == 42
-        assert params["n_jobs"] == -1
+        assert params["n_jobs"] == 1
         assert params["verbose"] == -1
 
     def test_random_forest_fixed_params(self):
@@ -210,7 +210,7 @@ class TestGetFixedParams:
         params = _get_fixed_params("RandomForest")
 
         assert params["random_state"] == 42
-        assert params["n_jobs"] == -1
+        assert params["n_jobs"] == 1
 
     def test_logistic_regression_fixed_params(self):
         """Should return correct fixed params for LogisticRegression."""
