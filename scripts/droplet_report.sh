@@ -183,7 +183,7 @@ check_endpoint "http://localhost:3002" "Frontend (Vite :3002)" || true
 subsection "MLOps"
 check_endpoint "http://localhost:5000/health" "MLflow (:5000)" || true
 check_endpoint "http://localhost:3000/healthz" "BentoML (:3000 /healthz)" 10 || true
-check_endpoint "http://localhost:6566/health" "Feast (:6566)" || true
+check_endpoint "http://localhost:6567/health" "Feast (:6567)" || true
 
 subsection "Opik"
 check_endpoint "http://localhost:5173/" "Opik UI (:5173)" || true

@@ -217,7 +217,7 @@ health: ## Check health of all services
 	@echo "API:         $$(curl -s http://localhost:8000/health || echo 'DOWN')"
 	@echo "MLflow:      $$(curl -s http://localhost:5000/health || echo 'DOWN')"
 	@echo "BentoML:     $$(curl -s http://localhost:3000/healthz || echo 'DOWN')"
-	@echo "Feast:       $$(curl -s http://localhost:6566/health || echo 'DOWN')"
+	@echo "Feast:       $$(curl -s http://localhost:6567/health || echo 'DOWN')"
 	@echo "Opik UI:     $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/ || echo 'DOWN')"
 	@echo "Opik API:    $$(curl -s http://localhost:8084/health-check || echo 'DOWN')"
 	@echo "Redis:       $$(docker exec e2i_redis_dev redis-cli ping 2>/dev/null || echo 'DOWN')"
