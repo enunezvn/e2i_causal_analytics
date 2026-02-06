@@ -55,10 +55,10 @@ ssh e2i-prod
 > From the droplet itself, services are accessible via localhost. Externally, use nginx proxy URLs or SSH tunnels.
 
 **FalkorDB Browser Connection URL:**
+The browser is pre-configured with credentials via environment variables. Connect using:
 ```
 redis://falkordb:6379
 ```
-Use this URL in the FalkorDB Browser login form to connect to the graph database.
 
 **Common Commands (run on droplet):**
 ```bash
