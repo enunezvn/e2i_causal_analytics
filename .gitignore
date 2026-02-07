@@ -110,8 +110,6 @@ archive/
 # Documentation - ignore generated/local-only subdirectories
 docs/Archive/
 docs/results/
-docs/api/*
-!docs/api/openapi.json
 
 # OS
 Thumbs.db
