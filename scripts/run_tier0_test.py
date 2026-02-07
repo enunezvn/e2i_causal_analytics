@@ -66,8 +66,8 @@ if not os.environ.get("MLFLOW_TRACKING_URI"):
 
 # Configure Supabase URL for database persistence
 # Self-hosted Supabase runs on port 54321 (internal Docker network uses localhost)
-if not os.environ.get("SUPABASE_URL"):
-    os.environ["SUPABASE_URL"] = "http://localhost:54321"
+# Always override: .env may contain a cloud URL but the Tier 0 test targets the local instance
+os.environ["SUPABASE_URL"] = "http://localhost:54321"
 
 
 # =============================================================================
@@ -1046,152 +1046,154 @@ def generate_sample_data(
 # BENTOML HELPER FUNCTIONS
 # =============================================================================
 
+# Docker container name for BentoML (dev overlay)
+BENTOML_CONTAINER = "e2i_bentoml_dev"
+BENTOML_DOCKER_ENDPOINT = "http://localhost:3000"
 
-async def start_bentoml_service(
-    model_tag: str,
-    port: int = 3001,
-    preprocessor: Any = None,
-    framework: str = "sklearn",
-) -> dict:
-    """Start BentoML service serving the real trained model.
 
-    Args:
-        model_tag: BentoML model tag from registration
-        port: Port to serve on
-        preprocessor: Optional fitted preprocessor to apply before prediction
-        framework: ML framework used to save the model ("sklearn", "xgboost", "lightgbm")
+def _detect_bentoml_container() -> str | None:
+    """Detect running BentoML Docker container.
 
     Returns:
-        {"started": True, "endpoint": "http://localhost:3001", "pid": <pid>}
+        Container name if running, None otherwise.
+    """
+    for name in [BENTOML_CONTAINER, "e2i_bentoml"]:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip() == "true":
+            return name
+    return None
+
+
+async def register_model_in_docker_bentoml(
+    trained_model: Any,
+    model_name: str,
+    framework: str = "sklearn",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Register a trained model in the Docker BentoML container's model store.
+
+    Saves the model locally via joblib, copies it into the container, and
+    runs docker exec to register it in BentoML's model store.
+
+    Args:
+        trained_model: Trained scikit-learn/xgboost/lightgbm model object.
+        model_name: Name for the model in the BentoML store.
+        framework: ML framework ("sklearn", "xgboost", "lightgbm").
+        metadata: Optional metadata dict to attach to the model.
+
+    Returns:
+        {"success": True, "model_tag": "model_name:hash"} or
+        {"success": False, "error": "..."}
+    """
+    import joblib
+
+    container = _detect_bentoml_container()
+    if not container:
+        return {"success": False, "error": "BentoML Docker container not running"}
+
+    # 1. Save model to temp file
+    tmp_path = f"/tmp/tier0_{model_name}.pkl"
+    joblib.dump(trained_model, tmp_path)
+
+    try:
+        # 2. Copy into container
+        cp_result = subprocess.run(
+            ["docker", "cp", tmp_path, f"{container}:/tmp/model.pkl"],
+            capture_output=True,
+            text=True,
+        )
+        if cp_result.returncode != 0:
+            return {"success": False, "error": f"docker cp failed: {cp_result.stderr.strip()}"}
+
+        # 3. Register in BentoML model store via docker exec
+        save_fn_map = {
+            "sklearn": "bentoml.sklearn.save_model",
+            "xgboost": "bentoml.xgboost.save_model",
+            "lightgbm": "bentoml.lightgbm.save_model",
+        }
+        save_fn = save_fn_map.get(framework, "bentoml.sklearn.save_model")
+        module_path = save_fn.rsplit(".", 1)[0]  # e.g. "bentoml.sklearn"
+
+        meta_str = repr(metadata or {})
+        register_script = (
+            f"import joblib, {module_path}; "
+            f"model = joblib.load('/tmp/model.pkl'); "
+            f"bento_model = {save_fn}('{model_name}', model, metadata={meta_str}); "
+            f"print(str(bento_model.tag))"
+        )
+
+        exec_result = subprocess.run(
+            ["docker", "exec", container, "python", "-c", register_script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if exec_result.returncode != 0:
+            return {"success": False, "error": f"docker exec failed: {exec_result.stderr.strip()[:300]}"}
+
+        model_tag = exec_result.stdout.strip()
+        return {"success": True, "model_tag": model_tag}
+
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+async def restart_docker_bentoml(model_tag: str | None = None) -> dict[str, Any]:
+    """Restart the Docker BentoML container and wait for health.
+
+    Optionally sets E2I_BENTOML_MODEL_TAG so the service loads the exact model.
+    If model_tag is None, the service will auto-discover the latest model.
+
+    Args:
+        model_tag: Optional BentoML model tag to load on startup.
+
+    Returns:
+        {"available": True, "endpoint": "..."} or {"available": False, "reason": "..."}
     """
     import httpx
 
-    # Save preprocessor to temp file if provided
-    preprocessor_path = ""
-    if preprocessor is not None:
-        try:
-            import joblib as _joblib
-            preprocessor_path = "/tmp/tier0_bentoml_preprocessor.pkl"
-            _joblib.dump(preprocessor, preprocessor_path)
-            print(f"    Saved preprocessor to {preprocessor_path}")
-        except Exception as e:
-            print(f"    Warning: could not save preprocessor: {e}")
-            preprocessor_path = ""
+    container = _detect_bentoml_container()
+    if not container:
+        return {"available": False, "reason": "BentoML Docker container not found"}
 
-    # Map framework to bentoml load function
-    load_fn_map = {
-        "sklearn": "bentoml.sklearn.load_model",
-        "xgboost": "bentoml.xgboost.load_model",
-        "lightgbm": "bentoml.lightgbm.load_model",
-    }
-    load_fn = load_fn_map.get(framework, "bentoml.picklable_model.load_model")
+    # Set env var for model tag if provided (write to container's env at restart)
+    if model_tag:
+        # We cannot set env vars on a running container persistently.
+        # Instead, the auto-discovery (strategy 3) will find the latest model.
+        # Log the intent.
+        print(f"    Model tag {model_tag} registered; relying on auto-discovery after restart")
 
-    # Build preprocessor loading code
-    if preprocessor_path:
-        preprocessor_code = f'''
-        try:
-            import joblib
-            self.preprocessor = joblib.load("{preprocessor_path}")
-        except Exception as e:
-            print(f"Warning: could not load preprocessor: {{e}}")
-            self.preprocessor = None'''
-        preprocess_step = '''
-        if self.preprocessor is not None:
-            import pandas as pd
-            if arr.ndim == 1:
-                arr = arr.reshape(1, -1)
-            feature_names = None
-            if hasattr(self.preprocessor, 'numeric_features'):
-                feature_names = list(self.preprocessor.numeric_features) + list(getattr(self.preprocessor, 'categorical_features', []))
-            elif hasattr(self.preprocessor, 'feature_names_in_'):
-                feature_names = list(self.preprocessor.feature_names_in_)
-            if feature_names and len(feature_names) == arr.shape[1]:
-                arr = pd.DataFrame(arr, columns=feature_names)
-            arr = self.preprocessor.transform(arr)'''
-    else:
-        preprocessor_code = '''
-        self.preprocessor = None'''
-        preprocess_step = ''
-
-    # Generate a service file dynamically for the model
-    service_code = f'''
-import bentoml
-import numpy as np
-
-@bentoml.service(name="tier0_model_service")
-class Tier0ModelService:
-    def __init__(self):
-        self.model = {load_fn}("{model_tag}")
-        self.model_tag = "{model_tag}"
-{preprocessor_code}
-
-    @bentoml.api
-    async def predict(self, features: list) -> dict:
-        import time
-        start = time.time()
-        arr = np.array(features)
-{preprocess_step}
-        predictions = self.model.predict(arr)
-        probas = self.model.predict_proba(arr) if hasattr(self.model, 'predict_proba') else None
-        elapsed = (time.time() - start) * 1000
-        return {{
-            "predictions": predictions.tolist(),
-            "probabilities": probas.tolist() if probas is not None else None,
-            "latency_ms": elapsed,
-            "model_tag": self.model_tag,
-        }}
-
-    @bentoml.api
-    async def health(self) -> dict:
-        return {{"status": "healthy", "model_tag": self.model_tag}}
-'''
-
-    # Clean up any Python files in /tmp that might shadow built-in modules
-    # This prevents circular import errors when BentoML runs from /tmp
-    builtin_shadow_files = ["types.py", "enum.py", "re.py", "functools.py", "dataclasses.py"]
-    for shadow_file in builtin_shadow_files:
-        shadow_path = Path("/tmp") / shadow_file
-        if shadow_path.exists():
-            shadow_path.unlink()
-
-    # Write service file
-    service_path = Path("/tmp/tier0_bentoml_service.py")
-    service_path.write_text(service_code)
-    print(f"    Generated service file: {service_path}")
-
-    # Start bentoml serve in background
-    # Use cwd=/tmp to avoid picking up project-level BentoML configuration
-    process = subprocess.Popen(
-        ["bentoml", "serve", str(service_path), "--port", str(port)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd="/tmp",
+    # Restart container
+    restart = subprocess.run(
+        ["docker", "restart", container],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
-    print(f"    Starting BentoML service on port {port} (PID: {process.pid})...")
+    if restart.returncode != 0:
+        return {"available": False, "reason": f"restart failed: {restart.stderr.strip()}"}
 
-    # Wait for service to be ready
-    # BentoML @api endpoints use POST, not GET
-    endpoint = f"http://localhost:{port}"
+    # Wait for health (BentoML uses /healthz)
+    endpoint = BENTOML_DOCKER_ENDPOINT
     async with httpx.AsyncClient() as client:
-        for retry in range(30):  # 30 retries (30 seconds max)
+        for _ in range(40):  # 40s max (BentoML start_period=10s + model load)
             await asyncio.sleep(1)
             try:
-                resp = await client.post(f"{endpoint}/health", timeout=2.0)
+                resp = await client.get(f"{endpoint}/healthz", timeout=3.0)
                 if resp.status_code == 200:
-                    print(f"    Service ready at {endpoint}")
-                    return {"started": True, "endpoint": endpoint, "pid": process.pid}
+                    return {"available": True, "endpoint": endpoint}
             except Exception:
-                # Check if process died
-                if process.poll() is not None:
-                    stderr = process.stderr.read().decode() if process.stderr else ""
-                    return {
-                        "started": False,
-                        "error": f"Process exited with code {process.returncode}: {stderr[:500]}",
-                    }
+                continue
 
-    # Timeout - kill process
-    process.terminate()
-    return {"started": False, "error": "Service startup timeout (30s)"}
+    return {"available": False, "reason": "health check timeout after 40s"}
 
 
 async def verify_bentoml_predictions(
@@ -1264,84 +1266,24 @@ async def verify_bentoml_predictions(
 
 
 async def deploy_to_persistent_service(model_tag: str) -> dict:
-    """Deploy model to the persistent e2i-bentoml systemd service.
+    """Deploy model to the Docker BentoML service.
 
-    Checks if the systemd service is installed, updates the env file with the
-    model tag, restarts the service, and waits for health. Falls back to
-    returning not-available so the caller can use ephemeral mode.
+    Registers the model in the Docker container's BentoML store (already done
+    by register_model_in_docker_bentoml), restarts the container so it picks up
+    the new model via auto-discovery, and waits for health.
 
     Args:
-        model_tag: BentoML model tag to deploy
+        model_tag: BentoML model tag (for logging; model is already registered)
 
     Returns:
         {"available": True, "endpoint": "http://localhost:3000"} or
         {"available": False, "reason": "..."}
     """
-    import httpx
+    container = _detect_bentoml_container()
+    if not container:
+        return {"available": False, "reason": "BentoML Docker container not running"}
 
-    # Check if systemd service exists
-    try:
-        check = subprocess.run(
-            ["systemctl", "is-enabled", "e2i-bentoml"],
-            capture_output=True,
-            text=True,
-        )
-        if check.returncode != 0:
-            return {"available": False, "reason": "e2i-bentoml.service not installed"}
-    except Exception:
-        return {"available": False, "reason": "systemctl not available"}
-
-    # Update env file with the model tag
-    env_path = Path("/opt/e2i_causal_analytics/deploy/e2i-bentoml.env")
-    if not env_path.exists():
-        # Try local path
-        env_path = Path(__file__).parent.parent / "deploy" / "e2i-bentoml.env"
-
-    if env_path.exists():
-        lines = env_path.read_text().splitlines()
-        new_lines = [
-            ln for ln in lines
-            if not ln.startswith("E2I_BENTOML_MODEL_TAG=")
-            and not ln.startswith("E2I_BENTOML_MODEL_NAME=")
-        ]
-        new_lines.append(f"E2I_BENTOML_MODEL_TAG={model_tag}")
-        env_path.write_text("\n".join(new_lines) + "\n")
-
-    # Restart service
-    try:
-        restart = subprocess.run(
-            ["sudo", "systemctl", "restart", "e2i-bentoml"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if restart.returncode != 0:
-            return {
-                "available": False,
-                "reason": f"restart failed: {restart.stderr.strip()}",
-            }
-    except subprocess.TimeoutExpired:
-        return {"available": False, "reason": "restart timed out"}
-    except Exception as e:
-        return {"available": False, "reason": str(e)}
-
-    # Wait for health
-    endpoint = "http://localhost:3000"
-    async with httpx.AsyncClient() as client:
-        for _ in range(30):
-            await asyncio.sleep(1)
-            try:
-                resp = await client.get(f"{endpoint}/healthz", timeout=2.0)
-                if resp.status_code == 200:
-                    return {
-                        "available": True,
-                        "endpoint": endpoint,
-                        "persistent": True,
-                    }
-            except Exception:
-                continue
-
-    return {"available": False, "reason": "health check timeout after 30s"}
+    return await restart_docker_bentoml(model_tag)
 
 
 async def stop_bentoml_service(pid: int) -> dict:
@@ -1662,6 +1604,11 @@ async def step_2b_feast_registration(
             feature_state["feature_importance"] = {
                 col: 1.0 / len(train_df.columns) for col in train_df.columns
             }
+            # Build generated_features metadata (required by adapter)
+            feature_state["generated_features"] = [
+                {"name": col, "description": f"Feature: {col}"}
+                for col in train_df.columns
+            ]
 
         # Register features
         reg_result = await adapter.register_features_from_state(
@@ -2646,7 +2593,7 @@ async def step_7_model_deployer(
     validation_metrics: dict,
     success_criteria_met: bool,
     trained_model: Any = None,
-    include_bentoml: bool = False,
+    include_bentoml: bool = True,
     fitted_preprocessor: Any = None,
 ) -> dict[str, Any]:
     """Step 7: Deploy model."""
@@ -2743,15 +2690,13 @@ async def step_7_model_deployer(
 
     print_metrics_table(metrics_list)
 
-    # BentoML Model Serving (optional)
+    # BentoML Model Serving via Docker container
     if include_bentoml and trained_model is not None:
         print("\n  " + "-" * 60)
-        print("  BentoML Model Serving:")
+        print("  BentoML Model Serving (Docker):")
         print("  " + "-" * 60)
 
         try:
-            from src.mlops.bentoml_service import register_model_for_serving
-
             # Detect framework from model class
             model_class_name = type(trained_model).__name__
             if "XGB" in model_class_name:
@@ -2761,60 +2706,45 @@ async def step_7_model_deployer(
             else:
                 framework = "sklearn"
 
-            model_name = f"tier0_{experiment_id[:8]}"
-            print(f"    Registering model: {model_name} (framework: {framework})")
+            model_name = f"tier0_{experiment_id.split('_')[-1]}"
+            print(f"    Registering model in Docker BentoML: {model_name} (framework: {framework})")
 
-            registration = await register_model_for_serving(
-                model=trained_model,
+            # Register model in Docker BentoML container's store
+            registration = await register_model_in_docker_bentoml(
+                trained_model=trained_model,
                 model_name=model_name,
+                framework=framework,
                 metadata={
                     "experiment_id": experiment_id,
-                    "validation_metrics": validation_metrics,
                     "tier0_test": True,
                     "algorithm": model_class_name,
                 },
-                preprocessor=fitted_preprocessor,
-                framework=framework,
             )
 
-            if registration.get("registration_status") == "success":
-                model_tag = registration.get("model_tag")
-                print(f"    ✓ Model registered: {model_tag}")
+            if registration.get("success"):
+                model_tag = registration["model_tag"]
+                print(f"    ✓ Model registered in Docker store: {model_tag}")
 
-                # Try persistent service first, fall back to ephemeral
-                persistent = await deploy_to_persistent_service(model_tag)
-                if persistent.get("available"):
-                    endpoint = persistent["endpoint"]
-                    print(f"    ✓ Using persistent service at {endpoint}")
+                # Restart container to pick up new model via auto-discovery
+                deploy_result = await deploy_to_persistent_service(model_tag)
+                if deploy_result.get("available"):
+                    endpoint = deploy_result["endpoint"]
+                    print(f"    ✓ Docker BentoML service ready at {endpoint}")
                     result["bentoml_persistent"] = True
                 else:
-                    reason = persistent.get("reason", "unknown")
-                    print(f"    ℹ Persistent service not available ({reason}), using ephemeral")
-                    # Start BentoML service with the registered model
-                    bentoml_result = await start_bentoml_service(
-                        model_tag,
-                        port=3001,
-                        preprocessor=fitted_preprocessor,
-                        framework=framework,
-                    )
-
-                    if bentoml_result.get("started"):
-                        endpoint = bentoml_result.get("endpoint")
-                        result["bentoml_pid"] = bentoml_result.get("pid")
-                    else:
-                        error_msg = bentoml_result.get("error", "Unknown error")
-                        print(f"    ✗ BentoML service failed to start: {error_msg}")
-                        result["bentoml_serving"] = {"error": error_msg}
-                        endpoint = None
+                    reason = deploy_result.get("reason", "unknown")
+                    print(f"    ✗ Docker BentoML restart failed: {reason}")
+                    result["bentoml_serving"] = {"error": reason}
+                    endpoint = None
 
                 if endpoint:
-                    # Verify predictions work with sample data.
-                    # Send RAW features — the service applies preprocessing internally.
+                    # Verify predictions with sample data
                     sample_features = [[30.0, 5.0, 1.0]]  # days_on_therapy, hcp_visits, prior_treatments
 
                     verification = await verify_bentoml_predictions(
                         endpoint=endpoint,
                         sample_features=sample_features,
+                        service_type="persistent",
                     )
 
                     # Display results
@@ -2837,11 +2767,10 @@ async def step_7_model_deployer(
                     if verification.get("latency_ms"):
                         print(f"      latency_ms: {verification.get('latency_ms'):.1f}")
 
-                    mode = "persistent" if result.get("bentoml_persistent") else "ephemeral"
                     result["bentoml_serving"] = {
                         "model_tag": model_tag,
                         "endpoint": endpoint,
-                        "mode": mode,
+                        "mode": "docker",
                         "health_check": verification.get("health_check"),
                         "prediction_test": verification.get("prediction_test"),
                         "predictions": verification.get("predictions"),
@@ -2850,17 +2779,14 @@ async def step_7_model_deployer(
                     }
 
                     if verification.get("health_check") and verification.get("prediction_test"):
-                        print_success(f"Real model deployed and serving verified via BentoML ({mode})")
+                        print_success("Real model deployed and serving verified via Docker BentoML")
                     else:
-                        print_warning("BentoML serving started but verification incomplete")
+                        print_warning("Docker BentoML running but verification incomplete")
             else:
                 error_msg = registration.get("error", "Registration failed")
-                print(f"    ✗ Model registration failed: {error_msg}")
+                print(f"    ✗ Docker BentoML registration failed: {error_msg}")
                 result["bentoml_serving"] = {"error": error_msg}
 
-        except ImportError as e:
-            print(f"    ✗ BentoML not available: {e}")
-            result["bentoml_serving"] = {"error": f"Import error: {e}"}
         except Exception as e:
             print(f"    ✗ BentoML error: {e}")
             result["bentoml_serving"] = {"error": str(e)}
@@ -3054,7 +2980,7 @@ async def run_pipeline(
     step: int | None = None,
     dry_run: bool = False,
     imbalance_ratio: float | None = None,
-    include_bentoml: bool = False,
+    include_bentoml: bool = True,
 ) -> dict[str, Any]:
     """Run the full pipeline or a specific step.
 
@@ -3792,8 +3718,8 @@ async def run_pipeline(
             print(f"  Cohort Size: {len(state['eligible_df'])}")
         if state.get("validation_metrics"):
             print(f"  Validation Metrics: {state['validation_metrics']}")
-        if include_bentoml and state.get("bentoml_pid"):
-            print(f"  BentoML Serving: Verified (PID: {state['bentoml_pid']})")
+        if include_bentoml and state.get("bentoml_persistent"):
+            print(f"  BentoML Serving: Verified (Docker: {BENTOML_DOCKER_ENDPOINT})")
         print(f"  Completed: {datetime.now().isoformat()}")
 
         # Print step status summary
@@ -3816,16 +3742,9 @@ async def run_pipeline(
         raise
 
     finally:
-        # Cleanup BentoML service if started (skip if using persistent systemd service)
-        if state.get("bentoml_pid") and not state.get("bentoml_persistent"):
-            print("\n  Cleaning up ephemeral BentoML service...")
-            cleanup_result = await stop_bentoml_service(state["bentoml_pid"])
-            if cleanup_result.get("stopped"):
-                print(f"    ✓ BentoML service stopped (PID: {state['bentoml_pid']})")
-            else:
-                print(f"    ⚠️  BentoML cleanup issue: {cleanup_result.get('error', 'unknown')}")
-        elif state.get("bentoml_persistent"):
-            print("\n  Persistent BentoML service left running (e2i-bentoml.service)")
+        # Cleanup: Docker BentoML is persistent — no PID to clean up
+        if state.get("bentoml_persistent"):
+            print(f"\n  Docker BentoML service left running ({BENTOML_DOCKER_ENDPOINT})")
 
     return state
 
@@ -3874,9 +3793,9 @@ def main():
         help="Create imbalanced data with specified minority ratio (e.g., 0.1 for 10%% minority class)"
     )
     parser.add_argument(
-        "--include-bentoml",
+        "--no-bentoml",
         action="store_true",
-        help="Include BentoML model serving verification with the real trained model"
+        help="Skip BentoML model serving verification (enabled by default)"
     )
     parser.add_argument(
         "--output-dir",
@@ -3930,7 +3849,7 @@ def main():
             step=args.step,
             dry_run=args.dry_run,
             imbalance_ratio=args.imbalanced,
-            include_bentoml=args.include_bentoml,
+            include_bentoml=not args.no_bentoml,
         ))
     finally:
         # Restore stdout

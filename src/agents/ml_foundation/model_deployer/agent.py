@@ -193,9 +193,10 @@ class ModelDeployerAgent:
         deployment_successful = final_state.get("deployment_successful", False)
         deployment_action = final_state.get("deployment_action", "deploy")
 
-        if deployment_action == "promote":
-            # Just promotion, no deployment
+        if deployment_action in ("promote", "register"):
+            # Registration/promotion only — no packaging or deployment needed
             overall_status = "completed" if promotion_successful else "failed"
+            deployment_successful = promotion_successful
         else:
             # Full deployment
             overall_status = (

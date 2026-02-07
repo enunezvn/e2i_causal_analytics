@@ -280,10 +280,9 @@ def _should_deploy(state: dict) -> str:
         return "end"
 
     # Check if deployment is requested
-    # If only promotion was requested, end here
+    # If only registration or promotion was requested, skip packaging/deployment
     deployment_action = state.get("deployment_action", "deploy")
-    if deployment_action == "promote":
-        # Just promotion, no deployment
+    if deployment_action in ("promote", "register"):
         return "end"
 
     return "package_model"

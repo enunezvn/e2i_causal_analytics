@@ -51,11 +51,26 @@ async def _register_model_mlflow(
         return None, None, None
 
     try:
-        # Extract run_id and model_path from model_uri (format: runs:/<run_id>/<path>)
+        # Extract run_id and model_path from model_uri
+        # MLflow 3.x returns models:/m-<hash> format; legacy uses runs:/<run_id>/<path>
         if model_uri.startswith("runs:/"):
             parts = model_uri[6:].split("/", 1)
             run_id = parts[0]
             model_path = parts[1] if len(parts) > 1 else "model"
+        elif model_uri.startswith("models:/"):
+            # MLflow 3.x model URI — register directly via mlflow.register_model()
+            try:
+                import mlflow
+
+                result = mlflow.register_model(model_uri, deployment_name)
+                logger.info(
+                    f"Registered model from models:/ URI: "
+                    f"{deployment_name} v{result.version}"
+                )
+                return deployment_name, int(result.version), "None"
+            except Exception as e:
+                logger.warning(f"Direct registration from models:/ URI failed: {e}")
+                return None, None, None
         else:
             logger.warning(f"Unexpected model_uri format: {model_uri}")
             return None, None, None

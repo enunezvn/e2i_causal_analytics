@@ -215,6 +215,11 @@ class DataPreparerAgent:
                     "recommended_actions": final_state.get("recommended_actions", []),
                 },
                 "gate_passed": final_state["gate_passed"],
+                # DataFrames for downstream consumers (Feast registration, model training)
+                "train_df": final_state.get("train_df"),
+                "validation_df": final_state.get("validation_df"),
+                "test_df": final_state.get("test_df"),
+                "holdout_df": final_state.get("holdout_df"),
             }
 
             # Log execution time

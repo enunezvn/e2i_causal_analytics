@@ -147,7 +147,9 @@ class FeatureAnalyzerAdapter:
             feature_importance = state.get("feature_importance", {})
 
             # Get DataFrame for type inference
-            X_selected = state.get("X_train_selected") or state.get("X_train")
+            X_selected = state.get("X_train_selected")
+            if X_selected is None:
+                X_selected = state.get("X_train")
 
             # Register each selected feature
             for feature_meta in generated_features:

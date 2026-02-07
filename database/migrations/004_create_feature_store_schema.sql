@@ -375,24 +375,34 @@ ALTER TABLE feature_groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE features ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feature_values ENABLE ROW LEVEL SECURITY;
 
--- Policies for authenticated users (adjust based on your auth setup)
--- Allow all operations for authenticated users for now
+-- Policies: full CRUD for anon and authenticated roles
+-- The anon key is used by backend services (FeatureStoreClient);
+-- authenticated is used by logged-in users via Supabase Auth.
 -- TODO: Implement fine-grained permissions based on roles
 
-CREATE POLICY "Allow authenticated read access to feature_groups"
-    ON feature_groups FOR SELECT
-    TO authenticated
-    USING (true);
+CREATE POLICY "Allow anon full access to feature_groups"
+    ON feature_groups FOR ALL TO anon
+    USING (true) WITH CHECK (true);
 
-CREATE POLICY "Allow authenticated read access to features"
-    ON features FOR SELECT
-    TO authenticated
-    USING (true);
+CREATE POLICY "Allow authenticated full access to feature_groups"
+    ON feature_groups FOR ALL TO authenticated
+    USING (true) WITH CHECK (true);
 
-CREATE POLICY "Allow authenticated read access to feature_values"
-    ON feature_values FOR SELECT
-    TO authenticated
-    USING (true);
+CREATE POLICY "Allow anon full access to features"
+    ON features FOR ALL TO anon
+    USING (true) WITH CHECK (true);
+
+CREATE POLICY "Allow authenticated full access to features"
+    ON features FOR ALL TO authenticated
+    USING (true) WITH CHECK (true);
+
+CREATE POLICY "Allow anon full access to feature_values"
+    ON feature_values FOR ALL TO anon
+    USING (true) WITH CHECK (true);
+
+CREATE POLICY "Allow authenticated full access to feature_values"
+    ON feature_values FOR ALL TO authenticated
+    USING (true) WITH CHECK (true);
 
 -- ==============================================================================
 -- Indexes for Performance
