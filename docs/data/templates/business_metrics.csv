@@ -1,0 +1,6 @@
+metric_id,metric_date,metric_type,metric_name,brand,region,value,target,achievement_rate,year_over_year_change,month_over_month_change,roi,statistical_significance,confidence_interval_lower,confidence_interval_upper,sample_size,data_split
+BM-2025W47-REMI-NE-TRX,2025-11-17,volume,Total Prescriptions,Remibrutinib,northeast,2450.00,2800.00,0.875,0.120,0.035,2.80,0.950,2320.00,2580.00,450,train
+BM-2025W47-FAB-S-NRX,2025-11-17,volume,New Prescriptions,Fabhalta,south,85.00,100.00,0.850,0.250,0.058,3.50,0.920,72.00,98.00,320,train
+BM-2025W47-KIS-W-SHARE,2025-11-17,share,TRx Market Share,Kisqali,west,0.280,0.300,0.933,0.045,0.012,4.10,0.980,0.260,0.300,580,validation
+BM-2025W47-REMI-MW-CVR,2025-11-17,rate,Conversion Rate,Remibrutinib,midwest,0.072,0.080,0.900,0.015,0.003,2.20,0.870,0.058,0.086,180,test
+BM-2025W47-KIS-S-ADH,2025-11-17,rate,Adherence Rate,Kisqali,south,0.830,0.850,0.976,-0.020,0.008,3.00,0.960,0.810,0.850,390,holdout
