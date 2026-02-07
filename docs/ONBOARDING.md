@@ -332,15 +332,17 @@ Each agent is a **LangGraph state machine** with:
 
 ### Database Schema
 
-- **37+ tables** across PostgreSQL (Supabase) with pgvector extension
-- **Core Data** (8): patient_journeys, hcp_profiles, treatment_events, etc.
-- **ML Foundation** (8): ml_experiments, ml_model_registry, ml_deployments, etc.
-- **Causal** (2): causal_validations, expert_reviews
-- **Memory** (4): episodic_memories, procedural_memories, semantic_cache, working_memory
-- **Digital Twin** (3): digital_twin_models, twin_simulations, twin_fidelity_tracking
-- **Tool Composer** (6): tool registry, dependencies, composition episodes, etc.
-- **Feature Store** (3): feature_groups, features, feature_values
+- **80+ tables** across PostgreSQL (Supabase) with pgvector extension
+- **Core Data** (19): patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, etc.
+- **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, etc.
+- **Memory** (7): episodic_memories, procedural_memories, semantic_cache, cognitive_cycles, etc.
+- **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
+- **Chat** (6+): chat_threads, chat_messages, user_preferences (RLS)
+- **Audit** (2): audit_chain_entries (SHA-256 hash chain), verification_log
 - **FalkorDB Graph**: 8 node types, 15 edge types (HCP, Patient, Treatment, Brand, etc.)
+- **Feast Feature Store**: 9 feature views, 48 features
+
+> **Full data documentation**: See [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary, conversion guide, and CSV templates for onboarding real data.
 
 ---
 

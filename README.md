@@ -116,6 +116,13 @@ e2i_causal_analytics/
 ├── scripts/                   # Utility scripts
 ├── frontend/                  # Dashboard UI mockups
 ├── docs/                      # Comprehensive documentation
+│   ├── ARCHITECTURE.md        # C4-model architecture documentation
+│   ├── ONBOARDING.md          # Developer onboarding guide
+│   ├── api/                   # OpenAPI spec (auto-generated)
+│   └── data/                  # Data dictionary & conversion docs
+│       ├── 00-INDEX.md        # Master index & quick-start
+│       ├── 01-07 *.md         # Schema docs (core, ML, graph, Feast, KPIs)
+│       └── templates/         # CSV templates with example rows
 └── docker/                    # Container configurations
 ```
 
@@ -403,26 +410,34 @@ Gate decisions: **proceed** | **review** | **block**
 
 ## Database
 
-28 tables across 5 categories:
-- **Core Data** (8): patient_journeys, hcp_profiles, treatment_events, etc.
-- **ML Foundation** (8): ml_experiments, ml_model_registry, ml_deployments, etc.
-- **Memory** (4): episodic_memories, procedural_memories, semantic_cache, working_memory
-- **Causal Validation** (2): causal_validations, expert_reviews
-- **Supporting** (6): user_sessions, data_source_tracking, etc.
+80+ tables across 8 categories:
+- **Core Data** (19): patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, etc.
+- **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, etc.
+- **Memory** (7): episodic_memories, procedural_memories, semantic_cache, cognitive_cycles, etc.
+- **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
+- **Chat** (6+): chat_threads, chat_messages, user_preferences (RLS)
+- **Audit** (2): audit_chain_entries (SHA-256 hash chain), verification_log
+- **FalkorDB Graph**: 8 node types, 15 edge types
+- **Feast Feature Store**: 9 feature views, 48 features
+
+See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dictionary and schema documentation.
 
 ## Documentation
 
-- **Primary**: `docs/e2i_nlv_project_structure_v4.1.md` (55KB)
-- **Setup**: `docs/README.md` (Memory system)
-- **Real-Time SHAP API**: `docs/realtime_shap_api.md` ⭐ NEW v4.1
-- **Feature Store**: `docs/FEATURE_STORE.md` (complete guide) ⭐ NEW v4.2
-- **Feature Store Quick Start**: `docs/FEATURE_STORE_QUICKSTART.md` ⭐ NEW v4.2
-- **Opik Observability**: `docs/OPIK_TODO.md` (implementation status)
-- **Observability Config**: `config/observability.yaml` (production settings)
-- **RAG Implementation**: `docs/rag_implementation_plan.md`
-- **Codebase Index**: `.claude/codebase_index.md`
-- **Project Structure**: `PROJECT_STRUCTURE.txt`
-- **API Docs**: Coming soon
+- **Architecture**: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — C4-model system architecture
+- **Onboarding**: [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — Developer setup guide
+- **Data Documentation**: [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) — Master index for all data docs:
+  - [Data Conversion Guide](docs/data/01-DATA-CONVERSION-GUIDE.md) — Real data onboarding playbook
+  - [Core Data Dictionary](docs/data/02-CORE-DATA-DICTIONARY.md) — 19 core tables, 12 enums, 28 views
+  - [ML Pipeline Schema](docs/data/03-ML-PIPELINE-SCHEMA.md) — 60+ ML lifecycle tables
+  - [Knowledge Graph Ontology](docs/data/04-KNOWLEDGE-GRAPH-ONTOLOGY.md) — FalkorDB schema
+  - [Feature Store Reference](docs/data/05-FEATURE-STORE-REFERENCE.md) — Feast entities & features
+  - [KPI Reference](docs/data/06-KPI-REFERENCE.md) — All 46 KPIs with formulas & thresholds
+  - [Supporting Schemas](docs/data/07-SUPPORTING-SCHEMAS.md) — Memory, RAG, Chat, Audit
+  - [CSV Templates](docs/data/templates/) — Ready-to-use templates with example rows
+- **API Reference**: [`docs/api/openapi.json`](docs/api/openapi.json) — OpenAPI 3.0 spec
+- **Observability Config**: `config/observability.yaml` — Production settings
+- **Developer Reference**: `CLAUDE.md` — Quick reference for AI-assisted development
 
 ## Tech Stack
 

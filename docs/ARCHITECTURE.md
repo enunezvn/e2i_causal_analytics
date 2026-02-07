@@ -409,7 +409,9 @@ graph LR
     end
 ```
 
-### 4.2 Database Schema (37+ tables)
+### 4.2 Database Schema (80+ tables)
+
+> **Comprehensive documentation**: See [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary covering all tables, columns, constraints, enums, views, and functions.
 
 #### Core Tables (8)
 
@@ -918,4 +920,4 @@ Developer Machine                       Droplet
 
 ---
 
-*Document generated from codebase analysis. See `CLAUDE.md` for developer reference and `DEPLOYMENT.md` for operational procedures.*
+*Document generated from codebase analysis. See `CLAUDE.md` for developer reference, `DEPLOYMENT.md` for operational procedures, and [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary.*
