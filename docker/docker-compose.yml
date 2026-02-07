@@ -660,6 +660,7 @@ services:
       celery -A src.workers.celery_app beat
       --loglevel=INFO
       --scheduler=celery.beat:PersistentScheduler
+      --schedule=/tmp/celerybeat-schedule
     healthcheck:
       test: ["CMD-SHELL", "celery -A src.workers.celery_app inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1"]
       interval: 60s
