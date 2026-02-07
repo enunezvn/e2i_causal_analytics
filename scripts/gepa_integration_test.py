@@ -251,7 +251,7 @@ class GEPAIntegrationTests:
         """Test StandardAgentGEPAMetric instantiation."""
         from src.optimization.gepa import StandardAgentGEPAMetric
 
-        metric = StandardAgentGEPAMetric(agent_name="gap_analyzer")
+        metric = StandardAgentGEPAMetric(name="gap_analyzer")
         return hasattr(metric, "__call__") or hasattr(metric, "evaluate")
 
     # =========================================================================
@@ -385,11 +385,10 @@ class GEPAIntegrationTests:
         """Test version ID generation."""
         from src.optimization.gepa import generate_version_id
 
-        version1 = generate_version_id("test_agent", "medium")
-        version2 = generate_version_id("test_agent", "medium")
+        version = generate_version_id("test_agent")
 
-        # Should be different (includes timestamp)
-        return version1 != version2
+        # Should follow format: gepa_v1_{agent}_{timestamp}
+        return version.startswith("gepa_v1_test_agent_") and len(version) > len("gepa_v1_test_agent_")
 
     def test_instruction_hash(self) -> bool:
         """Test instruction hashing."""
@@ -410,9 +409,8 @@ class GEPAIntegrationTests:
         from src.optimization.gepa import ABTestVariant
 
         variant = ABTestVariant(
+            variant_id="v1",
             name="test_variant",
-            description="Test variant description",
-            version_id="v1",
         )
         return variant.name == "test_variant"
 
@@ -421,12 +419,12 @@ class GEPAIntegrationTests:
         from src.optimization.gepa import GEPAABTest
 
         ab_test = GEPAABTest(
-            name="test_ab",
+            test_name="test_ab",
             agent_name="causal_impact",
-            baseline_version="v0",
-            treatment_version="v1",
+            baseline_instruction_id="v0",
+            treatment_instruction_id="v1",
         )
-        return ab_test.name == "test_ab"
+        return ab_test.test_name == "test_ab"
 
     # =========================================================================
     # Category: Vocabulary
@@ -468,7 +466,7 @@ class GEPAIntegrationTests:
             vocab = yaml.safe_load(f)
 
         metadata = vocab.get("_metadata", {})
-        return metadata.get("version") == "5.0.0"
+        return metadata.get("version") == "5.1.0"
 
     # =========================================================================
     # Run Tests
