@@ -86,6 +86,7 @@ class ExplainerState(TypedDict):
     generation_latency_ms: NotRequired[int]
     total_latency_ms: NotRequired[int]
     model_used: NotRequired[str]
+    timestamp: NotRequired[str]
 
     # === ERROR HANDLING (Required outputs) ===
     errors: Annotated[List[Dict[str, Any]], operator.add]

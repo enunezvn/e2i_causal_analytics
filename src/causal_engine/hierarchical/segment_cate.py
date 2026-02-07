@@ -305,22 +305,47 @@ class SegmentCATECalculator:
     ) -> tuple:
         """Run CausalForestDML estimator."""
         from econml.dml import CausalForestDML
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        from sklearn.feature_selection import VarianceThreshold
 
-        params = {
-            "n_estimators": self.config.estimator_params.get("n_estimators", 100),
-            "min_samples_leaf": self.config.estimator_params.get("min_samples_leaf", 10),
-            "random_state": self.config.random_state,
-        }
+        # Remove near-constant features to prevent numerical instability in tree nodes
+        selector = VarianceThreshold(threshold=0.01)
+        X_clean = selector.fit_transform(X)
+        if X_clean.shape[1] == 0:
+            X_clean = X  # Fall back if all features were filtered
 
-        model = CausalForestDML(**params)
-        model.fit(outcome, treatment, X=X, W=X)
+        is_binary = len(np.unique(treatment)) == 2
 
-        cate_values = model.effect(X)
+        model = CausalForestDML(
+            model_y=RandomForestRegressor(
+                n_estimators=50, min_samples_leaf=5,
+                min_impurity_decrease=1e-7, random_state=self.config.random_state,
+            ),
+            model_t=(
+                RandomForestClassifier(
+                    n_estimators=50, min_samples_leaf=5,
+                    min_impurity_decrease=1e-7, random_state=self.config.random_state,
+                )
+                if is_binary
+                else RandomForestRegressor(
+                    n_estimators=50, min_samples_leaf=5,
+                    min_impurity_decrease=1e-7, random_state=self.config.random_state,
+                )
+            ),
+            discrete_treatment=is_binary,
+            n_estimators=self.config.estimator_params.get("n_estimators", 100),
+            min_samples_leaf=self.config.estimator_params.get("min_samples_leaf", 10),
+            min_impurity_decrease=1e-7,
+            random_state=self.config.random_state,
+        )
+        model.fit(outcome, treatment, X=X_clean, W=X_clean)
+
+        cate_values = model.effect(X_clean)
         cate_mean = float(np.mean(cate_values))
         cate_std = float(np.std(cate_values))
 
         # Confidence intervals
-        ci_lower, ci_upper = self._compute_ci(model, X, cate_values, cate_mean, cate_std)
+        ci_lower, ci_upper = self._compute_ci(model, X_clean, cate_values, cate_mean, cate_std)
 
         return cate_values, cate_mean, cate_std, ci_lower, ci_upper, "causal_forest"
 
@@ -335,8 +360,14 @@ class SegmentCATECalculator:
         from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
         model = LinearDML(
-            model_y=RandomForestRegressor(n_estimators=50, random_state=self.config.random_state),
-            model_t=RandomForestClassifier(n_estimators=50, random_state=self.config.random_state),
+            model_y=RandomForestRegressor(
+                n_estimators=50, min_samples_leaf=5,
+                min_impurity_decrease=1e-7, random_state=self.config.random_state,
+            ),
+            model_t=RandomForestClassifier(
+                n_estimators=50, min_samples_leaf=5,
+                min_impurity_decrease=1e-7, random_state=self.config.random_state,
+            ),
             discrete_treatment=True,  # Required for binary treatment
             random_state=self.config.random_state,
         )

@@ -4,7 +4,7 @@ This module defines the LangGraph state structure for segment-level CATE analysi
 """
 
 import operator
-from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -285,6 +285,9 @@ class HeterogeneousOptimizerOutput(TypedDict):
 
     # Latency
     total_latency_ms: int
+    feature_importance: NotRequired[Optional[Dict[str, float]]]
+    estimation_latency_ms: NotRequired[int]
+    analysis_latency_ms: NotRequired[int]
 
     # Contract-required fields
     confidence: float  # Overall analysis confidence (0.0-1.0)

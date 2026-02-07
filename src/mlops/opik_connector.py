@@ -98,7 +98,7 @@ class OpikConfig:
             api_key=os.getenv("OPIK_API_KEY"),
             workspace=os.getenv("OPIK_WORKSPACE", "default"),
             project_name=os.getenv("OPIK_PROJECT_NAME", "e2i-causal-analytics"),
-            url=os.getenv("OPIK_ENDPOINT"),
+            url=os.getenv("OPIK_URL") or os.getenv("OPIK_ENDPOINT"),
             use_local=os.getenv("OPIK_USE_LOCAL", "false").lower() == "true",
             enabled=os.getenv("OPIK_ENABLED", "true").lower() == "true",
             sample_rate=float(os.getenv("OPIK_SAMPLE_RATE", "1.0")),

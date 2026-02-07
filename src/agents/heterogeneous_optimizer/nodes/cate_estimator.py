@@ -180,16 +180,26 @@ class CATEEstimatorNode:
                 )
 
             cf = CausalForestDML(
-                model_y=RandomForestRegressor(n_estimators=50, random_state=42),
+                model_y=RandomForestRegressor(
+                    n_estimators=50, min_samples_leaf=5,
+                    min_impurity_decrease=1e-7, random_state=42,
+                ),
                 model_t=(
-                    RandomForestClassifier(n_estimators=50, random_state=42)
+                    RandomForestClassifier(
+                        n_estimators=50, min_samples_leaf=5,
+                        min_impurity_decrease=1e-7, random_state=42,
+                    )
                     if is_binary_treatment
-                    else RandomForestRegressor(n_estimators=50, random_state=42)
+                    else RandomForestRegressor(
+                        n_estimators=50, min_samples_leaf=5,
+                        min_impurity_decrease=1e-7, random_state=42,
+                    )
                 ),
                 discrete_treatment=is_binary_treatment,
                 n_estimators=n_estimators,
                 subforest_size=subforest_size,
                 min_samples_leaf=state.get("min_samples_leaf", 10),
+                min_impurity_decrease=1e-7,
                 random_state=42,
             )
 

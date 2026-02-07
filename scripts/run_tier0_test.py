@@ -3017,10 +3017,11 @@ async def run_pipeline(
         return
 
     # Generate sample data
-    # NOTE: Generate 600 samples to satisfy scope_spec.minimum_samples=500
-    # (extra samples account for potential exclusions during cohort construction)
+    # NOTE: Generate 1500 samples to satisfy scope_spec.minimum_samples=500 and
+    # provide enough data for hierarchical CATE analysis (~500 per segment in
+    # CausalForestDML's 3-segment cross-fitting, preventing zero-variance leaves)
     print("\n  Generating sample patient data...")
-    patient_df = generate_sample_data(n_samples=600, imbalance_ratio=imbalance_ratio)
+    patient_df = generate_sample_data(n_samples=1500, imbalance_ratio=imbalance_ratio)
     print(f"  Generated {len(patient_df)} patient records")
 
     # Pipeline state

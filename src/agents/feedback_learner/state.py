@@ -221,6 +221,13 @@ class FeedbackLearnerState(TypedDict):
     update_latency_ms: NotRequired[int]
     total_latency_ms: NotRequired[int]
     model_used: NotRequired[str]
+    feedback_count: NotRequired[int]
+    pattern_count: NotRequired[int]
+    recommendation_count: NotRequired[int]
+    timestamp: NotRequired[str]
+    training_reward: NotRequired[Optional[float]]
+    cognitive_context_used: NotRequired[bool]
+    dspy_available: NotRequired[bool]
 
     # === ERROR HANDLING (Required outputs) ===
     errors: List[Dict[str, Any]]

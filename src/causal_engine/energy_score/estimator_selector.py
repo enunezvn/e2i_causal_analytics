@@ -250,6 +250,7 @@ class CausalForestWrapper(BaseEstimatorWrapper):
 
         try:
             from econml.dml import CausalForestDML
+            from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
             # Extract parameters
             base_min_leaf = self.config.params.get("min_samples_leaf", 10)
@@ -258,11 +259,31 @@ class CausalForestWrapper(BaseEstimatorWrapper):
             n_control = int((1 - treatment.mean()) * len(treatment))
             adaptive_min_leaf = max(5, min(base_min_leaf, n_control // 10))
 
+            is_binary = len(np.unique(treatment)) == 2
+            rs = self.config.params.get("random_state", 42)
+
             params = {
+                "model_y": RandomForestRegressor(
+                    n_estimators=50, min_samples_leaf=5,
+                    min_impurity_decrease=1e-7, random_state=rs,
+                ),
+                "model_t": (
+                    RandomForestClassifier(
+                        n_estimators=50, min_samples_leaf=5,
+                        min_impurity_decrease=1e-7, random_state=rs,
+                    )
+                    if is_binary
+                    else RandomForestRegressor(
+                        n_estimators=50, min_samples_leaf=5,
+                        min_impurity_decrease=1e-7, random_state=rs,
+                    )
+                ),
+                "discrete_treatment": is_binary,
                 "n_estimators": self.config.params.get("n_estimators", 100),
                 "min_samples_leaf": adaptive_min_leaf,
+                "min_impurity_decrease": 1e-7,
                 "max_depth": self.config.params.get("max_depth", None),
-                "random_state": self.config.params.get("random_state", 42),
+                "random_state": rs,
             }
 
             # Fit model with warning suppression for small control groups
@@ -347,8 +368,15 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
 
             # Fit model
             model = LinearDML(
-                model_y=RandomForestRegressor(n_estimators=50, random_state=42),
-                model_t=RandomForestClassifier(n_estimators=50, random_state=42),
+                model_y=RandomForestRegressor(
+                    n_estimators=50, min_samples_leaf=5,
+                    min_impurity_decrease=1e-7, random_state=42,
+                ),
+                model_t=RandomForestClassifier(
+                    n_estimators=50, min_samples_leaf=5,
+                    min_impurity_decrease=1e-7, random_state=42,
+                ),
+                discrete_treatment=True,
                 random_state=42,
             )
             X = covariates.values

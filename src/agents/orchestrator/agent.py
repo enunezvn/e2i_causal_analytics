@@ -266,7 +266,7 @@ class OrchestratorAgent:
             "recommendations": state.get("recommendations", []),
             # Performance
             "total_latency_ms": state.get("total_latency_ms", 0),
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             # Additional metadata
             "classification_latency_ms": state.get("classification_latency_ms", 0),
             "rag_latency_ms": state.get("rag_latency_ms", 0),

@@ -227,21 +227,46 @@ class HierarchicalAnalyzerNode:
     async def _get_data(self, state: HeterogeneousOptimizerState) -> Optional[pd.DataFrame]:
         """Get data for hierarchical analysis.
 
-        Uses mock data if data connector not available.
+        Data source priority:
+        1. tier0_data passthrough (from tier0 testing framework)
+        2. Data connector (Supabase)
+        3. Mock data for development/testing
         """
+        required_columns = (
+            [state["treatment_var"], state["outcome_var"]]
+            + state.get("effect_modifiers", [])
+            + state.get("segment_vars", [])
+        )
+
+        # Priority 1: Use tier0 passthrough data if available
+        tier0_data = state.get("tier0_data")
+        if tier0_data is not None and len(tier0_data) >= self.min_segment_size * 2:
+            missing_cols = [c for c in required_columns if c not in tier0_data.columns]
+            if not missing_cols:
+                logger.info(
+                    f"Using tier0 passthrough data ({len(tier0_data)} rows)",
+                    extra={
+                        "node": "hierarchical_analyzer",
+                        "data_source": "tier0_passthrough",
+                        "row_count": len(tier0_data),
+                    },
+                )
+                return tier0_data
+            else:
+                logger.warning(
+                    f"Tier0 data missing columns {missing_cols}, trying next source",
+                    extra={"node": "hierarchical_analyzer", "missing_columns": missing_cols},
+                )
+
+        # Priority 2: Fetch from data connector
         if hasattr(self, "data_connector") and self.data_connector:
-            columns = (
-                [state["treatment_var"], state["outcome_var"]]
-                + state.get("effect_modifiers", [])
-                + state.get("segment_vars", [])
-            )
             return await self.data_connector.query(
                 source=state["data_source"],
-                columns=list(set(columns)),
+                columns=list(set(required_columns)),
                 filters=state.get("filters"),
             )
 
-        # Generate mock data for testing
+        # Priority 3: Generate mock data for development/testing
         return self._generate_mock_data(state)
 
     def _generate_mock_data(self, state: HeterogeneousOptimizerState) -> pd.DataFrame:
@@ -279,6 +304,10 @@ class HierarchicalAnalyzerNode:
     ) -> tuple:
         """Prepare data for hierarchical analysis.
 
+        Binarizes continuous treatment at the median (consistent with
+        cate_estimator), ensuring CausalML uplift models receive binary
+        treatment assignments.
+
         Args:
             df: DataFrame with all columns
             state: Agent state with variable names
@@ -288,6 +317,20 @@ class HierarchicalAnalyzerNode:
         """
         treatment = df[state["treatment_var"]].values
         y = df[state["outcome_var"]].values
+
+        # Binarize continuous treatment at median (consistent with cate_estimator)
+        if len(np.unique(treatment)) > 2:
+            median_val = np.median(treatment)
+            treatment = (treatment > median_val).astype(int)
+            logger.info(
+                f"Binarized continuous treatment at median={median_val:.2f}",
+                extra={
+                    "node": "hierarchical_analyzer",
+                    "treatment_var": state["treatment_var"],
+                    "treated_count": int(np.sum(treatment)),
+                    "control_count": int(np.sum(1 - treatment)),
+                },
+            )
 
         # Prepare features (effect modifiers or all numeric columns)
         effect_modifiers = state.get("effect_modifiers", [])

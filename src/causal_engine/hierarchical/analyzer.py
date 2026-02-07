@@ -393,6 +393,9 @@ class HierarchicalAnalyzer:
             n_estimators=100,
             max_depth=10,
             min_samples_leaf=50,
+            min_samples_treatment=10,
+            n_reg=100,
+            control_name="0",
             random_state=42,
         )
 

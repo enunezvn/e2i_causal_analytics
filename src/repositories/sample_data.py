@@ -530,7 +530,7 @@ class SampleDataGenerator:
 
     def ml_patients(
         self,
-        n_patients: int = 200,
+        n_patients: int = 1500,
         target_rate: float = 0.3,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,

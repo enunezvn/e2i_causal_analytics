@@ -280,6 +280,8 @@ class ExperimentDesignState(TypedDict):
     iteration_history: NotRequired[list[DesignIteration]]
     total_llm_tokens_used: NotRequired[int]
     node_latencies_ms: NotRequired[dict[str, int]]
+    preregistration_document: NotRequired[str]
+    redesign_iterations: NotRequired[int]
 
     # ===== Contract-Required Output Fields =====
     total_latency_ms: int  # Contract requires this for all Tier 3 agents
