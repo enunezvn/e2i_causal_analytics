@@ -193,6 +193,7 @@ class E2IGraphitiService:
             falkor_driver = FalkorDriver(
                 host=self.config.falkordb_host,
                 port=self.config.falkordb_port,
+                password=self.config.falkordb_password,
                 database=self.config.graph_name,
             )
 

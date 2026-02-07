@@ -110,6 +110,7 @@ class GraphitiConfig:
     # Connection settings
     falkordb_host: str = "localhost"
     falkordb_port: int = 6379  # 6379 internal (docker), 6381 external (host)
+    falkordb_password: Optional[str] = None
 
     # Cache settings
     cache_enabled: bool = True
@@ -339,6 +340,7 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
         min_confidence_for_extraction=reflector_config.get("min_confidence_for_learning", 0.6),
         falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
         falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
+        falkordb_password=os.environ.get("FALKORDB_PASSWORD"),
         cache_enabled=cache_config.get("enabled", True),
         cache_ttl_minutes=raw_config.get("performance", {})
         .get("cache", {})

@@ -10,7 +10,16 @@ import sys
 from pathlib import Path
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from dotenv import load_dotenv
+
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Host-side defaults (external ports) — .env has internal Docker values
+os.environ.setdefault("FALKORDB_HOST", "localhost")
+os.environ.setdefault("FALKORDB_PORT", "6381")
 
 from src.memory.graphiti_service import E2IGraphitiService, get_graphiti_service
 
@@ -29,10 +38,7 @@ async def test_graphiti_extraction():
     else:
         print(f"\n✓ ANTHROPIC_API_KEY found: {anthropic_key[:10]}...")
 
-    # Set FalkorDB port (6381 is e2i_falkordb, 6380 is auto-claude-falkordb)
-    os.environ.setdefault("FALKORDB_PORT", "6381")
-
-    print(f"\n📊 FalkorDB: localhost:{os.environ.get('FALKORDB_PORT')}")
+    print(f"\n📊 FalkorDB: {os.environ.get('FALKORDB_HOST')}:{os.environ.get('FALKORDB_PORT')}")
 
     # Initialize service
     print("\n🔧 Initializing Graphiti service...")
