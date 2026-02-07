@@ -109,6 +109,7 @@ archive/
 
 # Documentation (kept locally, not tracked)
 docs/*
+!docs/ARCHITECTURE.md
 !docs/api/
 docs/api/*
 !docs/api/openapi.json
