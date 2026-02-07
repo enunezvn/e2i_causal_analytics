@@ -22,8 +22,6 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
-from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
-
 from src.api.models.graph import (
     AddEpisodeRequest,
     AddEpisodeResponse,
@@ -52,6 +50,7 @@ from src.api.models.graph import (
     TraverseRequest,
     TraverseResponse,
 )
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 

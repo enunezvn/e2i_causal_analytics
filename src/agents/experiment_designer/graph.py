@@ -23,6 +23,7 @@ import asyncio
 from typing import Any, Callable
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.agents.experiment_designer.nodes import (
@@ -63,7 +64,7 @@ def wrap_async_node(async_func: Callable) -> Callable:
     except ImportError:
         _has_nest_asyncio = False
 
-    def sync_wrapper(state: ExperimentDesignState) -> ExperimentDesignState:
+    def sync_wrapper(state: ExperimentDesignState) -> Any:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -94,7 +95,7 @@ def wrap_async_node(async_func: Callable) -> Callable:
     return sync_wrapper
 
 
-def error_handler_node(state: ExperimentDesignState) -> ExperimentDesignState:
+def error_handler_node(state: ExperimentDesignState) -> dict[str, Any]:
     """Handle errors and prepare final state for failed workflows.
 
     Args:
@@ -106,14 +107,11 @@ def error_handler_node(state: ExperimentDesignState) -> ExperimentDesignState:
     errors = state.get("errors", [])
     error_summary = "; ".join([e.get("error", "Unknown error") for e in errors])
 
-    state["warnings"] = state.get("warnings", []) + [
-        f"Workflow failed with {len(errors)} error(s): {error_summary}"
-    ]
-
-    # Ensure status is failed
-    state["status"] = "failed"
-
-    return state
+    return {
+        "warnings": state.get("warnings", [])
+        + [f"Workflow failed with {len(errors)} error(s): {error_summary}"],
+        "status": "failed",
+    }
 
 
 def create_experiment_designer_graph(
@@ -121,7 +119,7 @@ def create_experiment_designer_graph(
     max_redesign_iterations: int = 2,
     enable_twin_simulation: bool = True,
     auto_skip_on_low_effect: bool = True,
-) -> StateGraph:
+) -> CompiledStateGraph:  # type: ignore[type-arg]
     """Create the experiment designer agent graph with redesign loop.
 
     Workflow:
@@ -167,7 +165,7 @@ def create_experiment_designer_graph(
     workflow = StateGraph(ExperimentDesignState)
 
     # Add nodes to graph (wrapped for sync compatibility)
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[call-overload]
     workflow.add_node("context_loader", wrap_async_node(context_node.execute))
     workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))
     workflow.add_node("design_reasoning", wrap_async_node(design_node.execute))
@@ -175,7 +173,7 @@ def create_experiment_designer_graph(
     workflow.add_node("validity_audit", wrap_async_node(validity_node.execute))
     workflow.add_node("redesign", wrap_async_node(redesign_node.execute))
     workflow.add_node("template_generator", wrap_async_node(template_node.execute))
-    workflow.add_node("error_handler", error_handler_node)
+    workflow.add_node("error_handler", error_handler_node)  # type: ignore[call-overload]
 
     # Set entry point - start with audit initialization
     workflow.set_entry_point("audit_init")

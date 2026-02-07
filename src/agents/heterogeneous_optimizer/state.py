@@ -4,7 +4,17 @@ This module defines the LangGraph state structure for segment-level CATE analysi
 """
 
 import operator
-from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NotRequired,
+    Optional,
+    TypedDict,
+)
 from uuid import UUID
 
 if TYPE_CHECKING:

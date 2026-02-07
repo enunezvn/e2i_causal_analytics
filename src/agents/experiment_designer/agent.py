@@ -19,7 +19,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -310,7 +310,7 @@ class ExperimentDesignerAgent(SkillsMixin):
         initial_state = self._create_initial_state(input_data)
 
         # Execute graph
-        final_state = self.graph.invoke(initial_state)
+        final_state = cast(ExperimentDesignState, self.graph.invoke(initial_state))
 
         # Convert to output model
         output = self._create_output(final_state)
@@ -358,13 +358,15 @@ class ExperimentDesignerAgent(SkillsMixin):
                 design_type=None,  # Will be determined during execution
             ):
                 # Execute graph asynchronously
-                final_state = await self.graph.ainvoke(initial_state)
+                final_state = cast(
+                    ExperimentDesignState, await self.graph.ainvoke(initial_state)
+                )
 
                 # Convert to output model
                 output = self._create_output(final_state)
 
                 # Log to MLflow
-                await tracker.log_design_result(output, final_state)
+                await tracker.log_design_result(output, dict(final_state))
 
                 # Check for failures
                 if final_state.get("status") == "failed":
@@ -376,7 +378,9 @@ class ExperimentDesignerAgent(SkillsMixin):
                 return output
         else:
             # Execute graph asynchronously without MLflow
-            final_state = await self.graph.ainvoke(initial_state)
+            final_state = cast(
+                ExperimentDesignState, await self.graph.ainvoke(initial_state)
+            )
 
             # Convert to output model
             output = self._create_output(final_state)
@@ -430,6 +434,13 @@ class ExperimentDesignerAgent(SkillsMixin):
             "preregistration_formality": input_data.preregistration_formality,
             "max_redesign_iterations": input_data.max_redesign_iterations,
             "enable_validity_audit": input_data.enable_validity_audit,
+            # Required output fields (initialized with defaults)
+            "design_type": "RCT",
+            "design_rationale": "",
+            "validity_threats": [],
+            "overall_validity_score": 0.0,
+            "total_latency_ms": 0,
+            "timestamp": "",
             # Error handling
             "errors": [],
             "warnings": [],
@@ -478,15 +489,17 @@ class ExperimentDesignerAgent(SkillsMixin):
 
         # Parse validity threats
         threats = []
-        for t in state.get("validity_threats", []):
+        for vt in state.get("validity_threats", []):
             threats.append(
                 ValidityThreatOutput(
-                    threat_type=t.get("threat_type", "internal"),
-                    threat_name=t.get("threat_name", ""),
-                    description=t.get("description", ""),
-                    severity=t.get("severity", "medium"),
-                    mitigation_possible=t.get("mitigation_possible", True),
-                    mitigation_strategy=t.get("mitigation_strategy"),
+                    threat_type=str(vt.get("threat_type", "internal")),
+                    threat_name=str(vt.get("threat_name", "")),
+                    description=str(vt.get("description", "")),
+                    severity=str(vt.get("severity", "medium")),
+                    mitigation_possible=bool(vt.get("mitigation_possible", True)),
+                    mitigation_strategy=str(vt.get("mitigation_strategy", ""))
+                    if vt.get("mitigation_strategy") is not None
+                    else None,
                 )
             )
 
@@ -514,7 +527,9 @@ class ExperimentDesignerAgent(SkillsMixin):
 
         # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
         raw_errors = state.get("errors", [])
-        errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
+        errors: list[dict[Any, Any]] = [
+            dict(e) for e in raw_errors  # type: ignore[arg-type]
+        ]
 
         return ExperimentDesignerOutput(
             # Design outputs

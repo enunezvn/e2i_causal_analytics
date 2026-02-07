@@ -34,7 +34,6 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_analyst
-from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.causal import (
     AggregationMethod,
     AnalysisStatus,
@@ -58,6 +57,7 @@ from src.api.schemas.causal import (
     SequentialPipelineRequest,
     SequentialPipelineResponse,
 )
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 

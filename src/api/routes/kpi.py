@@ -24,8 +24,8 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.dependencies.auth import require_admin, require_auth
-from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.dependencies.supabase_client import get_supabase
+from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.kpi import (
     BatchKPICalculationRequest,
     BatchKPICalculationResponse,

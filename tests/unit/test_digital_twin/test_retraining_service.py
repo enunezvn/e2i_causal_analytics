@@ -526,12 +526,13 @@ class TestTwinRetrainingService:
         assert config["extended_tuning_budget"] is True
         assert config["data_window_days"] == 30
 
-    def test_get_statistics(self, service):
+    @pytest.mark.asyncio
+    async def test_get_statistics(self, service):
         """Test getting service statistics."""
         # Add some jobs
         model_id = uuid4()
-        asyncio.run(service.trigger_retraining(model_id, TwinTriggerReason.MANUAL))
-        asyncio.run(service.trigger_retraining(model_id, TwinTriggerReason.FIDELITY_DEGRADATION))
+        await service.trigger_retraining(model_id, TwinTriggerReason.MANUAL)
+        await service.trigger_retraining(model_id, TwinTriggerReason.FIDELITY_DEGRADATION)
 
         stats = service.get_statistics()
 
@@ -554,7 +555,3 @@ class TestGetTwinRetrainingService:
         config = TwinRetrainingConfig(fidelity_threshold=0.60)
         service = get_twin_retraining_service(config=config)
         assert service.config.fidelity_threshold == 0.60
-
-
-# Import asyncio for running async test in synchronous test
-import asyncio

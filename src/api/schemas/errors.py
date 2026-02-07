@@ -8,7 +8,7 @@ router can reference them in ``responses={}``.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 

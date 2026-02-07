@@ -146,10 +146,10 @@ try:
         logger.info(f"Sentry: ENABLED (env={SENTRY_ENVIRONMENT}, release={SENTRY_RELEASE})")
     else:
         logger.info("Sentry: DISABLED (SENTRY_DSN not set)")
-        sentry_sdk = None
+        sentry_sdk = None  # type: ignore[assignment]
 except ImportError:
     logger.warning("Sentry: sentry-sdk not installed, error tracking disabled")
-    sentry_sdk = None
+    sentry_sdk = None  # type: ignore[assignment]
 
 # =============================================================================
 # OPENTELEMETRY INITIALIZATION
@@ -560,7 +560,7 @@ def custom_openapi():
     return schema
 
 
-app.openapi = custom_openapi
+app.openapi = custom_openapi  # type: ignore[method-assign]
 
 # =============================================================================
 # MIDDLEWARE
@@ -806,8 +806,8 @@ async def bentoml_health_check() -> Dict[str, Any]:
     }
 
 
-@app.get("/ready", tags=["Health"])
-async def readiness_check() -> Dict[str, Any]:
+@app.get("/ready", tags=["Health"], response_model=None)
+async def readiness_check() -> Dict[str, Any] | JSONResponse:
     """
     Readiness check - determines if service can accept traffic.
 
@@ -1081,6 +1081,7 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
     Handle standard HTTP exceptions with structured responses.
     """
     # Map status codes to appropriate E2IError types
+    e2i_error: E2IError
     if exc.status_code == 404:
         e2i_error = EndpointNotFoundError(request.url.path)
     elif exc.status_code == 401:
