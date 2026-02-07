@@ -148,8 +148,8 @@ class BaseRepository(ABC, Generic[T]):
     def _to_model(self, data: Dict[str, Any]) -> T:
         """Convert database row to model instance."""
         if self.model_class and hasattr(self.model_class, "model_validate"):
-            return self.model_class.model_validate(data)
-        return data
+            return self.model_class.model_validate(data)  # type: ignore[attr-defined]
+        return data  # type: ignore[return-value]  # Raw dict when no Pydantic model
 
 
 class SplitAwareRepository(BaseRepository[T]):

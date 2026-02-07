@@ -164,5 +164,6 @@ def build_simple_explainer_graph(use_checkpointer: bool = True) -> Any:
 # =============================================================================
 
 # Pre-compiled graph for direct import
-# Uses default checkpointer for state persistence
-explainer_graph = build_simple_explainer_graph(use_checkpointer=True)
+# No checkpointer — avoids Redis connection at import time (causes xdist races)
+# ExplainerAgent builds its own graph via _get_graph() with appropriate checkpointer
+explainer_graph = build_simple_explainer_graph(use_checkpointer=False)

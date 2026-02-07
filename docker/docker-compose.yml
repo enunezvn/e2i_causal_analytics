@@ -439,6 +439,7 @@ services:
       <<: *common-env
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3002}
       WORKERS: 4
+      ENABLE_HSTS: "true"
     command: >
       gunicorn src.api.main:app
       --workers 4

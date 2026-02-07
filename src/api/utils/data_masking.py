@@ -19,6 +19,7 @@ Usage:
 """
 
 import re
+from collections.abc import Set as AbstractSet
 from typing import Any, Dict, List, Optional, Union
 
 # Default PII fields to mask in responses
@@ -87,7 +88,7 @@ def mask_identifier(value: str, preserve_end: int = 4) -> str:
 def mask_pii(
     value: Any,
     field_name: str,
-    pii_fields: Optional[set] = None,
+    pii_fields: Optional[AbstractSet[str]] = None,
 ) -> Any:
     """Mask a PII value based on field name.
 
@@ -118,7 +119,7 @@ def mask_pii(
 
 def mask_response_dict(
     data: Dict[str, Any],
-    pii_fields: Optional[set] = None,
+    pii_fields: Optional[AbstractSet[str]] = None,
     recursive: bool = True,
 ) -> Dict[str, Any]:
     """Mask PII fields in a response dictionary.
@@ -161,7 +162,7 @@ def mask_response_dict(
 
 def _mask_list(
     items: List[Any],
-    pii_fields: set,
+    pii_fields: AbstractSet[str],
 ) -> List[Any]:
     """Mask PII fields in a list of items.
 
@@ -183,7 +184,7 @@ def _mask_list(
 
 def create_masked_model_response(
     model_instance: Any,
-    pii_fields: Optional[set] = None,
+    pii_fields: Optional[AbstractSet[str]] = None,
 ) -> Dict[str, Any]:
     """Create a masked dictionary from a Pydantic model instance.
 
@@ -223,7 +224,7 @@ class PIIMaskingMiddleware:
 
     def __init__(
         self,
-        pii_fields: Optional[set] = None,
+        pii_fields: Optional[AbstractSet[str]] = None,
         enabled: bool = True,
     ):
         """Initialize the masking middleware.

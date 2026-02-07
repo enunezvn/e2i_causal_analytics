@@ -17,6 +17,7 @@ Smart LLM Mode Selection (v4.3):
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
@@ -142,10 +143,12 @@ class ExplainerAgent(SkillsMixin):
         """
         # Rebuild graph if LLM mode changed
         if self._graph is None or self._graph_use_llm != use_llm:
+            _testing = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
             self._graph = build_explainer_graph(
                 conversation_store=self._conversation_store,
                 use_llm=use_llm,
                 llm=self._llm,
+                use_default_checkpointer=not _testing,
             )
             self._graph_use_llm = use_llm
         return self._graph

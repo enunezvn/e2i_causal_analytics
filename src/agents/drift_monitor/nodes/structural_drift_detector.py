@@ -26,6 +26,7 @@ import networkx as nx
 from src.agents.drift_monitor.state import (
     DriftMonitorState,
     DriftResult,
+    DriftSeverity,
     ErrorDetails,
     StructuralDriftResult,
 )
@@ -122,7 +123,7 @@ class StructuralDriftNode:
                         test_statistic=drift_result.get("drift_score", 0.0),
                         p_value=0.0,  # No statistical test, using direct comparison
                         drift_detected=True,
-                        severity=drift_result.get("severity", "none"),
+                        severity=drift_result.get("severity", "none"),  # type: ignore[typeddict-item]  # value is always a valid DriftSeverity literal
                         baseline_period="baseline",
                         current_period="current",
                     )
@@ -257,7 +258,7 @@ class StructuralDriftNode:
         self,
         drift_score: float,
         edge_type_changes: List[Dict[str, Any]],
-    ) -> str:
+    ) -> DriftSeverity:
         """Determine drift severity based on score and edge type changes.
 
         Args:

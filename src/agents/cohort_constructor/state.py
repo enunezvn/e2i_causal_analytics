@@ -291,7 +291,7 @@ def create_initial_state(
     brand: Optional[str] = None,
     indication: Optional[str] = None,
     config: Optional[CohortConfigInput] = None,
-    environment: str = "production",
+    environment: Literal["development", "staging", "production"] = "production",
 ) -> CohortConstructorState:
     """Create initial state for cohort construction.
 
