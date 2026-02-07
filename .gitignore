@@ -107,10 +107,9 @@ temp/
 # Archive
 archive/
 
-# Documentation (kept locally, not tracked)
-docs/*
-!docs/ARCHITECTURE.md
-!docs/api/
+# Documentation - ignore generated/local-only subdirectories
+docs/Archive/
+docs/results/
 docs/api/*
 !docs/api/openapi.json
 
