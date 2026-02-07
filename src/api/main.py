@@ -570,9 +570,7 @@ app.openapi = custom_openapi  # type: ignore[method-assign]
 # Production-ready configuration with explicit origins, methods, and headers
 _DEFAULT_ORIGINS = [
     # Production
-    "http://138.197.4.36",
-    "http://138.197.4.36:54321",
-    "https://138.197.4.36",
+    "https://eznomics.site",
     # Development
     "http://localhost:3000",
     "http://localhost:5173",
@@ -653,11 +651,18 @@ logger.info("Security Headers: ENABLED")
 # Rate Limiting middleware
 # Protects API from abuse with configurable limits per endpoint
 # Can be disabled for testing via DISABLE_RATE_LIMITING env var
-if os.environ.get("DISABLE_RATE_LIMITING", "").lower() not in ("1", "true", "yes"):
+_env = os.environ.get("ENVIRONMENT", "development")
+_disable_requested = os.environ.get("DISABLE_RATE_LIMITING", "").lower() in ("1", "true", "yes")
+
+if _disable_requested and _env == "production":
+    logger.warning("DISABLE_RATE_LIMITING ignored — ENVIRONMENT=production")
+    _disable_requested = False
+
+if not _disable_requested:
     app.add_middleware(RateLimitMiddleware, use_redis=True)
     logger.info("Rate Limiting: ENABLED")
 else:
-    logger.info("Rate Limiting: DISABLED (DISABLE_RATE_LIMITING set)")
+    logger.warning("Rate Limiting: DISABLED (DISABLE_RATE_LIMITING set)")
 
 # Request Timing middleware
 # Records request latency metrics for Prometheus and adds Server-Timing header

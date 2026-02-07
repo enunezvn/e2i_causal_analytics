@@ -229,7 +229,7 @@ from copilotkit.integrations.fastapi import (
 from copilotkit.langgraph import copilotkit_emit_message, copilotkit_emit_state
 from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -238,6 +238,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
+from src.api.dependencies.auth import require_viewer
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
@@ -3059,7 +3060,11 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
 
 
 @router.post("/chat/stream", summary="Stream chatbot response", operation_id="stream_chat")
-async def stream_chat(chat_request: ChatRequest, request: Request) -> StreamingResponse:
+async def stream_chat(
+    chat_request: ChatRequest,
+    request: Request,
+    _user: dict = Depends(require_viewer),
+) -> StreamingResponse:
     """
     Stream chatbot response as Server-Sent Events (SSE).
 
@@ -3111,7 +3116,11 @@ async def stream_chat(chat_request: ChatRequest, request: Request) -> StreamingR
 
 
 @router.post("/chat", summary="Non-streaming chatbot", operation_id="chat")
-async def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
+async def chat(
+    chat_request: ChatRequest,
+    request: Request,
+    _user: dict = Depends(require_viewer),
+) -> ChatResponse:
     """
     Non-streaming chatbot endpoint.
 
@@ -3267,7 +3276,10 @@ class FeedbackResponse(BaseModel):
 
 
 @router.post("/feedback", summary="Submit message feedback", operation_id="submit_feedback")
-async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
+async def submit_feedback(
+    request: FeedbackRequest,
+    _user: dict = Depends(require_viewer),
+) -> FeedbackResponse:
     """
     Submit feedback (thumbs up/down) for a chatbot message.
 
@@ -3387,7 +3399,11 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
 
 
 @router.get("/feedback/stats", summary="Get feedback statistics", operation_id="get_feedback_stats")
-async def get_feedback_stats(agent_name: Optional[str] = None, days: int = 30) -> Dict[str, Any]:
+async def get_feedback_stats(
+    agent_name: Optional[str] = None,
+    days: int = 30,
+    _user: dict = Depends(require_viewer),
+) -> Dict[str, Any]:
     """
     Get feedback statistics for analytics.
 
@@ -3429,6 +3445,7 @@ async def get_feedback_stats(agent_name: Optional[str] = None, days: int = 30) -
 @router.get("/analytics/usage", summary="Get usage analytics", operation_id="get_usage_analytics")
 async def get_usage_analytics(
     days: int = 7,
+    _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
     Get chatbot usage analytics summary.
@@ -3481,6 +3498,7 @@ async def get_usage_analytics(
 async def get_agent_analytics(
     agent_name: Optional[str] = None,
     days: int = 30,
+    _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
     Get agent performance analytics.
@@ -3520,6 +3538,7 @@ async def get_agent_analytics(
 @router.get("/analytics/errors", summary="Get error analytics", operation_id="get_error_analytics")
 async def get_error_analytics(
     limit: int = 20,
+    _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
     Get recent error analytics for debugging.
@@ -3554,9 +3573,12 @@ async def get_error_analytics(
         }
 
 
-@router.get("/analytics/hourly", summary="Get hourly usage pattern", operation_id="get_hourly_pattern")
+@router.get(
+    "/analytics/hourly", summary="Get hourly usage pattern", operation_id="get_hourly_pattern"
+)
 async def get_hourly_pattern(
     days: int = 7,
+    _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
     Get hourly usage pattern for capacity planning.

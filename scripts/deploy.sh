@@ -38,6 +38,9 @@ echo "Project: $PROJECT_DIR"
 echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
+# Secure .env permissions
+chmod 600 "$PROJECT_DIR/.env" "$PROJECT_DIR/.env.dev" 2>/dev/null || true
+
 echo "=== Pulling latest code ==="
 git pull
 

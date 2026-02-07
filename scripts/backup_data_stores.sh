@@ -5,6 +5,12 @@
 # Creates RDB snapshots from Redis and FalkorDB docker volumes.
 # Keeps 7 daily snapshots.
 #
+# Backup Strategy:
+#   - Primary DR: DigitalOcean droplet image backups (full-system recovery)
+#   - This script: Supplementary point-in-time snapshots for Redis/FalkorDB
+#   - Use DO image backups for full disaster recovery
+#   - Use this script for granular data store rollback
+#
 # Usage:
 #   ./scripts/backup_data_stores.sh
 #

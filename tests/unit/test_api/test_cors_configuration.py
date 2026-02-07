@@ -18,7 +18,7 @@ class TestCORSConfiguration:
     """Test CORS middleware configuration."""
 
     def test_default_origins_include_production(self):
-        """Default origins should include production IP."""
+        """Default origins should include production domain."""
         # Import after ensuring no env var interference
         with patch.dict(os.environ, {"ALLOWED_ORIGINS": ""}, clear=False):
             # Force reimport to pick up the patched env
@@ -28,9 +28,7 @@ class TestCORSConfiguration:
 
             importlib.reload(main)
 
-            assert "http://138.197.4.36" in main._DEFAULT_ORIGINS
-            assert "http://138.197.4.36:54321" in main._DEFAULT_ORIGINS
-            assert "https://138.197.4.36" in main._DEFAULT_ORIGINS
+            assert "https://eznomics.site" in main._DEFAULT_ORIGINS
 
     def test_default_origins_include_development(self):
         """Default origins should include development URLs."""

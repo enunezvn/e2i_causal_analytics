@@ -47,7 +47,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         # Auto-detect HSTS from environment if not specified
         if enable_hsts is None:
-            self.enable_hsts = os.environ.get("ENABLE_HSTS", "false").lower() == "true"
+            self.enable_hsts = os.environ.get("ENABLE_HSTS", "true").lower() == "true"
         else:
             self.enable_hsts = enable_hsts
 

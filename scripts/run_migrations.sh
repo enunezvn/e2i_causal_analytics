@@ -99,7 +99,7 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # Apply migration in a transaction
   if psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -q <<SQL
 \i $migration_file
-INSERT INTO public.schema_migrations (filename) VALUES ('$filename');
+INSERT INTO public.schema_migrations (filename) VALUES ('${filename//\'/\'\'}');
 SQL
   then
     echo -e "${GREEN}OK${NC}"

@@ -7,7 +7,7 @@
 # Offline Store: File-based (for training data)
 # =============================================================================
 
-FROM feastdev/feature-server:latest
+FROM feastdev/feature-server:0.43.0
 
 # Set working directory
 WORKDIR /feast

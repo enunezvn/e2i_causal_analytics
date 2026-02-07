@@ -72,6 +72,23 @@ SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 
 # Testing mode - bypasses authentication for integration/e2e tests
 TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
+
+# Warn at startup if critical auth secrets are missing (skip in test mode)
+if not TESTING_MODE:
+    _auth_logger = logging.getLogger(__name__)
+    if not SUPABASE_JWT_SECRET:
+        _auth_logger.warning(
+            "SUPABASE_JWT_SECRET is not set — JWT verification will be disabled. "
+            "Set this in .env for production."
+        )
+    if not SUPABASE_URL:
+        _auth_logger.warning(
+            "SUPABASE_URL is not set — auth will be disabled. Set this in .env for production."
+        )
+    if not SUPABASE_ANON_KEY:
+        _auth_logger.warning(
+            "SUPABASE_ANON_KEY is not set — auth will be disabled. Set this in .env for production."
+        )
 _ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 if TESTING_MODE and _ENVIRONMENT == "production":
     import warnings

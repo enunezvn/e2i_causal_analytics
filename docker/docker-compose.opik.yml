@@ -53,10 +53,10 @@ services:
     restart: unless-stopped
 
     environment:
-      MYSQL_ROOT_PASSWORD: ${OPIK_MYSQL_ROOT_PASSWORD:-opik}
+      MYSQL_ROOT_PASSWORD: ${OPIK_MYSQL_ROOT_PASSWORD:?OPIK_MYSQL_ROOT_PASSWORD must be set}
       MYSQL_DATABASE: opik
       MYSQL_USER: opik
-      MYSQL_PASSWORD: ${OPIK_MYSQL_PASSWORD:-opik}
+      MYSQL_PASSWORD: ${OPIK_MYSQL_PASSWORD:?OPIK_MYSQL_PASSWORD must be set}
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
       timeout: 5s
@@ -85,7 +85,7 @@ services:
     hostname: opik-redis
     restart: unless-stopped
 
-    command: redis-server --requirepass ${OPIK_REDIS_PASSWORD:-opik}
+    command: redis-server --requirepass ${OPIK_REDIS_PASSWORD:?OPIK_REDIS_PASSWORD must be set}
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "6379"]
       interval: 5s
@@ -179,7 +179,7 @@ services:
     environment:
       CLICKHOUSE_DB: opik
       CLICKHOUSE_USER: opik
-      CLICKHOUSE_PASSWORD: ${OPIK_CLICKHOUSE_PASSWORD:-opik}
+      CLICKHOUSE_PASSWORD: ${OPIK_CLICKHOUSE_PASSWORD:?OPIK_CLICKHOUSE_PASSWORD must be set}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - opik_clickhouse:/var/lib/clickhouse
@@ -221,8 +221,8 @@ services:
     restart: unless-stopped
 
     environment:
-      MINIO_ROOT_USER: ${OPIK_MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE}
-      MINIO_ROOT_PASSWORD: ${OPIK_MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
+      MINIO_ROOT_USER: ${OPIK_MINIO_ROOT_USER:?OPIK_MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${OPIK_MINIO_ROOT_PASSWORD:?OPIK_MINIO_ROOT_PASSWORD must be set}
     command: server --console-address ":9090" /data
     ports:
       - "127.0.0.1:9090:9090"  # MinIO console
@@ -259,7 +259,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       sleep 5;
-      /usr/bin/mc alias set s3 http://opik-minio:9000 ${OPIK_MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE} ${OPIK_MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY} --api S3v4 ;
+      /usr/bin/mc alias set s3 http://opik-minio:9000 ${OPIK_MINIO_ROOT_USER:?OPIK_MINIO_ROOT_USER must be set} ${OPIK_MINIO_ROOT_PASSWORD:?OPIK_MINIO_ROOT_PASSWORD must be set} --api S3v4 ;
       /usr/bin/mc mb --ignore-existing s3/public;
       /usr/bin/mc anonymous set download s3/public/;
       "
@@ -286,22 +286,22 @@ services:
       STATE_DB_URL: "opik-mysql:3306/opik?createDatabaseIfNotExist=true&rewriteBatchedStatements=true"
       STATE_DB_DATABASE_NAME: opik
       STATE_DB_USER: opik
-      STATE_DB_PASS: ${OPIK_MYSQL_PASSWORD:-opik}
+      STATE_DB_PASS: ${OPIK_MYSQL_PASSWORD:?OPIK_MYSQL_PASSWORD must be set}
       ANALYTICS_DB_MIGRATIONS_URL: "jdbc:clickhouse://opik-clickhouse:8123"
       ANALYTICS_DB_MIGRATIONS_USER: opik
-      ANALYTICS_DB_MIGRATIONS_PASS: ${OPIK_CLICKHOUSE_PASSWORD:-opik}
+      ANALYTICS_DB_MIGRATIONS_PASS: ${OPIK_CLICKHOUSE_PASSWORD:?OPIK_CLICKHOUSE_PASSWORD must be set}
       ANALYTICS_DB_PROTOCOL: "HTTP"
       ANALYTICS_DB_HOST: "opik-clickhouse"
       ANALYTICS_DB_PORT: 8123
       ANALYTICS_DB_DATABASE_NAME: opik
       ANALYTICS_DB_USERNAME: opik
-      ANALYTICS_DB_PASS: ${OPIK_CLICKHOUSE_PASSWORD:-opik}
+      ANALYTICS_DB_PASS: ${OPIK_CLICKHOUSE_PASSWORD:?OPIK_CLICKHOUSE_PASSWORD must be set}
       JAVA_OPTS: "-Dliquibase.propertySubstitutionEnabled=true -XX:+UseG1GC -XX:MaxRAMPercentage=80.0"
-      REDIS_URL: redis://:${OPIK_REDIS_PASSWORD:-opik}@opik-redis:6379/
+      REDIS_URL: redis://:${OPIK_REDIS_PASSWORD:?OPIK_REDIS_PASSWORD must be set}@opik-redis:6379/
       OPIK_OTEL_SDK_ENABLED: false
       OPIK_USAGE_REPORT_ENABLED: ${OPIK_USAGE_REPORT_ENABLED:-true}
-      AWS_ACCESS_KEY_ID: ${OPIK_MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE}
-      AWS_SECRET_ACCESS_KEY: ${OPIK_MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
+      AWS_ACCESS_KEY_ID: ${OPIK_MINIO_ROOT_USER:?OPIK_MINIO_ROOT_USER must be set}
+      AWS_SECRET_ACCESS_KEY: ${OPIK_MINIO_ROOT_PASSWORD:?OPIK_MINIO_ROOT_PASSWORD must be set}
       IS_MINIO: true
       S3_URL: http://opik-minio:9000
       PYTHON_EVALUATOR_URL: http://opik-python-backend:8001
@@ -355,7 +355,7 @@ services:
       OPIK_VERSION: ${OPIK_VERSION:-latest}
       OPIK_REVERSE_PROXY_URL: http://opik-frontend:5173/api
       PYTHON_BACKEND_PORT: 8001
-      REDIS_URL: redis://:${OPIK_REDIS_PASSWORD:-opik}@opik-redis:6379/0
+      REDIS_URL: redis://:${OPIK_REDIS_PASSWORD:?OPIK_REDIS_PASSWORD must be set}@opik-redis:6379/0
       RQ_WORKER_ENABLED: "true"
       OPIK_URL_OVERRIDE: http://opik-backend:8080
     healthcheck:

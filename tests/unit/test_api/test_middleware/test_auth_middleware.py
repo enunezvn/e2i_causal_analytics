@@ -88,20 +88,21 @@ class TestIsPublicPath:
         assert _is_public_path("POST", "/api/auth/refresh") is True
 
     # =========================================================================
-    # CopilotKit endpoints — all public (rate-limited instead of auth-gated)
+    # CopilotKit endpoints — only status/info are public
     # =========================================================================
 
-    def test_copilotkit_root_is_public(self):
-        """Test /api/copilotkit is public."""
-        assert _is_public_path("POST", "/api/copilotkit") is True
-        assert _is_public_path("GET", "/api/copilotkit") is True
+    def test_copilotkit_root_requires_auth(self):
+        """Test /api/copilotkit (root) requires auth."""
+        assert _is_public_path("POST", "/api/copilotkit") is False
+        assert _is_public_path("GET", "/api/copilotkit") is False
 
     def test_copilotkit_status_is_public(self):
-        """Test /api/copilotkit/status is public."""
+        """Test /api/copilotkit/status is public (GET only)."""
         assert _is_public_path("GET", "/api/copilotkit/status") is True
+        assert _is_public_path("POST", "/api/copilotkit/status") is False
 
     def test_copilotkit_info_is_public(self):
-        """Test /api/copilotkit/info is public."""
+        """Test /api/copilotkit/info is public (GET only)."""
         assert _is_public_path("GET", "/api/copilotkit/info") is True
 
     # =========================================================================

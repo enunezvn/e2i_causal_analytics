@@ -205,6 +205,13 @@ echo -e "${RED}Unhealthy: $UNHEALTHY${NC}"
 echo -e "${YELLOW}Skipped (scaled to 0): $SKIPPED${NC}"
 echo ""
 
+# Check .env file permissions
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_PERMS="$(stat -c '%a' "$PROJECT_DIR/.env" 2>/dev/null || echo "missing")"
+if [ "$ENV_PERMS" != "600" ] && [ "$ENV_PERMS" != "missing" ]; then
+  echo -e "${YELLOW}WARNING: .env has insecure permissions ($ENV_PERMS, should be 600)${NC}"
+fi
+
 # Exit with error if any services are unhealthy
 if [ "$UNHEALTHY" -gt 0 ]; then
   echo -e "${RED}❌ SYSTEM STATUS: DEGRADED${NC}"

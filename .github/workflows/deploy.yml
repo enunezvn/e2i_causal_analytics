@@ -130,29 +130,41 @@ jobs:
 
             PROJECT_DIR="/home/enunez/Projects/e2i_causal_analytics"
             COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml"
-            SHA="${{ github.sha }}"
-            SHORT_SHA="${SHA:0:7}"
-
-            echo "==> Deploying ${SHORT_SHA}"
 
             cd "$PROJECT_DIR"
+            PREV_SHA=$(git rev-parse HEAD)
+            echo "==> Pre-deploy SHA: ${PREV_SHA:0:7}"
+
             git pull origin main
+            NEW_SHA=$(git rev-parse HEAD)
+            echo "==> Deploying ${NEW_SHA:0:7}"
+
+            # Run migrations
+            bash scripts/run_migrations.sh || true
 
             # Restart workers and scheduler (API/frontend auto-reload via volume mounts)
             $COMPOSE_CMD restart worker_light worker_medium scheduler
 
-            # Wait for health check
+            # Health check
             echo "==> Waiting for health check..."
+            HEALTHY=false
             for i in $(seq 1 30); do
               if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+                HEALTHY=true
                 echo "==> Health check passed on attempt ${i}"
-                exit 0
+                break
               fi
               sleep 2
             done
 
-            echo "==> Health check failed after 60s"
-            exit 1
+            if [ "$HEALTHY" = false ]; then
+              echo "==> Health check failed — rolling back to ${PREV_SHA:0:7}"
+              git checkout "$PREV_SHA"
+              $COMPOSE_CMD restart worker_light worker_medium scheduler
+              sleep 10
+              echo "==> Rollback complete. Deploy FAILED."
+              exit 1
+            fi
 
       - name: Deployment summary
         if: always()

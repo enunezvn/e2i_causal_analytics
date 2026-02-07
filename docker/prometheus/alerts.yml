@@ -48,11 +48,5 @@ groups:
           summary: "High memory usage (> 90%)"
           description: "System memory usage is {{ $value | humanizePercentage }}."
 
-      - alert: RedisDown
-        expr: up{job="redis"} == 0
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Redis is down"
-          description: "Redis health check has been failing for 2 minutes."
+      # Note: Redis does not expose a Prometheus metrics endpoint.
+      # Redis health is monitored via the API /health endpoint and scripts/health_check.sh.

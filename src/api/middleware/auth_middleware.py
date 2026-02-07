@@ -79,18 +79,17 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/api/monitoring/alerts"),
     # Analytics dashboard - public for dashboard widgets
     ("GET", "/api/analytics/dashboard"),
-    # CopilotKit - All endpoints public for demo access (chat widget needs to work without login)
-    ("*", "/api/copilotkit"),
-    ("*", "/api/copilotkit/status"),
-    ("*", "/api/copilotkit/info"),
+    # CopilotKit - only status/info are public (chat/feedback/analytics require auth)
+    ("GET", "/api/copilotkit/status"),
+    ("GET", "/api/copilotkit/info"),
+    ("OPTIONS", "/api/copilotkit/info"),
 ]
 
 # Paths that match patterns (for dynamic routes)
 PUBLIC_PATH_PATTERNS: List[Tuple[str, str]] = [
     # KPI metadata by ID is public
     ("GET", r"^/api/kpis/[^/]+/metadata$"),
-    # CopilotKit - all endpoints are public (rate-limited instead of auth-gated)
-    # Rate limiting is enforced by RateLimitMiddleware with per-endpoint limits
+    # CopilotKit - dynamic patterns (none currently public)
 ]
 
 

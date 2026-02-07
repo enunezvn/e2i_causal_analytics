@@ -109,8 +109,8 @@ class TestSecurityHeadersMiddleware:
             assert "Strict-Transport-Security" in response.headers
 
     @pytest.mark.asyncio
-    async def test_hsts_auto_detection_defaults_to_false(self):
-        """Test HSTS defaults to disabled if not in environment."""
+    async def test_hsts_auto_detection_defaults_to_true(self):
+        """Test HSTS defaults to enabled if not in environment."""
         app = MagicMock()
 
         with patch.dict("os.environ", {}, clear=True):
@@ -125,7 +125,7 @@ class TestSecurityHeadersMiddleware:
 
             response = await middleware.dispatch(mock_request, call_next)
 
-            assert "Strict-Transport-Security" not in response.headers
+            assert "Strict-Transport-Security" in response.headers
 
     @pytest.mark.asyncio
     async def test_custom_hsts_max_age(self):

@@ -131,7 +131,7 @@ jobs:
             --cov=src \
             --cov-report=xml:coverage.xml \
             --cov-report=term \
-            --cov-fail-under=0 \
+            --cov-fail-under=70 \
             -n 2 \
             --dist=loadscope \
             --timeout=30 \

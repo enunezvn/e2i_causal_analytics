@@ -28,6 +28,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+if not _AUDIT_ENABLED:
+    logger.warning("Security audit module not available — rate limit events will not be audited")
+
 
 class RateLimitBackend:
     """Abstract base for rate limit storage backends."""
