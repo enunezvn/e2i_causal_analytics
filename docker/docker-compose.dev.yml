@@ -31,7 +31,7 @@ services:
           memory: 512M
     ports:
       - "8000:8000"
-      - "5678:5678"  # debugpy port for VS Code debugging
+      - "127.0.0.1:5678:5678"  # debugpy port for VS Code debugging
     volumes:
       # -----------------------------------------------------------------------
       # BIND MOUNTS - Hot-reloading for development
