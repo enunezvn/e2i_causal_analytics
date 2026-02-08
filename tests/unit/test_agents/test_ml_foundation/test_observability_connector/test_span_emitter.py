@@ -328,6 +328,7 @@ class TestEmitSpansGracefulDegradation:
     async def test_emit_spans_without_repository(self, mock_opik_connector):
         """Test emission works without repository."""
         import src.agents.ml_foundation.observability_connector.nodes.span_emitter as module
+        from unittest.mock import patch
 
         # Only Opik, no repository
         module._opik_connector = mock_opik_connector
@@ -345,7 +346,8 @@ class TestEmitSpansGracefulDegradation:
             ]
         }
 
-        result = await emit_spans(state)
+        with patch.object(module, 'get_span_repository', return_value=None):
+            result = await emit_spans(state)
 
         # Should still succeed with Opik-only
         assert result["emission_successful"] is True

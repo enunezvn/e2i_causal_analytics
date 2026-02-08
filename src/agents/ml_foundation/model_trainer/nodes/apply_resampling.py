@@ -25,7 +25,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
         Numpy array
     """
     if data is None:
-        return np.array([])  # Return empty array instead of None
+        return None
 
     if isinstance(data, np.ndarray):
         return data

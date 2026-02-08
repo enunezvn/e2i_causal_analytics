@@ -86,7 +86,7 @@ class RubricNode:
             logger.debug("No rubric evaluation context provided, skipping")
             return {
                 **state,
-                "rubric_evaluation": {},
+                "rubric_evaluation": None,
                 "rubric_latency_ms": int((time.time() - start_time) * 1000),
             }
 
@@ -129,7 +129,7 @@ class RubricNode:
             logger.error("Rubric evaluation failed: %s", e)
             return {
                 **state,
-                "rubric_evaluation": {},
+                "rubric_evaluation": None,
                 "rubric_error": str(e),
                 "errors": (state.get("errors") or []) + [{"node": "rubric_node", "error": str(e)}],
                 "warnings": (state.get("warnings") or []) + [f"Rubric evaluation failed: {e}"],

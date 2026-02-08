@@ -952,6 +952,8 @@ async def test_enrollment_stats_empty_experiment(mock_enrollment_service):
 @pytest.mark.asyncio
 async def test_results_no_cached_results(mock_results_analysis_service, mock_ab_results_repository):
     """Test getting results when no cached results exist."""
+    from starlette.background import BackgroundTasks
+
     from src.api.routes.experiments import AnalysisMethod, AnalysisType, get_experiment_results
 
     mock_ab_results_repository.get_results.return_value = []
@@ -960,6 +962,7 @@ async def test_results_no_cached_results(mock_results_analysis_service, mock_ab_
 
     result = await get_experiment_results(
         experiment_id,
+        BackgroundTasks(),
         analysis_type=AnalysisType.FINAL,
         analysis_method=AnalysisMethod.ITT,
         recompute=False,

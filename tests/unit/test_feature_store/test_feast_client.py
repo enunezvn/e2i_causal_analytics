@@ -287,8 +287,10 @@ class TestFallback:
         client._store = mock_store
 
         # Mock custom store
-        mock_custom = AsyncMock()
-        mock_custom.get_features.return_value = {"engagement_score": 0.5}
+        mock_custom = MagicMock()
+        mock_result = MagicMock()
+        mock_result.features = {"hcp_conversion_features__engagement_score": 0.5}
+        mock_custom.get_entity_features.return_value = mock_result
         client._custom_store = mock_custom
 
         # Should fall back to custom store
@@ -298,7 +300,7 @@ class TestFallback:
         )
 
         # Custom store should have been called
-        mock_custom.get_features.assert_called()
+        mock_custom.get_entity_features.assert_called()
 
 
 class TestFeatureStatistics:
@@ -375,7 +377,7 @@ class TestListOperations:
         # Mock entity
         mock_entity = MagicMock()
         mock_entity.name = "hcp"
-        mock_entity.join_keys = ["hcp_id"]
+        mock_entity.join_key = "hcp_id"
         mock_entity.description = "Healthcare Provider"
         mock_entity.tags = {"domain": "commercial"}
 

@@ -402,7 +402,7 @@ class TestProceduralMemoryBackend:
                 mock_embed.embed = AsyncMock(return_value=[0.1, 0.2, 0.3])
                 mock_get_embed.return_value = mock_embed
 
-                mock_insert.return_value = AsyncMock(return_value={"id": "proc_new"})()
+                mock_insert.return_value = AsyncMock(return_value="proc_new")()
 
                 procedure_id = await backend.store_procedure(
                     procedure_name="New Procedure",
@@ -419,7 +419,7 @@ class TestProceduralMemoryBackend:
         with patch("src.rag.cognitive_backends.insert_procedural_memory") as mock_insert:
 
             async def async_return():
-                return {"id": "proc_embed"}
+                return "proc_embed"
 
             mock_insert.return_value = async_return()
 
