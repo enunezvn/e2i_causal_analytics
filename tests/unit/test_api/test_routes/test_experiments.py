@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 # =============================================================================
 # FIXTURES
@@ -615,6 +615,7 @@ async def test_get_experiment_results_recompute(mock_results_analysis_service):
 
     result = await get_experiment_results(
         experiment_id,
+        background_tasks=BackgroundTasks(),
         analysis_type=AnalysisType.FINAL,
         analysis_method=AnalysisMethod.ITT,
         recompute=True,
@@ -636,6 +637,7 @@ async def test_get_experiment_results_cached(
 
     result = await get_experiment_results(
         experiment_id,
+        background_tasks=BackgroundTasks(),
         analysis_type=AnalysisType.FINAL,
         analysis_method=AnalysisMethod.ITT,
         recompute=False,
@@ -653,6 +655,7 @@ async def test_get_experiment_results_per_protocol(mock_results_analysis_service
 
     result = await get_experiment_results(
         experiment_id,
+        background_tasks=BackgroundTasks(),
         analysis_type=AnalysisType.FINAL,
         analysis_method=AnalysisMethod.PER_PROTOCOL,
         recompute=True,
