@@ -10,6 +10,7 @@ Multi-Agent Causal Analytics for Pharmaceutical Drug Adoption Analysis
 [![Frontend Tests](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/frontend-tests.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/frontend-tests.yml)
 [![Security](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/security.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/security.yml)
 [![Deploy](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/deploy.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/deploy.yml)
+[![Type Check](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/verify-types.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/verify-types.yml)
 
 ## Overview
 
@@ -22,11 +23,13 @@ E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed
 - **Causal Validation** with 5 DoWhy refutation tests
 - **MLOps Integration** (MLflow, Opik, Feast, Great Expectations, Optuna, SHAP, BentoML)
 - **Real-Time Model Interpretability** (v4.1) - SHAP explanations in 50-500ms via REST API
-- **Digital Twin Engine** ⭐ NEW v4.2 - A/B test pre-screening with ML-based simulations
-- **Tool Composer** ⭐ NEW v4.2 - Multi-faceted query decomposition & dynamic tool orchestration
+- **Digital Twin Engine** (v4.2) - A/B test pre-screening with ML-based simulations
+- **Tool Composer** (v4.2) - Multi-faceted query decomposition & dynamic tool orchestration
 - **Natural Language Interface** with typo-tolerant query processing
-- **37 Database Tables** for comprehensive data management (including 9 new v4.2 tables)
+- **120+ Database Tables** across core, ML, memory, chat, audit, and RAG schemas
 - **Hybrid RAG System** with vector + full-text + graph search
+- **Full-Stack Dashboard** — React 18 + TypeScript + Vite with 27 pages
+- **Production Observability** — Prometheus, Grafana, Loki, Alertmanager
 
 ### Analyzed Brands
 
@@ -41,17 +44,17 @@ E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed
 **TIER 0: ML FOUNDATION** (8 agents)
 - scope_definer, cohort_constructor, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
 
-**TIER 1: COORDINATION** (2 agents) ⭐ Enhanced v4.2
+**TIER 1: COORDINATION** (2 agents)
 - orchestrator (multi-agent routing & synthesis with 4-stage classifier)
-- tool_composer ⭐ NEW v4.2 (multi-faceted query decomposition & tool orchestration)
+- tool_composer (multi-faceted query decomposition & tool orchestration)
 
-**TIER 2: CAUSAL ANALYTICS** (3 agents) ⭐ Core
+**TIER 2: CAUSAL ANALYTICS** (3 agents)
 - causal_impact (effect estimation + 5 refutation tests)
 - gap_analyzer (ROI opportunity identification)
 - heterogeneous_optimizer (treatment effect heterogeneity)
 
-**TIER 3: MONITORING** (3 agents) ⭐ Enhanced v4.2
-- drift_monitor, experiment_designer (with Digital Twin pre-screening), health_score
+**TIER 3: MONITORING** (4 agents)
+- drift_monitor, experiment_designer (with Digital Twin pre-screening), experiment_monitor, health_score
 
 **TIER 4: ML PREDICTIONS** (2 agents)
 - prediction_synthesizer, resource_optimizer
@@ -64,57 +67,48 @@ E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed
 ```
 e2i_causal_analytics/
 ├── config/                    # YAML configurations (8 files)
-│   ├── agent_config.yaml      # 21-agent definitions
+│   ├── agent_config.yaml      # Agent definitions
 │   ├── domain_vocabulary_v3.1.0.yaml
 │   ├── kpi_definitions.yaml   # 46+ KPIs
 │   └── ...
 │
-├── database/                  # SQL schemas (37 tables) ⭐ Enhanced v4.2
-│   ├── core/                  # 8 core data tables
-│   ├── ml/                    # 17 ML tables (8 foundation + 2 causal + 1 SHAP + 3 digital twin + 3 tool composer)
-│   ├── memory/                # 4 memory tables + FalkorDB schema + 3 tool composer memory tables
-│   ├── audit/                 # Audit trail
-│   └── causal/                # 2 causal validation tables
+├── database/                  # SQL schemas (120+ tables)
+│   ├── core/                  # Core data tables (patients, HCPs, treatments, triggers)
+│   ├── ml/                    # ML pipeline tables (experiments, models, digital twins, A/B testing, GEPA, etc.)
+│   ├── memory/                # Memory tables + FalkorDB schema
+│   ├── chat/                  # Chat, feedback, analytics tables
+│   ├── rag/                   # RAG document chunks + search logs
+│   ├── audit/                 # Audit trail + security audit log
+│   ├── causal/                # Causal validation + energy score tables
+│   └── migrations/            # Feature store, feedback loop, validation schemas
 │
 ├── data/
 │   ├── synthetic/             # ~200 patients, ~50 HCPs (18 JSON files)
 │   └── training/              # fastText corpus
 │
-├── src/                       # Main source code ⭐ Enhanced v4.2
+├── src/                       # Main source code
 │   ├── nlp/                   # Query processing, entity extraction
-│   ├── agents/                # 21 agent implementations
-│   │   ├── orchestrator/      # Tier 1 coordination agent
-│   │   │   ├── classifier/    # ⭐ NEW v4.2: 4-stage query classification
-│   │   │   ├── router.py      # ⭐ NEW v4.2: Enhanced routing logic
-│   │   │   └── tools/         # Orchestrator tools
-│   │   │       └── explain_tool.py  # SHAP chat integration
-│   │   ├── tool_composer/     # ⭐ NEW v4.2: Multi-faceted query handler
-│   │   │   ├── decomposer.py, planner.py, executor.py, synthesizer.py
-│   │   │   └── models/        # Composition data models
-│   │   └── experiment_designer/  # ⭐ Enhanced v4.2 with Digital Twin
-│   │       └── tools/         # Includes digital twin simulation tools
-│   ├── digital_twin/          # ⭐ NEW v4.2: Digital twin engine
-│   │   ├── twin_generator.py, simulation_engine.py
-│   │   └── models/            # Twin & simulation schemas
-│   ├── tool_registry/         # ⭐ NEW v4.2: Tool discovery & management
-│   ├── feature_store/         # ⭐ NEW v4.2: Lightweight feature store
-│   │   ├── client.py          # Main FeatureStoreClient
-│   │   ├── retrieval.py       # Feature retrieval with caching
-│   │   ├── writer.py          # Feature writing & batch operations
-│   │   └── models.py          # Feature store data models
-│   ├── memory/                # Tri-memory backends
-│   ├── causal/                # Causal inference engine
+│   ├── agents/                # 21 agent implementations (6 tiers)
+│   │   ├── orchestrator/      # Tier 1 coordination (4-stage classifier + router)
+│   │   ├── tool_composer/     # Multi-faceted query decomposition & orchestration
+│   │   ├── experiment_designer/ # Experiment design with Digital Twin pre-screening
+│   │   ├── ml_foundation/     # 7 Tier 0 agents (scope, data, features, models)
+│   │   └── ...                # 11 more agents (causal, monitoring, predictions, etc.)
+│   ├── digital_twin/          # A/B test pre-screening with ML-based simulations
+│   ├── tool_registry/         # Tool discovery & management
+│   ├── feature_store/         # Lightweight feature store (Supabase + Redis + MLflow)
+│   ├── memory/                # Tri-memory backends (working, episodic, procedural, semantic)
+│   ├── causal_engine/         # EconML CausalForestDML, CausalML, DoWhy integration
+│   ├── rag/                   # Hybrid RAG (vector + full-text + graph via FalkorDB)
 │   ├── ml/                    # ML operations & data management
-│   ├── mlops/                 # MLOps components
-│   │   └── shap_explainer_realtime.py  # Real-time SHAP engine
-│   ├── api/                   # FastAPI endpoints
-│   │   └── routes/
-│   │       └── explain.py     # 5 SHAP API endpoints
-│   └── utils/                 # Shared utilities
+│   ├── mlops/                 # MLflow, Opik, Feast, BentoML, SHAP connectors
+│   ├── workers/               # Celery task definitions and event consumers
+│   ├── api/                   # FastAPI endpoints & middleware
+│   └── utils/                 # Shared utilities (circuit breaker, etc.)
 │
-├── tests/                     # Unit & integration tests
-├── scripts/                   # Utility scripts
-├── frontend/                  # Dashboard UI mockups
+├── tests/                     # 500+ test files (unit, integration, tier0-5)
+├── scripts/                   # Utility scripts (deploy, health check, backups, migrations)
+├── frontend/                  # React 18 + TypeScript + Vite dashboard (27 pages)
 ├── docs/                      # Comprehensive documentation
 │   ├── ARCHITECTURE.md        # C4-model architecture documentation
 │   ├── ONBOARDING.md          # Developer onboarding guide
@@ -250,7 +244,7 @@ pytest tests/ -v --cov=src
 
 ## Key Components
 
-### Real-Time Model Interpretability ⭐ NEW v4.1
+### Real-Time Model Interpretability (v4.1)
 
 **SHAP Explanations API**
 - 5 REST endpoints (/predict, /batch, /history, /models, /health)
@@ -284,7 +278,7 @@ from src.mlops.shap_explainer_realtime import RealTimeSHAPExplainer
 
 See `docs/realtime_shap_api.md` for complete documentation and integration guide.
 
-### Lightweight Feature Store ⭐ NEW v4.2
+### Lightweight Feature Store (v4.2)
 
 **E2I Feature Store**
 - Integrated solution using Supabase (offline) + Redis (online) + MLflow (tracking)
@@ -410,15 +404,15 @@ Gate decisions: **proceed** | **review** | **block**
 
 ## Database
 
-80+ tables across 8 categories:
+120+ tables across 8 categories:
 - **Core Data** (19): patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, etc.
-- **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, etc.
+- **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, cohort constructor, etc.
 - **Memory** (7): episodic_memories, procedural_memories, semantic_cache, cognitive_cycles, etc.
 - **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
-- **Chat** (6+): chat_threads, chat_messages, user_preferences (RLS)
-- **Audit** (2): audit_chain_entries (SHA-256 hash chain), verification_log
+- **Chat** (10+): chat_threads, chat_messages, user_preferences (RLS), chatbot analytics, feedback, training signals
+- **Audit** (3): audit_chain_entries (SHA-256 hash chain), verification_log, security_audit_log (partitioned)
 - **FalkorDB Graph**: 8 node types, 15 edge types
-- **Feast Feature Store**: 9 feature views, 48 features
+- **Feast Feature Store**: 10 feature views, 48 features
 
 See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dictionary and schema documentation.
 
@@ -446,11 +440,13 @@ See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dicti
 | AI/ML | LangGraph, LangChain, Claude (Anthropic) |
 | Causal | DoWhy, EconML, NetworkX |
 | MLOps | MLflow, Opik, Optuna, SHAP, BentoML, Great Expectations |
-| Feature Store | Lightweight (Supabase + Redis + MLflow) ⭐ NEW v4.2 |
+| Feature Store | Feast + Lightweight (Supabase + Redis + MLflow) |
 | Database | PostgreSQL/Supabase, pgvector, Redis, FalkorDB |
 | NLP | fastText, rapidfuzz, sentence-transformers |
 | API | FastAPI, Pydantic |
-| Frontend | React, TypeScript (planned) |
+| Frontend | React 18, TypeScript, Vite, TanStack Query, Tailwind, CopilotKit |
+| Observability | Prometheus, Grafana, Loki, Promtail, Alertmanager |
+| Infrastructure | Docker Compose, Nginx, Celery, Certbot |
 
 ## License
 
