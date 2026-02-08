@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.utils.audit_chain import AgentTier
@@ -32,7 +33,7 @@ def create_orchestrator_graph(
     agent_registry: Optional[Dict[str, Any]] = None,
     enable_checkpointing: bool = False,
     enable_rag: bool = True,
-) -> StateGraph:
+) -> CompiledStateGraph:
     """Build the Orchestrator agent graph.
 
     Architecture (with RAG enabled):
@@ -59,16 +60,16 @@ def create_orchestrator_graph(
     workflow = StateGraph(OrchestratorState)
 
     # Add audit init node
-    workflow.add_node("audit_init", audit_initializer)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]
 
     # Add nodes
-    workflow.add_node("classify", classify_intent)
+    workflow.add_node("classify", classify_intent)  # type: ignore[type-var,arg-type,call-overload]
 
     # Conditionally add RAG node
     if enable_rag:
-        workflow.add_node("rag_context", retrieve_rag_context)
+        workflow.add_node("rag_context", retrieve_rag_context)  # type: ignore[type-var,arg-type,call-overload]
 
-    workflow.add_node("route", route_to_agents)
+    workflow.add_node("route", route_to_agents)  # type: ignore[type-var,arg-type,call-overload]
 
     # Dispatcher node with agent registry
     if agent_registry:
@@ -79,11 +80,11 @@ def create_orchestrator_graph(
         async def dispatch_with_registry(state):
             return await dispatcher.execute(state)
 
-        workflow.add_node("dispatch", dispatch_with_registry)
+        workflow.add_node("dispatch", dispatch_with_registry)  # type: ignore[type-var,arg-type,call-overload]
     else:
-        workflow.add_node("dispatch", dispatch_to_agents)
+        workflow.add_node("dispatch", dispatch_to_agents)  # type: ignore[type-var,arg-type,call-overload]
 
-    workflow.add_node("synthesize", synthesize_response)
+    workflow.add_node("synthesize", synthesize_response)  # type: ignore[type-var,arg-type,call-overload]
 
     # Linear flow (no conditionals for speed) - start with audit_init
     workflow.set_entry_point("audit_init")

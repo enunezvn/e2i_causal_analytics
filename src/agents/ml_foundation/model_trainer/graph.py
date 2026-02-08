@@ -3,6 +3,7 @@
 from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     apply_resampling,
@@ -38,7 +39,7 @@ def _should_proceed_after_splits(state: Dict[str, Any]) -> str:
     return "end"
 
 
-def create_model_trainer_graph() -> StateGraph:
+def create_model_trainer_graph() -> CompiledStateGraph:
     """Create model_trainer LangGraph workflow.
 
     Pipeline (11 nodes):
@@ -87,17 +88,17 @@ def create_model_trainer_graph() -> StateGraph:
     workflow = StateGraph(ModelTrainerState)
 
     # Add nodes (11 total)
-    workflow.add_node("check_qc_gate", check_qc_gate)
-    workflow.add_node("load_splits", load_splits)
-    workflow.add_node("enforce_splits", enforce_splits)
-    workflow.add_node("detect_class_imbalance", detect_class_imbalance)
-    workflow.add_node("fit_preprocessing", fit_preprocessing)
-    workflow.add_node("apply_resampling", apply_resampling)
-    workflow.add_node("tune_hyperparameters", tune_hyperparameters)
-    workflow.add_node("train_model", train_model)
-    workflow.add_node("evaluate_model", evaluate_model)
-    workflow.add_node("log_to_mlflow", log_to_mlflow)
-    workflow.add_node("save_checkpoint", save_checkpoint)
+    workflow.add_node("check_qc_gate", check_qc_gate)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("load_splits", load_splits)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("enforce_splits", enforce_splits)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("detect_class_imbalance", detect_class_imbalance)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("fit_preprocessing", fit_preprocessing)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("apply_resampling", apply_resampling)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("tune_hyperparameters", tune_hyperparameters)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("train_model", train_model)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("evaluate_model", evaluate_model)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("log_to_mlflow", log_to_mlflow)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("save_checkpoint", save_checkpoint)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point
     workflow.set_entry_point("check_qc_gate")

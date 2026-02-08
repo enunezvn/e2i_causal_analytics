@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import redis
 from supabase import Client
@@ -185,16 +185,21 @@ class FeatureRetriever:
 
             # Filter by feature names if specified
             results = []
-            for record in response.data:
-                feature_name = record["features"]["name"]
+            # Cast response.data to list of dicts - Supabase returns JSON
+            data_list = cast(List[Dict[str, Any]], response.data)
+            for record in data_list:
+                # Cast nested structures from JSON to dicts
+                features_data = cast(Dict[str, Any], record["features"])
+                feature_name = cast(str, features_data["name"])
                 if feature_name in feature_names:
+                    feature_groups_data = cast(Dict[str, Any], features_data["feature_groups"])
                     results.append(
                         {
                             "feature_name": feature_name,
-                            "feature_group": record["features"]["feature_groups"]["name"],
+                            "feature_group": cast(str, feature_groups_data["name"]),
                             "value": record["value"],
-                            "event_timestamp": record["event_timestamp"],
-                            "freshness_status": record["freshness_status"],
+                            "event_timestamp": cast(str, record["event_timestamp"]),
+                            "freshness_status": cast(str, record["freshness_status"]),
                         }
                     )
 
@@ -228,13 +233,16 @@ class FeatureRetriever:
 
             response = self.supabase.rpc("get_entity_features", rpc_params).execute()
 
+            # Cast response.data to list of dicts - Supabase RPC returns JSON
+            data_list = cast(List[Dict[str, Any]], response.data)
+
             # Filter by feature names if specified
             if feature_names:
                 return [
-                    record for record in response.data if record["feature_name"] in feature_names
+                    record for record in data_list if cast(str, record["feature_name"]) in feature_names
                 ]
 
-            return response.data
+            return data_list
 
         except Exception as e:
             logger.error(f"Error querying Supabase features: {e}")
@@ -294,7 +302,9 @@ class FeatureRetriever:
 
             cached_data = self.redis_client.get(cache_key)
             if cached_data:
-                data = json.loads(cached_data)
+                # Cast Redis response to bytes/str for json.loads
+                cached_str = cast(str, cached_data)
+                data = json.loads(cached_str)
                 return EntityFeatures(**data)
 
         except Exception as e:
@@ -343,8 +353,10 @@ class FeatureRetriever:
             # Delete all matching keys
             keys = self.redis_client.keys(pattern)
             if keys:
-                self.redis_client.delete(*keys)
-                logger.debug(f"Invalidated {len(keys)} cache keys for entity")
+                # Cast Redis keys() return to list for type checking
+                keys_list = cast(List[str], keys)
+                self.redis_client.delete(*keys_list)
+                logger.debug(f"Invalidated {len(keys_list)} cache keys for entity")
 
         except Exception as e:
             logger.warning(f"Cache invalidation error: {e}")

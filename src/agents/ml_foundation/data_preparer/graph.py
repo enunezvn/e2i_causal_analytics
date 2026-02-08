@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict, Literal
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     compute_baseline_metrics,
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 MAX_REMEDIATION_ATTEMPTS = 2
 
 
-def create_data_preparer_graph() -> StateGraph:
+def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     """Create the data_preparer LangGraph.
 
     The graph executes the following pipeline:
@@ -66,16 +67,16 @@ def create_data_preparer_graph() -> StateGraph:
     graph = StateGraph(DataPreparerState)
 
     # Add nodes
-    graph.add_node("load_data", load_data)
-    graph.add_node("run_schema_validation", run_schema_validation)
-    graph.add_node("run_quality_checks", run_quality_checks)
-    graph.add_node("run_ge_validation", run_ge_validation)
-    graph.add_node("detect_leakage", detect_leakage)
-    graph.add_node("transform_data", transform_data)
-    graph.add_node("register_features_in_feast", register_features_in_feast)
-    graph.add_node("compute_baseline_metrics", compute_baseline_metrics)
-    graph.add_node("finalize_output", finalize_output)
-    graph.add_node("qc_remediation", review_and_remediate_qc)
+    graph.add_node("load_data", load_data)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("run_schema_validation", run_schema_validation)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("run_quality_checks", run_quality_checks)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("run_ge_validation", run_ge_validation)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("detect_leakage", detect_leakage)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("transform_data", transform_data)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("register_features_in_feast", register_features_in_feast)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("compute_baseline_metrics", compute_baseline_metrics)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("finalize_output", finalize_output)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("qc_remediation", review_and_remediate_qc)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define edges (sequential execution with QC remediation loop)
     graph.set_entry_point("load_data")

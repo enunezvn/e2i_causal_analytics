@@ -67,12 +67,10 @@ def mock_alert_record():
     record.model_version = "propensity_v2.1.0"
     record.alert_type = "drift"
     record.severity = "high"
-    record.title = "High Drift Detected"
-    record.description = "Significant drift in feature X"
+    record.message = "High Drift Detected"
+    record.recommended_action = "Significant drift in feature X"
     record.status = "active"
     record.triggered_at = datetime.now(timezone.utc)
-    record.acknowledged_at = None
-    record.acknowledged_by = None
     record.resolved_at = None
     record.resolved_by = None
     return record
@@ -613,8 +611,7 @@ class TestGetModelHealth:
 
     def test_get_healthy_model(self, client, mock_drift_record, mock_run_record):
         """Test getting health of a healthy model."""
-        mock_drift_record.drift_score = 0.1
-        mock_drift_record.severity = "low"
+        mock_drift_record.severity = "low"  # maps to 0.25 drift score
 
         with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockDriftRepo:
             with patch(
@@ -645,7 +642,7 @@ class TestGetModelHealth:
 
     def test_get_warning_model(self, client, mock_drift_record, mock_alert_record, mock_run_record):
         """Test getting health of a model with warnings."""
-        mock_drift_record.drift_score = 0.5
+        mock_drift_record.severity = "medium"  # maps to 0.5 drift score
         mock_alert_record.status = "active"
 
         with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockDriftRepo:
@@ -677,7 +674,7 @@ class TestGetModelHealth:
 
     def test_get_critical_model(self, client, mock_drift_record, mock_run_record):
         """Test getting health of a critical model."""
-        mock_drift_record.drift_score = 0.85
+        mock_drift_record.severity = "critical"  # maps to 1.0 drift score
 
         with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockDriftRepo:
             with patch(

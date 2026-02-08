@@ -39,6 +39,7 @@ Rollback path (when deployment_action == "rollback"):
 """
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     check_health,
@@ -56,7 +57,7 @@ from .nodes import (
 from .state import ModelDeployerState
 
 
-def create_model_deployer_graph() -> StateGraph:
+def create_model_deployer_graph() -> CompiledStateGraph:
     """Create model_deployer LangGraph workflow.
 
     Enhanced pipeline with planning and rollback:
@@ -97,17 +98,17 @@ def create_model_deployer_graph() -> StateGraph:
     workflow = StateGraph(ModelDeployerState)
 
     # Add nodes
-    workflow.add_node("plan_deployment", plan_deployment)
-    workflow.add_node("validate_deployment_plan", validate_deployment_plan)
-    workflow.add_node("register_model", register_model)
-    workflow.add_node("validate_promotion", validate_promotion)
-    workflow.add_node("promote_stage", promote_stage)
-    workflow.add_node("package_model", package_model)
-    workflow.add_node("containerize_model", containerize_model)
-    workflow.add_node("deploy_to_endpoint", deploy_to_endpoint)
-    workflow.add_node("check_health", check_health)
-    workflow.add_node("check_rollback_availability", check_rollback_availability)
-    workflow.add_node("execute_rollback", execute_rollback)
+    workflow.add_node("plan_deployment", plan_deployment)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("validate_deployment_plan", validate_deployment_plan)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("register_model", register_model)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("validate_promotion", validate_promotion)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("promote_stage", promote_stage)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("package_model", package_model)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("containerize_model", containerize_model)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("deploy_to_endpoint", deploy_to_endpoint)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("check_health", check_health)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("check_rollback_availability", check_rollback_availability)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("execute_rollback", execute_rollback)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define entry point with conditional routing
     workflow.set_entry_point("plan_deployment")
@@ -348,7 +349,7 @@ def _should_health_check(state: dict) -> str:
 # =============================================================================
 
 
-def create_promotion_only_graph() -> StateGraph:
+def create_promotion_only_graph() -> CompiledStateGraph:
     """Create a simplified graph for promotion-only operations.
 
     Pipeline:
@@ -367,8 +368,8 @@ def create_promotion_only_graph() -> StateGraph:
     """
     workflow = StateGraph(ModelDeployerState)
 
-    workflow.add_node("validate_promotion", validate_promotion)
-    workflow.add_node("promote_stage", promote_stage)
+    workflow.add_node("validate_promotion", validate_promotion)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("promote_stage", promote_stage)  # type: ignore[type-var,arg-type,call-overload]
 
     workflow.set_entry_point("validate_promotion")
     workflow.add_conditional_edges(
@@ -381,7 +382,7 @@ def create_promotion_only_graph() -> StateGraph:
     return workflow.compile()
 
 
-def create_rollback_graph() -> StateGraph:
+def create_rollback_graph() -> CompiledStateGraph:
     """Create a graph specifically for rollback operations.
 
     Pipeline:
@@ -398,8 +399,8 @@ def create_rollback_graph() -> StateGraph:
     """
     workflow = StateGraph(ModelDeployerState)
 
-    workflow.add_node("execute_rollback", execute_rollback)
-    workflow.add_node("check_health", check_health)
+    workflow.add_node("execute_rollback", execute_rollback)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("check_health", check_health)  # type: ignore[type-var,arg-type,call-overload]
 
     workflow.set_entry_point("execute_rollback")
     workflow.add_conditional_edges(
@@ -412,7 +413,7 @@ def create_rollback_graph() -> StateGraph:
     return workflow.compile()
 
 
-def create_health_check_graph() -> StateGraph:
+def create_health_check_graph() -> CompiledStateGraph:
     """Create a graph for health check only.
 
     Pipeline:
@@ -429,8 +430,8 @@ def create_health_check_graph() -> StateGraph:
     """
     workflow = StateGraph(ModelDeployerState)
 
-    workflow.add_node("check_health", check_health)
-    workflow.add_node("check_rollback_availability", check_rollback_availability)
+    workflow.add_node("check_health", check_health)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("check_rollback_availability", check_rollback_availability)  # type: ignore[type-var,arg-type,call-overload]
 
     workflow.set_entry_point("check_health")
     workflow.add_edge("check_health", "check_rollback_availability")

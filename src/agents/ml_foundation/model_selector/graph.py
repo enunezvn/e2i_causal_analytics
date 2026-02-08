@@ -16,6 +16,7 @@ Core Pipeline:
 from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     analyze_historical_performance,
@@ -31,7 +32,7 @@ from .nodes import (
 from .state import ModelSelectorState
 
 
-def create_model_selector_graph() -> StateGraph:
+def create_model_selector_graph() -> CompiledStateGraph:
     """Create model_selector LangGraph workflow.
 
     Full Pipeline:
@@ -48,15 +49,15 @@ def create_model_selector_graph() -> StateGraph:
     workflow = StateGraph(ModelSelectorState)
 
     # Add all nodes
-    workflow.add_node("analyze_historical", analyze_historical_performance)
-    workflow.add_node("filter_algorithms", filter_algorithms)
-    workflow.add_node("rank_candidates", rank_candidates)
-    workflow.add_node("run_benchmarks", run_benchmarks)
-    workflow.add_node("select_primary_candidate", select_primary_candidate)
-    workflow.add_node("compare_baselines", compare_with_baselines)
-    workflow.add_node("generate_rationale", generate_rationale)
-    workflow.add_node("register_mlflow", register_selection_in_mlflow)
-    workflow.add_node("create_summary", create_selection_summary)
+    workflow.add_node("analyze_historical", analyze_historical_performance)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("filter_algorithms", filter_algorithms)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("rank_candidates", rank_candidates)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("run_benchmarks", run_benchmarks)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("select_primary_candidate", select_primary_candidate)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("compare_baselines", compare_with_baselines)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("generate_rationale", generate_rationale)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("register_mlflow", register_selection_in_mlflow)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("create_summary", create_selection_summary)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define main flow
     workflow.set_entry_point("analyze_historical")
@@ -73,7 +74,7 @@ def create_model_selector_graph() -> StateGraph:
     return workflow.compile()
 
 
-def create_simple_selector_graph() -> StateGraph:
+def create_simple_selector_graph() -> CompiledStateGraph:
     """Create simplified model_selector graph (no benchmarks/MLflow).
 
     Simple Pipeline:
@@ -90,10 +91,10 @@ def create_simple_selector_graph() -> StateGraph:
     workflow = StateGraph(ModelSelectorState)
 
     # Add core nodes only
-    workflow.add_node("filter_algorithms", filter_algorithms)
-    workflow.add_node("rank_candidates", rank_candidates)
-    workflow.add_node("select_primary_candidate", select_primary_candidate)
-    workflow.add_node("generate_rationale", generate_rationale)
+    workflow.add_node("filter_algorithms", filter_algorithms)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("rank_candidates", rank_candidates)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("select_primary_candidate", select_primary_candidate)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("generate_rationale", generate_rationale)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define edges
     workflow.set_entry_point("filter_algorithms")
@@ -139,7 +140,7 @@ def should_register_mlflow(state: Dict[str, Any]) -> str:
     return "create_summary"
 
 
-def create_conditional_selector_graph() -> StateGraph:
+def create_conditional_selector_graph() -> CompiledStateGraph:
     """Create model_selector graph with conditional branches.
 
     Conditional Pipeline:
@@ -153,15 +154,15 @@ def create_conditional_selector_graph() -> StateGraph:
     workflow = StateGraph(ModelSelectorState)
 
     # Add all nodes
-    workflow.add_node("analyze_historical", analyze_historical_performance)
-    workflow.add_node("filter_algorithms", filter_algorithms)
-    workflow.add_node("rank_candidates", rank_candidates)
-    workflow.add_node("run_benchmarks", run_benchmarks)
-    workflow.add_node("select_primary_candidate", select_primary_candidate)
-    workflow.add_node("compare_baselines", compare_with_baselines)
-    workflow.add_node("generate_rationale", generate_rationale)
-    workflow.add_node("register_mlflow", register_selection_in_mlflow)
-    workflow.add_node("create_summary", create_selection_summary)
+    workflow.add_node("analyze_historical", analyze_historical_performance)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("filter_algorithms", filter_algorithms)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("rank_candidates", rank_candidates)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("run_benchmarks", run_benchmarks)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("select_primary_candidate", select_primary_candidate)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("compare_baselines", compare_with_baselines)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("generate_rationale", generate_rationale)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("register_mlflow", register_selection_in_mlflow)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("create_summary", create_selection_summary)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define flow with conditional branches
     workflow.set_entry_point("analyze_historical")

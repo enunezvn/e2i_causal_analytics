@@ -15,6 +15,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.agents.drift_monitor.nodes import (
@@ -28,7 +29,7 @@ from src.agents.drift_monitor.state import DriftMonitorState
 from src.utils.audit_chain import AgentTier
 
 
-def create_drift_monitor_graph() -> StateGraph:
+def create_drift_monitor_graph() -> CompiledStateGraph:
     """Create the drift monitor agent graph.
 
     Workflow:
@@ -56,12 +57,12 @@ def create_drift_monitor_graph() -> StateGraph:
     alert_aggregator_node = AlertAggregatorNode()
 
     # Add nodes to graph
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("data_drift", data_drift_node.execute)
-    workflow.add_node("model_drift", model_drift_node.execute)
-    workflow.add_node("concept_drift", concept_drift_node.execute)
-    workflow.add_node("structural_drift", structural_drift_node.execute)  # V4.4
-    workflow.add_node("alert_aggregator", alert_aggregator_node.execute)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("data_drift", data_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("model_drift", model_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("concept_drift", concept_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("structural_drift", structural_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]  # V4.4
+    workflow.add_node("alert_aggregator", alert_aggregator_node.execute)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define sequential workflow starting with audit initialization
     # V4.4: Added structural_drift between concept_drift and alert_aggregator

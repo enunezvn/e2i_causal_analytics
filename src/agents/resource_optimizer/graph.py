@@ -76,12 +76,12 @@ def build_resource_optimizer_graph() -> Any:
     workflow = StateGraph(ResourceOptimizerState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("formulate", formulator.execute)
-    workflow.add_node("optimize", optimizer.execute)
-    workflow.add_node("scenario", scenario.execute)
-    workflow.add_node("project", projector.execute)
-    workflow.add_node("error_handler", error_handler_node)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("formulate", formulator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("optimize", optimizer.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("scenario", scenario.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("project", projector.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point - start with audit initialization
     workflow.set_entry_point("audit_init")
@@ -133,11 +133,11 @@ def build_simple_optimizer_graph() -> Any:
     workflow = StateGraph(ResourceOptimizerState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("formulate", formulator.execute)
-    workflow.add_node("optimize", optimizer.execute)
-    workflow.add_node("project", projector.execute)
-    workflow.add_node("error_handler", error_handler_node)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("formulate", formulator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("optimize", optimizer.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("project", projector.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point - start with audit initialization
     workflow.set_entry_point("audit_init")

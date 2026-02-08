@@ -11,6 +11,7 @@ import logging
 from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     apply_criteria,
@@ -66,7 +67,7 @@ async def error_handler(state: CohortConstructorState) -> Dict[str, Any]:
     }
 
 
-def create_cohort_constructor_graph() -> StateGraph:
+def create_cohort_constructor_graph() -> CompiledStateGraph:
     """Create the CohortConstructor LangGraph workflow.
 
     The workflow consists of 4 main nodes:
@@ -88,11 +89,11 @@ def create_cohort_constructor_graph() -> StateGraph:
     workflow = StateGraph(CohortConstructorState)
 
     # Add main nodes
-    workflow.add_node("validate_config", validate_config)
-    workflow.add_node("apply_criteria", apply_criteria)
-    workflow.add_node("validate_temporal", validate_temporal)
-    workflow.add_node("generate_metadata", generate_metadata)
-    workflow.add_node("error_handler", error_handler)
+    workflow.add_node("validate_config", validate_config)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("apply_criteria", apply_criteria)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("validate_temporal", validate_temporal)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("generate_metadata", generate_metadata)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", error_handler)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point
     workflow.set_entry_point("validate_config")
@@ -141,7 +142,7 @@ def create_cohort_constructor_graph() -> StateGraph:
     return workflow.compile()
 
 
-def create_simple_cohort_constructor_graph() -> StateGraph:
+def create_simple_cohort_constructor_graph() -> CompiledStateGraph:
     """Create a simple CohortConstructor graph without error handling.
 
     This version uses linear flow without conditional edges.
@@ -153,10 +154,10 @@ def create_simple_cohort_constructor_graph() -> StateGraph:
     workflow = StateGraph(CohortConstructorState)
 
     # Add nodes
-    workflow.add_node("validate_config", validate_config)
-    workflow.add_node("apply_criteria", apply_criteria)
-    workflow.add_node("validate_temporal", validate_temporal)
-    workflow.add_node("generate_metadata", generate_metadata)
+    workflow.add_node("validate_config", validate_config)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("apply_criteria", apply_criteria)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("validate_temporal", validate_temporal)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("generate_metadata", generate_metadata)  # type: ignore[type-var,arg-type,call-overload]
 
     # Linear flow
     workflow.set_entry_point("validate_config")

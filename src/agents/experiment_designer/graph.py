@@ -165,14 +165,14 @@ def create_experiment_designer_graph(
     workflow = StateGraph(ExperimentDesignState)
 
     # Add nodes to graph (wrapped for sync compatibility)
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[call-overload]
-    workflow.add_node("context_loader", wrap_async_node(context_node.execute))
-    workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))
-    workflow.add_node("design_reasoning", wrap_async_node(design_node.execute))
-    workflow.add_node("power_analysis", wrap_async_node(power_node.execute))
-    workflow.add_node("validity_audit", wrap_async_node(validity_node.execute))
-    workflow.add_node("redesign", wrap_async_node(redesign_node.execute))
-    workflow.add_node("template_generator", wrap_async_node(template_node.execute))
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("context_loader", wrap_async_node(context_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("design_reasoning", wrap_async_node(design_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("power_analysis", wrap_async_node(power_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("validity_audit", wrap_async_node(validity_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("redesign", wrap_async_node(redesign_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("template_generator", wrap_async_node(template_node.execute))  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("error_handler", error_handler_node)  # type: ignore[call-overload]
 
     # Set entry point - start with audit initialization

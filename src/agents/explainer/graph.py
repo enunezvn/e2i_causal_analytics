@@ -39,7 +39,7 @@ def _get_default_checkpointer() -> Optional[BaseCheckpointSaver]:
 
         checkpointer = get_langgraph_checkpointer()
         logger.debug("LangGraph checkpointer initialized")
-        return checkpointer
+        return checkpointer  # type: ignore[no-any-return]
     except Exception as e:
         logger.warning(f"Failed to initialize checkpointer (non-fatal): {e}")
         return None
@@ -105,11 +105,11 @@ def build_explainer_graph(
     workflow = StateGraph(ExplainerState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("assemble", assembler.execute)
-    workflow.add_node("reason", reasoner.execute)
-    workflow.add_node("generate", generator.execute)
-    workflow.add_node("error_handler", error_handler_node)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("assemble", assembler.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("reason", reasoner.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("generate", generator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point - start with audit initialization
     workflow.set_entry_point("audit_init")

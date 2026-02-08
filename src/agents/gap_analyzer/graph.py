@@ -21,6 +21,7 @@ Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 from typing import Optional
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.services.roi_calculation import ROICalculationService
@@ -40,7 +41,7 @@ def create_gap_analyzer_graph(
     use_bootstrap: bool = True,
     n_simulations: int = 1000,
     use_mock: bool = False,
-) -> StateGraph:
+) -> CompiledStateGraph:
     """Create the Gap Analyzer LangGraph workflow.
 
     Workflow:
@@ -77,11 +78,11 @@ def create_gap_analyzer_graph(
     workflow = StateGraph(GapAnalyzerState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("gap_detector", gap_detector.execute)
-    workflow.add_node("roi_calculator", roi_calculator.execute)
-    workflow.add_node("prioritizer", prioritizer.execute)
-    workflow.add_node("formatter", formatter.execute)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("gap_detector", gap_detector.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("roi_calculator", roi_calculator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("prioritizer", prioritizer.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("formatter", formatter.execute)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define linear flow starting with audit initialization
     workflow.set_entry_point("audit_init")

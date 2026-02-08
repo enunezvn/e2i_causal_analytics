@@ -11,12 +11,13 @@ collecting and returning metrics when explicitly requested.
 """
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import aggregate_metrics, emit_spans
 from .state import ObservabilityConnectorState
 
 
-def create_observability_connector_graph() -> StateGraph:
+def create_observability_connector_graph() -> CompiledStateGraph:
     """Create observability_connector LangGraph workflow.
 
     Pipeline:
@@ -34,8 +35,8 @@ def create_observability_connector_graph() -> StateGraph:
     workflow = StateGraph(ObservabilityConnectorState)
 
     # Add nodes
-    workflow.add_node("emit_spans", emit_spans)
-    workflow.add_node("aggregate_metrics", aggregate_metrics)
+    workflow.add_node("emit_spans", emit_spans)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("aggregate_metrics", aggregate_metrics)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define edges
     workflow.set_entry_point("emit_spans")

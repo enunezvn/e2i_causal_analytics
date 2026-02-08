@@ -11,6 +11,7 @@ Observability:
 """
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.utils.audit_chain import AgentTier
@@ -40,7 +41,7 @@ async def error_handler_node(
 def create_heterogeneous_optimizer_graph(
     data_connector=None,
     enable_hierarchical: bool = True,
-) -> StateGraph:
+) -> CompiledStateGraph:
     """Create the Heterogeneous Optimizer agent LangGraph workflow.
 
     Workflow (with hierarchical enabled - default):
@@ -82,14 +83,14 @@ def create_heterogeneous_optimizer_graph(
     workflow = StateGraph(HeterogeneousOptimizerState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("estimate_cate", cate_estimator.execute)
-    workflow.add_node("analyze_segments", segment_analyzer.execute)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("estimate_cate", cate_estimator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("analyze_segments", segment_analyzer.execute)  # type: ignore[type-var,arg-type,call-overload]
     if enable_hierarchical:
-        workflow.add_node("hierarchical_analysis", hierarchical_analyzer.execute)
-    workflow.add_node("learn_policy", policy_learner.execute)
-    workflow.add_node("generate_profiles", profile_generator.execute)
-    workflow.add_node("error_handler", error_handler_node)
+        workflow.add_node("hierarchical_analysis", hierarchical_analyzer.execute)  # type: ignore[type-var,arg-type,call-overload,union-attr]
+    workflow.add_node("learn_policy", policy_learner.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("generate_profiles", profile_generator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Entry point - start with audit initialization
     workflow.set_entry_point("audit_init")

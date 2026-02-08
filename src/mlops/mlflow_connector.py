@@ -56,7 +56,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    import mlflow  # type: ignore[import-untyped]
+    from mlflow.tracking import MlflowClient  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +468,8 @@ class MLflowConnector:
         self.circuit_breaker = CircuitBreaker(circuit_breaker_config)
 
         # Initialize MLflow
-        self._mlflow = None
+        self._mlflow: Optional["mlflow"] = None  # type: ignore[name-defined]
+        self._client: Optional["MlflowClient"] = None  # type: ignore[name-defined]
         self._enabled = False
         self._initialize_mlflow()
 
@@ -538,6 +543,8 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._mlflow is not None
+            assert self._client is not None
             full_name = f"{self.experiment_prefix}_{name}"
 
             # Check if experiment exists
@@ -545,11 +552,11 @@ class MLflowConnector:
 
             if experiment is None:
                 # Create new experiment
-                experiment_id = self._mlflow.create_experiment(
+                experiment_id = cast(str, self._mlflow.create_experiment(
                     name=full_name,
                     artifact_location=artifact_location or self.artifact_uri,
                     tags=tags or {},
-                )
+                ))
                 logger.info(f"Created experiment '{full_name}' with ID: {experiment_id}")
             else:
                 experiment_id = experiment.experiment_id
@@ -583,6 +590,7 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._client is not None
             from mlflow.entities import ViewType
 
             view_map = {
@@ -661,6 +669,7 @@ class MLflowConnector:
             if not self.circuit_breaker.allow_request():
                 raise RuntimeError("MLflow circuit breaker is open")
 
+            assert self._mlflow is not None
             # Start MLflow run
             run = self._mlflow.start_run(
                 experiment_id=experiment_id,
@@ -699,7 +708,7 @@ class MLflowConnector:
             raise
 
         finally:
-            if self._enabled and run:
+            if self._enabled and run and self._mlflow is not None:
                 self._mlflow.end_run()
 
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
@@ -718,6 +727,7 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._client is not None
             run = self._client.get_run(run_id)
             self.circuit_breaker.record_success()
 
@@ -763,6 +773,7 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._mlflow is not None
             runs = self._mlflow.search_runs(
                 experiment_ids=experiment_ids,
                 filter_string=filter_string,
@@ -772,7 +783,7 @@ class MLflowConnector:
 
             self.circuit_breaker.record_success()
 
-            return runs.to_dict(orient="records") if len(runs) > 0 else []
+            return runs.to_dict(orient="records") if len(runs) > 0 else []  # type: ignore[no-any-return]
 
         except Exception as e:
             self.circuit_breaker.record_failure()
@@ -789,6 +800,7 @@ class MLflowConnector:
             return
 
         try:
+            assert self._mlflow is not None
             # Convert all values to strings (MLflow requirement)
             str_params = {k: str(v) for k, v in params.items()}
             self._mlflow.log_params(str_params)

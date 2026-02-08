@@ -32,6 +32,7 @@ from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.utils.audit_chain import (
     AuditChainService,
 )
+from src.utils.type_helpers import parse_supabase_row, parse_supabase_rows
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ async def get_workflow_entries(
 
         # Convert to response models
         entries = []
-        for row in result.data:
+        for row in parse_supabase_rows(result.data):
             entries.append(_row_to_response(row))
 
         return entries
@@ -260,7 +261,7 @@ async def get_workflow_summary(
         if not result.data:
             raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
 
-        entries = result.data
+        entries = parse_supabase_rows(result.data)
 
         # Aggregate data
         agents = list({e["agent_name"] for e in entries})
@@ -352,7 +353,7 @@ async def get_recent_workflows(
                 last_agent=row["last_agent"],
                 brand=row.get("brand"),
             )
-            for row in result.data
+            for row in parse_supabase_rows(result.data)
         ]
 
     except Exception as e:
@@ -416,7 +417,7 @@ async def _get_recent_workflows_fallback(
             return []
 
         workflows = []
-        for row in result.data:
+        for row in parse_supabase_rows(result.data):
             workflow_id = UUID(row["workflow_id"])
 
             # Get entry count and last agent
@@ -432,8 +433,9 @@ async def _get_recent_workflows_fallback(
             entry_count = 1
             last_agent = row["agent_name"]
             if count_result.data:
-                entry_count = count_result.data[0]["sequence_number"]
-                last_agent = count_result.data[0]["agent_name"]
+                count_row = parse_supabase_row(count_result.data[0])
+                entry_count = count_row["sequence_number"]
+                last_agent = count_row["agent_name"]
 
             workflows.append(
                 RecentWorkflowResponse(

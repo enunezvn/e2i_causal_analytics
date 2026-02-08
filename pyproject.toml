@@ -113,6 +113,7 @@ dev = [
     "detect-secrets>=1.5.0",
     "ipython>=8.27.0",
     "jupyter>=1.1.0",
+    "types-PyYAML>=6.0.0",
 ]
 
 [build-system]
@@ -161,6 +162,11 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+
+# Per-module strict overrides — modules cleaned to zero errors
+[[tool.mypy.overrides]]
+module = "src.utils.type_helpers"
+disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 # Load environment variables from .env file

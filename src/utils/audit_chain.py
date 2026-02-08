@@ -22,6 +22,8 @@ from uuid import UUID, uuid4
 
 from supabase import Client
 
+from src.utils.type_helpers import parse_supabase_row, parse_supabase_rows
+
 
 class AgentTier(Enum):
     """
@@ -430,7 +432,7 @@ class AuditChainService:
         if not result.data:
             return None
 
-        row = result.data[0]
+        row = parse_supabase_row(result.data[0])
         entry = AuditChainEntry(
             entry_id=UUID(row["entry_id"]),
             workflow_id=UUID(row["workflow_id"]),
@@ -483,7 +485,10 @@ class AuditChainService:
             "verify_chain_integrity", {"p_workflow_id": str(workflow_id)}
         ).execute()
 
-        verification_data = result.data[0] if result.data else {}
+        verification_data: dict[str, Any] = {}
+        data = result.data
+        if isinstance(data, list) and data:
+            verification_data = parse_supabase_row(data[0])
 
         verification = ChainVerificationResult(
             is_valid=verification_data.get("is_valid", False),
@@ -521,7 +526,8 @@ class AuditChainService:
             )
 
         prev_hash = None
-        for i, row in enumerate(result.data):
+        rows = parse_supabase_rows(result.data)
+        for i, row in enumerate(rows):
             # Verify previous_hash links correctly
             if i > 0 and row.get("previous_hash") != prev_hash:
                 return ChainVerificationResult(
@@ -557,7 +563,7 @@ class AuditChainService:
 
             prev_hash = row["entry_hash"]
 
-        return ChainVerificationResult(is_valid=True, entries_checked=len(result.data))
+        return ChainVerificationResult(is_valid=True, entries_checked=len(rows))
 
     def _log_verification(self, workflow_id: UUID, result: ChainVerificationResult) -> None:
         """Log a verification result to the database"""
@@ -587,7 +593,7 @@ class AuditChainService:
             .execute()
         )
 
-        return result.data[0] if result.data else None
+        return parse_supabase_row(result.data[0]) if result.data else None
 
     def get_causal_validations(
         self,
@@ -616,7 +622,7 @@ class AuditChainService:
             query = query.lte("created_at", end_date.isoformat())
 
         result = query.order("created_at", desc=True).execute()
-        return result.data
+        return parse_supabase_rows(result.data)
 
 
 # =============================================================================

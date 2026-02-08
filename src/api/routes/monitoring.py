@@ -447,7 +447,16 @@ async def get_latest_drift_status(
         for record in records:
             if record.severity in ("high", "critical"):
                 features_with_drift.append(record.feature_name)
-            max_score = max(max_score, record.drift_score)
+            # Map severity to drift score
+            severity_to_score = {
+                "none": 0.0,
+                "low": 0.25,
+                "medium": 0.5,
+                "high": 0.75,
+                "critical": 1.0,
+            }
+            score = severity_to_score.get(record.severity, 0.0)
+            max_score = max(max_score, score)
 
             results.append(
                 DriftResult(
@@ -512,13 +521,22 @@ async def get_drift_history(
         else:
             records = await repo.get_latest_drift_status(model_id, limit=limit)
 
+        # Map severity to drift score for response
+        severity_to_score = {
+            "none": 0.0,
+            "low": 0.25,
+            "medium": 0.5,
+            "high": 0.75,
+            "critical": 1.0,
+        }
+
         items = [
             DriftHistoryItem(
                 id=str(r.id),
                 model_version=r.model_version,
                 feature_name=r.feature_name,
                 drift_type=r.drift_type,
-                drift_score=r.drift_score,
+                drift_score=severity_to_score.get(r.severity, 0.0),
                 severity=r.severity,
                 detected_at=r.detected_at,
                 baseline_start=r.baseline_start,
@@ -595,12 +613,12 @@ async def list_alerts(
                 model_version=r.model_version,
                 alert_type=r.alert_type,
                 severity=r.severity,
-                title=r.title,
-                description=r.description or "",
+                title=r.message,  # MonitoringAlertRecord uses 'message' not 'title'
+                description=r.recommended_action or "",  # Use recommended_action as description
                 status=AlertStatus(r.status),
                 triggered_at=r.triggered_at,
-                acknowledged_at=r.acknowledged_at,
-                acknowledged_by=r.acknowledged_by,
+                acknowledged_at=None,  # MonitoringAlertRecord doesn't have acknowledged_at
+                acknowledged_by=None,  # MonitoringAlertRecord doesn't have acknowledged_by
                 resolved_at=r.resolved_at,
                 resolved_by=r.resolved_by,
             )
@@ -650,12 +668,12 @@ async def get_alert(alert_id: str) -> AlertItem:
             model_version=record.model_version,
             alert_type=record.alert_type,
             severity=record.severity,
-            title=record.title,
-            description=record.description or "",
+            title=record.message,  # MonitoringAlertRecord uses 'message' not 'title'
+            description=record.recommended_action or "",
             status=AlertStatus(record.status),
             triggered_at=record.triggered_at,
-            acknowledged_at=record.acknowledged_at,
-            acknowledged_by=record.acknowledged_by,
+            acknowledged_at=None,  # MonitoringAlertRecord doesn't have acknowledged_at
+            acknowledged_by=None,  # MonitoringAlertRecord doesn't have acknowledged_by
             resolved_at=record.resolved_at,
             resolved_by=record.resolved_by,
         )
@@ -711,12 +729,12 @@ async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
             model_version=record.model_version,
             alert_type=record.alert_type,
             severity=record.severity,
-            title=record.title,
-            description=record.description or "",
+            title=record.message,  # MonitoringAlertRecord uses 'message' not 'title'
+            description=record.recommended_action or "",
             status=AlertStatus(record.status),
             triggered_at=record.triggered_at,
-            acknowledged_at=record.acknowledged_at,
-            acknowledged_by=record.acknowledged_by,
+            acknowledged_at=None,  # MonitoringAlertRecord doesn't have acknowledged_at
+            acknowledged_by=None,  # MonitoringAlertRecord doesn't have acknowledged_by
             resolved_at=record.resolved_at,
             resolved_by=record.resolved_by,
         )
@@ -829,7 +847,17 @@ async def get_model_health(model_id: str) -> ModelHealthSummary:
 
         # Get latest drift status
         drift_records = await drift_repo.get_latest_drift_status(model_id, limit=20)
-        max_drift_score = max((r.drift_score for r in drift_records), default=0.0)
+        severity_to_score = {
+            "none": 0.0,
+            "low": 0.25,
+            "medium": 0.5,
+            "high": 0.75,
+            "critical": 1.0,
+        }
+        max_drift_score = max(
+            (severity_to_score.get(r.severity, 0.0) for r in drift_records),
+            default=0.0,
+        )
 
         # Get active alerts
         alerts = await alert_repo.get_active_alerts(model_id, limit=100)

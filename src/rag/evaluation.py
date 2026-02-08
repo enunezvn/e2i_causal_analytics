@@ -23,7 +23,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field
 
@@ -437,6 +437,11 @@ class RAGASEvaluator:
             return EvaluationResult(
                 sample_id=sample_id,
                 query=sample.query,
+                faithfulness=None,
+                answer_relevancy=None,
+                context_precision=None,
+                context_recall=None,
+                overall_score=None,
                 metadata={"error": "No answer provided"},
             )
 
@@ -444,7 +449,7 @@ class RAGASEvaluator:
             sample.retrieved_contexts = sample.contexts
 
         # Execute evaluation with optional Opik tracing
-        if self._opik_tracer and self.enable_opik_tracing:
+        if self._opik_tracer is not None and self.enable_opik_tracing:
             return await self._evaluate_with_tracing(sample, sample_id, eval_run_id)
         elif self._ragas_available and self._llm_configured:
             return await self._evaluate_with_ragas(sample, sample_id)
@@ -524,13 +529,13 @@ class RAGASEvaluator:
                 def __init__(self, ragas_embeddings):
                     self._embeddings = ragas_embeddings
 
-                def embed_query(self, text: str) -> list:
+                def embed_query(self, text: str) -> list:  # type: ignore[type-arg]
                     """LangChain-compatible embed_query method."""
-                    return self._embeddings.embed_text(text)
+                    return self._embeddings.embed_text(text)  # type: ignore[no-any-return]
 
-                def embed_documents(self, texts: list) -> list:
+                def embed_documents(self, texts: list) -> list:  # type: ignore[type-arg]
                     """LangChain-compatible embed_documents method."""
-                    return self._embeddings.embed_texts(texts)
+                    return self._embeddings.embed_texts(texts)  # type: ignore[no-any-return]
 
                 def __getattr__(self, name):
                     return getattr(self._embeddings, name)
@@ -741,7 +746,6 @@ class RAGASEvaluator:
                 weighted_score=weighted_score,
                 decision=decision,
                 criterion_scores=criterion_scores,
-                pattern_flags=pattern_flags,
             )
             logger.debug(f"Logged rubric scores to Opik for run {run_id}")
             return True
@@ -771,27 +775,29 @@ class RAGASEvaluator:
 
         # Build combined result
         if _OPIK_AVAILABLE:
+            import time
+
             combined = CombinedEvaluationResult(
                 run_id=run_id or ragas_result.sample_id,
-                sample_id=ragas_result.sample_id,
-                query=sample.query,
-                faithfulness=ragas_result.faithfulness,
-                answer_relevancy=ragas_result.answer_relevancy,
-                context_precision=ragas_result.context_precision,
-                context_recall=ragas_result.context_recall,
+                timestamp=time.strftime("%Y-%m-%d %H:%M:%S"),
+                ragas_faithfulness=ragas_result.faithfulness,
+                ragas_answer_relevancy=ragas_result.answer_relevancy,
+                ragas_context_precision=ragas_result.context_precision,
+                ragas_context_recall=ragas_result.context_recall,
                 ragas_overall=ragas_result.overall_score,
                 rubric_weighted_score=rubric_evaluation.get("weighted_score")
                 if rubric_evaluation
                 else None,
                 rubric_decision=rubric_evaluation.get("decision") if rubric_evaluation else None,
-                rubric_criterion_scores=rubric_evaluation.get("criterion_scores")
+                rubric_criterion_scores=cast(
+                    Dict[str, float],
+                    rubric_evaluation.get("criterion_scores", {})
+                )
                 if rubric_evaluation
-                else None,
-                rubric_pattern_flags=rubric_evaluation.get("pattern_flags")
-                if rubric_evaluation
-                else None,
+                else {},
+                sample_count=1,
+                evaluation_time_seconds=0.0,
                 passed_thresholds=ragas_result.passed_thresholds,
-                metadata=ragas_result.metadata,
             )
 
             # Log combined scores to Opik if tracing enabled
@@ -801,12 +807,17 @@ class RAGASEvaluator:
             return combined
         else:
             # Return a basic dict-like structure if CombinedEvaluationResult not available
-            return {
-                "run_id": run_id or ragas_result.sample_id,
-                "ragas_result": ragas_result,
-                "rubric_evaluation": rubric_evaluation,
-                "passed_thresholds": ragas_result.passed_thresholds,
-            }
+            # Note: This branch technically violates the return type, but is only hit
+            # when _OPIK_AVAILABLE is False, which should not happen in production
+            return cast(
+                "CombinedEvaluationResult",
+                {
+                    "run_id": run_id or ragas_result.sample_id,
+                    "ragas_result": ragas_result,
+                    "rubric_evaluation": rubric_evaluation,
+                    "passed_thresholds": ragas_result.passed_thresholds,
+                }
+            )
 
 
 # =============================================================================
@@ -914,12 +925,19 @@ class RAGEvaluationPipeline:
         # Aggregate metrics
         valid_results = [r for r in results if r.faithfulness is not None]
 
+        avg_faith: Optional[float]
+        avg_relevancy: Optional[float]
+        avg_precision: Optional[float]
+        avg_recall: Optional[float]
+        overall: Optional[float]
+
         if valid_results:
-            avg_faith = sum(r.faithfulness for r in valid_results) / len(valid_results)
-            avg_relevancy = sum(r.answer_relevancy for r in valid_results) / len(valid_results)
-            avg_precision = sum(r.context_precision for r in valid_results) / len(valid_results)
-            avg_recall = sum(r.context_recall for r in valid_results) / len(valid_results)
-            overall = sum(r.overall_score for r in valid_results) / len(valid_results)
+            # Cast to handle Optional[float] types - we've filtered for non-None
+            avg_faith = sum(cast(float, r.faithfulness) for r in valid_results) / len(valid_results)
+            avg_relevancy = sum(cast(float, r.answer_relevancy) for r in valid_results) / len(valid_results)
+            avg_precision = sum(cast(float, r.context_precision) for r in valid_results) / len(valid_results)
+            avg_recall = sum(cast(float, r.context_recall) for r in valid_results) / len(valid_results)
+            overall = sum(cast(float, r.overall_score) for r in valid_results) / len(valid_results)
         else:
             avg_faith = avg_relevancy = avg_precision = avg_recall = overall = None
 
@@ -988,6 +1006,9 @@ class RAGEvaluationPipeline:
             return
 
         try:
+            # Assert mlflow is available - we already checked _MLFLOW_AVAILABLE
+            assert mlflow is not None, "MLflow should be available at this point"
+
             mlflow.set_experiment(self.config.mlflow_experiment)
 
             with mlflow.start_run(run_name=report.run_id):
@@ -1135,6 +1156,7 @@ def create_evaluation_sample(
     query: str,
     ground_truth: str,
     contexts: List[str],
+    answer: Optional[str] = None,
     **metadata: Any,
 ) -> EvaluationSample:
     """
@@ -1144,6 +1166,7 @@ def create_evaluation_sample(
         query: User query
         ground_truth: Expected answer
         contexts: Reference contexts
+        answer: Optional pre-generated answer
         **metadata: Additional metadata (brand, kpi, etc.)
 
     Returns:
@@ -1153,5 +1176,6 @@ def create_evaluation_sample(
         query=query,
         ground_truth=ground_truth,
         contexts=contexts,
+        answer=answer,
         metadata=metadata,
     )

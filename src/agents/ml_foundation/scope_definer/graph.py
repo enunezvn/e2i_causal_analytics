@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     build_scope_spec,
@@ -62,7 +63,7 @@ async def finalize_scope(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-def create_scope_definer_graph() -> StateGraph:
+def create_scope_definer_graph() -> CompiledStateGraph:
     """Create the scope_definer LangGraph workflow.
 
     The workflow consists of 4 nodes:
@@ -78,10 +79,10 @@ def create_scope_definer_graph() -> StateGraph:
     workflow = StateGraph(ScopeDefinerState)
 
     # Add nodes
-    workflow.add_node("classify_problem", classify_problem)
-    workflow.add_node("build_scope_spec", build_scope_spec)
-    workflow.add_node("define_success_criteria", define_success_criteria)
-    workflow.add_node("finalize_scope", finalize_scope)
+    workflow.add_node("classify_problem", classify_problem)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("build_scope_spec", build_scope_spec)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("define_success_criteria", define_success_criteria)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("finalize_scope", finalize_scope)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define edges (linear flow)
     workflow.set_entry_point("classify_problem")

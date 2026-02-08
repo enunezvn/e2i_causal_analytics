@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.utils.audit_chain import AgentTier
@@ -31,7 +32,7 @@ def build_prediction_synthesizer_graph(
     model_clients: Optional[Dict[str, Any]] = None,
     context_store: Optional[Any] = None,
     feature_store: Optional[Any] = None,
-) -> StateGraph:
+) -> CompiledStateGraph:
     """
     Build the Prediction Synthesizer agent graph.
 
@@ -69,11 +70,11 @@ def build_prediction_synthesizer_graph(
     workflow = StateGraph(PredictionSynthesizerState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("orchestrate", orchestrator.execute)
-    workflow.add_node("combine", combiner.execute)
-    workflow.add_node("enrich", enricher.execute)
-    workflow.add_node("error_handler", _error_handler_node)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("orchestrate", orchestrator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("combine", combiner.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("enrich", enricher.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", _error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Entry point - start with audit initialization
     workflow.set_entry_point("audit_init")
@@ -126,7 +127,7 @@ async def _error_handler_node(
 
 def build_simple_prediction_graph(
     model_clients: Optional[Dict[str, Any]] = None,
-) -> StateGraph:
+) -> CompiledStateGraph:
     """
     Build a simplified prediction graph without context enrichment.
 
@@ -149,10 +150,10 @@ def build_simple_prediction_graph(
 
     workflow = StateGraph(PredictionSynthesizerState)
 
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("orchestrate", orchestrator.execute)
-    workflow.add_node("combine", combiner.execute)
-    workflow.add_node("error_handler", _error_handler_node)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("orchestrate", orchestrator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("combine", combiner.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", _error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Entry point - start with audit initialization
     workflow.set_entry_point("audit_init")

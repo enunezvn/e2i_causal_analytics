@@ -9,6 +9,7 @@ Tier: 3 (Monitoring)
 """
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from src.agents.experiment_monitor.nodes import (
     AlertGeneratorNode,
@@ -20,7 +21,7 @@ from src.agents.experiment_monitor.nodes import (
 from src.agents.experiment_monitor.state import ExperimentMonitorState
 
 
-def create_experiment_monitor_graph() -> StateGraph:
+def create_experiment_monitor_graph() -> CompiledStateGraph:
     """Create the experiment monitor agent graph.
 
     Workflow:
@@ -44,11 +45,11 @@ def create_experiment_monitor_graph() -> StateGraph:
     alert_generator_node = AlertGeneratorNode()
 
     # Add nodes to graph
-    workflow.add_node("health_checker", health_checker_node.execute)
-    workflow.add_node("srm_detector", srm_detector_node.execute)
-    workflow.add_node("interim_analyzer", interim_analyzer_node.execute)
-    workflow.add_node("fidelity_checker", fidelity_checker_node.execute)
-    workflow.add_node("alert_generator", alert_generator_node.execute)
+    workflow.add_node("health_checker", health_checker_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("srm_detector", srm_detector_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("interim_analyzer", interim_analyzer_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("fidelity_checker", fidelity_checker_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("alert_generator", alert_generator_node.execute)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define sequential workflow
     workflow.set_entry_point("health_checker")

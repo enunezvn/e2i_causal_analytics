@@ -13,6 +13,7 @@ Extended hybrid pipeline with 5 nodes:
 """
 
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     compute_shap,
@@ -24,7 +25,7 @@ from .nodes import (
 from .state import FeatureAnalyzerState
 
 
-def create_feature_analyzer_graph() -> StateGraph:
+def create_feature_analyzer_graph() -> CompiledStateGraph:
     """Create feature_analyzer LangGraph workflow.
 
     Full Pipeline:
@@ -52,11 +53,11 @@ def create_feature_analyzer_graph() -> StateGraph:
     workflow = StateGraph(FeatureAnalyzerState)
 
     # Add all nodes
-    workflow.add_node("generate_features", generate_features)
-    workflow.add_node("select_features", select_features)
-    workflow.add_node("compute_shap", compute_shap)
-    workflow.add_node("detect_interactions", detect_interactions)
-    workflow.add_node("narrate_importance", narrate_importance)
+    workflow.add_node("generate_features", generate_features)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("select_features", select_features)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("compute_shap", compute_shap)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("detect_interactions", detect_interactions)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("narrate_importance", narrate_importance)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define edges
     workflow.set_entry_point("generate_features")
@@ -95,7 +96,7 @@ def create_feature_analyzer_graph() -> StateGraph:
     return workflow.compile()
 
 
-def create_feature_engineering_graph() -> StateGraph:
+def create_feature_engineering_graph() -> CompiledStateGraph:
     """Create feature engineering-only workflow (no SHAP).
 
     Simplified Pipeline:
@@ -113,8 +114,8 @@ def create_feature_engineering_graph() -> StateGraph:
     workflow = StateGraph(FeatureAnalyzerState)
 
     # Add nodes
-    workflow.add_node("generate_features", generate_features)
-    workflow.add_node("select_features", select_features)
+    workflow.add_node("generate_features", generate_features)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("select_features", select_features)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define edges
     workflow.set_entry_point("generate_features")
@@ -130,7 +131,7 @@ def create_feature_engineering_graph() -> StateGraph:
     return workflow.compile()
 
 
-def create_shap_analysis_graph() -> StateGraph:
+def create_shap_analysis_graph() -> CompiledStateGraph:
     """Create SHAP analysis-only workflow (assumes features already selected).
 
     Simplified Pipeline:
@@ -150,9 +151,9 @@ def create_shap_analysis_graph() -> StateGraph:
     workflow = StateGraph(FeatureAnalyzerState)
 
     # Add nodes
-    workflow.add_node("compute_shap", compute_shap)
-    workflow.add_node("detect_interactions", detect_interactions)
-    workflow.add_node("narrate_importance", narrate_importance)
+    workflow.add_node("compute_shap", compute_shap)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("detect_interactions", detect_interactions)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("narrate_importance", narrate_importance)  # type: ignore[type-var,arg-type,call-overload]
 
     # Define edges
     workflow.set_entry_point("compute_shap")

@@ -83,16 +83,16 @@ def build_feedback_learner_graph(
         return await _cognitive_context_enricher(state, cognitive_rag)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("enrich", enrich_node)
-    workflow.add_node("collect", collector.execute)
-    workflow.add_node("analyze", analyzer.execute)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("enrich", enrich_node)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("collect", collector.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("analyze", analyzer.execute)  # type: ignore[type-var,arg-type,call-overload]
     if rubric_node:
-        workflow.add_node("rubric", rubric_node.execute)
-    workflow.add_node("extract", extractor.execute)
-    workflow.add_node("update", updater.execute)
-    workflow.add_node("finalize", _finalize_training_signal)
-    workflow.add_node("error_handler", _error_handler_node)
+        workflow.add_node("rubric", rubric_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("extract", extractor.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("update", updater.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("finalize", _finalize_training_signal)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", _error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Flow - start with audit initialization
     workflow.set_entry_point("audit_init")
@@ -183,7 +183,7 @@ async def _cognitive_context_enricher(
         logger.debug("No CognitiveRAG provided, skipping cognitive enrichment")
         return {
             **state,
-            "cognitive_context": None,
+            "cognitive_context": None,  # type: ignore[typeddict-item]
         }
 
     try:
@@ -219,7 +219,7 @@ async def _cognitive_context_enricher(
         logger.warning(f"Cognitive enrichment failed: {e}, continuing without context")
         return {
             **state,
-            "cognitive_context": None,
+            "cognitive_context": None,  # type: ignore[typeddict-item]
             "warnings": (state.get("warnings") or []) + [f"Cognitive enrichment skipped: {str(e)}"],
         }
 
@@ -260,7 +260,7 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
         time_range_start=state.get("time_range_start", ""),
         time_range_end=state.get("time_range_end", ""),
         focus_agents=state.get("focus_agents") or [],
-        cognitive_context=state.get("cognitive_context"),
+        cognitive_context=state.get("cognitive_context"),  # type: ignore[arg-type]
         patterns_detected=len(patterns),
         recommendations_generated=len(recommendations),
         updates_applied=len(applied_updates),

@@ -6,7 +6,9 @@ CRITICAL: All queries must respect ML splits to prevent data leakage.
 
 import hashlib
 from abc import ABC
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, cast
+
+from src.utils.type_helpers import parse_supabase_row, parse_supabase_rows
 
 T = TypeVar("T")
 
@@ -21,7 +23,7 @@ class BaseRepository(ABC, Generic[T]):
     """
 
     table_name: str
-    model_class: Type[T]
+    model_class: Optional[Type[T]] = None
 
     def __init__(self, supabase_client=None):
         """
@@ -55,7 +57,7 @@ class BaseRepository(ABC, Generic[T]):
             query = query.eq("split_assignment", split)
 
         result = await query.execute()
-        return self._to_model(result.data[0]) if result.data else None
+        return self._to_model(parse_supabase_row(result.data[0])) if result.data else None
 
     async def get_many(
         self,
@@ -90,7 +92,7 @@ class BaseRepository(ABC, Generic[T]):
         query = query.limit(limit).offset(offset)
         result = await query.execute()
 
-        return [self._to_model(row) for row in result.data]
+        return [self._to_model(row) for row in parse_supabase_rows(result.data)]
 
     async def create(self, entity: T) -> T:
         """
@@ -108,7 +110,7 @@ class BaseRepository(ABC, Generic[T]):
         data = entity.model_dump() if hasattr(entity, "model_dump") else entity
         result = await self.client.table(self.table_name).insert(data).execute()
 
-        return self._to_model(result.data[0]) if result.data else entity
+        return self._to_model(parse_supabase_row(result.data[0])) if result.data else entity
 
     async def update(self, id: str, updates: Dict[str, Any]) -> Optional[T]:
         """
@@ -126,7 +128,7 @@ class BaseRepository(ABC, Generic[T]):
 
         result = await self.client.table(self.table_name).update(updates).eq("id", id).execute()
 
-        return self._to_model(result.data[0]) if result.data else None
+        return self._to_model(parse_supabase_row(result.data[0])) if result.data else None
 
     async def delete(self, id: str) -> bool:
         """
@@ -147,9 +149,9 @@ class BaseRepository(ABC, Generic[T]):
 
     def _to_model(self, data: Dict[str, Any]) -> T:
         """Convert database row to model instance."""
-        if self.model_class and hasattr(self.model_class, "model_validate"):
-            return self.model_class.model_validate(data)  # type: ignore[attr-defined]
-        return data  # type: ignore[return-value]  # Raw dict when no Pydantic model
+        if self.model_class is not None and hasattr(self.model_class, "model_validate"):
+            return cast(T, self.model_class.model_validate(data))  # type: ignore[attr-defined]
+        return cast(T, data)
 
 
 class SplitAwareRepository(BaseRepository[T]):

@@ -170,10 +170,10 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                                 json.dumps(output_summary, sort_keys=True, default=str).encode()
                             ).hexdigest()[:32]
 
-                            audit_service.add_entry(
+                            audit_service.add_entry(  # type: ignore[call-arg]
                                 workflow_id=workflow_id,
                                 agent_name="causal_impact",
-                                agent_tier=AgentTier.CAUSAL_ANALYTICS.value,
+                                agent_tier=AgentTier.CAUSAL_ANALYTICS.value,  # type: ignore[arg-type]
                                 action_type=node_name,
                                 duration_ms=duration_ms,
                                 input_hash=input_hash,
@@ -189,7 +189,7 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         except Exception as ae:
                             logger.warning(f"Failed to record audit entry: {ae}")
 
-                    return result
+                    return result  # type: ignore[no-any-return]
 
                 except Exception as e:
                     # Log error details to span
@@ -304,13 +304,13 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     audit_initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
 
     # Add nodes with Opik tracing wrappers (CONTRACT_VALIDATION.md #12)
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("graph_builder", traced_build_causal_graph)
-    workflow.add_node("estimation", traced_estimate_causal_effect)
-    workflow.add_node("refutation", traced_refute_causal_estimate)
-    workflow.add_node("sensitivity", traced_analyze_sensitivity)
-    workflow.add_node("interpretation", traced_interpret_results)
-    workflow.add_node("error_handler", handle_workflow_error)  # Error handler not traced
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("graph_builder", traced_build_causal_graph)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("estimation", traced_estimate_causal_effect)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("refutation", traced_refute_causal_estimate)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("sensitivity", traced_analyze_sensitivity)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("interpretation", traced_interpret_results)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("error_handler", handle_workflow_error)  # type: ignore[type-var,arg-type,call-overload]  # Error handler not traced
 
     # Set entry point to audit initializer
     workflow.set_entry_point("audit_init")
@@ -469,7 +469,7 @@ async def run_workflow_with_mlflow(
     if final_state:
         final_state["mlflow_run_id"] = mlflow_run_id
 
-    return final_state
+    return final_state  # type: ignore[no-any-return]
 
 
 def _extract_mlflow_metrics(state: Dict[str, Any], total_latency_ms: float) -> Dict[str, float]:

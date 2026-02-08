@@ -67,12 +67,12 @@ def build_health_score_graph(
     workflow = StateGraph(HealthScoreState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("component", component.execute)
-    workflow.add_node("model", model.execute)
-    workflow.add_node("pipeline", pipeline.execute)
-    workflow.add_node("agent", agent.execute)
-    workflow.add_node("compose", composer.execute)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("component", component.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("model", model.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("pipeline", pipeline.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("agent", agent.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("compose", composer.execute)  # type: ignore[type-var,arg-type,call-overload]
 
     # Sequential flow starting with audit initialization
     workflow.set_entry_point("audit_init")
@@ -119,9 +119,9 @@ def build_quick_check_graph(
     workflow = StateGraph(HealthScoreState)
 
     # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # Initialize audit chain
-    workflow.add_node("component", component.execute)
-    workflow.add_node("compose", composer.execute)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
+    workflow.add_node("component", component.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("compose", composer.execute)  # type: ignore[type-var,arg-type,call-overload]
 
     # Minimal flow starting with audit initialization
     workflow.set_entry_point("audit_init")
