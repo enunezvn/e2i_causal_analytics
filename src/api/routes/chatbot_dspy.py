@@ -71,9 +71,9 @@ def _ensure_dspy_configured():
 async def _run_dspy_with_retry(
     func: Callable[..., T],
     *args,
-    max_retries: int = None,
-    timeout: float = None,
-    retry_delay: float = None,
+    max_retries: Optional[int] = None,
+    timeout: Optional[float] = None,
+    retry_delay: Optional[float] = None,
     operation_name: str = "DSPy operation",
     **kwargs,
 ) -> Optional[T]:
@@ -96,7 +96,7 @@ async def _run_dspy_with_retry(
     timeout = timeout if timeout is not None else CHATBOT_DSPY_TIMEOUT
     retry_delay = retry_delay if retry_delay is not None else CHATBOT_DSPY_RETRY_DELAY
 
-    last_error = None
+    last_error: Optional[Exception] = None
     for attempt in range(max_retries + 1):
         try:
             # Run sync DSPy function in thread pool with timeout
@@ -615,7 +615,7 @@ async def classify_intent_dspy(
     """
     classifier = _get_dspy_classifier()
     classification_method = "dspy"
-    intent = None
+    intent: str = ""
     confidence = 0.0
     reasoning = ""
     use_fallback = False
@@ -949,7 +949,7 @@ async def route_agent_dspy(
     """
     router = _get_dspy_router()
     routing_method = "dspy"
-    primary_agent = None
+    primary_agent: str = ""
     secondary_agents: List[str] = []
     confidence = 0.0
     rationale = ""
@@ -2721,7 +2721,7 @@ class ChatbotSignalCollector:
             result = await client.table("chatbot_training_signals").insert(signal_data).execute()
 
             if result.data and len(result.data) > 0:
-                db_id = result.data[0].get("id")
+                db_id: Optional[int] = result.data[0].get("id")
                 logger.debug(f"Persisted training signal to database: id={db_id}")
                 return db_id
             return None
@@ -2764,11 +2764,11 @@ try:
 except ImportError:
     GEPA_AVAILABLE = False
     logger.info("GEPA not available - optimization disabled")
-    create_gepa_optimizer = None
-    save_optimized_module = None
-    load_optimized_module = None
-    ScoreWithFeedback = Dict[str, Any]
-    DSPyTrace = list
+    create_gepa_optimizer = None  # type: ignore[assignment]
+    save_optimized_module = None  # type: ignore[assignment]
+    load_optimized_module = None  # type: ignore[assignment]
+    ScoreWithFeedback = Dict[str, Any]  # type: ignore[assignment,misc]
+    DSPyTrace = list  # type: ignore[assignment,misc]
 
 
 @dataclass
@@ -3095,7 +3095,7 @@ class ChatbotOptimizer:
             else:
                 logger.info("Chatbot optimizer using MIPROv2")
         else:
-            self._optimizer_type = None
+            self._optimizer_type = None  # type: ignore[assignment]
             logger.warning("No optimizer available - chatbot optimization disabled")
 
     @property
@@ -3148,7 +3148,7 @@ class ChatbotOptimizer:
 
             if result.data:
                 logger.info(f"Retrieved {len(result.data)} training signals for {phase}")
-                return result.data
+                return result.data  # type: ignore[no-any-return]
             return []
 
         except Exception as e:
@@ -3398,7 +3398,7 @@ class ChatbotOptimizer:
                 self._best_score = getattr(optimizer, "best_score", 0.0)
 
                 # Save optimized module
-                version_id = await save_optimized_module(
+                version_id = await save_optimized_module(  # type: ignore[call-arg,misc]
                     agent_name=f"chatbot_{module_name}",
                     optimized_module=optimized_module,
                     budget=budget,

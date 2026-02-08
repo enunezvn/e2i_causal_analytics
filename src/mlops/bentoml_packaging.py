@@ -24,8 +24,8 @@ try:
     BENTOML_AVAILABLE = True
 except ImportError:
     BENTOML_AVAILABLE = False
-    bentoml = None
-    Model = None
+    bentoml = None  # type: ignore[assignment]
+    Model = None  # type: ignore[assignment]
 
 try:
     import yaml
@@ -331,7 +331,7 @@ def register_model_auto(
     }
 
     if framework_lower in register_funcs:
-        return register_funcs[framework_lower](model, model_name, metadata=metadata, **kwargs)
+        return register_funcs[framework_lower](model, model_name, metadata=metadata, **kwargs)  # type: ignore[no-any-return]
 
     # Fallback to pickle
     if not BENTOML_AVAILABLE:
@@ -1101,7 +1101,7 @@ def generate_docker_compose(
     Returns:
         Path to generated docker-compose file
     """
-    compose_config = {
+    compose_config: Dict[str, Any] = {
         "version": "3.8",
         "services": {},
         "networks": {
@@ -1178,7 +1178,7 @@ def validate_bento(bento_tag: str, strict: bool = False) -> Dict[str, Any]:
     if not BENTOML_AVAILABLE:
         raise ImportError("BentoML is not installed")
 
-    result = {
+    result: Dict[str, Any] = {
         "valid": False,
         "bento_tag": bento_tag,
         "checks": {},
@@ -1273,7 +1273,7 @@ def test_service_locally(
     import asyncio
     import importlib
 
-    result = {
+    result: Dict[str, Any] = {
         "success": False,
         "response": None,
         "error": None,

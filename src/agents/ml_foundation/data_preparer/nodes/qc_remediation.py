@@ -189,7 +189,9 @@ async def _analyze_qc_failures_with_llm(context: Dict[str, Any]) -> Dict[str, An
         )
 
         # Parse the LLM response
-        analysis_text = response.content[0].text
+        content_block = response.content[0]
+        assert hasattr(content_block, "text"), f"Expected TextBlock, got {type(content_block)}"
+        analysis_text = content_block.text
         return _parse_llm_analysis(analysis_text, context)
 
     except anthropic.APIError as e:
@@ -305,7 +307,7 @@ def _parse_llm_analysis(response_text: str, context: Dict[str, Any]) -> Dict[str
     Returns:
         Structured analysis dictionary
     """
-    analysis = {
+    analysis: Dict[str, Any] = {
         "root_causes": [],
         "can_auto_remediate": False,
         "remediation_actions": [],
@@ -362,7 +364,7 @@ def _parse_remediation_action(action_str: str) -> Dict[str, Any]:
     Returns:
         Structured action dictionary
     """
-    action = {"type": "unknown", "column": None, "params": {}}
+    action: Dict[str, Any] = {"type": "unknown", "column": None, "params": {}}
 
     try:
         parts = action_str.split(",")
@@ -393,7 +395,7 @@ def _rule_based_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Analysis results based on rules
     """
-    analysis = {
+    analysis: Dict[str, Any] = {
         "root_causes": [],
         "can_auto_remediate": False,
         "remediation_actions": [],

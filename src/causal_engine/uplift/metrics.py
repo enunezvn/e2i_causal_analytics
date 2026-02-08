@@ -275,7 +275,7 @@ def auuc(
             )
             random_area = overall_uplift * 0.5  # Random model area
             if abs(random_area) > 1e-10:
-                area = area / abs(random_area)
+                area = area / abs(random_area)  # type: ignore[operator]
 
     return float(area)
 
@@ -361,7 +361,7 @@ def uplift_at_k(
     uplift_scores: NDArray[np.float64],
     treatment: NDArray[np.int_],
     outcome: NDArray[np.float64],
-    k_percentiles: List[float] = None,
+    k_percentiles: Optional[List[float]] = None,
 ) -> Dict[str, float]:
     """Calculate uplift at various percentiles.
 
@@ -414,7 +414,7 @@ def uplift_at_k(
         elif n_treated > 0:
             uplift_k = np.sum(treatment_k * outcome_k) / n_treated
         else:
-            uplift_k = 0.0
+            uplift_k = 0.0  # type: ignore[assignment]
 
         results[f"uplift_at_{k}"] = float(uplift_k)
 
@@ -485,26 +485,26 @@ def treatment_effect_calibration(
         observed_means.append(obs_uplift)
         bin_sizes.append(np.sum(mask))
 
-    predicted_means = np.array(predicted_means)
-    observed_means = np.array(observed_means)
-    bin_sizes = np.array(bin_sizes)
+    predicted_means_arr: NDArray[np.float64] = np.array(predicted_means)
+    observed_means_arr: NDArray[np.float64] = np.array(observed_means)
+    bin_sizes_arr: NDArray[np.float64] = np.array(bin_sizes)
 
     # Weighted mean calibration error
-    if len(bin_sizes) > 0 and np.sum(bin_sizes) > 0:
-        calibration_error = np.sum(bin_sizes * np.abs(predicted_means - observed_means)) / np.sum(
-            bin_sizes
-        )
+    if len(bin_sizes_arr) > 0 and np.sum(bin_sizes_arr) > 0:
+        calibration_error = np.sum(
+            bin_sizes_arr * np.abs(predicted_means_arr - observed_means_arr)
+        ) / np.sum(bin_sizes_arr)
     else:
-        calibration_error = 0.0
+        calibration_error = 0.0  # type: ignore[assignment]
 
-    return predicted_means, observed_means, float(calibration_error)
+    return predicted_means_arr, observed_means_arr, float(calibration_error)
 
 
 def evaluate_uplift_model(
     uplift_scores: NDArray[np.float64],
     treatment: NDArray[np.int_],
     outcome: NDArray[np.float64],
-    k_percentiles: List[float] = None,
+    k_percentiles: Optional[List[float]] = None,
 ) -> UpliftMetrics:
     """Comprehensive evaluation of uplift model.
 

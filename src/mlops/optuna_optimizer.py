@@ -156,7 +156,7 @@ class OptunaOptimizer:
         elif self._config.get("storage", {}).get("enabled", False):
             self.storage_url = self._config.get("storage", {}).get("url")
         else:
-            self.storage_url = None
+            self.storage_url = None  # type: ignore[assignment]
 
         # Resolve MLflow tracking (explicit > config > True)
         if mlflow_tracking is not None:
@@ -416,14 +416,14 @@ class OptunaOptimizer:
                 log_scale = config.get("log", False)
                 step = config.get("step")
                 if step is not None and not log_scale:
-                    params[param_name] = trial.suggest_float(
+                    params[param_name] = trial.suggest_float(  # type: ignore[assignment]
                         param_name,
                         config["low"],
                         config["high"],
                         step=step,
                     )
                 else:
-                    params[param_name] = trial.suggest_float(
+                    params[param_name] = trial.suggest_float(  # type: ignore[assignment]
                         param_name,
                         config["low"],
                         config["high"],
@@ -506,7 +506,7 @@ class OptunaOptimizer:
                 if trial.should_prune():
                     raise optuna.TrialPruned()
 
-                return mean_score
+                return mean_score  # type: ignore[no-any-return]
 
             except optuna.TrialPruned:
                 raise
@@ -626,45 +626,45 @@ class OptunaOptimizer:
                     minority_recall = recall_score(y, y_pred, pos_label=1, zero_division=0)
                     if minority_recall == 0:
                         # Heavy penalty: model predicts all negatives
-                        return auc * 0.5
+                        return float(auc * 0.5)
                     else:
                         # Weighted combination: 70% AUC + 30% minority recall
-                        return auc * 0.7 + minority_recall * 0.3
-                return auc
+                        return float(auc * 0.7 + minority_recall * 0.3)
+                return float(auc)
             elif metric == "accuracy":
-                return accuracy_score(y, y_pred)
+                return float(accuracy_score(y, y_pred))
             elif metric == "f1":
-                return f1_score(
+                return float(f1_score(
                     y,
                     y_pred,
                     average="weighted" if problem_type == "multiclass_classification" else "binary",
-                )
+                ))
             elif metric == "precision":
-                return precision_score(
+                return float(precision_score(
                     y,
                     y_pred,
                     average="weighted" if problem_type == "multiclass_classification" else "binary",
-                )
+                ))
             elif metric == "recall":
-                return recall_score(
+                return float(recall_score(
                     y,
                     y_pred,
                     average="weighted" if problem_type == "multiclass_classification" else "binary",
-                )
+                ))
             else:
-                return accuracy_score(y, y_pred)
+                return float(accuracy_score(y, y_pred))
         else:  # Regression
             y_pred = model.predict(X)
 
             if metric == "rmse" or metric == "neg_root_mean_squared_error":
                 # Return negative RMSE so higher is better
-                return -np.sqrt(mean_squared_error(y, y_pred))
+                return float(-np.sqrt(mean_squared_error(y, y_pred)))
             elif metric == "mae":
-                return -mean_absolute_error(y, y_pred)
+                return float(-mean_absolute_error(y, y_pred))
             elif metric == "r2":
-                return r2_score(y, y_pred)
+                return float(r2_score(y, y_pred))
             else:
-                return -np.sqrt(mean_squared_error(y, y_pred))
+                return float(-np.sqrt(mean_squared_error(y, y_pred)))
 
     async def get_optimization_history(
         self,
@@ -939,72 +939,72 @@ def get_model_class(algorithm_name: str, problem_type: str) -> Optional[type]:
         if algorithm_name == "XGBoost":
             from xgboost import XGBClassifier, XGBRegressor
 
-            return XGBClassifier if is_classification else XGBRegressor
+            return XGBClassifier if is_classification else XGBRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "LightGBM":
             from lightgbm import LGBMClassifier, LGBMRegressor
 
-            return LGBMClassifier if is_classification else LGBMRegressor
+            return LGBMClassifier if is_classification else LGBMRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "RandomForest":
             from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
-            return RandomForestClassifier if is_classification else RandomForestRegressor
+            return RandomForestClassifier if is_classification else RandomForestRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "LogisticRegression":
             from sklearn.linear_model import LogisticRegression
 
-            return LogisticRegression
+            return LogisticRegression  # type: ignore[no-any-return]
 
         elif algorithm_name == "Ridge":
             from sklearn.linear_model import Ridge
 
-            return Ridge
+            return Ridge  # type: ignore[no-any-return]
 
         elif algorithm_name == "Lasso":
             from sklearn.linear_model import Lasso
 
-            return Lasso
+            return Lasso  # type: ignore[no-any-return]
 
         elif algorithm_name == "GradientBoosting":
             from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
-            return GradientBoostingClassifier if is_classification else GradientBoostingRegressor
+            return GradientBoostingClassifier if is_classification else GradientBoostingRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "ExtraTrees":
             from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
 
-            return ExtraTreesClassifier if is_classification else ExtraTreesRegressor
+            return ExtraTreesClassifier if is_classification else ExtraTreesRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "CausalForest":
             from econml.dml import CausalForestDML
 
-            return CausalForestDML
+            return CausalForestDML  # type: ignore[no-any-return]
 
         elif algorithm_name == "LinearDML":
             from econml.dml import LinearDML
 
-            return LinearDML
+            return LinearDML  # type: ignore[no-any-return]
 
         elif algorithm_name == "DRLearner":
             from econml.dr import DRLearner
 
-            return DRLearner
+            return DRLearner  # type: ignore[no-any-return]
 
         elif algorithm_name == "SLearner":
             from econml.metalearners import SLearner
 
-            return SLearner
+            return SLearner  # type: ignore[no-any-return]
 
         elif algorithm_name == "TLearner":
             from econml.metalearners import TLearner
 
-            return TLearner
+            return TLearner  # type: ignore[no-any-return]
 
         elif algorithm_name == "XLearner":
             from econml.metalearners import XLearner
 
-            return XLearner
+            return XLearner  # type: ignore[no-any-return]
 
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")

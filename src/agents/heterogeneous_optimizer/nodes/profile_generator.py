@@ -9,7 +9,7 @@ Additionally handles:
 
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 from ..state import HeterogeneousOptimizerState
 
@@ -72,7 +72,7 @@ class ProfileGeneratorNode:
                 generation_time=generation_time,
             )
 
-            return {
+            return cast(HeterogeneousOptimizerState, {
                 **state,
                 "cate_plot_data": cate_plot_data,
                 "segment_grid_data": segment_grid_data,
@@ -80,7 +80,7 @@ class ProfileGeneratorNode:
                 "key_insights": key_insights,
                 "strategic_interpretation": strategic_interpretation,
                 "status": "completed",
-            }
+            })
 
         except Exception as e:
             logger.error(
@@ -88,11 +88,11 @@ class ProfileGeneratorNode:
                 extra={"node": "profile_generator", "error": str(e)},
                 exc_info=True,
             )
-            return {
+            return cast(HeterogeneousOptimizerState, {
                 **state,
                 "errors": [{"node": "profile_generator", "error": str(e)}],
                 "status": "failed",
-            }
+            })
 
     def _generate_cate_plot_data(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Generate data for CATE visualization plots.

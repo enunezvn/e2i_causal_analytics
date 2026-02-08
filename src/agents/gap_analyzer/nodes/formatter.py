@@ -48,28 +48,28 @@ class FormatterNode:
 
             # Generate executive summary
             executive_summary = self._generate_executive_summary(
-                prioritized_opportunities=prioritized_opportunities,
-                quick_wins=quick_wins,
-                strategic_bets=strategic_bets,
-                total_addressable_value=total_addressable_value,
-                total_gap_value=total_gap_value,
+                prioritized_opportunities=prioritized_opportunities or [],
+                quick_wins=quick_wins or [],
+                strategic_bets=strategic_bets or [],
+                total_addressable_value=total_addressable_value or 0.0,
+                total_gap_value=total_gap_value or 0.0,
                 segments_analyzed=segments_analyzed,
             )
 
             # Extract key insights
             key_insights = self._extract_key_insights(
-                prioritized_opportunities=prioritized_opportunities,
-                quick_wins=quick_wins,
-                strategic_bets=strategic_bets,
+                prioritized_opportunities=prioritized_opportunities or [],
+                quick_wins=quick_wins or [],
+                strategic_bets=strategic_bets or [],
             )
 
             # Calculate total latency
-            detection_latency = state.get("detection_latency_ms", 0)
-            roi_latency = state.get("roi_latency_ms", 0)
-            prioritization_latency = state.get("prioritization_latency_ms", 0)
+            detection_latency: int = state.get("detection_latency_ms", 0)  # type: ignore[assignment]
+            roi_latency: int = state.get("roi_latency_ms", 0)  # type: ignore[assignment]
+            prioritization_latency: int = state.get("prioritization_latency_ms", 0)  # type: ignore[assignment]
             formatting_latency_ms = int((time.time() - start_time) * 1000)
 
-            total_latency_ms = (
+            total_latency_ms: int = (
                 detection_latency + roi_latency + prioritization_latency + formatting_latency_ms
             )
 
@@ -134,8 +134,8 @@ class FormatterNode:
             memory_counts = await contribute_to_memory(
                 result=result,
                 state=dict(state),
-                session_id=state.get("session_id"),
-                region=state.get("region"),
+                session_id=state.get("session_id"),  # type: ignore[arg-type]
+                region=state.get("region"),  # type: ignore[arg-type]
             )
             logger.info(
                 f"Memory contribution: episodic={memory_counts.get('episodic_stored', 0)}, "
@@ -170,7 +170,7 @@ class FormatterNode:
 
             # Initialize signal
             signal = collector.collect_analysis_signal(
-                session_id=state.get("session_id", ""),
+                session_id=state.get("session_id", ""),  # type: ignore[arg-type]
                 query=state.get("query", ""),
                 brand=state.get("brand", ""),
                 metrics_analyzed=state.get("metrics", []),
@@ -178,18 +178,18 @@ class FormatterNode:
             )
 
             # Update with detection phase data
-            gaps_detected = state.get("gaps_detected", [])
-            gap_types = list({g.get("gap_type", "unknown") for g in gaps_detected})
+            gaps_detected = state.get("gaps_detected") or []
+            gap_types: List[str] = list({g.get("gap_type", "unknown") for g in gaps_detected})
             collector.update_detection(
                 signal=signal,
                 gaps_detected_count=len(gaps_detected),
-                total_gap_value=state.get("total_gap_value", 0.0),
+                total_gap_value=state.get("total_gap_value") or 0.0,  # type: ignore[arg-type]
                 gap_types=gap_types,
                 detection_latency_ms=state.get("detection_latency_ms", 0.0),
             )
 
             # Update with ROI phase data
-            prioritized_opps = state.get("prioritized_opportunities", [])
+            prioritized_opps = state.get("prioritized_opportunities") or []
             roi_estimates = [o.get("roi_estimate", {}) for o in prioritized_opps]
             avg_roi = 0.0
             high_roi_count = 0
@@ -202,15 +202,15 @@ class FormatterNode:
             collector.update_roi(
                 signal=signal,
                 roi_estimates_count=len(roi_estimates),
-                total_addressable_value=state.get("total_addressable_value", 0.0),
+                total_addressable_value=state.get("total_addressable_value") or 0.0,  # type: ignore[arg-type]
                 avg_expected_roi=avg_roi,
                 high_roi_count=high_roi_count,
                 roi_latency_ms=state.get("roi_latency_ms", 0.0),
             )
 
             # Update with prioritization phase data
-            quick_wins = state.get("quick_wins", [])
-            strategic_bets = state.get("strategic_bets", [])
+            quick_wins = state.get("quick_wins") or []
+            strategic_bets = state.get("strategic_bets") or []
             key_insights = result.get("key_insights", [])
             executive_summary = result.get("executive_summary", "")
 
@@ -218,7 +218,7 @@ class FormatterNode:
                 signal=signal,
                 quick_wins_count=len(quick_wins),
                 strategic_bets_count=len(strategic_bets),
-                prioritization_confidence=state.get("prioritization_confidence", 0.8),
+                prioritization_confidence=state.get("prioritization_confidence", 0.8),  # type: ignore[arg-type]
                 executive_summary_length=len(executive_summary),
                 key_insights_count=len(key_insights),
                 actionable_recommendations=len(quick_wins) + len(strategic_bets),

@@ -68,7 +68,7 @@ class GapDetectorNode:
             if path.exists():
                 with open(path) as f:
                     full_config = yaml.safe_load(f)
-                    return full_config.get("gap_analyzer", {})
+                    return full_config.get("gap_analyzer", {})  # type: ignore[no-any-return]
             else:
                 logger.warning(f"Config file not found: {config_path}, using defaults")
         except Exception as e:
@@ -104,22 +104,22 @@ class GapDetectorNode:
     @property
     def economic_assumptions(self) -> Dict[str, float]:
         """Get economic assumptions from config."""
-        return self.config.get("economic_assumptions", {})
+        return self.config.get("economic_assumptions", {})  # type: ignore[no-any-return]
 
     @property
     def gap_thresholds(self) -> Dict[str, float]:
         """Get gap severity thresholds from config."""
-        return self.config.get("gap_thresholds", {})
+        return self.config.get("gap_thresholds", {})  # type: ignore[no-any-return]
 
     @property
     def roi_thresholds(self) -> Dict[str, float]:
         """Get ROI classification thresholds from config."""
-        return self.config.get("roi_thresholds", {})
+        return self.config.get("roi_thresholds", {})  # type: ignore[no-any-return]
 
     @property
     def value_drivers(self) -> Dict[str, float]:
         """Get value driver multipliers from config."""
-        return self.config.get("value_drivers", {})
+        return self.config.get("value_drivers", {})  # type: ignore[no-any-return]
 
     async def execute(self, state: GapAnalyzerState) -> Dict[str, Any]:
         """Execute gap detection workflow.
@@ -266,7 +266,7 @@ class GapDetectorNode:
             logger.warning("No segment columns found in tier0_data, using 'all' segment")
             available_segments = []
             # Create a single aggregation over all data
-            row = {"segment": "all"}
+            row: Dict[str, Any] = {"segment": "all"}
             for metric in metrics:
                 # Derive metric from available numeric columns
                 row[metric] = self._derive_single_metric(tier0_data, metric, numeric_cols)
@@ -278,10 +278,10 @@ class GapDetectorNode:
             segment_values = tier0_data[segment].unique()
             for seg_val in segment_values:
                 segment_data = tier0_data[tier0_data[segment] == seg_val]
-                row = {segment: seg_val}
+                seg_row: Dict[str, Any] = {segment: seg_val}
                 for metric in metrics:
-                    row[metric] = self._derive_single_metric(segment_data, metric, numeric_cols)
-                result_rows.append(row)
+                    seg_row[metric] = self._derive_single_metric(segment_data, metric, numeric_cols)
+                result_rows.append(seg_row)
 
         return pd.DataFrame(result_rows)
 
@@ -316,12 +316,12 @@ class GapDetectorNode:
             # If we have a flag column, calculate rate
             if "discontinuation_flag" in data.columns:
                 # Conversion = patients who didn't discontinue
-                return 1.0 - data["discontinuation_flag"].mean()
+                return float(1.0 - data["discontinuation_flag"].mean())
             return 0.5  # Default 50%
         elif metric == "hcp_engagement_score":
             # Average of some numeric indicator
             if "tenure_months" in data.columns:
-                return min(data["tenure_months"].mean() * 2, 100.0)  # Scale to 0-100
+                return float(min(data["tenure_months"].mean() * 2, 100.0))  # Scale to 0-100
             return 70.0  # Default
         elif metric in data.columns and metric in numeric_cols:
             # Direct average if column exists
@@ -603,7 +603,7 @@ class GapDetectorNode:
 
             memory_hooks = get_gap_analyzer_memory_hooks()
             context = await memory_hooks.get_context(
-                session_id=state.get("session_id", ""),
+                session_id=state.get("session_id", ""),  # type: ignore[arg-type]
                 query=state.get("query", ""),
                 brand=state.get("brand"),
                 metrics=state.get("metrics"),
@@ -665,7 +665,7 @@ class MockDataConnector:
                 continue
 
             for value in segment_values[segment]:
-                row = {segment: value}
+                row: Dict[str, Any] = {segment: value}
                 for metric in metrics:
                     # Realistic values based on metric type
                     if metric == "trx":
@@ -738,7 +738,7 @@ class MockBenchmarkStore:
                 continue
 
             for value in segment_values[segment]:
-                row = {segment: value}
+                row: Dict[str, Any] = {segment: value}
                 for metric in metrics:
                     # Targets are typically 10-30% higher than current
                     if metric == "trx":

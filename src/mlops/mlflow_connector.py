@@ -817,6 +817,7 @@ class MLflowConnector:
             return
 
         try:
+            assert self._mlflow is not None
             for key, value in metrics.items():
                 self._mlflow.log_metric(key, value, step=step)
             self.circuit_breaker.record_success()
@@ -830,6 +831,7 @@ class MLflowConnector:
             return
 
         try:
+            assert self._mlflow is not None
             self._mlflow.set_tags(tags)
             self.circuit_breaker.record_success()
         except Exception as e:
@@ -844,6 +846,7 @@ class MLflowConnector:
             return
 
         try:
+            assert self._mlflow is not None
             self._mlflow.log_artifact(local_path, artifact_path)
             self.circuit_breaker.record_success()
         except Exception as e:
@@ -868,6 +871,7 @@ class MLflowConnector:
             return None
 
         try:
+            assert self._mlflow is not None
             # MLflow 3.x log_model returns ModelInfo with model_uri attribute
             model_info = None
             if flavor == "sklearn":
@@ -943,6 +947,8 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._mlflow is not None
+            assert self._client is not None
             model_uri = f"runs:/{run_id}/{model_path}"
             result = self._mlflow.register_model(model_uri, model_name)
 
@@ -1008,6 +1014,7 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._client is not None
             # Map our enum to MLflow stages
             mlflow_stage_map = {
                 ModelStage.DEVELOPMENT: "None",
@@ -1055,6 +1062,7 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._client is not None
             # Get all versions
             versions = self._client.search_model_versions(f"name='{model_name}'")
 
@@ -1127,6 +1135,7 @@ class MLflowConnector:
             raise RuntimeError("MLflow circuit breaker is open")
 
         try:
+            assert self._mlflow is not None
             if flavor == "sklearn":
                 model = self._mlflow.sklearn.load_model(model_uri)
             elif flavor == "xgboost":
@@ -1184,6 +1193,7 @@ class MLflowConnector:
             return health
 
         try:
+            assert self._client is not None
             # Try to list experiments as a health check
             experiments = self._client.search_experiments(max_results=1)
             health["status"] = "healthy"
@@ -1235,6 +1245,7 @@ class AutoLogger:
 
         try:
             mlflow = self.connector._mlflow
+            assert mlflow is not None
 
             if framework == "sklearn":
                 mlflow.sklearn.autolog(

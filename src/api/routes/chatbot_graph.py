@@ -113,9 +113,9 @@ WORKFLOW_PROGRESS = {
 
 def get_progress_update(
     node_name: str,
-    current_steps: List[str] = None,
-    tools_executing: List[str] = None,
-    custom_step: str = None,
+    current_steps: Optional[List[str]] = None,
+    tools_executing: Optional[List[str]] = None,
+    custom_step: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate progress state update for a workflow node.
@@ -539,7 +539,7 @@ async def load_context_node(state: ChatbotState) -> Dict[str, Any]:
         if role == "user":
             history_messages.append(HumanMessage(content=content))
         elif role == "assistant":
-            history_messages.append(AIMessage(content=content))
+            history_messages.append(AIMessage(content=content))  # type: ignore[arg-type]
 
     # Include progress update
     progress = get_progress_update(
@@ -1370,7 +1370,7 @@ def _generate_fallback_response(state: ChatbotState) -> Dict[str, Any]:
     }
 
     response_text = responses.get(
-        intent,
+        intent,  # type: ignore[arg-type]
         "I'm the E2I Analytics Assistant. I can help with KPI analysis, causal inference, and pharmaceutical commercial analytics. What would you like to explore?",
     )
 
@@ -1388,7 +1388,7 @@ async def tool_node(state: ChatbotState) -> Dict[str, Any]:
     This is handled by LangGraph's ToolNode.
     """
     # ToolNode handles this automatically
-    pass
+    return {}  # type: ignore[return-value]
 
 
 # =============================================================================
@@ -1635,7 +1635,7 @@ async def finalize_node(state: ChatbotState) -> Dict[str, Any]:
     tool_calls = []
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
-            response_text = msg.content
+            response_text = msg.content  # type: ignore[assignment]
             # Extract tool calls if present
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 tool_calls = [
@@ -1892,7 +1892,7 @@ def after_tools(state: ChatbotState) -> Literal["generate", "finalize"]:
 # =============================================================================
 
 
-def create_e2i_chatbot_graph() -> StateGraph:
+def create_e2i_chatbot_graph() -> Any:
     """
     Create the E2I chatbot LangGraph workflow.
 
@@ -1982,9 +1982,9 @@ async def run_chatbot(
     query: str,
     user_id: str,
     request_id: str,
-    session_id: str = None,
-    brand_context: str = None,
-    region_context: str = None,
+    session_id: Optional[str] = None,
+    brand_context: Optional[str] = None,
+    region_context: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run the E2I chatbot workflow.
@@ -2048,7 +2048,7 @@ async def run_chatbot(
                 response_length=len(result.get("response_text", "")),
             )
 
-            return result
+            return result  # type: ignore[no-any-return]
 
         except Exception as e:
             # Log failure
@@ -2168,9 +2168,9 @@ async def stream_chatbot(
     query: str,
     user_id: str,
     request_id: str,
-    session_id: str = None,
-    brand_context: str = None,
-    region_context: str = None,
+    session_id: Optional[str] = None,
+    brand_context: Optional[str] = None,
+    region_context: Optional[str] = None,
 ):
     """
     Stream the E2I chatbot workflow.

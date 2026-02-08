@@ -38,7 +38,7 @@ Model Mappings:
 
 import logging
 import os
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ def _create_anthropic_llm(
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
 
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -137,7 +137,7 @@ def _create_anthropic_llm(
     if timeout is not None:
         kwargs["timeout"] = timeout
 
-    return ChatAnthropic(**kwargs)
+    return ChatAnthropic(**kwargs)  # type: ignore[arg-type]
 
 
 def _create_openai_llm(
@@ -159,7 +159,7 @@ def _create_openai_llm(
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is not set")
 
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -167,7 +167,7 @@ def _create_openai_llm(
     if timeout is not None:
         kwargs["request_timeout"] = timeout
 
-    return ChatOpenAI(**kwargs)
+    return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
 
 
 # Convenience functions for common use cases

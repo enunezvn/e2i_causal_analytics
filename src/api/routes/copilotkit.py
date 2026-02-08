@@ -524,7 +524,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # Note: ag_ui.core.Message is a Union type, so we must use specific types
         from ag_ui.core import AssistantMessage, UserMessage
 
-        agui_messages = []
+        agui_messages: list[UserMessage | AssistantMessage] = []
         dbg(f"Converting {len(messages or [])} messages to AG-UI format")
         for i, msg in enumerate(messages or []):
             dbg(f"msg[{i}] type={type(msg).__name__} value={msg}")
@@ -581,8 +581,8 @@ class LangGraphAgent(_LangGraphAGUIAgent):
             thread_id=thread_id,
             run_id=run_id,
             state=state_with_session,
-            messages=agui_messages,
-            tools=actions,  # CopilotKit actions become tools
+            messages=agui_messages,  # type: ignore[arg-type]
+            tools=actions,  # type: ignore[arg-type]  # CopilotKit actions become tools
             context=[],
             forwarded_props={"node_name": node_name} if node_name else {},
         )
@@ -593,7 +593,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # "Message ID not found in history" error. The SDK's prepare_stream()
         # triggers regenerate mode when checkpoint has more messages than input.
         # By using a fresh checkpointer, the checkpoint is always empty.
-        original_graph = self.graph
+        original_graph = self.graph  # type: ignore[has-type]
         if self._graph_factory:
             self.graph = self._graph_factory()
             dbg("Created fresh graph with new checkpointer")
@@ -628,7 +628,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # are created for a single user query (e.g., one empty message + one with content).
         # This happens when a terminal event resets streaming_started prematurely.
         # We track completed message IDs to detect this condition and log debug info.
-        completed_message_ids = []
+        completed_message_ids: list[str] = []
         message_lifecycle_count = 0
 
         # FIX (v1.27.0): Track if ag_ui_langgraph is handling the LLM stream
@@ -732,7 +732,8 @@ class LangGraphAgent(_LangGraphAGUIAgent):
                     yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': streaming_message_id, 'timestamp': current_ts, 'source': source})}\n\n"
                     event_count += 1
                     # FIX (v1.26.0): Track completed messages for duplicate detection (ERROR level to ensure visibility)
-                    completed_message_ids.append(streaming_message_id)
+                    if streaming_message_id is not None:
+                        completed_message_ids.append(streaming_message_id)
                     logger.error(
                         f"[CopilotKit] TEXT_MESSAGE_END: message_id={streaming_message_id}, lifecycle_count={message_lifecycle_count}, event_type={event_type_str}"
                     )
@@ -977,7 +978,7 @@ def _persist_message_sync(
 
         if result.data:
             logger.debug(f"_persist_message_sync: inserted message id={result.data[0].get('id')}")
-            return result.data[0]
+            return result.data[0]  # type: ignore[no-any-return]
         return None
     except Exception as e:
         logger.error(f"[CopilotKit] _persist_message_sync failed: {e}")
@@ -1087,7 +1088,7 @@ def _record_analytics_sync(
 
         if result.data:
             logger.debug(f"[CopilotKit] Recorded analytics id={result.data[0].get('id')}")
-            return result.data[0]
+            return result.data[0]  # type: ignore[no-any-return]
         return None
     except Exception as e:
         # Analytics should never block the main flow
@@ -1821,7 +1822,7 @@ def create_e2i_chat_agent():
                     result = _persist_message_sync(
                         session_id=session_id,
                         role="user",
-                        content=last_human_message,
+                        content=last_human_message,  # type: ignore[arg-type]
                         metadata={"source": "copilotkit"},
                     )
                     if result:
@@ -1866,7 +1867,7 @@ def create_e2i_chat_agent():
 
             # Build messages for LLM
             system_msg = SystemMessage(content=E2I_COPILOT_SYSTEM_PROMPT)
-            llm_messages = [system_msg]
+            llm_messages: list[BaseMessage] = [system_msg]
 
             # Add conversation history (convert to LangChain format if needed)
             for msg in messages:
@@ -1897,7 +1898,7 @@ def create_e2i_chat_agent():
             # 3. Only emit content if NO tool calls (direct response)
             # 4. If tool calls exist, don't emit - synthesize_node will handle final response
             full_content = ""
-            accumulated_tool_calls = []
+            accumulated_tool_calls: list[dict[str, Any]] = []
             content_chunks = []  # Buffer chunks for potential later emission
             response = None
 
@@ -2062,7 +2063,7 @@ def create_e2i_chat_agent():
             # Previously only checked response.tool_calls, but due to streaming this can be
             # empty [] even when accumulated_tool_calls has entries (name comes before args).
             # Now we also check accumulated_tool_calls directly as a fallback.
-            has_tool_calls = (getattr(response, "tool_calls", None) and response.tool_calls) or any(
+            has_tool_calls = (getattr(response, "tool_calls", None) and response.tool_calls) or any(  # type: ignore[union-attr]
                 tc.get("name") or tc.get("id") for tc in accumulated_tool_calls
             )
 
@@ -2070,8 +2071,8 @@ def create_e2i_chat_agent():
             if has_tool_calls:
                 # Get tool names from response.tool_calls if available, else from accumulated
                 tool_names = (
-                    [tc["name"] for tc in response.tool_calls if tc.get("name")]
-                    if response.tool_calls
+                    [tc["name"] for tc in response.tool_calls if tc.get("name")]  # type: ignore[union-attr]
+                    if response.tool_calls  # type: ignore[union-attr]
                     else [
                         tc.get("name", "unknown")
                         for tc in accumulated_tool_calls
@@ -2103,7 +2104,7 @@ def create_e2i_chat_agent():
                                 "type": "tool_request",
                                 "tool_calls": [
                                     {"name": tc["name"], "args": tc.get("args", {})}
-                                    for tc in response.tool_calls
+                                    for tc in response.tool_calls  # type: ignore[union-attr]
                                 ],
                                 "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
                             },
@@ -2130,7 +2131,7 @@ def create_e2i_chat_agent():
                         _persist_message_sync(
                             session_id=session_id,
                             role="assistant",
-                            content=response.content,
+                            content=response.content,  # type: ignore[union-attr]
                             agent_name="copilotkit",
                             metadata={
                                 "source": "copilotkit",
@@ -2150,7 +2151,7 @@ def create_e2i_chat_agent():
             if session_id:
                 _record_analytics_sync(
                     session_id=session_id,
-                    query_type=_classify_query_type(last_human_message or ""),
+                    query_type=_classify_query_type(last_human_message or ""),  # type: ignore[arg-type]
                     response_time_ms=elapsed_ms,
                     tools_invoked=[],
                     primary_agent="copilotkit",
@@ -2174,7 +2175,7 @@ def create_e2i_chat_agent():
 
         except Exception as e:
             logger.error(f"[CopilotKit] LLM invocation failed: {e}", exc_info=True)
-            fallback = generate_e2i_response(last_human_message)
+            fallback = generate_e2i_response(last_human_message)  # type: ignore[arg-type]
             await copilotkit_emit_message(config, fallback)
             # Persist fallback response
             if session_id:
@@ -2292,7 +2293,7 @@ Synthesize these results into a natural, conversational response. Include specif
                     _persist_message_sync(
                         session_id=session_id,
                         role="assistant",
-                        content=response.content,
+                        content=response.content,  # type: ignore[arg-type]
                         agent_name="copilotkit",
                         metadata={
                             "source": "copilotkit",
@@ -2311,7 +2312,7 @@ Synthesize these results into a natural, conversational response. Include specif
                     session_id=session_id,
                     query_type=_classify_query_type(original_query),
                     response_time_ms=elapsed_ms,
-                    tools_invoked=[tr["tool"] for tr in tool_results],
+                    tools_invoked=[tr["tool"] for tr in tool_results],  # type: ignore[misc]
                     primary_agent="copilotkit",
                     metadata={
                         "model_used": f"{provider}:{MODEL_MAPPINGS[provider]['standard']}",
@@ -2361,7 +2362,7 @@ Synthesize these results into a natural, conversational response. Include specif
                     session_id=session_id,
                     query_type=_classify_query_type(original_query),
                     response_time_ms=elapsed_ms,
-                    tools_invoked=[tr["tool"] for tr in tool_results],
+                    tools_invoked=[tr["tool"] for tr in tool_results],  # type: ignore[misc]
                     primary_agent="copilotkit",
                     error_occurred=True,
                     error_type="synthesis_error",
@@ -2560,7 +2561,7 @@ def transform_info_response(sdk: CopilotKitRemoteEndpoint) -> Dict[str, Any]:
 
 async def copilotkit_custom_handler(
     request: Request, sdk: CopilotKitRemoteEndpoint, path: str = ""
-) -> JSONResponse:
+) -> JSONResponse | StreamingResponse:
     """
     Custom CopilotKit endpoint handler that transforms info responses for frontend v1.x.
 
@@ -2629,6 +2630,7 @@ async def copilotkit_custom_handler(
 
             # Handle AG-UI protocol: agent/run
             if agui_method == "agent/run":
+                assert body_json is not None
                 params = body_json.get("params", {})
                 body_data = body_json.get("body", {})
                 agent_name = params.get("agentId", "default") or body_json.get(
@@ -2759,7 +2761,7 @@ async def copilotkit_custom_handler(
             scope_with_path = dict(request.scope)
             scope_with_path["path_params"] = {**request.path_params, "path": path}
             new_request = Request(scope_with_path, receive)
-            return await sdk_handler(new_request, sdk)
+            return await sdk_handler(new_request, sdk)  # type: ignore[no-any-return]
 
         except Exception as e:
             logger.warning(f"[CopilotKit] Error parsing POST body: {e}")
@@ -2777,13 +2779,13 @@ async def copilotkit_custom_handler(
     # causing the original request (with consumed body) to be passed to SDK handler,
     # resulting in "expected string or bytes-like object, got 'NoneType'" errors.
     # FIX v1.9.3: SDK handler expects path in path_params, but base route has no path param
-    async def receive():
+    async def receive_fallback():  # noqa: E303
         return {"type": "http.request", "body": body_bytes}
 
     scope_with_path = dict(request.scope)
     scope_with_path["path_params"] = {**request.path_params, "path": path}
-    new_request = Request(scope_with_path, receive)
-    return await sdk_handler(new_request, sdk)
+    new_request = Request(scope_with_path, receive_fallback)
+    return await sdk_handler(new_request, sdk)  # type: ignore[no-any-return]
 
 
 def add_copilotkit_routes(app: FastAPI, prefix: str = "/api/copilotkit") -> None:
@@ -2972,10 +2974,10 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
         async for state_update in stream_chatbot(
             query=request.query,
             user_id=request.user_id,
-            request_id=request.request_id,
+            request_id=request.request_id or "unknown",
             session_id=session_id,
-            brand_context=request.brand_context,
-            region_context=request.region_context,
+            brand_context=request.brand_context or "",
+            region_context=request.region_context or "",
         ):
             # Extract response from state updates
             if isinstance(state_update, dict):
@@ -3018,7 +3020,7 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
                                         )
                                         if new_text:
                                             yield f"data: {json.dumps({'type': 'text', 'data': new_text})}\n\n"
-                                            response_text = msg.content
+                                            response_text = msg.content  # type: ignore[assignment]
 
                         # Track dispatch observability fields
                         if "orchestrator_used" in node_output:
@@ -3170,10 +3172,10 @@ async def chat(
         result = await run_chatbot(
             query=chat_request.query,
             user_id=chat_request.user_id,
-            request_id=chat_request.request_id,
-            session_id=chat_request.session_id,
-            brand_context=chat_request.brand_context,
-            region_context=chat_request.region_context,
+            request_id=chat_request.request_id or "unknown",
+            session_id=chat_request.session_id or "",
+            brand_context=chat_request.brand_context or "",
+            region_context=chat_request.region_context or "",
         )
 
         # Calculate execution time
@@ -3346,7 +3348,7 @@ async def submit_feedback(
             )
 
             if message_result.data and len(message_result.data) > 0:
-                session_id = message_result.data[0].get("session_id")
+                session_id = message_result.data[0].get("session_id")  # type: ignore[union-attr]
                 logger.info(
                     f"[Feedback] Found message {request.message_id} with session_id={session_id}"
                 )
@@ -3368,8 +3370,8 @@ async def submit_feedback(
 
         result = await repo.add_feedback(
             message_id=request.message_id,
-            session_id=session_id,
-            rating=request.rating,
+            session_id=session_id,  # type: ignore[arg-type]
+            rating=request.rating,  # type: ignore[arg-type]
             comment=request.comment,
             query_text=request.query_text,
             response_preview=request.response_preview,

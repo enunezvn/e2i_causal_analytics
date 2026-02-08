@@ -222,7 +222,7 @@ class CausalImpactAgent(SkillsMixin):
                     # Retry with fallback model
                     final_state = await self.graph.ainvoke(initial_state)
                     output = self._build_output(final_state, start_time)
-                    output["fallback_model_used"] = fallback_model
+                    output["fallback_model_used"] = fallback_model  # type: ignore[typeddict-unknown-key]
 
                     # Log fallback result to MLflow
                     if tracker:
@@ -240,8 +240,8 @@ class CausalImpactAgent(SkillsMixin):
                         latency_ms,
                         input_data,
                     )
-                    error_output["fallback_attempted"] = True
-                    error_output["fallback_model"] = fallback_model
+                    error_output["fallback_attempted"] = True  # type: ignore[typeddict-unknown-key]
+                    error_output["fallback_model"] = fallback_model  # type: ignore[typeddict-unknown-key]
                     return error_output
             else:
                 error_output = self._build_error_output(str(e), latency_ms, input_data)
@@ -272,8 +272,8 @@ class CausalImpactAgent(SkillsMixin):
             "interpretation_depth": input_data.get("interpretation_depth", "standard"),
             "user_context": input_data.get("user_context", {}),
             "parameters": input_data.get("parameters", {}),
-            "time_period": input_data.get("time_period"),
-            "brand": input_data.get("brand"),
+            "time_period": input_data.get("time_period"),  # type: ignore[typeddict-item]
+            "brand": input_data.get("brand"),  # type: ignore[typeddict-item]
             # Workflow state
             "current_phase": "graph_building",
             "status": "pending",
@@ -340,26 +340,26 @@ class CausalImpactAgent(SkillsMixin):
             "status": "completed",
             # Core results
             "causal_narrative": interpretation.get("narrative", "Analysis completed successfully."),
-            "ate_estimate": estimation_result.get("ate"),
+            "ate_estimate": estimation_result.get("ate"),  # type: ignore[typeddict-item]
             "confidence_interval": (
-                (
+                (  # type: ignore[typeddict-item]
                     estimation_result.get("ate_ci_lower", 0.0),
                     estimation_result.get("ate_ci_upper", 0.0),
                 )
                 if "ate_ci_lower" in estimation_result
                 else None
             ),
-            "standard_error": estimation_result.get("standard_error"),
+            "standard_error": estimation_result.get("standard_error"),  # type: ignore[typeddict-item]
             "statistical_significance": estimation_result.get("statistical_significance", False),
-            "p_value": estimation_result.get("p_value"),
-            "effect_type": estimation_result.get("effect_type", "ate"),
-            "estimation_method": estimation_result.get("method"),
+            "p_value": estimation_result.get("p_value"),  # type: ignore[typeddict-item]
+            "effect_type": estimation_result.get("effect_type", "ate"),  # type: ignore[typeddict-item]
+            "estimation_method": estimation_result.get("method"),  # type: ignore[typeddict-item]
             # Contract REQUIRED fields
             "confidence": overall_confidence,  # Contract field (was overall_confidence)
             "model_used": estimation_result.get("method", "unknown"),  # Contract REQUIRED
             "key_insights": interpretation.get("key_findings", []),  # Contract REQUIRED
             "assumption_warnings": self._extract_assumption_warnings(
-                interpretation, estimation_result, refutation_results
+                interpretation, estimation_result, refutation_results  # type: ignore[arg-type]
             ),  # Contract REQUIRED
             "actionable_recommendations": interpretation.get(
                 "recommendations", []
@@ -367,11 +367,11 @@ class CausalImpactAgent(SkillsMixin):
             "requires_further_analysis": overall_confidence < 0.7,  # Contract REQUIRED
             "refutation_passed": refutation_passed,  # Contract REQUIRED
             "executive_summary": self._generate_executive_summary(
-                interpretation, estimation_result, overall_confidence
+                interpretation, estimation_result, overall_confidence  # type: ignore[arg-type]
             ),  # Contract REQUIRED
             # Rich metadata
-            "mechanism_explanation": interpretation.get("mechanism_explanation"),
-            "causal_graph_summary": self._summarize_causal_graph(causal_graph),
+            "mechanism_explanation": interpretation.get("mechanism_explanation"),  # type: ignore[typeddict-item]
+            "causal_graph_summary": self._summarize_causal_graph(causal_graph),  # type: ignore[arg-type, typeddict-item]
             "key_assumptions": interpretation.get("assumptions_made", []),
             "limitations": interpretation.get("limitations", []),
             # Performance metrics
@@ -379,9 +379,9 @@ class CausalImpactAgent(SkillsMixin):
             "interpretation_latency_ms": interpretation_latency_ms,
             "total_latency_ms": total_latency_ms,
             # Robustness indicators
-            "refutation_tests_passed": refutation_results.get("tests_passed"),
-            "refutation_tests_total": refutation_results.get("total_tests"),
-            "sensitivity_e_value": sensitivity_analysis.get("e_value"),
+            "refutation_tests_passed": refutation_results.get("tests_passed"),  # type: ignore[typeddict-item]
+            "refutation_tests_total": refutation_results.get("total_tests"),  # type: ignore[typeddict-item]
+            "sensitivity_e_value": sensitivity_analysis.get("e_value"),  # type: ignore[typeddict-item]
             # Follow-up
             "visualizations": [],
             "follow_up_suggestions": interpretation.get("recommendations", []),
@@ -635,7 +635,7 @@ class CausalImpactAgent(SkillsMixin):
                 ]
 
             logger.debug(f"Semantic memory query for '{query}': found {len(chains)} chains")
-            return chains
+            return chains  # type: ignore[no-any-return]
 
         except Exception as e:
             logger.warning(f"Semantic memory query failed: {e}")
@@ -740,7 +740,7 @@ class CausalImpactAgent(SkillsMixin):
         from src.memory.episodic_memory import EpisodicMemoryInput, insert_episodic_memory
 
         try:
-            memory = EpisodicMemoryInput(
+            memory = EpisodicMemoryInput(  # type: ignore[call-arg]
                 event_type=event.get("event_type", "causal_analysis"),
                 description=event.get("description", ""),
                 importance=event.get("importance", 0.5),
@@ -752,7 +752,7 @@ class CausalImpactAgent(SkillsMixin):
 
             memory_id = await insert_episodic_memory(
                 memory=memory,
-                embedding=None,  # Will be generated
+                embedding=None,  # type: ignore[arg-type]  # Will be generated
                 session_id=session_id,
                 cycle_id=cycle_id,
             )

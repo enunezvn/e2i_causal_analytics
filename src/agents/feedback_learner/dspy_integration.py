@@ -398,10 +398,10 @@ except ImportError:
     logger.warning("DSPy not available - using deterministic pattern detection")
 
     # Placeholder classes when dspy is not available
-    PatternDetectionSignature = None
-    RecommendationGenerationSignature = None
-    KnowledgeUpdateSignature = None
-    LearningSummarySignature = None
+    PatternDetectionSignature = None  # type: ignore[assignment]
+    RecommendationGenerationSignature = None  # type: ignore[assignment]
+    KnowledgeUpdateSignature = None  # type: ignore[assignment]
+    LearningSummarySignature = None  # type: ignore[assignment]
 
 
 # =============================================================================
@@ -425,11 +425,11 @@ except ImportError:
     logger.info("GEPA not available - using MIPROv2 optimizer")
 
     # Placeholder functions when GEPA is not available
-    create_gepa_optimizer = None
-    get_metric_for_agent = None
-    save_optimized_module = None
-    load_optimized_module = None
-    FeedbackLearnerGEPAMetric = None
+    create_gepa_optimizer = None  # type: ignore[assignment]
+    get_metric_for_agent = None  # type: ignore[assignment]
+    save_optimized_module = None  # type: ignore[assignment]
+    load_optimized_module = None  # type: ignore[assignment]
+    FeedbackLearnerGEPAMetric = None  # type: ignore[assignment]
 
 
 # =============================================================================
@@ -615,7 +615,7 @@ class FeedbackLearnerOptimizer:
             optimizer_type: Optimizer to use - "gepa" (recommended) or "miprov2"
         """
         self.signal_store = signal_store
-        self._cached_examples = {}
+        self._cached_examples: Dict[str, Any] = {}
 
         # Select optimizer based on availability and preference
         if optimizer_type == "gepa" and GEPA_AVAILABLE:
@@ -628,7 +628,7 @@ class FeedbackLearnerOptimizer:
             else:
                 logger.info("Using MIPROv2 optimizer for Feedback Learner")
         else:
-            self.optimizer_type = None
+            self.optimizer_type = None  # type: ignore[assignment]
             logger.warning("No optimizer available - optimization disabled")
 
     def pattern_metric(self, example, prediction, trace=None) -> float:
@@ -721,7 +721,8 @@ class FeedbackLearnerOptimizer:
             Optimized DSPy module or None if optimization fails
         """
         if self.optimizer_type == "gepa":
-            return await self._optimize_with_gepa(phase, training_signals, budget)
+            gepa_budget = budget if isinstance(budget, str) else "medium"
+            return await self._optimize_with_gepa(phase, training_signals, gepa_budget)
         elif self.optimizer_type == "miprov2":
             # Convert string budget to int for MIPROv2
             mipro_budget = (
@@ -803,7 +804,7 @@ class FeedbackLearnerOptimizer:
         # Optionally save optimized module
         if optimized and hasattr(optimizer, "best_score"):
             try:
-                version_id = await save_optimized_module(
+                version_id = await save_optimized_module(  # type: ignore[call-arg,misc]
                     agent_name="feedback_learner",
                     optimized_module=optimized,
                     budget=budget,
@@ -930,7 +931,7 @@ def create_memory_contribution(
     Returns:
         Memory contribution ready for storage
     """
-    contribution = {
+    contribution: Dict[str, Any] = {
         "source_agent": "feedback_learner",
         "memory_type": memory_type,
         "created_at": signal.created_at,
