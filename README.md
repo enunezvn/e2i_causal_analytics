@@ -223,7 +223,7 @@ All services (API, frontend, workers, Redis, FalkorDB, MLflow, Opik, observabili
    # Or: python src/ml/data_generator.py
    ```
 
-See `docker/README.md` for Docker Compose configuration, `DEPLOYMENT.md` for team setup instructions, and `DEPLOYMENT_ADMIN.md` for droplet administration.
+See `docker/README.md` for Docker Compose configuration and `DEPLOYMENT.md` for setup instructions.
 
 ## Development
 

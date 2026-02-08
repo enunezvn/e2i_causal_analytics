@@ -2,8 +2,6 @@
 
 How to run the full stack locally using Docker Compose with the dev overlay.
 
-> **Admin?** See [`DEPLOYMENT_ADMIN.md`](DEPLOYMENT_ADMIN.md) for droplet-specific operations (SSH access, nginx, remote deploy, tunnels).
-
 ---
 
 ## Prerequisites

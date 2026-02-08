@@ -257,8 +257,7 @@ e2i_causal_analytics/
 ├── feature_repo/           # Feast feature definitions
 ├── .github/workflows/      # 8 CI/CD workflows
 ├── CLAUDE.md               # AI assistant instructions
-├── DEPLOYMENT.md           # Team deployment guide
-├── DEPLOYMENT_ADMIN.md     # Admin/droplet deployment guide
+├── DEPLOYMENT.md           # Deployment guide
 └── pyproject.toml          # Python tool configuration
 ```
 
