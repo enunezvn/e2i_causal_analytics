@@ -708,7 +708,7 @@ async def get_enrollment_stats(
 async def trigger_interim_analysis(
     experiment_id: str,
     request: TriggerInterimAnalysisRequest,
-    background_tasks: BackgroundTasks | None = None,
+    background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
     user: Dict[str, Any] = Depends(require_operator),
 ) -> InterimAnalysisResult:
@@ -836,10 +836,10 @@ async def list_interim_analyses(
 )
 async def get_experiment_results(
     experiment_id: str,
+    background_tasks: BackgroundTasks,
     analysis_type: AnalysisType = Query(default=AnalysisType.FINAL),
     analysis_method: AnalysisMethod = Query(default=AnalysisMethod.ITT),
     recompute: bool = Query(default=False, description="Force recomputation"),
-    background_tasks: BackgroundTasks | None = None,
 ) -> ExperimentResults:
     """
     Get experiment results.
@@ -1159,7 +1159,7 @@ async def update_fidelity_comparison(
 )
 async def trigger_experiment_monitoring(
     request: TriggerMonitorRequest,
-    background_tasks: BackgroundTasks | None = None,
+    background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
     user: Dict[str, Any] = Depends(require_auth),
 ) -> MonitorResponse:
