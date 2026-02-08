@@ -272,11 +272,15 @@ class FeatureStoreClient:
             "tags": tags or [],
         }
 
-        response = self.supabase.table("features").insert(data).execute()
+        response = (
+            self.supabase.table("features")
+            .upsert(data, on_conflict="feature_group_id,name")
+            .execute()
+        )
 
         if response.data:
             feature = Feature(**response.data[0])  # type: ignore[arg-type]
-            logger.info(f"Created feature: {feature_group_name}.{name}")
+            logger.info(f"Upserted feature: {feature_group_name}.{name}")
 
             # Log to MLflow if experiment is linked
             if feature_group.mlflow_experiment_id:

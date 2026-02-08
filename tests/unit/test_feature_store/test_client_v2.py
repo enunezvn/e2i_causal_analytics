@@ -236,7 +236,7 @@ def test_create_feature(mock_client):
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     ]
-    mock_table.insert.return_value.execute.return_value = mock_result
+    mock_table.upsert.return_value.execute.return_value = mock_result
     mock_client.supabase.table = MagicMock(return_value=mock_table)
 
     feature = mock_client.create_feature(
