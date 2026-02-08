@@ -256,9 +256,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using deterministic optimization")
-    CATEInterpretationSignature = None
-    PolicyRecommendationSignature = None
-    SegmentProfileSignature = None
+    CATEInterpretationSignature = None  # type: ignore[assignment,misc]
+    PolicyRecommendationSignature = None  # type: ignore[assignment,misc]
+    SegmentProfileSignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================

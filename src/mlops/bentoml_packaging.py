@@ -28,7 +28,7 @@ except ImportError:
     Model = None  # type: ignore[assignment]
 
 try:
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 except ImportError:
     yaml = None
 
@@ -90,7 +90,8 @@ class BentoConfig:
             }
 
         if yaml:
-            return yaml.dump(config, default_flow_style=False)
+            result: str = yaml.dump(config, default_flow_style=False)
+            return result
         else:
             # Fallback to simple string formatting
             return str(config)
@@ -331,7 +332,7 @@ def register_model_auto(
     }
 
     if framework_lower in register_funcs:
-        return register_funcs[framework_lower](model, model_name, metadata=metadata, **kwargs)  # type: ignore[no-any-return]
+        return register_funcs[framework_lower](model, model_name, metadata=metadata, **kwargs)  # type: ignore[no-any-return,operator]
 
     # Fallback to pickle
     if not BENTOML_AVAILABLE:

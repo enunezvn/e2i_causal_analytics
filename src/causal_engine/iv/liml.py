@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -207,7 +207,7 @@ class LIMLEstimator(BaseIVEstimator):
                 ci_upper=ci_upper,
                 t_stat=t_stat,
                 p_value=p_value,
-                first_stage_coef=pi,
+                first_stage_coef=cast(NDArray[np.float64], pi),
                 first_stage_r_squared=float(first_stage_r2),
                 diagnostics=diagnostics,
                 n_observations=n,

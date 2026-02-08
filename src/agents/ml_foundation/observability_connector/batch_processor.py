@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 
 if TYPE_CHECKING:
     from src.agents.ml_foundation.observability_connector.models import ObservabilitySpan
@@ -186,7 +186,7 @@ class BatchProcessor:
 
                 client = get_supabase_client()
                 if client:
-                    self._span_repository = ObservabilitySpanRepository(client=client)
+                    self._span_repository = ObservabilitySpanRepository(supabase_client=client)
             except Exception as e:
                 logger.warning(f"Failed to initialize span repository: {e}")
         return self._span_repository
@@ -517,7 +517,9 @@ class BatchProcessor:
             except ValueError:
                 ended_at = None
 
-        return ObservabilitySpan(
+        # ObservabilitySpan is passed as a parameter, so mypy sees it as Any
+        # We need to cast the result to satisfy the return type annotation
+        span = ObservabilitySpan(
             trace_id=event.get("trace_id", ""),
             span_id=event.get("span_id", ""),
             parent_span_id=event.get("parent_span_id"),
@@ -537,6 +539,12 @@ class BatchProcessor:
             fallback_used=event.get("metadata", {}).get("fallback_used", False),
             attributes=event.get("metadata", {}),
         )
+        # Import the actual type for cast
+        from src.agents.ml_foundation.observability_connector.models import (
+            ObservabilitySpan as SpanModel,
+        )
+
+        return cast(SpanModel, span)
 
     async def _background_flush_loop(self) -> None:
         """Background task that flushes buffer periodically."""

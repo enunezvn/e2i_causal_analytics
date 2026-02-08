@@ -446,7 +446,7 @@ class ProceduralMemoryBackend:
             )
 
             result = await insert_procedural_memory(procedure, embedding)
-            return result.get("id") if result else None
+            return result if result else None
 
         except Exception as e:
             logger.error(f"Procedure storage failed: {e}")

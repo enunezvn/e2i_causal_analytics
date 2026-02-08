@@ -19,7 +19,7 @@ Contract: .claude/contracts/tier3-contracts.md (V4.4 extension)
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import networkx as nx
 
@@ -350,7 +350,7 @@ class StructuralDriftNode:
         return " ".join(recommendations) if recommendations else None
 
 
-async def detect_structural_drift(state: Dict[str, Any]) -> Dict[str, Any]:
+async def detect_structural_drift(state: Dict[str, Any]) -> DriftMonitorState:
     """Node function for structural drift detection.
 
     Args:
@@ -360,4 +360,4 @@ async def detect_structural_drift(state: Dict[str, Any]) -> Dict[str, Any]:
         Updated state
     """
     node = StructuralDriftNode()
-    return await node.execute(state)
+    return await node.execute(cast(DriftMonitorState, state))

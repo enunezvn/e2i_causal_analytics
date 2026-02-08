@@ -217,7 +217,7 @@ class SequentialPipeline(PipelineOrchestrator):
         """Generate executive summary from results."""
         parts = []
 
-        question_type = state.get("question_type", "unknown")
+        question_type = state.get("question_type") or "unknown"
         parts.append(f"Analysis type: {question_type.replace('_', ' ').title()}")
 
         if state["libraries_executed"]:

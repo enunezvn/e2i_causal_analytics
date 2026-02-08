@@ -208,7 +208,7 @@ def extract_explanation_entities(query: str) -> ExplanationEntities:
     Extract entities relevant to explanation queries.
     """
     query_lower = query.lower()
-    entities = ExplanationEntities()
+    entities = ExplanationEntities()  # type: ignore[call-arg]
 
     # Extract patient IDs
     for pattern in PATIENT_ID_PATTERNS:
@@ -380,7 +380,7 @@ class ExplanationResponseFormatter:
         data = explanation.get("data", explanation)
 
         # Build response sections
-        response = {
+        response: Dict[str, Any] = {
             "type": "explanation",
             "metadata": {
                 "explanation_id": data.get("explanation_id"),

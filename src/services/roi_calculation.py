@@ -702,7 +702,7 @@ class CostCalculator:
         breakdown["infrastructure"] = infra_cost
 
         # Opportunity cost
-        opportunity_cost = 0
+        opportunity_cost: float = 0.0
         if cost_input.delayed_initiative_annual_value > 0 and cost_input.delay_months > 0:
             monthly_value = cost_input.delayed_initiative_annual_value / 12
             opportunity_cost = monthly_value * cost_input.delay_months

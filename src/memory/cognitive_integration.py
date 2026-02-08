@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Coroutine, Dict, List, Optional, Set
+from typing import Any, Coroutine, Dict, List, Optional, Set, cast
 
 from pydantic import BaseModel, Field
 
@@ -471,7 +471,7 @@ class CognitiveService:
             query_type = "monitoring"
 
         # Extract entities
-        entities = {"brands": [], "regions": [], "kpis": []}
+        entities: Dict[str, List[str]] = {"brands": [], "regions": [], "kpis": []}
 
         # Brand detection
         brand_keywords = {
@@ -822,7 +822,7 @@ class CognitiveService:
         Returns:
             Dict with pending, succeeded, failed, and timeout counts
         """
-        return self._reflector_manager.stats
+        return cast(Dict[str, Any], self._reflector_manager.stats)
 
 
 # =============================================================================
@@ -867,6 +867,7 @@ async def process_cognitive_query(
         brand=brand,
         region=region,
         include_evidence=include_evidence,
+        max_hops=3,
     )
 
     return await service.process_query(input_data)

@@ -25,7 +25,7 @@ try:
     AUDIT_AVAILABLE = True
 except ImportError:
     AUDIT_AVAILABLE = False
-    log_prediction_audit = None
+    log_prediction_audit = None  # type: ignore[assignment]
 
 try:
     import bentoml
@@ -38,9 +38,9 @@ except ImportError:
 try:
     from pydantic import BaseModel, Field
 except ImportError:
-    BaseModel = object
+    BaseModel = object  # type: ignore[misc, assignment]
 
-    def Field(*args, **kwargs):
+    def Field(*args, **kwargs):  # type: ignore[no-redef]
         return None
 
 
@@ -223,7 +223,8 @@ class RegressionServiceTemplate:
             def _preprocess(self, features: np.ndarray) -> np.ndarray:
                 """Apply preprocessing if available."""
                 if self._preprocessor is not None:
-                    return self._preprocessor.transform(features)
+                    result: np.ndarray = self._preprocessor.transform(features)
+                    return result
                 return features
 
             def _compute_intervals(
@@ -321,7 +322,7 @@ class RegressionServiceTemplate:
                 )
 
                 # Prediction audit trail (Phase 1 G07)
-                if AUDIT_AVAILABLE and log_prediction_audit:
+                if AUDIT_AVAILABLE and log_prediction_audit is not None:
                     asyncio.create_task(
                         log_prediction_audit(
                             model_name=service_name,
@@ -380,7 +381,7 @@ class RegressionServiceTemplate:
                 )
 
                 # Prediction audit trail (Phase 1 G07)
-                if AUDIT_AVAILABLE and log_prediction_audit:
+                if AUDIT_AVAILABLE and log_prediction_audit is not None:
                     asyncio.create_task(
                         log_prediction_audit(
                             model_name=service_name,

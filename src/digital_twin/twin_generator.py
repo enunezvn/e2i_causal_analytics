@@ -126,7 +126,7 @@ class TwinGenerator:
         self.config = config
 
         # Model components (set during training)
-        self.model = None
+        self.model: Optional[Any] = None
         self.model_id: Optional[UUID] = None
         self.feature_columns: List[str] = []
         self.target_column: Optional[str] = None
@@ -195,6 +195,7 @@ class TwinGenerator:
 
         # Train model
         self.model = self._create_model(algorithm, **kwargs)
+        assert self.model is not None, "Model must be created successfully"
         self.model.fit(X_train, y_train)
 
         # Calculate metrics
@@ -382,7 +383,7 @@ class TwinGenerator:
 
     def _features_to_array(self, features: Dict[str, Any]) -> np.ndarray:
         """Convert feature dict to numpy array for prediction."""
-        arr = []
+        values: List[Any] = []
         for col in self.feature_columns:
             val = features.get(col, 0)
 
@@ -393,9 +394,9 @@ class TwinGenerator:
                 except ValueError:
                     val = 0  # Unknown category
 
-            arr.append(val)
+            values.append(val)
 
-        arr = np.array(arr, dtype=float)
+        arr: np.ndarray = np.array(values, dtype=float)
 
         if self.scaler is not None:
             arr = self.scaler.transform(arr.reshape(1, -1))[0]
@@ -413,7 +414,7 @@ class TwinGenerator:
             engagement = features.get("digital_engagement_score", 0.5)
             propensity = 0.3 + 0.05 * (11 - decile) + 0.2 * engagement
 
-        return np.clip(propensity, 0.1, 0.9)
+        return float(np.clip(propensity, 0.1, 0.9))
 
     def _calculate_feature_summary(self, features_list: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate summary statistics for generated population."""

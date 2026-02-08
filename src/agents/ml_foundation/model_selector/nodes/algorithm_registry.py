@@ -219,7 +219,7 @@ async def filter_algorithms(state: Dict[str, Any]) -> Dict[str, Any]:
         filtered_by_preferences = [
             {**ALGORITHM_REGISTRY[name], "name": name}
             for name in ["LogisticRegression", "Ridge", "Lasso"]
-            if problem_type in ALGORITHM_REGISTRY[name]["problem_types"]
+            if problem_type in ALGORITHM_REGISTRY[name]["problem_types"]  # type: ignore[operator]
         ]
 
     return {
@@ -234,7 +234,7 @@ def _filter_by_problem_type(problem_type: str) -> List[Dict[str, Any]]:
     """Filter algorithms that support the problem type."""
     candidates = []
     for name, spec in ALGORITHM_REGISTRY.items():
-        if problem_type in spec["problem_types"]:
+        if problem_type in spec["problem_types"]:  # type: ignore[operator]
             candidates.append({**spec, "name": name})
     return candidates
 

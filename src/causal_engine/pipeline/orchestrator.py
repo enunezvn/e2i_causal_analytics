@@ -7,7 +7,7 @@ causal analysis pipelines per the Data Architecture & Integration documentation.
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from .router import CausalLibrary, LibraryRouter, RoutingDecision
 from .state import (
@@ -81,19 +81,23 @@ class NetworkXExecutor(LibraryExecutor):
             # 1. Build causal DAG from confounders/effect_modifiers
             # 2. Calculate centrality metrics
             # 3. Identify causal paths
-            result = {
-                "nodes": [],
-                "edges": [],
+            nodes: List[Any] = []
+            edges: List[Dict[str, Any]] = []
+            result: Dict[str, Any] = {
+                "nodes": nodes,
+                "edges": edges,
                 "centrality": {},
                 "paths": [],
             }
 
-            if state.get("confounders"):
-                result["nodes"] = list(state["confounders"])
+            confounders = state.get("confounders")
+            if confounders:
+                nodes = list(confounders)
+                result["nodes"] = nodes
             if state.get("treatment_var") and state.get("outcome_var"):
-                result["edges"].append({"from": state["treatment_var"], "to": state["outcome_var"]})
-                result["nodes"].extend([state["treatment_var"], state["outcome_var"]])
-                result["nodes"] = list(set(result["nodes"]))
+                edges.append({"from": state["treatment_var"], "to": state["outcome_var"]})
+                nodes.extend([state["treatment_var"], state["outcome_var"]])
+                result["nodes"] = list(set(nodes))
 
             latency_ms = int((time.time() - start_time) * 1000)
             return LibraryExecutionResult(
@@ -359,12 +363,12 @@ class PipelineOrchestrator(ABC):
         libraries.extend([lib.value for lib in routing_decision.secondary_libraries])
 
         config: PipelineConfig = {
-            "mode": routing_decision.recommended_mode,  # type: ignore
+            "mode": routing_decision.recommended_mode,  # type: ignore[typeddict-item]
             "libraries_enabled": libraries,
             "primary_library": routing_decision.primary_library.value,
-            "stage_timeout_ms": input_data.get("stage_timeout_ms", 30000) or 30000,
-            "total_timeout_ms": input_data.get("total_timeout_ms", 120000) or 120000,
-            "cross_validate": input_data.get("cross_validate", True) or True,
+            "stage_timeout_ms": cast(int, input_data.get("stage_timeout_ms", 30000) or 30000),
+            "total_timeout_ms": cast(int, input_data.get("total_timeout_ms", 120000) or 120000),
+            "cross_validate": bool(input_data.get("cross_validate", True)),
             "min_agreement_threshold": 0.85,
             "max_parallel_libraries": 4,
             "fail_fast": False,

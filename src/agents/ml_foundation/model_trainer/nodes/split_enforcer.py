@@ -260,7 +260,7 @@ def _check_duplicate_indices(
     holdout_data: Optional[Dict[str, Any]],
 ) -> List[str]:
     """Check for duplicate row indices across splits."""
-    warnings = []
+    warnings: List[str] = []
 
     # Get indices from each split
     train_indices = _get_indices(train_data)
@@ -360,7 +360,7 @@ def _check_temporal_ordering(
     time_column: str,
 ) -> List[str]:
     """Check that training data is temporally before validation/test."""
-    warnings = []
+    warnings: List[str] = []
 
     try:
         train_max_time = _get_max_time(train_data, time_column)

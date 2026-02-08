@@ -33,7 +33,7 @@ try:
     SIMULATION_AVAILABLE = True
 except ImportError:
     SIMULATION_AVAILABLE = False
-    simulate_intervention = None
+    simulate_intervention = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -131,8 +131,9 @@ class TwinSimulationNode:
                 f"with {simulation_params.get('twin_count', self.DEFAULT_TWIN_COUNT)} twins"
             )
 
-            # Run simulation
-            result = simulate_intervention(
+            # Run simulation (guaranteed non-None by SIMULATION_AVAILABLE check above)
+            assert simulate_intervention is not None
+            result = simulate_intervention(  # type: ignore[operator]
                 intervention_type=intervention_type,
                 brand=brand,
                 target_population=simulation_params.get("target_population", "hcp"),

@@ -16,7 +16,8 @@ import json
 import logging
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
+from uuid import UUID
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -379,7 +380,7 @@ async def _log_model_artifact(
             flavor=flavor,
         )
         logger.info(f"Successfully logged model: {model_uri}")
-        return model_uri
+        return cast(str, model_uri)
     except Exception as e:
         logger.warning(f"Failed to log model with {flavor} flavor: {e}", exc_info=True)
         # Fallback to sklearn flavor
@@ -391,7 +392,7 @@ async def _log_model_artifact(
                 flavor="sklearn",
             )
             logger.info(f"Successfully logged model with sklearn fallback: {model_uri}")
-            return model_uri
+            return cast(str, model_uri)
         except Exception as e2:
             logger.error(f"Failed to log model with sklearn fallback: {e2}", exc_info=True)
             return None
@@ -595,7 +596,7 @@ async def _persist_training_run(
         logger.info(
             f"Persisted training run to database: id={run.id}, hpo_study={hpo_study_name or 'None'}"
         )
-        return run.id
+        return cast(UUID, run.id)
 
     except Exception as e:
         # Non-fatal: MLflow logging succeeded, DB persistence is secondary

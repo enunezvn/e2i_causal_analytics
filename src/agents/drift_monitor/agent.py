@@ -325,10 +325,10 @@ class DriftMonitorAgent:
         state: DriftMonitorState = {
             # Input fields
             "query": input_data.query,
-            "model_id": input_data.model_id,
+            "model_id": input_data.model_id or "",
             "features_to_monitor": input_data.features_to_monitor,
             "time_window": input_data.time_window,
-            "brand": input_data.brand,
+            "brand": input_data.brand or "",
             # Tier0 data passthrough for testing
             "tier0_data": input_data.tier0_data,
             # Configuration
@@ -356,17 +356,17 @@ class DriftMonitorAgent:
         """
         # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
         raw_errors = state.get("errors", [])
-        errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
+        errors: list[dict] = [dict(e) if hasattr(e, "keys") else {"error": str(e)} for e in raw_errors]
 
         return DriftMonitorOutput(
-            # Detection results
-            data_drift_results=state.get("data_drift_results", []),
-            model_drift_results=state.get("model_drift_results", []),
-            concept_drift_results=state.get("concept_drift_results", []),
+            # Detection results (convert TypedDicts to plain dicts)
+            data_drift_results=[dict(r) for r in state.get("data_drift_results", [])],
+            model_drift_results=[dict(r) for r in state.get("model_drift_results", [])],
+            concept_drift_results=[dict(r) for r in state.get("concept_drift_results", [])],
             # Aggregated outputs
             overall_drift_score=state.get("overall_drift_score", 0.0),
             features_with_drift=state.get("features_with_drift", []),
-            alerts=state.get("alerts", []),
+            alerts=[dict(a) for a in state.get("alerts", [])],
             # Summary
             drift_summary=state.get("drift_summary", "No summary available"),
             recommended_actions=state.get("recommended_actions", []),

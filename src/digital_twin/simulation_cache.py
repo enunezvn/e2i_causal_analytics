@@ -363,7 +363,7 @@ class SimulationCache:
         """
         client = await self._get_client()
 
-        stats = {
+        stats: Dict[str, Any] = {
             "enabled": self.config.enabled,
             "ttl_seconds": self.config.ttl_seconds,
             "hits": self._stats.hits,

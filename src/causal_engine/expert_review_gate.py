@@ -280,8 +280,12 @@ class ExpertReviewGate:
             return None
 
         # Create renewal review
+        review_id = approval.get("review_id")
+        if review_id is None:
+            logger.warning(f"No review_id found in approval for DAG {dag_hash}")
+            return None
         return await self.repository.renew_review(
-            original_review_id=approval.get("review_id"),
+            original_review_id=review_id,
             reviewer_id=requester_id,
             reviewer_name=requester_name,
             reviewer_email=requester_email,

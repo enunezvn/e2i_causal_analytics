@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class KPICache:
 
         key = self._make_key(kpi_id, **context)
         try:
-            data = self._redis.get(key)  # type: ignore
+            data: Optional[str] = cast(Optional[str], self._redis.get(key))  # type: ignore[union-attr]
             if data is None:
                 return None
 
@@ -208,9 +208,9 @@ class KPICache:
 
         try:
             pattern = f"{self.KEY_PREFIX}*"
-            keys = self._redis.keys(pattern)  # type: ignore
+            keys: List[str] = cast(List[str], self._redis.keys(pattern))  # type: ignore[union-attr]
             if keys:
-                count = self._redis.delete(*keys)  # type: ignore
+                count: int = cast(int, self._redis.delete(*keys))  # type: ignore[union-attr]
                 logger.info(f"Invalidated {count} cached KPI results")
                 return count
             return 0
@@ -229,7 +229,7 @@ class KPICache:
 
         key = self._make_key(kpi_id, **context)
         try:
-            ttl = self._redis.ttl(key)  # type: ignore
+            ttl: int = cast(int, self._redis.ttl(key))  # type: ignore[union-attr]
             return ttl if ttl > 0 else None
         except Exception:
             return None
@@ -245,7 +245,7 @@ class KPICache:
 
         try:
             pattern = f"{self.KEY_PREFIX}*"
-            keys = self._redis.keys(pattern)  # type: ignore
+            keys: List[str] = cast(List[str], self._redis.keys(pattern))  # type: ignore[union-attr]
             return len(keys) if keys else 0
         except Exception as e:
             logger.warning(f"Cache size check failed: {e}")

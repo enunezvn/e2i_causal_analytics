@@ -291,6 +291,7 @@ class GEPAOpikTracer:
 
         try:
             # Use OpikConnector's trace_agent context manager
+            assert self._opik_connector is not None
             async with self._opik_connector.trace_agent(
                 agent_name=f"gepa_{agent_name}",
                 operation="optimization",

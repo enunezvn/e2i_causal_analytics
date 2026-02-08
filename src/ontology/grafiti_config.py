@@ -505,7 +505,7 @@ class GraphityOptimizer:
         Returns:
             Optimization report
         """
-        report = {
+        report: Dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
             "patterns_analyzed": len(self.access_patterns),
             "optimizations_applied": [],

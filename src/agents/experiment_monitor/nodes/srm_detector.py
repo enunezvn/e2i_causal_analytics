@@ -20,6 +20,7 @@ from scipy import stats
 from src.agents.experiment_monitor.state import (
     ErrorDetails,
     ExperimentMonitorState,
+    ExperimentSummary,
     SRMIssue,
 )
 
@@ -98,7 +99,7 @@ class SRMDetectorNode:
 
     async def _check_srm(
         self,
-        experiment: Dict,
+        experiment: ExperimentSummary,
         client: Optional[Any],
         state: ExperimentMonitorState,
     ) -> Optional[SRMIssue]:

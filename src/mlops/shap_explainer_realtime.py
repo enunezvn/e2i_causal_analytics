@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import mlflow
 import numpy as np
@@ -425,7 +425,7 @@ class RealTimeSHAPExplainer:
                 # Extract feature columns and convert to numpy
                 feature_cols = [c for c in df.columns if c in feature_names]
                 if feature_cols:
-                    return df[feature_cols].fillna(0).values
+                    return cast(np.ndarray, df[feature_cols].fillna(0).values)
 
             return None
         except Exception as e:
@@ -843,7 +843,7 @@ class SHAPVisualization:
             shap_result.shap_values.items(), key=lambda x: abs(x[1]), reverse=True
         )[:top_k]
 
-        waterfall_data = {
+        waterfall_data: Dict[str, Any] = {
             "base_value": shap_result.base_value,
             "final_value": shap_result.base_value + sum(shap_result.shap_values.values()),
             "features": [],

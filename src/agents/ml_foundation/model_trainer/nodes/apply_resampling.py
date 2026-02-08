@@ -8,7 +8,7 @@ Version: 1.0.0
 """
 
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, cast
 
 import numpy as np
 
@@ -25,7 +25,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
         Numpy array
     """
     if data is None:
-        return None
+        return np.array([])  # Return empty array instead of None
 
     if isinstance(data, np.ndarray):
         return data
@@ -34,7 +34,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
         import pandas as pd
 
         if isinstance(data, (pd.DataFrame, pd.Series)):
-            return data.values
+            return cast(np.ndarray, data.values)
     except ImportError:
         pass
 
@@ -65,7 +65,8 @@ def _apply_smote(
     k_neighbors = min(5, minority_count - 1) if minority_count > 1 else 1
 
     smote = SMOTE(random_state=42, k_neighbors=k_neighbors)
-    return smote.fit_resample(X, y)
+    result = smote.fit_resample(X, y)
+    return cast(Tuple[np.ndarray, np.ndarray], result)
 
 
 def _apply_random_oversample(
@@ -84,7 +85,8 @@ def _apply_random_oversample(
     from imblearn.over_sampling import RandomOverSampler
 
     ros = RandomOverSampler(random_state=42)
-    return ros.fit_resample(X, y)
+    result = ros.fit_resample(X, y)
+    return cast(Tuple[np.ndarray, np.ndarray], result)
 
 
 def _apply_random_undersample(
@@ -103,7 +105,8 @@ def _apply_random_undersample(
     from imblearn.under_sampling import RandomUnderSampler
 
     rus = RandomUnderSampler(random_state=42)
-    return rus.fit_resample(X, y)
+    result = rus.fit_resample(X, y)
+    return cast(Tuple[np.ndarray, np.ndarray], result)
 
 
 def _apply_smote_tomek(
@@ -129,7 +132,8 @@ def _apply_smote_tomek(
 
     smote = SMOTE(random_state=42, k_neighbors=k_neighbors)
     smote_tomek = SMOTETomek(random_state=42, smote=smote)
-    return smote_tomek.fit_resample(X, y)
+    result = smote_tomek.fit_resample(X, y)
+    return cast(Tuple[np.ndarray, np.ndarray], result)
 
 
 def _apply_combined(
@@ -157,7 +161,8 @@ def _apply_combined(
 
     # Target 50% ratio instead of full balance
     smote = SMOTE(random_state=42, k_neighbors=k_neighbors, sampling_strategy=0.5)
-    return smote.fit_resample(X, y)
+    result = smote.fit_resample(X, y)
+    return cast(Tuple[np.ndarray, np.ndarray], result)
 
 
 def _apply_strategy(

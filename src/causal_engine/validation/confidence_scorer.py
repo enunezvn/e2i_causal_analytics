@@ -156,7 +156,9 @@ class ConfidenceScorer:
         significance = sum(sig_matches) / len(sig_matches) if sig_matches else 0.5
 
         # CI overlap from pairwise (average of available)
-        ci_overlaps = [p.get("ci_overlap") for p in pairwise if p.get("ci_overlap") is not None]
+        ci_overlaps: List[float] = [
+            p.get("ci_overlap") for p in pairwise if p.get("ci_overlap") is not None  # type: ignore[misc]
+        ]
         ci_overlap = sum(ci_overlaps) / len(ci_overlaps) if ci_overlaps else 0.5
 
         # Weighted score
@@ -243,7 +245,7 @@ class ConfidenceScorer:
         cv = std_effect / abs(mean_effect)
 
         # Convert CV to agreement score (CV of 0 = 1.0, CV of 1+ = 0.0)
-        return max(0.0, 1.0 - cv)
+        return max(0.0, float(1.0 - cv))
 
     def _compute_direction_consistency(
         self,

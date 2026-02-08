@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -508,7 +508,7 @@ def _parse_dataclass(cls: type, data: Dict[str, Any]) -> Any:
         return cls()
 
     # Get valid field names
-    valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+    valid_fields = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
 
     # Filter to valid fields only
     filtered_data = {k: v for k, v in data.items() if k in valid_fields}

@@ -136,7 +136,7 @@ class EngagementGenerator(BaseGenerator[pd.DataFrame]):
         if self.config.brand:
             brands = [self.config.brand.value] * n_actual
         else:
-            brands = self._random_choice([b.value for b in Brand], n_actual)
+            brands = self._random_choice([b.value for b in Brand], n_actual).tolist()
 
         # Build DataFrame
         df = pd.DataFrame(

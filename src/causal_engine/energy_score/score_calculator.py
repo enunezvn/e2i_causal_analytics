@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -66,7 +66,7 @@ class EnergyScoreResult:
     @property
     def is_valid(self) -> bool:
         """Check if the score is valid (not NaN or Inf)."""
-        return np.isfinite(self.energy_score)
+        return bool(np.isfinite(self.energy_score))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
@@ -280,7 +280,7 @@ class EnergyScoreCalculator:
         )
         lr.fit(X_scaled, treatment)
 
-        return lr.predict_proba(X_scaled)[:, 1]
+        return cast(NDArray[np.float64], lr.predict_proba(X_scaled)[:, 1])
 
     def _compute_treatment_balance(
         self,
@@ -443,7 +443,7 @@ class EnergyScoreCalculator:
         propensity_scores: NDArray[np.float64],
         n_bootstrap: int | None = None,
         time_budget_s: float = 5.0,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float] | tuple[None, None, None]:
         """Compute bootstrap confidence interval for energy score."""
         import time as _time
 

@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class ModelTrainerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -193,7 +193,7 @@ class ModelTrainerMemoryHooks:
             return {}
 
         try:
-            context = {
+            context: Dict[str, Any] = {
                 "training_runs": [],
                 "best_hyperparameters": {},
                 "performance_history": [],
@@ -259,7 +259,7 @@ class ModelTrainerMemoryHooks:
     ) -> Optional[str]:
         """Store training result in episodic memory."""
         try:
-            from src.memory.episodic_memory import store_episodic_memory
+            from src.memory.episodic_memory import insert_episodic_memory
 
             test_metrics = result.get("test_metrics", {})
 
@@ -297,7 +297,7 @@ class ModelTrainerMemoryHooks:
                 f"Success criteria: {'MET' if result.get('success_criteria_met') else 'NOT MET'}."
             )
 
-            memory_id = await store_episodic_memory(
+            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
                 event_type="model_training_completed",
                 agent_name="model_trainer",
@@ -308,7 +308,7 @@ class ModelTrainerMemoryHooks:
             )
 
             logger.info(f"Stored training result in episodic memory: {memory_id}")
-            return memory_id
+            return str(memory_id) if memory_id else None
         except Exception as e:
             logger.warning(f"Failed to store training result: {e}")
             return None

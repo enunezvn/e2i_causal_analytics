@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Literal, Optional, Protocol, cast
 
 from ..metrics import DEFAULT_THRESHOLDS
 from ..state import ComponentStatus, HealthScoreState
@@ -95,7 +95,7 @@ class ComponentHealthNode:
                             error_message=str(status),
                         )
                     )
-                else:
+                elif isinstance(status, dict):
                     component_statuses.append(status)
 
             # Calculate component health score
@@ -138,6 +138,7 @@ class ComponentHealthNode:
         start = time.time()
 
         try:
+            assert self.health_client is not None
             result = await asyncio.wait_for(
                 self.health_client.check(component["endpoint"]),
                 timeout=self.timeout_ms / 1000,
@@ -155,7 +156,7 @@ class ComponentHealthNode:
 
             return ComponentStatus(
                 component_name=component["name"],
-                status=status,
+                status=cast(Literal["healthy", "degraded", "unhealthy", "unknown"], status),
                 latency_ms=latency,
                 last_check=datetime.now(timezone.utc).isoformat(),
                 error_message=result.get("error"),

@@ -17,7 +17,7 @@ Example:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, cast
 
 logger = logging.getLogger(__name__)
 
@@ -221,8 +221,8 @@ def create_agent_registry(
         # Try to instantiate agent
         try:
             agent_instance = _create_agent(
-                module_path=config["module"],
-                class_name=config["class_name"],
+                module_path=cast(str, config["module"]),
+                class_name=cast(str, config["class_name"]),
             )
             if agent_instance:
                 registry[agent_name] = agent_instance

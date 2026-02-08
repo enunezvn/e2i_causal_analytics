@@ -115,8 +115,8 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using default health templates")
-    HealthSummarySignature = None
-    HealthRecommendationSignature = None
+    HealthSummarySignature = None  # type: ignore[assignment,misc]
+    HealthRecommendationSignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================
@@ -132,9 +132,9 @@ class HealthScoreDSPyIntegration:
     generate training signals (Fast Path computational agent).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.dspy_type: Literal["recipient"] = "recipient"
-        self._prompts = HealthReportPrompts()
+        self._prompts: HealthReportPrompts = HealthReportPrompts()
         self._prompt_versions: Dict[str, str] = {}
 
     @property

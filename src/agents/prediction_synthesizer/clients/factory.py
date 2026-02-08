@@ -33,9 +33,9 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Union
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from src.agents.prediction_synthesizer.clients.http_model_client import (
     HTTPModelClient,
@@ -267,6 +267,7 @@ class ModelClientFactory:
             raise ValueError(f"Model '{model_id}' is disabled")
 
         # Create client based on type
+        client: Union[MockModelClient, HTTPModelClient]
         if endpoint_config and endpoint_config.client_type == "mock":
             client = MockModelClient(
                 model_id=model_id,

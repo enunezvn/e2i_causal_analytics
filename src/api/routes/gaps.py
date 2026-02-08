@@ -24,7 +24,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -551,8 +551,8 @@ async def _execute_gap_analysis(
         from src.agents.gap_analyzer.graph import create_gap_analyzer_graph
         from src.agents.gap_analyzer.state import GapAnalyzerState
 
-        # Initialize state
-        initial_state: GapAnalyzerState = {
+        # Initialize state (cast partial state - remaining fields populated by graph nodes)
+        initial_state = cast(GapAnalyzerState, {
             "query": request.query,
             "metrics": request.metrics,
             "segments": request.segments,
@@ -569,7 +569,7 @@ async def _execute_gap_analysis(
             "roi_latency_ms": 0,
             "total_latency_ms": 0,
             "segments_analyzed": 0,
-        }
+        })
 
         # Create and run graph
         graph = create_gap_analyzer_graph()

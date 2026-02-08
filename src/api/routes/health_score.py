@@ -707,7 +707,7 @@ async def _execute_health_check(scope: CheckScope) -> HealthScoreResponse:
                 result.agent_health_score,
             ),
             health_summary=result.health_summary,
-            check_latency_ms=result.check_latency_ms,
+            check_latency_ms=result.total_latency_ms,
             timestamp=result.timestamp,
         )
 

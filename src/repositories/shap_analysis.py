@@ -6,7 +6,7 @@ Handles CRUD operations for ml_shap_analyses table.
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from .base import BaseRepository
 
@@ -88,7 +88,7 @@ class ShapAnalysisRepository(BaseRepository):
                 logger.info(
                     f"Stored SHAP analysis for experiment {analysis_dict.get('experiment_id')}"
                 )
-                return result.data[0]
+                return cast(Dict[str, Any], result.data[0])
             return None
 
         except Exception as e:

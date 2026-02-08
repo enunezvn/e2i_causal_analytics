@@ -103,13 +103,13 @@ class ModelOrchestratorNode:
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Process results
-            predictions = []
+            predictions: List[ModelPrediction] = []
             succeeded = 0
             failed = 0
             new_warnings = []
 
             for model_id, result in zip(models_to_use, results, strict=False):
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     failed += 1
                     new_warnings.append(f"Model {model_id} failed: {str(result)}")
                     logger.warning(f"Model {model_id} prediction failed: {result}")

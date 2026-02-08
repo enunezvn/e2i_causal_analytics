@@ -9,7 +9,7 @@ It executes AFTER validation and BEFORE baseline computation to ensure:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from ..state import DataPreparerState
 
@@ -181,7 +181,7 @@ async def _check_feature_freshness(
             max_staleness_hours=max_staleness_hours,
         )
 
-        return result
+        return cast(Dict[str, Any], result) if result is not None else result
 
     except Exception as e:
         logger.debug(f"Freshness check failed (non-critical): {e}")

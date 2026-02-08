@@ -11,6 +11,8 @@ This module provides specialized GEPA metrics for different agent types:
 Metrics return float scores for GEPA's aggregation and reflective evolution.
 """
 
+from typing import cast
+
 from src.optimization.gepa.metrics.base import (
     DSPyTrace,
     E2IGEPAMetric,
@@ -57,7 +59,7 @@ def get_metric_for_agent(agent_name: str) -> E2IGEPAMetric:
         An instantiated metric appropriate for this agent type
     """
     metric_class = AGENT_METRICS.get(agent_name, StandardAgentGEPAMetric)
-    return metric_class()
+    return cast(E2IGEPAMetric, metric_class())
 
 
 __all__ = [

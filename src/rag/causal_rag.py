@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from src.rag.models.retrieval_models import RetrievalContext, RetrievalResult
 
@@ -94,7 +94,7 @@ class CausalRAG:
 
         # 4. Rerank and deduplicate
         if self.reranker and all_results:
-            return self.reranker.rerank(all_results, query, top_k=top_k)
+            return cast(List[RetrievalResult], self.reranker.rerank(all_results, query, top_k=top_k))
 
         return all_results[:top_k]
 
@@ -215,7 +215,7 @@ class CausalRAG:
             )
 
             # Execute cognitive cycle
-            result_state = await workflow.ainvoke(initial_state)
+            result_state = await workflow.ainvoke(initial_state)  # type: ignore[attr-defined]
 
             elapsed_ms = (time.time() - start_time) * 1000
 

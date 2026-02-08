@@ -3,7 +3,7 @@
 This module ranks algorithms by composite scoring based on multiple factors.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 
 async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -177,7 +177,7 @@ def _compute_selection_score(
             score -= 0.1
 
     # Ensure score in [0, 1]
-    return max(0.0, min(1.0, score))
+    return cast(float, max(0.0, min(1.0, score)))
 
 
 async def select_primary_candidate(state: Dict[str, Any]) -> Dict[str, Any]:

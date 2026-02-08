@@ -16,7 +16,7 @@ Version: 2.0.0 - Full sklearn implementation
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -148,7 +148,8 @@ class ModelTrainerPreprocessor:
         if not self._is_fitted:
             raise RuntimeError("Preprocessor must be fitted before transform")
 
-        return self._pipeline.transform(X)
+        assert self._pipeline is not None
+        return cast(np.ndarray, self._pipeline.transform(X))
 
     def fit_transform(self, X: pd.DataFrame, y=None) -> np.ndarray:
         """Fit and transform in one step."""

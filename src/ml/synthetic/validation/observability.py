@@ -6,7 +6,7 @@ Integrates validation results with MLflow and Opik for tracking and monitoring.
 
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 # Optional imports for observability tools
 try:
@@ -15,7 +15,7 @@ try:
     MLFLOW_AVAILABLE = True
 except ImportError:
     MLFLOW_AVAILABLE = False
-    mlflow = None
+    mlflow = None  # type: ignore[assignment]
 
 try:
     import opik
@@ -23,7 +23,7 @@ try:
     OPIK_AVAILABLE = True
 except ImportError:
     OPIK_AVAILABLE = False
-    opik = None
+    opik = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from .expectations import ValidationResult
@@ -131,7 +131,7 @@ def log_validation_to_mlflow(
             full_results = {table_name: result.to_dict() for table_name, result in results.items()}
             mlflow.log_dict(full_results, "validation_results.json")
 
-            return run.info.run_id
+            return cast(str, run.info.run_id)
 
     except Exception as e:
         # Log error but don't fail the validation
@@ -168,14 +168,14 @@ class ValidationSpan:
         self.operation_name = operation_name
         self.table_name = table_name
         self.metadata = metadata or {}
-        self.span = None
-        self.start_time = None
+        self.span: Optional[Any] = None
+        self.start_time: Optional[datetime] = None
 
     def __enter__(self) -> "ValidationSpan":
         self.start_time = datetime.now()
         if OPIK_AVAILABLE and opik:
             try:
-                self.span = opik.trace(
+                self.span = opik.trace(  # type: ignore[attr-defined]
                     name=self.operation_name,
                     metadata={
                         "table_name": self.table_name,
@@ -288,7 +288,7 @@ class ValidationObserver:
         Returns:
             Summary dictionary with run IDs and status
         """
-        summary = {
+        summary: Dict[str, Any] = {
             "mlflow_run_id": None,
             "tables_validated": len(self._results),
             "all_passed": all(r.success for r in self._results.values()),

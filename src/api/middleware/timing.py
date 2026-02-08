@@ -11,7 +11,7 @@ Version: 1.0.0
 
 import logging
 import time
-from typing import Callable
+from typing import Callable, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -28,10 +28,10 @@ except ImportError:
     METRICS_AVAILABLE = False
     logger.warning("metrics module not available, timing metrics will not be recorded")
 
-    def record_request(*args, **kwargs):
+    def record_request(*args, **kwargs):  # type: ignore[misc]
         pass
 
-    def record_error(*args, **kwargs):
+    def record_error(*args, **kwargs):  # type: ignore[misc]
         pass
 
 
@@ -142,7 +142,7 @@ class TimingMiddleware(BaseHTTPMiddleware):
         error_type = None
 
         try:
-            response = await call_next(request)
+            response: Response = cast(Response, await call_next(request))
             status_code = response.status_code
 
             # Track client/server errors
@@ -217,8 +217,8 @@ class RequestTimingContext:
     Used to track timing across middleware layers and handlers.
     """
 
-    def __init__(self):
-        self.start_time = time.perf_counter()
+    def __init__(self) -> None:
+        self.start_time: float = time.perf_counter()
         self.checkpoints: dict[str, float] = {}
 
     def checkpoint(self, name: str) -> float:

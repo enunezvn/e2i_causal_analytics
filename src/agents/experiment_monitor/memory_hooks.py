@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ class ExperimentMonitorMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -174,7 +174,7 @@ class ExperimentMonitorMemoryHooks:
 
             cached = await redis.get(cache_key)
             if cached:
-                return json.loads(cached)
+                return cast(Dict[str, Any], json.loads(cached))
             return None
         except Exception as e:
             logger.warning(f"Failed to get cached status: {e}")
@@ -536,7 +536,7 @@ class ExperimentMonitorMemoryHooks:
         # Boost for alerts
         alert_boost = min(0.1, alert_count * 0.02)
 
-        return min(1.0, base_importance + critical_boost + warning_boost + alert_boost)
+        return float(min(1.0, base_importance + critical_boost + warning_boost + alert_boost))
 
     # =========================================================================
     # HISTORICAL ANALYSIS

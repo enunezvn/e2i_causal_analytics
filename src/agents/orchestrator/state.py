@@ -236,7 +236,7 @@ class OrchestratorState(TypedDict, total=False):
     current_phase: Literal["classifying", "routing", "dispatching", "synthesizing", "complete"]
 
     # Overall status
-    status: Literal["pending", "processing", "completed", "failed"]
+    status: Literal["pending", "processing", "completed", "failed", "partial_success"]
 
     # ========================================================================
     # METADATA

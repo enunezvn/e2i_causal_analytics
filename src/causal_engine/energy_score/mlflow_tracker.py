@@ -100,7 +100,8 @@ class EnergyScoreMLflowTracker:
         try:
             import mlflow  # noqa: F401
 
-            os.environ["MLFLOW_TRACKING_URI"] = self.tracking_uri
+            if self.tracking_uri:
+                os.environ["MLFLOW_TRACKING_URI"] = self.tracking_uri
             return True
         except ImportError:
             logger.warning("MLflow not installed, metrics will only log to database")

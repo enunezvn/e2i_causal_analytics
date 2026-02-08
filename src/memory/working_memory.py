@@ -32,7 +32,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from src.memory.services.config import get_config
 from src.memory.services.factories import get_redis_client
@@ -61,22 +61,22 @@ class RedisWorkingMemory:
     @property
     def session_prefix(self) -> str:
         """Redis key prefix for sessions."""
-        return self._working_config.session_prefix
+        return cast(str, self._working_config.session_prefix)
 
     @property
     def evidence_prefix(self) -> str:
         """Redis key prefix for evidence."""
-        return self._working_config.evidence_prefix
+        return cast(str, self._working_config.evidence_prefix)
 
     @property
     def ttl_seconds(self) -> int:
         """Session TTL in seconds."""
-        return self._working_config.ttl_seconds
+        return cast(int, self._working_config.ttl_seconds)
 
     @property
     def context_window_messages(self) -> int:
         """Maximum messages to keep in context window."""
-        return self._working_config.context_window_messages
+        return cast(int, self._working_config.context_window_messages)
 
     async def get_client(self):
         """Lazy Redis client initialization."""
@@ -185,7 +185,7 @@ class RedisWorkingMemory:
         if data.get("message_count"):
             data["message_count"] = int(data["message_count"])
 
-        return data
+        return cast(Dict[str, Any], data)
 
     async def update_session(self, session_id: str, updates: Dict[str, Any]) -> None:
         """

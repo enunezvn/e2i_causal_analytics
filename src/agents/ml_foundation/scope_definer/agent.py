@@ -16,7 +16,7 @@ Integration:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from .graph import create_scope_definer_graph
 from .state import ScopeDefinerState
@@ -86,7 +86,7 @@ class ScopeDefinerAgent:
     agent_name = "scope_definer"
     agent_type = "standard"  # No LLM, pure computation
     sla_seconds = 5
-    tools = []  # Standard agent, no external tools
+    tools: List[Any] = []  # Standard agent, no external tools
 
     def __init__(self):
         """Initialize the ScopeDefinerAgent."""

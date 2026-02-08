@@ -86,14 +86,13 @@ class E2IError(Exception):
         self.include_trace = include_trace
 
         # Capture stack trace if requested or in debug mode
+        self._traceback: Optional[str] = None
         if include_trace and original_error:
             self._traceback = "".join(
                 traceback.format_exception(
                     type(original_error), original_error, original_error.__traceback__
                 )
             )
-        else:
-            self._traceback = None
 
     def to_dict(self, include_debug: bool = False) -> Dict[str, Any]:
         """
@@ -105,7 +104,7 @@ class E2IError(Exception):
         Returns:
             Structured error response dictionary
         """
-        result = {
+        result: Dict[str, Any] = {
             "error": self.__class__.__name__,
             "error_id": self.error_id,
             "category": self.category.value,

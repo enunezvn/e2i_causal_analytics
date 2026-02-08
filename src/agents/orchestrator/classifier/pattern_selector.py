@@ -122,14 +122,19 @@ class PatternSelector:
         # =====================================================================
         if not domain_mapping.is_multi_domain:
             primary_domain = domain_mapping.primary_domain
-            target_agent = DOMAIN_TO_AGENT.get(primary_domain, "explainer")
+            if primary_domain is not None:
+                target_agent = DOMAIN_TO_AGENT.get(primary_domain, "explainer")
+                domain_value = primary_domain.value
+            else:
+                target_agent = "explainer"
+                domain_value = "unknown"
 
             return ClassificationResult(
                 routing_pattern=RoutingPattern.SINGLE_AGENT,
                 target_agents=[target_agent],
                 sub_questions=dependency_analysis.sub_questions,
                 confidence=domain_mapping.domains_detected[0].confidence,
-                reasoning=f"Single domain query: {primary_domain.value}",
+                reasoning=f"Single domain query: {domain_value}",
                 is_followup=is_followup,
                 context_source=context_source,
                 classification_latency_ms=latency_ms,

@@ -10,7 +10,7 @@ Uses MLflowConnector for circuit breaker protection and async support.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ async def _transition_stage_mlflow(model_name: str, version: int, target_stage: 
 
         if success:
             logger.info(f"MLflow: Transitioned {model_name} v{version} to {target_stage}")
-        return success
+        return cast(bool, success)
 
     except Exception as e:
         logger.warning(f"MLflow stage transition failed: {e}")
@@ -443,4 +443,4 @@ def _validate_shadow_mode(state: Dict[str, Any]) -> bool:
         True if shadow mode requirements are met
     """
     result = _validate_shadow_mode_detailed(state)
-    return result["validated"]
+    return cast(bool, result["validated"])

@@ -8,7 +8,7 @@ Version: 4.2.0
 """
 
 import os
-from typing import Callable
+from typing import Callable, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -86,7 +86,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         Returns:
             Response with security headers added
         """
-        response = await call_next(request)
+        response = cast(Response, await call_next(request))
 
         # Prevent MIME type sniffing
         response.headers["X-Content-Type-Options"] = "nosniff"

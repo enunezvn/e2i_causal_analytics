@@ -104,7 +104,7 @@ class ChatbotFeedbackRepository(BaseRepository):
         if not self.client:
             return None
 
-        data = {"rating": rating}
+        data: Dict[str, Any] = {"rating": rating}
         if comment is not None:
             data["comment"] = comment
 

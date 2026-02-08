@@ -20,7 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
@@ -558,7 +558,7 @@ class RefutationRunner:
 
         try:
             # Execute the test
-            result = test_func(**kwargs)
+            result: RefutationResult = cast(RefutationResult, test_func(**kwargs))
 
             # Log span to Opik
             span_duration_ms = (time.time() - span_start) * 1000

@@ -662,10 +662,11 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
 
             for deployment in deployments:
                 if deployment.created_at and deployment.created_at < cutoff:
-                    await self.mark_rolled_back(
-                        deployment_id=deployment.id,
-                        reason=f"Stale deployment (pending > {max_age_hours}h)",
-                    )
-                    count += 1
+                    if deployment.id is not None:
+                        await self.mark_rolled_back(
+                            deployment_id=deployment.id,
+                            reason=f"Stale deployment (pending > {max_age_hours}h)",
+                        )
+                        count += 1
 
         return count

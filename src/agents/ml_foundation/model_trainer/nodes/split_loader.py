@@ -47,7 +47,7 @@ async def _fetch_splits_from_feast(
     experiment_id: str,
     feature_refs: Optional[List[str]] = None,
     entity_key: str = "hcp_id",
-) -> Optional[Dict[str, Dict[str, Any]]]:
+) -> Optional[Dict[str, Any]]:
     """Fetch point-in-time correct splits from Feast feature store.
 
     This retrieves training features with proper temporal joins to prevent

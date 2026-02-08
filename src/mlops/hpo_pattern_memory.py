@@ -410,7 +410,7 @@ async def get_pattern_stats(algorithm_name: Optional[str] = None) -> Dict[str, A
             return {"total_patterns": 0, "by_algorithm": {}}
 
         # Aggregate stats
-        by_algorithm = {}
+        by_algorithm: Dict[str, Dict[str, Any]] = {}
         total_warmstarts = 0
 
         for p in patterns:

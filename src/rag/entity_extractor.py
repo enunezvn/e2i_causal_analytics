@@ -199,7 +199,7 @@ class EntityExtractor:
     def _load_vocabulary(self, config_path: str) -> EntityVocabulary:
         """Load vocabulary from YAML config file."""
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
         except ImportError:
             logger.warning("PyYAML not installed, using default vocabulary")
             return EntityVocabulary.from_default()
@@ -342,8 +342,9 @@ class EntityExtractor:
         except Exception as e:
             logger.error(f"Entity extraction failed: {e}")
             raise EntityExtractionError(
-                message="Failed to extract entities from query",
-                details={"query": query[:100], "error": str(e)},
+                message=f"Failed to extract entities from query: {e}",
+                query=query[:100],
+                original_error=e,
             ) from e
 
     def _extract_brands(self, query: str) -> List[str]:

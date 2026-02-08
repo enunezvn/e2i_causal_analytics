@@ -10,7 +10,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Literal, cast
 
 from src.agents.experiment_monitor.dspy_integration import (
     get_experiment_monitor_dspy_integration,
@@ -144,13 +144,13 @@ class AlertGeneratorNode:
         """
         if self.dspy_integration:
             try:
-                return self.dspy_integration.get_srm_prompt(
+                return cast(str, self.dspy_integration.get_srm_prompt(
                     experiment_name=exp_name,
                     chi_squared=chi_squared,
                     p_value=p_value,
                     expected_ratio=expected_ratio,
                     actual_counts=actual_counts,
-                )
+                ))
             except Exception as e:
                 logger.debug(f"DSPy prompt failed, using fallback: {e}")
 
@@ -229,12 +229,12 @@ class AlertGeneratorNode:
         """
         if self.dspy_integration:
             try:
-                return self.dspy_integration.get_enrollment_prompt(
+                return cast(str, self.dspy_integration.get_enrollment_prompt(
                     experiment_name=exp_name,
                     current_rate=current_rate,
                     expected_rate=expected_rate,
                     days_below_threshold=days_below_threshold,
-                )
+                ))
             except Exception as e:
                 logger.debug(f"DSPy prompt failed, using fallback: {e}")
 
@@ -402,13 +402,13 @@ class AlertGeneratorNode:
         """
         if self.dspy_integration:
             try:
-                return self.dspy_integration.get_fidelity_prompt(
+                return cast(str, self.dspy_integration.get_fidelity_prompt(
                     experiment_name=exp_name,
                     predicted_effect=predicted_effect,
                     actual_effect=actual_effect,
                     prediction_error=prediction_error,
                     calibration_needed=calibration_needed,
-                )
+                ))
             except Exception as e:
                 logger.debug(f"DSPy prompt failed, using fallback: {e}")
 
@@ -463,7 +463,7 @@ class AlertGeneratorNode:
             alert = MonitorAlert(
                 alert_id=str(uuid.uuid4()),
                 alert_type="fidelity",
-                severity=severity,
+                severity=cast(Literal["info", "warning", "critical"], severity),
                 experiment_id=exp_id,
                 experiment_name=exp_name,
                 message=message,

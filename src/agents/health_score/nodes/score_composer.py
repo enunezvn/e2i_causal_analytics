@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 
 from ..metrics import DEFAULT_GRADES, DEFAULT_WEIGHTS, GradeThresholds, ScoreWeights
 from ..state import HealthScoreState
@@ -59,7 +59,7 @@ class ScoreComposerNode:
             overall_score_100 = overall_score * 100
 
             # Determine grade
-            grade = self.grades.get_grade(overall_score)
+            grade: Literal["A", "B", "C", "D", "F"] = self.grades.get_grade(overall_score)  # type: ignore[assignment]
 
             # Identify issues
             critical_issues, warnings = self._identify_issues(state)
@@ -196,7 +196,7 @@ class ScoreComposerNode:
         Returns:
             Diagnosis dictionary with root causes and remediation
         """
-        diagnosis = {
+        diagnosis: dict[str, Any] = {
             "root_causes": [],
             "cascading_effects": [],
             "priority_fixes": [],
@@ -245,7 +245,7 @@ class ScoreComposerNode:
                         "dimension": "component",
                         "component": comp["component_name"],
                         "status": comp["status"],
-                        "root_cause": self._infer_component_root_cause(comp),
+                        "root_cause": self._infer_component_root_cause(dict(comp)),
                         "metrics": {
                             "latency_ms": comp.get("latency_ms"),
                             "error_message": comp.get("error_message"),
@@ -435,7 +435,7 @@ class ScoreComposerNode:
         fixes = []
 
         # Define fix templates
-        fix_templates = {
+        fix_templates: dict[str, Any] = {
             "component": {
                 "database": "Check database connection pool and consider restart",
                 "cache": "Verify Redis service status and memory usage",

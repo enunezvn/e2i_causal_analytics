@@ -15,9 +15,9 @@ import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ def _expand_env_vars(config: Dict[str, Any]) -> Dict[str, Any]:
             return [expand_value(v) for v in value]
         return value
 
-    return expand_value(config)
+    return cast(Dict[str, Any], expand_value(config))
 
 
 def _parse_working_config(raw: Dict[str, Any], env: str) -> WorkingMemoryConfig:

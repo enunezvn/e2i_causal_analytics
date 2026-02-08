@@ -28,7 +28,7 @@ try:
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
-    CollectorRegistry = None
+    CollectorRegistry = None  # type: ignore[misc, assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -585,7 +585,7 @@ class BentoMLHealthMonitor:
         Returns:
             Health summary for all services
         """
-        summary = {
+        summary: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "services": {},
             "overall_status": ServiceStatus.HEALTHY.value,

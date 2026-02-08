@@ -321,7 +321,7 @@ class TwinRetrainingService:
 
         # Queue retraining task (if Celery is available)
         try:
-            from src.tasks.ab_testing_tasks import execute_twin_retraining
+            from src.tasks.ab_testing_tasks import execute_twin_retraining  # type: ignore[attr-defined]
 
             task = execute_twin_retraining.delay(
                 retraining_job_id=job.job_id,
@@ -365,6 +365,10 @@ class TwinRetrainingService:
                 f"Reason: {decision.reason}, confidence: {decision.confidence:.2f}, "
                 f"fidelity: {decision.fidelity_score:.2f}"
             )
+            return None
+
+        if decision.reason is None:
+            logger.warning(f"Decision to retrain model {model_id} has no reason")
             return None
 
         return await self.trigger_retraining(
@@ -464,7 +468,7 @@ class TwinRetrainingService:
                 fidelity_score = 0.7 * error_score + 0.3 * coverage_rate
 
                 # Grade distribution
-                grades = {}
+                grades: Dict[str, int] = {}
                 for r in records:
                     grade = r.fidelity_grade.value
                     grades[grade] = grades.get(grade, 0) + 1
@@ -538,7 +542,7 @@ class TwinRetrainingService:
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get service statistics."""
-        status_counts = {}
+        status_counts: Dict[str, int] = {}
         for job in self._pending_jobs.values():
             status = job.status.value
             status_counts[status] = status_counts.get(status, 0) + 1

@@ -246,9 +246,9 @@ def get_combined_summary(
         )
         if obs_summary.get("mlflow_run_id"):
             lines.append(f"  MLflow Run ID: {obs_summary['mlflow_run_id']}")
-        status = get_observability_status()
-        lines.append(f"  MLflow Available: {status['mlflow_available']}")
-        lines.append(f"  Opik Available: {status['opik_available']}")
+        obs_status = get_observability_status()
+        lines.append(f"  MLflow Available: {obs_status['mlflow_available']}")
+        lines.append(f"  Opik Available: {obs_status['opik_available']}")
 
     lines.append("=" * 70)
 

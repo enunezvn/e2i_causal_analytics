@@ -87,7 +87,7 @@ async def _query_historical_experiments(
 
         query += " ORDER BY ex.created_at DESC LIMIT 100"
 
-        result = await loader.execute_query(query, params)
+        result = await loader.execute_query(query, params)  # type: ignore[attr-defined]
         return result if result else []
 
     except Exception:
@@ -297,10 +297,10 @@ async def _query_algorithm_trends(
             "older_cutoff": older_cutoff.isoformat(),
         }
 
-        result = await loader.execute_query(query, params)
+        result = await loader.execute_query(query, params)  # type: ignore[attr-defined]
 
         # Process results into trend data
-        trends = {}
+        trends: Dict[str, Dict[str, Any]] = {}
         for row in result or []:
             algo = row.get("algorithm")
             period = row.get("time_period")

@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, cast
 
 from src.agents.experiment_designer.state import (
     ErrorDetails,
@@ -390,7 +390,7 @@ Provide JSON with:
         json_match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1))
+                return cast(Dict[str, Any], json.loads(json_match.group(1)))
             except json.JSONDecodeError:
                 pass
 
@@ -399,7 +399,7 @@ Provide JSON with:
             start = content.find("{")
             end = content.rfind("}") + 1
             if start >= 0 and end > start:
-                return json.loads(content[start:end])
+                return cast(Dict[str, Any], json.loads(content[start:end]))
         except json.JSONDecodeError:
             pass
 

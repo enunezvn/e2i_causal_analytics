@@ -17,6 +17,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any, Dict
 
 from src.agents.drift_monitor.state import DriftAlert, DriftMonitorState, DriftResult, ErrorDetails
 
@@ -479,7 +480,7 @@ class AlertAggregatorNode:
         Returns:
             Interpretation dictionary with root cause analysis
         """
-        interpretation = {
+        interpretation: Dict[str, Any] = {
             "severity_assessment": "",
             "primary_drivers": [],
             "root_cause_hypothesis": "",
@@ -559,7 +560,8 @@ class AlertAggregatorNode:
         Returns:
             Human-readable description of the change
         """
-        psi = result.get("psi_score", 0)
+        psi_value = result.get("psi_score", 0)
+        psi: float = float(psi_value) if isinstance(psi_value, (int, float)) else 0.0
         result.get("ks_statistic", 0)
         drift_type = result["drift_type"]
 

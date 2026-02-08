@@ -4,7 +4,7 @@ Trigger Generator.
 Generates synthetic triggers for patient/HCP targeting actions.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -221,7 +221,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         weights = np.array(list(probs.values()))
         weights = weights / weights.sum()
 
-        return self._rng.choice(options, p=weights)
+        return cast(str, self._rng.choice(options, p=weights))
 
     def _select_priority(
         self,
@@ -238,7 +238,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         elif engagement_score > 7 and treatment_initiated == 1:
             probs = [0.05, 0.20, 0.45, 0.30]  # Lower priority (already engaged)
 
-        return self._rng.choice(list(self.PRIORITY_DIST.keys()), p=probs)
+        return cast(str, self._rng.choice(list(self.PRIORITY_DIST.keys()), p=probs))
 
     def _calculate_confidence(
         self,
@@ -263,7 +263,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         confidence = base_confidence + type_adjustment + engagement_factor
         noise = self._rng.normal(0, 0.05)
 
-        return np.clip(confidence + noise, 0.50, 0.99)
+        return float(np.clip(confidence + noise, 0.50, 0.99))
 
     def _generate_causal_chain(
         self,
@@ -391,10 +391,11 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         ]
 
         # Brands
+        brands_list: list[str]
         if self.config.brand:
-            brands = [self.config.brand.value] * n
+            brands_list = [self.config.brand.value] * n
         else:
-            brands = self._random_choice([b.value for b in Brand], n)
+            brands_list = list(self._random_choice([b.value for b in Brand], n))
 
         return pd.DataFrame(
             {
@@ -422,6 +423,6 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
                 "recommended_action": [
                     self._generate_recommended_action(tt) for tt in trigger_types
                 ],
-                "brand": brands,
+                "brand": brands_list,
             }
         )

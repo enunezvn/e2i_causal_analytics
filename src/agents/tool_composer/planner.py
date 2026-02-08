@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -334,7 +334,7 @@ class ToolPlanner:
         response = await self.llm_client.ainvoke(messages)
 
         # LangChain returns AIMessage with .content attribute
-        return response.content
+        return cast(str, response.content)
 
     def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
         """Format similar compositions as context for the LLM."""
@@ -374,7 +374,7 @@ class ToolPlanner:
             response = response[start:end].strip()
 
         try:
-            return json.loads(response)
+            return cast(Dict[str, Any], json.loads(response))
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse planning JSON: {response[:200]}...")
             raise PlanningError(f"Invalid JSON in LLM response: {e}") from e
@@ -414,7 +414,7 @@ class ToolPlanner:
         # Build mapping from sub_question_id to dependencies
         {sq.id: sq.depends_on for sq in decomposition.sub_questions}
 
-        steps = []
+        steps: List[ExecutionStep] = []
         for s in raw_steps:
             tool_name = s["tool_name"]
 

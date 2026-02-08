@@ -34,7 +34,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ class OpenAIEmbeddingService(EmbeddingService):
         client = self._get_client()
         try:
             response = client.embeddings.create(model=self.model, input=text)
-            embedding = response.data[0].embedding
+            embedding: List[float] = response.data[0].embedding
             self._cache[cache_key] = embedding
             return embedding
         except Exception as e:
@@ -149,7 +149,7 @@ class BedrockEmbeddingService(EmbeddingService):
         try:
             response = client.invoke_model(modelId=self.model, body=json.dumps({"inputText": text}))
             result = json.loads(response["body"].read())
-            return result["embedding"]
+            return cast(List[float], result["embedding"])
         except Exception as e:
             raise ServiceConnectionError("Bedrock", f"Failed to generate embedding: {e}", e) from e
 
@@ -207,7 +207,7 @@ class LocalEmbeddingService(EmbeddingService):
 
         model = self._get_model()
         try:
-            embedding = model.encode(text, convert_to_numpy=True).tolist()
+            embedding: List[float] = model.encode(text, convert_to_numpy=True).tolist()
             self._cache[cache_key] = embedding
             return embedding
         except Exception as e:
@@ -219,7 +219,7 @@ class LocalEmbeddingService(EmbeddingService):
         """Generate embeddings for multiple texts."""
         model = self._get_model()
         try:
-            embeddings = model.encode(texts, convert_to_numpy=True).tolist()
+            embeddings: List[List[float]] = model.encode(texts, convert_to_numpy=True).tolist()
             return embeddings
         except Exception as e:
             raise ServiceConnectionError(
@@ -417,7 +417,7 @@ class AnthropicLLMService(LLMService):
                 temperature=self.temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return response.content[0].text
+            return cast(str, response.content[0].text)
         except Exception as e:
             raise ServiceConnectionError(
                 "Anthropic", f"Failed to generate completion: {e}", e
@@ -515,7 +515,7 @@ class BedrockLLMService(LLMService):
                 ),
             )
             result = json.loads(response["body"].read())
-            return result["content"][0]["text"]
+            return cast(str, result["content"][0]["text"])
         except Exception as e:
             raise ServiceConnectionError("Bedrock", f"Failed to generate completion: {e}", e) from e
 

@@ -262,8 +262,8 @@ def _detect_numeric_columns(df: pd.DataFrame) -> List[str]:
 def _generate_temporal_features(
     df: pd.DataFrame,
     temporal_columns: List[str],
-    lag_periods: List[int] = None,
-    rolling_windows: List[int] = None,
+    lag_periods: List[int] | None = None,
+    rolling_windows: List[int] | None = None,
 ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """Generate temporal features from time-series columns.
 
@@ -286,7 +286,7 @@ def _generate_temporal_features(
     if lag_periods is None:
         lag_periods = [1, 7, 30]
     df = df.copy()
-    metadata = []
+    metadata: List[Dict[str, Any]] = []
 
     for col in temporal_columns:
         if col not in df.columns:
@@ -605,7 +605,7 @@ def _generate_aggregate_features(
         Tuple of (transformed DataFrame, feature metadata list)
     """
     df = df.copy()
-    metadata = []
+    metadata: List[Dict[str, Any]] = []
 
     num_cols = [c for c in numeric_columns if c in df.columns]
     if len(num_cols) < 2:

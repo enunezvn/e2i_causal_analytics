@@ -21,7 +21,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
@@ -163,9 +163,9 @@ def _levenshtein_distance(s1: str, s2: str) -> int:
     if len(s2) == 0:
         return len(s1)
 
-    previous_row = range(len(s2) + 1)
+    previous_row: List[int] = list(range(len(s2) + 1))
     for i, c1 in enumerate(s1):
-        current_row = [i + 1]
+        current_row: List[int] = [i + 1]
         for j, c2 in enumerate(s2):
             insertions = previous_row[j + 1] + 1
             deletions = current_row[j] + 1
@@ -277,7 +277,7 @@ class TypoHandler:
 
         if cached:
             if time.time() - cached["timestamp"] < _CACHE_TTL_SECONDS:
-                return cached["result"]
+                return cast(CorrectionResult, cached["result"])
             else:
                 del _CORRECTION_CACHE[cache_key]
 
@@ -569,7 +569,7 @@ class TypoHandler:
         suggestions = []
 
         for candidate in candidates:
-            if self.is_fasttext_available:
+            if self.is_fasttext_available and self._model is not None:
                 term_vec = self._model.get_word_vector(term.lower())
                 cand_vec = self._model.get_word_vector(candidate.lower())
                 score = _cosine_similarity(term_vec, cand_vec)

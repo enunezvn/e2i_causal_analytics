@@ -4,7 +4,7 @@ Agent Registry Repository.
 Handles the 11 V3 agents with tier assignments.
 """
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from src.repositories.base import BaseRepository
 
@@ -132,7 +132,7 @@ class AgentRegistryRepository(BaseRepository):
 
         # Sort by tier (lower is higher priority)
         sorted_agents = sorted(agents, key=lambda a: a.get("tier", 99))
-        return sorted_agents[0]
+        return cast(Dict[Any, Any], sorted_agents[0])
 
     async def get_active_agents(self) -> List:
         """

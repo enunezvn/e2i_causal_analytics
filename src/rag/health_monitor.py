@@ -311,7 +311,8 @@ class HealthMonitor:
             # Call backend's health_check method
             if not hasattr(backend, "health_check"):
                 raise HealthCheckError(
-                    message=f"Backend '{backend_name}' has no health_check method"
+                    backend=backend_name,
+                    reason="Backend has no health_check method",
                 )
 
             result = await backend.health_check()

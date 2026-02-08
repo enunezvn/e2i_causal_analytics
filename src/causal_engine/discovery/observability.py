@@ -266,6 +266,7 @@ class DiscoveryTracer:
             # Create Opik trace/span if enabled
             if self.is_enabled:
                 try:
+                    assert self._opik is not None
                     async with self._opik.trace_agent(
                         agent_name="causal_discovery",
                         operation="discover_dag",

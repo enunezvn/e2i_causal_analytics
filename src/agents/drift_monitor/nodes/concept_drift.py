@@ -19,7 +19,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Dict, List, Literal, cast
 
 import numpy as np
 from scipy import stats
@@ -27,6 +27,9 @@ from scipy import stats
 from src.agents.drift_monitor.connectors import get_connector
 from src.agents.drift_monitor.connectors.base import BaseDataConnector, TimeWindow
 from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, ErrorDetails
+
+# Type alias for severity levels
+SeverityLevel = Literal["none", "low", "medium", "high", "critical"]
 
 
 class ConceptDriftNode:
@@ -170,8 +173,8 @@ class ConceptDriftNode:
             )
 
             # Await features if available
-            baseline_features = {}
-            current_features = {}
+            baseline_features: dict[str, Any] = {}
+            current_features: dict[str, Any] = {}
             if baseline_features_task and current_features_task:
                 baseline_features, current_features = await asyncio.gather(
                     baseline_features_task, current_features_task
@@ -180,13 +183,16 @@ class ConceptDriftNode:
             drift_results = []
 
             # 1. Performance Degradation Detection
-            perf_drift = self._detect_performance_degradation(
-                baseline_preds.labels,
-                baseline_preds.actual_labels,
-                current_preds.labels,
-                current_preds.actual_labels,
-                state["significance_level"],
-            )
+            perf_drift = None
+            if (baseline_preds.labels is not None and baseline_preds.actual_labels is not None
+                    and current_preds.labels is not None and current_preds.actual_labels is not None):
+                perf_drift = self._detect_performance_degradation(
+                    baseline_preds.labels,
+                    baseline_preds.actual_labels,
+                    current_preds.labels,
+                    current_preds.actual_labels,
+                    state["significance_level"],
+                )
             if perf_drift:
                 drift_results.append(perf_drift)
 
@@ -214,12 +220,12 @@ class ConceptDriftNode:
             state["total_latency_ms"] = state.get("total_latency_ms", 0) + latency_ms
 
         except Exception as e:
-            error: ErrorDetails = {
+            error_details: ErrorDetails = {
                 "node": "concept_drift",
                 "error": str(e),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            state["errors"] = state.get("errors", []) + [error]
+            state["errors"] = state.get("errors", []) + [error_details]
             # Don't fail the whole pipeline for concept drift issues
             state["concept_drift_results"] = []
             state["warnings"] = state.get("warnings", []) + [
@@ -315,7 +321,7 @@ class ConceptDriftNode:
                         "test_statistic": float(z_stat),
                         "p_value": float(p_value),
                         "drift_detected": True,
-                        "severity": severity,
+                        "severity": cast(SeverityLevel, severity),
                         "baseline_period": "baseline",
                         "current_period": "current",
                     }
@@ -397,7 +403,7 @@ class ConceptDriftNode:
             "test_statistic": float(z_stat),
             "p_value": float(p_value),
             "drift_detected": drift_detected,
-            "severity": severity,
+            "severity": cast(SeverityLevel, severity),
             "baseline_period": "baseline",
             "current_period": "current",
         }
@@ -427,7 +433,7 @@ class ConceptDriftNode:
         Returns:
             List of drift results for features with correlation drift
         """
-        results = []
+        results: List[DriftResult] = []
 
         # Skip if no actual labels available
         if baseline_preds.actual_labels is None or current_preds.actual_labels is None:
@@ -480,7 +486,7 @@ class ConceptDriftNode:
                         "test_statistic": float(z_stat),
                         "p_value": float(p_value),
                         "drift_detected": drift_detected,
-                        "severity": severity,
+                        "severity": cast(SeverityLevel, severity),
                         "baseline_period": "baseline",
                         "current_period": "current",
                     }

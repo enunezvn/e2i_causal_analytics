@@ -6,7 +6,7 @@ Parallel agent dispatch with timeout handling.
 import asyncio
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..state import AgentDispatch, AgentResult, OrchestratorState
 
@@ -43,9 +43,9 @@ class DispatcherNode:
         """
         start_time = time.time()
 
-        dispatch_plan = state.get("dispatch_plan", [])
-        parallel_groups = state.get("parallel_groups", [])
-        all_results = []
+        dispatch_plan = state.get("dispatch_plan") or []
+        parallel_groups = state.get("parallel_groups") or []
+        all_results: List[AgentResult] = []
 
         # Execute each parallel group sequentially
         for group in parallel_groups:
@@ -70,23 +70,27 @@ class DispatcherNode:
                     all_results.append(failed_result)
 
                     # Try fallback if available
-                    if dispatch.get("fallback_agent"):
+                    fallback_agent = dispatch.get("fallback_agent")
+                    if fallback_agent:
                         fallback_result = await self._dispatch_fallback(
-                            dispatch["fallback_agent"], state
+                            str(fallback_agent), state
                         )
                         all_results.append(fallback_result)
                 elif isinstance(result, dict) and not result.get("success", True):
                     # AgentResult returned with success=False
-                    all_results.append(result)
+                    all_results.append(result)  # type: ignore[arg-type]
 
                     # Try fallback if available
-                    if dispatch.get("fallback_agent"):
+                    fallback_agent2 = dispatch.get("fallback_agent")
+                    if fallback_agent2:
                         fallback_result = await self._dispatch_fallback(
-                            dispatch["fallback_agent"], state
+                            str(fallback_agent2), state
                         )
                         all_results.append(fallback_result)
                 else:
-                    all_results.append(result)
+                    # Result is AgentResult (TypedDict cannot use isinstance, check dict)
+                    if isinstance(result, dict) and "agent_name" in result:
+                        all_results.append(result)
 
         dispatch_time = int((time.time() - start_time) * 1000)
 
@@ -342,4 +346,5 @@ async def dispatch_to_agents(state: Dict[str, Any]) -> Dict[str, Any]:
         Updated state
     """
     dispatcher = DispatcherNode()
-    return await dispatcher.execute(state)
+    result = await dispatcher.execute(cast(OrchestratorState, state))
+    return cast(Dict[str, Any], result)

@@ -321,7 +321,7 @@ def validate_supabase_data(
     if expected_splits is None:
         expected_splits = ["train", "validation", "test", "holdout"]
 
-    results = {
+    results: Dict[str, Any] = {
         "is_valid": True,
         "errors": [],
         "warnings": [],

@@ -248,9 +248,11 @@ def _get_mock_spans(time_window: str) -> List[Dict[str, Any]]:
 
         # Add token usage for feature_analyzer (Hybrid agent)
         if agent_name == "feature_analyzer":
-            span["input_tokens"] = 1000 + (i % 500)
-            span["output_tokens"] = 500 + (i % 300)
-            span["total_tokens"] = span["input_tokens"] + span["output_tokens"]
+            input_tokens = 1000 + (i % 500)
+            output_tokens = 500 + (i % 300)
+            span["input_tokens"] = input_tokens
+            span["output_tokens"] = output_tokens
+            span["total_tokens"] = input_tokens + output_tokens
 
         spans.append(span)
 
@@ -301,7 +303,7 @@ def _compute_error_rates(spans: List[Dict[str, Any]], group_by: str) -> Dict[str
     Returns:
         Dict of error rates by group
     """
-    groups = defaultdict(lambda: {"total": 0, "errors": 0})
+    groups: Dict[str, Dict[str, int]] = defaultdict(lambda: {"total": 0, "errors": 0})
 
     for span in spans:
         key = span.get(group_by)
@@ -329,7 +331,7 @@ def _compute_token_usage(spans: List[Dict[str, Any]]) -> Dict[str, Dict[str, int
     Returns:
         Dict of token usage by agent
     """
-    usage = defaultdict(lambda: {"input": 0, "output": 0, "total": 0})
+    usage: Dict[str, Dict[str, int]] = defaultdict(lambda: {"input": 0, "output": 0, "total": 0})
 
     for span in spans:
         agent_name = span.get("agent_name")

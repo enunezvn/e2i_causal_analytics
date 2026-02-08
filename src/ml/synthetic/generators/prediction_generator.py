@@ -173,7 +173,7 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
         if self.config.brand:
             brands = [self.config.brand.value] * n
         else:
-            brands = self._random_choice([b.value for b in Brand], n)
+            brands = self._random_choice([b.value for b in Brand], n).tolist()
 
         return pd.DataFrame(
             {

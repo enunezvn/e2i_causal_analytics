@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ class ScopeDefinerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -222,7 +222,7 @@ class ScopeDefinerMemoryHooks:
             return {}
 
         try:
-            context = {
+            context: Dict[str, Any] = {
                 "experiments": [],
                 "problem_type_patterns": [],
                 "target_variable_history": [],
@@ -310,7 +310,7 @@ class ScopeDefinerMemoryHooks:
             Memory entry ID if successful, None otherwise
         """
         try:
-            from src.memory.episodic_memory import store_episodic_memory
+            from src.memory.episodic_memory import insert_episodic_memory
 
             # Build content from scope specification
             result.get("scope_spec", {})
@@ -335,7 +335,7 @@ class ScopeDefinerMemoryHooks:
                 f"Objective: {state.get('business_objective', 'unknown')}"
             )
 
-            memory_id = await store_episodic_memory(
+            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
                 event_type="scope_definition_completed",
                 agent_name="scope_definer",
@@ -347,7 +347,7 @@ class ScopeDefinerMemoryHooks:
             )
 
             logger.info(f"Stored scope definition in episodic memory: {memory_id}")
-            return memory_id
+            return str(memory_id) if memory_id else None
         except Exception as e:
             logger.warning(f"Failed to store scope definition: {e}")
             return None

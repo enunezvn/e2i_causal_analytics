@@ -30,7 +30,7 @@ try:
     KNOWLEDGE_STORE_AVAILABLE = True
 except ImportError:
     KNOWLEDGE_STORE_AVAILABLE = False
-    ExperimentKnowledgeStore = None
+    ExperimentKnowledgeStore = None  # type: ignore[misc, assignment]
 
 
 # ===== MOCK KNOWLEDGE STORE =====

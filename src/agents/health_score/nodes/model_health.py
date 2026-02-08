@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Literal, Optional, Protocol, cast
 
 from ..metrics import DEFAULT_THRESHOLDS
 from ..state import HealthScoreState, ModelMetrics
@@ -119,6 +119,7 @@ class ModelHealthNode:
     async def _get_model_metrics(self, model_id: str) -> ModelMetrics:
         """Get metrics for a single model."""
         try:
+            assert self.metrics_store is not None
             metrics = await self.metrics_store.get_model_metrics(
                 model_id=model_id, time_window="24h"
             )
@@ -137,7 +138,7 @@ class ModelHealthNode:
                 prediction_latency_p99_ms=metrics.get("latency_p99"),
                 predictions_last_24h=metrics.get("prediction_count", 0),
                 error_rate=metrics.get("error_rate", 0),
-                status=status,
+                status=cast(Literal["healthy", "degraded", "unhealthy"], status),
             )
 
         except Exception as e:

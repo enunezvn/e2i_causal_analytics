@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ class CohortConstructorMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -224,7 +224,7 @@ class CohortConstructorMemoryHooks:
             return {}
 
         try:
-            context = {
+            context: Dict[str, Any] = {
                 "eligibility_rules": [],
                 "brand_patterns": [],
                 "prior_cohorts": [],
@@ -342,7 +342,7 @@ class CohortConstructorMemoryHooks:
             Memory entry ID if successful, None otherwise
         """
         try:
-            from src.memory.episodic_memory import store_episodic_memory
+            from src.memory.episodic_memory import insert_episodic_memory
 
             # Extract key information
             config = state.get("config", {})
@@ -376,7 +376,8 @@ class CohortConstructorMemoryHooks:
                 f"Eligible: {content['eligible_patients']}/{content['total_patients']} ({eligibility_rate:.1f}%)."
             )
 
-            memory_id = await store_episodic_memory(
+            # TODO: Refactor to use EpisodicMemoryInput pattern
+            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
                 event_type="cohort_construction_completed",
                 agent_name="cohort_constructor",
@@ -388,7 +389,7 @@ class CohortConstructorMemoryHooks:
             )
 
             logger.info(f"Stored cohort result in episodic memory: {memory_id}")
-            return memory_id
+            return cast(Optional[str], memory_id)
         except Exception as e:
             logger.warning(f"Failed to store cohort result: {e}")
             return None
@@ -631,7 +632,7 @@ class CohortConstructorMemoryHooks:
                 f"WHERE r.effectiveness_score >= {min_effectiveness} "
                 f"RETURN r ORDER BY r.effectiveness_score DESC LIMIT {limit}"
             )
-            return rules
+            return cast(List[Dict[str, Any]], rules)
         except Exception as e:
             logger.warning(f"Failed to get effective rules: {e}")
             return []

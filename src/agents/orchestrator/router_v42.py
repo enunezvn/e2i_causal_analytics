@@ -14,7 +14,7 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -316,7 +316,7 @@ class QueryRouter:
             return QueryIntent.UNKNOWN, 0.5, "No intent patterns matched"
 
         # Get highest scoring intent
-        best_intent = max(scores, key=scores.get)
+        best_intent = max(scores, key=lambda k: scores.get(k, 0.0))
         confidence = scores[best_intent]
 
         reasoning = f"Matched {best_intent.value} patterns with confidence {confidence:.2f}"
@@ -434,7 +434,7 @@ class OrchestratorRouter:
             }
 
         # Call the agent's handle method
-        result = await agent.handle(query, context)
+        result: Dict[str, Any] = await agent.handle(query, context)
 
         # Add routing metadata
         result["routing"] = {

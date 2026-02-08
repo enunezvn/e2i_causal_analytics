@@ -258,9 +258,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using deterministic drift detection")
-    DriftDetectionSignature = None
-    HopDecisionSignature = None
-    DriftInterpretationSignature = None
+    DriftDetectionSignature = None  # type: ignore[assignment,misc]
+    HopDecisionSignature = None  # type: ignore[assignment,misc]
+    DriftInterpretationSignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================

@@ -6,7 +6,7 @@ Handles CRUD operations for ml_data_quality_reports table.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from .base import BaseRepository
 
@@ -74,7 +74,7 @@ class DataQualityReportRepository(BaseRepository):
 
             if result.data:
                 logger.info(f"Stored DQ report: {db_record.get('report_name')}")
-                return result.data[0]
+                return cast(Dict[str, Any], result.data[0])
             return None
 
         except Exception as e:

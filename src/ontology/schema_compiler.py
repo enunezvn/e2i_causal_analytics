@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -370,7 +370,7 @@ class SchemaCompiler:
         Returns:
             JSON Schema dictionary
         """
-        schema = {
+        schema: Dict[str, Any] = {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "title": "E2I Ontology Schema",
             "version": compiled.version,

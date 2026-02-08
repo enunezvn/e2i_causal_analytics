@@ -257,7 +257,7 @@ class CeleryQueueMonitor:
         Returns:
             Dictionary with worker statistics
         """
-        stats = {
+        stats: Dict[str, Any] = {
             "total_workers": 0,
             "workers_by_tier": {"light": 0, "medium": 0, "heavy": 0, "unknown": 0},
             "workers": [],
@@ -344,17 +344,20 @@ class CeleryQueueMonitor:
 
         # Update queue depths
         depths = self.get_queue_depths()
-        for queue_name, depth in depths.items():
-            queue_metrics.queue_length.labels(queue_name=queue_name).set(depth)
+        if queue_metrics.queue_length is not None:
+            for queue_name, depth in depths.items():
+                queue_metrics.queue_length.labels(queue_name=queue_name).set(depth)
 
         # Update scheduled tasks
         scheduled_count = self.get_scheduled_task_count()
-        queue_metrics.scheduled_tasks.set(scheduled_count)
+        if queue_metrics.scheduled_tasks is not None:
+            queue_metrics.scheduled_tasks.set(scheduled_count)
 
         # Update reserved tasks per worker
         reserved = self.get_reserved_tasks()
-        for worker, count in reserved.items():
-            queue_metrics.reserved_tasks.labels(worker=worker).set(count)
+        if queue_metrics.reserved_tasks is not None:
+            for worker, count in reserved.items():
+                queue_metrics.reserved_tasks.labels(worker=worker).set(count)
 
         logger.debug(f"Updated queue metrics: depths={depths}, scheduled={scheduled_count}")
 

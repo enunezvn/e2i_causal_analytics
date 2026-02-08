@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -150,7 +150,7 @@ class QueryDecomposer:
         response = await self.llm_client.ainvoke(messages)
 
         # LangChain returns AIMessage with .content attribute
-        return response.content
+        return cast(str, response.content)
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse JSON from LLM response"""
@@ -165,7 +165,7 @@ class QueryDecomposer:
             response = response[start:end].strip()
 
         try:
-            return json.loads(response)
+            return cast(Dict[str, Any], json.loads(response))
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {response[:200]}...")
             raise DecompositionError(f"Invalid JSON in LLM response: {e}") from e

@@ -503,7 +503,7 @@ class CohortTraceContext:
             return
 
         try:
-            duration_ms = 0
+            duration_ms = 0.0
             if self._start_time:
                 duration_ms = (datetime.utcnow() - self._start_time).total_seconds() * 1000
 

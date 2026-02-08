@@ -687,7 +687,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if not self.client:
             return False
 
-        updates = {
+        updates: Dict[str, Any] = {
             "optuna_study_name": optuna_study_name,
         }
         if optuna_trial_number is not None:
@@ -904,7 +904,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             )
 
         # Update stage
-        updates = {
+        updates: Dict[str, Any] = {
             "stage": new_stage,
             "promoted_at": datetime.now(timezone.utc).isoformat(),
         }

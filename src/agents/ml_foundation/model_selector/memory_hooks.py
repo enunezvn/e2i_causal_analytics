@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class ModelSelectorMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -193,7 +193,7 @@ class ModelSelectorMemoryHooks:
             return {}
 
         try:
-            context = {
+            context: Dict[str, Any] = {
                 "algorithms": [],
                 "success_rates": {},
                 "problem_type_algorithms": [],
@@ -259,7 +259,7 @@ class ModelSelectorMemoryHooks:
     ) -> Optional[str]:
         """Store model selection in episodic memory."""
         try:
-            from src.memory.episodic_memory import store_episodic_memory
+            from src.memory.episodic_memory import insert_episodic_memory
 
             content = {
                 "experiment_id": state.get("experiment_id"),
@@ -282,7 +282,7 @@ class ModelSelectorMemoryHooks:
                 f"Reason: {result.get('primary_reason', 'N/A')}"
             )
 
-            memory_id = await store_episodic_memory(
+            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
                 event_type="model_selection_completed",
                 agent_name="model_selector",
@@ -293,7 +293,7 @@ class ModelSelectorMemoryHooks:
             )
 
             logger.info(f"Stored model selection in episodic memory: {memory_id}")
-            return memory_id
+            return str(memory_id) if memory_id else None
         except Exception as e:
             logger.warning(f"Failed to store model selection: {e}")
             return None

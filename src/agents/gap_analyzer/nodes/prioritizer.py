@@ -13,7 +13,7 @@ V4.4: Added causal evidence filtering and confidence adjustments.
 """
 
 import time
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Dict, List, Literal, Tuple, cast
 
 from ..state import (
     GapAnalyzerState,
@@ -103,14 +103,14 @@ class PrioritizerNode:
                 predictive_only_features = state.get("predictive_only_features", [])
 
                 # Build causal lookup
-                causal_lookup = self._build_causal_feature_lookup(causal_rankings)
+                causal_lookup = self._build_causal_feature_lookup(causal_rankings or [])
 
                 # Apply causal adjustments
                 opportunities, causal_evidence_warnings = self._apply_causal_evidence_adjustments(
                     opportunities,
                     causal_lookup,
-                    direct_cause_features,
-                    predictive_only_features,
+                    direct_cause_features or [],
+                    predictive_only_features or [],
                 )
 
             # Sort by expected ROI (descending) - may have been adjusted by causal evidence
@@ -472,8 +472,14 @@ class PrioritizerNode:
                 adjusted_roi_estimate["causal_adjustment_reason"] = adjustment_reason
 
                 # Create adjusted opportunity
-                adjusted_opp = dict(opp)
-                adjusted_opp["roi_estimate"] = adjusted_roi_estimate
+                adjusted_opp: PrioritizedOpportunity = {
+                    "rank": opp["rank"],
+                    "gap": opp["gap"],
+                    "roi_estimate": cast(ROIEstimate, adjusted_roi_estimate),
+                    "recommended_action": opp["recommended_action"],
+                    "implementation_difficulty": opp["implementation_difficulty"],
+                    "time_to_impact": opp["time_to_impact"],
+                }
                 adjusted_opportunities.append(adjusted_opp)
             else:
                 adjusted_opportunities.append(opp)

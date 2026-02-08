@@ -45,7 +45,7 @@ import logging
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -232,7 +232,7 @@ class AgentCostTracker:
         # Budget tracking
         self._budgets: Dict[str, float] = {}  # agent_name -> daily budget USD
         self._daily_spend: Dict[str, float] = defaultdict(float)
-        self._daily_spend_date: Optional[datetime] = None
+        self._daily_spend_date: Optional[date] = None
 
         logger.info(
             f"AgentCostTracker initialized (max_records={max_records}, "

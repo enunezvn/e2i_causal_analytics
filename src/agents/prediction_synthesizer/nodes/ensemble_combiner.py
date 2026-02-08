@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..state import EnsemblePrediction, ModelPrediction, PredictionSynthesizerState
 
@@ -223,7 +223,7 @@ class EnsembleCombinerNode:
 
         # Agreement is inverse of CV, capped at 0-1
         agreement = max(0.0, min(1.0, 1 - cv))
-        return agreement
+        return cast(float, agreement)
 
     def _generate_summary(
         self,

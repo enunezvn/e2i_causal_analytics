@@ -87,26 +87,26 @@ class ResourceOptimizerState(TypedDict):
     scenario_count: NotRequired[int]
 
     # === INTERNAL (problem formulation) ===
-    _problem: NotRequired[Dict[str, Any]]
+    _problem: NotRequired[Dict[str, Any] | None]
 
-    # === OPTIMIZATION OUTPUTS (Required) ===
-    optimal_allocations: List[AllocationResult]
-    objective_value: float
-    solver_status: str
+    # === OPTIMIZATION OUTPUTS (populated during execution) ===
+    optimal_allocations: NotRequired[List[AllocationResult] | None]
+    objective_value: NotRequired[float | None]
+    solver_status: NotRequired[str | None]
     solve_time_ms: NotRequired[int]
 
     # === SCENARIO OUTPUTS (NotRequired - only if run_scenarios=True) ===
-    scenarios: NotRequired[List[ScenarioResult]]
-    sensitivity_analysis: NotRequired[Dict[str, float]]
+    scenarios: NotRequired[List[ScenarioResult] | None]
+    sensitivity_analysis: NotRequired[Dict[str, float] | None]
 
     # === IMPACT OUTPUTS (NotRequired - computed after optimization) ===
-    projected_total_outcome: NotRequired[float]
-    projected_roi: NotRequired[float]
-    impact_by_segment: NotRequired[Dict[str, float]]
+    projected_total_outcome: NotRequired[float | None]
+    projected_roi: NotRequired[float | None]
+    impact_by_segment: NotRequired[Dict[str, float] | None]
 
-    # === SUMMARY (Required output) ===
-    optimization_summary: str
-    recommendations: NotRequired[List[str]]
+    # === SUMMARY (populated during execution) ===
+    optimization_summary: NotRequired[str | None]
+    recommendations: NotRequired[List[str] | None]
 
     # === EXECUTION METADATA (NotRequired - populated during execution) ===
     timestamp: NotRequired[str]

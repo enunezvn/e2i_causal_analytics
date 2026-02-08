@@ -782,4 +782,5 @@ if __name__ == "__main__":
 
     for tool_name in registry.list_tools():
         schema = registry.get_schema(tool_name)
-        print(f"  - {tool_name} ({schema.source_agent}, Tier {schema.tier})")
+        if schema is not None:
+            print(f"  - {tool_name} ({schema.source_agent}, Tier {schema.tier})")

@@ -545,7 +545,7 @@ async def _execute_optimization(
     try:
         # Try to use the actual Resource Optimizer agent
         from src.agents.resource_optimizer.graph import (
-            create_resource_optimizer_graph,
+            build_resource_optimizer_graph as create_resource_optimizer_graph,
         )
         from src.agents.resource_optimizer.state import ResourceOptimizerState
 
@@ -576,8 +576,8 @@ async def _execute_optimization(
         initial_state: ResourceOptimizerState = {
             "query": request.query,
             "resource_type": request.resource_type.value,
-            "allocation_targets": allocation_targets,
-            "constraints": constraints,
+            "allocation_targets": allocation_targets,  # type: ignore[typeddict-item]
+            "constraints": constraints,  # type: ignore[typeddict-item]
             "objective": request.objective.value,
             "solver_type": request.solver_type.value,
             "time_limit_seconds": request.time_limit_seconds,

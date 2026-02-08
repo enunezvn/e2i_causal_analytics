@@ -140,19 +140,18 @@ class JSONFormatter(logging.Formatter):
         self.include_thread = include_thread
         self.include_process = include_process
         self.extra_fields = extra_fields or {}
+        self._hostname: Optional[str] = None
 
         # Cache hostname
         if include_hostname:
             import socket
 
             self._hostname = socket.gethostname()
-        else:
-            self._hostname = None
 
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON."""
         # Build base log entry
-        log_entry = {
+        log_entry: Dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,

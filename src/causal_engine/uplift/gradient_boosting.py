@@ -12,7 +12,7 @@ Author: E2I Causal Analytics Team
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -285,7 +285,7 @@ class UpliftGradientBoosting(BaseUpliftModel):
         if self.config.normalize_scores:
             uplift_scores = self._normalize_scores(uplift_scores)
 
-        return uplift_scores
+        return cast(NDArray[np.float64], uplift_scores)
 
     def estimate(
         self,

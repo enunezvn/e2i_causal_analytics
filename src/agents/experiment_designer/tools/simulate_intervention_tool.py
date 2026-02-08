@@ -420,7 +420,7 @@ class DigitalTwinWorkflow:
             - action="DESIGN" with prior_estimate and recommended_sample_size
         """
         # Run simulation
-        sim_result = simulate_intervention(
+        sim_result = simulate_intervention(  # type: ignore[operator]
             intervention_type=intervention_type, brand=brand, **kwargs
         )
 

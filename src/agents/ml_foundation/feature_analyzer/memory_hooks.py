@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class FeatureAnalyzerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -194,7 +194,7 @@ class FeatureAnalyzerMemoryHooks:
             return {}
 
         try:
-            context = {
+            context: Dict[str, Any] = {
                 "features": [],
                 "interactions": [],
                 "importance_history": [],
@@ -260,7 +260,7 @@ class FeatureAnalyzerMemoryHooks:
     ) -> Optional[str]:
         """Store feature analysis in episodic memory."""
         try:
-            from src.memory.episodic_memory import store_episodic_memory
+            from src.memory.episodic_memory import insert_episodic_memory
 
             content = {
                 "experiment_id": state.get("experiment_id"),
@@ -282,7 +282,7 @@ class FeatureAnalyzerMemoryHooks:
                 f"Selected {state.get('selected_feature_count', 0)} features."
             )
 
-            memory_id = await store_episodic_memory(
+            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
                 event_type="feature_analysis_completed",
                 agent_name="feature_analyzer",
@@ -293,7 +293,7 @@ class FeatureAnalyzerMemoryHooks:
             )
 
             logger.info(f"Stored feature analysis in episodic memory: {memory_id}")
-            return memory_id
+            return str(memory_id) if memory_id else None
         except Exception as e:
             logger.warning(f"Failed to store feature analysis: {e}")
             return None

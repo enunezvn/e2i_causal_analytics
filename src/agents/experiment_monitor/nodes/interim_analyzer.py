@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from src.agents.experiment_monitor.state import (
     ErrorDetails,
     ExperimentMonitorState,
+    ExperimentSummary,
     InterimTrigger,
 )
 
@@ -100,7 +101,7 @@ class InterimAnalyzerNode:
         return state
 
     async def _check_interim_trigger(
-        self, experiment: Dict, client: Optional[Any]
+        self, experiment: ExperimentSummary, client: Optional[Any]
     ) -> Optional[InterimTrigger]:
         """Check if an experiment has reached an interim analysis milestone.
 

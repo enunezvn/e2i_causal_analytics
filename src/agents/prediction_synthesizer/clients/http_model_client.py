@@ -257,6 +257,9 @@ class HTTPModelClient:
         if not self._initialized:
             await self.initialize()
 
+        # After initialization, _client is guaranteed to be set
+        assert self._client is not None
+
         if not self._circuit_breaker.can_execute():
             raise RuntimeError(
                 f"Circuit breaker open for model '{self.model_id}'. Service may be unavailable."
@@ -330,6 +333,9 @@ class HTTPModelClient:
         if not self._initialized:
             await self.initialize()
 
+        # After initialization, _client is guaranteed to be set
+        assert self._client is not None
+
         try:
             response = await self._client.get(
                 f"{self.endpoint_url}/healthz",
@@ -370,7 +376,7 @@ class HTTPModelClient:
         try:
             import opik
 
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name=f"model_client.predict.{self.model_id}",
                 input={
                     "entity_id": entity_id,

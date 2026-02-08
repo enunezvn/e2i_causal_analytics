@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..state import DetectedPattern, FeedbackLearnerState
 
@@ -98,7 +98,7 @@ class PatternAnalyzerNode:
     def _analyze_deterministic(self, state: FeedbackLearnerState) -> Dict[str, Any]:
         """Deterministic pattern analysis using heuristics."""
         feedback_items = state.get("feedback_items") or []
-        summary = state.get("feedback_summary") or {}
+        summary: Dict[str, Any] = cast(Dict[str, Any], state.get("feedback_summary") or {})
 
         patterns: List[DetectedPattern] = []
         pattern_id = 1
@@ -267,7 +267,7 @@ class PatternAnalyzerNode:
     def _build_analysis_prompt(self, state: FeedbackLearnerState) -> str:
         """Build analysis prompt for LLM."""
         feedback_items = state.get("feedback_items") or []
-        summary = state.get("feedback_summary") or {}
+        summary: Dict[str, Any] = cast(Dict[str, Any], state.get("feedback_summary") or {})
 
         # Sample feedback for analysis (avoid token limits)
         sample_size = min(50, len(feedback_items))

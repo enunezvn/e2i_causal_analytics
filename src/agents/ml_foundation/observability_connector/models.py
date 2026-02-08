@@ -122,8 +122,8 @@ class TokenUsage(BaseModel):
     def compute_total_if_zero(cls, v: int, info) -> int:
         """Auto-compute total if not provided."""
         if v == 0 and info.data:
-            input_tokens = info.data.get("input_tokens", 0)
-            output_tokens = info.data.get("output_tokens", 0)
+            input_tokens: int = info.data.get("input_tokens", 0)
+            output_tokens: int = info.data.get("output_tokens", 0)
             return input_tokens + output_tokens
         return v
 

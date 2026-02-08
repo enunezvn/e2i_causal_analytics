@@ -16,7 +16,7 @@ Outputs:
 import json
 import os
 from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List, cast
 
 import pandas as pd
 
@@ -171,7 +171,7 @@ class CohortConstructorAgent:
             )
 
             if response.data:
-                db_config = response.data[0]
+                db_config = cast(Dict[str, Any], response.data[0])
                 # Convert DB record to CohortConfig
                 return self._db_record_to_config(db_config)
 

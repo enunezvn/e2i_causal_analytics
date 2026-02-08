@@ -248,9 +248,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using deterministic prioritization")
-    GapDetectionSignature = None
-    EvidenceRelevanceSignature = None
-    GapPrioritizationSignature = None
+    GapDetectionSignature = None  # type: ignore[assignment,misc]
+    EvidenceRelevanceSignature = None  # type: ignore[assignment,misc]
+    GapPrioritizationSignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================

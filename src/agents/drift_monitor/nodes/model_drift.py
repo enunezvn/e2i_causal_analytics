@@ -13,6 +13,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Literal, cast
 
 import numpy as np
 from scipy import stats
@@ -153,13 +154,14 @@ class ModelDriftNode:
                 drift_results.append(score_drift)
 
             # 2. Prediction class drift (Chi-square test)
-            class_drift = self._detect_class_drift(
-                baseline_preds.labels,
-                current_preds.labels,
-                state["significance_level"],
-            )
-            if class_drift:
-                drift_results.append(class_drift)
+            if baseline_preds.labels is not None and current_preds.labels is not None:
+                class_drift = self._detect_class_drift(
+                    baseline_preds.labels,
+                    current_preds.labels,
+                    state["significance_level"],
+                )
+                if class_drift:
+                    drift_results.append(class_drift)
 
             # Update state
             state["model_drift_results"] = drift_results
@@ -169,12 +171,12 @@ class ModelDriftNode:
             state["total_latency_ms"] = state.get("total_latency_ms", 0) + latency_ms
 
         except Exception as e:
-            error: ErrorDetails = {
+            error_details: ErrorDetails = {
                 "node": "model_drift",
                 "error": str(e),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            state["errors"] = state.get("errors", []) + [error]
+            state["errors"] = state.get("errors", []) + [error_details]
             state["status"] = "failed"
             state["model_drift_results"] = []
 
@@ -305,7 +307,7 @@ class ModelDriftNode:
             "test_statistic": float(ks_stat),
             "p_value": float(p_value),
             "drift_detected": drift_detected,
-            "severity": severity,
+            "severity": cast(Literal["none", "low", "medium", "high", "critical"], severity),
             "baseline_period": "baseline",
             "current_period": "current",
         }
@@ -361,7 +363,7 @@ class ModelDriftNode:
             "test_statistic": float(chi2_stat),
             "p_value": float(p_value),
             "drift_detected": drift_detected,
-            "severity": severity,
+            "severity": cast(Literal["none", "low", "medium", "high", "critical"], severity),
             "baseline_period": "baseline",
             "current_period": "current",
         }

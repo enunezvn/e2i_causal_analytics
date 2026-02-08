@@ -409,7 +409,7 @@ class StructuralDriftTool:
             import opik
 
             trace_id = str(uuid.uuid4())
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name="detect_structural_drift",
                 input={
                     "n_nodes": len(params.dag_nodes),
@@ -427,7 +427,7 @@ class StructuralDriftTool:
         try:
             import opik
 
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name="detect_structural_drift.complete",
                 output={
                     "success": output.success,

@@ -32,9 +32,9 @@ class PolicyLearnerNode:
             "Starting policy learning",
             extra={
                 "node": "policy_learner",
-                "segment_count": len(state.get("cate_by_segment", {})),
-                "high_responders": len(state.get("high_responders", [])),
-                "low_responders": len(state.get("low_responders", [])),
+                "segment_count": len(state.get("cate_by_segment") or {}),
+                "high_responders": len(state.get("high_responders") or []),
+                "low_responders": len(state.get("low_responders") or []),
             },
         )
 
@@ -43,17 +43,17 @@ class PolicyLearnerNode:
             return state
 
         try:
-            cate_by_segment = state["cate_by_segment"]
-            high_responders = state["high_responders"]
-            low_responders = state["low_responders"]
-            ate = state["overall_ate"]
+            cate_by_segment = state.get("cate_by_segment") or {}
+            high_responders = state.get("high_responders") or []
+            low_responders = state.get("low_responders") or []
+            ate: float = state.get("overall_ate") or 0.0
 
             # Generate policy recommendations
             recommendations = []
 
             for _segment_var, results in cate_by_segment.items():
                 for result in results:
-                    rec = self._generate_recommendation(result, ate)
+                    rec = self._generate_recommendation(dict(result), ate)  # type: ignore[arg-type]
                     if rec:
                         recommendations.append(rec)
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..state import FeedbackLearnerState, KnowledgeUpdate
 
@@ -43,7 +43,9 @@ class KnowledgeUpdaterNode:
             recommendations = state.get("learning_recommendations") or []
 
             # Generate proposed updates
-            proposed_updates = self._generate_updates(recommendations)
+            proposed_updates = self._generate_updates(
+                cast(List[Dict[str, Any]], recommendations)
+            )
 
             # Apply updates (with validation)
             applied = []

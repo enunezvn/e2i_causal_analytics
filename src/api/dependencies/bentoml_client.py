@@ -324,7 +324,7 @@ class BentoMLClient:
         *,
         timeout: Optional[float] = None,
         trace_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Make batch prediction requests.
 
         Args:

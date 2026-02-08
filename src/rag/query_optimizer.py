@@ -16,7 +16,7 @@ import hashlib
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import anthropic
 from tenacity import (
@@ -302,7 +302,7 @@ class QueryOptimizer:
             # Check TTL
             if time.time() - cached["timestamp"] < _CACHE_TTL_SECONDS:
                 logger.debug(f"Cache hit for {cache_key[:8]}...")
-                return cached["result"]
+                return cast(str, cached["result"])
             else:
                 # Expired, remove
                 del _EXPANSION_CACHE[cache_key]
@@ -342,7 +342,11 @@ class QueryOptimizer:
             messages=[{"role": "user", "content": prompt}],
         )
 
-        return response.content[0].text
+        # Extract text from the first content block
+        first_block = response.content[0]
+        if hasattr(first_block, "text"):
+            return first_block.text  # type: ignore[union-attr]
+        return ""
 
     async def _call_llm_async(self, prompt: str) -> str:
         """Async wrapper for LLM call."""
@@ -598,7 +602,7 @@ Write a realistic {document_type} that directly answers this question using spec
         """
         query_text = query.text if hasattr(query, "text") else str(query)
 
-        result = {
+        result: Dict[str, Any] = {
             "original": query_text,
             "typo_corrected": None,
             "typo_corrections": [],

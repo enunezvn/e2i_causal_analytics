@@ -490,6 +490,8 @@ class Span:
         self.status = status
         self.attributes = attributes if attributes is not None else {}
         self.events: List[Dict[str, Any]] = []
+        self.error_type: Optional[str] = None
+        self.error_message: Optional[str] = None
 
     def set_attribute(self, key: str, value: Any):
         """Set span attribute.

@@ -113,15 +113,18 @@ class NarrativeGeneratorNode:
                     result=result,
                 )
 
-            return {
+            # Build updated state - result is Dict[str, Any] from _generate_narrative
+            # We spread result dict which mypy can't verify against TypedDict
+            updated_state: ExplainerState = {
                 **state,
-                **result,
+                **result,  # type: ignore[typeddict-item]
                 "visual_suggestions": visuals,
                 "follow_up_questions": follow_ups,
                 "generation_latency_ms": generation_time,
                 "total_latency_ms": total_time,
                 "status": "completed",
             }
+            return updated_state
 
         except Exception as e:
             logger.error(f"Narrative generation failed: {e}")

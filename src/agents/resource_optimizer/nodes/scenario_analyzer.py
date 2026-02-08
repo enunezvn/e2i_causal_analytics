@@ -38,11 +38,19 @@ class ScenarioAnalyzerNode:
             constraints = state.get("constraints", [])
             scenario_count = state.get("scenario_count", 3)
 
-            # Generate scenarios
-            scenarios = self._generate_scenarios(allocations, targets, constraints, scenario_count)
+            # Generate scenarios (cast typed objects to dicts for internal methods)
+            scenarios = self._generate_scenarios(
+                allocations,  # type: ignore[arg-type]
+                targets,  # type: ignore[arg-type]
+                constraints,  # type: ignore[arg-type]
+                scenario_count
+            )
 
             # Perform sensitivity analysis
-            sensitivity = self._analyze_sensitivity(allocations, targets)
+            sensitivity = self._analyze_sensitivity(
+                allocations,  # type: ignore[arg-type]
+                targets  # type: ignore[arg-type]
+            )
 
             logger.info(f"Scenario analysis complete: {len(scenarios)} scenarios analyzed")
 

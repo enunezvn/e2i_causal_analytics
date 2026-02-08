@@ -29,7 +29,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
@@ -301,7 +301,7 @@ async def _execute_hierarchical_analysis(
                     segment_id=seg.segment_id,
                     segment_name=seg.segment_name,
                     n_samples=seg.n_samples,
-                    uplift_range=seg.uplift_range,
+                    uplift_range=list(seg.uplift_range),
                     cate_mean=seg.cate_mean,
                     cate_std=seg.cate_std,
                     cate_ci_lower=seg.cate_ci_lower,
@@ -758,10 +758,11 @@ async def run_parallel_pipeline(
                 library_results[lib.value] = {"error": str(result)}
                 failed.append(lib.value)
             else:
-                library_results[lib.value] = result
+                result_dict = cast(Dict[str, Any], result)
+                library_results[lib.value] = result_dict
                 succeeded.append(lib.value)
-                if result.get("effect_estimate") is not None:
-                    effect_estimates.append(result["effect_estimate"])
+                if result_dict.get("effect_estimate") is not None:
+                    effect_estimates.append(result_dict["effect_estimate"])
 
         # Compute consensus
         consensus_effect = None
@@ -944,9 +945,9 @@ async def run_cross_validation(
             primary_library=request.primary_library.value,
             validation_library=request.validation_library.value,
             primary_effect=primary_effect,
-            primary_ci=primary_ci,
+            primary_ci=list(primary_ci),
             validation_effect=validation_effect,
-            validation_ci=validation_ci,
+            validation_ci=list(validation_ci),
             effect_difference=effect_difference,
             relative_difference=relative_difference,
             ci_overlap_ratio=ci_overlap_ratio,

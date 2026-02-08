@@ -29,7 +29,7 @@ Version: 1.0.0
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from pydantic import BaseModel, Field
 
@@ -163,7 +163,7 @@ class ModelInferenceTool:
 
         if self.feast_enabled and self._feast_store is None:
             try:
-                from src.feature_store.client import get_feast_store
+                from src.feature_store.client import get_feast_store  # type: ignore[attr-defined]
 
                 self._feast_store = await get_feast_store()
                 logger.info("ModelInferenceTool: Feast store connected")
@@ -293,7 +293,7 @@ class ModelInferenceTool:
             trace_id=trace_id,
         )
 
-        return result
+        return cast(Dict[str, Any], result)
 
     async def _fetch_feast_features(
         self,
@@ -331,7 +331,7 @@ class ModelInferenceTool:
             import opik
 
             trace_id = str(uuid.uuid4())
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name=f"model_inference.{params.model_name}",
                 input={
                     "model_name": params.model_name,
@@ -350,7 +350,7 @@ class ModelInferenceTool:
         try:
             import opik
 
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name="model_inference.complete",
                 output={
                     "prediction": str(output.prediction)[:100],

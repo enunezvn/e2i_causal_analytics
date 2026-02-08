@@ -710,7 +710,7 @@ class LatencyContext:
         self._start_time = time.perf_counter()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Stop timing and record latency."""
         self._latency_ms = (time.perf_counter() - self._start_time) * 1000
 
@@ -724,7 +724,7 @@ class LatencyContext:
                 error_msg = f"{exc_type.__name__}: {exc_val}"
                 tracker.record_error(error_msg)
 
-        return False  # Don't suppress exceptions
+        # Don't suppress exceptions (implicitly returns None)
 
     @property
     def latency_ms(self) -> float:

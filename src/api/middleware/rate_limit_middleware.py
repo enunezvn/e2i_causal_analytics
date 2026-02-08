@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from collections import defaultdict
-from typing import Callable
+from typing import Any, Callable, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -92,7 +92,7 @@ class RedisBackend(RateLimitBackend):
             self._fallback = InMemoryBackend()
 
     def is_rate_limited(self, key: str, limit: int, window: int) -> tuple[bool, int]:
-        if not self._enabled:
+        if not self._enabled or self._redis is None:
             return self._fallback.is_rate_limited(key, limit, window)
 
         try:
@@ -177,6 +177,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         super().__init__(app)
 
+        self._backend: RateLimitBackend
         if use_redis:
             self._backend = RedisBackend(redis_url)
         else:
@@ -187,7 +188,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         env_window = os.environ.get("RATE_LIMIT_WINDOW")
 
         if default_limit or env_limit:
-            limit = default_limit or int(env_limit)
+            limit = default_limit if default_limit else int(env_limit)  # type: ignore[arg-type]
             window = default_window or (int(env_window) if env_window else 60)
             self.DEFAULT_LIMITS["default"] = (limit, window)
 
@@ -263,18 +264,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Skip rate limiting for exempt paths
         if path in self.EXEMPT_PATHS:
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Skip rate limiting for exempt path prefixes
         if path.startswith(self.EXEMPT_PREFIXES):
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Skip rate limiting for internal/self IPs
         client_ip = request.headers.get("X-Real-IP") or (
             request.client.host if request.client else None
         )
         if client_ip in self.EXEMPT_IPS:
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Get client identifier and limits
         client_key = self._get_client_key(request)
@@ -321,7 +322,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         # Process request and add rate limit headers
-        response = await call_next(request)
+        response: Response = cast(Response, await call_next(request))
         response.headers["X-RateLimit-Limit"] = str(limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-RateLimit-Reset"] = str(int(time.time()) + window)

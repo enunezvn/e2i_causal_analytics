@@ -197,10 +197,10 @@ class ModelTrainerAgent:
             "enable_mlflow": input_data.get("enable_mlflow", True),
             "enable_checkpointing": input_data.get("enable_checkpointing", True),
             # Optional: Pre-loaded splits
-            "train_data": input_data.get("train_data"),
-            "validation_data": input_data.get("validation_data"),
-            "test_data": input_data.get("test_data"),
-            "holdout_data": input_data.get("holdout_data"),
+            "train_data": input_data.get("train_data") or {},
+            "validation_data": input_data.get("validation_data") or {},
+            "test_data": input_data.get("test_data") or {},
+            "holdout_data": input_data.get("holdout_data") or {},
         }
 
         # Execute LangGraph workflow with optional Opik tracing

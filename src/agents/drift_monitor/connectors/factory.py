@@ -16,7 +16,7 @@ Example:
 
 import logging
 import os
-from typing import Literal
+from typing import Literal, cast
 
 from src.agents.drift_monitor.connectors.base import BaseDataConnector
 from src.agents.drift_monitor.connectors.mock_connector import MockDataConnector
@@ -69,7 +69,7 @@ def get_connector(
     env_connector = os.getenv("DRIFT_MONITOR_CONNECTOR", "").lower()
     if env_connector:
         if env_connector in ("supabase", "mock"):
-            connector_type = env_connector
+            connector_type = cast(Literal["supabase", "mock", "auto"], env_connector)
             logger.info(f"Using connector type from env: {connector_type}")
 
     # Auto-detect based on environment

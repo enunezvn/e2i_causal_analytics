@@ -10,7 +10,7 @@ tree-based ensemble methods optimized for uplift modeling.
 Author: E2I Causal Analytics Team
 """
 
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -88,7 +88,8 @@ class UpliftRandomForest(BaseUpliftModel):
         Returns:
             Self for method chaining
         """
-        return super().fit(X, treatment, y, **kwargs)
+        super().fit(X, treatment, y, **kwargs)
+        return cast("UpliftRandomForest", self)
 
     def predict(
         self,

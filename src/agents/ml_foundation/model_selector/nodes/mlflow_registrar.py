@@ -5,7 +5,7 @@ in MLflow for experiment tracking and model registry.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 
 async def register_selection_in_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -41,6 +41,7 @@ async def register_selection_in_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # Set or create experiment
         mlflow_experiment_id = await _ensure_experiment(connector, experiment_id)
+        assert mlflow_experiment_id is not None, "Could not get or create experiment"
 
         # Start run for model selection using async context manager
         async with connector.start_run(
@@ -112,7 +113,7 @@ async def _ensure_experiment(
         },
     )
 
-    return mlflow_experiment_id
+    return cast(str, mlflow_experiment_id) if mlflow_experiment_id else None
 
 
 async def _log_selection_params(

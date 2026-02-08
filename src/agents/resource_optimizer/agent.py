@@ -149,8 +149,8 @@ class ResourceOptimizerAgent:
         allocation_targets: List[AllocationTarget],
         constraints: List[Constraint],
         resource_type: str = "budget",
-        objective: str = "maximize_outcome",
-        solver_type: str = "linear",
+        objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"] = "maximize_outcome",
+        solver_type: Literal["linear", "milp", "nonlinear"] = "linear",
         run_scenarios: bool = False,
         scenario_count: int = 3,
         query: str = "",
@@ -187,7 +187,7 @@ class ResourceOptimizerAgent:
                     session_id=session_id,
                     resource_type=resource_type,
                     objective=objective,
-                    constraints=constraints,
+                    constraints=[dict(c) for c in constraints] if constraints else None,  # type: ignore[arg-type]
                 )
                 logger.debug(
                     f"Retrieved memory context: "
@@ -351,7 +351,7 @@ class ResourceOptimizerAgent:
         self,
         allocation_targets: List[AllocationTarget],
         constraints: List[Constraint],
-        objective: str = "maximize_outcome",
+        objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"] = "maximize_outcome",
     ) -> ResourceOptimizerOutput:
         """
         Quick optimization without scenario analysis.
@@ -426,7 +426,7 @@ class ResourceOptimizerAgent:
 async def optimize_allocation(
     allocation_targets: List[AllocationTarget],
     constraints: List[Constraint],
-    objective: str = "maximize_outcome",
+    objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"] = "maximize_outcome",
     run_scenarios: bool = False,
 ) -> ResourceOptimizerOutput:
     """

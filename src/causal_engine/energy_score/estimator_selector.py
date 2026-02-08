@@ -1030,7 +1030,7 @@ class EstimatorSelector:
         for est_config in sorted(self.config.estimators, key=lambda x: x.priority):
             if est_config.enabled and est_config.estimator_type in ESTIMATOR_WRAPPERS:
                 wrapper_class = ESTIMATOR_WRAPPERS[est_config.estimator_type]
-                self.estimators.append(wrapper_class(est_config))
+                self.estimators.append(wrapper_class(est_config))  # type: ignore[call-arg]
 
     def select(
         self,

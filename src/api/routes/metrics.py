@@ -39,7 +39,7 @@ try:
 except ImportError:
     PROMETHEUS_AVAILABLE = False
     CONTENT_TYPE_LATEST = "text/plain"
-    REGISTRY = None
+    REGISTRY = None  # type: ignore[assignment]
     logger.warning("prometheus_client not installed, /metrics endpoint will return empty")
 
 # Create router - no prefix since /metrics is typically at root level
@@ -140,6 +140,8 @@ def record_request(method: str, endpoint: str, status_code: int, latency: float)
     """Record an API request metric."""
     if not PROMETHEUS_AVAILABLE or not _metrics_initialized:
         return
+    if _request_counter is None or _request_latency is None:
+        return
 
     try:
         _request_counter.labels(
@@ -160,6 +162,8 @@ def record_error(method: str, endpoint: str, error_type: str) -> None:
     """Record an API error metric."""
     if not PROMETHEUS_AVAILABLE or not _metrics_initialized:
         return
+    if _error_counter is None:
+        return
 
     try:
         _error_counter.labels(
@@ -175,6 +179,8 @@ def record_agent_invocation(agent_name: str, tier: str, status: str) -> None:
     """Record an agent invocation metric."""
     if not PROMETHEUS_AVAILABLE or not _metrics_initialized:
         return
+    if _agent_invocations is None:
+        return
 
     try:
         _agent_invocations.labels(
@@ -189,6 +195,8 @@ def record_agent_invocation(agent_name: str, tier: str, status: str) -> None:
 def set_component_health(component: str, healthy: bool) -> None:
     """Set health status for a component."""
     if not PROMETHEUS_AVAILABLE or not _metrics_initialized:
+        return
+    if _health_gauge is None:
         return
 
     try:

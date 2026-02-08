@@ -192,7 +192,7 @@ async def extract_entities(query: str) -> Dict[str, List[str]]:
     """
     from pathlib import Path
 
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     # Load vocabulary
     vocab_path = Path(__file__).parent.parent.parent / "config" / "domain_vocabulary.yaml"

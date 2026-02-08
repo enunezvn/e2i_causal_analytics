@@ -356,7 +356,7 @@ class E2IEntityExtractor:
         # Sort by start position
         mentions.sort(key=lambda m: (m.start, -m.end))
 
-        deduplicated = []
+        deduplicated: List[ExtractedMention] = []
         for mention in mentions:
             # Check for overlap with existing mentions
             overlaps = False

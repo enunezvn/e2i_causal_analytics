@@ -5,7 +5,7 @@ Handles user preferences and settings for E2I chatbot.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from src.repositories.base import BaseRepository
 
@@ -62,7 +62,7 @@ class ChatbotUserProfileRepository(BaseRepository):
         Returns:
             Updated profile or None
         """
-        updates = {}
+        updates: Dict[str, Any] = {}
 
         if brand_preference is not None:
             updates["brand_preference"] = brand_preference
@@ -95,7 +95,7 @@ class ChatbotUserProfileRepository(BaseRepository):
         """
         profile = await self.get_by_id(user_id)
         if profile:
-            return profile.get("brand_preference")
+            return cast(Optional[str], profile.get("brand_preference"))
         return None
 
     async def update_activity(

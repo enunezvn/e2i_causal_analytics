@@ -116,25 +116,25 @@ class DriftMonitorState(TypedDict):
     check_concept_drift: NotRequired[bool]  # Default: True
     check_structural_drift: NotRequired[bool]  # V4.4: Enable structural drift detection
 
-    # ===== Detection Outputs (Required) =====
-    data_drift_results: list[DriftResult]
+    # ===== Detection Outputs (populated during execution) =====
+    data_drift_results: NotRequired[list[DriftResult]]
     model_drift_results: NotRequired[list[DriftResult]]
     concept_drift_results: NotRequired[list[DriftResult]]
     structural_drift_results: NotRequired[list[DriftResult]]  # V4.4: DAG structure drift
     structural_drift_details: NotRequired[StructuralDriftResult]  # V4.4: Detailed drift info
 
-    # ===== Aggregated Outputs (Required) =====
-    overall_drift_score: float
-    features_with_drift: list[str]
+    # ===== Aggregated Outputs (populated during execution) =====
+    overall_drift_score: NotRequired[float]
+    features_with_drift: NotRequired[list[str]]
     alerts: NotRequired[list[DriftAlert]]
 
-    # ===== Summary (Required output) =====
-    drift_summary: str
+    # ===== Summary (populated during execution) =====
+    drift_summary: NotRequired[str]
     recommended_actions: NotRequired[list[str]]
 
     # ===== Execution Metadata (Contract-required output fields) =====
-    total_latency_ms: int  # Contract requires this name (was detection_latency_ms)
-    timestamp: str  # Contract requires this name (was current_timestamp)
+    total_latency_ms: NotRequired[int]  # Contract requires this name (was detection_latency_ms)
+    timestamp: NotRequired[str]  # Contract requires this name (was current_timestamp)
     features_checked: NotRequired[int]
     baseline_timestamp: NotRequired[str]
 

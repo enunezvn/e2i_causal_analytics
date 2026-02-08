@@ -171,7 +171,7 @@ class PredictionSynthesizerAgent:
         entity_type: str = "hcp",
         time_horizon: str = "30d",
         models_to_use: Optional[List[str]] = None,
-        ensemble_method: str = "weighted",
+        ensemble_method: Literal["average", "weighted", "stacking", "voting"] = "weighted",
         include_context: bool = True,
         query: str = "",
         session_id: Optional[str] = None,
@@ -426,9 +426,9 @@ class PredictionSynthesizerAgent:
         Returns:
             Handoff dictionary for other agents
         """
-        ensemble = output.ensemble_prediction or {}
+        ensemble: Dict[str, Any] = dict(output.ensemble_prediction) if output.ensemble_prediction else {}
 
-        recommendations = []
+        recommendations: List[str] = []
         if output.status == "failed":
             recommendations.append("Review model availability and health")
             recommendations.append("Check input features for completeness")
@@ -439,7 +439,7 @@ class PredictionSynthesizerAgent:
         elif ensemble.get("confidence", 0) < 0.5:
             recommendations.append("Low confidence - may need more data or model retraining")
 
-        context = output.prediction_context or {}
+        context: Dict[str, Any] = dict(output.prediction_context) if output.prediction_context else {}
 
         return {
             "agent": "prediction_synthesizer",
@@ -477,7 +477,7 @@ async def synthesize_predictions(
     prediction_target: str,
     features: Optional[Dict[str, Any]] = None,
     model_clients: Optional[Dict[str, Any]] = None,
-    ensemble_method: str = "weighted",
+    ensemble_method: Literal["average", "weighted", "stacking", "voting"] = "weighted",
     include_context: bool = False,
 ) -> PredictionSynthesizerOutput:
     """

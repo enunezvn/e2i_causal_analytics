@@ -399,7 +399,7 @@ async def _query_causal_chains(
 
         # Note: causal_paths table does not have 'brand' column
         # Brand filtering is only available via hybrid_search (RAG index)
-        filters = {}
+        filters: dict[str, str] = {}
 
         # Use RAG retriever for semantic search if kpi_name provided
         if kpi_name:
@@ -481,7 +481,7 @@ async def _query_triggers(
 
         # Note: triggers table does not have 'brand' or 'region' columns
         # Parameters kept for API compatibility but not used in direct queries
-        filters = {}
+        filters: dict[str, str] = {}
 
         triggers = await repo.get_many(filters=filters, limit=limit)
 
@@ -713,7 +713,7 @@ async def agent_routing_tool(
     if OPIK_AVAILABLE:
         try:
             opik = OpikConnector()
-            opik_span = opik.start_span(
+            opik_span = opik.start_span(  # type: ignore[attr-defined]
                 name="agent_routing",
                 metadata={"query_preview": query[:100], "target_agent": target_agent},
             )

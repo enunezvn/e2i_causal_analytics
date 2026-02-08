@@ -468,7 +468,7 @@ class MLflowConnector:
         self.circuit_breaker = CircuitBreaker(circuit_breaker_config)
 
         # Initialize MLflow
-        self._mlflow: Optional["mlflow"] = None  # type: ignore[name-defined]
+        self._mlflow: Optional[Any] = None
         self._client: Optional["MlflowClient"] = None  # type: ignore[name-defined]
         self._enabled = False
         self._initialize_mlflow()
@@ -900,7 +900,7 @@ class MLflowConnector:
                 model_uri = f"runs:/{run_id}/{artifact_path}"
 
             logger.info(f"Logged model to: {model_uri}")
-            return model_uri
+            return cast(str, model_uri)
 
         except Exception as e:
             self.circuit_breaker.record_failure()
@@ -1078,7 +1078,8 @@ class MLflowConnector:
                     ModelStage.ARCHIVED: "Archived",
                 }
                 target_stage = mlflow_stage_map.get(stage, "None")
-                versions = [v for v in versions if v.current_stage == target_stage]
+                filtered_versions = [v for v in versions if v.current_stage == target_stage]
+                versions = filtered_versions  # type: ignore[assignment]
 
             if not versions:
                 return None
@@ -1099,9 +1100,9 @@ class MLflowConnector:
             return ModelVersion(
                 name=latest.name,
                 version=latest.version,
-                run_id=latest.run_id,
-                source=latest.source,
-                stage=stage_map.get(latest.current_stage, ModelStage.DEVELOPMENT),
+                run_id=latest.run_id or "",
+                source=latest.source or "",
+                stage=stage_map.get(latest.current_stage or "None", ModelStage.DEVELOPMENT),
                 created_at=datetime.fromtimestamp(
                     latest.creation_timestamp / 1000, tz=timezone.utc
                 ),

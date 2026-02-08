@@ -242,9 +242,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using deterministic synthesis")
-    PredictionSynthesisSignature = None
-    PredictionInterpretationSignature = None
-    UncertaintyQuantificationSignature = None
+    PredictionSynthesisSignature = None  # type: ignore[assignment,misc]
+    PredictionInterpretationSignature = None  # type: ignore[assignment,misc]
+    UncertaintyQuantificationSignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================

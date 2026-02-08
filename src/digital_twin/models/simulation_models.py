@@ -121,7 +121,7 @@ class EffectHeterogeneity(BaseModel):
 
     def get_top_segments(self, n: int = 5) -> List[Dict[str, Any]]:
         """Get top N segments by effect size."""
-        segments = []
+        segments: List[Dict[str, Any]] = []
 
         for dim_name, dim_data in [
             ("specialty", self.by_specialty),
@@ -140,7 +140,7 @@ class EffectHeterogeneity(BaseModel):
                         }
                     )
 
-        return sorted(segments, key=lambda x: abs(x["ate"]), reverse=True)[:n]
+        return sorted(segments, key=lambda x: abs(float(x["ate"])), reverse=True)[:n]
 
 
 class SimulationResult(BaseModel):

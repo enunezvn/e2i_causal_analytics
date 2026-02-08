@@ -218,7 +218,7 @@ class CeleryEventConsumer:
     def _get_task_queue(self, event: Dict[str, Any]) -> str:
         """Extract queue name from event."""
         # Try to get from routing_key or default to 'default'
-        return event.get("routing_key", event.get("queue", "default"))
+        return str(event.get("routing_key", event.get("queue", "default")))
 
     def _get_or_create_timing(self, event: Dict[str, Any]) -> TaskTiming:
         """Get or create task timing tracker."""

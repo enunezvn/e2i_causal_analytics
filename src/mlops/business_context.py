@@ -124,7 +124,7 @@ class BusinessContext:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
-        result = {
+        result: Dict[str, Any] = {
             "brand": self.brand,
             "region": self.region,
             "segment": self.segment,

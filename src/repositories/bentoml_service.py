@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID, uuid4
 
 from .base import BaseRepository
@@ -426,7 +426,7 @@ class BentoMLServiceRepository(BaseRepository[BentoMLService]):
             return None
 
         try:
-            update_data = {
+            update_data: Dict[str, Any] = {
                 "health_status": health_status.value,
                 "last_health_check": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -741,7 +741,8 @@ class BentoMLMetricsRepository(BaseRepository[BentoMLServingMetrics]):
             ).execute()
 
             if result.data:
-                return result.data[0] if isinstance(result.data, list) else result.data
+                data = result.data[0] if isinstance(result.data, list) else result.data
+                return cast(Dict[str, Any], data)
 
             # Fallback to manual aggregation
             metrics = await self.get_metrics_range(

@@ -441,7 +441,7 @@ class ToolComposerGEPAMetric:
         lines.extend(parts)
 
         # Add optimization suggestions
-        lowest_component = min(scores, key=scores.get)
+        lowest_component = min(scores, key=lambda k: scores.get(k, 0.0))
         if scores[lowest_component] < 0.7:
             suggestions = {
                 "decomposition": "Improve query decomposition: check intent classification and entity extraction",

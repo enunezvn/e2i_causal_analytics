@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import typing
 from dataclasses import dataclass, field
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, Dict, Optional, cast, get_args, get_origin, get_type_hints
 
 # Python 3.11+ has Required/NotRequired in typing, else use typing_extensions
 try:
@@ -257,9 +257,9 @@ class ContractValidator:
             args = get_args(actual_type)
             for arg in args:
                 if arg is type(None) and value is None:
-                    return None
+                    return cast(Optional[Dict[str, str]], None)
                 if arg is not type(None) and self._is_instance(value, arg):
-                    return None
+                    return cast(Optional[Dict[str, str]], None)
             return {
                 "field": field_name,
                 "expected": str(expected_type),

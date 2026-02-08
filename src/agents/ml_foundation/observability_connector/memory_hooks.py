@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class ObservabilityConnectorMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -193,7 +193,7 @@ class ObservabilityConnectorMemoryHooks:
             return {}
 
         try:
-            context = {
+            context: Dict[str, Any] = {
                 "health_snapshots": [],
                 "anomalies": [],
                 "agent_patterns": [],
@@ -264,7 +264,7 @@ class ObservabilityConnectorMemoryHooks:
     ) -> Optional[str]:
         """Store observability event in episodic memory."""
         try:
-            from src.memory.episodic_memory import store_episodic_memory
+            from src.memory.episodic_memory import insert_episodic_memory
 
             content = {
                 "time_window": state.get("time_window"),
@@ -288,7 +288,7 @@ class ObservabilityConnectorMemoryHooks:
                 f"Spans: {result.get('total_spans_analyzed', 0)}."
             )
 
-            memory_id = await store_episodic_memory(
+            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
                 event_type="observability_metrics_collected",
                 agent_name="observability_connector",
@@ -299,7 +299,7 @@ class ObservabilityConnectorMemoryHooks:
             )
 
             logger.info(f"Stored observability event in episodic memory: {memory_id}")
-            return memory_id
+            return str(memory_id) if memory_id else None
         except Exception as e:
             logger.warning(f"Failed to store observability event: {e}")
             return None

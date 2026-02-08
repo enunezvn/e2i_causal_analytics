@@ -232,9 +232,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using deterministic composition")
-    QueryDecompositionSignature = None
-    ToolMappingSignature = None
-    ResponseSynthesisSignature = None
+    QueryDecompositionSignature = None  # type: ignore[assignment,misc]
+    ToolMappingSignature = None  # type: ignore[assignment,misc]
+    ResponseSynthesisSignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================
@@ -454,7 +454,7 @@ class ToolComposerDSPyIntegration:
         self._optimization_requests.append(request)
         logger.info(f"Optimization requested for tool_composer.{signature_name}")
 
-        return request["request_id"]
+        return str(request["request_id"])
 
     def get_pending_requests(self) -> List[Dict[str, Any]]:
         """Get pending optimization requests."""

@@ -275,6 +275,8 @@ class SecurityAuditService:
 
     def _log_to_file(self, event: SecurityAuditEvent) -> None:
         """Append event to JSON lines file."""
+        if self.log_file is None:
+            return
         try:
             with open(self.log_file, "a") as f:
                 f.write(event.to_json() + "\n")

@@ -7,7 +7,7 @@ Handles writing feature values to Supabase and cache invalidation.
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 import redis
@@ -85,7 +85,8 @@ class FeatureWriter:
             if not response.data:
                 raise RuntimeError("No data returned from insert")
 
-            feature_value = FeatureValue(**response.data[0])
+            first_record = cast(Dict[str, Any], response.data[0])
+            feature_value = FeatureValue(**first_record)
             logger.debug(f"Wrote feature value: {feature_name} for {entity_values}")
 
             # Invalidate cache
@@ -203,7 +204,8 @@ class FeatureWriter:
                         f"Multiple features found with name '{feature_name}'. "
                         "Consider specifying feature_group."
                     )
-                return UUID(response.data[0]["id"])
+                first_record = cast(Dict[str, Any], response.data[0])
+                return UUID(str(first_record["id"]))
 
             return None
 
@@ -241,8 +243,9 @@ class FeatureWriter:
             # Delete matching keys
             keys = self.redis_client.keys(pattern)
             if keys:
-                self.redis_client.delete(*keys)
-                logger.debug(f"Invalidated {len(keys)} cache entries")
+                keys_list: List[Any] = list(keys)  # type: ignore[arg-type]
+                self.redis_client.delete(*keys_list)
+                logger.debug(f"Invalidated {len(keys_list)} cache entries")
 
         except Exception as e:
             logger.warning(f"Cache invalidation error: {e}")

@@ -13,7 +13,7 @@ Usage:
 
 import logging
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from langchain_core.tools import tool
@@ -178,7 +178,9 @@ def validate_twin_fidelity(
             record = tracker.validate(
                 simulation_id=sim_uuid,
                 actual_ate=actual_ate,
-                actual_ci=(actual_ci_lower, actual_ci_upper) if actual_ci_lower else None,
+                actual_ci=cast(Tuple[float, float], (actual_ci_lower, actual_ci_upper))
+                if actual_ci_lower and actual_ci_upper
+                else None,
                 actual_sample_size=actual_sample_size,
                 actual_experiment_id=exp_uuid,
                 notes=validation_notes,
@@ -202,7 +204,7 @@ def validate_twin_fidelity(
             "tracking_id": str(record.tracking_id),
             "simulation_id": str(record.simulation_id),
             "simulated_ate": round(record.simulated_ate, 4),
-            "actual_ate": round(record.actual_ate, 4),
+            "actual_ate": round(record.actual_ate, 4) if record.actual_ate is not None else 0,
             "prediction_error": round(record.prediction_error, 4) if record.prediction_error else 0,
             "absolute_error": round(record.absolute_error, 4) if record.absolute_error else 0,
             "ci_coverage": record.ci_coverage,

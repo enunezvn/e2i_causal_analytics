@@ -86,7 +86,7 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
             brands = self._random_choice(
                 [b.value for b in Brand],
                 n,
-            )
+            ).tolist()
 
         # Generate specialties based on brand
         specialties = self._generate_specialties(brands)

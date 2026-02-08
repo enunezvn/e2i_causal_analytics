@@ -408,14 +408,14 @@ class NestedConfidenceInterval:
                 all_cates.extend(seg.cate.tolist())
                 segment_ids.extend([seg.segment_id] * len(seg.cate))
 
-        all_cates = np.array(all_cates)
-        n_total = len(all_cates)
+        all_cates_arr = np.array(all_cates)
+        n_total = len(all_cates_arr)
 
         bootstrap_ates = np.zeros(n_iter)
         for i in range(n_iter):
             # Resample with replacement
             indices = self._rng.choice(n_total, size=n_total, replace=True)
-            bootstrap_ates[i] = np.mean(all_cates[indices])
+            bootstrap_ates[i] = np.mean(all_cates_arr[indices])
 
         return bootstrap_ates
 

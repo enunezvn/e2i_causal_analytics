@@ -6,7 +6,7 @@ Verifies that Opik traces are created correctly for agent executions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -96,7 +96,7 @@ class OpikTraceVerifier:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.get(f"{self.base_url}/api/v1/private/traces/{trace_id}")
                 if resp.status_code == 200:
-                    return resp.json()
+                    return cast(dict[str, Any], resp.json())
         except Exception:
             pass
         return None
@@ -118,7 +118,7 @@ class OpikTraceVerifier:
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data.get("content", data.get("spans", []))
+                    return cast(list[dict[str, Any]], data.get("content", data.get("spans", [])))
         except Exception:
             pass
         return []
@@ -294,7 +294,7 @@ class OpikTraceVerifier:
         """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                params = {"page_size": limit}
+                params: dict[str, Any] = {"page_size": limit}
                 if project_name:
                     params["project_name"] = project_name
 
@@ -304,7 +304,7 @@ class OpikTraceVerifier:
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data.get("content", data.get("traces", []))
+                    return cast(list[dict[str, Any]], data.get("content", data.get("traces", [])))
         except Exception:
             pass
         return []
@@ -322,4 +322,4 @@ async def verify_opik_available(base_url: str = "http://localhost:5173") -> bool
     """
     verifier = OpikTraceVerifier(opik_base_url=base_url)
     health = await verifier.check_opik_health()
-    return health.get("healthy", False)
+    return cast(bool, health.get("healthy", False))

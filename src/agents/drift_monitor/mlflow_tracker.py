@@ -159,7 +159,7 @@ class DriftMonitorMLflowTracker:
             else:
                 experiment_id = experiment.experiment_id
 
-            return experiment_id
+            return str(experiment_id)
         except Exception as e:
             logger.warning(f"MLflow connection failed, continuing without tracking: {e}")
             self._mlflow = None  # Disable MLflow for subsequent calls

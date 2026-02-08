@@ -19,7 +19,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -404,7 +404,7 @@ class DriftMonitorMemoryHooks:
         if not self.semantic_memory:
             return {"patterns": [], "feature_clusters": [], "drift_history": {}}
 
-        semantic_context = {
+        semantic_context: Dict[str, Any] = {
             "patterns": [],
             "feature_clusters": [],
             "drift_history": {},
@@ -425,8 +425,9 @@ class DriftMonitorMemoryHooks:
                 try:
                     result = await self.semantic_memory.query(query)
                     if result:
+                        patterns_list: List[Dict[str, Any]] = semantic_context["patterns"]
                         for row in result:
-                            semantic_context["patterns"].append(
+                            patterns_list.append(
                                 {
                                     "feature": feature,
                                     "drift_type": row.get("drift_type"),
@@ -543,7 +544,7 @@ class DriftMonitorMemoryHooks:
             session_key = f"drift_monitor:session:{session_id}"
             cached = await self.working_memory.get(session_key)
             if cached:
-                return cached.get("result")
+                return cast(Dict[str, Any], cached.get("result"))
         except Exception as e:
             logger.warning(f"Error retrieving cached drift result: {e}")
 
@@ -719,7 +720,7 @@ class DriftMonitorMemoryHooks:
             elif drift_type == "concept":
                 drift_results = result.get("concept_drift_results", [])
 
-            feature_result = next((r for r in drift_results if r.get("feature") == feature), {})
+            feature_result: Dict[str, Any] = next((r for r in drift_results if r.get("feature") == feature), {})
 
             # Create/update Feature node
             feature_query = f"""

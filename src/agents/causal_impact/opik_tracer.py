@@ -38,7 +38,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar, cast
 
 from uuid_utils import uuid7 as uuid7_func
 
@@ -543,9 +543,9 @@ class CausalImpactOpikTracer:
                                     "has_error": bool(result.get(f"{node_name}_error")),
                                 }
                             )
-                        return result
+                        return cast(Dict[str, Any], result)
                 else:
-                    return await func(state)
+                    return cast(Dict[str, Any], await func(state))
 
             return wrapper  # type: ignore
 

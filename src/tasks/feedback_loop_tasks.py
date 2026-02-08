@@ -22,9 +22,9 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from src.workers.celery_app import celery_app
 
@@ -258,12 +258,15 @@ def run_feedback_loop_short_window(
         "short_window_types", ["trigger", "next_best_action"]
     )
 
-    return run_async(
-        _execute_feedback_loop(
-            prediction_types=types_to_process,
-            task_id=self.request.id,
-            window_name="short",
-        )
+    return cast(
+        Dict[str, Any],
+        run_async(
+            _execute_feedback_loop(
+                prediction_types=types_to_process,
+                task_id=self.request.id,
+                window_name="short",
+            )
+        ),
     )
 
 
@@ -292,12 +295,15 @@ def run_feedback_loop_medium_window(
 
     types_to_process = prediction_types or schedule_config.get("medium_window_types", ["churn"])
 
-    return run_async(
-        _execute_feedback_loop(
-            prediction_types=types_to_process,
-            task_id=self.request.id,
-            window_name="medium",
-        )
+    return cast(
+        Dict[str, Any],
+        run_async(
+            _execute_feedback_loop(
+                prediction_types=types_to_process,
+                task_id=self.request.id,
+                window_name="medium",
+            )
+        ),
     )
 
 
@@ -328,12 +334,15 @@ def run_feedback_loop_long_window(
         "long_window_types", ["market_share_impact", "risk"]
     )
 
-    return run_async(
-        _execute_feedback_loop(
-            prediction_types=types_to_process,
-            task_id=self.request.id,
-            window_name="long",
-        )
+    return cast(
+        Dict[str, Any],
+        run_async(
+            _execute_feedback_loop(
+                prediction_types=types_to_process,
+                task_id=self.request.id,
+                window_name="long",
+            )
+        ),
     )
 
 
@@ -497,7 +506,7 @@ def analyze_concept_drift_from_truth(
                 "error": str(e),
             }
 
-    return run_async(execute_analysis())
+    return cast(Dict[str, Any], run_async(execute_analysis()))
 
 
 @celery_app.task(bind=True, name="src.tasks.run_full_feedback_loop")
@@ -554,7 +563,7 @@ def run_full_feedback_loop(
             "total_duration_ms": duration_ms,
         }
 
-    return run_async(execute_full_loop())
+    return cast(Dict[str, Any], run_async(execute_full_loop()))
 
 
 # Celery Beat schedule configuration

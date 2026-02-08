@@ -108,7 +108,7 @@ def _compute_correlation_interactions(
     correlation_matrix = np.corrcoef(shap_values.T)
 
     # Build interaction matrix as nested dict
-    interaction_matrix = {}
+    interaction_matrix: Dict[str, Dict[str, float]] = {}
 
     for i in range(n_features):
         feature_i = feature_names[i]

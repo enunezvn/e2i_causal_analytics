@@ -28,7 +28,7 @@ Date: December 2025
 import functools
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Optional, TypeVar, cast
 from uuid import UUID
 
 from src.mlops.opik_connector import get_opik_connector
@@ -250,7 +250,7 @@ class AuditChainMixin:
             # Convert to AuditChainEntry objects
             entries = []
             for row in result.data or []:
-                entries.append(_row_to_entry(row))
+                entries.append(_row_to_entry(cast(Dict[str, Any], row)))
             return entries
         except Exception as e:
             logger.warning(f"Failed to get entries for workflow {workflow_id}: {e}")
@@ -427,7 +427,7 @@ def audited_traced_node(
                     # Set span output
                     span.set_output(output_summary)
 
-                    return result
+                    return cast(Dict[str, Any], result)
 
                 except Exception as e:
                     # Log error to span

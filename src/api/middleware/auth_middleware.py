@@ -11,7 +11,7 @@ Version: 4.2.3
 import logging
 import os
 import re
-from typing import Callable, List, Tuple
+from typing import Callable, List, Tuple, cast
 
 from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
@@ -190,11 +190,11 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         # Skip auth for public paths
         if _is_public_path(method, path):
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Skip auth for OPTIONS (CORS preflight)
         if method == "OPTIONS":
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Skip auth in testing mode (for integration/e2e tests)
         if TESTING_MODE:
@@ -208,14 +208,14 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 "user_metadata": {"name": "Test User"},
             }
             logger.debug(f"Testing mode - bypassing auth for {method} {path}")
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Check if auth is configured
         if not is_auth_enabled():
             logger.warning(
                 f"Auth not configured - allowing unauthenticated access to {method} {path}"
             )
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Get CORS headers for error responses
         cors_headers = _get_cors_headers(request)
@@ -305,7 +305,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         # We skip logging for every authenticated request to reduce noise
         # Login success is logged at the auth endpoint level, not middleware
 
-        return await call_next(request)
+        return cast(Response, await call_next(request))
 
 
 def get_public_paths() -> List[str]:

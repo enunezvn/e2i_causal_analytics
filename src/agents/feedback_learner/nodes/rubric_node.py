@@ -86,21 +86,24 @@ class RubricNode:
             logger.debug("No rubric evaluation context provided, skipping")
             return {
                 **state,
-                "rubric_evaluation": None,
+                "rubric_evaluation": {},
                 "rubric_latency_ms": int((time.time() - start_time) * 1000),
             }
 
         try:
             # Convert to EvaluationContext if dict
+            context: EvaluationContext
             if isinstance(eval_context, dict):
-                eval_context = EvaluationContext(**eval_context)
+                context = EvaluationContext(**eval_context)
+            else:
+                context = eval_context
 
             # Run evaluation
-            evaluation = await self.evaluator.evaluate(eval_context)
+            evaluation = await self.evaluator.evaluate(context)
 
             # Store results if db_client provided
             if self.db_client:
-                await self._store_evaluation(evaluation, eval_context)
+                await self._store_evaluation(evaluation, context)
 
             # Log result
             logger.info(
@@ -118,7 +121,7 @@ class RubricNode:
                 "rubric_weighted_score": evaluation.weighted_score,
                 "rubric_decision": evaluation.decision.value,
                 "rubric_pattern_flags": [p.model_dump() for p in evaluation.pattern_flags],
-                "rubric_improvement_suggestion": evaluation.improvement_suggestion,
+                "rubric_improvement_suggestion": evaluation.improvement_suggestion or "",
                 "rubric_latency_ms": rubric_latency,
             }
 
@@ -126,7 +129,7 @@ class RubricNode:
             logger.error("Rubric evaluation failed: %s", e)
             return {
                 **state,
-                "rubric_evaluation": None,
+                "rubric_evaluation": {},
                 "rubric_error": str(e),
                 "errors": (state.get("errors") or []) + [{"node": "rubric_node", "error": str(e)}],
                 "warnings": (state.get("warnings") or []) + [f"Rubric evaluation failed: {e}"],

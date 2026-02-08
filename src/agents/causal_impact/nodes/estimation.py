@@ -10,7 +10,7 @@ V4.2 Enhancement: Energy Score-based Estimator Selection
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -166,8 +166,18 @@ class EstimationNode:
             "ols": "linear_regression",
         }
 
+        # Cast method to the expected Literal type
+        MethodType = Literal[
+            "CausalForestDML", "LinearDML", "linear_regression",
+            "propensity_score_weighting", "causal_forest", "linear_dml", "drlearner", "ols"
+        ]
+        method_name = cast(
+            MethodType,
+            estimator_to_method.get(selected.estimator_type.value, "CausalForestDML")
+        )
+
         result: EstimationResult = {
-            "method": estimator_to_method.get(selected.estimator_type.value, "CausalForestDML"),
+            "method": method_name,
             "ate": float(selected.ate) if selected.ate is not None else 0.0,
             "ate_ci_lower": float(selected.ate_ci_lower) if selected.ate_ci_lower else 0.0,
             "ate_ci_upper": float(selected.ate_ci_upper) if selected.ate_ci_upper else 0.0,
@@ -183,7 +193,9 @@ class EstimationNode:
             "covariates_adjusted": covariate_cols,
             "heterogeneity_detected": False,
             # V4.2: Energy score fields
-            "selection_strategy": strategy,
+            "selection_strategy": cast(
+                Literal["first_success", "best_energy", "ensemble"], strategy
+            ),
             "selected_estimator": selected.estimator_type.value,
             "energy_score": float(energy_score),
             "energy_score_data": {
@@ -313,37 +325,36 @@ class EstimationNode:
                     use_energy_score_path = False
 
             # Legacy path: single method estimation
-            if not use_energy_score_path:
-                method = explicit_method or "CausalForestDML"
-                logger.info(f"Using legacy estimation with method: {method}")
+            method = explicit_method or "CausalForestDML"
+            logger.info(f"Using legacy estimation with method: {method}")
 
-                if method == "CausalForestDML":
-                    result = self._estimate_causal_forest(data, treatment, outcome, adjustment_set)
-                elif method == "LinearDML":
-                    result = self._estimate_linear_dml(data, treatment, outcome, adjustment_set)
-                elif method == "linear_regression":
-                    result = self._estimate_linear_regression(
-                        data, treatment, outcome, adjustment_set
-                    )
-                elif method == "propensity_score_weighting":
-                    result = self._estimate_propensity_weighting(
-                        data, treatment, outcome, adjustment_set
-                    )
-                else:
-                    raise ValueError(f"Unknown estimation method: {method}")
+            if method == "CausalForestDML":
+                result = self._estimate_causal_forest(data, treatment, outcome, adjustment_set)
+            elif method == "LinearDML":
+                result = self._estimate_linear_dml(data, treatment, outcome, adjustment_set)
+            elif method == "linear_regression":
+                result = self._estimate_linear_regression(
+                    data, treatment, outcome, adjustment_set
+                )
+            elif method == "propensity_score_weighting":
+                result = self._estimate_propensity_weighting(
+                    data, treatment, outcome, adjustment_set
+                )
+            else:
+                raise ValueError(f"Unknown estimation method: {method}")
 
-                latency_ms = (time.time() - start_time) * 1000
+            latency_ms = (time.time() - start_time) * 1000
 
-                return {
-                    **state,
-                    "estimation_result": result,
-                    "estimation_latency_ms": latency_ms,
-                    "current_phase": "refuting",
-                    "status": "computing",
-                    "energy_score_enabled": False,
-                    # Passthrough data for refutation node
-                    "estimation_data": data,
-                }
+            return {
+                **state,
+                "estimation_result": result,
+                "estimation_latency_ms": latency_ms,
+                "current_phase": "refuting",
+                "status": "computing",
+                "energy_score_enabled": False,
+                # Passthrough data for refutation node
+                "estimation_data": data,
+            }
 
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000

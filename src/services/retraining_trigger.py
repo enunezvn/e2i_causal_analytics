@@ -383,6 +383,9 @@ class RetrainingTriggerService:
             # Would send notification for approval here
             return None
 
+        if decision.reason is None:
+            logger.warning(f"Decision has no reason for {model_version}")
+            return None
         return await self.trigger_retraining(
             model_version=model_version,
             reason=decision.reason,
@@ -606,7 +609,7 @@ async def evaluate_and_trigger_retraining(
     }
 
     # Trigger if appropriate
-    if decision.should_retrain and (not decision.requires_approval or auto_approve):
+    if decision.should_retrain and (not decision.requires_approval or auto_approve) and decision.reason:
         job = await service.trigger_retraining(
             model_version=model_version,
             reason=decision.reason,

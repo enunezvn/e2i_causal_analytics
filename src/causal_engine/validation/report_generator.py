@@ -11,7 +11,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from src.causal_engine.validation.state import (
     ABReconciliationResult,
@@ -242,7 +242,9 @@ class ValidationReportGenerator:
             "poor": "warning",
             "failed": "failed",
         }
-        section_status = status_map.get(status, "failed")
+        section_status: Literal["passed", "warning", "failed"] = cast(
+            Literal["passed", "warning", "failed"], status_map.get(status, "failed")
+        )
 
         # Build details
         details = []
@@ -389,7 +391,7 @@ class ValidationReportGenerator:
         return ValidationReportSection(
             title="Confidence Assessment",
             status=status,
-            summary=f"Overall confidence: {overall_confidence:.1%} ({metrics['confidence_tier'].replace('_', ' ').title()})",
+            summary=f"Overall confidence: {overall_confidence:.1%} ({str(metrics['confidence_tier']).replace('_', ' ').title()})",
             details=details,
             metrics=metrics,
             visualizations=None,
@@ -796,13 +798,14 @@ class ValidationReportGenerator:
             "confidence_section",
             "discrepancy_section",
         ]:
-            section = report.get(section_key)
-            if section:
+            section_raw = report.get(section_key)
+            if section_raw:
+                section = cast(Dict[str, Any], section_raw)
                 md.append(f"## {section.get('title', 'Section')}")
                 md.append("")
-                md.append(f"**Status:** {section.get('status', 'unknown').upper()}")
+                md.append(f"**Status:** {str(section.get('status', 'unknown')).upper()}")
                 md.append("")
-                md.append(section.get("summary", ""))
+                md.append(str(section.get("summary", "")))
                 md.append("")
 
                 details = section.get("details", [])

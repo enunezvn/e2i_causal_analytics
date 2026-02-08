@@ -42,7 +42,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 # Configure logging
 logger = logging.getLogger(__name__)

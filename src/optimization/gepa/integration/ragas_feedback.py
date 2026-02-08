@@ -28,7 +28,7 @@ Version: 4.2.0
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol, Union
+from typing import Any, Callable, Coroutine, Optional, Protocol, Union
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +351,7 @@ def create_ragas_metric(
     provider: Optional[RAGASFeedbackProvider] = None,
     agent_name: str = "cognitive_rag",
     weights: Optional[dict[str, float]] = None,
-) -> Callable[[Any, Any, Any], ScoreWithFeedback]:
+) -> Callable[[Any, Any, Optional[Any]], Coroutine[Any, Any, ScoreWithFeedback]]:
     """Create a GEPA-compatible metric function using RAGAS evaluation.
 
     This factory creates a metric function that can be passed to GEPA's

@@ -27,10 +27,15 @@ import tempfile
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import pandas as pd
-import yaml
+
+if TYPE_CHECKING:
+    from feast import FeatureStore
+
+    from src.feature_store.client import FeatureStoreClient
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -187,9 +192,9 @@ class FeastClient:
             materialization_config_path: Optional path to materialization config.
         """
         self.config = config or FeastConfig()
-        self._store = None
+        self._store: Optional[FeatureStore] = None
         self._initialized = False
-        self._custom_store = None  # Fallback custom store
+        self._custom_store: Optional[FeatureStoreClient] = None  # Fallback custom store
         self._stats_cache: Dict[str, FeatureStatistics] = {}
         self._stats_cache_time: Dict[str, datetime] = {}
         self._temp_dir: Optional[str] = None  # Temp directory for expanded config
@@ -348,7 +353,7 @@ class FeastClient:
             raise RuntimeError("Custom store not available for fallback")
 
         # Parse feature refs to get feature names
-        features = {}
+        features: Dict[str, List[Any]] = {}
         for ref in feature_refs:
             if ":" in ref:
                 view_name, feat_name = ref.split(":", 1)
@@ -361,12 +366,12 @@ class FeastClient:
         for entity_row in entity_rows:
             entity_id = entity_row.get("hcp_id") or entity_row.get("patient_id")
             if entity_id:
-                result = await self._custom_store.get_features(
-                    entity_id=entity_id,
+                result = self._custom_store.get_entity_features(
+                    entity_values=entity_row,
                     feature_names=list(features.keys()),
                 )
                 for key in features:
-                    features[key].append(result.get(key))
+                    features[key].append(result.features.get(key))
 
         return features
 
@@ -995,7 +1000,7 @@ class FeastClient:
             return [
                 {
                     "name": e.name,
-                    "join_keys": list(e.join_keys),
+                    "join_keys": [e.join_key] if hasattr(e, "join_key") else [],
                     "description": e.description,
                     "tags": dict(e.tags) if hasattr(e, "tags") else {},
                 }
@@ -1169,14 +1174,17 @@ class FeastClient:
 _client: Optional[FeastClient] = None
 
 
-async def get_feast_client() -> FeastClient:
+async def get_feast_client(config: Optional[FeastConfig] = None) -> FeastClient:
     """Get or create the singleton Feast client.
+
+    Args:
+        config: Optional FeastConfig. Only used when creating new client.
 
     Returns:
         Initialized FeastClient instance.
     """
     global _client
     if _client is None:
-        _client = FeastClient()
+        _client = FeastClient(config=config)
         await _client.initialize()
     return _client

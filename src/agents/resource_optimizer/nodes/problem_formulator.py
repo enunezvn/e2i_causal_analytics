@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from ..state import AllocationTarget, Constraint, ResourceOptimizerState
 
@@ -59,7 +59,7 @@ class ProblemFormulatorNode:
             return {
                 **state,
                 "_problem": problem,  # Internal use for optimizer
-                "solver_type": solver_type,
+                "solver_type": cast(Literal["linear", "milp", "nonlinear"], solver_type),
                 "formulation_latency_ms": formulation_time,
                 "status": "optimizing",
             }

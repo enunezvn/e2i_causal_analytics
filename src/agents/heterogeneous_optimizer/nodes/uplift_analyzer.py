@@ -13,7 +13,7 @@ import asyncio
 import logging
 import time
 import traceback
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -447,11 +447,11 @@ class UpliftAnalyzerNode:
         """
         try:
             from src.causal_engine.uplift.metrics import (
-                area_under_uplift_curve,
+                auuc as calculate_auuc,
                 qini_coefficient,
             )
 
-            auuc = area_under_uplift_curve(uplift_scores, treatment, y)
+            auuc = calculate_auuc(uplift_scores, treatment, y)
             qini = qini_coefficient(uplift_scores, treatment, y)
 
             return {"auuc": auuc, "qini": qini}
@@ -561,4 +561,4 @@ class UpliftAnalyzerNode:
         efficiency = top_20_treated_outcome / overall_treated_outcome
 
         # Normalize to 0-1 (cap at 2x as "perfect")
-        return min(efficiency / 2.0, 1.0)
+        return cast(float, min(efficiency / 2.0, 1.0))

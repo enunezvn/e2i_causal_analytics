@@ -17,7 +17,8 @@ The simulation follows these steps:
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
+from uuid import UUID, uuid4
 
 import numpy as np
 from scipy import stats
@@ -67,7 +68,7 @@ class SimulationEngine:
     """
 
     # Effect size parameters by intervention type (simplified model)
-    INTERVENTION_EFFECTS = {
+    INTERVENTION_EFFECTS: Dict[str, Dict[str, Any]] = {
         "email_campaign": {
             "base_effect": 0.05,
             "variance": 0.02,
@@ -250,7 +251,7 @@ class SimulationEngine:
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         result = SimulationResult(
-            model_id=self.model_id,
+            model_id=self.model_id or uuid4(),
             intervention_config=intervention_config,
             population_filters=population_filter or PopulationFilter(),
             twin_count=n_twins,
@@ -349,7 +350,7 @@ class SimulationEngine:
         intervention_type = config.intervention_type
 
         # Get intervention parameters
-        params = self.INTERVENTION_EFFECTS.get(
+        params: Dict[str, Any] = self.INTERVENTION_EFFECTS.get(
             intervention_type, {"base_effect": 0.05, "variance": 0.02}
         )
 
@@ -444,7 +445,7 @@ class SimulationEngine:
             f"effect={effect:.4f} (before_noise={base_effect * effect_multiplier:.4f})"
         )
 
-        return effect
+        return float(effect)
 
     def _calculate_statistics(
         self,
@@ -615,7 +616,7 @@ class SimulationEngine:
     ) -> SimulationResult:
         """Create error result when simulation cannot complete."""
         return SimulationResult(
-            model_id=self.model_id,
+            model_id=self.model_id or uuid4(),
             intervention_config=config,
             population_filters=filters,
             twin_count=0,

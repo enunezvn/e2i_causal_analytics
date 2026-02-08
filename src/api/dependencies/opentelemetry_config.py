@@ -61,12 +61,14 @@ def init_opentelemetry() -> bool:
             ALWAYS_OFF,
             ALWAYS_ON,
             ParentBasedTraceIdRatio,
+            Sampler,
         )
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
 
         # Configure sampler based on rate
+        sampler: Sampler
         if OTEL_SAMPLING_RATE <= 0:
             sampler = ALWAYS_OFF
             logger.info("OpenTelemetry: Sampling DISABLED (rate=0)")

@@ -12,7 +12,7 @@ Version: 4.4
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, cast
 
 import networkx as nx
 import pandas as pd
@@ -173,9 +173,10 @@ class GraphBuilderNode:
                 "confidence": confidence,
                 # V4.4: Discovery metadata
                 "discovery_enabled": auto_discover,
-                "discovery_gate_decision": gate_evaluation.get("decision")
-                if gate_evaluation
-                else None,
+                "discovery_gate_decision": cast(
+                    Literal["accept", "review", "reject", "augment"],
+                    gate_evaluation.get("decision") if gate_evaluation else "accept",
+                ),
                 "discovery_algorithms_used": (
                     [a.value for a in discovery_result.config.algorithms]
                     if discovery_result and discovery_result.config
@@ -189,7 +190,7 @@ class GraphBuilderNode:
             }
 
             # Compute DAG version hash for expert review tracking
-            dag_version_hash = compute_dag_hash(causal_graph=causal_graph)
+            dag_version_hash = compute_dag_hash(causal_graph=causal_graph.copy())  # type: ignore[arg-type]
             causal_graph["dag_version_hash"] = dag_version_hash
 
             latency_ms = (time.time() - start_time) * 1000
@@ -576,11 +577,10 @@ class GraphBuilderNode:
             dag = self._construct_dag(treatment, outcome, confounders)
             return dag, augmented_edges
 
-        else:
-            # REJECT or unknown: use manual DAG
-            logger.info("Using manual DAG (REJECT or fallback)")
-            dag = self._construct_dag(treatment, outcome, confounders)
-            return dag, augmented_edges
+        # REJECT or unknown: use manual DAG
+        logger.info("Using manual DAG (REJECT or fallback)")
+        dag = self._construct_dag(treatment, outcome, confounders)
+        return dag, augmented_edges
 
 
 # Standalone function for LangGraph integration

@@ -20,7 +20,7 @@ import logging
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -246,7 +246,7 @@ class TracingMiddleware(BaseHTTPMiddleware):
             )
 
         try:
-            response = await call_next(request)
+            response = cast(Response, await call_next(request))
 
             # Add trace headers to response
             if self.add_response_headers:

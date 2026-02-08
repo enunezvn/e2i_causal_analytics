@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +133,13 @@ class InferenceEngine:
         # Convert default rule dicts to InferenceRule objects
         for rule_def in self.DEFAULT_RULES:
             # Create a simple confidence calculator
-            confidence_fn = rule_def["confidence_fn"]
+            confidence_fn = cast(Callable[[Dict[str, Any]], float], rule_def["confidence_fn"])
 
             rule = InferenceRule(
-                name=rule_def["name"],
-                inference_type=rule_def["type"],
-                source_pattern=rule_def["pattern"],
-                inferred_pattern=rule_def["infers"],
+                name=cast(str, rule_def["name"]),
+                inference_type=cast(InferenceType, rule_def["type"]),
+                source_pattern=cast(str, rule_def["pattern"]),
+                inferred_pattern=cast(str, rule_def["infers"]),
                 confidence_calculator=confidence_fn,
             )
             self.rules.append(rule)
@@ -218,7 +218,7 @@ class InferenceEngine:
             mediators = node_ids[1:-1] if len(node_ids) > 2 else []
 
             # Identify potential confounders (would need separate query)
-            confounders = []  # TODO: Implement confounder detection
+            confounders: List[str] = []  # TODO: Implement confounder detection
 
             causal_path = CausalPath(
                 source_id=source_id,

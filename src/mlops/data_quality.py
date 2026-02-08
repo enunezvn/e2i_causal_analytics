@@ -180,13 +180,15 @@ class WebhookAlertHandler(AlertHandler):
 
         try:
             data = json.dumps(payload).encode("utf-8")
+            if config.webhook_url is None:
+                return False
             req = urllib.request.Request(
                 config.webhook_url,
                 data=data,
                 headers={"Content-Type": "application/json"},
             )
             with urllib.request.urlopen(req, timeout=config.webhook_timeout) as response:
-                return response.status < 300
+                return bool(response.status < 300)
         except Exception as e:
             logger.error(f"Sync webhook failed: {e}")
             return False
@@ -198,7 +200,7 @@ class WebhookAlertHandler(AlertHandler):
         config: AlertConfig,
     ) -> Dict[str, Any]:
         """Build webhook payload."""
-        payload = {
+        payload: Dict[str, Any] = {
             "type": "data_quality_alert",
             "severity": severity.value,
             "timestamp": datetime.now().isoformat(),
@@ -950,7 +952,7 @@ class DataQualityValidator:
             # Default: check for duplicate rows
             if df.empty:
                 return 1.0
-            return 1 - (df.duplicated().sum() / len(df))
+            return float(1 - (df.duplicated().sum() / len(df)))
         return sum(1 for r in uniqueness_results if r["success"]) / len(uniqueness_results)
 
     async def validate_splits(

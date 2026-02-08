@@ -348,10 +348,10 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using deterministic interpretation")
-    CausalGraphSignature = None
-    EvidenceSynthesisSignature = None
-    CausalInterpretationSignature = None
-    CausalImpactModule = None
+    CausalGraphSignature = None  # type: ignore[assignment,misc]
+    EvidenceSynthesisSignature = None  # type: ignore[assignment,misc]
+    CausalInterpretationSignature = None  # type: ignore[assignment,misc]
+    CausalImpactModule = None  # type: ignore[assignment,misc]
 
 
 # Module singleton for optimization

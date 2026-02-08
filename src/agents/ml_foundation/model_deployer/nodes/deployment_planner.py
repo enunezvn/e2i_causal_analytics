@@ -354,7 +354,7 @@ def _create_rollback_config(
     Returns:
         Rollback configuration
     """
-    config = {
+    config: Dict[str, Any] = {
         "enabled": True,
         "automatic": target_environment == "production",
         "health_check_failures_threshold": 3,

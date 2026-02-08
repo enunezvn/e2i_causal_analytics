@@ -8,7 +8,7 @@ V4.4: Added discovery routing to pass DAG data to discovery-aware agents.
 
 import time
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal, cast
 
 from ..state import AgentDispatch, OrchestratorState
 
@@ -177,7 +177,12 @@ class RouterNode:
             if key in self.MULTI_AGENT_PATTERNS:
                 pattern = self.MULTI_AGENT_PATTERNS[key]
                 for agent_name, priority in pattern:
-                    dispatch_plan.append(self._get_dispatch_for_agent(agent_name, priority))
+                    dispatch_plan.append(
+                        self._get_dispatch_for_agent(
+                            agent_name,
+                            cast(Literal["low", "medium", "high", "critical"], priority),
+                        )
+                    )
                 # Group by priority for parallel execution
                 parallel_groups = self._group_by_priority(dispatch_plan)
 
@@ -251,7 +256,9 @@ class RouterNode:
             "current_phase": "dispatching",
         }
 
-    def _get_dispatch_for_agent(self, agent_name: str, priority: str) -> AgentDispatch:
+    def _get_dispatch_for_agent(
+        self, agent_name: str, priority: Literal["low", "medium", "high", "critical"]
+    ) -> AgentDispatch:
         """Get dispatch config for a specific agent.
 
         Args:
@@ -404,5 +411,7 @@ async def route_to_agents(state: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Updated state
     """
+    from src.agents.orchestrator.state import OrchestratorState
+
     router = RouterNode()
-    return await router.execute(state)
+    return cast(Dict[str, Any], await router.execute(cast(OrchestratorState, state)))

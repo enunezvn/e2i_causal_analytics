@@ -17,7 +17,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ class PredictionSynthesizerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -265,7 +265,7 @@ class PredictionSynthesizerMemoryHooks:
 
             cached = await redis.get(performance_key)
             if cached:
-                return json.loads(cached)
+                return cast(Dict[str, Dict[str, Any]], json.loads(cached))
             return {}
         except Exception as e:
             logger.warning(f"Failed to get model performance history: {e}")

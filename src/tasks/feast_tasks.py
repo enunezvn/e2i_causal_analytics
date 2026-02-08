@@ -8,9 +8,9 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from src.workers.celery_app import celery_app
 
@@ -95,7 +95,7 @@ def materialize_features(
         finally:
             await job.close()
 
-    result = run_async(run_job())
+    result = cast(Dict[str, Any], run_async(run_job()))
 
     # Log result
     status = result.get("status", "unknown")
@@ -152,7 +152,7 @@ def materialize_incremental_features(
         finally:
             await job.close()
 
-    result = run_async(run_job())
+    result = cast(Dict[str, Any], run_async(run_job()))
 
     # Log result
     status = result.get("status", "unknown")
@@ -224,7 +224,7 @@ def check_feature_freshness(
         finally:
             await job.close()
 
-    result = run_async(run_check())
+    result = cast(Dict[str, Any], run_async(run_check()))
 
     # Log and alert
     if result.get("status") == "completed":
@@ -300,12 +300,18 @@ def materialize_feature_view(
     logger.info(f"Materializing feature view: {feature_view}")
 
     if mode == "incremental":
-        return materialize_incremental_features.delay(
-            end_date=end_date,
-            feature_views=[feature_view],
-        ).get()
+        return cast(
+            Dict[str, Any],
+            materialize_incremental_features.delay(
+                end_date=end_date,
+                feature_views=[feature_view],
+            ).get(),
+        )
     else:
-        return materialize_features.delay(
-            end_date=end_date,
-            feature_views=[feature_view],
-        ).get()
+        return cast(
+            Dict[str, Any],
+            materialize_features.delay(
+                end_date=end_date,
+                feature_views=[feature_view],
+            ).get(),
+        )

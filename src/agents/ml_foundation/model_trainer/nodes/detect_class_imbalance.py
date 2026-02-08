@@ -132,7 +132,8 @@ RATIONALE: <one sentence explanation>"""
             messages=[{"role": "user", "content": prompt}],
         )
 
-        response_text = message.content[0].text
+        first_block = message.content[0]
+        response_text = first_block.text if hasattr(first_block, "text") else str(first_block)
 
         # Parse response
         strategy = "class_weight"  # Default fallback

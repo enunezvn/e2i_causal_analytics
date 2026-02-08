@@ -10,7 +10,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, cast
 
 import numpy as np
 from scipy import stats
@@ -161,7 +161,7 @@ class PowerAnalysisNode:
                 achieved_power=0.0,
                 minimum_detectable_effect=0.0,
                 alpha=0.05,
-                effect_size_type="unknown",
+                effect_size_type="cohens_d",  # Default to cohens_d for unknown
                 assumptions=["Default values used due to calculation error"],
             )
             state["duration_estimate_days"] = 70  # ~10 weeks default
@@ -375,7 +375,7 @@ class PowerAnalysisNode:
         Returns:
             Sensitivity analysis results
         """
-        sensitivity = {
+        sensitivity: Dict[str, Any] = {
             "effect_size_variations": {},
             "power_variations": {},
         }
@@ -399,4 +399,4 @@ class PowerAnalysisNode:
                 "change_from_base": result["sample_size"] - base_n,
             }
 
-        return sensitivity
+        return cast(Dict[str, Any], sensitivity)

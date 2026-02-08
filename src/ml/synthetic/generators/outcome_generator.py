@@ -4,7 +4,7 @@ Business Outcome Generator.
 Generates synthetic business outcomes linked to patient journeys.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -168,10 +168,10 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
             probs.append(adjusted_prob)
 
         # Normalize probabilities
-        probs = np.array(probs)
-        probs = probs / probs.sum()
+        probs_arr = np.array(probs)
+        probs_norm = probs_arr / probs_arr.sum()
 
-        return self._rng.choice(self.OUTCOME_TYPES, p=probs)
+        return cast(str, self._rng.choice(self.OUTCOME_TYPES, p=probs_norm))
 
     def _calculate_outcome_value(
         self,
@@ -228,17 +228,18 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
         outcome_dates = self._random_dates(n)
 
         # Determine brand
+        brands_list: List[str]
         if self.config.brand:
-            brands = [self.config.brand.value] * n
+            brands_list = [self.config.brand.value] * n
         else:
-            brands = self._random_choice([b.value for b in Brand], n)
+            brands_list = list(self._random_choice([b.value for b in Brand], n))
 
         return pd.DataFrame(
             {
                 "patient_journey_id": journey_ids,
                 "patient_id": patient_ids,
                 "hcp_id": self._random_choice(hcp_ids, n).tolist(),
-                "brand": brands,
+                "brand": brands_list,
                 "outcome_type": outcome_types,
                 "outcome_date": outcome_dates,
                 "outcome_value": outcome_values,

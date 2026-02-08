@@ -335,7 +335,7 @@ class ResourceOptimizerMLflowTracker:
         metrics.objective_value = state.get("objective_value")
         metrics.projected_outcome = state.get("projected_total_outcome")
         metrics.projected_roi = state.get("projected_roi")
-        metrics.solver_status = state.get("solver_status", "unknown")
+        metrics.solver_status = str(state.get("solver_status", "unknown"))
         metrics.solve_time_ms = state.get("solve_time_ms", 0)
 
         # Allocation changes

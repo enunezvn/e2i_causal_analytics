@@ -29,7 +29,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
 
 if TYPE_CHECKING:
     from .state import PredictionSynthesizerState
@@ -299,9 +299,10 @@ class PredictionSynthesizerMLflowTracker:
             mlflow.log_metrics(metrics.to_dict())
 
             # Log additional parameters
-            ensemble_pred = state.get("ensemble_prediction", {})
+            ensemble_pred = state.get("ensemble_prediction")
             if ensemble_pred:
-                mlflow.log_param("ensemble_method", ensemble_pred.get("ensemble_method", "unknown"))
+                method = ensemble_pred.get("ensemble_method", "unknown") if isinstance(ensemble_pred, dict) else "unknown"
+                mlflow.log_param("ensemble_method", method)
 
             # Log confidence and agreement tags
             mlflow.set_tags(
@@ -332,8 +333,8 @@ class PredictionSynthesizerMLflowTracker:
         metrics = PredictionSynthesizerMetrics()
 
         # Ensemble prediction metrics
-        ensemble = state.get("ensemble_prediction", {})
-        if ensemble:
+        ensemble = state.get("ensemble_prediction")
+        if ensemble and isinstance(ensemble, dict):
             metrics.point_estimate = ensemble.get("point_estimate")
             metrics.prediction_interval_lower = ensemble.get("prediction_interval_lower")
             metrics.prediction_interval_upper = ensemble.get("prediction_interval_upper")
@@ -346,8 +347,8 @@ class PredictionSynthesizerMLflowTracker:
         metrics.models_total = metrics.models_succeeded + metrics.models_failed
 
         # Context metrics
-        pred_context = state.get("prediction_context", {})
-        if pred_context:
+        pred_context = state.get("prediction_context")
+        if pred_context and isinstance(pred_context, dict):
             metrics.historical_accuracy = pred_context.get("historical_accuracy")
             similar_cases = pred_context.get("similar_cases", [])
             metrics.similar_cases_count = len(similar_cases) if similar_cases else 0
@@ -379,19 +380,19 @@ class PredictionSynthesizerMLflowTracker:
                     mlflow.log_artifact(preds_path, "predictions")
 
                 # Log ensemble prediction
-                ensemble = state.get("ensemble_prediction", {})
-                if ensemble:
+                ensemble_data = state.get("ensemble_prediction")
+                if ensemble_data:
                     ensemble_path = os.path.join(tmpdir, "ensemble_prediction.json")
                     with open(ensemble_path, "w") as f:
-                        json.dump(ensemble, f, indent=2, default=str)
+                        json.dump(ensemble_data, f, indent=2, default=str)
                     mlflow.log_artifact(ensemble_path, "predictions")
 
                 # Log prediction context
-                pred_context = state.get("prediction_context", {})
-                if pred_context:
+                context_data = state.get("prediction_context")
+                if context_data:
                     context_path = os.path.join(tmpdir, "prediction_context.json")
                     with open(context_path, "w") as f:
-                        json.dump(pred_context, f, indent=2, default=str)
+                        json.dump(context_data, f, indent=2, default=str)
                     mlflow.log_artifact(context_path, "context")
 
         except Exception as e:

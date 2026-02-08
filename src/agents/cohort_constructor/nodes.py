@@ -11,7 +11,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
 
@@ -65,7 +65,7 @@ async def validate_config(state: CohortConstructorState) -> Dict[str, Any]:
         if config_dict:
             # Explicit configuration provided
             try:
-                cohort_config = CohortConfig.from_dict(config_dict)
+                cohort_config = CohortConfig.from_dict(cast(Dict[str, Any], config_dict))
                 logger.info(f"Using explicit configuration: {cohort_config.cohort_name}")
             except Exception as e:
                 config_errors.append(f"Invalid configuration format: {str(e)}")
@@ -235,7 +235,7 @@ async def apply_criteria(state: CohortConstructorState) -> Dict[str, Any]:
                 "error_category": "INVALID_CONFIG",
             }
 
-        config = CohortConfig.from_dict(config_dict)
+        config = CohortConfig.from_dict(cast(Dict[str, Any], config_dict))
 
         # Get patient data (from source_population DataFrame reference)
         source_population = state.get("source_population")
@@ -408,7 +408,7 @@ async def validate_temporal(state: CohortConstructorState) -> Dict[str, Any]:
                 "error_code": CohortErrorCode.CC_001.value,
             }
 
-        config = CohortConfig.from_dict(config_dict)
+        config = CohortConfig.from_dict(cast(Dict[str, Any], config_dict))
         temporal_req = config.temporal_requirements
 
         # If no temporal requirements, skip temporal validation entirely
@@ -613,7 +613,7 @@ async def generate_metadata(state: CohortConstructorState) -> Dict[str, Any]:
 
         # Get configuration
         config_dict = state.get("validated_config")
-        config = CohortConfig.from_dict(config_dict) if config_dict else None
+        config = CohortConfig.from_dict(cast(Dict[str, Any], config_dict)) if config_dict else None
 
         # Get data
         source_population = state.get("source_population")

@@ -473,6 +473,9 @@ class RAGASEvaluator:
         Returns:
             Evaluation result
         """
+        # Tracer is verified not-None by caller (_evaluate_sample)
+        assert self._opik_tracer is not None, "Opik tracer must be initialized for tracing"
+
         metadata = {
             "query": sample.query,
             "brand": sample.metadata.get("brand"),
@@ -946,6 +949,9 @@ class RAGEvaluationPipeline:
         # Check if all thresholds met
         all_passed = (
             avg_faith is not None
+            and avg_relevancy is not None
+            and avg_precision is not None
+            and avg_recall is not None
             and avg_faith >= self.config.thresholds.get("faithfulness", 0.85)
             and avg_relevancy >= self.config.thresholds.get("answer_relevancy", 0.90)
             and avg_precision >= self.config.thresholds.get("context_precision", 0.80)

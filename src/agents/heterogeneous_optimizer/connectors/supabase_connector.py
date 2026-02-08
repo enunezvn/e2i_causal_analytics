@@ -16,9 +16,12 @@ Example:
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.repositories.ml_data_loader import MLDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +66,7 @@ class HeterogeneousOptimizerDataConnector:
             supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
         )
 
-        self._loader = None
+        self._loader: Optional["MLDataLoader"] = None
         self._initialized = False
 
     async def _ensure_initialized(self) -> None:
@@ -121,6 +124,7 @@ class HeterogeneousOptimizerDataConnector:
 
         try:
             # Use MLDataLoader to load a sample (no temporal splitting for CATE)
+            assert self._loader is not None, "Loader not initialized"
             df = await self._loader.load_table_sample(
                 table=source,
                 filters=filters,
@@ -162,6 +166,7 @@ class HeterogeneousOptimizerDataConnector:
 
         try:
             # Load with temporal splits
+            assert self._loader is not None, "Loader not initialized"
             dataset = await self._loader.load_for_training(
                 table=source,
                 filters=filters,
@@ -199,6 +204,7 @@ class HeterogeneousOptimizerDataConnector:
             health["connected"] = True
 
             # Check database connectivity by loading a sample
+            assert self._loader is not None, "Loader not initialized"
             df = await self._loader.load_table_sample("business_metrics", limit=1)
             health["database"] = True
             health["business_metrics"] = not df.empty

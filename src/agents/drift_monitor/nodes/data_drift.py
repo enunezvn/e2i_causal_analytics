@@ -11,6 +11,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Literal, cast
 
 import numpy as np
 from scipy import stats
@@ -18,6 +19,9 @@ from scipy import stats
 from src.agents.drift_monitor.connectors import get_connector
 from src.agents.drift_monitor.connectors.base import BaseDataConnector, TimeWindow
 from src.agents.drift_monitor.state import DriftMonitorState, DriftResult, ErrorDetails
+
+# Type alias for severity levels
+SeverityLevel = Literal["none", "low", "medium", "high", "critical"]
 
 
 class DataDriftNode:
@@ -323,7 +327,7 @@ class DataDriftNode:
             "test_statistic": float(psi),  # Use PSI as primary statistic
             "p_value": float(p_value),
             "drift_detected": drift_detected,
-            "severity": severity,
+            "severity": cast(SeverityLevel, severity),
             "baseline_period": "baseline",
             "current_period": "current",
         }

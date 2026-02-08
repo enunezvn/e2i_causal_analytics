@@ -30,7 +30,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional, Union
 
 if TYPE_CHECKING:
     from .state import FeedbackLearnerState
@@ -101,7 +101,7 @@ class FeedbackLearnerMetrics:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert metrics to dictionary for MLflow logging."""
-        metrics = {
+        metrics: Dict[str, Union[int, float]] = {
             "total_feedback_items": self.total_feedback_items,
             "rating_feedback_count": self.rating_feedback_count,
             "correction_feedback_count": self.correction_feedback_count,

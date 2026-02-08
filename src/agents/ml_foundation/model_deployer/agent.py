@@ -318,6 +318,10 @@ class ModelDeployerAgent:
             }
 
             # Create deployment record
+            if model_registry_id is None:
+                logger.warning("No model_registry_id available for deployment record")
+                return
+
             deployment = await deployment_repo.create_deployment(
                 model_registry_id=model_registry_id,
                 deployment_name=state.get("deployment_name", ""),

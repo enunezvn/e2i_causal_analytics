@@ -234,8 +234,9 @@ class SampleDataGenerator:
             rank = random.randint(1, 100)
 
             # Actual outcome (with some noise vs prediction)
+            actual: float
             if threshold:
-                actual = 1 if np.random.random() < predicted_value + np.random.normal(0, 0.1) else 0
+                actual = 1.0 if np.random.random() < predicted_value + np.random.normal(0, 0.1) else 0.0
             else:
                 actual = predicted_value * np.random.uniform(0.7, 1.3)
 

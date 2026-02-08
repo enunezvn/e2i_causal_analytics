@@ -13,7 +13,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from .graph import create_orchestrator_graph
 from .state import OrchestratorState
@@ -134,7 +134,7 @@ class OrchestratorAgent:
 
         async def execute_and_build_output() -> Dict[str, Any]:
             """Execute workflow and build output."""
-            final_state = await self.graph.ainvoke(initial_state)
+            final_state = cast(OrchestratorState, await self.graph.ainvoke(initial_state))
             return self._build_output(final_state)
 
         if opik_tracer:
@@ -273,8 +273,8 @@ class OrchestratorAgent:
             "routing_latency_ms": state.get("routing_latency_ms", 0),
             "dispatch_latency_ms": state.get("dispatch_latency_ms", 0),
             "synthesis_latency_ms": state.get("synthesis_latency_ms", 0),
-            "intent_classified": state.get("intent", {}).get("primary_intent"),
-            "intent_confidence": state.get("intent", {}).get("confidence", 0.0),
+            "intent_classified": (intent := state.get("intent")) and intent["primary_intent"],
+            "intent_confidence": (intent := state.get("intent")) and intent["confidence"] or 0.0,
         }
 
     def _generate_query_id(self) -> str:
@@ -302,7 +302,8 @@ class OrchestratorAgent:
 
         classifier = IntentClassifierNode()
         result = await classifier.execute({"query": query})
-        return result.get("intent", {})
+        intent = result.get("intent")
+        return dict(intent) if intent else {}
 
     async def route_query(self, query: str) -> List[str]:
         """Route a query to agents (for standalone use).
@@ -324,7 +325,7 @@ class OrchestratorAgent:
         routed_state = await router.execute(state_with_intent)
 
         # Extract agent names
-        dispatch_plan = routed_state.get("dispatch_plan", [])
+        dispatch_plan = routed_state.get("dispatch_plan") or []
         return [d["agent_name"] for d in dispatch_plan]
 
     def get_agent_registry(self) -> Dict[str, Any]:

@@ -10,7 +10,7 @@ Performance Target: <2s per experiment
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from src.agents.experiment_monitor.state import (
     EnrollmentIssue,
@@ -240,7 +240,7 @@ class HealthCheckerNode:
 
     def _determine_health_status(
         self, enrollment_rate: float, information_fraction: float, days_running: int
-    ) -> str:
+    ) -> Literal["healthy", "warning", "critical", "unknown"]:
         """Determine overall health status.
 
         Args:

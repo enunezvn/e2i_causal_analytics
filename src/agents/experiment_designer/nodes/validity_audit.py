@@ -18,7 +18,9 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Dict, Protocol, cast, runtime_checkable
+
+from pydantic import SecretStr
 
 from src.agents.experiment_designer.state import (
     ErrorDetails,
@@ -60,11 +62,11 @@ def _get_validity_llm() -> tuple[Any, str, bool]:
 
         # Use Claude Sonnet 4 for validity assessment
         model_name = os.environ.get("VALIDITY_AUDIT_MODEL", "claude-sonnet-4-20250514")
-        llm = ChatAnthropic(
+        llm = ChatAnthropic(  # type: ignore[call-arg]
             model=model_name,
             max_tokens=4096,
             temperature=0.3,  # Lower temperature for structured analysis
-            api_key=api_key,
+            api_key=SecretStr(api_key),
         )
         logger.info(f"Using ChatAnthropic ({model_name}) for validity audit")
         return llm, model_name, True
@@ -428,7 +430,7 @@ For each threat, assess severity (low/medium/high/critical) and mitigation:
         json_match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1))
+                return cast(Dict[str, Any], json.loads(json_match.group(1)))
             except json.JSONDecodeError:
                 pass
 
@@ -437,7 +439,7 @@ For each threat, assess severity (low/medium/high/critical) and mitigation:
             start = content.find("{")
             end = content.rfind("}") + 1
             if start >= 0 and end > start:
-                return json.loads(content[start:end])
+                return cast(Dict[str, Any], json.loads(content[start:end]))
         except json.JSONDecodeError:
             pass
 

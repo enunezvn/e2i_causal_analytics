@@ -120,7 +120,7 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
             n_actual = n
             patient_ids = self._generate_ids("pt", n, width=6)
             journey_ids = self._generate_ids("patient", n, width=6)
-            brands = self._random_choice([b.value for b in Brand], n)
+            brands = self._random_choice([b.value for b in Brand], n).tolist()
             start_dates = self._random_dates(n)
             hcp_ids = self._generate_ids("hcp", max(100, n // 10))
             hcp_ids = self._random_choice(hcp_ids, n).tolist()

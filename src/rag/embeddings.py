@@ -15,7 +15,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import openai
 from openai import AsyncOpenAI, OpenAI
@@ -180,12 +180,13 @@ class OpenAIEmbeddingClient:
         Raises:
             EmbeddingError: If embedding generation fails after retries
         """
-        is_single = isinstance(text, str)
-        texts = [text] if is_single else text
-
-        embeddings = self._embed_with_retry(texts, dimensions)
-
-        return embeddings[0] if is_single else embeddings
+        if isinstance(text, str):
+            texts = [text]
+            embeddings = self._embed_with_retry(texts, dimensions)
+            return embeddings[0]
+        else:
+            embeddings = self._embed_with_retry(text, dimensions)
+            return embeddings
 
     def encode_batch(
         self, texts: List[str], batch_size: Optional[int] = None, dimensions: Optional[int] = None
@@ -329,12 +330,13 @@ class OpenAIEmbeddingClient:
         Raises:
             EmbeddingError: If embedding generation fails
         """
-        is_single = isinstance(text, str)
-        texts = [text] if is_single else text
-
-        embeddings = await self._embed_with_retry_async(texts, dimensions)
-
-        return embeddings[0] if is_single else embeddings
+        if isinstance(text, str):
+            texts = [text]
+            embeddings = await self._embed_with_retry_async(texts, dimensions)
+            return embeddings[0]
+        else:
+            embeddings = await self._embed_with_retry_async(text, dimensions)
+            return embeddings
 
     async def encode_batch_async(
         self,
@@ -514,4 +516,5 @@ async def get_embedding(
     """
     config = EmbeddingConfig(model_name=model, api_key=api_key)
     client = OpenAIEmbeddingClient(config)
-    return await client.encode_async(text)
+    result = await client.encode_async(text)
+    return cast(List[float], result)

@@ -454,7 +454,7 @@ class PlanExecutor:
                 else:
                     # Multiple steps, execute in parallel
                     results = await self._execute_parallel(
-                        [plan.get_step(sid) for sid in group if plan.get_step(sid)],
+                        [step for sid in group if (step := plan.get_step(sid)) is not None],
                         outputs,
                         context,
                     )

@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Literal, Optional, Protocol, cast
 
 from ..metrics import DEFAULT_THRESHOLDS
 from ..state import HealthScoreState, PipelineStatus
@@ -118,6 +118,7 @@ class PipelineHealthNode:
     async def _get_pipeline_status(self, pipeline_name: str) -> PipelineStatus:
         """Get status for a single pipeline."""
         try:
+            assert self.pipeline_store is not None
             status = await self.pipeline_store.get_pipeline_status(pipeline_name)
 
             # Calculate freshness
@@ -150,7 +151,7 @@ class PipelineHealthNode:
                 last_success=status.get("last_success", ""),
                 rows_processed=status.get("rows_processed", 0),
                 freshness_hours=freshness_hours if freshness_hours != float("inf") else -1,
-                status=pipeline_status,
+                status=cast(Literal["healthy", "stale", "failed"], pipeline_status),
             )
 
         except Exception as e:

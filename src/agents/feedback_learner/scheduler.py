@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 
 if TYPE_CHECKING:
     from .agent import FeedbackLearnerAgent, FeedbackLearnerOutput
@@ -272,7 +272,7 @@ class FeedbackLearnerScheduler:
                     count = store.count_pending()
                     if asyncio.iscoroutine(count):
                         count = await count
-                    return count
+                    return cast(int, count)
                 elif hasattr(store, "get_feedback"):
                     # Fallback: get all and count
                     items = await store.get_feedback()

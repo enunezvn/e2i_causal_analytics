@@ -183,7 +183,7 @@ class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
         Returns:
             Dict mapping (source, target) to effect strength
         """
-        effects = {}
+        effects: Dict[Tuple[str, str], float] = {}
         adj_weights = result.metadata.get("adjacency_weights", [])
         node_names = result.metadata.get("node_names", [])
 
@@ -382,7 +382,7 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
         Returns:
             Dict mapping (source, target) to effect strength
         """
-        effects = {}
+        effects: Dict[Tuple[str, str], float] = {}
         adj_weights = result.metadata.get("adjacency_weights", [])
         node_names = result.metadata.get("node_names", [])
 

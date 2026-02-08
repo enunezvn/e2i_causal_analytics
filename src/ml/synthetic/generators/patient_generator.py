@@ -5,7 +5,7 @@ Generates synthetic patient journeys with embedded causal effects.
 This is the core generator for causal validation.
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -112,7 +112,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         if self.config.brand:
             brands = [self.config.brand.value] * n
         else:
-            brands = self._random_choice([b.value for b in Brand], n)
+            brands = self._random_choice([b.value for b in Brand], n).tolist()
 
         # Build DataFrame
         df = pd.DataFrame(
@@ -295,10 +295,10 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         treatment_initiated = (expit(outcome_propensity) > 0.5).astype(int)
 
         # Generate days to treatment (only for those who initiated)
-        days_to_treatment = np.where(
+        days_to_treatment: Any = np.where(
             treatment_initiated == 1,
             self._random_int(7, 90, n),
-            None,
+            np.nan,  # Use np.nan instead of None for numpy compatibility
         )
 
         return {
@@ -336,4 +336,4 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             # Generate placeholder HCP IDs
             n_hcps = max(100, n // 10)  # ~10 patients per HCP
             hcp_ids = self._generate_ids("hcp", n_hcps)
-            return self._random_choice(hcp_ids, n).tolist()
+            return cast(List[str], self._random_choice(hcp_ids, n).tolist())

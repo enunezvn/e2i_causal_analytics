@@ -270,9 +270,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using deterministic design")
-    DesignReasoningSignature = None
-    InvestigationPlanSignature = None
-    ValidityAssessmentSignature = None
+    DesignReasoningSignature = None  # type: ignore[assignment,misc]
+    InvestigationPlanSignature = None  # type: ignore[assignment,misc]
+    ValidityAssessmentSignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================

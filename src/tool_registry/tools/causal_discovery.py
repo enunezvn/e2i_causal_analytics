@@ -406,7 +406,7 @@ class CausalDiscoveryTool:
             import opik
 
             trace_id = str(uuid.uuid4())
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name="discover_dag",
                 input={
                     "algorithms": params.algorithms,
@@ -426,7 +426,7 @@ class CausalDiscoveryTool:
         try:
             import opik
 
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name="discover_dag.complete",
                 output={
                     "success": output.success,
@@ -493,7 +493,7 @@ class DriverRankerTool:
         # Start trace
         trace_id = self._start_trace(params) if self.opik_enabled else None
 
-        errors = []
+        errors: List[str] = []
         timestamp = datetime.now(timezone.utc).isoformat()
 
         try:
@@ -579,7 +579,7 @@ class DriverRankerTool:
             import opik
 
             trace_id = str(uuid.uuid4())
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name="rank_drivers",
                 input={
                     "target": params.target,
@@ -598,7 +598,7 @@ class DriverRankerTool:
         try:
             import opik
 
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name="rank_drivers.complete",
                 output={
                     "success": output.success,

@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,7 @@ class DataPreparerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -207,7 +207,7 @@ class DataPreparerMemoryHooks:
             return {}
 
         try:
-            context = {
+            context: Dict[str, Any] = {
                 "quality_patterns": [],
                 "leakage_incidents": [],
                 "data_source_history": [],
@@ -272,7 +272,7 @@ class DataPreparerMemoryHooks:
     ) -> Optional[str]:
         """Store QC report in episodic memory."""
         try:
-            from src.memory.episodic_memory import store_episodic_memory
+            from src.memory.episodic_memory import insert_episodic_memory
 
             content = {
                 "experiment_id": state.get("experiment_id"),
@@ -303,7 +303,7 @@ class DataPreparerMemoryHooks:
                 f"Leakage: {'DETECTED' if state.get('leakage_detected') else 'none'}."
             )
 
-            memory_id = await store_episodic_memory(
+            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
                 event_type="qc_report_completed",
                 agent_name="data_preparer",
@@ -314,7 +314,7 @@ class DataPreparerMemoryHooks:
             )
 
             logger.info(f"Stored QC report in episodic memory: {memory_id}")
-            return memory_id
+            return str(memory_id) if memory_id else None
         except Exception as e:
             logger.warning(f"Failed to store QC report: {e}")
             return None

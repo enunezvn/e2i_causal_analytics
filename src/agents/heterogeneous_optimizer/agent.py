@@ -10,7 +10,7 @@ Latency: Up to 150s
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, cast
 
 from .graph import create_heterogeneous_optimizer_graph
 from .memory_hooks import (
@@ -177,12 +177,12 @@ class HeterogeneousOptimizerAgent:
                         query_id=session_id,
                     ):
                         # Execute workflow
-                        final_state = await self.graph.ainvoke(initial_state)
+                        final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
                         output = self._build_output(final_state)
                         await tracker.log_analysis_result(output, final_state)
                 else:
                     # Execute workflow without MLflow
-                    final_state = await self.graph.ainvoke(initial_state)
+                    final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
                     output = self._build_output(final_state)
 
                 # Log analysis results to Opik
@@ -215,14 +215,14 @@ class HeterogeneousOptimizerAgent:
                     outcome_var=input_data.get("outcome_var"),
                     query_id=session_id,
                 ):
-                    final_state = await self.graph.ainvoke(initial_state)
+                    final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
                     output = self._build_output(final_state)
                     await tracker.log_analysis_result(output, final_state)
                     await _contribute_to_memory(output, final_state)
                     return output
             else:
                 # Execute workflow without any tracking
-                final_state = await self.graph.ainvoke(initial_state)
+                final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
                 output = self._build_output(final_state)
                 await _contribute_to_memory(output, final_state)
                 return output
@@ -308,7 +308,8 @@ class HeterogeneousOptimizerAgent:
             }
             episodic_context = memory_context.episodic_context
 
-        return {
+        # Cast partial state - remaining fields populated by graph nodes
+        return cast(HeterogeneousOptimizerState, {
             # Input
             "query": input_data["query"],
             "treatment_var": input_data["treatment_var"],
@@ -354,7 +355,7 @@ class HeterogeneousOptimizerAgent:
             "session_id": session_id,
             "working_memory_context": working_memory_context,
             "episodic_context": episodic_context,
-        }
+        })
 
     def _build_output(self, final_state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Build output from final state.

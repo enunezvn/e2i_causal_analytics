@@ -59,7 +59,7 @@ class MockDataConnector:
             base = 100 + np.random.normal(0, 20)
 
             # Heterogeneous treatment effect based on specialty
-            treatment_effect = 0
+            treatment_effect: float = 0.0
             if data["hcp_engagement_frequency"][i] == 1:
                 if data["hcp_specialty"][i] == "Oncology":
                     treatment_effect = 50 + np.random.normal(0, 10)  # High responder

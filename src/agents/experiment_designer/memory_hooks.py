@@ -18,7 +18,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -481,7 +481,7 @@ class ExperimentDesignerMemoryHooks:
             session_key = f"experiment_designer:session:{session_id}"
             cached = await self.working_memory.get(session_key)
             if cached:
-                return cached.get("result")
+                return cast(Dict[str, Any], cached.get("result"))
         except Exception as e:
             logger.warning(f"Error retrieving cached experiment design: {e}")
 

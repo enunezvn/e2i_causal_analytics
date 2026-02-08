@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID, uuid4
 
 from .base import BaseRepository
@@ -789,7 +789,10 @@ class FeastMaterializationRepository(BaseRepository[FeastMaterializationJob]):
             ).execute()
 
             if result.data:
-                return result.data[0] if isinstance(result.data, list) else result.data
+                return cast(
+                    Dict[str, Any],
+                    result.data[0] if isinstance(result.data, list) else result.data,
+                )
 
             # Fallback to manual aggregation
             jobs = await self.get_jobs_for_view(feature_view_id, limit=100)

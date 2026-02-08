@@ -64,7 +64,7 @@ async def init_redis() -> Redis:
     # Reset stale reference so retries don't short-circuit
     if _redis_client is not None:
         try:
-            await _redis_client.ping()
+            await _redis_client.ping()  # type: ignore[misc]
             return _redis_client
         except Exception:
             _redis_client = None
@@ -80,7 +80,7 @@ async def init_redis() -> Redis:
         )
 
         # Verify connection
-        await _redis_client.ping()
+        await _redis_client.ping()  # type: ignore[misc]
         logger.info("Redis connection established successfully")
 
         return _redis_client
@@ -135,7 +135,7 @@ async def redis_health_check() -> dict:
     try:
         client = await get_redis()
         start = time.time()
-        await client.ping()
+        await client.ping()  # type: ignore[misc]
         latency_ms = (time.time() - start) * 1000
 
         # Get info for additional metrics

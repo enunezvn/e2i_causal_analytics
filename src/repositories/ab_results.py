@@ -12,7 +12,7 @@ Data access layer for:
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from src.repositories.base import BaseRepository
@@ -526,7 +526,7 @@ class ABResultsRepository(BaseRepository):
 
         if result.data:
             scores = [row["fidelity_score"] for row in result.data]
-            return sum(scores) / len(scores)
+            return cast(float, sum(scores) / len(scores))
 
         return 0.0
 

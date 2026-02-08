@@ -196,7 +196,7 @@ class DiscoveryResult:
         """Number of nodes in ensemble DAG."""
         if self.ensemble_dag is None:
             return 0
-        return self.ensemble_dag.number_of_nodes()
+        return int(self.ensemble_dag.number_of_nodes())
 
     @property
     def algorithm_agreement(self) -> float:

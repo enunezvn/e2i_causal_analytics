@@ -168,7 +168,8 @@ class ParallelPipeline(PipelineOrchestrator):
             results = await self._gather_fail_fast(tasks)
         else:
             # Wait for all tasks, continue on failures
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Type is list of (tuple | BaseException) due to return_exceptions=True
+            results = await asyncio.gather(*tasks, return_exceptions=True)  # type: ignore[assignment]
 
         # Process results
         for result in results:

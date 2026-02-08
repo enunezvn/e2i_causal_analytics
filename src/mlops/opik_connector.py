@@ -47,7 +47,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from uuid_utils import uuid7 as uuid7_func  # For Opik-compatible UUID v7
 
@@ -392,14 +392,14 @@ class OpikConnector:
                 if self.config.url:
                     configure_kwargs["url"] = self.config.url
 
-                opik.configure(**configure_kwargs)
+                opik.configure(**configure_kwargs)  # type: ignore[arg-type]
                 logger.info(
                     f"Opik configured: use_local={self.config.use_local}, "
                     f"url={self.config.url}, workspace={self.config.workspace}"
                 )
 
             # Create Opik client instance
-            self._opik_client = opik.Opik(project_name=self.config.project_name)
+            self._opik_client = opik.Opik(project_name=self.config.project_name)  # type: ignore[assignment]
             logger.debug("Opik client initialized successfully")
 
         except ImportError:
@@ -501,7 +501,7 @@ class OpikConnector:
                 try:
                     if is_new_trace:
                         # Create new trace
-                        opik_trace = self._opik_client.trace(
+                        opik_trace = self._opik_client.trace(  # type: ignore[attr-defined]
                             id=trace_id,
                             name=f"{agent_name}.{operation}",
                             start_time=start_time,
@@ -888,7 +888,7 @@ class OpikConnector:
             }
 
             # Create trace for the prediction
-            opik_trace = self._opik_client.trace(
+            opik_trace = self._opik_client.trace(  # type: ignore[attr-defined]
                 id=trace_id,
                 name=f"prediction.{model_name}",
                 start_time=start_time,

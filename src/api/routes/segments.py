@@ -25,7 +25,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -581,8 +581,8 @@ async def _execute_segment_analysis(
         )
         from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
-        # Initialize state
-        initial_state: HeterogeneousOptimizerState = {
+        # Initialize state (cast partial state - remaining fields populated by graph nodes)
+        initial_state = cast(HeterogeneousOptimizerState, {
             "query": request.query,
             "treatment_var": request.treatment_var,
             "outcome_var": request.outcome_var,
@@ -600,7 +600,7 @@ async def _execute_segment_analysis(
             "estimation_latency_ms": 0,
             "analysis_latency_ms": 0,
             "total_latency_ms": 0,
-        }
+        })
 
         # Create and run graph
         graph = create_heterogeneous_optimizer_graph()
@@ -650,7 +650,7 @@ def _convert_cate_results(
     cate_data: Dict[str, List[Dict[str, Any]]],
 ) -> Dict[str, List[CATEResult]]:
     """Convert agent CATE output to API response format."""
-    result = {}
+    result: Dict[str, List[CATEResult]] = {}
     for segment_var, cate_list in cate_data.items():
         result[segment_var] = []
         for cate in cate_list:

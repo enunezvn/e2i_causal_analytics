@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 from uuid import UUID
 
 from src.utils.audit_chain import AgentTier, AuditChainService
@@ -162,8 +162,11 @@ class MLFoundationPipeline:
         """
         if self._audit_service is None:
             try:
-                self._audit_service = AuditChainService()
-                logger.debug("Audit chain service initialized")
+                from src.repositories import get_supabase_client
+                supabase = get_supabase_client()
+                if supabase:
+                    self._audit_service = AuditChainService(supabase)
+                    logger.debug("Audit chain service initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize audit service (non-fatal): {e}")
         return self._audit_service
@@ -334,7 +337,7 @@ class MLFoundationPipeline:
                 feature_refs=refs,
                 max_staleness_hours=self.config.feast_max_staleness_hours,
             )
-            return result
+            return cast(Dict[str, Any], result)
 
         except Exception as e:
             logger.warning(f"Feature freshness check failed: {e}")
@@ -396,9 +399,12 @@ class MLFoundationPipeline:
         audit_service = self._get_audit_service()
         if audit_service:
             try:
-                audit_workflow_id = audit_service.start_workflow(
-                    "ml_foundation_pipeline", AgentTier.ML_FOUNDATION
+                genesis_entry = audit_service.start_workflow(
+                    agent_name="ml_foundation_pipeline",
+                    agent_tier=AgentTier.ML_FOUNDATION,
+                    action_type="pipeline_start",
                 )
+                audit_workflow_id = genesis_entry.workflow_id
                 logger.debug(f"Started audit workflow: {audit_workflow_id}")
             except Exception as e:
                 logger.warning(f"Failed to start audit workflow (non-fatal): {e}")
@@ -697,7 +703,7 @@ class MLFoundationPipeline:
             validation_passed=gate_passed,
         )
 
-        return gate_passed
+        return cast(bool, gate_passed)
 
     async def _run_model_selection(
         self,
@@ -798,7 +804,7 @@ class MLFoundationPipeline:
             "qc_report": result.qc_report,
             "experiment_id": result.experiment_id,
             "success_criteria": result.success_criteria,
-            "problem_type": result.scope_spec.get("problem_type", "binary_classification"),
+            "problem_type": (result.scope_spec or {}).get("problem_type", "binary_classification"),
             "enable_hpo": self.config.enable_hpo,
             "hpo_trials": self.config.hpo_trials,
             "hpo_timeout_hours": self.config.hpo_timeout_hours,

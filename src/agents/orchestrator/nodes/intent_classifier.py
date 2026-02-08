@@ -8,13 +8,20 @@ Fast intent classification optimized for <500ms:
 import logging
 import re
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Literal, cast
 
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 
 from ..state import IntentClassification, OrchestratorState
 
 logger = logging.getLogger(__name__)
+
+# Type alias for intent types
+IntentType = Literal[
+    "causal_effect", "performance_gap", "segment_analysis", "experiment_design",
+    "prediction", "resource_allocation", "explanation", "system_health",
+    "drift_check", "feedback", "general"
+]
 
 
 def _get_opik_connector():
@@ -177,7 +184,7 @@ class IntentClassifierNode:
                 requires_multi_agent=False,
             )
 
-        primary = max(scores, key=scores.get)
+        primary = max(scores, key=lambda k: scores.get(k, 0.0))
         confidence = scores[primary]
 
         # Get secondary intents (those with matches but lower score)
@@ -186,7 +193,7 @@ class IntentClassifierNode:
         ]
 
         return IntentClassification(
-            primary_intent=primary,
+            primary_intent=cast(IntentType, primary),
             confidence=confidence,
             secondary_intents=secondary[:2],
             requires_multi_agent=len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8,
@@ -269,7 +276,7 @@ Respond with ONLY a JSON object:
 
 
 # Export for use in graph
-async def classify_intent(state: Dict[str, Any]) -> Dict[str, Any]:
+async def classify_intent(state: OrchestratorState) -> OrchestratorState:
     """Node function for intent classification.
 
     Args:

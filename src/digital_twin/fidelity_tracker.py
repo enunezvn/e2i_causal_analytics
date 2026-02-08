@@ -16,7 +16,7 @@ Key Functions:
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 import numpy as np
@@ -88,7 +88,7 @@ class FidelityTracker:
         self._retraining_service = retraining_service
         self._auto_trigger_retraining = auto_trigger_retraining
         self.records: Dict[UUID, FidelityRecord] = {}
-        self.model_fidelity_cache: Dict[UUID, Dict[str, Any]] = {}
+        self.model_fidelity_cache: Dict[str, Dict[str, Any]] = {}
 
         logger.info(
             f"Initialized FidelityTracker "
@@ -291,7 +291,7 @@ class FidelityTracker:
         ci_coverages = [r.ci_coverage for r in validated_records if r.ci_coverage is not None]
 
         # Grade distribution
-        grade_counts = {}
+        grade_counts: Dict[str, int] = {}
         for r in validated_records:
             grade = r.fidelity_grade.value
             grade_counts[grade] = grade_counts.get(grade, 0) + 1
@@ -363,7 +363,7 @@ class FidelityTracker:
 
         # Try repository if available
         if self.repository:
-            return self.repository.get_fidelity_by_simulation(simulation_id)
+            return cast(Optional[FidelityRecord], self.repository.get_fidelity_by_simulation(simulation_id))
 
         return None
 
@@ -377,11 +377,11 @@ class FidelityTracker:
             return 0.5  # Unknown
 
         # Error component (lower is better)
-        mean_error = np.mean(errors)
-        error_score = max(0, 1 - mean_error)  # Cap at 0
+        mean_error = float(np.mean(errors))
+        error_score = max(0.0, 1.0 - mean_error)  # Cap at 0
 
         # CI coverage component
-        coverage_score = np.mean(ci_coverages) if ci_coverages else 0.5
+        coverage_score = float(np.mean(ci_coverages)) if ci_coverages else 0.5
 
         # Weighted combination
         fidelity_score = 0.7 * error_score + 0.3 * coverage_score
@@ -416,7 +416,7 @@ class FidelityTracker:
         # Check if recent error is significantly higher
         increase = (recent_mean - older_mean) / older_mean if older_mean > 0 else 0
 
-        return increase > self.DEGRADATION_THRESHOLD
+        return bool(increase > self.DEGRADATION_THRESHOLD)
 
     def _invalidate_model_cache(self, simulation_id: UUID) -> None:
         """Invalidate model cache when new validation added."""
@@ -429,7 +429,7 @@ class FidelityTracker:
         total_records = len(self.records)
         validated = sum(1 for r in self.records.values() if r.actual_ate is not None)
 
-        grades = {}
+        grades: Dict[str, int] = {}
         for r in self.records.values():
             if r.fidelity_grade != FidelityGrade.UNVALIDATED:
                 grade = r.fidelity_grade.value

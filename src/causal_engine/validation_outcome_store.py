@@ -693,7 +693,7 @@ class ExperimentKnowledgeStore:
         # Get all failures and score by relevance
         all_failures = await self._outcome_store.query_failures(limit=50)
 
-        experiments = []
+        experiments: List[Dict[str, Any]] = []
         for outcome in all_failures:
             # Score relevance
             relevance = 0
@@ -727,7 +727,7 @@ class ExperimentKnowledgeStore:
                 )
 
         # Sort by relevance and limit
-        experiments.sort(key=lambda x: x["relevance_score"], reverse=True)
+        experiments.sort(key=lambda x: int(x.get("relevance_score", 0)), reverse=True)
         return experiments[:limit]
 
     async def get_recent_assumption_violations(

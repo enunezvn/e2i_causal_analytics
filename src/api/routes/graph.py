@@ -932,6 +932,7 @@ async def get_graph_stats() -> GraphStatsResponse:
                 relationships_by_type={},
                 total_episodes=0,
                 total_communities=0,
+                last_updated=None,
             )
 
         stats = semantic.get_stats()

@@ -638,9 +638,9 @@ def composable_tool(
             return func(*args, **kwargs)
 
         # Attach schema to function for introspection
-        wrapper._tool_schema = schema
+        setattr(wrapper, "_tool_schema", schema)
 
-        return wrapper
+        return wrapper  # type: ignore[return-value]
 
     return decorator
 

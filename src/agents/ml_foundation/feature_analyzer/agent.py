@@ -21,7 +21,7 @@ Integration:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple, cast
 
 from .graph import create_feature_analyzer_graph, create_shap_analysis_graph
 from .state import FeatureAnalyzerState
@@ -138,7 +138,7 @@ class FeatureAnalyzerAgent:
         # Prepare initial state
         initial_state: FeatureAnalyzerState = {
             # Input fields
-            "model_uri": model_uri,
+            "model_uri": model_uri,  # type: ignore[typeddict-item]
             "experiment_id": experiment_id,
             "training_run_id": input_data.get("training_run_id", "unknown"),
             # Configuration
@@ -151,7 +151,7 @@ class FeatureAnalyzerAgent:
             "X_train": input_data.get("X_train"),
             "y_train": input_data.get("y_train"),
             # Feature names from data_preparer (for SHAP output)
-            "feature_columns": input_data.get("feature_columns"),
+            "feature_columns": input_data.get("feature_columns"),  # type: ignore[typeddict-item]
             # Status
             "status": "in_progress",
         }
@@ -319,7 +319,7 @@ class FeatureAnalyzerAgent:
 
         return feature_importance_list
 
-    def _build_interaction_list(self, state: Dict[str, Any]) -> list:
+    def _build_interaction_list(self, state: Dict[str, Any]) -> List[Any]:
         """Build FeatureInteraction list.
 
         Args:
@@ -332,7 +332,7 @@ class FeatureAnalyzerAgent:
 
         # If we have LLM interpretations, use those
         if interaction_interpretations:
-            return interaction_interpretations
+            return cast(List[Any], interaction_interpretations)
 
         # Otherwise, build from raw interactions
         top_interactions_raw = state.get("top_interactions_raw", [])

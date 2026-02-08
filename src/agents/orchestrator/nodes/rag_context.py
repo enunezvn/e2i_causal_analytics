@@ -10,7 +10,7 @@ agent responses with:
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from src.rag.types import ExtractedEntities, RetrievalResult
 
@@ -89,10 +89,12 @@ class RAGContextNode:
         start_time = time.time()
 
         query = state.get("query", "")
-        intent = state.get("intent", {})
+        intent_data = state.get("intent")
+        intent: dict[str, Any] = dict(intent_data) if intent_data else {}
 
         # Skip if no query or if intent is system-related
-        if not query or intent.get("primary_intent") in ["system_health", "drift_check"]:
+        primary_intent = intent.get("primary_intent")
+        if not query or primary_intent in ["system_health", "drift_check"]:
             logger.debug("Skipping RAG context - not applicable for this intent")
             return {
                 **state,
@@ -137,7 +139,7 @@ class RAGContextNode:
 
             logger.info(f"RAG context retrieved: {len(results)} results in {rag_latency_ms}ms")
 
-            return {
+            return {  # type: ignore[typeddict-unknown-key]
                 **state,
                 "rag_context": rag_context,
                 "rag_results": [self._result_to_dict(r) for r in results],
@@ -180,7 +182,7 @@ class RAGContextNode:
         # Extract entities
         if self._entity_extractor:
             try:
-                return self._entity_extractor.extract(query)
+                return cast(ExtractedEntities, self._entity_extractor.extract(query))
             except Exception as e:
                 logger.warning(f"Entity extraction failed: {e}")
 
@@ -192,7 +194,7 @@ class RAGContextNode:
             return None
 
         try:
-            return await self._embedding_service.embed(query)
+            return cast(List[float], await self._embedding_service.embed(query))
         except Exception as e:
             logger.warning(f"Embedding generation failed: {e}")
             return None
@@ -249,8 +251,8 @@ class RAGContextNode:
             )
 
             # Extract causal paths if present
-            if result.graph_context:
-                for path in result.graph_context.paths:
+            if result.graph_context and hasattr(result.graph_context, "paths"):
+                for path in result.graph_context.paths:  # type: ignore[attr-defined]
                     causal_paths.append(
                         {
                             "path": " → ".join(path.node_names) if path.node_names else str(path),
@@ -313,4 +315,5 @@ async def retrieve_rag_context(state: Dict[str, Any]) -> Dict[str, Any]:
         Updated state with RAG context
     """
     node = RAGContextNode()
-    return await node.execute(state)
+    result = await node.execute(cast(OrchestratorState, state))
+    return cast(Dict[str, Any], result)

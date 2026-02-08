@@ -234,8 +234,8 @@ class QueryRouter:
         merged = "\n\n".join(parts)
 
         if failed:
-            failed_agents = [r.get("agent") for r in failed]
-            merged += f"\n\n*Note: Unable to get results from: {', '.join(failed_agents)}*"
+            failed_agents = [r.get("agent") for r in failed if r.get("agent") is not None]
+            merged += f"\n\n*Note: Unable to get results from: {', '.join(str(a) for a in failed_agents)}*"
 
         return merged
 

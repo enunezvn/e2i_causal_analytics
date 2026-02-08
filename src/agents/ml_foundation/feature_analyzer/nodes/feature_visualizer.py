@@ -237,7 +237,7 @@ def _create_selection_funnel(
 
     # Create bars
     x_pos = np.arange(len(steps))
-    colors = plt.cm.Blues(np.linspace(0.3, 0.8, len(steps)))
+    colors = plt.cm.Blues(np.linspace(0.3, 0.8, len(steps)))  # type: ignore[attr-defined]
 
     bars = ax.bar(x_pos, counts, color=colors, edgecolor="white", linewidth=1.5)
 

@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
 from uuid_utils import uuid7 as uuid7_func
 
 if TYPE_CHECKING:
-    pass
+    from src.mlops.opik_connector import OpikConnector
 
 logger = logging.getLogger(__name__)
 
@@ -531,7 +531,7 @@ class ToolComposerOpikTracer:
         self.project_name = project_name
         self.enabled = enabled
         self.sample_rate = sample_rate
-        self._opik_connector = None
+        self._opik_connector: Optional[OpikConnector] = None
         self._initialized = False
 
     def _ensure_initialized(self) -> None:
@@ -628,6 +628,7 @@ class ToolComposerOpikTracer:
             # Create Opik trace if enabled and sampled
             if self.is_enabled and self._should_trace():
                 try:
+                    assert self._opik_connector is not None
                     async with self._opik_connector.trace_agent(
                         agent_name="tool_composer",
                         operation="compose",

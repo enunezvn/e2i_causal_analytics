@@ -269,6 +269,8 @@ class GEPAABTest:
             t_stat, p_value = stats.ttest_ind(treatment_scores, baseline_scores)
 
             # 95% confidence interval for difference
+            # Since len >= 30, score_avg values are definitely not None
+            assert baseline_score_avg is not None and treatment_score_avg is not None
             mean_diff = treatment_score_avg - baseline_score_avg
             pooled_se = (stats.sem(baseline_scores) ** 2 + stats.sem(treatment_scores) ** 2) ** 0.5
             ci_margin = 1.96 * pooled_se
@@ -281,7 +283,7 @@ class GEPAABTest:
         recommendation = "Insufficient data for recommendation"
 
         total_samples = len(baseline_obs) + len(treatment_obs)
-        if total_samples >= self.target_sample_size and is_significant:
+        if total_samples >= self.target_sample_size and is_significant and score_delta is not None:
             if score_delta > 0:
                 winner = "gepa"
                 recommendation = (

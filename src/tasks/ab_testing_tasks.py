@@ -25,10 +25,10 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from src.workers.celery_app import celery_app
 
@@ -82,10 +82,10 @@ def load_config() -> Dict[str, Any]:
             with open(CONFIG_PATH) as f:
                 config = yaml.safe_load(f) or {}
                 # Deep merge with defaults
-                merged = DEFAULT_CONFIG.copy()
+                merged: Dict[str, Any] = DEFAULT_CONFIG.copy()
                 for key, value in config.items():
-                    if isinstance(value, dict) and key in merged:
-                        merged[key] = {**merged[key], **value}
+                    if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
+                        merged[key] = {**cast(Dict[str, Any], merged[key]), **value}
                     else:
                         merged[key] = value
                 return merged
@@ -260,7 +260,7 @@ def scheduled_interim_analysis(
                 "error": str(e),
             }
 
-    return run_async(execute_analysis())
+    return cast(Dict[str, Any], run_async(execute_analysis()))
 
 
 @celery_app.task(bind=True, name="src.tasks.enrollment_health_check")
@@ -416,7 +416,7 @@ def enrollment_health_check(
                 "error": str(e),
             }
 
-    return run_async(execute_check())
+    return cast(Dict[str, Any], run_async(execute_check()))
 
 
 async def _send_enrollment_alerts(alerts: List[Dict], config: Dict) -> None:
@@ -590,7 +590,7 @@ def srm_detection_sweep(
                 "error": str(e),
             }
 
-    return run_async(execute_sweep())
+    return cast(Dict[str, Any], run_async(execute_sweep()))
 
 
 async def _send_srm_alerts(srm_issues: List[Dict], config: Dict) -> None:
@@ -705,7 +705,7 @@ def compute_experiment_results(
                 "error": str(e),
             }
 
-    return run_async(execute_computation())
+    return cast(Dict[str, Any], run_async(execute_computation()))
 
 
 @celery_app.task(bind=True, name="src.tasks.fidelity_tracking_update")
@@ -836,7 +836,7 @@ def fidelity_tracking_update(
                 "error": str(e),
             }
 
-    return run_async(execute_update())
+    return cast(Dict[str, Any], run_async(execute_update()))
 
 
 @celery_app.task(bind=True, name="src.tasks.check_all_active_experiments")
@@ -916,7 +916,7 @@ def check_all_active_experiments(
                 "error": str(e),
             }
 
-    return run_async(execute_check())
+    return cast(Dict[str, Any], run_async(execute_check()))
 
 
 @celery_app.task(bind=True, name="src.tasks.cleanup_old_ab_results")
@@ -984,7 +984,7 @@ def cleanup_old_ab_results(
                 "error": str(e),
             }
 
-    return run_async(execute_cleanup())
+    return cast(Dict[str, Any], run_async(execute_cleanup()))
 
 
 # Celery Beat schedule configuration

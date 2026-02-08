@@ -426,6 +426,7 @@ class ToolComposerCacheManager:
     """
 
     _instance: Optional[ToolComposerCacheManager] = None
+    _initialized: bool = False
 
     def __new__(cls, **kwargs) -> ToolComposerCacheManager:
         if cls._instance is None:

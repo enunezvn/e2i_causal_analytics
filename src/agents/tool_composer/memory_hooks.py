@@ -21,7 +21,7 @@ import logging
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ class ToolComposerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -306,7 +306,7 @@ class ToolComposerMemoryHooks:
 
             cached = await redis.get(cache_key)
             if cached:
-                return json.loads(cached)
+                return cast(Dict[str, Any], json.loads(cached))
             return None
         except Exception as e:
             logger.warning(f"Failed to get cached composition: {e}")

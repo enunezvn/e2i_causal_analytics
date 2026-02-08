@@ -7,7 +7,7 @@ V4.4: Added causal discovery integration for causal vs predictive comparison.
 """
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 from anthropic import Anthropic
 
@@ -93,7 +93,7 @@ async def narrate_importance(state: Dict[str, Any]) -> Dict[str, Any]:
         if has_causal_results:
             causal_context = _prepare_causal_context(
                 causal_rankings=causal_rankings,
-                discovery_gate_decision=discovery_gate_decision,
+                discovery_gate_decision=discovery_gate_decision or "unknown",
                 discovery_gate_confidence=discovery_gate_confidence,
                 rank_correlation=rank_correlation,
                 divergent_features=divergent_features,
@@ -177,7 +177,8 @@ Format your response as JSON with this structure:
         )
 
         # Parse LLM response
-        response_text = response.content[0].text
+        first_block = response.content[0]
+        response_text = first_block.text if hasattr(first_block, "text") else str(first_block)
 
         # Extract JSON from response
         interpretation_data = _parse_interpretation_response(response_text)
@@ -379,7 +380,7 @@ def _parse_interpretation_response(response_text: str) -> Dict[str, Any]:
             json_str = response_text
 
     try:
-        return json.loads(json_str)
+        return cast(Dict[str, Any], json.loads(json_str))
     except json.JSONDecodeError:
         # Fallback: return empty structure
         return {

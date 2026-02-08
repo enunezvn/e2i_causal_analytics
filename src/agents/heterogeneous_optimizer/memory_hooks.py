@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +193,7 @@ class HeterogeneousOptimizerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return cast(List[Dict[str, Any]], messages)
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -252,7 +252,7 @@ class HeterogeneousOptimizerMemoryHooks:
             return {"entities": [], "relationships": [], "causal_paths": []}
 
         try:
-            result = {
+            result: Dict[str, Any] = {
                 "entities": [],
                 "relationships": [],
                 "causal_paths": [],
@@ -357,7 +357,7 @@ class HeterogeneousOptimizerMemoryHooks:
 
             cached = await redis.get(cache_key)
             if cached:
-                return json.loads(cached)
+                return cast(Dict[str, Any], json.loads(cached))
             return None
         except Exception as e:
             logger.warning(f"Failed to get cached CATE analysis: {e}")
@@ -566,7 +566,7 @@ class HeterogeneousOptimizerMemoryHooks:
                 kpi_name=kpi_name,
                 min_confidence=min_confidence,
             )
-            return paths
+            return cast(List[Dict[str, Any]], paths)
         except Exception as e:
             logger.warning(f"Failed to get causal context: {e}")
             return []

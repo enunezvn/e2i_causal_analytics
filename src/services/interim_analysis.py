@@ -15,7 +15,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 import numpy as np
@@ -162,7 +162,7 @@ class InterimAnalysisService:
         z_boundary = z_alpha / math.sqrt(information_fraction)
         alpha_boundary = 2 * (1 - stats.norm.cdf(z_boundary))
 
-        return alpha_boundary
+        return cast(float, alpha_boundary)
 
     def calculate_pocock_boundary(
         self,
@@ -310,7 +310,7 @@ class InterimAnalysisService:
         else:
             conditional_power = 0.0
 
-        return max(0.0, min(1.0, conditional_power))
+        return cast(float, max(0.0, min(1.0, conditional_power)))
 
     def calculate_predictive_probability(
         self,
@@ -369,7 +369,7 @@ class InterimAnalysisService:
             -threshold, loc=posterior_mean, scale=math.sqrt(predictive_variance)
         )
 
-        return max(0.0, min(1.0, predictive_prob))
+        return cast(float, max(0.0, min(1.0, predictive_prob)))
 
     async def perform_interim_analysis(
         self,
@@ -531,12 +531,12 @@ class InterimAnalysisService:
             # O'Brien-Fleming cumulative spending
             z_alpha = stats.norm.ppf(1 - self.config.total_alpha / 2)
             z_boundary = z_alpha / math.sqrt(information_fraction)
-            return 2 * (1 - stats.norm.cdf(z_boundary))
+            return cast(float, 2 * (1 - stats.norm.cdf(z_boundary)))
         elif self.config.spending_function == SpendingFunction.POCOCK:
             # Pocock spends alpha proportionally
-            return self.config.total_alpha * information_fraction
+            return cast(float, self.config.total_alpha * information_fraction)
         else:
-            return self.config.total_alpha * information_fraction
+            return cast(float, self.config.total_alpha * information_fraction)
 
     def _make_stopping_decision(
         self,

@@ -10,7 +10,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from src.agents.experiment_designer.state import (
     DoWhySpec,
@@ -170,15 +170,17 @@ class TemplateGeneratorNode:
         else:
             identification_strategy = "backdoor"
 
-        return DoWhySpec(
-            treatment_variable=treatment_var,
-            outcome_variable=primary_outcome,
-            common_causes=common_causes,
-            instruments=None,  # Would be populated for IV designs
-            effect_modifiers=effect_modifiers if effect_modifiers else None,
-            graph_dot=dot_string,
-            identification_strategy=identification_strategy,
-        )
+        spec: DoWhySpec = {
+            "treatment_variable": treatment_var,
+            "outcome_variable": primary_outcome,
+            "common_causes": common_causes,
+            "graph_dot": dot_string,
+            "identification_strategy": identification_strategy,
+        }
+        # Add optional fields only if they have values
+        if effect_modifiers:
+            spec["effect_modifiers"] = effect_modifiers
+        return spec
 
     def _generate_analysis_code(self, state: ExperimentDesignState, dag_spec: DoWhySpec) -> str:
         """Generate Python analysis template using DoWhy.
@@ -408,7 +410,7 @@ print("Results saved to analysis_results.json")
             blocking_variables=state.get("blocking_variables") or [],
             stratification_variables=state.get("stratification_variables") or [],
             pre_registration_document=prereg_doc,
-            analysis_code_template=state.get("analysis_code"),
+            analysis_code_template=state.get("analysis_code") or "",
             monitoring_checkpoints=checkpoints,
         )
 
@@ -421,7 +423,7 @@ print("Results saved to analysis_results.json")
         Returns:
             Pre-registration markdown document
         """
-        power_analysis = state.get("power_analysis", {})
+        power_analysis: dict[str, Any] = cast(dict[str, Any], state.get("power_analysis") or {})
         treatments = state.get("treatments", [])
         treatment_name = treatments[0].get("name", "treatment") if treatments else "treatment"
         treatment_desc = treatments[0].get("description", "") if treatments else ""
@@ -436,11 +438,12 @@ print("Results saved to analysis_results.json")
                 secondary_outcomes.append(outcome.get("name", ""))
 
         formality = state.get("preregistration_formality", "medium")
+        outcome_str = primary_outcome or "outcome"
 
         # Build document based on formality level
         if formality == "light":
             return self._generate_light_prereg(
-                state, power_analysis, treatment_name, primary_outcome
+                state, power_analysis, treatment_name, outcome_str
             )
         elif formality == "heavy":
             return self._generate_heavy_prereg(
@@ -448,7 +451,7 @@ print("Results saved to analysis_results.json")
                 power_analysis,
                 treatment_name,
                 treatment_desc,
-                primary_outcome,
+                outcome_str,
                 secondary_outcomes,
             )
         else:  # medium
@@ -457,12 +460,12 @@ print("Results saved to analysis_results.json")
                 power_analysis,
                 treatment_name,
                 treatment_desc,
-                primary_outcome,
+                outcome_str,
                 secondary_outcomes,
             )
 
     def _generate_light_prereg(
-        self, state: ExperimentDesignState, power: dict, treatment: str, outcome: str
+        self, state: ExperimentDesignState, power: dict[str, Any], treatment: str, outcome: str
     ) -> str:
         """Generate light pre-registration."""
         return f"""# Experiment Pre-Registration (Light)
@@ -486,11 +489,11 @@ Comparison of {outcome} between treatment and control groups.
     def _generate_medium_prereg(
         self,
         state: ExperimentDesignState,
-        power: dict,
+        power: dict[str, Any],
         treatment: str,
         treatment_desc: str,
         outcome: str,
-        secondary: list,
+        secondary: list[str],
     ) -> str:
         """Generate medium pre-registration."""
         validity_score = state.get("overall_validity_score", 0.5)
@@ -535,11 +538,11 @@ Comparison of {outcome} between treatment and control groups.
     def _generate_heavy_prereg(
         self,
         state: ExperimentDesignState,
-        power: dict,
+        power: dict[str, Any],
         treatment: str,
         treatment_desc: str,
         outcome: str,
-        secondary: list,
+        secondary: list[str],
     ) -> str:
         """Generate comprehensive pre-registration (OSF-style)."""
         medium = self._generate_medium_prereg(

@@ -485,7 +485,7 @@ class AlertRouter:
         Returns:
             Routing result with status for each channel
         """
-        result = {
+        result: Dict[str, Any] = {
             "alert_id": alert.alert_id,
             "deduplicated": False,
             "rate_limited": False,

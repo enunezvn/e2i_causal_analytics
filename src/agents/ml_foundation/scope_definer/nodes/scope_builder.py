@@ -5,7 +5,7 @@ This module builds the complete ScopeSpec from business requirements.
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 
 async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -136,7 +136,7 @@ def _define_required_features(state: Dict[str, Any]) -> List[str]:
     candidate_features = state.get("candidate_features", [])
 
     if candidate_features:
-        return candidate_features
+        return cast(List[str], candidate_features)
 
     # Default feature sets by problem type
     base_features = [

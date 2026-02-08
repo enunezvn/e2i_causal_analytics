@@ -14,7 +14,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, cast, runtime_checkable
 
 # Import procedural memory functions for semantic search
 from src.memory.procedural_memory import (
@@ -139,12 +139,15 @@ class EpisodicMemoryAdapter:
 
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using configured model."""
+        if self._embedding_model is None:
+            raise ValueError("Embedding model not configured")
         if hasattr(self._embedding_model, "embed"):
-            return await self._embedding_model.embed(text)
+            return cast(List[float], await self._embedding_model.embed(text))
         elif hasattr(self._embedding_model, "encode"):
             # Synchronous model (e.g., sentence-transformers)
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self._embedding_model.encode, text)
+            result = await loop.run_in_executor(None, self._embedding_model.encode, text)
+            return cast(List[float], result)
         else:
             raise ValueError("Embedding model must have 'embed' or 'encode' method")
 
@@ -262,7 +265,7 @@ class SemanticMemoryAdapter:
 
         for entity in entities:
             # Find related nodes within max_depth hops
-            if hasattr(self._falkordb, "find_related"):
+            if self._falkordb is not None and hasattr(self._falkordb, "find_related"):
                 related = await self._falkordb.find_related(
                     entity_type=entity.get("type", "Entity"),
                     entity_id=entity.get("id"),
@@ -271,7 +274,7 @@ class SemanticMemoryAdapter:
                 all_results.extend(self._transform_graph_results(related))
 
             # Also try semantic similarity search in graph
-            if hasattr(self._falkordb, "semantic_search"):
+            if self._falkordb is not None and hasattr(self._falkordb, "semantic_search"):
                 semantic = await self._falkordb.semantic_search(
                     query=query,
                     limit=10,
@@ -285,7 +288,9 @@ class SemanticMemoryAdapter:
         # Extract starting entities
         entities = self._extract_entities(query)
 
-        results = []
+        results: List[Dict[str, Any]] = []
+        if self._connector is None:
+            return results
         for entity in entities:
             try:
                 traversal = await self._connector.graph_traverse(
@@ -504,14 +509,17 @@ class ProceduralMemoryAdapter:
 
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using configured model."""
+        if self._embedding_model is None:
+            raise ValueError("Embedding model not configured")
         if hasattr(self._embedding_model, "embed"):
-            return await self._embedding_model.embed(text)
+            return cast(List[float], await self._embedding_model.embed(text))
         elif hasattr(self._embedding_model, "encode"):
             # Synchronous model (e.g., sentence-transformers)
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self._embedding_model.encode, text)
+            result = await loop.run_in_executor(None, self._embedding_model.encode, text)
+            return cast(List[float], result)
         elif hasattr(self._embedding_model, "encode_async"):
-            return await self._embedding_model.encode_async(text)
+            return cast(List[float], await self._embedding_model.encode_async(text))
         else:
             raise ValueError(
                 "Embedding model must have 'embed', 'encode', or 'encode_async' method"
@@ -519,11 +527,13 @@ class ProceduralMemoryAdapter:
 
     async def _execute_procedure_search(self, query: str, limit: int) -> List[Any]:
         """Execute procedure search via Supabase."""
+        if self._client is None:
+            return []
         # Try RPC function first
         try:
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self._client.rpc(
+                lambda: self._client.rpc(  # type: ignore[union-attr]
                     "search_procedural_memory", {"query_text": query, "limit_count": limit}
                 ).execute(),
             )
@@ -535,7 +545,7 @@ class ProceduralMemoryAdapter:
         try:
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self._client.table("procedural_memory").select("*").limit(limit).execute(),
+                lambda: self._client.table("procedural_memory").select("*").limit(limit).execute(),  # type: ignore[union-attr]
             )
             return response.data if response.data else []
         except Exception as e:
@@ -762,10 +772,11 @@ class SignalCollectorAdapter:
             ]
 
             # Persist to database
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self._client.table("dspy_agent_training_signals").insert(records).execute(),
-            )
+            if self._client is not None:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self._client.table("dspy_agent_training_signals").insert(records).execute(),  # type: ignore[union-attr]
+                )
 
             logger.info(f"Flushed {count} training signals to database")
             return count

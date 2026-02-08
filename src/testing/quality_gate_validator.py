@@ -442,7 +442,7 @@ class QualityGateValidator:
         expected_type: str,
     ) -> QualityCheckResult:
         """Check if value matches expected type."""
-        type_map = {
+        type_map: dict[str, type | tuple[type, ...]] = {
             "str": str,
             "int": int,
             "float": (int, float),  # Allow int for float

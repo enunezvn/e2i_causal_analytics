@@ -404,7 +404,7 @@ class OntologyValidator:
         # Check for potential cardinality conflicts
         for entity, rels in entity_relationships.items():
             # Multiple 1:1 relationships to same target
-            targets = {}
+            targets: Dict[str, str] = {}
             for rel_type, target, cardinality in rels:
                 if cardinality == CardinalityType.ONE_TO_ONE:
                     if target in targets:

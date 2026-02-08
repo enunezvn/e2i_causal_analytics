@@ -260,7 +260,7 @@ def _run_cross_validation(
 
     except Exception as e:
         # Return default scores on failure
-        return [0.5] * cv_folds, {"error": str(e)}
+        return [0.5] * cv_folds, {}  # Return empty metrics on error
 
 
 def _rerank_by_benchmarks(

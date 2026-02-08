@@ -9,7 +9,7 @@ import logging
 import os
 import time
 import traceback
-from typing import Dict, List
+from typing import Any, Dict, List, cast
 
 import numpy as np
 import pandas as pd
@@ -399,7 +399,7 @@ class CATEEstimatorNode:
                 cat_to_int = {cat: i for i, cat in enumerate(categories)}
                 result[col] = result[col].map(cat_to_int).astype(float)
 
-        return result.values
+        return cast("np.ndarray[Any, Any]", result.values)
 
     def _calculate_heterogeneity(self, cate_individual: np.ndarray, ate: float) -> float:
         """Calculate heterogeneity score (coefficient of variation).
@@ -411,7 +411,7 @@ class CATEEstimatorNode:
             return 0.0
         cv = std / abs(ate)
         # Normalize to 0-1 scale (CV/2, capped at 1.0)
-        return min(cv / 2, 1.0)
+        return cast(float, min(cv / 2, 1.0))
 
     async def _calculate_cate_by_segment(
         self,

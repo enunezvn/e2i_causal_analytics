@@ -31,7 +31,7 @@ Version: 4.3.0 (Opik Feedback Loop Integration)
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -1186,7 +1186,7 @@ async def _execute_learning_cycle(
 
     try:
         # Try to use the actual Feedback Learner agent
-        from src.agents.feedback_learner.graph import create_feedback_learner_graph
+        from src.agents.feedback_learner.graph import build_feedback_learner_graph
         from src.agents.feedback_learner.state import FeedbackLearnerState
 
         # Set default time range
@@ -1196,22 +1196,19 @@ async def _execute_learning_cycle(
         )
         time_range_end = request.time_range_end or now.isoformat()
 
-        # Initialize state
-        initial_state: FeedbackLearnerState = {
+        # Initialize state (cast partial state - remaining fields populated by graph nodes)
+        initial_state = cast(FeedbackLearnerState, {
             "batch_id": "",
             "time_range_start": time_range_start,
             "time_range_end": time_range_end,
             "focus_agents": request.focus_agents or [],
-            "min_feedback_count": request.min_feedback_count,
-            "pattern_threshold": request.pattern_threshold,
-            "auto_apply": request.auto_apply,
             "status": "pending",
             "errors": [],
             "warnings": [],
-        }
+        })
 
         # Create and run graph
-        graph = create_feedback_learner_graph()
+        graph = build_feedback_learner_graph()
         result = await graph.ainvoke(initial_state)
 
         # Convert agent output to API response

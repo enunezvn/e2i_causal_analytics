@@ -36,7 +36,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -266,12 +266,12 @@ class MetricsCache:
 
         try:
             # Try Redis first if available
-            if self._redis_available:
+            if self._redis_available and self._redis_client is not None:
                 try:
                     data = await self._redis_client.get(key)
                     if data:
                         self._metrics.hits += 1
-                        return json.loads(data)
+                        return cast(Dict[str, Any], json.loads(data))
                 except Exception as e:
                     logger.debug(f"Redis get failed, trying memory: {e}")
                     self._metrics.redis_failures += 1
@@ -281,7 +281,7 @@ class MetricsCache:
                 entry = self._memory_cache.get(key)
                 if entry and not entry.is_expired:
                     self._metrics.hits += 1
-                    return entry.value
+                    return cast(Dict[str, Any], entry.value)
                 elif entry and entry.is_expired:
                     del self._memory_cache[key]
 
@@ -318,7 +318,7 @@ class MetricsCache:
 
         try:
             # Try Redis first if available
-            if self._redis_available:
+            if self._redis_available and self._redis_client is not None:
                 try:
                     await self._redis_client.setex(
                         key,
@@ -373,7 +373,7 @@ class MetricsCache:
                 key = self._make_key(w, agent)
 
                 # Invalidate in Redis
-                if self._redis_available:
+                if self._redis_available and self._redis_client is not None:
                     try:
                         deleted = await self._redis_client.delete(key)
                         count += deleted
@@ -414,7 +414,7 @@ class MetricsCache:
         count = 0
 
         try:
-            if self._redis_available:
+            if self._redis_available and self._redis_client is not None:
                 # Use SCAN to find matching keys
                 cursor = 0
                 while True:
@@ -473,7 +473,7 @@ class MetricsCache:
             return cached
 
         # Compute and cache
-        metrics = await compute_fn()
+        metrics: Dict[str, Any] = await compute_fn()
         await self.set_metrics(window, agent, metrics, ttl)
         return metrics
 

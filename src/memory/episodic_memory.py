@@ -41,7 +41,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from src.memory.services.factories import get_embedding_service, get_supabase_client
 
@@ -807,7 +807,7 @@ async def get_memory_by_id(memory_id: str) -> Optional[Dict[str, Any]]:
         client.table("episodic_memories").select("*").eq("memory_id", memory_id).single().execute()
     )
 
-    return result.data
+    return cast(Optional[Dict[str, Any]], result.data)
 
 
 async def delete_memory(memory_id: str) -> bool:

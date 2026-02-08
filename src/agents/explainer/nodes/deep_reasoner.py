@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from ..state import ExplainerState, Insight
 
@@ -124,12 +124,18 @@ class DeepReasonerNode:
 
                 insight = Insight(
                     insight_id=str(insight_id),
-                    category=category,
+                    category=cast(
+                        Literal["finding", "recommendation", "warning", "opportunity"],
+                        category,
+                    ),
                     statement=finding if isinstance(finding, str) else str(finding),
                     supporting_evidence=[f"Source: {source_agent}"],
                     confidence=confidence,
                     priority=priority,
-                    actionability=actionability,
+                    actionability=cast(
+                        Literal["immediate", "short_term", "long_term", "informational"],
+                        actionability,
+                    ),
                 )
                 insights.append(insight)
                 insight_id += 1
@@ -143,7 +149,8 @@ class DeepReasonerNode:
         # P2 Enhancement: Generate recommendations from findings
         # This ensures we always have actionable recommendations,
         # even when upstream agents don't provide explicit ones
-        generated_recs = self._generate_recommendations(insights, analysis_context)
+        analysis_context_dicts = [cast(Dict[str, Any], c) for c in analysis_context]
+        generated_recs = self._generate_recommendations(insights, analysis_context_dicts)
         if generated_recs:
             logger.info(f"Generated {len(generated_recs)} recommendations from findings")
             insights.extend(generated_recs)
@@ -260,7 +267,7 @@ class DeepReasonerNode:
         themes = []
 
         # Count categories
-        categories = {}
+        categories: Dict[str, int] = {}
         for insight in insights:
             cat = insight["category"]
             categories[cat] = categories.get(cat, 0) + 1
@@ -363,7 +370,7 @@ Provide JSON with:
         json_match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1))
+                return cast(Dict[str, Any], json.loads(json_match.group(1)))
             except json.JSONDecodeError:
                 pass
 

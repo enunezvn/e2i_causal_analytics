@@ -120,6 +120,7 @@ class E2IGraphitiService:
         self.config = config or get_graphiti_config()
         self._graphiti = None
         self._falkordb = None
+        self._graph = None
         self._initialized = False
         self._llm_client = None
 
@@ -137,7 +138,8 @@ class E2IGraphitiService:
         try:
             # Initialize FalkorDB connection
             self._falkordb = get_falkordb_client()
-            self._graph = self._falkordb.select_graph(self.config.graph_name)
+            if self._falkordb is not None:
+                self._graph = self._falkordb.select_graph(self.config.graph_name)  # type: ignore[attr-defined]
 
             # Initialize Graphiti client
             await self._init_graphiti()
@@ -205,7 +207,8 @@ class E2IGraphitiService:
             )
 
             # Build indices and constraints for Graphiti
-            await self._graphiti.build_indices_and_constraints()
+            if self._graphiti is not None:
+                await self._graphiti.build_indices_and_constraints()  # type: ignore[attr-defined]
 
             self._llm_client = llm_client
             logger.info("Graphiti client initialized successfully with FalkorDB driver")
@@ -320,7 +323,7 @@ class E2IGraphitiService:
             })
             RETURN e
             """
-            self._graph.query(
+            self._graph.query(  # type: ignore[attr-defined]
                 query,
                 params={
                     "episode_id": episode_id,
@@ -484,7 +487,9 @@ class E2IGraphitiService:
             LIMIT $limit
             """
 
-            result = self._graph.query(cypher, params={"query": query, "limit": limit})
+            result = self._graph.query(  # type: ignore[attr-defined]
+                cypher, params={"query": query, "limit": limit}
+            )
 
             search_results = []
             for row in result.result_set:
@@ -571,7 +576,9 @@ class E2IGraphitiService:
             RETURN DISTINCT n, r
             """
 
-            result = self._graph.query(cypher, params={"entity_id": entity_id})
+            result = self._graph.query(  # type: ignore[attr-defined]
+                cypher, params={"entity_id": entity_id}
+            )
 
             nodes = []
             edges = []
@@ -677,7 +684,9 @@ class E2IGraphitiService:
                 """
                 params = {"min_confidence": min_confidence}
 
-            result = self._graph.query(cypher, params=params)
+            result = self._graph.query(  # type: ignore[attr-defined]
+                cypher, params=params
+            )
 
             chains = []
             for row in result.result_set:
@@ -736,7 +745,7 @@ class E2IGraphitiService:
             node_counts = {}
             for entity_type in E2IEntityType:
                 cypher = f"MATCH (n:{entity_type.value}) RETURN count(n) as count"
-                result = self._graph.query(cypher)
+                result = self._graph.query(cypher)  # type: ignore[attr-defined]
                 count = result.result_set[0][0] if result.result_set else 0
                 node_counts[entity_type.value] = count
 
@@ -744,7 +753,7 @@ class E2IGraphitiService:
             edge_counts = {}
             for rel_type in E2IRelationshipType:
                 cypher = f"MATCH ()-[r:{rel_type.value}]->() RETURN count(r) as count"
-                result = self._graph.query(cypher)
+                result = self._graph.query(cypher)  # type: ignore[attr-defined]
                 count = result.result_set[0][0] if result.result_set else 0
                 edge_counts[rel_type.value] = count
 

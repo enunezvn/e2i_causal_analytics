@@ -17,7 +17,7 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ProcessPoolExecutor
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, cast
 from uuid import UUID
 
 import networkx as nx
@@ -91,7 +91,7 @@ def _run_algorithm_in_process(
         "algorithm": result.algorithm.value,
         "adjacency_matrix": result.adjacency_matrix.tolist(),
         "edge_list": [
-            (e.source, e.target, e.edge_type.value, e.confidence) for e in result.edge_list
+            (e.source, e.target, e.edge_type.value, e.confidence) for e in result.edge_list  # type: ignore[attr-defined]
         ],
         "runtime_seconds": result.runtime_seconds,
         "converged": result.converged,
@@ -267,6 +267,7 @@ class DiscoveryRunner:
         start_time: float,
     ) -> DiscoveryResult:
         """Discovery implementation with Opik tracing."""
+        assert self._tracer is not None, "Tracer must be initialized for traced discovery"
         async with self._tracer.trace_discovery(
             session_id=session_id,
             algorithms=[a.value for a in config.algorithms],
@@ -411,7 +412,7 @@ class DiscoveryRunner:
                     loop = asyncio.get_event_loop()
                     result = await loop.run_in_executor(
                         None,
-                        lambda a=algorithm: a.discover(data, config),
+                        lambda a=algorithm: a.discover(data, config),  # type: ignore[misc]
                     )
 
                     results.append(result)
@@ -486,18 +487,21 @@ class DiscoveryRunner:
                     result_dict = await future
 
                     # Reconstruct AlgorithmResult from dict
+                    # Note: edge_list type annotation in AlgorithmResult is List[Tuple[str, str]]
+                    # but actual implementation uses DiscoveredEdge objects
+                    edge_list_data = [
+                        DiscoveredEdge(
+                            source=e[0],
+                            target=e[1],
+                            edge_type=EdgeType(e[2]),
+                            confidence=e[3],
+                        )
+                        for e in result_dict["edge_list"]
+                    ]
                     result = AlgorithmResult(
                         algorithm=DiscoveryAlgorithmType(result_dict["algorithm"]),
                         adjacency_matrix=np.array(result_dict["adjacency_matrix"]),
-                        edge_list=[
-                            DiscoveredEdge(
-                                source=e[0],
-                                target=e[1],
-                                edge_type=EdgeType(e[2]),
-                                confidence=e[3],
-                            )
-                            for e in result_dict["edge_list"]
-                        ],
+                        edge_list=cast(List[Tuple[str, str]], edge_list_data),
                         runtime_seconds=result_dict["runtime_seconds"],
                         converged=result_dict["converged"],
                         metadata=result_dict["metadata"],

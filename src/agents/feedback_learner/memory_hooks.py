@@ -260,11 +260,11 @@ class MemoryHooks:
 
         Finds the most similar high-quality examples for a given query.
         """
-        from src.memory.procedural_memory import get_few_shot_examples
+        from src.memory.procedural_memory import get_few_shot_examples_by_text
 
         try:
-            examples = await get_few_shot_examples(
-                query_embedding=None,  # Will be generated internally
+            examples = await get_few_shot_examples_by_text(
+                query_text=query,
                 intent=query_type,
                 brand=None,
                 max_examples=max_examples,

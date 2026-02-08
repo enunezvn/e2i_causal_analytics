@@ -42,7 +42,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from src.memory.services.factories import get_embedding_service, get_supabase_client
 
@@ -208,7 +208,7 @@ async def insert_procedural_memory(
         ).eq("procedure_id", procedure_id).execute()
 
         logger.info(f"Updated existing procedure {procedure_id}")
-        return procedure_id
+        return cast(str, procedure_id)
 
     procedure_id = str(uuid.uuid4())
 
@@ -393,7 +393,7 @@ async def get_procedure_by_id(procedure_id: str) -> Optional[Dict[str, Any]]:
         .execute()
     )
 
-    return result.data
+    return cast(Optional[Dict[str, Any]], result.data)
 
 
 async def deactivate_procedure(procedure_id: str) -> bool:

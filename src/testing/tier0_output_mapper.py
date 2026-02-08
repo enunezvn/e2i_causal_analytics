@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Dict, cast
 
 
 class Tier0OutputMapper:
@@ -675,4 +675,4 @@ class Tier0OutputMapper:
             raise ValueError(
                 f"Unknown agent: {agent_name}. Supported: {list(self.get_all_mappings().keys())}"
             )
-        return getattr(self, method_name)()
+        return cast(Dict[str, Any], getattr(self, method_name)())

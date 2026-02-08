@@ -125,6 +125,7 @@ class AgentHealthNode:
         agent_name = agent.get("name", "unknown")
 
         try:
+            assert self.agent_registry is not None
             metrics = await self.agent_registry.get_agent_metrics(agent_name)
 
             return AgentStatus(

@@ -90,7 +90,7 @@ class MemoryConnector:
                         RetrievalResult(
                             source_id=row.get("id", ""),
                             content=row.get("content", ""),
-                            source=RetrievalSource.VECTOR,
+                            source=RetrievalSource.VECTOR.value,
                             score=float(similarity),
                             retrieval_method="dense",
                             metadata=result_metadata,
@@ -183,7 +183,7 @@ class MemoryConnector:
                     RetrievalResult(
                         source_id=row.get("id", ""),
                         content=row.get("content", ""),
-                        source=RetrievalSource.FULLTEXT,
+                        source=RetrievalSource.FULLTEXT.value,
                         score=normalized_score,
                         retrieval_method="sparse",
                         metadata=result_metadata,
@@ -237,7 +237,7 @@ class MemoryConnector:
 
             else:
                 # Generic traversal using find_common_paths
-                paths = semantic.find_common_paths(entity_id, entity_id, max_length=max_depth)
+                paths = semantic.find_common_paths(entity_id, entity_id, max_depth=max_depth)
                 return self._paths_to_results(paths)
 
         except Exception as e:
@@ -283,7 +283,7 @@ class MemoryConnector:
                 RetrievalResult(
                     source_id=chain.get("start_entity_id", f"chain_{i}"),
                     content=content or f"Causal chain {i + 1}",
-                    source=RetrievalSource.GRAPH,
+                    source=RetrievalSource.GRAPH.value,
                     score=chain.get("confidence", 0.8),
                     retrieval_method="graph",
                     metadata={
@@ -308,7 +308,7 @@ class MemoryConnector:
                 RetrievalResult(
                     source_id=center.get("id", ""),
                     content=f"{network_type.upper()} center: {center.get('id', 'unknown')}",
-                    source=RetrievalSource.GRAPH,
+                    source=RetrievalSource.GRAPH.value,
                     score=1.0,  # Center node has highest relevance
                     retrieval_method="graph",
                     metadata={
@@ -330,7 +330,7 @@ class MemoryConnector:
                 RetrievalResult(
                     source_id=conn.get("node_id", f"conn_{i}"),
                     content=f"Connected {conn.get('node_type', 'entity')}: {conn.get('node_id', '')}",
-                    source=RetrievalSource.GRAPH,
+                    source=RetrievalSource.GRAPH.value,
                     score=score,
                     retrieval_method="graph",
                     metadata={
@@ -357,7 +357,7 @@ class MemoryConnector:
                 RetrievalResult(
                     source_id=path.get("path_id", f"path_{i}"),
                     content=content or f"Path {i + 1}",
-                    source=RetrievalSource.GRAPH,
+                    source=RetrievalSource.GRAPH.value,
                     score=path.get("confidence", 0.7),
                     retrieval_method="graph",
                     metadata={

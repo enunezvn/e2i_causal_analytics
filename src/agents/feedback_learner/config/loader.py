@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)

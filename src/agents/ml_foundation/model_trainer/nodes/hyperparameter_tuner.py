@@ -14,7 +14,7 @@ Version: 2.3.0
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
@@ -93,9 +93,9 @@ def validate_hpo_output(output: Dict[str, Any]) -> Tuple[bool, List[str]]:
     # Check optional fields if present
     for field, expected_types in HPO_OPTIONAL_FIELDS.items():
         if field in output and output[field] is not None:
-            if not isinstance(output[field], expected_types):
+            if not isinstance(output[field], expected_types):  # type: ignore[arg-type]
                 type_names = (
-                    expected_types.__name__
+                    expected_types.__name__  # type: ignore[attr-defined]
                     if not isinstance(expected_types, tuple)
                     else "/".join(t.__name__ for t in expected_types)
                 )
@@ -511,7 +511,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
         Numpy array
     """
     if data is None:
-        return None
+        return np.array([])  # Return empty array instead of None
 
     if isinstance(data, np.ndarray):
         return data
@@ -521,7 +521,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
         import pandas as pd
 
         if isinstance(data, (pd.DataFrame, pd.Series)):
-            return data.values
+            return cast(np.ndarray, data.values)
     except ImportError:
         pass
 
@@ -529,8 +529,8 @@ def _ensure_numpy(data: Any) -> np.ndarray:
     if isinstance(data, (list, tuple)):
         return np.array(data)
 
-    # Return as-is and hope for the best
-    return data
+    # Convert to array
+    return np.asarray(data)
 
 
 def _get_default_metric(problem_type: str) -> str:
@@ -571,7 +571,7 @@ def _get_fixed_params(
     Returns:
         Dictionary of fixed parameters
     """
-    fixed_params = {}
+    fixed_params: Dict[str, Any] = {}
 
     if algorithm_name == "XGBoost":
         fixed_params = {

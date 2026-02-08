@@ -140,7 +140,8 @@ class HeterogeneousOptimizerMLflowTracker:
         try:
             import mlflow
 
-            mlflow.set_tracking_uri(self.tracking_uri)
+            if self.tracking_uri:
+                mlflow.set_tracking_uri(self.tracking_uri)
             return True
         except ImportError:
             logger.warning("MLflow not installed, metrics will be logged locally only")
@@ -435,8 +436,9 @@ class HeterogeneousOptimizerMLflowTracker:
             mlflow.log_param("min_samples_leaf", state.get("min_samples_leaf", 10))
             mlflow.log_param("significance_level", state.get("significance_level", 0.05))
 
-            if state.get("brand"):
-                mlflow.log_param("brand", state["brand"])
+            brand = state.get("brand")  # type: ignore[typeddict-item]
+            if brand:
+                mlflow.log_param("brand", brand)
 
             # Model parameters
             if state.get("model_type_used"):
@@ -545,7 +547,7 @@ class HeterogeneousOptimizerMLflowTracker:
             if brand:
                 filters.append(f"tags.brand = '{brand}'")
 
-            filter_string = " AND ".join(filters) if filters else None
+            filter_string = " AND ".join(filters) if filters else ""
 
             # Get experiment
             if experiment_name:
@@ -572,9 +574,9 @@ class HeterogeneousOptimizerMLflowTracker:
                 order_by=["start_time DESC"],
             )
 
-            # Convert to list of dicts
+            # Convert to list of dicts (runs is a DataFrame by default)
             results = []
-            for _, row in runs.iterrows():
+            for _, row in runs.iterrows():  # type: ignore[union-attr]
                 result = {
                     "run_id": row.get("run_id"),
                     "experiment_id": row.get("experiment_id"),

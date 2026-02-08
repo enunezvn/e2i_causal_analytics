@@ -274,11 +274,12 @@ class HybridRetriever:
             completed = await asyncio.gather(*tasks, return_exceptions=True)
 
             for source, result in zip(task_sources, completed, strict=False):
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     logger.warning(f"{source.value} search failed: {result}")
                     results[source] = []
                 else:
-                    results[source] = result
+                    # result is List[RetrievalResult] at this point
+                    results[source] = result  # type: ignore[assignment]
 
         return results
 
@@ -431,7 +432,7 @@ class HybridRetriever:
                     last_check=datetime.now(timezone.utc),
                     error_message=str(result),
                 )
-            else:
+            elif isinstance(result, dict):
                 # Convert string status to BackendStatus enum
                 status_str = result.get("status", "unknown")
                 try:

@@ -152,8 +152,8 @@ class ChunkProcessor:
         # Simple sentence-based splitting
         # In production, use a proper tokenizer
         sentences = text.replace("\n", " ").split(". ")
-        chunks = []
-        current_chunk = []
+        chunks: List[str] = []
+        current_chunk: List[str] = []
         current_size = 0
 
         for sentence in sentences:

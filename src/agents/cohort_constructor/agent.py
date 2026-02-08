@@ -211,8 +211,8 @@ class CohortConstructorAgent:
         initial_state = create_initial_state(
             brand=brand,
             indication=indication,
-            config=cohort_config.to_dict() if cohort_config else None,
-            environment=environment,
+            config=cohort_config.to_dict() if cohort_config else None,  # type: ignore[arg-type]
+            environment=environment,  # type: ignore[arg-type]
         )
 
         # Add source population with DataFrame
@@ -244,6 +244,8 @@ class CohortConstructorAgent:
 
         try:
             # Execute graph
+            if self._graph is None:
+                raise RuntimeError("Cohort constructor graph not initialized")
             final_state = await self._graph.ainvoke(initial_state)
 
             # Extract results
@@ -456,7 +458,7 @@ class CohortConstructorAgent:
         Returns:
             Validation result with any errors or warnings
         """
-        result = {
+        result: Dict[str, Any] = {
             "valid": True,
             "errors": [],
             "warnings": [],

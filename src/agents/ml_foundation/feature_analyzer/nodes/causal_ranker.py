@@ -99,7 +99,7 @@ async def rank_causal_drivers(state: Dict[str, Any]) -> Dict[str, Any]:
         if not target:
             # Fallback: use y_sample column name if available
             y_sample = state.get("y_sample")
-            if hasattr(y_sample, "name") and y_sample.name:
+            if y_sample is not None and hasattr(y_sample, "name") and y_sample.name:
                 target = y_sample.name
             else:
                 target = "target"
@@ -178,7 +178,6 @@ async def rank_causal_drivers(state: Dict[str, Any]) -> Dict[str, Any]:
                 result=discovery_result,
                 target=target,
                 shap_values=filtered_shap,
-                feature_names=ranking_features,
             )
 
             # Build output

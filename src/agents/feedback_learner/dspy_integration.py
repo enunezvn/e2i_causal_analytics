@@ -398,10 +398,10 @@ except ImportError:
     logger.warning("DSPy not available - using deterministic pattern detection")
 
     # Placeholder classes when dspy is not available
-    PatternDetectionSignature = None  # type: ignore[assignment]
-    RecommendationGenerationSignature = None  # type: ignore[assignment]
-    KnowledgeUpdateSignature = None  # type: ignore[assignment]
-    LearningSummarySignature = None  # type: ignore[assignment]
+    PatternDetectionSignature = None  # type: ignore[assignment,misc]
+    RecommendationGenerationSignature = None  # type: ignore[assignment,misc]
+    KnowledgeUpdateSignature = None  # type: ignore[assignment,misc]
+    LearningSummarySignature = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================
@@ -429,7 +429,7 @@ except ImportError:
     get_metric_for_agent = None  # type: ignore[assignment]
     save_optimized_module = None  # type: ignore[assignment]
     load_optimized_module = None  # type: ignore[assignment]
-    FeedbackLearnerGEPAMetric = None  # type: ignore[assignment]
+    FeedbackLearnerGEPAMetric = None  # type: ignore[assignment,misc]
 
 
 # =============================================================================

@@ -121,7 +121,7 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
     Returns:
         List of temporal leakage issues
     """
-    issues = []
+    issues: List[str] = []
 
     if df is None or len(df) == 0:
         return issues
@@ -245,12 +245,13 @@ def _parse_date(date_str: str) -> Optional[datetime]:
         datetime object or None if parsing fails
     """
     try:
-        return pd.to_datetime(date_str).to_pydatetime()
+        result = pd.to_datetime(date_str).to_pydatetime()
+        return result if isinstance(result, datetime) else None
     except Exception:
         return None
 
 
-def _detect_date_columns(df: Any, exclude: List[str] = None) -> List[str]:
+def _detect_date_columns(df: Any, exclude: Optional[List[str]] = None) -> List[str]:
     """Auto-detect date columns in DataFrame.
 
     Args:

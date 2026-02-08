@@ -15,7 +15,7 @@ Author: E2I Causal Analytics Team
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -259,7 +259,7 @@ class BaseUpliftModel(ABC):
         if self.config.normalize_scores:
             uplift_scores = self._normalize_scores(uplift_scores)
 
-        return uplift_scores
+        return cast(NDArray[np.float64], uplift_scores)
 
     def estimate(
         self,
@@ -423,10 +423,10 @@ class BaseUpliftModel(ABC):
             mean_val = np.mean(scores)
             std_val = np.std(scores)
             if std_val > 0:
-                return (scores - mean_val) / std_val
-            return scores - mean_val
+                return cast(NDArray[np.float64], (scores - mean_val) / std_val)
+            return cast(NDArray[np.float64], scores - mean_val)
 
-        return scores
+        return cast(NDArray[np.float64], scores)
 
     def _get_feature_importances(self) -> Optional[Dict[str, float]]:
         """Get feature importance scores from fitted model.

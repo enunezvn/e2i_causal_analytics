@@ -27,7 +27,7 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -107,6 +107,9 @@ class MaterializationJob:
                 "error": "Failed to initialize Feast client",
             }
 
+        # After successful initialization, feast_client is guaranteed to be set
+        assert self.feast_client is not None
+
         logger.info(
             f"Starting full materialization: {start_date.isoformat()} to "
             f"{end_date.isoformat()}"
@@ -167,6 +170,9 @@ class MaterializationJob:
                 "error": "Failed to initialize Feast client",
             }
 
+        # After successful initialization, feast_client is guaranteed to be set
+        assert self.feast_client is not None
+
         end_date = end_date or datetime.now(timezone.utc)
         logger.info(f"Starting incremental materialization to {end_date.isoformat()}")
 
@@ -221,6 +227,9 @@ class MaterializationJob:
                 "status": "failed",
                 "error": "Failed to initialize Feast client",
             }
+
+        # After successful initialization, feast_client is guaranteed to be set
+        assert self.feast_client is not None
 
         logger.info("Checking feature freshness...")
 
@@ -284,7 +293,7 @@ class MaterializationJob:
             if stale_features:
                 logger.warning(
                     f"Found {len(stale_features)} stale feature view(s): "
-                    f"{', '.join(f['feature_view'] for f in stale_features)}"
+                    f"{', '.join(cast(str, f['feature_view']) for f in stale_features)}"
                 )
             else:
                 logger.info(f"All {len(fresh_features)} feature views are fresh")
@@ -310,6 +319,9 @@ class MaterializationJob:
         Returns:
             Validation result dict
         """
+        # _validate_materialization is only called after successful initialization
+        assert self.feast_client is not None
+
         try:
             # List all feature views
             all_views = await self.feast_client.list_feature_views()

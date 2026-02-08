@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -98,7 +98,7 @@ class IVDiagnosticReport:
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
-        result = {"recommendation": self.recommendation}
+        result: dict[str, Any] = {"recommendation": self.recommendation}
 
         if self.cragg_donald:
             result["cragg_donald"] = {

@@ -6,7 +6,7 @@ for improved relevance.
 """
 
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, cast
 
 from sentence_transformers import CrossEncoder
 
@@ -151,7 +151,7 @@ class CrossEncoderReranker:
 
             normalized_scores = 1 / (1 + np.exp(-raw_scores))
 
-            return normalized_scores.tolist()
+            return cast(List[float], normalized_scores.tolist())
 
         except Exception as e:
             logger.error(f"Batch scoring failed: {e}")

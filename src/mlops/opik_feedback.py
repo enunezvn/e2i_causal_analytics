@@ -40,8 +40,11 @@ Author: E2I Causal Analytics Team
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from src.mlops.opik_connector import OpikConnector
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +186,7 @@ class OpikFeedbackCollector:
         self._by_agent: Dict[str, List[FeedbackRecord]] = {}
 
         # Opik connector
-        self._opik_connector = None
+        self._opik_connector: Optional[OpikConnector] = None
         self._init_opik()
 
     def _init_opik(self) -> None:
@@ -299,8 +302,8 @@ class OpikFeedbackCollector:
             if self._opik_connector:
                 self._opik_connector.log_feedback(
                     trace_id=record.trace_id,
-                    name=f"user_feedback_{record.feedback_type}",
-                    value=record.score,
+                    score=record.score,
+                    feedback_type=f"user_feedback_{record.feedback_type}",
                     reason=record.category or record.feedback_type,
                 )
                 logger.debug(f"Logged feedback to Opik trace {record.trace_id}")

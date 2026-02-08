@@ -77,7 +77,8 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
             suite_name = data_source
 
         # Validate all splits
-        training_run_id = state.get("training_run_id")
+        training_run_id_raw = state.get("training_run_id")
+        training_run_id = str(training_run_id_raw) if training_run_id_raw is not None else None
         results = await validator.validate_splits(
             train_df=train_df,
             val_df=validation_df,

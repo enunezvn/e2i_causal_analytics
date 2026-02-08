@@ -340,9 +340,9 @@ def validate_dataframe_with_expectations(
 
     # Special handling for patient_journeys (needs dgp_type)
     if table_name == "patient_journeys":
-        dataset = builder(dataset, dgp_type=dgp_type)
+        dataset = builder(dataset, dgp_type=dgp_type)  # type: ignore[operator]
     else:
-        dataset = builder(dataset)
+        dataset = builder(dataset)  # type: ignore[operator]
 
     # Get validation results
     results = dataset.validate()
@@ -370,7 +370,7 @@ def validate_dataframe_with_expectations(
     run_time = (datetime.now() - start_time).total_seconds()
 
     return ValidationResult(
-        suite_name=suite_name,
+        suite_name=suite_name or f"e2i_synthetic_{table_name}_suite",
         table_name=table_name,
         success=results.success,
         statistics=statistics,

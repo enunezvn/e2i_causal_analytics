@@ -13,7 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class ExperimentDesignerMLflowTracker:
         else:
             experiment_id = experiment.experiment_id
 
-        return experiment_id
+        return cast(str, experiment_id)
 
     @asynccontextmanager
     async def start_design_run(

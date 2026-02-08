@@ -34,7 +34,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Deque, Dict, List, Literal, Optional
+from typing import Any, Deque, Dict, List, Literal, Optional, cast
 
 from .state import FeedbackItem
 
@@ -126,12 +126,14 @@ class TrainingSignalReceiver:
                     logger.warning(f"Unknown agent {agent_name}, skipping signals")
                     continue
 
-                buffer = self._buffers[agent_name]
+                # Cast to Tier2Agent after validation
+                tier2_agent = cast(Tier2Agent, agent_name)
+                buffer = self._buffers[tier2_agent]
 
                 for signal_data in signals:
                     # Create received signal
                     received_signal = ReceivedSignal(
-                        source_agent=agent_name,
+                        source_agent=tier2_agent,
                         signal_data=signal_data,
                     )
 

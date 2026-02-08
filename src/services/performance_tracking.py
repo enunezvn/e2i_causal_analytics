@@ -76,7 +76,7 @@ class PerformanceTracker:
     """Service for tracking model performance over time."""
 
     def __init__(self, config: Optional[PerformanceTrackingConfig] = None):
-        self.config = config or PerformanceTrackingConfig()
+        self.config: PerformanceTrackingConfig = config or PerformanceTrackingConfig()
 
     async def record_performance(
         self,
@@ -251,11 +251,11 @@ class PerformanceTracker:
 
         # Baseline is average of older records
         baseline_values = values[self.config.current_window_days :]
-        baseline_value = np.mean(baseline_values) if baseline_values else current_value
+        baseline_value = float(np.mean(baseline_values)) if baseline_values else current_value
 
         # Calculate change
         if baseline_value > 0:
-            change_percent = ((current_value - baseline_value) / baseline_value) * 100
+            change_percent = float((current_value - baseline_value) / baseline_value * 100)
         else:
             change_percent = 0.0
 
@@ -268,21 +268,22 @@ class PerformanceTracker:
             trend = "stable"
 
         # Check significance and thresholds
-        is_significant = abs(change_percent) > (self.config.degradation_threshold * 100)
+        threshold = float(self.config.degradation_threshold) * 100
+        is_significant = abs(change_percent) > threshold
         alert_threshold_breached = (
-            change_percent < -(self.config.degradation_threshold * 100)
-            or current_value < self.config.absolute_min_accuracy
+            change_percent < -threshold
+            or float(current_value) < float(self.config.absolute_min_accuracy)
         )
 
         return PerformanceTrend(
             model_version=model_version,
             metric_name=metric_name,
             current_value=current_value,
-            baseline_value=baseline_value,
-            change_percent=change_percent,
+            baseline_value=float(baseline_value),
+            change_percent=float(change_percent),
             trend=trend,
             is_significant=is_significant,
-            alert_threshold_breached=alert_threshold_breached,
+            alert_threshold_breached=bool(alert_threshold_breached),
         )
 
     async def check_performance_alerts(

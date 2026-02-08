@@ -182,7 +182,7 @@ class CohortConfig:
             indication=data["indication"],
             inclusion_criteria=[Criterion.from_dict(c) for c in data.get("inclusion_criteria", [])],
             exclusion_criteria=[Criterion.from_dict(c) for c in data.get("exclusion_criteria", [])],
-            temporal_requirements=temporal_req,
+            temporal_requirements=temporal_req or TemporalRequirements(),
             required_fields=data.get("required_fields", []),
             version=data.get("version", "1.0.0"),
             status=data.get("status", "active"),

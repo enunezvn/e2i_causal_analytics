@@ -225,7 +225,7 @@ class RedesignNode:
         # Update state with mitigations
         state["stratification_variables"] = stratification_vars
         state["blocking_variables"] = blocking_variables
-        state["power_analysis"] = power_analysis
+        state["power_analysis"] = power_analysis  # type: ignore[typeddict-item]
 
         # Add causal assumption about mitigations
         causal_assumptions = list(state.get("causal_assumptions", []))

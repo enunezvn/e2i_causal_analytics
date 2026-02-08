@@ -30,7 +30,7 @@ Version: 4.2.0
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +414,7 @@ async def log_optimization_run(
                     os.unlink(temp_path)
 
             logger.info(f"Logged GEPA run: {run.run_id}")
-            return run.run_id
+            return cast(str, run.run_id)
 
     except Exception as e:
         logger.error(f"Failed to log optimization run: {e}")

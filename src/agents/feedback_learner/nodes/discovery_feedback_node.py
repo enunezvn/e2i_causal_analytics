@@ -23,9 +23,10 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..state import (
+    DetectedPattern,
     DiscoveryAccuracyTracking,
     DiscoveryFeedbackItem,
     DiscoveryParameterRecommendation,
@@ -103,7 +104,7 @@ class DiscoveryFeedbackNode:
                 **state,
                 "discovery_accuracy_tracking": accuracy_tracking,
                 "discovery_parameter_recommendations": recommendations,
-                "detected_patterns": all_patterns,
+                "detected_patterns": cast(List[DetectedPattern], all_patterns),
                 "analysis_latency_ms": state.get("analysis_latency_ms", 0) + latency_ms,
                 "warnings": state.get("warnings", [])
                 + (
@@ -165,8 +166,8 @@ class DiscoveryFeedbackNode:
             )
 
             # Calculate accuracy scores
-            accuracy_scores = [
-                item.get("accuracy_score", 0.0)
+            accuracy_scores: List[float] = [
+                cast(float, item["accuracy_score"])
                 for item in algo_items
                 if item.get("accuracy_score") is not None
             ]

@@ -9,7 +9,7 @@ Supported Brands:
 - Kisqali (HR+/HER2- Advanced Breast Cancer)
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from .constants import SUPPORTED_BRANDS
 from .types import (
@@ -587,7 +587,7 @@ def get_brand_config(brand: str, indication: Optional[str] = None) -> CohortConf
     )
 
 
-def list_available_configs() -> Dict[str, Dict[str, str]]:
+def list_available_configs() -> Dict[str, Dict[str, Any]]:
     """List all available brand configurations.
 
     Returns:

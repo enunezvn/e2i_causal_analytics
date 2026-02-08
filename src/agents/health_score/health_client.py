@@ -116,7 +116,9 @@ class SupabaseHealthClient:
             # Try to import and use Supabase client
             from src.api.dependencies.supabase_client import get_supabase
 
-            client = await get_supabase()
+            client_result = get_supabase()
+            assert client_result is not None, "Failed to get Supabase client"
+            client = await client_result
 
             # Execute a simple health check query
             # Using a lightweight query that doesn't require specific tables

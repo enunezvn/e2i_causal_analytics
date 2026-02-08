@@ -31,7 +31,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ class OpikEvaluationTracer:
         """
         self.project_name = project_name
         self.enabled = enabled
-        self._opik_connector = None
+        self._opik_connector: Optional[Any] = None
         self._initialized = False
 
     def _ensure_initialized(self) -> None:
@@ -230,7 +230,7 @@ class OpikEvaluationTracer:
         """Get circuit breaker status."""
         if not self._opik_connector:
             return {"state": "unknown", "reason": "connector_not_initialized"}
-        return self._opik_connector.circuit_breaker.get_status()
+        return cast(Dict[str, Any], self._opik_connector.circuit_breaker.get_status())
 
     @asynccontextmanager
     async def trace_evaluation(
@@ -270,9 +270,10 @@ class OpikEvaluationTracer:
 
         try:
             # Create Opik trace if enabled and circuit breaker allows
-            if self.is_enabled and self._opik_connector.circuit_breaker.allow_request():
+            connector = self._opik_connector
+            if self.is_enabled and connector is not None and connector.circuit_breaker.allow_request():
                 try:
-                    async with self._opik_connector.trace_agent(
+                    async with connector.trace_agent(
                         agent_name="rag_evaluator",
                         operation="evaluate",
                         trace_id=trace_id,
@@ -296,10 +297,10 @@ class OpikEvaluationTracer:
                                 }
                             )
 
-                    self._opik_connector.circuit_breaker.record_success()
+                    connector.circuit_breaker.record_success()
 
                 except Exception as e:
-                    self._opik_connector.circuit_breaker.record_failure()
+                    connector.circuit_breaker.record_failure()
                     logger.warning(f"Opik tracing failed: {e}")
                     trace_ctx.error = str(e)
                     yield trace_ctx
@@ -346,9 +347,10 @@ class OpikEvaluationTracer:
         )
 
         try:
-            if self.is_enabled and self._opik_connector.circuit_breaker.allow_request():
+            connector = self._opik_connector
+            if self.is_enabled and connector is not None and connector.circuit_breaker.allow_request():
                 try:
-                    async with self._opik_connector.trace_agent(
+                    async with connector.trace_agent(
                         agent_name="rag_evaluator",
                         operation="evaluate_sample",
                         trace_id=parent_trace_id,

@@ -13,7 +13,7 @@ Phase 4 Integration:
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from src.agents.causal_impact.state import (
     CausalImpactState,
@@ -104,9 +104,9 @@ class RefutationNode:
             # Get data passthrough from estimation node
             # This enables proper refutation tests on actual data
             estimation_data = state.get("estimation_data")
-            if estimation_data is not None:
+            if estimation_data is not None and hasattr(estimation_data, "shape"):
                 logger.debug(
-                    f"Using estimation data for refutation (shape: {estimation_data.shape})"
+                    f"Using estimation data for refutation (shape: {estimation_data.shape})"  # type: ignore[union-attr]
                 )
 
             # Run all refutation tests
@@ -125,7 +125,7 @@ class RefutationNode:
             )
 
             # Convert to legacy format for backward compatibility
-            refutation_results: RefutationResults = suite.to_legacy_format()
+            refutation_results = cast(RefutationResults, suite.to_legacy_format())
 
             # Persist validation results to database
             validation_ids = []
@@ -135,8 +135,8 @@ class RefutationNode:
                         suite=suite,
                         estimate_id=query_id,
                         estimate_source="causal_paths",
-                        agent_activity_id=state.get("agent_activity_id"),
-                        data_split=state.get("data_split"),
+                        agent_activity_id=cast(Optional[str], state.get("agent_activity_id")),
+                        data_split=cast(Optional[str], state.get("data_split")),
                     )
                     logger.info(
                         f"Persisted {len(validation_ids)} validation records for estimate {query_id}"
@@ -155,8 +155,8 @@ class RefutationNode:
                         "query_id": query_id,
                         "agent_activity_id": state.get("agent_activity_id"),
                     },
-                    dag_hash=state.get("dag_hash"),
-                    sample_size=estimation_result.get("n_samples"),
+                    dag_hash=cast(Optional[str], state.get("dag_hash")),
+                    sample_size=cast(Optional[int], estimation_result.get("n_samples")),
                 )
                 validation_outcome_id = await log_validation_outcome(validation_outcome)
                 logger.info(
