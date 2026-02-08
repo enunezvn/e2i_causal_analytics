@@ -98,7 +98,7 @@ class OpikConfig:
             api_key=os.getenv("OPIK_API_KEY"),
             workspace=os.getenv("OPIK_WORKSPACE", "default"),
             project_name=os.getenv("OPIK_PROJECT_NAME", "e2i-causal-analytics"),
-            url=os.getenv("OPIK_URL") or os.getenv("OPIK_ENDPOINT"),
+            url=os.getenv("OPIK_URL_OVERRIDE") or os.getenv("OPIK_URL") or os.getenv("OPIK_ENDPOINT"),
             use_local=os.getenv("OPIK_USE_LOCAL", "false").lower() == "true",
             enabled=os.getenv("OPIK_ENABLED", "true").lower() == "true",
             sample_rate=float(os.getenv("OPIK_SAMPLE_RATE", "1.0")),
@@ -388,9 +388,12 @@ class OpikConnector:
                 # Only include api_key if provided (local doesn't need it)
                 if self.config.api_key:
                     configure_kwargs["api_key"] = self.config.api_key
-                # Only include url if provided
+                # Include url if provided, or use default for local deployment
                 if self.config.url:
                     configure_kwargs["url"] = self.config.url
+                elif self.config.use_local:
+                    # Opik SDK requires explicit URL when use_local=True (non-interactive)
+                    configure_kwargs["url"] = "http://localhost:8084"
 
                 opik.configure(**configure_kwargs)  # type: ignore[arg-type]
                 logger.info(
