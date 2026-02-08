@@ -920,4 +920,4 @@ Developer Machine                       Droplet
 
 ---
 
-*Document generated from codebase analysis. See `CLAUDE.md` for developer reference, `DEPLOYMENT.md` for operational procedures, and [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary.*
+*Document generated from codebase analysis. See `CLAUDE.md` for developer reference, `DEPLOYMENT.md` for team setup, `DEPLOYMENT_ADMIN.md` for droplet operations, and [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary.*
