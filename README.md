@@ -112,6 +112,7 @@ e2i_causal_analytics/
 ├── docs/                      # Comprehensive documentation
 │   ├── ARCHITECTURE.md        # C4-model architecture documentation
 │   ├── ONBOARDING.md          # Developer onboarding guide
+│   ├── SYNTHETIC_DATA.md      # Synthetic data generation & validation reference
 │   ├── api/                   # OpenAPI spec (auto-generated)
 │   └── data/                  # Data dictionary & conversion docs
 │       ├── 00-INDEX.md        # Master index & quick-start
@@ -420,6 +421,7 @@ See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dicti
 
 - **Architecture**: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — C4-model system architecture
 - **Onboarding**: [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — Developer setup guide
+- **Synthetic Data**: [`docs/SYNTHETIC_DATA.md`](docs/SYNTHETIC_DATA.md) — DGPs, generators, causal validation, digital twin
 - **Data Documentation**: [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) — Master index for all data docs:
   - [Data Conversion Guide](docs/data/01-DATA-CONVERSION-GUIDE.md) — Real data onboarding playbook
   - [Core Data Dictionary](docs/data/02-CORE-DATA-DICTIONARY.md) — 19 core tables, 12 enums, 28 views
