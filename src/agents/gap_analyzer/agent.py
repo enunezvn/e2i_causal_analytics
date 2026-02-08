@@ -16,7 +16,7 @@ Architecture:
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from src.agents.base import SkillsMixin
 
@@ -150,7 +150,7 @@ class GapAnalyzerAgent(SkillsMixin):
                             query_id=input_data.get("query_id"),
                         ):
                             # Execute workflow
-                            final_state = await self.graph.ainvoke(state)
+                            final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
 
                             # Build output
                             output = self._build_output(final_state)
@@ -159,7 +159,7 @@ class GapAnalyzerAgent(SkillsMixin):
                             await tracker.log_analysis_result(output, final_state)
                     else:
                         # Execute workflow without MLflow
-                        final_state = await self.graph.ainvoke(state)
+                        final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
                         output = self._build_output(final_state)
 
                     # Log analysis results to Opik
@@ -167,7 +167,7 @@ class GapAnalyzerAgent(SkillsMixin):
                         status="success",
                         success=True,
                         total_duration_ms=output.get("total_latency_ms", 0),
-                        gaps_detected=len(final_state.get("gaps_detected", [])),
+                        gaps_detected=len(final_state.get("gaps_detected") or []),
                         opportunities_count=len(output.get("prioritized_opportunities", [])),
                         quick_wins_count=len(output.get("quick_wins", [])),
                         strategic_bets_count=len(output.get("strategic_bets", [])),
@@ -188,7 +188,7 @@ class GapAnalyzerAgent(SkillsMixin):
                         query_id=input_data.get("query_id"),
                     ):
                         # Execute workflow
-                        final_state = await self.graph.ainvoke(state)
+                        final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
 
                         # Build output
                         output = self._build_output(final_state)
@@ -199,7 +199,7 @@ class GapAnalyzerAgent(SkillsMixin):
                         return output
                 else:
                     # Execute workflow without any tracking
-                    final_state = await self.graph.ainvoke(state)
+                    final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
 
                     # Build output
                     output = self._build_output(final_state)
@@ -383,7 +383,7 @@ class GapAnalyzerAgent(SkillsMixin):
         confidence = 0.7  # Base confidence
 
         # Number of gaps factor
-        gaps_detected = state.get("gaps_detected", [])
+        gaps_detected = state.get("gaps_detected") or []
         if len(gaps_detected) > 10:
             confidence += 0.1
         elif len(gaps_detected) < 3:
@@ -428,7 +428,7 @@ class GapAnalyzerAgent(SkillsMixin):
                 return True
 
         # Check for very large gaps (may need causal validation)
-        gaps_detected = state.get("gaps_detected", [])
+        gaps_detected = state.get("gaps_detected") or []
         for gap in gaps_detected:
             if abs(gap["gap_percentage"]) > 50:
                 return True
@@ -458,7 +458,7 @@ class GapAnalyzerAgent(SkillsMixin):
             return "causal_impact"
 
         # Segment-specific patterns → Heterogeneous optimization
-        gaps_by_segment = state.get("gaps_by_segment", {})
+        gaps_by_segment = state.get("gaps_by_segment") or {}
         if len(gaps_by_segment) > 5:
             return "heterogeneous_optimizer"
 

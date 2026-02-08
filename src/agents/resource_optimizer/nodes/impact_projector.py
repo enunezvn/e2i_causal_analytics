@@ -78,8 +78,8 @@ class ImpactProjectorNode:
 
             # Calculate projected savings (efficiency gains)
             # Savings = outcome improvement per unit of investment compared to baseline
-            baseline_outcome = state.get(
-                "baseline_outcome", current_total * 0.5
+            baseline_outcome: float = float(
+                state.get("baseline_outcome", current_total * 0.5)  # type: ignore[arg-type]
             )  # Assume 50% baseline conversion
             outcome_improvement = total_outcome - baseline_outcome
             savings_pct = (
@@ -95,13 +95,14 @@ class ImpactProjectorNode:
             }
 
             # Impact by segment
-            impact_by_segment = self._calculate_segment_impact(allocations)
+            alloc_dicts: List[Dict[str, Any]] = [dict(a) for a in allocations]
+            impact_by_segment = self._calculate_segment_impact(alloc_dicts)
 
             # Generate summary
-            summary = self._generate_summary(allocations, total_outcome, roi)
+            summary = self._generate_summary(alloc_dicts, total_outcome, roi)
 
             # Generate recommendations
-            recommendations = self._generate_recommendations(allocations)
+            recommendations = self._generate_recommendations(alloc_dicts)
 
             total_time = (
                 state.get("formulation_latency_ms", 0)
@@ -111,7 +112,7 @@ class ImpactProjectorNode:
 
             logger.info(f"Impact projection complete: outcome={total_outcome:.2f}, roi={roi:.2f}")
 
-            return {
+            return {  # type: ignore[typeddict-unknown-key]
                 **state,
                 "projected_total_outcome": total_outcome,
                 "projected_roi": roi,

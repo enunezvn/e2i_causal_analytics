@@ -167,7 +167,8 @@ async def summarizer_node(state: CognitiveState) -> CognitiveState:
 
         state["conversation_summary"] = await llm.complete(summary_prompt)
         state["context_compressed"] = True
-        state["compression_ratio"] = len(state["conversation_summary"]) / len(messages_text)
+        summary = state["conversation_summary"] or ""
+        state["compression_ratio"] = len(summary) / len(messages_text)
     else:
         state["context_compressed"] = False
 
@@ -198,7 +199,13 @@ async def extract_entities(query: str) -> Dict[str, List[str]]:
     with open(vocab_path) as f:
         vocab = yaml.safe_load(f)
 
-    entities = {"brands": [], "regions": [], "kpis": [], "agents": [], "time_periods": []}
+    entities: Dict[str, List[str]] = {
+        "brands": [],
+        "regions": [],
+        "kpis": [],
+        "agents": [],
+        "time_periods": [],
+    }
 
     query_lower = query.lower()
 
@@ -239,15 +246,15 @@ async def detect_intent(query: str) -> str:
         vocab = yaml.safe_load(f)
 
     query_lower = query.lower()
-    intent_scores = {}
+    intent_scores: Dict[str, int] = {}
 
     for intent_name, intent_info in vocab["intent_vocabulary"].items():
         score = sum(1 for kw in intent_info["keywords"] if kw in query_lower)
         if score > 0:
-            intent_scores[intent_name] = score
+            intent_scores[str(intent_name)] = score
 
     if intent_scores:
-        return max(intent_scores, key=intent_scores.get)
+        return max(intent_scores, key=lambda k: intent_scores[k])
     return "exploration_intents"  # Default
 
 
@@ -428,7 +435,7 @@ async def evaluate_evidence(state: CognitiveState, new_evidence: List[EvidenceIt
         ]
     )
 
-    investigation_goal = state.get("investigation_goal", state["user_query"])
+    investigation_goal: str = state.get("investigation_goal") or state["user_query"]
 
     # Check cache before making LLM call
     if is_evidence_cache_enabled():
@@ -505,7 +512,8 @@ async def agent_node(state: CognitiveState) -> CognitiveState:
         "experiment_intents": ["experiment_designer"],
     }
 
-    state["agents_to_invoke"] = intent_to_agents.get(state["detected_intent"], ["orchestrator"])
+    detected_intent: str = state["detected_intent"] or ""
+    state["agents_to_invoke"] = intent_to_agents.get(detected_intent, ["orchestrator"])
 
     # Build context for agents
     selected_evidence = [e for e in state["evidence_trail"] if e.selected]
@@ -574,7 +582,7 @@ Response:"""
         state["confidence_score"] = 0.5
 
     # Add assistant message
-    assistant_message = Message(role="assistant", content=state["synthesized_response"])
+    assistant_message = Message(role="assistant", content=state["synthesized_response"] or "")
     state["messages"] = [assistant_message]
 
     state["phase_timings"]["agent"]["end"] = datetime.now(timezone.utc)
@@ -696,14 +704,15 @@ Triplets (one per line, or NONE if no new facts):"""
             await insert_procedural_memory(procedure, state["query_embedding"])
 
     # === Create Episodic Memory ===
+    confidence: float = state["confidence_score"] or 0.0
     episodic_entry = {
         "event_type": "user_query",
         "event_subtype": state["detected_intent"],
         "description": f"User asked about {', '.join(state['detected_entities'].get('brands', ['unknown']))} "
         f"with intent '{state['detected_intent']}'. "
-        f"Response confidence: {state['confidence_score']:.0%}",
+        f"Response confidence: {confidence:.0%}",
         "entities": state["detected_entities"],
-        "outcome_type": "success" if state["confidence_score"] > 0.6 else "partial",
+        "outcome_type": "success" if confidence > 0.6 else "partial",
         "agent_name": ",".join(state["agents_to_invoke"]),
     }
     await insert_episodic_memory(episodic_entry, state["query_embedding"])
@@ -712,13 +721,13 @@ Triplets (one per line, or NONE if no new facts):"""
     state["feedback_signals"] = [
         {
             "signal_type": (
-                "outcome_success" if state["confidence_score"] > 0.7 else "outcome_partial"
+                "outcome_success" if confidence > 0.7 else "outcome_partial"
             ),
-            "signal_value": state["confidence_score"],
+            "signal_value": confidence,
             "applies_to_type": "procedure",
-            "is_training_example": state["confidence_score"] > 0.8,  # High-quality examples
+            "is_training_example": confidence > 0.8,  # High-quality examples
             "dspy_metric_name": "response_quality",
-            "dspy_metric_value": state["confidence_score"],
+            "dspy_metric_value": confidence,
         }
     ]
 
@@ -730,7 +739,7 @@ Triplets (one per line, or NONE if no new facts):"""
 
 def parse_triplets(text: str) -> List[Dict[str, Any]]:
     """Parse triplet text into structured format."""
-    triplets = []
+    triplets: List[Dict[str, Any]] = []
 
     if "NONE" in text.upper():
         return triplets
@@ -888,9 +897,11 @@ async def run_cognitive_cycle(
 
     # Run the workflow
     config = {"configurable": {"thread_id": initial_state["session_id"]}}
-    final_state = await app.ainvoke(initial_state, config)
+    final_state = await app.ainvoke(
+        initial_state, config  # type: ignore[arg-type]
+    )
 
-    return final_state
+    return final_state  # type: ignore[return-value]
 
 
 # ============================================================================

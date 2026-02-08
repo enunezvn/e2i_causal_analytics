@@ -91,7 +91,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
 
         calc_func = calculator_map.get(kpi.id)
         if calc_func is None:
-            return KPIResult(
+            return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 error=f"No calculator implemented for {kpi.id}",
             )
@@ -101,14 +101,14 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             # Determine if lower is better
             lower_is_better = kpi.id in {"WS1-MP-005", "WS1-MP-008", "WS1-MP-009"}
             status = self._evaluate_status(kpi, value, lower_is_better)
-            return KPIResult(
+            return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
                 metadata={"context": context, "lower_is_better": lower_is_better},
             )
         except Exception as e:
-            return KPIResult(
+            return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 error=str(e),
             )
@@ -186,7 +186,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0]["coverage"] is not None:
-            return result[0]["coverage"]
+            return float(result[0]["coverage"])
         return 0.0
 
     def _calc_fairness_gap(self, context: dict[str, Any]) -> float:
@@ -215,7 +215,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [model_name])
         if result and result[0]["avg_psi"] is not None:
-            return result[0]["avg_psi"]
+            return float(result[0]["avg_psi"])
 
         # Fall back to MLflow metric
         return self._get_metric_from_mlflow(model_name, "feature_drift_psi", default=0.0)
@@ -255,7 +255,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data
+            return response.data  # type: ignore[no-any-return]
         except Exception:
             return None
 

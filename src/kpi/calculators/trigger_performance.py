@@ -74,6 +74,9 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         if calc_func is None:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=f"No calculator implemented for {kpi.id}",
             )
 
@@ -86,11 +89,16 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
+                cached=False,
+                error=None,
                 metadata={"context": context, "lower_is_better": lower_is_better},
             )
         except Exception as e:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=str(e),
             )
 
@@ -116,7 +124,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("precision") is not None:
-            return result[0]["precision"]
+            return float(result[0]["precision"])
         return 0.0
 
     def _calc_trigger_recall(self, context: dict[str, Any]) -> float:
@@ -149,7 +157,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("recall") is not None:
-            return result[0]["recall"]
+            return float(result[0]["recall"])
         return 0.0
 
     def _calc_action_rate_uplift(self, context: dict[str, Any]) -> float:
@@ -179,7 +187,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("uplift") is not None:
-            return result[0]["uplift"]
+            return float(result[0]["uplift"])
         return 0.0
 
     def _calc_acceptance_rate(self, context: dict[str, Any]) -> float:
@@ -197,7 +205,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("acceptance_rate") is not None:
-            return result[0]["acceptance_rate"]
+            return float(result[0]["acceptance_rate"])
         return 0.0
 
     def _calc_false_alert_rate(self, context: dict[str, Any]) -> float:
@@ -215,7 +223,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("false_alert_rate") is not None:
-            return result[0]["false_alert_rate"]
+            return float(result[0]["false_alert_rate"])
         return 0.0
 
     def _calc_override_rate(self, context: dict[str, Any]) -> float:
@@ -234,7 +242,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("override_rate") is not None:
-            return result[0]["override_rate"]
+            return float(result[0]["override_rate"])
         return 0.0
 
     def _calc_lead_time(self, context: dict[str, Any]) -> float:
@@ -273,7 +281,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("cfr") is not None:
-            return result[0]["cfr"]
+            return float(result[0]["cfr"])
 
         # Fall back to direct calculation
         query = """
@@ -286,13 +294,13 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("cfr") is not None:
-            return result[0]["cfr"]
+            return float(result[0]["cfr"])
         return 0.0
 
     def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data
+            return response.data  # type: ignore[no-any-return]
         except Exception:
             return None

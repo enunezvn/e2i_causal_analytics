@@ -139,10 +139,26 @@ class ContextEnricherNode:
                     warnings.extend(freshness_warnings)
 
             context = PredictionContext(
-                similar_cases=(similar if not isinstance(similar, Exception) else []),
-                feature_importance=(importance if not isinstance(importance, Exception) else {}),
-                historical_accuracy=(accuracy if not isinstance(accuracy, Exception) else 0.0),
-                trend_direction=(trend if not isinstance(trend, Exception) else "stable"),
+                similar_cases=(
+                    similar  # type: ignore[typeddict-item]
+                    if not isinstance(similar, (Exception, BaseException))
+                    else []
+                ),
+                feature_importance=(
+                    importance  # type: ignore[typeddict-item]
+                    if not isinstance(importance, (Exception, BaseException))
+                    else {}
+                ),
+                historical_accuracy=(
+                    accuracy  # type: ignore[typeddict-item]
+                    if not isinstance(accuracy, (Exception, BaseException))
+                    else 0.0
+                ),
+                trend_direction=(
+                    trend  # type: ignore[typeddict-item]
+                    if not isinstance(trend, (Exception, BaseException))
+                    else "stable"
+                ),
             )
 
             context_time = int((time.time() - start_time) * 1000)
@@ -178,7 +194,7 @@ class ContextEnricherNode:
             if warnings:
                 result_state["warnings"] = warnings
 
-            return result_state
+            return result_state  # type: ignore[return-value]
 
         except Exception as e:
             logger.warning(f"Context enrichment failed: {e}")
@@ -210,7 +226,7 @@ class ContextEnricherNode:
 
         # Aggregate importance across models
         importances: Dict[str, float] = {}
-        predictions = state.get("individual_predictions", [])
+        predictions = state.get("individual_predictions") or []
 
         for pred in predictions:
             try:
@@ -290,7 +306,7 @@ class ContextEnricherNode:
         if not entity_id:
             return {"features": {}, "freshness": None, "warnings": []}
 
-        result = {"features": {}, "freshness": None, "warnings": []}
+        result: Dict[str, Any] = {"features": {}, "freshness": None, "warnings": []}
 
         try:
             # Check if feature_store supports online features (Feast)
@@ -313,13 +329,19 @@ class ContextEnricherNode:
                 # Add warning if features are stale
                 if freshness and not freshness.get("fresh", True):
                     stale_features = freshness.get("stale_features", [])
-                    result["warnings"].append(
+                    warnings_list: list[Any] = result["warnings"]
+                    warnings_list.append(
                         f"Stale features detected: {', '.join(stale_features[:5])}"
-                        + (f" (+{len(stale_features) - 5} more)" if len(stale_features) > 5 else "")
+                        + (
+                            f" (+{len(stale_features) - 5} more)"
+                            if len(stale_features) > 5
+                            else ""
+                        )
                     )
 
         except Exception as e:
             logger.debug(f"Online feature retrieval failed for {entity_id}: {e}")
-            result["warnings"].append(f"Online feature retrieval failed: {str(e)}")
+            warnings_list2: list[Any] = result["warnings"]
+            warnings_list2.append(f"Online feature retrieval failed: {str(e)}")
 
         return result

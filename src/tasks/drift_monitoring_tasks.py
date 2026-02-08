@@ -150,8 +150,8 @@ def run_drift_detection(
         "check_data_drift": check_data_drift,
         "check_model_drift": check_model_drift,
         "check_concept_drift": check_concept_drift,
-        "brand": brand,
-        "status": "initializing",
+        "brand": brand or "",
+        "status": "pending",
         "errors": [],
         "warnings": [],
         "data_drift_results": [],
@@ -162,7 +162,8 @@ def run_drift_detection(
         "alerts": [],
         "drift_summary": "",
         "recommended_actions": [],
-        "detection_latency_ms": 0,
+        "total_latency_ms": 0,
+        "timestamp": "",
         "features_checked": 0,
     }
 
@@ -297,7 +298,7 @@ def run_drift_detection(
             )
             raise
 
-    return run_async(execute_detection())
+    return run_async(execute_detection())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.check_all_production_models")
@@ -372,7 +373,7 @@ def check_all_production_models(
             "results": results,
         }
 
-    return run_async(run_sweep())
+    return run_async(run_sweep())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.cleanup_old_drift_history")
@@ -445,7 +446,7 @@ def cleanup_old_drift_history(
                 "error": str(e),
             }
 
-    return run_async(run_cleanup())
+    return run_async(run_cleanup())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.track_model_performance")
@@ -522,7 +523,7 @@ def track_model_performance(
                 "error": str(e),
             }
 
-    return run_async(execute_tracking())
+    return run_async(execute_tracking())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.check_model_performance_alerts")
@@ -578,7 +579,7 @@ def check_model_performance_alerts(
                 "error": str(e),
             }
 
-    return run_async(execute_check())
+    return run_async(execute_check())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.send_drift_alert_notifications")
@@ -656,7 +657,7 @@ def send_drift_alert_notifications(
             "details": notifications_sent,
         }
 
-    return run_async(send_notifications())
+    return run_async(send_notifications())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.evaluate_retraining_need")
@@ -697,7 +698,7 @@ def evaluate_retraining_need(
                 "error": str(e),
             }
 
-    return run_async(execute_evaluation())
+    return run_async(execute_evaluation())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.execute_model_retraining")
@@ -794,7 +795,7 @@ def execute_model_retraining(
                 "error": str(e),
             }
 
-    return run_async(execute_retraining())
+    return run_async(execute_retraining())  # type: ignore[no-any-return]
 
 
 @celery_app.task(bind=True, name="src.tasks.check_retraining_for_all_models")
@@ -864,7 +865,7 @@ def check_retraining_for_all_models(
             "results": results,
         }
 
-    return run_async(run_check())
+    return run_async(run_check())  # type: ignore[no-any-return]
 
 
 # Celery Beat schedule configuration

@@ -170,7 +170,7 @@ class RubricEvaluator:
         # Initialize Anthropic client (uses ANTHROPIC_API_KEY env var)
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if _has_anthropic and api_key:
-            self.client = anthropic.Anthropic(api_key=api_key)
+            self.client: Optional[Any] = anthropic.Anthropic(api_key=api_key)
         else:
             self.client = None
             if not _has_anthropic:
@@ -245,6 +245,7 @@ class RubricEvaluator:
         eval_prompt = self._build_evaluation_prompt(context)
 
         try:
+            assert self.client is not None
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -252,7 +253,7 @@ class RubricEvaluator:
                 messages=[{"role": "user", "content": eval_prompt}],
             )
 
-            response_text = response.content[0].text
+            response_text = response.content[0].text  # type: ignore[union-attr]
             return self._parse_evaluation_response(response_text)
 
         except Exception as e:
@@ -385,7 +386,8 @@ Format your response as JSON:
         # Check override conditions first
         for condition in self.override_conditions:
             if condition["condition"] == "any_criterion_below":
-                if any(s.score < condition["threshold"] for s in scores):
+                threshold = float(condition["threshold"])  # type: ignore[arg-type]
+                if any(s.score < threshold for s in scores):
                     action = condition.get("action", "suggestion")
                     if action == "suggestion":
                         return ImprovementDecision.SUGGESTION
@@ -460,7 +462,7 @@ Keep the improvement concise (2-3 sentences max)."""
                 temperature=0.5,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return response.content[0].text.strip()
+            return response.content[0].text.strip()  # type: ignore[union-attr, no-any-return]
 
         except Exception as e:
             # Handle anthropic.APIError specifically when available

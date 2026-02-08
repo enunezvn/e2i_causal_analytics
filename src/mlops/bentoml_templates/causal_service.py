@@ -26,7 +26,7 @@ try:
     AUDIT_AVAILABLE = True
 except ImportError:
     AUDIT_AVAILABLE = False
-    log_prediction_audit = None
+    log_prediction_audit = None  # type: ignore[assignment]
 
 try:
     import bentoml
@@ -39,9 +39,9 @@ except ImportError:
 try:
     from pydantic import BaseModel, Field
 except ImportError:
-    BaseModel = object
+    BaseModel = object  # type: ignore[misc,assignment]
 
-    def Field(*args, **kwargs):
+    def Field(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
         return None
 
 
@@ -266,7 +266,7 @@ class CausalInferenceServiceTemplate:
             def _preprocess(self, features: np.ndarray) -> np.ndarray:
                 """Apply preprocessing if available."""
                 if self._preprocessor is not None:
-                    return self._preprocessor.transform(features)
+                    return self._preprocessor.transform(features)  # type: ignore[no-any-return]
                 return features
 
             def _estimate_cate(
@@ -279,11 +279,11 @@ class CausalInferenceServiceTemplate:
                 """
                 # EconML models use effect() or const_marginal_effect()
                 if hasattr(self._model, "effect"):
-                    return self._model.effect(features)
+                    return self._model.effect(features)  # type: ignore[no-any-return]
                 elif hasattr(self._model, "const_marginal_effect"):
-                    return self._model.const_marginal_effect(features)
+                    return self._model.const_marginal_effect(features)  # type: ignore[no-any-return]
                 elif hasattr(self._model, "predict"):
-                    return self._model.predict(features)
+                    return self._model.predict(features)  # type: ignore[no-any-return]
                 else:
                     raise ValueError("Model does not support CATE estimation")
 
@@ -376,7 +376,7 @@ class CausalInferenceServiceTemplate:
                 )
 
                 # Prediction audit trail (Phase 1 G07)
-                if AUDIT_AVAILABLE and log_prediction_audit:
+                if AUDIT_AVAILABLE and log_prediction_audit is not None:
                     asyncio.create_task(
                         log_prediction_audit(
                             model_name=service_name,
@@ -460,7 +460,7 @@ class CausalInferenceServiceTemplate:
                 )
 
                 # Prediction audit trail (Phase 1 G07)
-                if AUDIT_AVAILABLE and log_prediction_audit:
+                if AUDIT_AVAILABLE and log_prediction_audit is not None:
                     asyncio.create_task(
                         log_prediction_audit(
                             model_name=service_name,
@@ -523,7 +523,7 @@ class CausalInferenceServiceTemplate:
                 )
 
                 # Prediction audit trail (Phase 1 G07)
-                if AUDIT_AVAILABLE and log_prediction_audit:
+                if AUDIT_AVAILABLE and log_prediction_audit is not None:
                     asyncio.create_task(
                         log_prediction_audit(
                             model_name=service_name,

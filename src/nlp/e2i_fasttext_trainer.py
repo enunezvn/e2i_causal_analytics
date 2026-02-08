@@ -15,7 +15,7 @@ Usage:
 
 import os
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -247,7 +247,7 @@ def find_best_match(
     return best_match, best_score
 
 
-def run_test_suite(model: fasttext.FastText._FastText) -> Dict:
+def run_test_suite(model: fasttext.FastText._FastText) -> Dict[str, Any]:
     """
     Run comprehensive test suite against the trained model.
     """
@@ -255,7 +255,7 @@ def run_test_suite(model: fasttext.FastText._FastText) -> Dict:
     print("RUNNING E2I FASTTEXT TEST SUITE")
     print("=" * 60)
 
-    results = {
+    results: Dict[str, Any] = {
         "passed": 0,
         "failed": 0,
         "total": len(TEST_CASES),

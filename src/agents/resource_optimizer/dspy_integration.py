@@ -139,9 +139,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using default optimization templates")
-    OptimizationSummarySignature = None
-    AllocationRecommendationSignature = None
-    ScenarioNarrativeSignature = None
+    OptimizationSummarySignature = None  # type: ignore[assignment, misc]
+    AllocationRecommendationSignature = None  # type: ignore[assignment, misc]
+    ScenarioNarrativeSignature = None  # type: ignore[assignment, misc]
 
 
 # =============================================================================
@@ -165,7 +165,7 @@ class ResourceOptimizerDSPyIntegration:
     @property
     def prompts(self) -> ResourceOptimizationPrompts:
         """Get current optimized prompts."""
-        return self._prompts
+        return self._prompts  # type: ignore[no-any-return]
 
     def update_optimized_prompts(
         self,
@@ -209,7 +209,7 @@ class ResourceOptimizerDSPyIntegration:
         decrease_count: int,
     ) -> str:
         """Get formatted summary prompt with current optimized template."""
-        return self._prompts.summary_template.format(
+        return self._prompts.summary_template.format(  # type: ignore[no-any-return]
             resource_type=resource_type,
             objective=objective,
             solver_type=solver_type,
@@ -230,7 +230,7 @@ class ResourceOptimizerDSPyIntegration:
         expected_impact: float,
     ) -> str:
         """Get formatted recommendation prompt."""
-        return self._prompts.recommendation_template.format(
+        return self._prompts.recommendation_template.format(  # type: ignore[no-any-return]
             entity_id=entity_id,
             entity_type=entity_type,
             current=current,
@@ -247,7 +247,7 @@ class ResourceOptimizerDSPyIntegration:
         violations: str,
     ) -> str:
         """Get formatted scenario comparison prompt."""
-        return self._prompts.scenario_comparison_template.format(
+        return self._prompts.scenario_comparison_template.format(  # type: ignore[no-any-return]
             scenario_names=scenario_names,
             best_scenario=best_scenario,
             best_roi=best_roi,
@@ -263,7 +263,7 @@ class ResourceOptimizerDSPyIntegration:
         impact: str,
     ) -> str:
         """Get formatted constraint warning prompt."""
-        return self._prompts.constraint_warning_template.format(
+        return self._prompts.constraint_warning_template.format(  # type: ignore[no-any-return]
             constraint_type=constraint_type,
             description=description,
             value=value,

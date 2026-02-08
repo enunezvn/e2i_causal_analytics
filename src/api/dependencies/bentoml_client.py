@@ -273,6 +273,7 @@ class BentoMLClient:
                 # e.g., async def predict(self, input_data: Model) expects {"input_data": {...}}
                 wrapped_input = {"input_data": input_data}
 
+                assert self._client is not None
                 response = await self._client.post(
                     f"{endpoint_url}/predict",
                     json=wrapped_input,
@@ -297,7 +298,7 @@ class BentoMLClient:
                 if self.config.enable_tracing:
                     self._log_trace(model_name, input_data, result, latency_ms, trace_id)
 
-                return result
+                return result  # type: ignore[no-any-return]
 
             except httpx.HTTPStatusError as e:
                 last_exception = e
@@ -342,6 +343,7 @@ class BentoMLClient:
 
         start_time = time.time()
 
+        assert self._client is not None
         response = await self._client.post(
             f"{endpoint_url}/predict_batch",
             json={"instances": batch_data},
@@ -361,7 +363,7 @@ class BentoMLClient:
                 trace_id,
             )
 
-        return results
+        return results  # type: ignore[no-any-return]
 
     async def health_check(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Check health of BentoML service or specific model.
@@ -381,6 +383,7 @@ class BentoMLClient:
             endpoint_url = self.config.base_url
 
         try:
+            assert self._client is not None
             response = await self._client.get(
                 f"{endpoint_url}/healthz",
                 timeout=5.0,
@@ -413,12 +416,13 @@ class BentoMLClient:
 
         endpoint_url = self.config.get_endpoint_url(model_name)
 
+        assert self._client is not None
         response = await self._client.get(
             f"{endpoint_url}/metadata",
             timeout=5.0,
         )
         response.raise_for_status()
-        return response.json()
+        return response.json()  # type: ignore[no-any-return]
 
     async def _backoff(self, attempt: int) -> None:
         """Exponential backoff with jitter."""
@@ -438,7 +442,7 @@ class BentoMLClient:
         try:
             import opik
 
-            opik.track(
+            opik.track(  # type: ignore[call-arg]
                 name=f"bentoml.predict.{model_name}",
                 input={"model": model_name, "input_summary": str(input_data)[:200]},
                 output={"prediction_summary": str(output_data)[:200]},

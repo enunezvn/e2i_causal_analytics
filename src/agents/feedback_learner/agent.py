@@ -155,32 +155,19 @@ class FeedbackLearnerAgent:
         if not batch_id:
             batch_id = f"batch_{uuid.uuid4().hex[:8]}"
 
+        # NotRequired fields are omitted - populated during graph execution
         initial_state: FeedbackLearnerState = {
             "batch_id": batch_id,
             "time_range_start": time_range_start,
             "time_range_end": time_range_end,
-            "focus_agents": focus_agents,
-            # DSPy Integration fields
-            "cognitive_context": None,
-            "training_signal": None,
-            # Feedback data
-            "feedback_items": None,
-            "feedback_summary": None,
-            "detected_patterns": None,
-            "pattern_clusters": None,
-            "learning_recommendations": None,
-            "priority_improvements": None,
-            "proposed_updates": None,
-            "applied_updates": None,
-            "learning_summary": None,
-            "metrics_before": None,
-            "metrics_after": None,
+            "focus_agents": focus_agents or [],
+            # Required output fields with initial values
+            "learning_summary": "",
             "collection_latency_ms": 0,
             "analysis_latency_ms": 0,
             "extraction_latency_ms": 0,
             "update_latency_ms": 0,
             "total_latency_ms": 0,
-            "model_used": None,
             "errors": [],
             "warnings": [],
             "status": "pending",

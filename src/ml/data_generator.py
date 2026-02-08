@@ -22,7 +22,7 @@ import random
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Dict, List
+from typing import Any, Dict, List, Optional, Union
 
 # Try to import optional packages
 try:
@@ -205,30 +205,30 @@ def json_serial(obj):
 class E2IDataGenerator:
     """Generates complete E2I dataset with all KPI gaps filled."""
 
-    def __init__(self, config: SplitConfig = None):
+    def __init__(self, config: Optional[SplitConfig] = None):
         self.config = config or SplitConfig()
         self.split_config_id = str(uuid.uuid4())
 
         # Data containers
-        self.hcp_profiles = []
-        self.patient_journeys = []
-        self.treatment_events = []
-        self.ml_predictions = []
-        self.triggers = []
-        self.agent_activities = []
-        self.business_metrics = []
-        self.causal_paths = []
+        self.hcp_profiles: list[Dict[str, Any]] = []
+        self.patient_journeys: list[Dict[str, Any]] = []
+        self.treatment_events: list[Dict[str, Any]] = []
+        self.ml_predictions: list[Dict[str, Any]] = []
+        self.triggers: list[Dict[str, Any]] = []
+        self.agent_activities: list[Dict[str, Any]] = []
+        self.business_metrics: list[Dict[str, Any]] = []
+        self.causal_paths: list[Dict[str, Any]] = []
 
         # New KPI gap tables
-        self.user_sessions = []
-        self.data_source_tracking = []
-        self.ml_annotations = []
-        self.etl_pipeline_metrics = []
-        self.hcp_intent_surveys = []
-        self.reference_universe = []
+        self.user_sessions: list[Dict[str, Any]] = []
+        self.data_source_tracking: list[Dict[str, Any]] = []
+        self.ml_annotations: list[Dict[str, Any]] = []
+        self.etl_pipeline_metrics: list[Dict[str, Any]] = []
+        self.hcp_intent_surveys: list[Dict[str, Any]] = []
+        self.reference_universe: list[Dict[str, Any]] = []
 
         # Tracking
-        self.patient_splits = {}  # patient_id -> split
+        self.patient_splits: dict[str, str] = {}  # patient_id -> split
 
     def generate_all(self):
         """Generate complete dataset."""
@@ -1369,9 +1369,9 @@ class E2IDataGenerator:
             "causal_paths": [c for c in self.causal_paths if c["data_split"] == "test"],
         }
 
-        exports["e2i_ml_v3_train.json"] = train_data
-        exports["e2i_ml_v3_validation.json"] = validation_data
-        exports["e2i_ml_v3_test.json"] = test_data
+        exports["e2i_ml_v3_train.json"] = train_data  # type: ignore[assignment]
+        exports["e2i_ml_v3_validation.json"] = validation_data  # type: ignore[assignment]
+        exports["e2i_ml_v3_test.json"] = test_data  # type: ignore[assignment]
 
         for filename, data in exports.items():
             filepath = f"{output_dir}/{filename}"

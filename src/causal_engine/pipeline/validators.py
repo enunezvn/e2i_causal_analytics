@@ -82,9 +82,9 @@ class NetworkXToDoWhyValidator(StageValidator):
 
     def validate(self, state: PipelineState) -> ValidationResult:
         """Validate that graph structure is suitable for DoWhy."""
-        errors = []
-        warnings = []
-        suggestions = []
+        errors: List[str] = []
+        warnings: List[str] = []
+        suggestions: List[str] = []
 
         # Check if NetworkX produced a graph
         if not state.get("causal_graph"):
@@ -94,8 +94,8 @@ class NetworkXToDoWhyValidator(StageValidator):
         graph = state["causal_graph"]
 
         # Check for required nodes
-        nodes = graph.get("nodes", [])
-        edges = graph.get("edges", [])
+        nodes = graph.get("nodes", [])  # type: ignore[union-attr]
+        edges = graph.get("edges", [])  # type: ignore[union-attr]
 
         if not nodes:
             errors.append("Causal graph has no nodes")
@@ -138,9 +138,9 @@ class DoWhyToEconMLValidator(StageValidator):
 
     def validate(self, state: PipelineState) -> ValidationResult:
         """Validate that DoWhy results are suitable for EconML CATE."""
-        errors = []
-        warnings = []
-        suggestions = []
+        errors: List[str] = []
+        warnings: List[str] = []
+        suggestions: List[str] = []
 
         # Check if DoWhy produced results
         if not state.get("dowhy_result"):
@@ -150,8 +150,8 @@ class DoWhyToEconMLValidator(StageValidator):
         dowhy_result = state["dowhy_result"]
 
         # Check for successful DoWhy execution
-        if not dowhy_result.get("success"):
-            error_msg = dowhy_result.get("error", "Unknown error")
+        if not dowhy_result.get("success"):  # type: ignore[union-attr]
+            error_msg = dowhy_result.get("error", "Unknown error")  # type: ignore[union-attr]
             errors.append(f"DoWhy execution failed: {error_msg}")
             return ValidationResult(False, errors, warnings, suggestions)
 
@@ -200,9 +200,9 @@ class EconMLToCausalMLValidator(StageValidator):
 
     def validate(self, state: PipelineState) -> ValidationResult:
         """Validate that EconML results are suitable for CausalML uplift."""
-        errors = []
-        warnings = []
-        suggestions = []
+        errors: List[str] = []
+        warnings: List[str] = []
+        suggestions: List[str] = []
 
         # Check if EconML produced results
         if not state.get("econml_result"):
@@ -212,8 +212,8 @@ class EconMLToCausalMLValidator(StageValidator):
         econml_result = state["econml_result"]
 
         # Check for successful EconML execution
-        if not econml_result.get("success"):
-            error_msg = econml_result.get("error", "Unknown error")
+        if not econml_result.get("success"):  # type: ignore[union-attr]
+            error_msg = econml_result.get("error", "Unknown error")  # type: ignore[union-attr]
             errors.append(f"EconML execution failed: {error_msg}")
             return ValidationResult(False, errors, warnings, suggestions)
 

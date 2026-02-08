@@ -207,7 +207,7 @@ def _get_model_class_dynamic(
     try:
         from src.mlops.optuna_optimizer import get_model_class
 
-        return get_model_class(algorithm_name, problem_type)
+        return get_model_class(algorithm_name, problem_type)  # type: ignore[no-any-return]
     except ImportError:
         pass
 
@@ -221,12 +221,12 @@ def _get_model_class_dynamic(
         if algorithm_name == "XGBoost":
             import xgboost as xgb
 
-            return xgb.XGBClassifier if is_classification else xgb.XGBRegressor
+            return xgb.XGBClassifier if is_classification else xgb.XGBRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "LightGBM":
             import lightgbm as lgb
 
-            return lgb.LGBMClassifier if is_classification else lgb.LGBMRegressor
+            return lgb.LGBMClassifier if is_classification else lgb.LGBMRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "RandomForest":
             from sklearn.ensemble import (
@@ -234,7 +234,7 @@ def _get_model_class_dynamic(
                 RandomForestRegressor,
             )
 
-            return RandomForestClassifier if is_classification else RandomForestRegressor
+            return RandomForestClassifier if is_classification else RandomForestRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "ExtraTrees":
             from sklearn.ensemble import (
@@ -242,22 +242,22 @@ def _get_model_class_dynamic(
                 ExtraTreesRegressor,
             )
 
-            return ExtraTreesClassifier if is_classification else ExtraTreesRegressor
+            return ExtraTreesClassifier if is_classification else ExtraTreesRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "LogisticRegression":
             from sklearn.linear_model import LogisticRegression
 
-            return LogisticRegression
+            return LogisticRegression  # type: ignore[no-any-return]
 
         elif algorithm_name == "Ridge":
             from sklearn.linear_model import Ridge
 
-            return Ridge
+            return Ridge  # type: ignore[no-any-return]
 
         elif algorithm_name == "Lasso":
             from sklearn.linear_model import Lasso
 
-            return Lasso
+            return Lasso  # type: ignore[no-any-return]
 
         elif algorithm_name == "GradientBoosting":
             from sklearn.ensemble import (
@@ -265,22 +265,22 @@ def _get_model_class_dynamic(
                 GradientBoostingRegressor,
             )
 
-            return GradientBoostingClassifier if is_classification else GradientBoostingRegressor
+            return GradientBoostingClassifier if is_classification else GradientBoostingRegressor  # type: ignore[no-any-return]
 
         elif algorithm_name == "SVM":
             from sklearn.svm import SVC, SVR
 
-            return SVC if is_classification else SVR
+            return SVC if is_classification else SVR  # type: ignore[no-any-return]
 
         elif algorithm_name == "CausalForest":
             from econml.dml import CausalForestDML
 
-            return CausalForestDML
+            return CausalForestDML  # type: ignore[no-any-return]
 
         elif algorithm_name == "LinearDML":
             from econml.dml import LinearDML
 
-            return LinearDML
+            return LinearDML  # type: ignore[no-any-return]
 
         elif algorithm_name in ("DRLearner", "SLearner", "TLearner", "XLearner"):
             # Meta-learners share similar interface
@@ -292,7 +292,7 @@ def _get_model_class_dynamic(
                 "TLearner": metalearners.TLearner,
                 "XLearner": metalearners.XLearner,
             }
-            return mapping[algorithm_name]
+            return mapping[algorithm_name]  # type: ignore[no-any-return]
 
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
@@ -528,7 +528,7 @@ def _prepare_fit_params(
     Returns:
         Dictionary of fit parameters
     """
-    fit_params = {}
+    fit_params: Dict[str, Any] = {}
 
     if not early_stopping:
         return fit_params
@@ -619,14 +619,14 @@ def _check_early_stopping(model: Any, algorithm_name: str) -> tuple:
     return early_stopped, final_epoch
 
 
-def _ensure_numpy(data: Any) -> np.ndarray:
+def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
     """Convert data to numpy array if needed.
 
     Args:
         data: Input data
 
     Returns:
-        Numpy array
+        Numpy array or None
     """
     if data is None:
         return None
@@ -639,7 +639,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
         import pandas as pd
 
         if isinstance(data, (pd.DataFrame, pd.Series)):
-            return data.values
+            return data.values  # type: ignore[no-any-return]
     except ImportError:
         pass
 
@@ -647,7 +647,7 @@ def _ensure_numpy(data: Any) -> np.ndarray:
     if isinstance(data, (list, tuple)):
         return np.array(data)
 
-    return data
+    return data  # type: ignore[no-any-return]
 
 
 def _get_shape(data: Any) -> str:

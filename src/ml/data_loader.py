@@ -46,8 +46,8 @@ try:
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
-    Client = None  # Type hint placeholder
-    create_client = None
+    Client = None  # type: ignore[assignment,misc]
+    create_client = None  # type: ignore[assignment]
     print("Warning: supabase-py not installed. Running in dry-run mode.")
 
 
@@ -94,7 +94,7 @@ BATCH_SIZE = 100
 def load_json_file(filepath: str) -> List[Dict]:
     """Load JSON data from file."""
     with open(filepath, "r") as f:
-        return json.load(f)
+        return json.load(f)  # type: ignore[no-any-return]
 
 
 def transform_for_supabase(table_name: str, records: List[Dict]) -> List[Dict]:
@@ -307,16 +307,16 @@ class E2IDataLoader:
                     split_data = json.load(f)
                     if split_data:
                         split_config_id = split_data[0].get("split_config_id")
-                        if split_config_id:
+                        if split_config_id and self.client is not None:
                             # Call the audit function via RPC
                             response = self.client.rpc(
                                 "run_leakage_audit", {"p_split_config_id": split_config_id}
                             ).execute()
                             if response.data:
                                 print("  Audit results:")
-                                for check in response.data:
-                                    status = "✓" if check["passed"] else "✗"
-                                    print(f"    {status} {check['check_type']}: {check['details']}")
+                                for check in response.data:  # type: ignore[union-attr]
+                                    status = "✓" if check["passed"] else "✗"  # type: ignore[index,call-overload]
+                                    print(f"    {status} {check['check_type']}: {check['details']}")  # type: ignore[index,call-overload]
         except Exception as e:
             print(f"  ⚠️  Could not run audit: {e}")
 

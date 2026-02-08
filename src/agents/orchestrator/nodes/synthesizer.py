@@ -96,7 +96,7 @@ class SynthesizerNode:
         Returns:
             Enhanced response with strategic interpretation
         """
-        agent_output = result.get("result", {})
+        agent_output = result.get("result") or {}
         agent_name = result.get("agent_name", "unknown")
 
         # Get raw response
@@ -109,7 +109,7 @@ class SynthesizerNode:
 
         # Enhance response with strategic context if we have metrics
         if interpretation["has_metrics"]:
-            enhanced_response = f"""{raw_response}
+            enhanced_response: str = f"""{raw_response}
 
 **Strategic Implications:**
 {interpretation["strategic_summary"]}
@@ -298,7 +298,7 @@ class SynthesizerNode:
         agent_names = []
 
         for result in results:
-            agent_output = result.get("result", {})
+            agent_output = result.get("result") or {}
             agent_name = result["agent_name"]
             agent_names.append(agent_name)
             narrative = agent_output.get("narrative", "")[:500]
@@ -541,4 +541,4 @@ async def synthesize_response(state: Dict[str, Any]) -> Dict[str, Any]:
         Updated state
     """
     synthesizer = SynthesizerNode()
-    return await synthesizer.execute(state)
+    return await synthesizer.execute(state)  # type: ignore[arg-type, return-value]

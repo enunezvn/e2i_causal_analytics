@@ -37,7 +37,7 @@ class SegmentAnalyzerNode:
             extra={
                 "node": "segment_analyzer",
                 "overall_ate": state.get("overall_ate"),
-                "segment_count": len(state.get("cate_by_segment", {})),
+                "segment_count": len(state.get("cate_by_segment") or {}),
             },
         )
 
@@ -46,15 +46,15 @@ class SegmentAnalyzerNode:
             return state
 
         try:
-            ate = state["overall_ate"]
-            cate_by_segment = state["cate_by_segment"]
+            ate: float = state.get("overall_ate") or 0.0
+            cate_by_segment = state.get("cate_by_segment") or {}
             top_count = state.get("top_segments_count", 10)
 
             # Flatten all segment results
             all_segments = []
             total_size = 0
 
-            for segment_var, results in cate_by_segment.items():
+            for segment_var, results in (cate_by_segment or {}).items():
                 for result in results:
                     total_size += result["sample_size"]
                     all_segments.append({"segment_var": segment_var, "result": result})
@@ -117,7 +117,7 @@ class SegmentAnalyzerNode:
                 },
             )
 
-            result = {
+            output_state: Dict[str, Any] = {
                 **state,
                 "high_responders": high_responders,
                 "low_responders": low_responders,
@@ -128,15 +128,15 @@ class SegmentAnalyzerNode:
 
             # V4.4: Add DAG validation results if available
             if dag_validated_segments is not None:
-                result["dag_validated_segments"] = dag_validated_segments
+                output_state["dag_validated_segments"] = dag_validated_segments
             if dag_invalid_segments is not None:
-                result["dag_invalid_segments"] = dag_invalid_segments
+                output_state["dag_invalid_segments"] = dag_invalid_segments
             if latent_confounder_segments is not None:
-                result["latent_confounder_segments"] = latent_confounder_segments
+                output_state["latent_confounder_segments"] = latent_confounder_segments
             if dag_validation_warnings:
-                result["dag_validation_warnings"] = dag_validation_warnings
+                output_state["dag_validation_warnings"] = dag_validation_warnings
 
-            return result
+            return output_state  # type: ignore[return-value]
 
         except Exception as e:
             logger.error(
@@ -195,7 +195,7 @@ class SegmentAnalyzerNode:
 
             profile = SegmentProfile(
                 segment_id=f"{seg['segment_var']}_{result['segment_value']}",
-                responder_type=responder_type,
+                responder_type=responder_type,  # type: ignore[typeddict-item]
                 cate_estimate=cate,
                 defining_features=[
                     {
@@ -259,7 +259,7 @@ class SegmentAnalyzerNode:
                 profiles.append(
                     SegmentProfile(
                         segment_id=f"{seg['segment_var']}_{result['segment_value']}",
-                        responder_type=rtype,
+                        responder_type=rtype,  # type: ignore[typeddict-item]
                         cate_estimate=cate,
                         defining_features=[
                             {
@@ -390,9 +390,9 @@ class SegmentAnalyzerNode:
         latent_confounder_segments: List[str] = []
         warnings: List[str] = []
 
-        dag_adjacency = state.get("discovered_dag_adjacency", [])
-        dag_nodes = state.get("discovered_dag_nodes", [])
-        edge_types = state.get("discovered_dag_edge_types", {})
+        dag_adjacency: List[List[int]] = state.get("discovered_dag_adjacency") or []
+        dag_nodes: List[str] = state.get("discovered_dag_nodes") or []
+        edge_types: Dict[str, str] = state.get("discovered_dag_edge_types") or {}
         treatment_var = state.get("treatment_var", "")
         outcome_var = state.get("outcome_var", "")
 

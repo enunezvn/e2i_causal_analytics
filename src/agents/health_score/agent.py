@@ -184,22 +184,14 @@ class HealthScoreAgent:
         logger.info(f"Starting health check with scope: {scope}")
 
         # Create initial state
+        # NotRequired fields (component/model/pipeline/agent statuses and scores)
+        # are omitted - they will be populated during graph execution
         initial_state: HealthScoreState = {
             "query": query,
             "check_scope": scope,
-            "component_statuses": None,
-            "component_health_score": None,
-            "model_metrics": None,
-            "model_health_score": None,
-            "pipeline_statuses": None,
-            "pipeline_health_score": None,
-            "agent_statuses": None,
-            "agent_health_score": None,
-            "overall_health_score": None,
-            "health_grade": None,
-            "critical_issues": None,
-            "warnings": None,
-            "health_summary": None,
+            "overall_health_score": 0.0,
+            "health_grade": "F",
+            "health_summary": "",
             "total_latency_ms": 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "errors": [],
@@ -219,7 +211,8 @@ class HealthScoreAgent:
                 graph = self._full_graph
 
             # Run graph
-            return await graph.ainvoke(initial_state)
+            result: Dict[str, Any] = await graph.ainvoke(initial_state)
+            return result
 
         async def run_with_mlflow(trace_ctx=None) -> HealthScoreOutput:
             """Execute workflow with optional MLflow tracking."""
@@ -259,7 +252,7 @@ class HealthScoreAgent:
                     )
 
                     # Log to MLflow
-                    await mlflow_tracker.log_health_result(output, result)
+                    await mlflow_tracker.log_health_result(output, result)  # type: ignore[arg-type]
 
                     return output
             else:

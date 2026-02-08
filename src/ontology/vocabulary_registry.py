@@ -131,7 +131,8 @@ class VocabularyRegistry:
         Returns:
             List of brand names: ['Remibrutinib', 'Fabhalta', 'Kisqali']
         """
-        return self._data.get("brands", {}).get("values", [])
+        result: list[str] = self._data.get("brands", {}).get("values", [])
+        return result
 
     def get_regions(self) -> list[str]:
         """
@@ -140,7 +141,8 @@ class VocabularyRegistry:
         Returns:
             List of region names: ['northeast', 'south', 'midwest', 'west']
         """
-        return self._data.get("regions", {}).get("values", [])
+        result: list[str] = self._data.get("regions", {}).get("values", [])
+        return result
 
     def get_agents(self, tier: Optional[int] = None) -> dict[str, Any]:
         """
@@ -155,11 +157,12 @@ class VocabularyRegistry:
         agents_data = self._data.get("agents", {})
 
         if tier is None:
-            return agents_data
+            result: dict[str, Any] = agents_data
+            return result
 
         # Filter by tier
         tier_key_prefix = f"tier_{tier}_"
-        filtered = {}
+        filtered: dict[str, Any] = {}
         for key, value in agents_data.items():
             if key.startswith(tier_key_prefix):
                 filtered[key] = value
@@ -195,7 +198,8 @@ class VocabularyRegistry:
         Returns:
             Dictionary of KPI configurations
         """
-        return self._data.get("kpis", {})
+        result: dict[str, Any] = self._data.get("kpis", {})
+        return result
 
     def get_kpi_names(self) -> list[str]:
         """
@@ -218,11 +222,12 @@ class VocabularyRegistry:
             List of engagement journey stage names
         """
         # Try new location first (v5.1.0+)
-        stages = self._data.get("patient_engagement_stages", {}).get("values", [])
+        stages: list[str] = self._data.get("patient_engagement_stages", {}).get("values", [])
         if stages:
             return stages
         # Fallback for backward compatibility
-        return self._data.get("journey_stages", {}).get("values", [])
+        fallback: list[str] = self._data.get("journey_stages", {}).get("values", [])
+        return fallback
 
     def get_engagement_stages(self) -> list[str]:
         """
@@ -246,7 +251,8 @@ class VocabularyRegistry:
         Returns:
             List of treatment line stage names
         """
-        return self._data.get("treatment_line_stages", {}).get("values", [])
+        result: list[str] = self._data.get("treatment_line_stages", {}).get("values", [])
+        return result
 
     def get_hcp_segments(self) -> list[str]:
         """
@@ -255,7 +261,8 @@ class VocabularyRegistry:
         Returns:
             List of HCP segments
         """
-        return self._data.get("hcp_segments", {}).get("values", [])
+        result: list[str] = self._data.get("hcp_segments", {}).get("values", [])
+        return result
 
     def get_time_references(self) -> dict[str, Any]:
         """
@@ -264,7 +271,8 @@ class VocabularyRegistry:
         Returns:
             Dictionary of time reference patterns
         """
-        return self._data.get("time_references", {})
+        result: dict[str, Any] = self._data.get("time_references", {})
+        return result
 
     def get_state_to_region_mapping(self) -> dict[str, list[str]]:
         """
@@ -275,7 +283,8 @@ class VocabularyRegistry:
             Example: {'northeast': ['CT', 'ME', 'MA', ...], ...}
         """
         mapping_data = self._data.get("state_to_region_mapping", {})
-        return mapping_data.get("mapping", {})
+        result: dict[str, list[str]] = mapping_data.get("mapping", {})
+        return result
 
     def get_region_for_state(self, state_code: str) -> Optional[str]:
         """
@@ -307,7 +316,8 @@ class VocabularyRegistry:
         by_area = competitor_data.get("by_therapeutic_area", {})
 
         if therapeutic_area:
-            return by_area.get(therapeutic_area, [])
+            result: list[str] = by_area.get(therapeutic_area, [])
+            return result
 
         # Return all competitors across all areas
         all_competitors = []
@@ -329,7 +339,8 @@ class VocabularyRegistry:
         channels = channel_data.get("channels", {})
 
         if channel_type:
-            return channels.get(channel_type, [])
+            ch_result: list[str] = channels.get(channel_type, [])
+            return ch_result
 
         # Return all channels across all types
         all_channels = []
@@ -345,7 +356,8 @@ class VocabularyRegistry:
             Dictionary of payer categories with subcategories
         """
         payer_data = self._data.get("payer_categories", {})
-        return payer_data.get("categories", {})
+        result: dict[str, Any] = payer_data.get("categories", {})
+        return result
 
     def get_icd10_codes(self, brand: Optional[str] = None) -> dict[str, list[str]]:
         """
@@ -477,7 +489,8 @@ class VocabularyRegistry:
         Returns:
             Dictionary of canonical names to their aliases
         """
-        return self._data.get("aliases", {})
+        result: dict[str, list[str]] = self._data.get("aliases", {})
+        return result
 
     def resolve_alias(self, text: str, entity_type: Optional[str] = None) -> Optional[str]:
         """
@@ -575,7 +588,8 @@ class VocabularyRegistry:
         Returns:
             Section data or empty dict
         """
-        return self._data.get(section_name, {})
+        result: dict[str, Any] = self._data.get(section_name, {})
+        return result
 
     def get_all_sections(self) -> list[str]:
         """

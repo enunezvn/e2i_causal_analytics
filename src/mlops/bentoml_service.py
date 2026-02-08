@@ -36,9 +36,9 @@ except ImportError:
 try:
     from pydantic import BaseModel, Field
 except ImportError:
-    BaseModel = object
+    BaseModel = object  # type: ignore[misc,assignment]
 
-    def Field(*args, **kwargs):
+    def Field(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
         return None
 
 
@@ -54,8 +54,8 @@ try:
     OPIK_AUDIT_AVAILABLE = True
 except ImportError:
     OPIK_AUDIT_AVAILABLE = False
-    log_prediction_audit = None
-    prediction_audit_context = None
+    log_prediction_audit = None  # type: ignore[assignment]
+    prediction_audit_context = None  # type: ignore[assignment]
     logger.debug("Prediction audit not available - Opik logging disabled")
 
 # Default model store path
@@ -545,7 +545,7 @@ def create_prediction_service(
                 except Exception as e:
                     logger.debug(f"Failed to log prediction audit: {e}")
 
-            return predictions
+            return predictions  # type: ignore[no-any-return]
 
         @bentoml.api
         async def predict_proba(
@@ -622,7 +622,7 @@ def create_prediction_service(
                 except Exception as e:
                     logger.debug(f"Failed to log prediction audit: {e}")
 
-            return probabilities
+            return probabilities  # type: ignore[no-any-return]
 
         @bentoml.api
         async def health(self) -> Dict[str, Any]:
@@ -799,12 +799,12 @@ class BentoPackager:
             Path to exported Bento
         """
         try:
-            output_path = Path(output_path)
-            output_path.mkdir(parents=True, exist_ok=True)
+            output_dir = Path(output_path)
+            output_dir.mkdir(parents=True, exist_ok=True)
 
             export_path = bentoml.bentos.export_bento(
                 bento_tag,
-                output_path,
+                output_dir,
             )
 
             logger.info(f"Exported Bento to: {export_path}")
@@ -1011,7 +1011,7 @@ async def _persist_deployment(
         registry_uuid = UUID(model_registry_id) if model_registry_id else None
 
         deployment = await repo.create_deployment(
-            model_registry_id=registry_uuid,
+            model_registry_id=registry_uuid,  # type: ignore[arg-type]
             deployment_name=deployment_name,
             environment=environment,
             deployed_by=deployed_by,

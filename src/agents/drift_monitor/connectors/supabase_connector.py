@@ -68,7 +68,7 @@ class SupabaseDataConnector(BaseDataConnector):
             supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
         )
 
-        self._client = None
+        self._client: Any = None
         self._initialized = False
 
     async def _ensure_initialized(self) -> None:
@@ -393,7 +393,7 @@ class SupabaseDataConnector(BaseDataConnector):
             response = query.order("created_at", desc=True).execute()
 
             if response.data:
-                return response.data
+                return response.data  # type: ignore[no-any-return]
             return []
 
         except Exception as e:
@@ -471,7 +471,7 @@ class SupabaseDataConnector(BaseDataConnector):
         """
         if isinstance(value, dict):
             # Handle JSONB wrapper
-            return float(value.get("value", value.get("v", 0)))
+            return float(value.get("value", value.get("v", 0)))  # type: ignore[arg-type]
         elif isinstance(value, (int, float)):
             return float(value)
         elif isinstance(value, str):

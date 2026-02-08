@@ -195,7 +195,7 @@ class ResourceOptimizerMemoryHooks:
 
         try:
             messages = await self.working_memory.get_messages(session_id, limit=limit)
-            return messages
+            return messages  # type: ignore[no-any-return]
         except Exception as e:
             logger.warning(f"Failed to get working memory: {e}")
             return []
@@ -214,7 +214,7 @@ class ResourceOptimizerMemoryHooks:
 
             cached = await redis.get(cache_key)
             if cached:
-                return json.loads(cached)
+                return json.loads(cached)  # type: ignore[no-any-return]
             return None
         except Exception as e:
             logger.warning(f"Failed to get cached optimization: {e}")
@@ -262,7 +262,7 @@ class ResourceOptimizerMemoryHooks:
     ) -> List[Dict[str, Any]]:
         """Get learned optimization patterns from procedural memory."""
         try:
-            from src.memory.procedural_memory import (
+            from src.memory.procedural_memory import (  # type: ignore[attr-defined]
                 ProceduralSearchFilters,
                 search_procedures_by_text,
             )
@@ -285,7 +285,7 @@ class ResourceOptimizerMemoryHooks:
                 min_similarity=0.5,
             )
 
-            return results
+            return results  # type: ignore[no-any-return]
         except ImportError:
             # Procedural memory may not be fully implemented yet
             logger.debug("Procedural memory not available, skipping pattern retrieval")
@@ -416,7 +416,7 @@ class ResourceOptimizerMemoryHooks:
         try:
             from src.memory.procedural_memory import (
                 ProceduralMemoryInput,
-                insert_procedural_memory,
+                insert_procedural_memory_with_text,
             )
 
             resource_type = state.get("resource_type", "unknown")
@@ -450,9 +450,8 @@ class ResourceOptimizerMemoryHooks:
 
             # Create procedural memory input
             memory_input = ProceduralMemoryInput(
-                procedure_type="optimization_pattern",
-                description=description,
-                raw_content={
+                procedure_name=f"optimization_pattern_{resource_type}_{objective}",
+                tool_sequence=[{
                     "resource_type": resource_type,
                     "objective": objective,
                     "constraint_signature": constraint_signature,
@@ -461,16 +460,15 @@ class ResourceOptimizerMemoryHooks:
                     "solve_time_ms": result.get("solve_time_ms", 0),
                     "common_adjustments": adjustments,
                     "entities_optimized": len(allocations),
-                },
-                agent_name="resource_optimizer",
-                success_count=1,
-                last_success=datetime.now(timezone.utc).isoformat(),
+                }],
+                procedure_type="optimization_pattern",
+                trigger_pattern=description,
             )
 
             # Insert pattern
-            pattern_id = await insert_procedural_memory(
-                memory=memory_input,
-                text_to_embed=description,
+            pattern_id = await insert_procedural_memory_with_text(
+                procedure=memory_input,
+                trigger_text=description,
             )
 
             logger.info(f"Stored optimization pattern: {pattern_id}")

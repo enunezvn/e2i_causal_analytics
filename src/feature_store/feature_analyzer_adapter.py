@@ -121,7 +121,7 @@ class FeatureAnalyzerAdapter:
         Returns:
             Dict with registration results
         """
-        results = {
+        results: Dict[str, Any] = {
             "feature_group_created": False,
             "features_registered": 0,
             "features_skipped": 0,
@@ -248,7 +248,7 @@ class FeatureAnalyzerAdapter:
         Returns:
             Dict with write results
         """
-        results = {
+        results: Dict[str, Any] = {
             "values_written": 0,
             "errors": [],
         }
@@ -527,12 +527,12 @@ class FeatureAnalyzerAdapter:
             try:
                 # Build entity keys from first row to get feature group
                 # This is a simplified fallback - not point-in-time correct
-                features = self.fs_client.get_features(
+                entity_features = self.fs_client.get_entity_features(
                     feature_names=[feature_name],
                     entity_values={},  # Empty - get latest
                 )
-                if features and feature_name in features:
-                    result_df[f"{feature_view}__{feature_name}"] = features[feature_name]
+                if entity_features and feature_name in entity_features.features:
+                    result_df[f"{feature_view}__{feature_name}"] = entity_features.features[feature_name]
 
             except Exception as e:
                 logger.warning(f"Failed to get feature {feature_ref} from custom store: {e}")
@@ -668,7 +668,7 @@ class FeatureAnalyzerAdapter:
                 print(f"Stale features: {freshness['stale_features']}")
             ```
         """
-        result = {
+        result: Dict[str, Any] = {
             "fresh": True,
             "stale_features": [],
             "feature_ages": {},
@@ -696,7 +696,7 @@ class FeatureAnalyzerAdapter:
             try:
                 stats = await self._feast_client.get_feature_statistics(
                     feature_view=feature_view,
-                    feature_name=feature_name if feature_name != "*" else None,
+                    feature_name=feature_name if feature_name != "*" else "",  # type: ignore[arg-type]
                 )
 
                 if stats and stats.last_updated:
@@ -747,7 +747,7 @@ class FeatureAnalyzerAdapter:
         Returns:
             Dict with sync results
         """
-        result = {
+        result: Dict[str, Any] = {
             "synced": False,
             "features_synced": 0,
             "materialized": False,

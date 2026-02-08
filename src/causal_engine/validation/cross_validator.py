@@ -201,8 +201,10 @@ class CrossValidator:
         direction_agreement = (effect_a >= 0) == (effect_b >= 0) or both_near_zero
 
         # Significance agreement
-        sig_a = est_a.get("p_value") is not None and est_a.get("p_value", 1.0) < 0.05
-        sig_b = est_b.get("p_value") is not None and est_b.get("p_value", 1.0) < 0.05
+        p_val_a = est_a.get("p_value")
+        p_val_b = est_b.get("p_value")
+        sig_a = p_val_a is not None and p_val_a < 0.05
+        sig_b = p_val_b is not None and p_val_b < 0.05
         significance_agreement = sig_a == sig_b
 
         # CI overlap
@@ -264,7 +266,7 @@ class CrossValidator:
         Returns:
             Overlap ratio (0-1) or None if CIs unavailable
         """
-        if any(x is None for x in [ci_a_lower, ci_a_upper, ci_b_lower, ci_b_upper]):
+        if ci_a_lower is None or ci_a_upper is None or ci_b_lower is None or ci_b_upper is None:
             return None
 
         # Compute overlap

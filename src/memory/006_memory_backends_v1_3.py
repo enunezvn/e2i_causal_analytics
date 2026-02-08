@@ -56,7 +56,8 @@ def load_config() -> Dict[str, Any]:
     """Load memory configuration from YAML."""
     config_path = Path(__file__).parent / "005_memory_config.yaml"
     with open(config_path) as f:
-        return yaml.safe_load(f)
+        result: Dict[str, Any] = yaml.safe_load(f)
+        return result
 
 
 CONFIG = load_config()
@@ -322,11 +323,11 @@ class OpenAIEmbeddingService:
         """Generate embedding for text."""
         cache_key = hash(text)
         if cache_key in self._cache:
-            return self._cache[cache_key]
+            return self._cache[cache_key]  # type: ignore[no-any-return]
 
         response = self.client.embeddings.create(model=self.model, input=text)
 
-        embedding = response.data[0].embedding
+        embedding: List[float] = response.data[0].embedding
         self._cache[cache_key] = embedding
 
         return embedding
@@ -334,7 +335,7 @@ class OpenAIEmbeddingService:
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""
         response = self.client.embeddings.create(model=self.model, input=texts)
-        return [item.embedding for item in response.data]
+        return [item.embedding for item in response.data]  # type: ignore[no-any-return]
 
 
 class BedrockEmbeddingService:
@@ -351,7 +352,8 @@ class BedrockEmbeddingService:
             modelId=self.model, body=json.dumps({"inputText": text})
         )
         result = json.loads(response["body"].read())
-        return result["embedding"]
+        embedding: List[float] = result["embedding"]
+        return embedding
 
 
 # ============================================================================
@@ -377,7 +379,7 @@ class AnthropicLLMService:
             temperature=self.temperature,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text
+        return str(response.content[0].text)
 
 
 class BedrockLLMService:
@@ -402,7 +404,7 @@ class BedrockLLMService:
             ),
         )
         result = json.loads(response["body"].read())
-        return result["content"][0]["text"]
+        return str(result["content"][0]["text"])
 
 
 # ============================================================================
@@ -489,7 +491,7 @@ class RedisWorkingMemory:
         if data.get("message_count"):
             data["message_count"] = int(data["message_count"])
 
-        return data
+        return dict(data)
 
     async def update_session(self, session_id: str, updates: Dict[str, Any]):
         """Update session fields."""
@@ -1289,7 +1291,7 @@ class FalkorDBSemanticMemory:
 
         result = self.graph.query(query, {"patient_id": patient_id, "max_depth": max_depth})
 
-        network = {
+        network: Dict[str, Any] = {
             "patient_id": patient_id,
             "hcps": [],
             "treatments": [],
@@ -1329,7 +1331,12 @@ class FalkorDBSemanticMemory:
 
         result = self.graph.query(query, {"hcp_id": hcp_id, "max_depth": max_depth})
 
-        network = {"hcp_id": hcp_id, "influenced_hcps": [], "patients": [], "brands_prescribed": []}
+        network: Dict[str, Any] = {
+            "hcp_id": hcp_id,
+            "influenced_hcps": [],
+            "patients": [],
+            "brands_prescribed": [],
+        }
 
         for record in result.result_set:
             connected = record[2]
@@ -1720,7 +1727,7 @@ async def insert_procedural_memory(
     )
 
     if existing:
-        procedure_id = existing[0]["procedure_id"]
+        procedure_id: str = existing[0]["procedure_id"]
 
         client.table("procedural_memories").update(
             {

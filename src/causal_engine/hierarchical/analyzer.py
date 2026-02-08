@@ -406,6 +406,7 @@ class HierarchicalAnalyzer:
             raise RuntimeError(f"Uplift estimation failed: {result.error_message}")
 
         # Handle multi-dimensional uplift scores
+        assert result.uplift_scores is not None
         scores = result.uplift_scores
         if len(scores.shape) > 1:
             scores = scores[:, 0]
@@ -470,7 +471,7 @@ class HierarchicalAnalyzer:
             thresholds = self.config.quantile_thresholds
         else:
             # Use median as single threshold
-            thresholds = [np.median(uplift_scores)]
+            thresholds = [float(np.median(uplift_scores))]
 
         segment_indices = np.digitize(uplift_scores, thresholds)
         segment_names = [f"segment_{i}" for i in range(len(thresholds) + 1)]
@@ -610,7 +611,10 @@ class HierarchicalAnalyzer:
         if total_samples == 0:
             return None, None, None
 
-        overall_ate = sum(s.cate_mean * s.n_samples / total_samples for s in successful)
+        # cate_mean is guaranteed non-None by the filter above
+        overall_ate: float = sum(  # type: ignore[assignment]
+            (s.cate_mean or 0.0) * s.n_samples / total_samples for s in successful
+        )
 
         # Aggregate confidence intervals using nested CI calculation
         if self.config.compute_nested_ci:
@@ -625,10 +629,10 @@ class HierarchicalAnalyzer:
                 SegmentEstimate(
                     segment_id=s.segment_id,
                     segment_name=s.segment_name,
-                    ate=s.cate_mean,
+                    ate=s.cate_mean or 0.0,
                     ate_std=s.cate_std or 0.0,
-                    ci_lower=s.cate_ci_lower or s.cate_mean,
-                    ci_upper=s.cate_ci_upper or s.cate_mean,
+                    ci_lower=s.cate_ci_lower or (s.cate_mean or 0.0),
+                    ci_upper=s.cate_ci_upper or (s.cate_mean or 0.0),
                     sample_size=s.n_samples,
                     cate=s.cate_values,
                 )
@@ -645,10 +649,12 @@ class HierarchicalAnalyzer:
         else:
             # Simple pooled CI (conservative)
             ci_lower_weighted = sum(
-                (s.cate_ci_lower or s.cate_mean) * s.n_samples / total_samples for s in successful
+                float(s.cate_ci_lower or s.cate_mean or 0.0) * s.n_samples / total_samples
+                for s in successful
             )
             ci_upper_weighted = sum(
-                (s.cate_ci_upper or s.cate_mean) * s.n_samples / total_samples for s in successful
+                float(s.cate_ci_upper or s.cate_mean or 0.0) * s.n_samples / total_samples
+                for s in successful
             )
             overall_ci_lower = ci_lower_weighted
             overall_ci_upper = ci_upper_weighted
@@ -665,7 +671,7 @@ class HierarchicalAnalyzer:
         if len(successful) < 2:
             return None
 
-        cate_values = [s.cate_mean for s in successful]
+        cate_values = [float(s.cate_mean) for s in successful if s.cate_mean is not None]
         mean_cate = np.mean(cate_values)
         std_cate = np.std(cate_values)
 

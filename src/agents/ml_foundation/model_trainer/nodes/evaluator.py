@@ -96,6 +96,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Make predictions on all sets
     try:
+        assert X_test_np is not None
         predictions = _make_predictions(
             model=trained_model,
             X_train=X_train_np,
@@ -112,6 +113,9 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Get imbalance detection status
     imbalance_detected = state.get("imbalance_detected", False)
+
+    # y_test_np must be valid at this point (checked above)
+    assert y_test_np is not None
 
     # Compute metrics based on problem type
     try:
@@ -352,7 +356,7 @@ def _normalize_cate(cate: np.ndarray) -> np.ndarray:
     cate_min = cate.min()
     cate_max = cate.max()
     if cate_max - cate_min > 1e-8:
-        return (cate - cate_min) / (cate_max - cate_min)
+        return (cate - cate_min) / (cate_max - cate_min)  # type: ignore[no-any-return]
     else:
         return np.ones_like(cate) * 0.5
 
@@ -502,7 +506,7 @@ def _compute_classification_metrics(
             f"minority_recall={result['minority_recall']:.4f}, "
             f"minority_precision={result['minority_precision']:.4f}"
         )
-        if result["minority_recall_at_05"] == 0 and result["minority_recall"] > 0:
+        if float(result["minority_recall_at_05"]) == 0 and float(result["minority_recall"]) > 0:  # type: ignore[arg-type]
             logger.warning(
                 f"Model would predict ALL negatives at 0.5 threshold! "
                 f"Optimal threshold {optimal_threshold:.4f} rescues recall."
@@ -515,7 +519,7 @@ def _compute_split_classification_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     y_proba: Optional[np.ndarray],
-) -> Dict[str, float]:
+) -> Dict[str, Optional[float]]:
     """Compute classification metrics for a single split.
 
     Args:
@@ -526,7 +530,7 @@ def _compute_split_classification_metrics(
     Returns:
         Dictionary of metrics
     """
-    metrics = {
+    metrics: Dict[str, Optional[float]] = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
@@ -623,7 +627,7 @@ def _compute_multiclass_metrics(
         }
 
     # Test metrics
-    test_metrics = {
+    test_metrics: Dict[str, Optional[float]] = {
         "accuracy": float(accuracy_score(y_test, y_test_pred)),
         "precision_macro": float(
             precision_score(y_test, y_test_pred, average="macro", zero_division=0)
@@ -1022,7 +1026,7 @@ def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
         import pandas as pd
 
         if isinstance(data, (pd.DataFrame, pd.Series)):
-            return data.values
+            return data.values  # type: ignore[no-any-return]
     except ImportError:
         pass
 
@@ -1030,4 +1034,4 @@ def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
     if isinstance(data, (list, tuple)):
         return np.array(data)
 
-    return data
+    return data  # type: ignore[no-any-return]

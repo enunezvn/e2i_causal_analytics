@@ -159,9 +159,9 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using default monitoring templates")
-    MonitorSummarySignature = None
-    AlertGenerationSignature = None
-    SRMDescriptionSignature = None
+    MonitorSummarySignature = None  # type: ignore[assignment, misc]
+    AlertGenerationSignature = None  # type: ignore[assignment, misc]
+    SRMDescriptionSignature = None  # type: ignore[assignment, misc]
 
 
 # =============================================================================
@@ -177,9 +177,9 @@ class ExperimentMonitorDSPyIntegration:
     generate training signals (Fast Path computational agent).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.dspy_type: Literal["recipient"] = "recipient"
-        self._prompts = ExperimentMonitorPrompts()
+        self._prompts: ExperimentMonitorPrompts = ExperimentMonitorPrompts()
         self._prompt_versions: Dict[str, str] = {}
 
     @property

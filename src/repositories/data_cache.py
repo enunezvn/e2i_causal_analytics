@@ -317,29 +317,31 @@ class DataCache:
         pattern = self._make_key("*:meta")
 
         try:
-            stats = {
-                "total_entries": 0,
-                "total_hits": 0,
-                "tables": {},
-            }
+            total_entries = 0
+            total_hits = 0
+            tables: Dict[str, Dict[str, int]] = {}
 
             async for key in client.scan_iter(match=pattern):
                 meta = await client.hgetall(key)
                 if meta:
-                    stats["total_entries"] += 1
-                    stats["total_hits"] += int(meta.get("hit_count", 0))
+                    total_entries += 1
+                    total_hits += int(meta.get("hit_count", 0))
 
                     # Extract table name from key
                     # Key format: ml_data:table:hash:meta
                     parts = key.split(":")
                     if len(parts) >= 3:
                         table = parts[1]
-                        if table not in stats["tables"]:
-                            stats["tables"][table] = {"entries": 0, "hits": 0}
-                        stats["tables"][table]["entries"] += 1
-                        stats["tables"][table]["hits"] += int(meta.get("hit_count", 0))
+                        if table not in tables:
+                            tables[table] = {"entries": 0, "hits": 0}
+                        tables[table]["entries"] += 1
+                        tables[table]["hits"] += int(meta.get("hit_count", 0))
 
-            return stats
+            return {
+                "total_entries": total_entries,
+                "total_hits": total_hits,
+                "tables": tables,
+            }
         except Exception as e:
             logger.error(f"Failed to get cache stats: {e}")
             return {"status": "error", "error": str(e)}
@@ -365,8 +367,8 @@ class DataCache:
                 return await loader.load_for_training(table, filters)
         """
 
-        def decorator(func: Callable[..., T]) -> Callable[..., T]:
-            async def wrapper(*args, **kwargs) -> T:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            async def wrapper(*args: Any, **kwargs: Any) -> Any:
                 # Generate cache key
                 if key_func:
                     key = key_func(*args, **kwargs)
@@ -378,9 +380,9 @@ class DataCache:
                     key = f"{func.__name__}:{hashlib.sha256(arg_str.encode()).hexdigest()[:16]}"
 
                 # Try to get from cache
-                cached = await self.get(key)
-                if cached is not None:
-                    return cached
+                cached_result = await self.get(key)
+                if cached_result is not None:
+                    return cached_result
 
                 # Execute function
                 result = await func(*args, **kwargs)

@@ -10,7 +10,7 @@ Validates that generated data matches Supabase table schemas:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Type
+from typing import Any, Dict, List, Optional, Set, Type, Union
 
 import pandas as pd
 
@@ -30,7 +30,7 @@ class ColumnSpec:
     """Specification for a single column."""
 
     name: str
-    dtype: Type
+    dtype: Union[Type, tuple[Type, ...]]
     nullable: bool = True
     enum_values: Optional[Set[str]] = None
     min_value: Optional[float] = None

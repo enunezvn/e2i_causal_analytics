@@ -188,7 +188,7 @@ class SummarizerModule(dspy.Module):
 
         intent = self.classify(query=original_query, extracted_entities=entities_json)
 
-        return {
+        return {  # type: ignore[return-value]
             "rewritten_query": rewritten.rewritten_query,
             "search_keywords": rewritten.search_keywords,
             "graph_entities": rewritten.graph_entities,
@@ -281,7 +281,7 @@ class InvestigatorModule(dspy.Module):
         # Step 1: Plan investigation
         plan = self.plan(query=rewritten_query, intent=intent, entities=entities)
 
-        evidence_board = []
+        evidence_board: list[Evidence] = []
         queried_memories = set()
 
         # Step 2: Iterative hop execution
@@ -349,13 +349,13 @@ class InvestigatorModule(dspy.Module):
 
         if memory_type == "episodic":
             # pgvector semantic search
-            return await backend.vector_search(query, limit=5)
+            return await backend.vector_search(query, limit=5)  # type: ignore[no-any-return]
         elif memory_type == "semantic":
             # FalkorDB graph traversal
-            return await backend.graph_query(query, max_depth=2)
+            return await backend.graph_query(query, max_depth=2)  # type: ignore[no-any-return]
         elif memory_type == "procedural":
             # pgvector similarity on tool sequences
-            return await backend.procedure_search(query, limit=3)
+            return await backend.procedure_search(query, limit=3)  # type: ignore[no-any-return]
 
         return []
 
@@ -686,9 +686,9 @@ def create_dspy_cognitive_workflow(
             domain_vocabulary=domain_vocabulary,
         )
 
-        state.rewritten_query = result["rewritten_query"]
-        state.extracted_entities = result["extracted_entities"]
-        state.detected_intent = result["primary_intent"]
+        state.rewritten_query = result["rewritten_query"]  # type: ignore[index]
+        state.extracted_entities = result["extracted_entities"]  # type: ignore[index]
+        state.detected_intent = result["primary_intent"]  # type: ignore[index]
 
         return state
 
@@ -697,7 +697,7 @@ def create_dspy_cognitive_workflow(
         result = await investigator.forward(
             rewritten_query=state.rewritten_query,
             intent=state.detected_intent,
-            entities=state.extracted_entities,
+            entities=str(state.extracted_entities),
         )
 
         state.investigation_goal = result["investigation_goal"]
@@ -727,7 +727,7 @@ def create_dspy_cognitive_workflow(
     graph.add_edge("agent", "reflector")
     graph.add_edge("reflector", END)
 
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=MemorySaver())  # type: ignore[return-value]
 
 
 # =============================================================================

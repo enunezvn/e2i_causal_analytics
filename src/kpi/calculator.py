@@ -122,6 +122,9 @@ class KPICalculator:
         if kpi is None:
             return KPIResult(
                 kpi_id=kpi_id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=f"KPI not found: {kpi_id}",
             )
 
@@ -165,11 +168,8 @@ class KPICalculator:
         if workstream is not None:
             kpis = self._registry.get_by_workstream(workstream)
         elif kpi_ids is not None:
-            kpis = [
-                self._registry.get(kpi_id)
-                for kpi_id in kpi_ids
-                if self._registry.get(kpi_id) is not None
-            ]
+            kpis_raw = [self._registry.get(kpi_id) for kpi_id in kpi_ids]
+            kpis = [k for k in kpis_raw if k is not None]
         else:
             kpis = self._registry.get_all()
 
@@ -205,6 +205,9 @@ class KPICalculator:
             logger.error(f"KPI calculation failed for {kpi.id}: {e}")
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=str(e),
             )
 
@@ -221,6 +224,9 @@ class KPICalculator:
         if self._db is None:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error="No database connection for default calculation",
             )
 
@@ -248,6 +254,8 @@ class KPICalculator:
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
+                cached=False,
+                error=None,
                 calculated_at=datetime.now(timezone.utc),
                 metadata=metadata,
                 causal_library_used=causal_library,
@@ -257,6 +265,9 @@ class KPICalculator:
             logger.error(f"Default calculation failed for {kpi.id}: {e}")
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=str(e),
             )
 

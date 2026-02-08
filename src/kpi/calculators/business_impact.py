@@ -76,6 +76,9 @@ class BusinessImpactCalculator(KPICalculatorBase):
         if calc_func is None:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=f"No calculator implemented for {kpi.id}",
             )
 
@@ -90,11 +93,16 @@ class BusinessImpactCalculator(KPICalculatorBase):
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
+                cached=False,
+                error=None,
                 metadata={"context": context},
             )
         except Exception as e:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=str(e),
             )
 
@@ -184,7 +192,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("touch_rate") is not None:
-            return result[0]["touch_rate"]
+            return float(result[0]["touch_rate"])
         return 0.0
 
     def _calc_hcp_coverage(self, context: dict[str, Any]) -> float:
@@ -201,7 +209,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("coverage") is not None:
-            return result[0]["coverage"]
+            return float(result[0]["coverage"])
         return 0.0
 
     def _calc_trx(self, context: dict[str, Any]) -> float:
@@ -302,7 +310,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [brand])
         if result and result[0].get("share") is not None:
-            return result[0]["share"]
+            return float(result[0]["share"])
         return 0.0
 
     def _calc_conversion_rate(self, context: dict[str, Any]) -> float:
@@ -330,7 +338,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("conversion_rate") is not None:
-            return result[0]["conversion_rate"]
+            return float(result[0]["conversion_rate"])
         return 0.0
 
     def _calc_roi(self, context: dict[str, Any]) -> float:
@@ -347,7 +355,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("avg_roi") is not None:
-            return result[0]["avg_roi"]
+            return float(result[0]["avg_roi"])
 
         # Try agent_activities table
         query = """
@@ -358,7 +366,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("avg_roi") is not None:
-            return result[0]["avg_roi"]
+            return float(result[0]["avg_roi"])
 
         return 0.0
 
@@ -366,6 +374,6 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data
+            return response.data  # type: ignore[no-any-return]
         except Exception:
             return None

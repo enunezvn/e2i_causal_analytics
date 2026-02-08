@@ -98,6 +98,7 @@ AGENT_REGISTRY = [
         name="Scope Definer",
         tier=0,
         status=AgentStatusEnum.IDLE,
+        last_activity=None,
         capabilities=["problem_scoping", "requirement_analysis"],
     ),
     AgentInfo(
@@ -105,6 +106,7 @@ AGENT_REGISTRY = [
         name="Data Preparer",
         tier=0,
         status=AgentStatusEnum.IDLE,
+        last_activity=None,
         capabilities=["data_validation", "preprocessing"],
     ),
     AgentInfo(
@@ -112,6 +114,7 @@ AGENT_REGISTRY = [
         name="Feature Analyzer",
         tier=0,
         status=AgentStatusEnum.IDLE,
+        last_activity=None,
         capabilities=["feature_engineering", "selection"],
     ),
     AgentInfo(
@@ -119,6 +122,7 @@ AGENT_REGISTRY = [
         name="Model Selector",
         tier=0,
         status=AgentStatusEnum.IDLE,
+        last_activity=None,
         capabilities=["model_comparison", "benchmarking"],
     ),
     AgentInfo(
@@ -126,6 +130,7 @@ AGENT_REGISTRY = [
         name="Model Trainer",
         tier=0,
         status=AgentStatusEnum.IDLE,
+        last_activity=None,
         capabilities=["training", "hyperparameter_tuning"],
     ),
     AgentInfo(
@@ -133,6 +138,7 @@ AGENT_REGISTRY = [
         name="Model Deployer",
         tier=0,
         status=AgentStatusEnum.IDLE,
+        last_activity=None,
         capabilities=["deployment", "versioning"],
     ),
     AgentInfo(
@@ -140,6 +146,7 @@ AGENT_REGISTRY = [
         name="Observability Connector",
         tier=0,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["mlflow", "opik", "monitoring"],
     ),
     AgentInfo(
@@ -147,6 +154,7 @@ AGENT_REGISTRY = [
         name="Cohort Constructor",
         tier=0,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["cohort_definition", "patient_eligibility", "inclusion_exclusion"],
     ),
     # Tier 1 - Orchestration (2 agents)
@@ -155,6 +163,7 @@ AGENT_REGISTRY = [
         name="Orchestrator",
         tier=1,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["routing", "coordination", "agent_dispatch"],
     ),
     AgentInfo(
@@ -162,6 +171,7 @@ AGENT_REGISTRY = [
         name="Tool Composer",
         tier=1,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["tool_orchestration", "query_decomposition"],
     ),
     # Tier 2 - Causal Analytics (3 agents)
@@ -170,6 +180,7 @@ AGENT_REGISTRY = [
         name="Causal Impact",
         tier=2,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["causal_tracing", "effect_estimation", "dowhy"],
     ),
     AgentInfo(
@@ -177,6 +188,7 @@ AGENT_REGISTRY = [
         name="Gap Analyzer",
         tier=2,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["opportunity_detection", "roi_analysis"],
     ),
     AgentInfo(
@@ -184,6 +196,7 @@ AGENT_REGISTRY = [
         name="Heterogeneous Optimizer",
         tier=2,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["cate_analysis", "segment_optimization", "econml"],
     ),
     # Tier 3 - Monitoring (3 agents)
@@ -192,6 +205,7 @@ AGENT_REGISTRY = [
         name="Drift Monitor",
         tier=3,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["data_drift", "model_drift", "alerting"],
     ),
     AgentInfo(
@@ -199,6 +213,7 @@ AGENT_REGISTRY = [
         name="Experiment Designer",
         tier=3,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["ab_testing", "sample_size", "power_analysis"],
     ),
     AgentInfo(
@@ -206,6 +221,7 @@ AGENT_REGISTRY = [
         name="Health Score",
         tier=3,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["system_health", "performance_metrics"],
     ),
     # Tier 4 - ML Predictions (2 agents)
@@ -214,6 +230,7 @@ AGENT_REGISTRY = [
         name="Prediction Synthesizer",
         tier=4,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["prediction_aggregation", "ensemble"],
     ),
     AgentInfo(
@@ -221,6 +238,7 @@ AGENT_REGISTRY = [
         name="Resource Optimizer",
         tier=4,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["resource_allocation", "optimization"],
     ),
     # Tier 5 - Self-Improvement (2 agents)
@@ -229,6 +247,7 @@ AGENT_REGISTRY = [
         name="Explainer",
         tier=5,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["nl_generation", "insight_explanation"],
     ),
     AgentInfo(
@@ -236,6 +255,7 @@ AGENT_REGISTRY = [
         name="Feedback Learner",
         tier=5,
         status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
         capabilities=["feedback_integration", "self_improvement"],
     ),
 ]

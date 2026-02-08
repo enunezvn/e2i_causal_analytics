@@ -77,6 +77,9 @@ class DataQualityCalculator(KPICalculatorBase):
         if calc_func is None:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=f"No calculator implemented for {kpi.id}",
             )
 
@@ -87,11 +90,16 @@ class DataQualityCalculator(KPICalculatorBase):
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
+                cached=False,
+                error=None,
                 metadata={"context": context},
             )
         except Exception as e:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=str(e),
             )
 
@@ -117,7 +125,7 @@ class DataQualityCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [brand])
         if result and result[0]["total"] > 0:
-            return result[0]["covered"] / result[0]["total"]
+            return float(result[0]["covered"] / result[0]["total"])
         return 0.0
 
     def _calc_source_coverage_hcps(self, context: dict[str, Any]) -> float:
@@ -136,7 +144,7 @@ class DataQualityCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [brand])
         if result and result[0]["total"] > 0:
-            return result[0]["covered"] / result[0]["total"]
+            return float(result[0]["covered"] / result[0]["total"])
         return 0.0
 
     def _calc_cross_source_match(self, context: dict[str, Any]) -> float:
@@ -147,7 +155,7 @@ class DataQualityCalculator(KPICalculatorBase):
         query = "SELECT match_rate FROM v_kpi_cross_source_match LIMIT 1"
         result = self._execute_query(query, [])
         if result:
-            return result[0]["match_rate"]
+            return float(result[0]["match_rate"])
         return 0.0
 
     def _calc_stacking_lift(self, context: dict[str, Any]) -> float:
@@ -158,7 +166,7 @@ class DataQualityCalculator(KPICalculatorBase):
         query = "SELECT lift_score FROM v_kpi_stacking_lift LIMIT 1"
         result = self._execute_query(query, [])
         if result:
-            return result[0]["lift_score"]
+            return float(result[0]["lift_score"])
         return 1.0  # Neutral lift
 
     def _calc_completeness_pass_rate(self, context: dict[str, Any]) -> float:
@@ -212,7 +220,7 @@ class DataQualityCalculator(KPICalculatorBase):
         query = "SELECT median_lag_days FROM v_kpi_data_lag LIMIT 1"
         result = self._execute_query(query, [])
         if result:
-            return result[0]["median_lag_days"]
+            return float(result[0]["median_lag_days"])
         return 0.0
 
     def _calc_label_quality(self, context: dict[str, Any]) -> float:
@@ -224,7 +232,7 @@ class DataQualityCalculator(KPICalculatorBase):
         query = "SELECT iaa_score FROM v_kpi_label_quality LIMIT 1"
         result = self._execute_query(query, [])
         if result:
-            return result[0]["iaa_score"]
+            return float(result[0]["iaa_score"])
         return 0.0
 
     def _calc_time_to_release(self, context: dict[str, Any]) -> float:
@@ -236,7 +244,7 @@ class DataQualityCalculator(KPICalculatorBase):
         query = "SELECT median_ttr_days FROM v_kpi_time_to_release LIMIT 1"
         result = self._execute_query(query, [])
         if result:
-            return result[0]["median_ttr_days"]
+            return float(result[0]["median_ttr_days"])
         return 0.0
 
     def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
@@ -254,7 +262,7 @@ class DataQualityCalculator(KPICalculatorBase):
             # This is a simplified implementation - actual implementation
             # would depend on the specific database client
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data
+            return response.data  # type: ignore[no-any-return]
         except Exception:
             # Fall back to mock data for testing
             return None

@@ -84,7 +84,7 @@ class CausalMetricsCalculator(KPICalculatorBase):
 
         calc_func = calculator_map.get(kpi.id)
         if calc_func is None:
-            return KPIResult(
+            return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 error=f"No calculator implemented for {kpi.id}",
             )
@@ -94,14 +94,14 @@ class CausalMetricsCalculator(KPICalculatorBase):
             value = result_data.get("value")
             metadata = result_data.get("metadata", {})
 
-            return KPIResult(
+            return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 value=value,
                 status=KPIStatus.UNKNOWN,  # Causal metrics typically don't have thresholds
                 metadata={**context, **metadata},
             )
         except Exception as e:
-            return KPIResult(
+            return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 error=str(e),
             )
@@ -366,6 +366,6 @@ class CausalMetricsCalculator(KPICalculatorBase):
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data
+            return response.data  # type: ignore[no-any-return]
         except Exception:
             return None

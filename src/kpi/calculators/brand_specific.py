@@ -66,6 +66,9 @@ class BrandSpecificCalculator(KPICalculatorBase):
         if calc_func is None:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=f"No calculator implemented for {kpi.id}",
             )
 
@@ -78,11 +81,16 @@ class BrandSpecificCalculator(KPICalculatorBase):
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
+                cached=False,
+                error=None,
                 metadata={"context": context, "lower_is_better": lower_is_better},
             )
         except Exception as e:
             return KPIResult(
                 kpi_id=kpi.id,
+                value=None,
+                status=KPIStatus.UNKNOWN,
+                cached=False,
                 error=str(e),
             )
 
@@ -122,7 +130,7 @@ class BrandSpecificCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("uncontrolled_pct") is not None:
-            return result[0]["uncontrolled_pct"]
+            return float(result[0]["uncontrolled_pct"])
         return 0.0
 
     def _calc_remi_intent_delta(self, context: dict[str, Any]) -> float:
@@ -141,7 +149,7 @@ class BrandSpecificCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("intent_delta") is not None:
-            return result[0]["intent_delta"]
+            return float(result[0]["intent_delta"])
 
         # Fall back to direct calculation
         query = """
@@ -153,7 +161,7 @@ class BrandSpecificCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("intent_delta") is not None:
-            return result[0]["intent_delta"]
+            return float(result[0]["intent_delta"])
         return 0.0
 
     def _calc_fabhalta_pnh_tested(self, context: dict[str, Any]) -> float:
@@ -178,7 +186,7 @@ class BrandSpecificCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("tested_pct") is not None:
-            return result[0]["tested_pct"]
+            return float(result[0]["tested_pct"])
         return 0.0
 
     def _calc_kisqali_dx_adoption(self, context: dict[str, Any]) -> float:
@@ -235,13 +243,13 @@ class BrandSpecificCalculator(KPICalculatorBase):
         """
         result = self._execute_query(query, [])
         if result and result[0].get("reach") is not None:
-            return result[0]["reach"]
+            return float(result[0]["reach"])
         return 0.0
 
     def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a SQL query and return results."""
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data
+            return response.data  # type: ignore[no-any-return]
         except Exception:
             return None

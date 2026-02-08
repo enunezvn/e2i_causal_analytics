@@ -48,10 +48,10 @@ try:
 except ImportError:
     GEPA_AVAILABLE = False
     logger.info("GEPA not available - using MIPROv2 optimizer")
-    create_gepa_optimizer = None
-    save_optimized_module = None
-    RAGASFeedbackProvider = None
-    create_ragas_metric = None
+    create_gepa_optimizer = None  # type: ignore[assignment]
+    save_optimized_module = None  # type: ignore[assignment]
+    RAGASFeedbackProvider = None  # type: ignore[assignment, misc]
+    create_ragas_metric = None  # type: ignore[assignment]
 
 # =============================================================================
 # 1. MEMORY TYPES & HOP DEFINITIONS
@@ -218,7 +218,7 @@ class SummarizerModule(dspy.Module):
 
         intent = self.classify(query=original_query, extracted_entities=entities_json)
 
-        return {
+        return {  # type: ignore[return-value]
             "rewritten_query": rewritten.rewritten_query,
             "search_keywords": rewritten.search_keywords,
             "graph_entities": rewritten.graph_entities,
@@ -311,7 +311,7 @@ class InvestigatorModule(dspy.Module):
         # Step 1: Plan investigation
         plan = self.plan(query=rewritten_query, intent=intent, entities=entities)
 
-        evidence_board = []
+        evidence_board: List[Evidence] = []
         queried_memories = set()
 
         # Step 2: Iterative hop execution
@@ -371,23 +371,28 @@ class InvestigatorModule(dspy.Module):
             "sufficient_evidence": len(evidence_board) >= 2,
         }
 
-    async def _retrieve_from_memory(self, memory_type: str, query: str) -> List[Dict]:
+    async def _retrieve_from_memory(
+        self, memory_type: str, query: str
+    ) -> List[Dict[Any, Any]]:
         """Execute retrieval against the appropriate memory backend."""
         backend = self.memory_backends.get(memory_type)
         if not backend:
             return []
 
+        result: List[Dict[Any, Any]]
         if memory_type == "episodic":
             # pgvector semantic search
-            return await backend.vector_search(query, limit=5)
+            result = await backend.vector_search(query, limit=5)
         elif memory_type == "semantic":
             # FalkorDB graph traversal
-            return await backend.graph_query(query, max_depth=2)
+            result = await backend.graph_query(query, max_depth=2)
         elif memory_type == "procedural":
             # pgvector similarity on tool sequences
-            return await backend.procedure_search(query, limit=3)
+            result = await backend.procedure_search(query, limit=3)
+        else:
+            return []
 
-        return []
+        return result
 
 
 # =============================================================================
@@ -745,9 +750,9 @@ def create_dspy_cognitive_workflow(
             domain_vocabulary=domain_vocabulary,
         )
 
-        state.rewritten_query = result["rewritten_query"]
-        state.extracted_entities = result["extracted_entities"]
-        state.detected_intent = result["primary_intent"]
+        state.rewritten_query = result["rewritten_query"]  # type: ignore[index]
+        state.extracted_entities = result["extracted_entities"]  # type: ignore[index]
+        state.detected_intent = result["primary_intent"]  # type: ignore[index]
 
         return state
 
@@ -756,7 +761,7 @@ def create_dspy_cognitive_workflow(
         result = await investigator.forward(
             rewritten_query=state.rewritten_query,
             intent=state.detected_intent,
-            entities=state.extracted_entities,
+            entities=str(state.extracted_entities),
         )
 
         state.investigation_goal = result["investigation_goal"]
@@ -786,7 +791,7 @@ def create_dspy_cognitive_workflow(
     graph.add_edge("agent", "reflector")
     graph.add_edge("reflector", END)
 
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=MemorySaver())  # type: ignore[return-value]
 
 
 # =============================================================================
@@ -980,7 +985,7 @@ class CognitiveRAGOptimizer:
 
         # Create GEPA optimizer
         optimizer = create_gepa_optimizer(
-            metric=ragas_metric,
+            metric=ragas_metric,  # type: ignore[arg-type]
             trainset=train_examples,
             valset=val_examples,
             budget=budget_preset,
@@ -999,7 +1004,7 @@ class CognitiveRAGOptimizer:
         # Save optimized module if successful
         if optimized and hasattr(optimizer, "best_score"):
             try:
-                version_id = await save_optimized_module(
+                version_id = await save_optimized_module(  # type: ignore[call-arg, misc]
                     agent_name=f"cognitive_rag_{phase}",
                     optimized_module=optimized,
                     budget=budget_preset,

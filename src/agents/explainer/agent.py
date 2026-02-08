@@ -205,7 +205,7 @@ class ExplainerAgent(SkillsMixin):
             try:
                 from .memory_hooks import get_explanation_memory_hooks
 
-                self._memory_hooks = get_explanation_memory_hooks()
+                self._memory_hooks = get_explanation_memory_hooks()  # type: ignore[assignment]
                 logger.debug("Memory hooks initialized for Explainer agent")
             except Exception as e:
                 logger.warning(f"Failed to initialize memory hooks: {e}")
@@ -302,36 +302,36 @@ class ExplainerAgent(SkillsMixin):
                 f"complexity={complexity_score:.2f}, reason={llm_reason}"
             )
 
-        initial_state: ExplainerState = {
+        initial_state: ExplainerState = {  # type: ignore[typeddict-item]
             "query": query,
             "analysis_results": analysis_results,
-            "user_expertise": user_expertise,
-            "output_format": output_format,
-            "focus_areas": focus_areas,
+            "user_expertise": user_expertise,  # type: ignore[typeddict-item]
+            "output_format": output_format,  # type: ignore[typeddict-item]
+            "focus_areas": focus_areas or [],
             # Memory integration fields
             "session_id": effective_session_id,
             "memory_config": memory_config or {},
-            "episodic_context": None,
-            "semantic_context": None,
-            "working_memory_messages": None,
-            # Context fields
-            "analysis_context": None,
-            "user_context": None,
-            "conversation_history": None,
-            "extracted_insights": None,
-            "narrative_structure": None,
-            "key_themes": None,
-            "executive_summary": None,
-            "detailed_explanation": None,
-            "narrative_sections": None,
-            "visual_suggestions": None,
-            "follow_up_questions": None,
-            "related_analyses": None,
+            # Context fields (populated during graph execution)
+            "extracted_insights": [],
+            "executive_summary": "",
+            "detailed_explanation": "",
             "assembly_latency_ms": 0,
             "reasoning_latency_ms": 0,
             "generation_latency_ms": 0,
             "total_latency_ms": 0,
-            "model_used": None,
+            # V4.4: Causal discovery fields (required non-NotRequired)
+            "discovered_dag_adjacency": None,
+            "discovered_dag_nodes": None,
+            "discovered_dag_edge_types": None,
+            "discovery_gate_decision": None,
+            "discovery_gate_confidence": None,
+            "causal_rankings": None,
+            "predictive_rankings": None,
+            "rank_correlation": None,
+            "divergent_features": None,
+            "causal_only_features": None,
+            "predictive_only_features": None,
+            "concordant_features": None,
             "errors": [],
             "warnings": [],
             "status": "pending",

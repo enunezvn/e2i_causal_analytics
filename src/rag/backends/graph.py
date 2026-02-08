@@ -266,7 +266,7 @@ class GraphBackend:
 
             properties = dict(node.properties) if hasattr(node, "properties") else {}
 
-            result = {
+            result: Dict[str, Any] = {
                 "id": str(node.id),
                 "description": properties.get(
                     "description", properties.get("name", f"Node-{node.id}")

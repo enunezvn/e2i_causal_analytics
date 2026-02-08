@@ -197,7 +197,7 @@ class FalkorDBSemanticMemory:
         """
 
         result = self.graph.query(query, {"entity_id": entity_id})
-        deleted = result.nodes_deleted > 0
+        deleted: bool = result.nodes_deleted > 0
 
         if deleted:
             logger.debug(f"Deleted {label} entity: {entity_id}")
@@ -365,7 +365,7 @@ class FalkorDBSemanticMemory:
 
         result = self.graph.query(query, {"patient_id": patient_id})
 
-        network = {
+        network: Dict[str, Any] = {
             "patient_id": patient_id,
             "hcps": [],
             "treatments": [],
@@ -439,7 +439,12 @@ class FalkorDBSemanticMemory:
 
         result = self.graph.query(query, {"hcp_id": hcp_id})
 
-        network = {"hcp_id": hcp_id, "influenced_hcps": [], "patients": [], "brands_prescribed": []}
+        network: Dict[str, Any] = {
+            "hcp_id": hcp_id,
+            "influenced_hcps": [],
+            "patients": [],
+            "brands_prescribed": [],
+        }
 
         for record in result.result_set:
             connected = record[0]  # First element since we only return connected
@@ -824,7 +829,7 @@ class FalkorDBSemanticMemory:
 
         if min_confidence is not None:
             where_parts.append("r.confidence >= $min_confidence")
-            params["min_confidence"] = min_confidence
+            params["min_confidence"] = min_confidence  # type: ignore[assignment]
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -1040,4 +1045,4 @@ async def sync_data_layer_to_semantic_cache() -> Dict[str, Any]:
 
     result = client.rpc("sync_hcp_patient_relationships_to_cache", {}).execute()
 
-    return result.data
+    return result.data  # type: ignore[no-any-return]

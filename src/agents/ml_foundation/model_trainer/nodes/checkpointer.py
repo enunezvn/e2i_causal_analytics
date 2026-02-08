@@ -288,14 +288,14 @@ def _filter_serializable(data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Filtered dictionary
     """
-    result = {}
+    result: Dict[str, Any] = {}
     for key, value in data.items():
         if isinstance(value, (str, int, float, bool, type(None))):
             result[key] = value
         elif isinstance(value, (list, tuple)):
             try:
                 json.dumps(value)
-                result[key] = value
+                result[key] = value  # type: ignore[assignment]
             except (TypeError, ValueError):
                 pass
         elif isinstance(value, dict):
@@ -324,7 +324,7 @@ def _load_metadata(path: Path) -> Dict[str, Any]:
         Metadata dictionary
     """
     with open(path, "r") as f:
-        return json.load(f)
+        return json.load(f)  # type: ignore[no-any-return]
 
 
 def _get_framework(algorithm_name: str) -> str:
@@ -365,13 +365,13 @@ def list_checkpoints(
     Returns:
         List of checkpoint metadata dictionaries
     """
-    checkpoint_dir = Path(checkpoint_dir or DEFAULT_CHECKPOINT_DIR)
+    checkpoint_dir_path = Path(checkpoint_dir or DEFAULT_CHECKPOINT_DIR)
 
-    if not checkpoint_dir.exists():
+    if not checkpoint_dir_path.exists():
         return []
 
     checkpoints = []
-    for metadata_path in checkpoint_dir.glob("*_metadata.json"):
+    for metadata_path in checkpoint_dir_path.glob("*_metadata.json"):
         try:
             metadata = _load_metadata(metadata_path)
 
@@ -412,12 +412,12 @@ def delete_checkpoint(
     Returns:
         True if deleted successfully
     """
-    checkpoint_dir = Path(checkpoint_dir or DEFAULT_CHECKPOINT_DIR)
+    checkpoint_dir_path = Path(checkpoint_dir or DEFAULT_CHECKPOINT_DIR)
 
     if checkpoint_path:
         model_path = Path(checkpoint_path)
     elif checkpoint_name:
-        model_path = checkpoint_dir / f"{checkpoint_name}.pkl"
+        model_path = checkpoint_dir_path / f"{checkpoint_name}.pkl"
     else:
         return False
 

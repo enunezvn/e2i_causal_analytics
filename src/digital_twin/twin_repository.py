@@ -160,7 +160,7 @@ class TwinModelRepository(BaseRepository):
                         3600,
                         json.dumps(model, default=str),
                     )
-                return model
+                return model  # type: ignore[no-any-return]
             return None
         except Exception as e:
             logger.error(f"Failed to get model {model_id}: {e}")
@@ -338,7 +338,7 @@ class TwinModelRepository(BaseRepository):
 
         data = self.redis_client.get(f"twin_model:{model_id}")
         if data:
-            return json.loads(data)
+            return json.loads(data)  # type: ignore[no-any-return]
 
         return None
 
@@ -664,7 +664,7 @@ class FidelityRepository(BaseRepository):
             )
             if result.data:
                 logger.info(f"Updated fidelity validation for {tracking_id}")
-                return result.data[0]
+                return result.data[0]  # type: ignore[no-any-return]
             return None
         except Exception as e:
             logger.error(f"Failed to update fidelity validation: {e}")
@@ -853,11 +853,13 @@ class TwinRepository:
         mlflow_run_id: Optional[str] = None,
     ) -> UUID:
         """Save a trained twin model."""
-        return await self.models.save_model(config, metrics, model_artifact, mlflow_run_id)
+        return await self.models.save_model(  # type: ignore[no-any-return]
+            config, metrics, model_artifact, mlflow_run_id
+        )
 
     async def get_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:
         """Get model by ID."""
-        return await self.models.get_model(model_id)
+        return await self.models.get_model(model_id)  # type: ignore[no-any-return]
 
     async def list_active_models(
         self,
@@ -865,25 +867,35 @@ class TwinRepository:
         brand: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List active twin models."""
-        return await self.models.list_active_models(twin_type, brand)
+        return await self.models.list_active_models(  # type: ignore[no-any-return]
+            twin_type, brand
+        )
 
     async def save_simulation(self, result: SimulationResult, brand: str) -> UUID:
         """Save simulation result."""
-        return await self.simulations.save_simulation(result, brand)
+        return await self.simulations.save_simulation(  # type: ignore[no-any-return]
+            result, brand
+        )
 
     async def get_simulation(self, simulation_id: UUID) -> Optional[Dict[str, Any]]:
         """Get simulation by ID."""
-        return await self.simulations.get_simulation(simulation_id)
+        return await self.simulations.get_simulation(  # type: ignore[no-any-return]
+            simulation_id
+        )
 
     async def save_fidelity_record(self, record: FidelityRecord) -> UUID:
         """Save fidelity tracking record."""
-        return await self.fidelity.save_fidelity_record(record)
+        return await self.fidelity.save_fidelity_record(  # type: ignore[no-any-return]
+            record
+        )
 
     async def update_fidelity_validation(
         self,
         tracking_id: UUID,
         actual_ate: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         """Update fidelity record with validation results."""
-        return await self.fidelity.update_fidelity_validation(tracking_id, actual_ate, **kwargs)
+        return await self.fidelity.update_fidelity_validation(  # type: ignore[no-any-return]
+            tracking_id, actual_ate, **kwargs
+        )

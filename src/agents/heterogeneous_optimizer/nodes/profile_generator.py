@@ -9,7 +9,7 @@ Additionally handles:
 
 import logging
 import time
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, cast
 
 from ..state import HeterogeneousOptimizerState
 
@@ -26,9 +26,9 @@ class ProfileGeneratorNode:
             "Starting profile generation",
             extra={
                 "node": "profile_generator",
-                "high_responders": len(state.get("high_responders", [])),
-                "low_responders": len(state.get("low_responders", [])),
-                "policy_recommendations": len(state.get("policy_recommendations", [])),
+                "high_responders": len(state.get("high_responders") or []),
+                "low_responders": len(state.get("low_responders") or []),
+                "policy_recommendations": len(state.get("policy_recommendations") or []),
             },
         )
 
@@ -100,17 +100,14 @@ class ProfileGeneratorNode:
         Returns data structure suitable for plotting CATE estimates by segment.
         """
 
-        cate_by_segment = state.get("cate_by_segment", {})
-        overall_ate = state.get("overall_ate", 0)
+        cate_by_segment = state.get("cate_by_segment") or {}
+        overall_ate = state.get("overall_ate") or 0
 
-        plot_data = {
-            "overall_ate": overall_ate,
-            "segments": [],
-        }
+        segments: List[Dict[str, Any]] = []
 
         for segment_var, results in cate_by_segment.items():
             for result in results:
-                plot_data["segments"].append(
+                segments.append(
                     {
                         "segment_var": segment_var,
                         "segment_value": result["segment_value"],
@@ -123,7 +120,12 @@ class ProfileGeneratorNode:
                 )
 
         # Sort by CATE for visualization
-        plot_data["segments"].sort(key=lambda x: x["cate"], reverse=True)
+        segments.sort(key=lambda x: x["cate"], reverse=True)
+
+        plot_data: Dict[str, Any] = {
+            "overall_ate": overall_ate,
+            "segments": segments,
+        }
 
         return plot_data
 
@@ -133,9 +135,9 @@ class ProfileGeneratorNode:
         Returns data structure suitable for segment comparison heatmap.
         """
 
-        high_responders = state.get("high_responders", [])
-        low_responders = state.get("low_responders", [])
-        segment_comparison = state.get("segment_comparison", {})
+        high_responders = state.get("high_responders") or []
+        low_responders = state.get("low_responders") or []
+        segment_comparison = state.get("segment_comparison") or {}
 
         grid_data = {
             "comparison_metrics": segment_comparison,
@@ -162,12 +164,12 @@ class ProfileGeneratorNode:
     def _generate_executive_summary(self, state: HeterogeneousOptimizerState) -> str:
         """Generate executive summary of heterogeneous optimization analysis."""
 
-        overall_ate = state.get("overall_ate", 0)
-        heterogeneity_score = state.get("heterogeneity_score", 0)
-        high_responders = state.get("high_responders", [])
-        low_responders = state.get("low_responders", [])
-        expected_total_lift = state.get("expected_total_lift", 0)
-        optimal_allocation_summary = state.get("optimal_allocation_summary", "")
+        overall_ate: float = state.get("overall_ate") or 0
+        heterogeneity_score: float = state.get("heterogeneity_score") or 0
+        high_responders = state.get("high_responders") or []
+        low_responders = state.get("low_responders") or []
+        expected_total_lift: float = state.get("expected_total_lift") or 0
+        optimal_allocation_summary: str = state.get("optimal_allocation_summary") or ""
 
         if not high_responders and not low_responders:
             return (
@@ -215,12 +217,12 @@ class ProfileGeneratorNode:
 
         insights = []
 
-        overall_ate = state.get("overall_ate", 0)
-        heterogeneity_score = state.get("heterogeneity_score", 0)
-        high_responders = state.get("high_responders", [])
-        low_responders = state.get("low_responders", [])
-        feature_importance = state.get("feature_importance", {})
-        segment_comparison = state.get("segment_comparison", {})
+        overall_ate: float = state.get("overall_ate") or 0
+        heterogeneity_score: float = state.get("heterogeneity_score") or 0
+        high_responders = state.get("high_responders") or []
+        low_responders = state.get("low_responders") or []
+        feature_importance = state.get("feature_importance") or {}
+        segment_comparison = state.get("segment_comparison") or {}
 
         # Insight 1: Overall treatment effect
         if overall_ate > 0:
@@ -289,11 +291,11 @@ class ProfileGeneratorNode:
         Translates ATE and heterogeneity data into actionable business insights.
         Required by quality gates (v4.3) - semantic validation checks this field.
         """
-        overall_ate = state.get("overall_ate", 0)
-        heterogeneity_score = state.get("heterogeneity_score", 0)
-        high_responders = state.get("high_responders", [])
-        low_responders = state.get("low_responders", [])
-        expected_total_lift = state.get("expected_total_lift", 0)
+        overall_ate: float = state.get("overall_ate") or 0
+        heterogeneity_score: float = state.get("heterogeneity_score") or 0
+        high_responders = state.get("high_responders") or []
+        low_responders = state.get("low_responders") or []
+        expected_total_lift: float = state.get("expected_total_lift") or 0
 
         # Determine treatment effect direction
         effect_direction = (
@@ -394,7 +396,7 @@ Tactical Recommendation:
 
             # Initialize signal with input context
             signal = collector.collect_optimization_signal(
-                session_id=state.get("session_id", ""),
+                session_id=state.get("session_id") or "",
                 query=state.get("query", ""),
                 treatment_var=state.get("treatment_var", ""),
                 outcome_var=state.get("outcome_var", ""),
@@ -403,7 +405,7 @@ Tactical Recommendation:
             )
 
             # Update with CATE estimation phase
-            cate_by_segment = state.get("cate_by_segment", {})
+            cate_by_segment = state.get("cate_by_segment") or {}
             total_segments = sum(len(results) for results in cate_by_segment.values())
             significant_count = sum(
                 1
@@ -414,16 +416,16 @@ Tactical Recommendation:
 
             collector.update_cate_estimation(
                 signal=signal,
-                overall_ate=state.get("overall_ate", 0.0),
-                heterogeneity_score=state.get("heterogeneity_score", 0.0),
+                overall_ate=state.get("overall_ate") or 0.0,
+                heterogeneity_score=state.get("heterogeneity_score") or 0.0,
                 cate_segments_count=total_segments,
                 significant_cate_count=significant_count,
                 estimation_latency_ms=state.get("estimation_latency_ms", 0.0),
             )
 
             # Update with segment discovery phase
-            high_responders = state.get("high_responders", [])
-            low_responders = state.get("low_responders", [])
+            high_responders = state.get("high_responders") or []
+            low_responders = state.get("low_responders") or []
 
             # Calculate responder spread (difference between avg high and avg low CATE)
             responder_spread = 0.0
@@ -441,32 +443,32 @@ Tactical Recommendation:
                 high_responders_count=len(high_responders),
                 low_responders_count=len(low_responders),
                 responder_spread=responder_spread,
-                analysis_latency_ms=state.get("segment_latency_ms", 0.0),
+                analysis_latency_ms=float(state.get("segment_latency_ms", 0)),  # type: ignore[arg-type]
             )
 
             # Calculate total latency
-            total_latency_ms = (
-                state.get("estimation_latency_ms", 0)
-                + state.get("segment_latency_ms", 0)
-                + state.get("hierarchical_latency_ms", 0)
-                + state.get("policy_latency_ms", 0)
-                + generation_time
+            estimation_ms: int = state.get("estimation_latency_ms", 0)
+            segment_ms: int = state.get("segment_latency_ms") or 0  # type: ignore[assignment]
+            hierarchical_ms: int = state.get("hierarchical_latency_ms") or 0  # type: ignore[assignment]
+            policy_ms: int = state.get("policy_latency_ms") or 0  # type: ignore[assignment]
+            total_latency_ms: float = (
+                estimation_ms + segment_ms + hierarchical_ms + policy_ms + generation_time
             )
 
             # Update with policy learning phase (final)
-            policy_recommendations = state.get("policy_recommendations", [])
+            policy_recommendations = state.get("policy_recommendations") or []
             actionable_count = sum(1 for p in policy_recommendations if p.get("actionable", True))
 
             collector.update_policy_learning(
                 signal=signal,
                 policy_recommendations_count=len(policy_recommendations),
-                expected_total_lift=state.get("expected_total_lift", 0.0),
+                expected_total_lift=state.get("expected_total_lift") or 0.0,
                 actionable_policies=actionable_count,
                 executive_summary_length=len(executive_summary),
                 key_insights_count=len(key_insights),
                 visualization_data_complete=True,
                 total_latency_ms=total_latency_ms,
-                confidence_score=state.get("confidence_score", 0.8),
+                confidence_score=float(state.get("confidence_score") or 0.8),  # type: ignore[arg-type]
             )
 
             # Route to feedback_learner

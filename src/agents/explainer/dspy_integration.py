@@ -173,10 +173,10 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
     logger.warning("DSPy not available - using default explanation templates")
-    ExplanationSynthesisSignature = None
-    InsightExtractionSignature = None
-    NarrativeStructureSignature = None
-    QueryRewriteForExplanationSignature = None
+    ExplanationSynthesisSignature = None  # type: ignore[assignment, misc]
+    InsightExtractionSignature = None  # type: ignore[assignment, misc]
+    NarrativeStructureSignature = None  # type: ignore[assignment, misc]
+    QueryRewriteForExplanationSignature = None  # type: ignore[assignment, misc]
 
 
 # =============================================================================
@@ -193,9 +193,9 @@ class ExplainerDSPyIntegration:
     generating training signals.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.dspy_type: Literal["recipient"] = "recipient"
-        self._prompts = ExplanationPrompts()
+        self._prompts: ExplanationPrompts = ExplanationPrompts()
         self._prompt_versions: Dict[str, str] = {}
 
     @property

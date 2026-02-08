@@ -200,7 +200,7 @@ class FeatureStoreClient:
         response = self.supabase.table("feature_groups").insert(data).execute()
 
         if response.data:
-            feature_group = FeatureGroup(**response.data[0])
+            feature_group = FeatureGroup(**response.data[0])  # type: ignore[arg-type]
             logger.info(f"Created feature group: {name}")
             return feature_group
         else:
@@ -211,7 +211,7 @@ class FeatureStoreClient:
         response = self.supabase.table("feature_groups").select("*").eq("name", name).execute()
 
         if response.data:
-            return FeatureGroup(**response.data[0])
+            return FeatureGroup(**response.data[0])  # type: ignore[arg-type]
         return None
 
     def list_feature_groups(self, owner: Optional[str] = None) -> List[FeatureGroup]:
@@ -222,7 +222,7 @@ class FeatureStoreClient:
             query = query.eq("owner", owner)
 
         response = query.execute()
-        return [FeatureGroup(**item) for item in response.data]
+        return [FeatureGroup(**item) for item in response.data]  # type: ignore[arg-type]
 
     # =========================================================================
     # Feature Management
@@ -275,7 +275,7 @@ class FeatureStoreClient:
         response = self.supabase.table("features").insert(data).execute()
 
         if response.data:
-            feature = Feature(**response.data[0])
+            feature = Feature(**response.data[0])  # type: ignore[arg-type]
             logger.info(f"Created feature: {feature_group_name}.{name}")
 
             # Log to MLflow if experiment is linked
@@ -303,7 +303,7 @@ class FeatureStoreClient:
         )
 
         if response.data:
-            return Feature(**response.data[0])
+            return Feature(**response.data[0])  # type: ignore[arg-type]
         return None
 
     def list_features(self, feature_group_name: str) -> List[Feature]:
@@ -319,7 +319,7 @@ class FeatureStoreClient:
             .execute()
         )
 
-        return [Feature(**item) for item in response.data]
+        return [Feature(**item) for item in response.data]  # type: ignore[arg-type]
 
     # =========================================================================
     # Feature Retrieval (Online Serving)
@@ -483,6 +483,7 @@ class FeatureStoreClient:
 
         if not response.data:
             # Return empty statistics if no values
+            assert feature.id is not None
             return FeatureStatistics(
                 feature_id=feature.id,
                 feature_name=feature_name,
@@ -493,7 +494,7 @@ class FeatureStoreClient:
             )
 
         # Extract values
-        values = [row.get("value") for row in response.data]
+        values = [row.get("value") for row in response.data]  # type: ignore[union-attr]
         total_count = len(values)
 
         # Count nulls
@@ -501,6 +502,7 @@ class FeatureStoreClient:
         non_null_values = [v for v in values if v is not None]
 
         # Initialize statistics
+        assert feature.id is not None
         stats = FeatureStatistics(
             feature_id=feature.id,
             feature_name=feature_name,
@@ -539,7 +541,7 @@ class FeatureStoreClient:
                 # Compute percentiles
                 sorted_values = sorted(numeric_values)
                 n = len(sorted_values)
-                stats.percentiles = {
+                percentiles_raw: Dict[str, Optional[float]] = {
                     "p25": sorted_values[int(n * 0.25)],
                     "p50": sorted_values[int(n * 0.50)],
                     "p75": sorted_values[int(n * 0.75)],
@@ -548,7 +550,7 @@ class FeatureStoreClient:
                     "p99": sorted_values[int(n * 0.99)] if n >= 100 else None,
                 }
                 # Remove None percentiles
-                stats.percentiles = {k: v for k, v in stats.percentiles.items() if v is not None}
+                stats.percentiles = {k: v for k, v in percentiles_raw.items() if v is not None}
 
         logger.debug(
             f"Computed statistics for {feature_group_name}.{feature_name}: "

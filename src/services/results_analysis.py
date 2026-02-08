@@ -395,7 +395,7 @@ class ResultsAnalysisService:
         # Power = P(reject H0 | H1 true)
         power = stats.norm.cdf(z_effect - z_alpha) + stats.norm.cdf(-z_effect - z_alpha)
 
-        return max(0.0, min(1.0, power))
+        return float(max(0.0, min(1.0, power)))
 
     async def compute_heterogeneous_effects(
         self,
@@ -632,21 +632,24 @@ class ResultsAnalysisService:
         ci_coverage: bool,
     ) -> Dict[str, Any]:
         """Generate calibration recommendations based on fidelity."""
-        recommendations = {
-            "needs_calibration": prediction_error_percent > 20,
-            "direction": "overestimated" if prediction_error < 0 else "underestimated",
-            "magnitude_adjustment": -prediction_error,
-            "suggestions": [],
-        }
+        direction = "overestimated" if prediction_error < 0 else "underestimated"
+        suggestions: List[str] = []
 
         if prediction_error_percent > 30:
-            recommendations["suggestions"].append("Consider updating twin model parameters")
+            suggestions.append("Consider updating twin model parameters")
         if not ci_coverage:
-            recommendations["suggestions"].append("Twin uncertainty estimates may need widening")
+            suggestions.append("Twin uncertainty estimates may need widening")
         if abs(prediction_error) > 0.1:
-            recommendations["suggestions"].append(
-                f"Twin {recommendations['direction']} effect by {prediction_error_percent:.0f}%"
+            suggestions.append(
+                f"Twin {direction} effect by {prediction_error_percent:.0f}%"
             )
+
+        recommendations: Dict[str, Any] = {
+            "needs_calibration": prediction_error_percent > 20,
+            "direction": direction,
+            "magnitude_adjustment": -prediction_error,
+            "suggestions": suggestions,
+        }
 
         return recommendations
 

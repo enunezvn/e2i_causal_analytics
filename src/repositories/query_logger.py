@@ -251,7 +251,7 @@ class SlowQueryDetector:
             self._slow_queries = self._slow_queries[-self.config.max_retained_queries :]
 
         # Update metrics
-        if query_metrics._initialized:
+        if query_metrics._initialized and query_metrics.slow_queries is not None:
             query_metrics.slow_queries.labels(
                 operation=operation,
                 table=table,
@@ -416,7 +416,7 @@ class QueryLogger:
             error_type = type(e).__name__
 
             # Record error metric
-            if query_metrics._initialized:
+            if query_metrics._initialized and query_metrics.query_errors is not None:
                 query_metrics.query_errors.labels(
                     operation=operation,
                     table=table,
@@ -431,16 +431,18 @@ class QueryLogger:
 
             # Record duration metric
             if query_metrics._initialized:
-                query_metrics.query_duration.labels(
-                    operation=operation,
-                    table=table,
-                    status=status,
-                ).observe(duration)
+                if query_metrics.query_duration is not None:
+                    query_metrics.query_duration.labels(
+                        operation=operation,
+                        table=table,
+                        status=status,
+                    ).observe(duration)
 
-                query_metrics.query_total.labels(
-                    operation=operation,
-                    table=table,
-                ).inc()
+                if query_metrics.query_total is not None:
+                    query_metrics.query_total.labels(
+                        operation=operation,
+                        table=table,
+                    ).inc()
 
             # Check for slow query
             self.slow_query_detector.check_query(
@@ -488,7 +490,7 @@ class QueryLogger:
             error_type = type(e).__name__
 
             # Record error metric
-            if query_metrics._initialized:
+            if query_metrics._initialized and query_metrics.query_errors is not None:
                 query_metrics.query_errors.labels(
                     operation=operation,
                     table=table,
@@ -503,16 +505,18 @@ class QueryLogger:
 
             # Record duration metric
             if query_metrics._initialized:
-                query_metrics.query_duration.labels(
-                    operation=operation,
-                    table=table,
-                    status=status,
-                ).observe(duration)
+                if query_metrics.query_duration is not None:
+                    query_metrics.query_duration.labels(
+                        operation=operation,
+                        table=table,
+                        status=status,
+                    ).observe(duration)
 
-                query_metrics.query_total.labels(
-                    operation=operation,
-                    table=table,
-                ).inc()
+                if query_metrics.query_total is not None:
+                    query_metrics.query_total.labels(
+                        operation=operation,
+                        table=table,
+                    ).inc()
 
             # Check for slow query
             self.slow_query_detector.check_query(
@@ -627,18 +631,20 @@ class _QueryTracker:
 
         # Record metrics
         if query_metrics._initialized:
-            query_metrics.query_duration.labels(
-                operation=self.operation,
-                table=self.table,
-                status=status,
-            ).observe(duration)
+            if query_metrics.query_duration is not None:
+                query_metrics.query_duration.labels(
+                    operation=self.operation,
+                    table=self.table,
+                    status=status,
+                ).observe(duration)
 
-            query_metrics.query_total.labels(
-                operation=self.operation,
-                table=self.table,
-            ).inc()
+            if query_metrics.query_total is not None:
+                query_metrics.query_total.labels(
+                    operation=self.operation,
+                    table=self.table,
+                ).inc()
 
-            if self.error:
+            if self.error and query_metrics.query_errors is not None:
                 query_metrics.query_errors.labels(
                     operation=self.operation,
                     table=self.table,
@@ -692,9 +698,9 @@ def logged_query(operation: str, table: str):
         table: Table name
     """
 
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> T:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             return query_logger.execute(
                 operation=operation,
                 table=table,
@@ -722,9 +728,9 @@ def logged_query_async(operation: str, table: str):
         table: Table name
     """
 
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs) -> T:
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             return await query_logger.execute_async(
                 operation=operation,
                 table=table,

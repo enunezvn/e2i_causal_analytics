@@ -144,7 +144,7 @@ class CausalImpactMLflowTracker:
         try:
             import mlflow
 
-            mlflow.set_tracking_uri(self.tracking_uri)
+            mlflow.set_tracking_uri(self.tracking_uri)  # type: ignore[arg-type]
             return True
         except ImportError:
             logger.warning("MLflow not installed, metrics will be logged locally only")
@@ -356,18 +356,18 @@ class CausalImpactMLflowTracker:
             sensitivity_analysis = state.get("sensitivity_analysis", {})
 
             # CATE metrics
-            cate_results = estimation_result.get("cate_results", {})
+            cate_results: dict[str, Any] = estimation_result.get("cate_results", {})  # type: ignore[assignment]
             if cate_results:
-                metrics.cate_mean = cate_results.get("mean")
-                metrics.cate_std = cate_results.get("std")
-                metrics.n_segments = cate_results.get("n_segments", 0)
+                metrics.cate_mean = cate_results.get("mean")  # type: ignore[assignment]
+                metrics.cate_std = cate_results.get("std")  # type: ignore[assignment]
+                metrics.n_segments = cate_results.get("n_segments", 0)  # type: ignore[assignment]
 
             # Energy score (if estimator selection was used)
-            metrics.energy_score = estimation_result.get("energy_score")
-            metrics.selection_strategy = estimation_result.get("selection_strategy")
+            metrics.energy_score = estimation_result.get("energy_score")  # type: ignore[assignment]
+            metrics.selection_strategy = estimation_result.get("selection_strategy")  # type: ignore[assignment]
 
             # Refutation details
-            metrics.n_refutation_tests = refutation_results.get("n_tests", 0)
+            metrics.n_refutation_tests = refutation_results.get("n_tests", 0)  # type: ignore[assignment]
             metrics.tests_passed = refutation_results.get("tests_passed", 0)
             metrics.confidence_adjustment = refutation_results.get("confidence_adjustment", 1.0)
 
@@ -465,22 +465,26 @@ class CausalImpactMLflowTracker:
         if state:
             causal_graph = state.get("causal_graph", {})
             if causal_graph:
-                await self._log_json_artifact(causal_graph, "causal_dag.json", "causal_graph")
+                await self._log_json_artifact(
+                    dict(causal_graph), "causal_dag.json", "causal_graph"
+                )
 
             # Log sensitivity analysis details
             sensitivity = state.get("sensitivity_analysis", {})
             if sensitivity:
                 await self._log_json_artifact(
-                    sensitivity, "sensitivity_analysis.json", "sensitivity"
+                    dict(sensitivity), "sensitivity_analysis.json", "sensitivity"
                 )
 
             # Log refutation details
             refutation = state.get("refutation_results", {})
             if refutation:
-                await self._log_json_artifact(refutation, "refutation_results.json", "refutation")
+                await self._log_json_artifact(
+                    dict(refutation), "refutation_results.json", "refutation"
+                )
 
         # Log full output as JSON
-        output_dict = dict(output) if hasattr(output, "items") else output
+        output_dict: dict[str, Any] = dict(output) if hasattr(output, "items") else dict(output)
         await self._log_json_artifact(output_dict, "analysis_output.json", "output")
 
     async def _log_json_artifact(
@@ -554,14 +558,14 @@ class CausalImpactMLflowTracker:
             # Search runs
             runs = mlflow.search_runs(
                 experiment_ids=experiment_ids,
-                filter_string=filter_string,
+                filter_string=filter_string or "",
                 max_results=limit,
                 order_by=["start_time DESC"],
             )
 
             # Convert to list of dicts
             results = []
-            for _, row in runs.iterrows():
+            for _, row in runs.iterrows():  # type: ignore[union-attr]
                 result = {
                     "run_id": row.get("run_id"),
                     "experiment_id": row.get("experiment_id"),
