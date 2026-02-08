@@ -32,7 +32,7 @@ x-common-env: &common-env
   REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
   FALKORDB_URL: redis://:${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}@falkordb:6379/0
   MLFLOW_TRACKING_URI: http://mlflow:5000
-  BENTOML_URL: http://bentoml:3000
+  BENTOML_SERVICE_URL: http://bentoml:3000
   FEAST_URL: http://feast:6566
   OPIK_URL: http://opik-backend:8080
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
