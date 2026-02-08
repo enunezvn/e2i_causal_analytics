@@ -1,0 +1,25 @@
+# Claude Code ignore patterns
+# Exclude heavy directories to prevent OOM
+
+.venv/
+.venv/**
+node_modules/
+node_modules/**
+__pycache__/
+**/__pycache__
+**/*.pyc
+dist/
+coverage/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+mlruns/
+mlartifacts/
+playwright-report/
+test-results/
+*.egg-info/
+.git/objects/
+build/
+*.so
+*.dylib
+*.dll

@@ -1,0 +1,38 @@
+{
+  "folders": [
+    {
+      "name": "Source Code",
+      "path": "src"
+    },
+    {
+      "name": "Tests",
+      "path": "tests"
+    },
+    {
+      "name": "Frontend",
+      "path": "frontend/src"
+    },
+    {
+      "name": "Config",
+      "path": "config"
+    },
+    {
+      "name": "Scripts",
+      "path": "scripts"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.venv": true,
+      "**/node_modules": true,
+      "**/__pycache__": true,
+      "**/.pytest_cache": true,
+      "**/.mypy_cache": true,
+      "**/.ruff_cache": true,
+      "**/mlruns": true,
+      "**/mlartifacts": true
+    },
+    "python.languageServer": "None",
+    "python.analysis.indexing": false
+  }
+}
