@@ -293,7 +293,7 @@ services:
   # Flower - Celery Monitoring Dashboard (Dev Only)
   # ---------------------------------------------------------------------------
   flower:
-    image: mher/flower:latest
+    image: mher/flower:2.0.0
     container_name: e2i_flower_dev
     ports:
       - "5555:5555"
@@ -313,7 +313,7 @@ services:
   # Redis Commander - Redis GUI (Dev Only)
   # ---------------------------------------------------------------------------
   redis-commander:
-    image: rediscommander/redis-commander:latest
+    image: rediscommander/redis-commander:0.8.1
     container_name: e2i_redis_commander_dev
     ports:
       - "8081:8081"

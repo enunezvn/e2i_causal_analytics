@@ -152,7 +152,7 @@ services:
   # Opik ClickHouse Init - Copy Config Files
   # ---------------------------------------------------------------------------
   opik-clickhouse-init:
-    image: alpine:latest
+    image: alpine:3.19
 
     volumes:
       - ./opik/clickhouse:/clickhouse_config_files:ro
@@ -274,7 +274,7 @@ services:
   # Opik Backend - Java API Server
   # ---------------------------------------------------------------------------
   opik-backend:
-    image: ghcr.io/comet-ml/opik/opik-backend:${OPIK_VERSION:-latest}
+    image: ghcr.io/comet-ml/opik/opik-backend:${OPIK_VERSION:-1.10.8}
     hostname: opik-backend
     restart: unless-stopped
 
@@ -341,7 +341,7 @@ services:
   # Opik Python Backend - Evaluators & Optimization Studio
   # ---------------------------------------------------------------------------
   opik-python-backend:
-    image: ghcr.io/comet-ml/opik/opik-python-backend:${OPIK_VERSION:-latest}
+    image: ghcr.io/comet-ml/opik/opik-python-backend:${OPIK_VERSION:-1.10.8}
     hostname: opik-python-backend
     restart: unless-stopped
 
@@ -352,7 +352,7 @@ services:
       PYTHON_CODE_EXECUTOR_STRATEGY: process
       PYTHON_CODE_EXECUTOR_EXEC_TIMEOUT_IN_SECS: 3
       PYTHON_CODE_EXECUTOR_ALLOW_NETWORK: "false"
-      OPIK_VERSION: ${OPIK_VERSION:-latest}
+      OPIK_VERSION: ${OPIK_VERSION:-1.10.8}
       OPIK_REVERSE_PROXY_URL: http://opik-frontend:5173/api
       PYTHON_BACKEND_PORT: 8001
       REDIS_URL: redis://:${OPIK_REDIS_PASSWORD:?OPIK_REDIS_PASSWORD must be set}@opik-redis:6379/0
@@ -383,14 +383,14 @@ services:
   # Opik Frontend - UI (nginx + React)
   # ---------------------------------------------------------------------------
   opik-frontend:
-    image: ghcr.io/comet-ml/opik/opik-frontend:${OPIK_VERSION:-latest}
+    image: ghcr.io/comet-ml/opik/opik-frontend:${OPIK_VERSION:-1.10.8}
     hostname: opik-frontend
     restart: unless-stopped
 
     ports:
       - "127.0.0.1:5173:80"
     environment:
-      OPIK_VERSION: ${OPIK_VERSION:-latest}
+      OPIK_VERSION: ${OPIK_VERSION:-1.10.8}
       OTEL_TRACE: "off"
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --fail-early http://localhost:80/"]

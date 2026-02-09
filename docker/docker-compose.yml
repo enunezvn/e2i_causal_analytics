@@ -465,8 +465,8 @@ services:
       - no-new-privileges:true
     read_only: true
     tmpfs:
-      - /tmp:size=50M,mode=1777
-      - /app/tmp:size=100M,mode=1777
+      - /tmp:size=50M,mode=1770
+      - /app/tmp:size=100M,mode=1770
     deploy:
       resources:
         limits:
