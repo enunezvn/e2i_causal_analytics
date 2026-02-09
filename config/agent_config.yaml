@@ -1,8 +1,8 @@
 # E2I Causal Analytics - Agent Configuration V4.2
-# 18-Agent 6-Tier Architecture Configuration
+# 21-Agent 6-Tier Architecture Configuration
 # Includes: Tier 0 ML Foundation, Causal Validation, MLOps Integration, Feature Store
 
-version: "4.2.0"
+version: "4.2.1"
 last_updated: "2025-12-19"
 
 # ═══════════════════════════════════════════════════════════════════
@@ -227,12 +227,12 @@ tier1_orchestration:
       store_successful_patterns: true
 
 # ═══════════════════════════════════════════════════════════════════
-# AGENT CONFIGURATIONS (18 Agents)
+# AGENT CONFIGURATIONS (21 Agents)
 # ═══════════════════════════════════════════════════════════════════
 
 agents:
   # ─────────────────────────────────────────────────────────────────
-  # TIER 0: ML FOUNDATION (7 agents) - NEW in V4
+  # TIER 0: ML FOUNDATION (8 agents) - NEW in V4
   # ─────────────────────────────────────────────────────────────────
   
   scope_definer:
@@ -702,7 +702,7 @@ agents:
       - CATE
 
   # ─────────────────────────────────────────────────────────────────
-  # TIER 3: MONITORING (3 agents)
+  # TIER 3: MONITORING (4 agents)
   # ─────────────────────────────────────────────────────────────────
   
   drift_monitor:

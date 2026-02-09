@@ -3,7 +3,7 @@
   "info": {
     "title": "E2I Causal Analytics Platform",
     "description": "21-Agent architecture for causal inference, ML interpretability, and digital twin generation",
-    "version": "4.2.0",
+    "version": "4.2.1",
     "contact": {
       "name": "E2I Causal Analytics Team",
       "email": "support@eznomics.site"

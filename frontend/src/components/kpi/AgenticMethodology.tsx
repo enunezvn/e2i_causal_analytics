@@ -81,7 +81,7 @@ const PROCESSING_LAYERS: ProcessingLayer[] = [
   },
   {
     emoji: '🤖',
-    title: 'Layer 3: 18-Agent 6-Tier Orchestration',
+    title: 'Layer 3: 21-Agent 6-Tier Orchestration',
     description: 'LangGraph state management • Priority-based routing • 13 Standard + 3 Hybrid + 2 Deep agents',
     colorClass: 'bg-purple-50',
     borderColor: 'border-purple-500',

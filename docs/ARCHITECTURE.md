@@ -96,7 +96,7 @@ C4Container
         Container(bentoml, "BentoML", "Custom Python 3.12", "Model serving (churn, conversion, causal)")
         Container(feast, "Feast", "Feast Feature Server", "Online/offline feature serving")
 
-        Container(opik, "Opik Stack", "8 containers", "LLM observability: traces, spans, feedback")
+        Container(opik, "Opik Stack", "10 services", "LLM observability: traces, spans, feedback")
 
         Container(prometheus, "Prometheus", "v3.2.1", "Metrics scraping (15s interval)")
         Container(grafana, "Grafana", "v11.5.2", "Dashboards and alerting")
@@ -161,7 +161,7 @@ C4Container
 | `node-exporter` | prom/node-exporter:v1.9.0 | - |
 | `postgres-exporter` | prometheuscommunity/postgres-exporter:v0.16.0 | - |
 
-#### Opik Stack (8 containers in `docker-compose.opik.yml`)
+#### Opik Stack (10 services in `docker-compose.opik.yml`)
 
 | Container | Image | Port |
 |-----------|-------|------|
@@ -173,6 +173,8 @@ C4Container
 | `opik-clickhouse` | clickhouse/clickhouse-server:25.3.6.56-alpine | - |
 | `opik-zookeeper` | zookeeper:3.9.4 | - |
 | `opik-minio` | minio/minio | 127.0.0.1:9090:9090 (console) |
+| `opik-clickhouse-init` | Custom init | - (one-shot) |
+| `opik-mc` | minio/mc | - (one-shot) |
 
 ### 2.3 Network Topology
 

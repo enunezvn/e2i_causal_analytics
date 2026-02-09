@@ -1,7 +1,7 @@
 # =============================================================================
 # E2I Causal Analytics - Production Docker Compose
 # =============================================================================
-# 18-Agent 6-Tier Architecture | Tri-Memory System | MLOps Integration
+# 21-Agent 6-Tier Architecture | Tri-Memory System | MLOps Integration
 #
 # Usage:
 #   Production:  docker compose -f docker/docker-compose.yml up -d
@@ -418,7 +418,7 @@ services:
   # TIER 3: APPLICATION SERVICES
   # ===========================================================================
 
-  # FastAPI Backend - 18-Agent Orchestration Layer
+  # FastAPI Backend - 21-Agent Orchestration Layer
   api:
     build:
       context: ..

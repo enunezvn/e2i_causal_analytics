@@ -66,18 +66,25 @@ These are defined in `docker-compose.yml` via the `x-common-env` anchor:
 
 ## Service Map
 
-| Service | Port | URL | Description |
-|---------|------|-----|-------------|
-| API (FastAPI) | 8000 | http://localhost:8000 | Backend + agents (auto-reloads) |
+| Service | Port | URL | Notes |
+|---------|------|-----|-------|
+| API (FastAPI) | 8000 | http://localhost:8000 | Auto-reloads |
 | API Docs | 8000 | http://localhost:8000/docs | Swagger UI |
-| Frontend (Vite) | 3002 | http://localhost:3002 | React app (HMR) |
-| MLflow | 5000 | http://localhost:5000 | Experiment tracking |
-| Redis | 6382 | `redis://localhost:6382` | Cache + task queue |
-| FalkorDB | 6381 | `redis://localhost:6381` | Graph database |
-| Grafana | 3200 | http://localhost:3200 | Dashboards |
-| Prometheus | 9091 | http://localhost:9091 | Metrics |
-| BentoML | 3000 | http://localhost:3000 | Model serving |
-| Feast | 6567 | http://localhost:6567 | Feature store |
+| Frontend (Vite) | 3002 | http://localhost:3002 | HMR |
+| MLflow | 5000 | http://localhost:5000 | 127.0.0.1 only |
+| Redis | 6382 | redis://localhost:6382 | |
+| FalkorDB | 6381 | redis://localhost:6381 | |
+| BentoML | 3000 | http://localhost:3000 | 127.0.0.1 only |
+| Feast | 6567 | http://localhost:6567 | 127.0.0.1 only |
+| Grafana | 3200 | http://localhost:3200 | 127.0.0.1 only |
+| Prometheus | 9091 | http://localhost:9091 | 127.0.0.1 only |
+| Loki | 3101 | http://localhost:3101 | 127.0.0.1 only |
+| Alertmanager | 9093 | http://localhost:9093 | 127.0.0.1 only |
+| Flower* | 5555 | http://localhost:5555 | debug profile |
+| FalkorDB Browser* | 3030 | http://localhost:3030 | debug profile |
+| Redis Commander* | 8081 | http://localhost:8081 | dev-tools profile |
+
+\* Requires `--profile`. Management ports (127.0.0.1 only) need SSH tunnels for remote access — see `scripts/ssh-tunnels/`.
 
 ---
 
@@ -99,6 +106,42 @@ After changing Python code that runs in workers:
 ```bash
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml restart worker_light worker_medium scheduler
 ```
+
+### FalkorDB Auto-Seeding
+
+The deploy script (`scripts/deploy.sh`) automatically runs `scripts/seed_falkordb_all.sh` after pulling new code. This seeds 8 node types and 15 edge types from Supabase core tables into the FalkorDB knowledge graph, ensuring the graph stays in sync with the relational data.
+
+To run manually:
+
+```bash
+./scripts/seed_falkordb_all.sh
+```
+
+### Deploy Rollback
+
+The CI/CD deploy workflow (`.github/workflows/deploy.yml`) includes automatic rollback:
+
+1. Saves the pre-deploy git SHA
+2. Pulls new code and runs migrations
+3. Runs a 30-attempt health check loop (with backoff)
+4. If health checks fail, automatically rolls back to the saved SHA
+
+For manual rollback, revert to a known-good commit and restart workers:
+
+```bash
+git checkout <good-sha>
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml restart worker_light worker_medium scheduler
+```
+
+### docker/.env Symlink
+
+Docker Compose at `docker/docker-compose.yml` does not auto-find the root `.env` file. A symlink is required:
+
+```bash
+cd docker && ln -sf ../.env .env
+```
+
+This is already set up on the droplet. If you get empty variable errors when starting containers, check that this symlink exists.
 
 ### Running Tests
 

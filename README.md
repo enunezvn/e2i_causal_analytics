@@ -66,7 +66,7 @@ E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed
 
 ```
 e2i_causal_analytics/
-├── config/                    # YAML configurations (8 files)
+├── config/                    # YAML configurations (48 files)
 │   ├── agent_config.yaml      # Agent definitions
 │   ├── domain_vocabulary_v3.1.0.yaml
 │   ├── kpi_definitions.yaml   # 46+ KPIs
@@ -224,6 +224,48 @@ All services (API, frontend, workers, Redis, FalkorDB, MLflow, Opik, observabili
    ```
 
 See `docker/README.md` for Docker Compose configuration and `DEPLOYMENT.md` for setup instructions.
+
+## CI/CD Workflows
+
+All workflows live in `.github/workflows/` and run on GitHub Actions:
+
+| Workflow | File | Trigger | Purpose |
+|----------|------|---------|---------|
+| Backend Tests | `backend-tests.yml` | Push/PR to main, develop | pytest with coverage gate (`--cov-fail-under=70`) |
+| Frontend Tests | `frontend-tests.yml` | Push/PR to main, develop | Vitest + coverage thresholds |
+| Deploy | `deploy.yml` | Push to main | Auto-deploy with health checks and rollback |
+| Security | `security.yml` | Push/PR + daily cron | Bandit, safety, secrets scan |
+| API Docs | `api-docs.yml` | Push/PR to main, develop | OpenAPI spec validation (Spectral) |
+| Verify Types | `verify-types.yml` | Push/PR to main | MyPy type checking (non-blocking) |
+| RAGAS Evaluation | `ragas-evaluation.yml` | Push/PR to main | RAG pipeline quality evaluation |
+| Synthetic Benchmarks | `synthetic-benchmarks.yml` | Push/PR to main | Causal engine benchmark suite |
+
+## Operational Scripts
+
+Key scripts in `scripts/`:
+
+**Core Operations**
+- `deploy.sh` — Git pull, restart workers, seed FalkorDB, health check
+- `health_check.sh` — Check all 24 services (HTTP, Redis, FalkorDB, Supabase, observability)
+- `run_migrations.sh` — Apply SQL migrations to Supabase
+- `backup_data_stores.sh` — Backup Redis, FalkorDB, MLflow artifacts
+- `backup_cron.sh` — Scheduled backup wrapper
+
+**Testing**
+- `run_tests_batched.sh` — Full test suite in 43 batches (~20 min)
+- `run_frontend_tests_batched.sh` — Frontend test suite in batches
+
+**Infrastructure**
+- `opik-manager.sh` — Start/stop/status for Opik overlay
+- `setup_branch_protection.sh` — Configure GitHub branch protection via `gh api`
+- `ssh-tunnels/tunnels.sh` — SSH tunnel launcher for remote management ports
+- `seed_falkordb_all.sh` — Seed knowledge graph from Supabase tables
+
+**Utilities**
+- `droplet-connect.sh` — SSH into the production droplet
+- `droplet_report.sh` — System resource and service status report
+- `generate_api_docs.sh` — Regenerate OpenAPI spec
+- `preflight-check.sh` — Pre-deploy validation checks
 
 ## Development
 
