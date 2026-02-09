@@ -160,9 +160,9 @@ product-development/
 DEPLOYMENT_ADMIN.md
 INFRASTRUCTURE.md
 
-# Auto-generated API types and schema
+# Auto-generated API schema (regenerable via npm run generate:types)
 docs/api/openapi.json
-frontend/src/types/generated/
+frontend/src/types/generated/api.ts
 
 # Test/script output files
 scripts/*_results.json
