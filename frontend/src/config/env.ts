@@ -80,7 +80,7 @@ export const env: EnvConfig = {
   apiUrl: import.meta.env.VITE_API_URL || '/api',
 
   // Supabase Configuration
-  supabaseUrl: getEnvVar('SUPABASE_URL', ''),
+  supabaseUrl: getEnvVar('SUPABASE_URL', typeof window !== 'undefined' ? window.location.origin : ''),
   supabaseAnonKey: getEnvVar('SUPABASE_ANON_KEY', ''),
 
   // Environment Mode
