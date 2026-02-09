@@ -285,6 +285,31 @@ services:
   falkordb:
     container_name: e2i_falkordb_dev
 
+  # ---------------------------------------------------------------------------
+  # FalkorDB Init Seeder - Seeds graphs on first startup (one-shot)
+  # ---------------------------------------------------------------------------
+  falkordb-seeder:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: e2i_falkordb_seeder
+    restart: "no"
+    volumes:
+      - ../scripts:/app/scripts:ro
+      - ../src:/app/src:ro
+      - ../config:/app/config:ro
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - FALKORDB_PASSWORD=${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}
+    entrypoint: ["python", "/app/scripts/seed_falkordb_init.py"]
+    networks:
+      - e2i_network
+    depends_on:
+      falkordb:
+        condition: service_healthy
+
 # =============================================================================
 # DEVELOPMENT-ONLY SERVICES
 # =============================================================================

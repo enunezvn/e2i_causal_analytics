@@ -136,6 +136,15 @@ if ! $HEALTHY; then
 fi
 
 # ---------------------------------------------------------------------------
+# Seed FalkorDB graphs (non-blocking — failure doesn't fail the deploy)
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Checking FalkorDB graph data ==="
+bash "$PROJECT_DIR/scripts/seed_falkordb_all.sh" || {
+    echo "WARNING: FalkorDB seeding failed. Run manually: ./scripts/seed_falkordb_all.sh"
+}
+
+# ---------------------------------------------------------------------------
 # Success
 # ---------------------------------------------------------------------------
 echo ""
