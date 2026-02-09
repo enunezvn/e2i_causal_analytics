@@ -201,14 +201,12 @@ function errorInterceptor(error: AxiosError<ApiErrorResponse>): Promise<never> {
     });
   }
 
-  // Handle 401 Unauthorized - clear auth state (token expired or invalid)
+  // Handle 401 Unauthorized - log but don't clear Supabase auth session.
+  // The Supabase session is managed by AuthProvider's onAuthStateChange listener.
+  // A backend API 401 means the API rejected the request, not that the
+  // Supabase session is invalid.
   if (error.response?.status === 401) {
-    const { clearAuth, setError } = useAuthStore.getState();
-    clearAuth();
-    setError({
-      code: 'session_expired',
-      message: 'Your session has expired. Please sign in again.',
-    });
+    console.warn('[API] 401 Unauthorized:', error.config?.url);
   }
 
   // Transform to ApiError
