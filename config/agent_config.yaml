@@ -154,6 +154,7 @@ tier1_orchestration:
       explainer: 45000
       health_score: 5000
       drift_monitor: 10000
+      experiment_monitor: 10000
       feedback_learner: 30000
       # Tier 0 agents
       scope_definer: 30000
@@ -816,6 +817,51 @@ agents:
       - QUALITY
       - SCORE
 
+  experiment_monitor:
+    tier: monitoring
+    enabled: true
+    description: "Monitors active A/B experiments for health issues, SRM, and interim triggers"
+    agent_type: "fast_path"  # Deterministic, no LLM inference
+
+    workflow:
+      nodes:
+        - health_checker
+        - srm_detector
+        - interim_analyzer
+        - fidelity_checker
+        - alert_generator
+
+    thresholds:
+      srm_p_value: 0.001
+      enrollment_min_daily_rate: 5.0
+      fidelity_max_error: 0.2
+      stale_data_hours: 24.0
+
+    monitoring:
+      check_frequency_hours: 1
+      check_all_active: true
+      check_interim: true
+      performance_target_ms: 5000
+
+    capabilities:
+      - experiment_health_check
+      - srm_detection
+      - interim_analysis_trigger
+      - digital_twin_fidelity
+      - alert_generation
+
+    data_access:
+      train: true
+      validation: true
+      test: true
+      holdout: true
+
+    routes_from_intents:
+      - MONITOR
+      - EXPERIMENT_HEALTH
+      - SRM
+      - EXPERIMENT_CHECK
+
   # ─────────────────────────────────────────────────────────────────
   # TIER 4: ML PREDICTIONS (2 agents)
   # ─────────────────────────────────────────────────────────────────
@@ -991,7 +1037,7 @@ routing:
     default_agent: explainer
     error_agent: orchestrator
     
-  # V4.3: Priority ordering for all 18 agents (now includes tool_composer)
+  # V4.3: Priority ordering for all 21 agents (now includes tool_composer)
   priority_order:
     # Tier 0: ML Foundation
     - scope_definer
@@ -1013,6 +1059,7 @@ routing:
     - drift_monitor
     - experiment_designer
     - health_score
+    - experiment_monitor
     # Tier 4: ML Predictions
     - prediction_synthesizer
     - resource_optimizer
@@ -1221,6 +1268,7 @@ tab_routing:
     secondary_agents:
       - drift_monitor
       - experiment_designer
+      - experiment_monitor
       - heterogeneous_optimizer
       - health_score
       - resource_optimizer
@@ -1302,6 +1350,7 @@ tab_routing:
       - prediction_synthesizer
       - drift_monitor
     secondary_agents:
+      - experiment_monitor
       - model_deployer
     cache_ttl: 300  # 5 minutes
     prefetch_tabs:
@@ -1426,6 +1475,11 @@ tab_refresh_triggers:
       - ws2_triggers
       - overview
       - ai_agent_insights
+
+  experiment_monitoring_alert:
+    affected_tabs:
+      - ai_agent_insights
+      - ws2_triggers
 
 # Cache invalidation strategy per tab
 cache_invalidation_strategy:
