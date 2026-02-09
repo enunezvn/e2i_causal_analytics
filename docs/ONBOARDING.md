@@ -73,7 +73,7 @@ The system uses 21 AI agents organized in 6 tiers to perform causal analysis, pr
 | Service | Variable | How to Get |
 |---------|----------|------------|
 | **Anthropic** | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
-| **Supabase** | `SUPABASE_URL`, `SUPABASE_KEY` | Project settings at [supabase.com](https://supabase.com) |
+| **Supabase** | `SUPABASE_URL`, `SUPABASE_KEY` | Self-hosted Supabase — see `config/supabase_self_hosted.example.env` |
 | **OpenAI** (optional) | `OPENAI_API_KEY` | For RAGAS evaluation and embeddings |
 
 ---
@@ -98,7 +98,7 @@ Edit `.env` with your credentials. Required variables:
 ```env
 # API Keys
 ANTHROPIC_API_KEY=sk-ant-...
-SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_URL=http://172.17.0.1:54321
 SUPABASE_KEY=eyJhbG...
 SUPABASE_SERVICE_KEY=eyJhbG...
 
@@ -108,7 +108,7 @@ FALKORDB_PASSWORD=your-falkordb-password
 GRAFANA_ADMIN_PASSWORD=your-grafana-password
 
 # Database
-SUPABASE_DB_URL=postgresql://postgres:password@db.your-project.supabase.co:5432/postgres
+SUPABASE_DB_URL=postgresql://postgres:PASSWORD@127.0.0.1:5432/postgres
 ```
 
 > **Note**: `docker/.env` is a symlink to `../.env` so Docker Compose picks up these values automatically.

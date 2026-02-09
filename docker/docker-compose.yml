@@ -8,7 +8,7 @@
 #   With debug:  docker compose -f docker/docker-compose.yml --profile debug up -d
 #
 # External Dependencies:
-#   - Supabase Cloud (PostgreSQL + pgvector)
+#   - Self-hosted Supabase (PostgreSQL + pgvector)
 #   - Anthropic API (Claude for agents)
 # =============================================================================
 
