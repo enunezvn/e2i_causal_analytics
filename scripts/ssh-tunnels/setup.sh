@@ -19,6 +19,11 @@
 #   localhost:3101  → Loki
 #   localhost:9093  → Alertmanager
 #   localhost:6567  → Feast
+#   localhost:5678  → API Debugpy (VS Code remote debug)
+#   localhost:5555  → Flower (Celery monitoring)
+#   localhost:8081  → Redis Commander (Redis GUI)
+#   localhost:5433  → Supabase PostgreSQL
+#   localhost:54321 → Supabase Kong API
 #
 # Prerequisites:
 #   - autossh installed (brew install autossh / apt install autossh)
@@ -50,6 +55,11 @@ declare -A TUNNELS=(
   ["e2i-loki"]="3101:localhost:3101"
   ["e2i-alertmanager"]="9093:localhost:9093"
   ["e2i-feast"]="6567:localhost:6567"
+  ["e2i-debugpy"]="5678:localhost:5678"
+  ["e2i-flower"]="5555:localhost:5555"
+  ["e2i-redis-commander"]="8081:localhost:8081"
+  ["e2i-supabase-db"]="5433:localhost:5433"
+  ["e2i-supabase-api"]="54321:localhost:54321"
 )
 
 check_deps() {
@@ -129,6 +139,11 @@ UNIT
   echo "  Loki:             http://localhost:3101"
   echo "  Alertmanager:     http://localhost:9093"
   echo "  Feast:            http://localhost:6567"
+  echo "  Debugpy:          localhost:5678"
+  echo "  Flower:           http://localhost:5555"
+  echo "  Redis Commander:  http://localhost:8081"
+  echo "  Supabase DB:      localhost:5433"
+  echo "  Supabase API:     http://localhost:54321"
   echo ""
   echo "Management:"
   echo "  Status:  systemctl --user status e2i-*-tunnel"

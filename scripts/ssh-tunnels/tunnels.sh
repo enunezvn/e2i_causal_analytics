@@ -26,6 +26,11 @@ start_tunnels() {
   echo "  Loki:             http://localhost:3101"
   echo "  Alertmanager:     http://localhost:9093"
   echo "  Feast:            http://localhost:6567"
+  echo "  Debugpy:          localhost:5678"
+  echo "  Flower:           http://localhost:5555"
+  echo "  Redis Commander:  http://localhost:8081"
+  echo "  Supabase DB:      localhost:5433"
+  echo "  Supabase API:     http://localhost:54321"
   echo ""
   echo "Press Ctrl+C to stop."
   echo ""
@@ -46,6 +51,11 @@ start_tunnels() {
     -L 3101:localhost:3101 \
     -L 9093:localhost:9093 \
     -L 6567:localhost:6567 \
+    -L 5678:localhost:5678 \
+    -L 5555:localhost:5555 \
+    -L 8081:localhost:8081 \
+    -L 5433:localhost:5433 \
+    -L 54321:localhost:54321 \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \

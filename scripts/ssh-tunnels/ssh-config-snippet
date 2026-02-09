@@ -20,6 +20,11 @@ Host e2i-tunnels
     LocalForward 3101 localhost:3101
     LocalForward 9093 localhost:9093
     LocalForward 6567 localhost:6567
+    LocalForward 5678 localhost:5678
+    LocalForward 5555 localhost:5555
+    LocalForward 8081 localhost:8081
+    LocalForward 5433 localhost:5433
+    LocalForward 54321 localhost:54321
     ServerAliveInterval 30
     ServerAliveCountMax 3
     ExitOnForwardFailure yes

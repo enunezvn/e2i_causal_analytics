@@ -164,7 +164,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "6382:6379"  # 6382 external to avoid conflict with host Redis on 6379
+      - "127.0.0.1:6382:6379"  # 6382 external to avoid conflict with host Redis on 6379
     volumes:
       - redis_data:/data
     command: >
@@ -205,7 +205,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "6381:6379"  # 6381 external to avoid conflict with Redis
+      - "127.0.0.1:6381:6379"  # 6381 external to avoid conflict with Redis
     volumes:
       - falkordb_data:/data
     environment:
