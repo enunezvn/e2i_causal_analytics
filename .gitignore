@@ -159,3 +159,18 @@ scripts/tier0_output_cache/
 product-development/
 DEPLOYMENT_ADMIN.md
 INFRASTRUCTURE.md
+
+# Auto-generated API types and schema
+docs/api/openapi.json
+frontend/src/types/generated/
+
+# Test/script output files
+scripts/*_results.json
+
+# Standalone HTML dashboard exports
+frontend/E2I_Causal_Dashboard_*.html
+frontend/graph_viewer.html
+docker/e2i_docker_volume_strategy.html
+
+# Stale deploy artifacts (BentoML now runs in Docker)
+deploy/
