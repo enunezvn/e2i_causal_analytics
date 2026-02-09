@@ -83,7 +83,7 @@ C4Container
         Container(nginx_host, "Host Nginx", "Nginx 1.x", "SSL termination, reverse proxy to all containers")
 
         Container(frontend, "Frontend", "React 18 / TypeScript / Vite", "SPA with CopilotKit chat, 20+ pages, TanStack Query")
-        Container(api, "API Server", "FastAPI / Python 3.12", "80+ REST endpoints, 6 middleware layers, WebSocket support")
+        Container(api, "API Server", "FastAPI / Python 3.12", "150+ REST endpoints, 6 middleware layers, WebSocket support")
 
         Container(worker_light, "Worker Light (x2)", "Celery / Python 3.12", "Cache, notifications, API tasks")
         Container(worker_medium, "Worker Medium", "Celery / Python 3.12", "Analytics, reports, drift monitoring")

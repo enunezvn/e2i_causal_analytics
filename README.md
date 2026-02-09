@@ -28,7 +28,7 @@ E2I Causal Analytics is a sophisticated 21-agent, 6-tier agentic system designed
 - **Natural Language Interface** with typo-tolerant query processing
 - **120+ Database Tables** across core, ML, memory, chat, audit, and RAG schemas
 - **Hybrid RAG System** with vector + full-text + graph search
-- **Full-Stack Dashboard** — React 18 + TypeScript + Vite with 27 pages
+- **Full-Stack Dashboard** — React 18 + TypeScript + Vite with 21 pages
 - **Production Observability** — Prometheus, Grafana, Loki, Alertmanager
 
 ### Analyzed Brands
@@ -69,7 +69,7 @@ e2i_causal_analytics/
 ├── config/                    # YAML configurations (48 files)
 │   ├── agent_config.yaml      # Agent definitions
 │   ├── domain_vocabulary_v3.1.0.yaml
-│   ├── kpi_definitions.yaml   # 46+ KPIs
+│   ├── kpi_definitions.yaml   # 50 KPIs
 │   └── ...
 │
 ├── database/                  # SQL schemas (120+ tables)
@@ -83,7 +83,7 @@ e2i_causal_analytics/
 │   └── migrations/            # Feature store, feedback loop, validation schemas
 │
 ├── data/
-│   ├── synthetic/             # ~200 patients, ~50 HCPs (18 JSON files)
+│   ├── synthetic/             # ~200 patients, ~50 HCPs (20 JSON files)
 │   └── training/              # fastText corpus
 │
 ├── src/                       # Main source code
@@ -108,7 +108,7 @@ e2i_causal_analytics/
 │
 ├── tests/                     # 500+ test files (unit, integration, tier0-5)
 ├── scripts/                   # Utility scripts (deploy, health check, backups, migrations)
-├── frontend/                  # React 18 + TypeScript + Vite dashboard (27 pages)
+├── frontend/                  # React 18 + TypeScript + Vite dashboard (21 pages)
 ├── docs/                      # Comprehensive documentation
 │   ├── ARCHITECTURE.md        # C4-model architecture documentation
 │   ├── ONBOARDING.md          # Developer onboarding guide
@@ -121,7 +121,7 @@ e2i_causal_analytics/
 └── docker/                    # Container configurations
 ```
 
-## What's New in v4.2.0
+## What's New in v4.2.1
 
 ### Lightweight Feature Store 🏪
 Integrated feature store leveraging existing infrastructure:

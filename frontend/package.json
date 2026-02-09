@@ -15,7 +15,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "generate:types": "openapi-typescript http://localhost:8000/api/openapi.json -o src/types/generated/api.ts",
-    "generate:types:prod": "openapi-typescript http://138.197.4.36:8000/api/openapi.json -o src/types/generated/api.ts"
+    "generate:types:prod": "openapi-typescript https://eznomics.site/api/openapi.json -o src/types/generated/api.ts"
   },
   "dependencies": {
     "@copilotkit/react-core": "1.51.2",
