@@ -88,22 +88,23 @@ class TestIsPublicPath:
         assert _is_public_path("POST", "/api/auth/refresh") is True
 
     # =========================================================================
-    # CopilotKit endpoints — only status/info are public
+    # CopilotKit endpoints — all public (SDK needs POST for agent discovery)
     # =========================================================================
 
-    def test_copilotkit_root_requires_auth(self):
-        """Test /api/copilotkit (root) requires auth."""
-        assert _is_public_path("POST", "/api/copilotkit") is False
-        assert _is_public_path("GET", "/api/copilotkit") is False
+    def test_copilotkit_root_is_public(self):
+        """Test /api/copilotkit (root) is public (all methods)."""
+        assert _is_public_path("POST", "/api/copilotkit") is True
+        assert _is_public_path("GET", "/api/copilotkit") is True
 
     def test_copilotkit_status_is_public(self):
-        """Test /api/copilotkit/status is public (GET only)."""
+        """Test /api/copilotkit/status is public (all methods)."""
         assert _is_public_path("GET", "/api/copilotkit/status") is True
-        assert _is_public_path("POST", "/api/copilotkit/status") is False
+        assert _is_public_path("POST", "/api/copilotkit/status") is True
 
     def test_copilotkit_info_is_public(self):
-        """Test /api/copilotkit/info is public (GET only)."""
+        """Test /api/copilotkit/info is public (all methods)."""
         assert _is_public_path("GET", "/api/copilotkit/info") is True
+        assert _is_public_path("POST", "/api/copilotkit/info") is True
 
     # =========================================================================
     # Protected paths
