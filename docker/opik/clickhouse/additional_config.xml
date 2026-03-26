@@ -33,8 +33,8 @@
     <!-- ================================================================
          Memory & merge tuning (8 vCPU / 2 GB container)
          ================================================================ -->
-    <!-- Hard cap: 1.5 GiB — leaves 500 MB headroom in 2 GiB container -->
-    <max_server_memory_usage>1610612736</max_server_memory_usage>
+    <!-- Hard cap: 768 MiB — leaves 256 MB headroom in 1 GiB container -->
+    <max_server_memory_usage>805306368</max_server_memory_usage>
 
     <!-- Limit concurrent background merges to reduce I/O pressure (default: 16) -->
     <background_pool_size>4</background_pool_size>
@@ -64,20 +64,6 @@
         <ttl>event_date + INTERVAL 3 DAY</ttl>
     </query_log>
 
-    <metric_log>
-        <database>system</database>
-        <table>metric_log</table>
-        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
-        <ttl>event_date + INTERVAL 3 DAY</ttl>
-    </metric_log>
-
-    <asynchronous_metric_log>
-        <database>system</database>
-        <table>asynchronous_metric_log</table>
-        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
-        <ttl>event_date + INTERVAL 3 DAY</ttl>
-    </asynchronous_metric_log>
-
     <part_log>
         <database>system</database>
         <table>part_log</table>
@@ -101,4 +87,6 @@
     <opentelemetry_span_log remove="true" />
     <query_metric_log remove="true" />
     <latency_log remove="true" />
+    <metric_log remove="true" />
+    <asynchronous_metric_log remove="true" />
 </clickhouse>

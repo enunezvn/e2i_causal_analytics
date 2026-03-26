@@ -757,6 +757,12 @@ async def health_check() -> Dict[str, Any]:
     return response
 
 
+@app.get("/api/health", tags=["Health"], include_in_schema=False)
+async def api_health_check() -> Dict[str, Any]:
+    """Health check alias accessible via nginx /api/ proxy."""
+    return await health_check()
+
+
 @app.get("/healthz", tags=["Health"])
 async def healthz() -> Dict[str, str]:
     """Kubernetes-style health check (alias for /health)."""

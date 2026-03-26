@@ -207,7 +207,7 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 2G
+          memory: 1G
     labels:
       - "e2i.service=opik"
       - "e2i.component=clickhouse"
@@ -332,7 +332,7 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 2G
+          memory: 1G
     labels:
       - "e2i.service=opik"
       - "e2i.component=backend"

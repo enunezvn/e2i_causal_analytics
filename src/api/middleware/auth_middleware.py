@@ -50,6 +50,7 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("*", "/healthz"),
     ("*", "/ready"),
     ("*", "/health/bentoml"),
+    ("*", "/api/health"),
     # Prometheus metrics - must be public for scraping
     ("GET", "/metrics"),
     ("GET", "/metrics/health"),
@@ -67,8 +68,12 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/api/kpis/workstreams"),
     ("GET", "/api/kpis/health"),
     # Read-only Causal endpoints - public
-    ("GET", "/causal/estimators"),
-    ("GET", "/causal/health"),
+    ("GET", "/api/causal/estimators"),
+    ("GET", "/api/causal/health"),
+    # Resource optimization health - public
+    ("GET", "/api/resources/health"),
+    # Segment analysis health - public
+    ("GET", "/api/segments/health"),
     # Graph endpoints - public for demo visualization
     ("GET", "/api/graph/health"),
     ("GET", "/api/graph/nodes"),

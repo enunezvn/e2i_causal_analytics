@@ -94,6 +94,7 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
+      - /tmp:size=256M,mode=1770
       - /app/tmp:size=512M,mode=1770
     environment:
       - ENVIRONMENT=development
@@ -142,6 +143,14 @@ services:
       --queues=analytics,reports,aggregations
       --pool=solo
       --hostname=worker_medium@%h
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
     healthcheck:
       test: ["CMD", "echo", "ok"]
       interval: 120s
@@ -248,6 +257,14 @@ services:
     environment:
       - MLFLOW_TRACKING_URI=sqlite:///mlflow/db/mlflow.db
     # Port 5000 already exposed by base compose (127.0.0.1:5000:5000)
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   bentoml:
     container_name: e2i_bentoml_dev
@@ -284,6 +301,14 @@ services:
 
   falkordb:
     container_name: e2i_falkordb_dev
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   # ---------------------------------------------------------------------------
   # FalkorDB Init Seeder - Seeds graphs on first startup (one-shot)
