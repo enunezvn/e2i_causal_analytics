@@ -265,7 +265,7 @@ services:
       resources:
         limits:
           cpus: '1'
-          memory: 2G
+          memory: 512M
 
   # ===========================================================================
   # Infrastructure - No changes needed (Redis, FalkorDB)

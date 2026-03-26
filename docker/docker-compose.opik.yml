@@ -206,7 +206,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '3'
+          cpus: '2'
           memory: 2G
     labels:
       - "e2i.service=opik"

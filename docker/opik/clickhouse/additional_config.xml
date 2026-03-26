@@ -29,4 +29,76 @@
         </shard>
         </cluster>
     </remote_servers>
+
+    <!-- ================================================================
+         Memory & merge tuning (8 vCPU / 2 GB container)
+         ================================================================ -->
+    <!-- Hard cap: 1.5 GiB — leaves 500 MB headroom in 2 GiB container -->
+    <max_server_memory_usage>1610612736</max_server_memory_usage>
+
+    <!-- Limit concurrent background merges to reduce I/O pressure (default: 16) -->
+    <background_pool_size>4</background_pool_size>
+    <background_schedule_pool_size>4</background_schedule_pool_size>
+    <!-- Concurrency ratio: effective pool = pool_size * ratio (4*8=32, satisfies all defaults) -->
+    <background_merges_mutations_concurrency_ratio>8</background_merges_mutations_concurrency_ratio>
+
+    <!-- Disable memory profiler (was filling trace_log with 19 GiB) -->
+    <total_memory_profiler_step>0</total_memory_profiler_step>
+
+    <!-- ================================================================
+         Logger: warning-only, small rotated files
+         ================================================================ -->
+    <logger>
+        <level>warning</level>
+        <size>50M</size>
+        <count>3</count>
+    </logger>
+
+    <!-- ================================================================
+         System log tuning: disable verbose logs, TTL on the rest
+         ================================================================ -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </query_log>
+
+    <metric_log>
+        <database>system</database>
+        <table>metric_log</table>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </metric_log>
+
+    <asynchronous_metric_log>
+        <database>system</database>
+        <table>asynchronous_metric_log</table>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </asynchronous_metric_log>
+
+    <part_log>
+        <database>system</database>
+        <table>part_log</table>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </part_log>
+
+    <text_log>
+        <database>system</database>
+        <table>text_log</table>
+        <level>warning</level>
+        <flush_interval_milliseconds>15000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </text_log>
+
+    <!-- Disable verbose diagnostic logs (not needed for Opik) -->
+    <trace_log remove="true" />
+    <processors_profile_log remove="true" />
+    <query_thread_log remove="true" />
+    <query_views_log remove="true" />
+    <opentelemetry_span_log remove="true" />
+    <query_metric_log remove="true" />
+    <latency_log remove="true" />
 </clickhouse>
