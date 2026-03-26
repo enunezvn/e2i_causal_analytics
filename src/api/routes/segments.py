@@ -381,35 +381,6 @@ async def run_segment_analysis(
 
 
 @router.get(
-    "/{analysis_id}",
-    response_model=SegmentAnalysisResponse,
-    summary="Get segment analysis results",
-    operation_id="get_segment_analysis",
-    description="Retrieve results of a segment analysis by ID.",
-)
-async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
-    """
-    Get segment analysis results by ID.
-
-    Args:
-        analysis_id: Unique analysis identifier
-
-    Returns:
-        Segment analysis results
-
-    Raises:
-        HTTPException: If analysis not found
-    """
-    if analysis_id not in _analyses_store:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Segment analysis {analysis_id} not found",
-        )
-
-    return _analyses_store[analysis_id]
-
-
-@router.get(
     "/policies",
     response_model=PolicyListResponse,
     summary="List targeting recommendations",
@@ -523,6 +494,35 @@ async def get_segment_health() -> SegmentHealthResponse:
         last_analysis=last_analysis,
         analyses_24h=analyses_24h,
     )
+
+
+@router.get(
+    "/{analysis_id}",
+    response_model=SegmentAnalysisResponse,
+    summary="Get segment analysis results",
+    operation_id="get_segment_analysis",
+    description="Retrieve results of a segment analysis by ID.",
+)
+async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
+    """
+    Get segment analysis results by ID.
+
+    Args:
+        analysis_id: Unique analysis identifier
+
+    Returns:
+        Segment analysis results
+
+    Raises:
+        HTTPException: If analysis not found
+    """
+    if analysis_id not in _analyses_store:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Segment analysis {analysis_id} not found",
+        )
+
+    return _analyses_store[analysis_id]
 
 
 # =============================================================================

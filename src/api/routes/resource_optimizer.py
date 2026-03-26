@@ -367,35 +367,6 @@ async def run_optimization(
 
 
 @router.get(
-    "/{optimization_id}",
-    response_model=OptimizationResponse,
-    summary="Get optimization results",
-    operation_id="get_optimization",
-    description="Retrieve results of an optimization by ID.",
-)
-async def get_optimization(optimization_id: str) -> OptimizationResponse:
-    """
-    Get optimization results by ID.
-
-    Args:
-        optimization_id: Unique optimization identifier
-
-    Returns:
-        Optimization results
-
-    Raises:
-        HTTPException: If optimization not found
-    """
-    if optimization_id not in _optimizations_store:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Optimization {optimization_id} not found",
-        )
-
-    return _optimizations_store[optimization_id]
-
-
-@router.get(
     "/scenarios",
     response_model=ScenarioListResponse,
     summary="List scenario analyses",
@@ -491,6 +462,35 @@ async def get_resource_health() -> ResourceHealthResponse:
         last_optimization=last_optimization,
         optimizations_24h=optimizations_24h,
     )
+
+
+@router.get(
+    "/{optimization_id}",
+    response_model=OptimizationResponse,
+    summary="Get optimization results",
+    operation_id="get_optimization",
+    description="Retrieve results of an optimization by ID.",
+)
+async def get_optimization(optimization_id: str) -> OptimizationResponse:
+    """
+    Get optimization results by ID.
+
+    Args:
+        optimization_id: Unique optimization identifier
+
+    Returns:
+        Optimization results
+
+    Raises:
+        HTTPException: If optimization not found
+    """
+    if optimization_id not in _optimizations_store:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Optimization {optimization_id} not found",
+        )
+
+    return _optimizations_store[optimization_id]
 
 
 # =============================================================================

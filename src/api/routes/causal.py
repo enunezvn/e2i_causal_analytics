@@ -1189,6 +1189,13 @@ async def causal_health_check() -> CausalHealthResponse:
     except ImportError:
         pass
 
+    try:
+        from src.causal_engine.pipeline import PipelineOrchestrator  # noqa: F401
+
+        pipeline_ready = True
+    except ImportError:
+        pass
+
     # Determine overall status
     all_libs = all(libraries_available.values())
     status = (

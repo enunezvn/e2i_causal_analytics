@@ -74,6 +74,7 @@ distro==1.9.0
 docker==7.1.0
 docstring_parser==0.17.0
 dowhy==0.14
+causalml==0.15.5
 dspy==3.0.4
 dspy-ai==3.0.4
 econml==0.16.0
