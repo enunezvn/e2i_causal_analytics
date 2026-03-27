@@ -601,3 +601,103 @@ class TestIntegration:
 
         result = validator.validate_state(output, MixedContract)
         assert result.valid is True
+
+
+@pytest.mark.unit
+class TestPEP604UnionTypes:
+    """Test PEP 604 union type syntax (X | Y) validation.
+
+    Python 3.10+ supports 'X | Y' as an alternative to Union[X, Y].
+    This produces types.UnionType rather than typing.Union.
+    """
+
+    @pytest.fixture
+    def validator(self):
+        return ContractValidator()
+
+    def test_pep604_optional_float_with_value(self, validator):
+        """Test float | None field with a float value."""
+
+        class PEP604Contract(TypedDict):
+            value: float | None
+
+        result = validator.validate_state({"value": 0.5}, PEP604Contract)
+        assert result.valid is True
+        assert len(result.type_errors) == 0
+
+    def test_pep604_optional_float_with_none(self, validator):
+        """Test float | None field with None value."""
+
+        class PEP604Contract(TypedDict):
+            value: float | None
+
+        result = validator.validate_state({"value": None}, PEP604Contract)
+        assert result.valid is True
+        assert len(result.type_errors) == 0
+
+    def test_pep604_optional_float_with_int(self, validator):
+        """Test float | None field with int value (int->float coercion)."""
+
+        class PEP604Contract(TypedDict):
+            value: float | None
+
+        result = validator.validate_state({"value": 42}, PEP604Contract)
+        assert result.valid is True
+        assert len(result.type_errors) == 0
+
+    def test_pep604_optional_float_type_mismatch(self, validator):
+        """Test float | None field with wrong type."""
+
+        class PEP604Contract(TypedDict):
+            value: float | None
+
+        result = validator.validate_state({"value": "not_a_float"}, PEP604Contract)
+        assert result.valid is False
+        assert len(result.type_errors) == 1
+
+    def test_pep604_union_str_int(self, validator):
+        """Test str | int union type."""
+
+        class PEP604UnionContract(TypedDict):
+            value: str | int
+
+        result1 = validator.validate_state({"value": "hello"}, PEP604UnionContract)
+        result2 = validator.validate_state({"value": 42}, PEP604UnionContract)
+
+        assert result1.valid is True
+        assert result2.valid is True
+
+    def test_pep604_not_required_optional(self, validator):
+        """Test NotRequired[float | None] -- the exact pattern from ResourceOptimizerState."""
+
+        class NotRequiredPEP604Contract(TypedDict):
+            required_field: str
+            optional_value: NotRequired[float | None]
+
+        # Present with float value
+        result1 = validator.validate_state(
+            {"required_field": "ok", "optional_value": 3.14},
+            NotRequiredPEP604Contract,
+        )
+        assert result1.valid is True
+
+        # Missing entirely
+        result2 = validator.validate_state(
+            {"required_field": "ok"},
+            NotRequiredPEP604Contract,
+        )
+        assert result2.valid is True
+
+        # Present with None
+        result3 = validator.validate_state(
+            {"required_field": "ok", "optional_value": None},
+            NotRequiredPEP604Contract,
+        )
+        assert result3.valid is True
+
+    def test_pep604_is_optional_type(self, validator):
+        """Test that _is_optional_type recognizes PEP 604 optional types."""
+        assert validator._is_optional_type(float | None) is True
+        assert validator._is_optional_type(str | None) is True
+        assert validator._is_optional_type(str | int) is False
+        assert validator._is_optional_type(float) is False

@@ -156,19 +156,50 @@ async def _get_semantic_memory():
 
 def _convert_to_graph_node(data: Dict[str, Any]) -> GraphNode:
     """Convert raw node data to GraphNode model."""
-    # Get type with fallback for unknown types
-    type_str = data.get("type", data.get("entity_type", "Agent"))
+    # Try e2i_entity_type first (set by causal agents), then type/entity_type
+    type_str = (
+        data.get("e2i_entity_type")
+        or data.get("type")
+        or data.get("entity_type")
+        or "Agent"
+    )
     try:
         entity_type = EntityType(type_str)
     except ValueError:
-        # Unknown type - use Agent as fallback but preserve in properties
-        entity_type = EntityType.AGENT
+        # Map common causal-engine types to the closest enum member
+        _TYPE_MAP = {
+            "SegmentEffect": EntityType.PREDICTION,
+            "CausalEffect": EntityType.CAUSAL_PATH,
+            "TreatmentEffect": EntityType.TREATMENT,
+            "ExperimentResult": EntityType.EXPERIMENT,
+        }
+        entity_type = _TYPE_MAP.get(type_str, EntityType.AGENT)
         data = {**data, "original_type": type_str}
+
+    # Derive a display name when name/label are missing
+    name = data.get("name") or data.get("label") or ""
+    if not name:
+        # Try common property fields that make good display names
+        name = (
+            data.get("segment_id")
+            or data.get("entity_name")
+            or data.get("title")
+            or ""
+        )
+    if not name:
+        # Fall back to a human-readable version of the node ID
+        node_id = data.get("id", data.get("node_id", ""))
+        if ":" in node_id:
+            # e.g. "segment_effect:hcp_specialty_Oncology:..." → "hcp_specialty_Oncology"
+            parts = node_id.split(":")
+            name = parts[1] if len(parts) > 1 else parts[0]
+        else:
+            name = node_id
 
     return GraphNode(
         id=data.get("id", data.get("node_id", "")),
         type=entity_type,
-        name=data.get("name", data.get("label", "")),
+        name=name,
         properties={
             k: v
             for k, v in data.items()
@@ -178,6 +209,7 @@ def _convert_to_graph_node(data: Dict[str, Any]) -> GraphNode:
                 "node_id",
                 "type",
                 "entity_type",
+                "e2i_entity_type",
                 "name",
                 "label",
                 "created_at",

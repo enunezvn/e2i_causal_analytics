@@ -198,6 +198,10 @@ RELATIONSHIPS = [
     {"from_type": "Agent", "from_name": "gap_analyzer", "to_type": "KPI", "to_name": "HCP_Reach", "rel_type": "ANALYZES", "weight": 0.85},
     {"from_type": "Agent", "from_name": "prediction_synthesizer", "to_type": "KPI", "to_name": "NRx", "rel_type": "PREDICTS", "weight": 0.92},
     {"from_type": "Agent", "from_name": "prediction_synthesizer", "to_type": "KPI", "to_name": "Patient_Retention", "rel_type": "PREDICTS", "weight": 0.87},
+    {"from_type": "Agent", "from_name": "experiment_designer", "to_type": "KPI", "to_name": "Conversion_Rate", "rel_type": "ANALYZES", "weight": 0.82},
+    {"from_type": "Agent", "from_name": "experiment_designer", "to_type": "KPI", "to_name": "NRx", "rel_type": "ANALYZES", "weight": 0.78},
+    {"from_type": "Agent", "from_name": "explainer", "to_type": "KPI", "to_name": "TRx", "rel_type": "EXPLAINS", "weight": 0.9},
+    {"from_type": "Agent", "from_name": "explainer", "to_type": "KPI", "to_name": "Market_Share", "rel_type": "EXPLAINS", "weight": 0.88},
 
     # === Agent -> CausalPath (DISCOVERED) ===
     {"from_type": "Agent", "from_name": "causal_impact", "to_type": "CausalPath", "to_name": "HCP_Engagement_to_NRx", "rel_type": "DISCOVERED", "weight": 1.0},

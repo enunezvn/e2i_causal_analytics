@@ -31,7 +31,7 @@
     </remote_servers>
 
     <!-- ================================================================
-         Memory & merge tuning (8 vCPU / 2 GB container)
+         Memory & merge tuning (8 vCPU / 1 GiB container)
          ================================================================ -->
     <!-- Hard cap: 768 MiB — leaves 256 MB headroom in 1 GiB container -->
     <max_server_memory_usage>805306368</max_server_memory_usage>
@@ -39,8 +39,8 @@
     <!-- Limit concurrent background merges to reduce I/O pressure (default: 16) -->
     <background_pool_size>4</background_pool_size>
     <background_schedule_pool_size>4</background_schedule_pool_size>
-    <!-- Concurrency ratio: effective pool = pool_size * ratio (4*8=32, satisfies all defaults) -->
-    <background_merges_mutations_concurrency_ratio>8</background_merges_mutations_concurrency_ratio>
+    <!-- Concurrency ratio: effective pool = pool_size * ratio (4*7=28, satisfies >=25 constraint) -->
+    <background_merges_mutations_concurrency_ratio>7</background_merges_mutations_concurrency_ratio>
 
     <!-- Disable memory profiler (was filling trace_log with 19 GiB) -->
     <total_memory_profiler_step>0</total_memory_profiler_step>

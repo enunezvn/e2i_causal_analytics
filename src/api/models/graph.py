@@ -66,10 +66,19 @@ class RelationshipType(str, Enum):
     RELATES_TO = "RELATES_TO"
     # Additional E2I relationship types
     RECEIVED = "RECEIVED"
+    RECEIVES = "RECEIVES"
     LOCATED_IN = "LOCATED_IN"
     PRACTICES_IN = "PRACTICES_IN"
     MEASURED_IN = "MEASURED_IN"
     LEADS_TO = "LEADS_TO"
+    # Seed data relationship types
+    TRACKS = "TRACKS"
+    AFFECTS = "AFFECTS"
+    EXPLAINS = "EXPLAINS"
+    ANALYZES = "ANALYZES"
+    PREDICTS = "PREDICTS"
+    MONITORS = "MONITORS"
+    USES = "USES"
 
 
 class SortOrder(str, Enum):

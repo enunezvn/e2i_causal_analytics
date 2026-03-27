@@ -5,6 +5,7 @@ Validates agent outputs against TypedDict state contracts.
 
 from __future__ import annotations
 
+import types
 import typing
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, cast, get_args, get_origin, get_type_hints
@@ -205,8 +206,8 @@ class ContractValidator:
         """
         origin = get_origin(field_type)
 
-        # Check for Union types (Optional[X] is Union[X, None])
-        if origin is typing.Union:
+        # Check for Union types (Optional[X] is Union[X, None], X | None is types.UnionType)
+        if origin is typing.Union or origin is types.UnionType:
             args = get_args(field_type)
             # Optional[X] is Union[X, None], so check if None is in the args
             return type(None) in args
@@ -229,9 +230,9 @@ class ContractValidator:
 
         # Handle None values
         if value is None:
-            # Check if Optional
+            # Check if Optional (typing.Union or PEP 604 types.UnionType)
             origin = get_origin(expected_type)
-            if origin is typing.Union:
+            if origin is typing.Union or origin is types.UnionType:
                 args = get_args(expected_type)
                 if type(None) in args:
                     return None  # None is allowed for Optional types
@@ -252,8 +253,8 @@ class ContractValidator:
         # Get the origin of generic types
         origin = get_origin(actual_type)
 
-        # Handle Union types (including Optional)
-        if origin is typing.Union:
+        # Handle Union types (including Optional and PEP 604 X | Y syntax)
+        if origin is typing.Union or origin is types.UnionType:
             args = get_args(actual_type)
             for arg in args:
                 if arg is type(None) and value is None:
@@ -356,6 +357,9 @@ class ContractValidator:
                     return isinstance(value, set)
                 if origin is tuple:
                     return isinstance(value, tuple)
+                if origin is types.UnionType:
+                    # PEP 604 union types support isinstance() directly
+                    return isinstance(value, expected_type)
                 # For other origins, check against the origin
                 return isinstance(value, origin)
 

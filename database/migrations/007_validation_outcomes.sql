@@ -151,7 +151,7 @@ RETURNS TABLE (
     effect_size DECIMAL(10,6),
     failure_patterns JSONB,
     similarity_score INTEGER,
-    timestamp TIMESTAMPTZ
+    "timestamp" TIMESTAMPTZ
 ) AS $$
 BEGIN
     RETURN QUERY

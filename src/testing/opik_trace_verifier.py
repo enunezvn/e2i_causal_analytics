@@ -52,7 +52,7 @@ class OpikTraceVerifier:
 
     def __init__(
         self,
-        opik_base_url: str = "http://localhost:5173",
+        opik_base_url: str = "http://localhost:8084",
         timeout: float = 10.0,
     ):
         """Initialize the verifier.
@@ -311,7 +311,7 @@ class OpikTraceVerifier:
 
 
 # Convenience function for quick checks
-async def verify_opik_available(base_url: str = "http://localhost:5173") -> bool:
+async def verify_opik_available(base_url: str = "http://localhost:8084") -> bool:
     """Quick check if Opik is available.
 
     Args:

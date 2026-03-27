@@ -106,10 +106,18 @@ const RELATIONSHIP_TYPE_COLORS: Record<string, string> = {
   MEMBER_OF: '#14b8a6', // teal-500
   RELATES_TO: '#9ca3af', // gray-400 (default)
   RECEIVED: '#22c55e', // green-500
+  RECEIVES: '#22c55e', // green-500
   LOCATED_IN: '#8b5cf6', // violet-500
   PRACTICES_IN: '#06b6d4', // cyan-500
   MEASURED_IN: '#a855f7', // purple-500
   LEADS_TO: '#d946ef', // fuchsia-500
+  TRACKS: '#0ea5e9', // sky-500
+  AFFECTS: '#f97316', // orange-500
+  EXPLAINS: '#6366f1', // indigo-500
+  ANALYZES: '#14b8a6', // teal-500
+  PREDICTS: '#a855f7', // purple-500
+  MONITORS: '#64748b', // slate-500
+  USES: '#84cc16', // lime-500
 };
 
 /**

@@ -9,3 +9,5 @@
 ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'composition_completed';
 ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'optimization_completed';
 ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'explanation_generated';
+
+ALTER TYPE procedure_type ADD VALUE IF NOT EXISTS 'tool_composition';

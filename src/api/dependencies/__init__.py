@@ -43,6 +43,7 @@ from src.api.dependencies.redis_client import (
     init_redis,
     redis_health_check,
 )
+from src.api.dependencies.rag import get_rag_dependencies
 from src.api.dependencies.supabase_client import (
     close_supabase,
     get_supabase,
@@ -85,4 +86,6 @@ __all__ = [
     "get_supabase",
     "close_supabase",
     "supabase_health_check",
+    # RAG
+    "get_rag_dependencies",
 ]

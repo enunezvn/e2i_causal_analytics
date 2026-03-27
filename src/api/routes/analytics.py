@@ -422,9 +422,9 @@ async def get_analytics_dashboard(
     # Latency breakdown (estimated from agent tiers)
     tier_latencies: Dict[int, List[float]] = {}
     for entry in entries:
-        tier = entry.get("agent_tier", 0)
-        duration = entry.get("duration_ms", 0)
-        if duration > 0:
+        tier = entry.get("agent_tier") or 0
+        duration = entry.get("duration_ms")
+        if duration is not None and duration > 0:
             if tier not in tier_latencies:
                 tier_latencies[tier] = []
             tier_latencies[tier].append(duration)

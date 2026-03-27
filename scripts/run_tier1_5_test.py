@@ -53,6 +53,11 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Suppress warnings and configure services for host-based test execution
+os.environ.setdefault("DISABLE_PANDERA_IMPORT_WARNING", "True")
+os.environ.setdefault("E2I_TESTING_MODE", "true")
+os.environ.setdefault("OPIK_URL_OVERRIDE", "http://localhost:8084")
+
 from dotenv import load_dotenv
 
 # Load environment variables
