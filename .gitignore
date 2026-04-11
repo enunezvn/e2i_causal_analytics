@@ -84,6 +84,7 @@ mlartifacts/
 *.pkl
 *.joblib
 data/cache/
+data/rwd/
 /models/
 !src/api/models/
 
