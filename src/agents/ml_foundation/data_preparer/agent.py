@@ -224,6 +224,13 @@ class DataPreparerAgent:
                 "leakage_findings": final_state.get("leakage_findings", []),
                 "leakage_severity": final_state.get("leakage_severity", "none"),
                 "leaked_features": final_state.get("leaked_features", []),
+                # Leakage remediation results
+                "leakage_remediation_status": final_state.get("leakage_remediation_status"),
+                "leakage_remediated_features": final_state.get("leakage_remediated_features", []),
+                "leakage_dropped_features": final_state.get("leakage_dropped_features", []),
+                "leakage_added_features": final_state.get("leakage_added_features", []),
+                "leakage_remediation_reasoning": final_state.get("leakage_remediation_reasoning"),
+                "leakage_remediation_viable": final_state.get("leakage_remediation_viable"),
             }
 
             # Log execution time

@@ -3168,6 +3168,30 @@ async def run_pipeline(
             state["leaked_features"] = result.get("leaked_features", [])
             state["leakage_findings"] = result.get("leakage_findings", [])
 
+            # Propagate leakage remediation state (from LLM-assisted remediation node)
+            if result.get("leakage_remediation_status"):
+                state["leakage_remediation_status"] = result["leakage_remediation_status"]
+                state["leakage_remediated_features"] = result.get("leakage_remediated_features", [])
+                state["leakage_dropped_features"] = result.get("leakage_dropped_features", [])
+                state["leakage_added_features"] = result.get("leakage_added_features", [])
+                state["leakage_remediation_reasoning"] = result.get("leakage_remediation_reasoning")
+                state["leakage_remediation_viable"] = result.get("leakage_remediation_viable", True)
+
+                _rem_status = result["leakage_remediation_status"]
+                if _rem_status == "applied" and result.get("leakage_remediated_features"):
+                    print(f"\n  🔧 Leakage remediation: {_rem_status}")
+                    print(f"     Dropped: {result.get('leakage_dropped_features', [])}")
+                    print(f"     Clean features: {result.get('leakage_remediated_features', [])}")
+                    print(f"     Reasoning: {result.get('leakage_remediation_reasoning', 'N/A')}")
+                elif _rem_status == "failed" or not result.get("leakage_remediation_viable", True):
+                    print(f"\n  🚨 Leakage remediation FAILED: no viable features")
+                    print(f"     Reasoning: {result.get('leakage_remediation_reasoning', 'N/A')}")
+                    state["pipeline_halted"] = True
+                    state["halt_reason"] = result.get(
+                        "leakage_remediation_reasoning",
+                        "No viable features after leakage remediation",
+                    )
+
             qc_report = result.get("qc_report", {})
             data_readiness = result.get("data_readiness", {})
             train_samples = data_readiness.get("train_samples", 0)
@@ -3423,11 +3447,38 @@ async def run_pipeline(
             ))
 
         # Step 5: Model Trainer
-        if 5 in steps_to_run:
+        if 5 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             eligible_df = state.get("eligible_df", patient_df)
-            # Use numeric features for training
-            feature_cols = ["days_on_therapy", "hcp_visits", "prior_treatments"]
+
+            # Dynamic feature discovery: use remediated features from data_preparer
+            # if available, otherwise discover numeric features from the data
+            remediated = state.get("leakage_remediated_features")
+            if remediated:
+                feature_cols = [f for f in remediated if f in eligible_df.columns]
+            else:
+                # Discover numeric features, excluding IDs, dates, targets, metadata
+                _exclude = {
+                    "patient_journey_id", "patient_id", "patient_hash", "brand",
+                    "journey_start_date", "journey_end_date", "created_at", "updated_at",
+                    "source_timestamp", "ingestion_timestamp", "data_split", "split_config_id",
+                    "data_source", "data_sources_matched", "source_match_confidence",
+                    "source_combination_method", "source_stacking_flag", "data_lag_hours",
+                    "primary_diagnosis_code", "primary_diagnosis_desc", "secondary_diagnosis_codes",
+                    "state", "zip_code", "comorbidities", "risk_score",
+                    CONFIG.target_outcome, "discontinuation_flag", "treatment_initiated",
+                }
+                feature_cols = [
+                    c for c in eligible_df.columns
+                    if c not in _exclude
+                    and eligible_df[c].dtype.kind in "iufb"
+                    and eligible_df[c].nunique() > 1
+                    and eligible_df[c].notna().mean() > 0.5
+                ]
+            if not feature_cols:
+                # Absolute fallback to historical defaults
+                feature_cols = ["days_on_therapy", "hcp_visits", "prior_treatments"]
+
             X = eligible_df[feature_cols].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
 
@@ -3467,148 +3518,276 @@ async def run_pipeline(
             except Exception as _e:
                 print(f"  ⚠️  Pre-training leakage check error: {_e}")
 
-            model_candidate = state.get("model_candidate", {
-                "algorithm_name": "LogisticRegression",
-                "hyperparameters": {"C": 1.0, "max_iter": 100}
-            })
-            qc_report = state.get("qc_report", {"gate_passed": True})
+            # === LEAKAGE REMEDIATION (Step 5a) ===
+            # When critical/high leakage is detected, invoke the LLM-assisted
+            # remediation node to reason about alternatives and rebuild features.
+            if state.get("leakage_severity") in ("critical", "high") and not state.get("leakage_remediated_features"):
+                print(f"\n  🔧 LEAKAGE REMEDIATION: Analyzing {len(state.get('leaked_features', []))} leaked feature(s)...")
+                _rem_start = time.time()
+                try:
+                    from src.agents.ml_foundation.data_preparer.nodes.leakage_remediation import (
+                        review_and_remediate_leakage,
+                    )
 
-            result = await step_5_model_trainer(
-                experiment_id, model_candidate, qc_report, X, y
-            )
-            state["trained_model"] = result.get("trained_model")
-            state["validation_metrics"] = result.get("validation_metrics", {})
-            # Store feature names for downstream agents (e.g., prediction_synthesizer)
-            state["feature_names"] = feature_cols
-            # Store preprocessor for BentoML serving (service handles preprocessing)
-            state["fitted_preprocessor"] = result.get("fitted_preprocessor")
-            # Try multiple possible keys for model_uri
-            state["model_uri"] = (
-                result.get("model_uri")
-                or result.get("model_artifact_uri")
-                or result.get("mlflow_model_uri")
-            )
-            state["success_criteria_met"] = result.get("success_criteria_met", True)
+                    # Build a minimal state dict for the remediation node
+                    _rem_state = {
+                        "experiment_id": experiment_id,
+                        "leakage_severity": state["leakage_severity"],
+                        "leaked_features": state["leaked_features"],
+                        "leakage_findings": state["leakage_findings"],
+                        "leakage_remediation_attempts": 0,
+                        "train_df": eligible_df,
+                        "scope_spec": state.get("scope_spec", {
+                            "prediction_target": CONFIG.target_outcome,
+                            "problem_type": CONFIG.problem_type,
+                        }),
+                    }
+                    _rem_result = await review_and_remediate_leakage(_rem_state)
+                    _rem_status = _rem_result.get("leakage_remediation_status", "error")
+                    _rem_features = _rem_result.get("leakage_remediated_features", [])
+                    _rem_viable = _rem_result.get("leakage_remediation_viable", False)
+                    _rem_reasoning = _rem_result.get("leakage_remediation_reasoning", "")
+                    _rem_dropped = _rem_result.get("leakage_dropped_features", [])
 
-            # Capture class imbalance information
-            state["class_imbalance_info"] = {
-                "imbalance_detected": result.get("imbalance_detected", False),
-                "imbalance_ratio": result.get("imbalance_ratio"),
-                "minority_ratio": result.get("minority_ratio"),
-                "imbalance_severity": result.get("imbalance_severity"),
-                "class_distribution": result.get("class_distribution", {}),
-                "recommended_strategy": result.get("recommended_strategy"),
-                "strategy_rationale": result.get("strategy_rationale"),
-            }
+                    _rem_duration = time.time() - _rem_start
 
-            # Capture resampling information if applied
-            resampled_dist = result.get("resampled_distribution", {})
-            # Calculate new minority ratio from resampled distribution
-            if resampled_dist:
-                total_resampled = sum(resampled_dist.values())
-                new_minority_ratio = min(resampled_dist.values()) / total_resampled if total_resampled > 0 else None
+                    print(f"\n  🔧 Remediation result: {_rem_status} ({_rem_duration:.1f}s)")
+                    if _rem_dropped:
+                        print(f"     Dropped: {_rem_dropped}")
+                    if _rem_features:
+                        print(f"     Clean features: {_rem_features}")
+                    if _rem_reasoning:
+                        print(f"     Reasoning: {_rem_reasoning}")
+
+                    # Emit Step 5a result
+                    step_results.append(StepResult(
+                        step_num="5a",
+                        step_name="LEAKAGE REMEDIATION",
+                        status="success" if _rem_viable else "failed",
+                        duration_seconds=_rem_duration,
+                        key_metrics={
+                            "status": _rem_status,
+                            "leaked_features_count": len(state.get("leaked_features", [])),
+                            "dropped_features": _rem_dropped,
+                            "clean_features": _rem_features,
+                            "viable": _rem_viable,
+                        },
+                        input_summary={
+                            "leakage_severity": state["leakage_severity"],
+                            "leaked_features": state["leaked_features"],
+                            "initial_feature_count": len(feature_cols),
+                        },
+                        validation_checks=[
+                            ("Leaked features identified", bool(state.get("leaked_features")), "present", str(state.get("leaked_features", []))),
+                            ("Clean alternatives found", bool(_rem_features), "present", str(_rem_features)),
+                            ("Feature set viable", _rem_viable, "True", str(_rem_viable)),
+                        ],
+                        interpretation=[
+                            f"Leakage severity: {state['leakage_severity']}",
+                            f"Dropped {len(_rem_dropped)} leaked features: {_rem_dropped}" if _rem_dropped else "No features dropped",
+                            f"Recommended {len(_rem_features)} clean features: {_rem_features}" if _rem_features else "No viable replacement features found",
+                            _rem_reasoning or "No reasoning provided",
+                        ],
+                        result_message=f"Remediated: {len(_rem_features)} clean features" if _rem_viable else "FAILED — no viable features",
+                    ))
+
+                    if _rem_viable and _rem_features:
+                        # Update feature set and rebuild X
+                        feature_cols = [f for f in _rem_features if f in eligible_df.columns]
+                        X = eligible_df[feature_cols].copy()
+                        y = eligible_df[CONFIG.target_outcome].copy()
+
+                        # Update leakage state (re-check on the new feature set)
+                        _combined2 = _pd.concat([X, y], axis=1)
+                        _numeric_feats2 = [c for c in feature_cols if _combined2[c].dtype.kind in "iufb"]
+                        _recheck_findings = []
+                        if len(_numeric_feats2) > 0 and len(_combined2) >= 30:
+                            _recheck_findings.extend(check_perfect_class_separation(_combined2, CONFIG.target_outcome, _numeric_feats2))
+                            _recheck_findings.extend(check_zero_variance_within_class(_combined2, CONFIG.target_outcome, _numeric_feats2))
+                            _recheck_findings.extend(check_mutual_information(_combined2, CONFIG.target_outcome, _numeric_feats2))
+                            _recheck_findings.extend(check_feature_target_logical_dependency(_combined2, CONFIG.target_outcome, _numeric_feats2))
+
+                        if _recheck_findings:
+                            _recheck_sev = _aggregate_severity(_recheck_findings)
+                            state["leakage_severity"] = _recheck_sev
+                            state["leaked_features"] = _get_leaked_features(_recheck_findings)
+                            state["leakage_findings"] = [f.to_dict() for f in _recheck_findings]
+                            print(f"     Re-check: {_recheck_sev} severity on {len(_recheck_findings)} finding(s)")
+                        else:
+                            state["leakage_severity"] = "none"
+                            state["leaked_features"] = []
+                            state["leakage_findings"] = []
+                            state["leakage_suspected"] = False
+                            print(f"     ✅ Re-check: clean — no leakage in remediated features")
+
+                        state["leakage_remediated_features"] = _rem_features
+                    else:
+                        # No viable features — halt pipeline
+                        print(f"\n  🚨 REMEDIATION FAILED: No viable feature set found")
+                        state["pipeline_halted"] = True
+                        state["halt_reason"] = _rem_reasoning or "No viable features after leakage remediation"
+
+                        step_results.append(StepResult(
+                            step_num=5,
+                            step_name="MODEL TRAINER",
+                            status="failed",
+                            duration_seconds=time.time() - step_start,
+                            key_metrics={"status": "skipped"},
+                            interpretation=["Training SKIPPED — no viable features after leakage remediation"],
+                            result_message="Training SKIPPED — no viable features",
+                        ))
+
+                except Exception as _rem_err:
+                    print(f"  ⚠️  Leakage remediation error: {_rem_err}")
+                    import traceback
+                    traceback.print_exc()
+
+            # Skip training if pipeline was halted by remediation
+            if state.get("pipeline_halted"):
+                pass  # Steps 6-8 guards will also skip
             else:
-                new_minority_ratio = None
-            state["resampling_info"] = {
-                "resampling_applied": result.get("resampling_applied", False),
-                "original_samples": result.get("original_train_samples"),
-                "resampled_samples": result.get("resampled_train_samples"),
-                "original_distribution": result.get("original_distribution", {}),
-                "resampled_distribution": resampled_dist,
-                "new_minority_ratio": new_minority_ratio,
-                "resampling_strategy": result.get("resampling_strategy"),
-            }
+                model_candidate = state.get("model_candidate", {
+                    "algorithm_name": "LogisticRegression",
+                    "hyperparameters": {"C": 1.0, "max_iter": 100}
+                })
+                qc_report = state.get("qc_report", {"gate_passed": True})
 
-            # Capture enhanced accuracy analysis data
-            if result.get("accuracy_analysis"):
-                state["accuracy_analysis"] = result["accuracy_analysis"]
+                result = await step_5_model_trainer(
+                    experiment_id, model_candidate, qc_report, X, y
+                )
+                state["trained_model"] = result.get("trained_model")
+                state["validation_metrics"] = result.get("validation_metrics", {})
+                # Store feature names for downstream agents (e.g., prediction_synthesizer)
+                state["feature_names"] = feature_cols
+                # Store preprocessor for BentoML serving (service handles preprocessing)
+                state["fitted_preprocessor"] = result.get("fitted_preprocessor")
+                # Try multiple possible keys for model_uri
+                state["model_uri"] = (
+                    result.get("model_uri")
+                    or result.get("model_artifact_uri")
+                    or result.get("mlflow_model_uri")
+                )
+                state["success_criteria_met"] = result.get("success_criteria_met", True)
 
-            # Propagate post-training leakage suspicion state
-            state["leakage_suspected"] = result.get("leakage_suspected", False)
-            state["suspicion_level"] = result.get("suspicion_level", "none")
-            state["suspicion_reasons"] = result.get("suspicion_reasons", [])
-            state["investigation_recommendations"] = result.get("investigation_recommendations", [])
-
-            # Determine step status based on both AUC and model usefulness
-            model_usefulness = result.get("model_usefulness", "unknown")
-            if model_usefulness == "useless":
-                step_5_status = "failed"
-            elif model_usefulness == "poor" or not result.get("success_criteria_met"):
-                step_5_status = "warning"
-            else:
-                step_5_status = "success"
-
-            auc_roc = result.get("auc_roc", 0)
-            precision = result.get("precision", 0)
-            recall = result.get("recall", 0)
-            f1 = result.get("f1_score", 0)
-            success_met = result.get("success_criteria_met", False)
-            imbalance_detected = result.get("imbalance_detected", False)
-            resampling_applied = result.get("resampling_applied", False)
-            step_results.append(StepResult(
-                step_num=5,
-                step_name="MODEL TRAINER",
-                status=step_5_status,
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "training_run_id": result.get("training_run_id"),
-                    "model_id": result.get("model_id"),
-                    "auc_roc": auc_roc,
-                    "precision": precision,
-                    "recall": recall,
-                    "f1_score": f1,
-                    "success_criteria_met": success_met,
-                    "hpo_trials_run": result.get("hpo_trials_run"),
-                    "model_usefulness": model_usefulness,
-                },
-                details={
-                    "mlflow_run_id": result.get("mlflow_run_id"),
-                    "model_uri": state.get("model_uri"),
-                    "training_duration_seconds": result.get("training_duration_seconds"),
-                    "imbalance_detected": imbalance_detected,
+                # Capture class imbalance information
+                state["class_imbalance_info"] = {
+                    "imbalance_detected": result.get("imbalance_detected", False),
+                    "imbalance_ratio": result.get("imbalance_ratio"),
+                    "minority_ratio": result.get("minority_ratio"),
                     "imbalance_severity": result.get("imbalance_severity"),
-                    "remediation_strategy": result.get("recommended_strategy"),
-                    "usefulness_reason": result.get("usefulness_reason"),
-                },
-                # Enhanced format fields
-                input_summary={
-                    "experiment_id": experiment_id,
-                    "algorithm": model_candidate.get("algorithm_name") if isinstance(model_candidate, dict) else "Unknown",
-                    "training_samples": len(X),
-                    "features": list(X.columns),
-                    "target": CONFIG.target_outcome,
-                },
-                validation_checks=[
-                    ("AUC-ROC above threshold", auc_roc >= 0.6, "≥ 0.60", f"{auc_roc:.3f}" if auc_roc else "N/A"),
-                    ("Model not useless", model_usefulness != "useless", "not useless", model_usefulness),
-                    ("Success criteria met", success_met, "True", str(success_met)),
-                    ("Both classes predicted", model_usefulness not in ["useless", "poor"], "multi-class output", model_usefulness),
-                ],
-                metrics_table=[
-                    ("auc_roc", f"{auc_roc:.3f}" if auc_roc else "N/A", "≥ 0.60", auc_roc >= 0.6 if auc_roc else False),
-                    ("precision", f"{precision:.3f}" if precision else "N/A", None, None),
-                    ("recall", f"{recall:.3f}" if recall else "N/A", None, None),
-                    ("f1_score", f"{f1:.3f}" if f1 else "N/A", None, None),
-                    ("model_usefulness", model_usefulness, "good/acceptable", model_usefulness in ["good", "acceptable"]),
-                    ("imbalance_detected", imbalance_detected, None, None),
-                    ("resampling_applied", resampling_applied, None, None),
-                ],
-                interpretation=[
-                    f"Model trained with AUC-ROC: {auc_roc:.3f}" if auc_roc else "Model training completed",
-                    f"Model usefulness: {model_usefulness}" + (f" - {result.get('usefulness_reason', '')}" if result.get('usefulness_reason') else ""),
-                    f"Class imbalance {'detected and remediated via ' + result.get('recommended_strategy', 'resampling') if imbalance_detected else 'not detected'}",
-                    f"Success criteria {'MET' if success_met else 'NOT MET'}",
-                ],
-                result_message=f"Training complete: {model_usefulness} model with AUC={auc_roc:.3f}" if auc_roc else "Training complete",
-            ))
+                    "class_distribution": result.get("class_distribution", {}),
+                    "recommended_strategy": result.get("recommended_strategy"),
+                    "strategy_rationale": result.get("strategy_rationale"),
+                }
+
+                # Capture resampling information if applied
+                resampled_dist = result.get("resampled_distribution", {})
+                # Calculate new minority ratio from resampled distribution
+                if resampled_dist:
+                    total_resampled = sum(resampled_dist.values())
+                    new_minority_ratio = min(resampled_dist.values()) / total_resampled if total_resampled > 0 else None
+                else:
+                    new_minority_ratio = None
+                state["resampling_info"] = {
+                    "resampling_applied": result.get("resampling_applied", False),
+                    "original_samples": result.get("original_train_samples"),
+                    "resampled_samples": result.get("resampled_train_samples"),
+                    "original_distribution": result.get("original_distribution", {}),
+                    "resampled_distribution": resampled_dist,
+                    "new_minority_ratio": new_minority_ratio,
+                    "resampling_strategy": result.get("resampling_strategy"),
+                }
+
+                # Capture enhanced accuracy analysis data
+                if result.get("accuracy_analysis"):
+                    state["accuracy_analysis"] = result["accuracy_analysis"]
+
+                # Propagate post-training leakage suspicion state
+                state["leakage_suspected"] = result.get("leakage_suspected", False)
+                state["suspicion_level"] = result.get("suspicion_level", "none")
+                state["suspicion_reasons"] = result.get("suspicion_reasons", [])
+                state["investigation_recommendations"] = result.get("investigation_recommendations", [])
+
+                # Determine step status based on both AUC and model usefulness
+                model_usefulness = result.get("model_usefulness", "unknown")
+                if model_usefulness == "useless":
+                    step_5_status = "failed"
+                elif model_usefulness == "poor" or not result.get("success_criteria_met"):
+                    step_5_status = "warning"
+                else:
+                    step_5_status = "success"
+
+                auc_roc = result.get("auc_roc", 0)
+                precision = result.get("precision", 0)
+                recall = result.get("recall", 0)
+                f1 = result.get("f1_score", 0)
+                success_met = result.get("success_criteria_met", False)
+                imbalance_detected = result.get("imbalance_detected", False)
+                resampling_applied = result.get("resampling_applied", False)
+                step_results.append(StepResult(
+                    step_num=5,
+                    step_name="MODEL TRAINER",
+                    status=step_5_status,
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "training_run_id": result.get("training_run_id"),
+                        "model_id": result.get("model_id"),
+                        "auc_roc": auc_roc,
+                        "precision": precision,
+                        "recall": recall,
+                        "f1_score": f1,
+                        "success_criteria_met": success_met,
+                        "hpo_trials_run": result.get("hpo_trials_run"),
+                        "model_usefulness": model_usefulness,
+                    },
+                    details={
+                        "mlflow_run_id": result.get("mlflow_run_id"),
+                        "model_uri": state.get("model_uri"),
+                        "training_duration_seconds": result.get("training_duration_seconds"),
+                        "imbalance_detected": imbalance_detected,
+                        "imbalance_severity": result.get("imbalance_severity"),
+                        "remediation_strategy": result.get("recommended_strategy"),
+                        "usefulness_reason": result.get("usefulness_reason"),
+                    },
+                    # Enhanced format fields
+                    input_summary={
+                        "experiment_id": experiment_id,
+                        "algorithm": model_candidate.get("algorithm_name") if isinstance(model_candidate, dict) else "Unknown",
+                        "training_samples": len(X),
+                        "features": list(X.columns),
+                        "target": CONFIG.target_outcome,
+                    },
+                    validation_checks=[
+                        ("AUC-ROC above threshold", auc_roc >= 0.6, "≥ 0.60", f"{auc_roc:.3f}" if auc_roc else "N/A"),
+                        ("Model not useless", model_usefulness != "useless", "not useless", model_usefulness),
+                        ("Success criteria met", success_met, "True", str(success_met)),
+                        ("Both classes predicted", model_usefulness not in ["useless", "poor"], "multi-class output", model_usefulness),
+                    ],
+                    metrics_table=[
+                        ("auc_roc", f"{auc_roc:.3f}" if auc_roc else "N/A", "≥ 0.60", auc_roc >= 0.6 if auc_roc else False),
+                        ("precision", f"{precision:.3f}" if precision else "N/A", None, None),
+                        ("recall", f"{recall:.3f}" if recall else "N/A", None, None),
+                        ("f1_score", f"{f1:.3f}" if f1 else "N/A", None, None),
+                        ("model_usefulness", model_usefulness, "good/acceptable", model_usefulness in ["good", "acceptable"]),
+                        ("imbalance_detected", imbalance_detected, None, None),
+                        ("resampling_applied", resampling_applied, None, None),
+                    ],
+                    interpretation=[
+                        f"Model trained with AUC-ROC: {auc_roc:.3f}" if auc_roc else "Model training completed",
+                        f"Model usefulness: {model_usefulness}" + (f" - {result.get('usefulness_reason', '')}" if result.get('usefulness_reason') else ""),
+                        f"Class imbalance {'detected and remediated via ' + result.get('recommended_strategy', 'resampling') if imbalance_detected else 'not detected'}",
+                        f"Success criteria {'MET' if success_met else 'NOT MET'}",
+                    ],
+                    result_message=f"Training complete: {model_usefulness} model with AUC={auc_roc:.3f}" if auc_roc else "Training complete",
+                ))
 
         # Step 6: Feature Analyzer
-        if 6 in steps_to_run:
+        if 6 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             eligible_df = state.get("eligible_df", patient_df)
-            # Use numeric features for analysis
-            feature_cols = ["days_on_therapy", "hcp_visits", "prior_treatments"]
-            X = eligible_df[feature_cols].copy()
+            # Use whatever features the model was trained on
+            feature_cols = state.get("feature_names", ["days_on_therapy", "hcp_visits", "prior_treatments"])
+            X = eligible_df[[c for c in feature_cols if c in eligible_df.columns]].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
 
             result = await step_6_feature_analyzer(
@@ -3674,7 +3853,7 @@ async def run_pipeline(
             ))
 
         # Step 7: Model Deployer
-        if 7 in steps_to_run:
+        if 7 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
 
             # Block deployment if leakage suspected
@@ -3790,7 +3969,7 @@ async def run_pipeline(
                 ))
 
         # Step 8: Observability Connector
-        if 8 in steps_to_run:
+        if 8 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             result = await step_8_observability_connector(
                 experiment_id,

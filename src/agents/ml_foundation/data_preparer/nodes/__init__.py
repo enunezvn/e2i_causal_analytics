@@ -6,6 +6,7 @@ from .data_transformer import transform_data
 from .feast_registrar import register_features_in_feast
 from .ge_validator import run_ge_validation
 from .leakage_detector import detect_leakage
+from .leakage_remediation import review_and_remediate_leakage
 from .qc_remediation import review_and_remediate_qc
 from .quality_checker import run_quality_checks
 from .schema_validator import run_schema_validation
@@ -16,6 +17,7 @@ __all__ = [
     "run_quality_checks",
     "run_ge_validation",
     "detect_leakage",
+    "review_and_remediate_leakage",
     "transform_data",
     "register_features_in_feast",
     "compute_baseline_metrics",

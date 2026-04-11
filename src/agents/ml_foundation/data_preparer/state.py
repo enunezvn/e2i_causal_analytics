@@ -60,6 +60,18 @@ class DataPreparerState(TypedDict, total=False):
     leakage_severity: str  # "critical" / "high" / "moderate" / "info" / "none"
     leaked_features: List[str]  # Feature names flagged at CRITICAL or HIGH
 
+    # Leakage remediation (LLM-assisted)
+    leakage_remediation_status: Literal[
+        "not_needed", "applied", "failed", "manual_required", "error"
+    ]
+    leakage_remediation_attempts: int
+    leakage_remediated_features: List[str]  # Clean features after remediation
+    leakage_dropped_features: List[str]     # Features removed due to leakage
+    leakage_added_features: List[str]       # Alternative features added
+    leakage_remediation_reasoning: Optional[str]  # LLM reasoning summary
+    leakage_remediation_viable: bool        # Whether a viable feature set was found
+    requires_leakage_revalidation: bool     # Trigger re-check loop
+
     # Baseline computation
     feature_stats: Dict[str, Dict[str, Any]]  # Per-feature statistics
     target_rate: Optional[float]  # For classification

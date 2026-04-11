@@ -14,6 +14,7 @@ from .nodes import (
     detect_leakage,
     load_data,
     register_features_in_feast,
+    review_and_remediate_leakage,
     review_and_remediate_qc,
     run_ge_validation,
     run_quality_checks,
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Maximum remediation attempts before giving up
 MAX_REMEDIATION_ATTEMPTS = 2
+
+from .nodes.leakage_remediation import MAX_LEAKAGE_REMEDIATION_ATTEMPTS
 
 
 def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
@@ -72,6 +75,7 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_node("run_quality_checks", run_quality_checks)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("run_ge_validation", run_ge_validation)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("detect_leakage", detect_leakage)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("leakage_remediation", review_and_remediate_leakage)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("transform_data", transform_data)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("register_features_in_feast", register_features_in_feast)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("compute_baseline_metrics", compute_baseline_metrics)  # type: ignore[type-var,arg-type,call-overload]
@@ -84,7 +88,28 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_edge("run_schema_validation", "run_quality_checks")
     graph.add_edge("run_quality_checks", "run_ge_validation")
     graph.add_edge("run_ge_validation", "detect_leakage")
-    graph.add_edge("detect_leakage", "transform_data")
+
+    # Conditional edge: route to remediation if critical/high leakage detected
+    graph.add_conditional_edges(
+        "detect_leakage",
+        _route_after_leakage_detection,
+        {
+            "remediate": "leakage_remediation",
+            "continue": "transform_data",
+        },
+    )
+
+    # After remediation: re-check, continue, or halt
+    graph.add_conditional_edges(
+        "leakage_remediation",
+        _route_after_leakage_remediation,
+        {
+            "recheck": "detect_leakage",
+            "continue": "transform_data",
+            "end": END,
+        },
+    )
+
     graph.add_edge("transform_data", "register_features_in_feast")
     graph.add_edge("register_features_in_feast", "compute_baseline_metrics")
     graph.add_edge("compute_baseline_metrics", "finalize_output")
@@ -160,6 +185,69 @@ def _route_after_remediation(state: DataPreparerState) -> Literal["retry", "end"
 
     logger.info(f"Remediation complete with status: {remediation_status}")
     return "end"
+
+
+def _route_after_leakage_detection(
+    state: DataPreparerState,
+) -> Literal["remediate", "continue"]:
+    """Route after detect_leakage based on severity.
+
+    CRITICAL or HIGH leakage triggers the LLM-assisted remediation node.
+    Lower severities pass through to transform_data.
+    Also guards against re-entry if max remediation attempts exhausted.
+
+    Args:
+        state: Current agent state
+
+    Returns:
+        "remediate" if severity warrants intervention, "continue" otherwise
+    """
+    severity = state.get("leakage_severity", "none")
+    attempts = state.get("leakage_remediation_attempts", 0)
+    if severity in ("critical", "high") and attempts < MAX_LEAKAGE_REMEDIATION_ATTEMPTS:
+        logger.info(
+            f"Leakage severity '{severity}' detected (attempt {attempts + 1}) "
+            "— routing to remediation"
+        )
+        return "remediate"
+    return "continue"
+
+
+def _route_after_leakage_remediation(
+    state: DataPreparerState,
+) -> Literal["recheck", "continue", "end"]:
+    """Route after leakage remediation.
+
+    - If remediation was applied and viable, re-check via detect_leakage
+    - If remediation found no viable features, halt the pipeline
+    - Otherwise continue to transform_data
+
+    Args:
+        state: Current agent state
+
+    Returns:
+        "recheck", "continue", or "end"
+    """
+    status = state.get("leakage_remediation_status", "not_needed")
+    viable = state.get("leakage_remediation_viable", True)
+    attempts = state.get("leakage_remediation_attempts", 0)
+
+    if not viable:
+        logger.warning("Leakage remediation found no viable features — halting pipeline")
+        return "end"
+
+    if (
+        status == "applied"
+        and state.get("requires_leakage_revalidation")
+        and attempts < MAX_LEAKAGE_REMEDIATION_ATTEMPTS
+    ):
+        logger.info(
+            f"Leakage remediation applied, re-checking "
+            f"(attempt {attempts}/{MAX_LEAKAGE_REMEDIATION_ATTEMPTS})"
+        )
+        return "recheck"
+
+    return "continue"
 
 
 async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
