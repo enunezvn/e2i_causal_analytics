@@ -39,6 +39,21 @@ def _should_proceed_after_splits(state: Dict[str, Any]) -> str:
     return "end"
 
 
+def _should_proceed_after_evaluation(state: Dict[str, Any]) -> str:
+    """Conditional edge: block MLflow logging if critical leakage suspicion.
+
+    If the evaluator detects implausibly perfect metrics (AUC=1.0, perfect
+    precision/recall), this blocks the model from being logged to MLflow
+    and checkpointed — preventing a tautological model from being deployed.
+    """
+    if state.get("error"):
+        return "end"
+    suspicion_level = state.get("suspicion_level", "none")
+    if suspicion_level == "critical":
+        return "end"
+    return "log_to_mlflow"
+
+
 def create_model_trainer_graph() -> CompiledStateGraph:
     """Create model_trainer LangGraph workflow.
 
@@ -67,6 +82,8 @@ def create_model_trainer_graph() -> CompiledStateGraph:
           ↓
         evaluate_model (eval on train/val/test)
           ↓
+        [Leakage suspicion?]
+          ↓ NOT CRITICAL
         log_to_mlflow (track experiment)
           ↓
         save_checkpoint (persist model)
@@ -142,8 +159,15 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     # Training → evaluation (always)
     workflow.add_edge("train_model", "evaluate_model")
 
-    # Evaluation → MLflow logging (always)
-    workflow.add_edge("evaluate_model", "log_to_mlflow")
+    # Evaluation → conditional (block on critical leakage suspicion)
+    workflow.add_conditional_edges(
+        "evaluate_model",
+        _should_proceed_after_evaluation,
+        {
+            "log_to_mlflow": "log_to_mlflow",
+            "end": END,
+        },
+    )
 
     # MLflow logging → checkpointing (always)
     workflow.add_edge("log_to_mlflow", "save_checkpoint")

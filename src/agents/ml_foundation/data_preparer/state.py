@@ -56,6 +56,9 @@ class DataPreparerState(TypedDict, total=False):
     # Leakage detection
     leakage_detected: bool
     leakage_issues: List[str]
+    leakage_findings: List[Dict[str, Any]]  # Structured LeakageFinding dicts
+    leakage_severity: str  # "critical" / "high" / "moderate" / "info" / "none"
+    leaked_features: List[str]  # Feature names flagged at CRITICAL or HIGH
 
     # Baseline computation
     feature_stats: Dict[str, Dict[str, Any]]  # Per-feature statistics

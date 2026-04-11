@@ -220,6 +220,10 @@ class DataPreparerAgent:
                 "validation_df": final_state.get("validation_df"),
                 "test_df": final_state.get("test_df"),
                 "holdout_df": final_state.get("holdout_df"),
+                # Leakage detection results
+                "leakage_findings": final_state.get("leakage_findings", []),
+                "leakage_severity": final_state.get("leakage_severity", "none"),
+                "leaked_features": final_state.get("leaked_features", []),
             }
 
             # Log execution time

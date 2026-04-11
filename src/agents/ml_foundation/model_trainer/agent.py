@@ -317,6 +317,12 @@ class ModelTrainerAgent:
         original_distribution = final_state.get("original_distribution", {})
         resampled_distribution = final_state.get("resampled_distribution", {})
 
+        # Post-training leakage suspicion (from evaluator)
+        leakage_suspected = final_state.get("leakage_suspected", False)
+        suspicion_level = final_state.get("suspicion_level", "none")
+        suspicion_reasons = final_state.get("suspicion_reasons", [])
+        investigation_recommendations = final_state.get("investigation_recommendations", [])
+
         # Extract sample counts from shape tuples (shape is (n_samples, n_features))
         original_train_shape = final_state.get("original_train_shape")
         resampled_train_shape = final_state.get("resampled_train_shape")
@@ -423,6 +429,11 @@ class ModelTrainerAgent:
             "framework": self._detect_framework(algorithm_class),
             "trained_by": "model_trainer",
             "created_at": datetime.now(timezone.utc).isoformat(),
+            # Post-training leakage suspicion
+            "leakage_suspected": leakage_suspected,
+            "suspicion_level": suspicion_level,
+            "suspicion_reasons": suspicion_reasons,
+            "investigation_recommendations": investigation_recommendations,
         }
 
         # Persist training run to database

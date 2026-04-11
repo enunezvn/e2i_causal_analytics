@@ -183,6 +183,12 @@ class ModelTrainerState(TypedDict, total=False):
     # Database
     persisted_to_db: bool  # Whether saved to ml_training_runs table
 
+    # Leakage Suspicion (post-training)
+    leakage_suspected: bool  # Whether metrics suggest data leakage
+    suspicion_level: str  # "critical" / "high" / "none"
+    suspicion_reasons: List[str]  # Why leakage is suspected
+    investigation_recommendations: List[str]  # Recommended next steps
+
     # Error handling
     error: Optional[str]
     error_type: Optional[str]

@@ -177,10 +177,22 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
         f"Evaluation complete: success_criteria_met={success_results['success_criteria_met']}"
     )
 
+    # Post-training leakage suspicion check
+    suspicion_result = _check_metric_suspicion(
+        metrics_result, problem_type
+    )
+
+    if suspicion_result["leakage_suspected"]:
+        logger.warning(
+            f"LEAKAGE SUSPECTED: level={suspicion_result['suspicion_level']}, "
+            f"reasons={suspicion_result['suspicion_reasons']}"
+        )
+
     # Merge results
     return {
         **metrics_result,
         **success_results,
+        **suspicion_result,
     }
 
 
@@ -927,6 +939,129 @@ def _compute_bootstrap_ci(
             confidence_intervals[metric_name] = (lower, upper)
 
     return confidence_intervals, n_bootstrap
+
+
+def _check_metric_suspicion(
+    metrics_result: Dict[str, Any],
+    problem_type: str,
+) -> Dict[str, Any]:
+    """Post-training safety net: check for implausibly perfect metrics.
+
+    Runs after metric computation to catch models that may be tautological
+    (e.g., AUC=1.0, perfect precision+recall) — a sign of data leakage
+    that pre-training checks may have missed.
+
+    Args:
+        metrics_result: Full metrics dict from _compute_*_metrics
+        problem_type: Problem type
+
+    Returns:
+        Dictionary with leakage_suspected, suspicion_level,
+        suspicion_reasons, investigation_recommendations
+    """
+    reasons: List[str] = []
+    recommendations: List[str] = []
+
+    test_metrics = metrics_result.get("test_metrics", {})
+    train_metrics = metrics_result.get("train_metrics", {})
+    validation_metrics = metrics_result.get("validation_metrics", {})
+
+    if problem_type in ["binary_classification", "multiclass_classification"]:
+        auc = test_metrics.get("roc_auc")
+        precision = test_metrics.get("precision")
+        recall = test_metrics.get("recall")
+        brier = test_metrics.get("brier_score")
+
+        # Check 1: AUC >= 0.99
+        if auc is not None and auc >= 0.99:
+            reasons.append(
+                f"AUC={auc:.4f} >= 0.99 is implausible on real-world data"
+            )
+            recommendations.append(
+                "Check features for target leakage — no real-world clinical model achieves AUC >= 0.99"
+            )
+
+        # Check 2: Perfect precision AND recall
+        if precision is not None and recall is not None:
+            if precision >= 0.999 and recall >= 0.999:
+                reasons.append(
+                    f"Perfect precision ({precision:.4f}) and recall ({recall:.4f}) "
+                    f"indicates tautological model"
+                )
+                recommendations.append(
+                    "Features likely encode the target directly — audit feature derivation pipeline"
+                )
+
+        # Check 3: All splits AUC > 0.98 with near-zero variance
+        split_aucs = []
+        for m in [train_metrics, validation_metrics, test_metrics]:
+            a = m.get("roc_auc")
+            if a is not None:
+                split_aucs.append(a)
+        if len(split_aucs) >= 3 and all(a > 0.98 for a in split_aucs):
+            variance = float(np.var(split_aucs))
+            if variance < 0.01:
+                reasons.append(
+                    f"All splits AUC > 0.98 (variance={variance:.6f}) — "
+                    f"no generalization gap across splits"
+                )
+                recommendations.append(
+                    "Identical performance across splits suggests the signal is trivially recoverable"
+                )
+
+        # Check 4: Brier score == 0
+        if brier is not None and brier < 1e-6:
+            reasons.append(
+                f"Brier score={brier:.2e} is effectively zero — implausible calibration"
+            )
+            recommendations.append(
+                "Zero calibration error means predicted probabilities are perfect — "
+                "this only happens with deterministic features"
+            )
+
+    elif problem_type in ["regression", "continuous"]:
+        r2 = test_metrics.get("r2")
+        rmse = test_metrics.get("rmse")
+
+        if r2 is not None and r2 >= 0.999:
+            reasons.append(f"R²={r2:.6f} >= 0.999 is implausible on real-world data")
+            recommendations.append("Check features for target leakage")
+
+        if rmse is not None and rmse < 1e-6:
+            reasons.append(f"RMSE={rmse:.2e} is effectively zero")
+            recommendations.append("Near-zero RMSE suggests features deterministically encode target")
+
+    # Determine suspicion level
+    if not reasons:
+        return {
+            "leakage_suspected": False,
+            "suspicion_level": "none",
+            "suspicion_reasons": [],
+            "investigation_recommendations": [],
+        }
+
+    # Determine severity from the original metric values (not string matching)
+    has_critical = False
+    if problem_type in ["binary_classification", "multiclass_classification"]:
+        auc = test_metrics.get("roc_auc")
+        prec = test_metrics.get("precision")
+        rec = test_metrics.get("recall")
+        if auc is not None and auc >= 0.99:
+            has_critical = True
+        if prec is not None and rec is not None and prec >= 0.999 and rec >= 0.999:
+            has_critical = True
+    elif problem_type in ["regression", "continuous"]:
+        r2_val = test_metrics.get("r2")
+        if r2_val is not None and r2_val >= 0.999:
+            has_critical = True
+    suspicion_level = "critical" if has_critical else "high"
+
+    return {
+        "leakage_suspected": True,
+        "suspicion_level": suspicion_level,
+        "suspicion_reasons": reasons,
+        "investigation_recommendations": recommendations,
+    }
 
 
 def _check_success_criteria(

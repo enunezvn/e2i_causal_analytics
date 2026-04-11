@@ -937,8 +937,63 @@ def print_detailed_summary(
             precision = val_metrics.get("precision", 0)
             f1 = val_metrics.get("f1", 0)
 
-            # Determine verdict based on metrics
-            if auc_roc >= 0.85 and recall >= 0.7:
+            # --- LEAKAGE SUSPICION CHECK (must precede EXCELLENT) ---
+            suspicion_level = state.get("suspicion_level", "none")
+            leakage_severity = state.get("leakage_severity", "none")
+            suspicion_reasons = state.get("suspicion_reasons", [])
+            leaked_features = state.get("leaked_features", [])
+            leakage_findings = state.get("leakage_findings", [])
+            investigation_recs = state.get("investigation_recommendations", [])
+
+            is_leakage_suspected = (
+                (auc_roc >= 0.99 and recall >= 0.99 and precision >= 0.99)
+                or suspicion_level in ("high", "critical")
+                or leakage_severity in ("high", "critical")
+            )
+
+            if is_leakage_suspected:
+                verdict = "LEAKAGE_SUSPECTED"
+                icon = "🚨"
+                description = "Model metrics are implausibly perfect — data leakage suspected"
+                deploy_recommendation = "DO NOT DEPLOY — investigate feature derivation pipeline"
+
+                print(f"\n  {icon} VERDICT: {verdict}")
+                print(f"\n  Assessment: {description}")
+
+                if leaked_features:
+                    print(f"\n  Leaked Features:")
+                    for feat in leaked_features:
+                        print(f"    • {feat}")
+
+                if leakage_findings:
+                    print(f"\n  Pre-Training Leakage Findings:")
+                    for finding in leakage_findings:
+                        sev = finding.get("severity", "unknown").upper()
+                        desc = finding.get("description", "")
+                        print(f"    [{sev}] {desc}")
+                        rec = finding.get("recommendation", "")
+                        if rec:
+                            print(f"           → {rec}")
+
+                if suspicion_reasons:
+                    print(f"\n  Post-Training Suspicion Reasons:")
+                    for reason in suspicion_reasons:
+                        print(f"    • {reason}")
+
+                if investigation_recs:
+                    print(f"\n  Investigation Recommendations:")
+                    for rec in investigation_recs:
+                        print(f"    • {rec}")
+
+                print(f"\n  Key Metrics (suspiciously perfect):")
+                print(f"    • AUC-ROC:   {auc_roc:.4f}")
+                print(f"    • Recall:    {recall:.4f}")
+                print(f"    • Precision: {precision:.4f}")
+                print(f"    • F1 Score:  {f1:.4f}")
+                print(f"\n  ❌ Recommendation: {deploy_recommendation}")
+
+            # --- Normal verdict logic (only if leakage not suspected) ---
+            elif auc_roc >= 0.85 and recall >= 0.7:
                 verdict = "EXCELLENT"
                 icon = "🌟"
                 description = "Model has strong discrimination and high recall"
@@ -3108,6 +3163,11 @@ async def run_pipeline(
             if result.get("validation_df") is not None:
                 state["validation_df"] = result["validation_df"]
 
+            # Propagate leakage detection state
+            state["leakage_severity"] = result.get("leakage_severity", "none")
+            state["leaked_features"] = result.get("leaked_features", [])
+            state["leakage_findings"] = result.get("leakage_findings", [])
+
             qc_report = result.get("qc_report", {})
             data_readiness = result.get("data_readiness", {})
             train_samples = data_readiness.get("train_samples", 0)
@@ -3371,6 +3431,42 @@ async def run_pipeline(
             X = eligible_df[feature_cols].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
 
+            # === PRE-TRAINING LEAKAGE CHECK (on actual pipeline data) ===
+            # The data_preparer's leakage detector runs on synthetic data,
+            # so we run structural checks here on the real feature matrix + target.
+            try:
+                from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import (
+                    check_perfect_class_separation,
+                    check_zero_variance_within_class,
+                    check_mutual_information,
+                    check_feature_target_logical_dependency,
+                    _aggregate_severity,
+                    _get_leaked_features,
+                )
+                import pandas as _pd
+
+                _combined = _pd.concat([X, y], axis=1)
+                _numeric_feats = [c for c in feature_cols if _combined[c].dtype.kind in "iufb"]
+                _all_findings = []
+
+                if len(_numeric_feats) > 0 and len(_combined) >= 30:
+                    _all_findings.extend(check_perfect_class_separation(_combined, CONFIG.target_outcome, _numeric_feats))
+                    _all_findings.extend(check_zero_variance_within_class(_combined, CONFIG.target_outcome, _numeric_feats))
+                    _all_findings.extend(check_mutual_information(_combined, CONFIG.target_outcome, _numeric_feats))
+                    _all_findings.extend(check_feature_target_logical_dependency(_combined, CONFIG.target_outcome, _numeric_feats))
+
+                if _all_findings:
+                    state["leakage_severity"] = _aggregate_severity(_all_findings)
+                    state["leaked_features"] = _get_leaked_features(_all_findings)
+                    state["leakage_findings"] = [f.to_dict() for f in _all_findings]
+                    print(f"\n  ⚠️  Pre-training leakage detection: {len(_all_findings)} findings")
+                    print(f"     Severity: {state['leakage_severity']}")
+                    print(f"     Leaked features: {state['leaked_features']}")
+                    for _f in _all_findings:
+                        print(f"     [{_f.severity.value.upper()}] {_f.check_name}: {_f.description}")
+            except Exception as _e:
+                print(f"  ⚠️  Pre-training leakage check error: {_e}")
+
             model_candidate = state.get("model_candidate", {
                 "algorithm_name": "LogisticRegression",
                 "hyperparameters": {"C": 1.0, "max_iter": 100}
@@ -3426,6 +3522,12 @@ async def run_pipeline(
             # Capture enhanced accuracy analysis data
             if result.get("accuracy_analysis"):
                 state["accuracy_analysis"] = result["accuracy_analysis"]
+
+            # Propagate post-training leakage suspicion state
+            state["leakage_suspected"] = result.get("leakage_suspected", False)
+            state["suspicion_level"] = result.get("suspicion_level", "none")
+            state["suspicion_reasons"] = result.get("suspicion_reasons", [])
+            state["investigation_recommendations"] = result.get("investigation_recommendations", [])
 
             # Determine step status based on both AUC and model usefulness
             model_usefulness = result.get("model_usefulness", "unknown")
@@ -3574,83 +3676,118 @@ async def run_pipeline(
         # Step 7: Model Deployer
         if 7 in steps_to_run:
             step_start = time.time()
-            result = await step_7_model_deployer(
-                experiment_id,
-                state.get("model_uri"),
-                state.get("validation_metrics", {}),
-                state.get("success_criteria_met", True),
-                trained_model=state.get("trained_model"),
-                include_bentoml=include_bentoml,
-                fitted_preprocessor=state.get("fitted_preprocessor"),
-            )
-            state["deployment_manifest"] = result.get("deployment_manifest")
-            # Track BentoML PID for cleanup (ephemeral mode only)
-            if include_bentoml and result.get("bentoml_pid"):
-                state["bentoml_pid"] = result["bentoml_pid"]
-            # Track persistent mode to skip cleanup
-            if include_bentoml and result.get("bentoml_persistent"):
-                state["bentoml_persistent"] = True
 
-            manifest = result.get("deployment_manifest", {})
-            bentoml_serving = result.get("bentoml_serving", {})
-            step_details = {
-                "model_version": result.get("model_version"),
-                "endpoint_url": manifest.get("endpoint_url"),
-            }
-            # Add BentoML info if present
-            if bentoml_serving:
-                step_details["bentoml_model_tag"] = bentoml_serving.get("model_tag")
-                step_details["bentoml_endpoint"] = bentoml_serving.get("endpoint")
-                step_details["bentoml_health_check"] = bentoml_serving.get("health_check")
-                step_details["bentoml_prediction_test"] = bentoml_serving.get("prediction_test")
-                step_details["bentoml_latency_ms"] = bentoml_serving.get("latency_ms")
+            # Block deployment if leakage suspected
+            _leakage_suspected = state.get("leakage_suspected", False)
+            _leakage_severity = state.get("leakage_severity", "none")
+            _suspicion_level = state.get("suspicion_level", "none")
+            if (
+                _leakage_suspected
+                or _leakage_severity in ("high", "critical")
+                or _suspicion_level in ("high", "critical")
+            ):
+                print(f"\n  🚨 DEPLOYMENT BLOCKED: Data leakage detected")
+                print(f"     Leakage severity: {_leakage_severity}")
+                print(f"     Suspicion level: {_suspicion_level}")
+                print(f"     Leaked features: {state.get('leaked_features', [])}")
+                step_results.append(StepResult(
+                    step_num=7,
+                    step_name="MODEL DEPLOYER",
+                    status="failed",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "deployment_id": "BLOCKED",
+                        "environment": "N/A",
+                        "status": "blocked_leakage",
+                        "deployment_successful": False,
+                    },
+                    details={"reason": "Data leakage detected — deployment blocked"},
+                    input_summary={"leakage_severity": _leakage_severity, "suspicion_level": _suspicion_level},
+                    validation_checks=[
+                        ("Leakage check", False, "no leakage", f"severity={_leakage_severity}"),
+                    ],
+                    metrics_table=[],
+                    interpretation=["Deployment blocked due to data leakage detection"],
+                    result_message="Deployment BLOCKED — data leakage suspected",
+                ))
+            else:
+                result = await step_7_model_deployer(
+                    experiment_id,
+                    state.get("model_uri"),
+                    state.get("validation_metrics", {}),
+                    state.get("success_criteria_met", True),
+                    trained_model=state.get("trained_model"),
+                    include_bentoml=include_bentoml,
+                    fitted_preprocessor=state.get("fitted_preprocessor"),
+                )
+                state["deployment_manifest"] = result.get("deployment_manifest")
+                # Track BentoML PID for cleanup (ephemeral mode only)
+                if include_bentoml and result.get("bentoml_pid"):
+                    state["bentoml_pid"] = result["bentoml_pid"]
+                # Track persistent mode to skip cleanup
+                if include_bentoml and result.get("bentoml_persistent"):
+                    state["bentoml_persistent"] = True
 
-            deployment_id = manifest.get("deployment_id", "N/A")
-            environment = manifest.get("environment", "staging")
-            deployment_status = manifest.get("status", "unknown")
-            deployment_successful = result.get("deployment_successful", False)
-            bentoml_verified = bentoml_serving.get("prediction_test", False) if bentoml_serving else None
-            step_results.append(StepResult(
-                step_num=7,
-                step_name="MODEL DEPLOYER",
-                status="success" if deployment_successful else "warning",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "deployment_id": deployment_id,
-                    "environment": environment,
-                    "status": deployment_status,
-                    "deployment_successful": deployment_successful,
-                    "bentoml_verified": bentoml_verified,
-                },
-                details=step_details,
-                # Enhanced format fields
-                input_summary={
-                    "experiment_id": experiment_id,
-                    "model_uri": state.get("model_uri", "N/A"),
-                    "validation_metrics": state.get("validation_metrics", {}),
-                    "success_criteria_met": state.get("success_criteria_met", True),
-                    "include_bentoml": include_bentoml,
-                },
-                validation_checks=[
-                    ("Deployment successful", deployment_successful, "True", str(deployment_successful)),
-                    ("Deployment ID assigned", deployment_id != "N/A", "ID present", deployment_id),
-                    ("Environment set", environment is not None, "env specified", environment),
-                    ("BentoML verified", bentoml_verified if include_bentoml else True, "True", str(bentoml_verified) if include_bentoml else "N/A (not enabled)"),
-                ],
-                metrics_table=[
-                    ("deployment_id", deployment_id, None, None),
-                    ("environment", environment, None, None),
-                    ("status", deployment_status, "deployed", deployment_status == "deployed"),
-                    ("bentoml_verified", str(bentoml_verified) if include_bentoml else "N/A", None, None),
-                    ("latency_ms", f"{bentoml_serving.get('latency_ms', 'N/A')}" if bentoml_serving else "N/A", None, None),
-                ],
-                interpretation=[
-                    f"Model deployed to {environment} environment" if deployment_successful else "Deployment pending or failed",
-                    f"Deployment ID: {deployment_id}",
-                    f"BentoML serving {'verified with live prediction test' if bentoml_verified else 'not verified' if include_bentoml else 'not enabled'}",
-                ],
-                result_message=f"Deployment complete: {deployment_id} to {environment}" if deployment_successful else "Deployment incomplete",
-            ))
+                manifest = result.get("deployment_manifest", {})
+                bentoml_serving = result.get("bentoml_serving", {})
+                step_details = {
+                    "model_version": result.get("model_version"),
+                    "endpoint_url": manifest.get("endpoint_url"),
+                }
+                # Add BentoML info if present
+                if bentoml_serving:
+                    step_details["bentoml_model_tag"] = bentoml_serving.get("model_tag")
+                    step_details["bentoml_endpoint"] = bentoml_serving.get("endpoint")
+                    step_details["bentoml_health_check"] = bentoml_serving.get("health_check")
+                    step_details["bentoml_prediction_test"] = bentoml_serving.get("prediction_test")
+                    step_details["bentoml_latency_ms"] = bentoml_serving.get("latency_ms")
+
+                deployment_id = manifest.get("deployment_id", "N/A")
+                environment = manifest.get("environment", "staging")
+                deployment_status = manifest.get("status", "unknown")
+                deployment_successful = result.get("deployment_successful", False)
+                bentoml_verified = bentoml_serving.get("prediction_test", False) if bentoml_serving else None
+                step_results.append(StepResult(
+                    step_num=7,
+                    step_name="MODEL DEPLOYER",
+                    status="success" if deployment_successful else "warning",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "deployment_id": deployment_id,
+                        "environment": environment,
+                        "status": deployment_status,
+                        "deployment_successful": deployment_successful,
+                        "bentoml_verified": bentoml_verified,
+                    },
+                    details=step_details,
+                    # Enhanced format fields
+                    input_summary={
+                        "experiment_id": experiment_id,
+                        "model_uri": state.get("model_uri", "N/A"),
+                        "validation_metrics": state.get("validation_metrics", {}),
+                        "success_criteria_met": state.get("success_criteria_met", True),
+                        "include_bentoml": include_bentoml,
+                    },
+                    validation_checks=[
+                        ("Deployment successful", deployment_successful, "True", str(deployment_successful)),
+                        ("Deployment ID assigned", deployment_id != "N/A", "ID present", deployment_id),
+                        ("Environment set", environment is not None, "env specified", environment),
+                        ("BentoML verified", bentoml_verified if include_bentoml else True, "True", str(bentoml_verified) if include_bentoml else "N/A (not enabled)"),
+                    ],
+                    metrics_table=[
+                        ("deployment_id", deployment_id, None, None),
+                        ("environment", environment, None, None),
+                        ("status", deployment_status, "deployed", deployment_status == "deployed"),
+                        ("bentoml_verified", str(bentoml_verified) if include_bentoml else "N/A", None, None),
+                        ("latency_ms", f"{bentoml_serving.get('latency_ms', 'N/A')}" if bentoml_serving else "N/A", None, None),
+                    ],
+                    interpretation=[
+                        f"Model deployed to {environment} environment" if deployment_successful else "Deployment pending or failed",
+                        f"Deployment ID: {deployment_id}",
+                        f"BentoML serving {'verified with live prediction test' if bentoml_verified else 'not verified' if include_bentoml else 'not enabled'}",
+                    ],
+                    result_message=f"Deployment complete: {deployment_id} to {environment}" if deployment_successful else "Deployment incomplete",
+                ))
 
         # Step 8: Observability Connector
         if 8 in steps_to_run:
