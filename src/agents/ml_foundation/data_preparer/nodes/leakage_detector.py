@@ -8,6 +8,8 @@ This node detects multiple types of data leakage:
 5. Zero variance within class: Features with no variance in one or both classes
 6. Mutual information: Features with implausibly high MI with target
 7. Logical dependency: Features that are tautologically equivalent to target
+8. Single-feature AUC: Individual features that nearly predict the target alone
+9. Categorical class separation: Categorical features with high Cramér's V
 """
 
 import logging
@@ -161,6 +163,22 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
                 )
                 findings.extend(dependency_findings)
 
+                # 8. Single-feature AUC
+                auc_findings = check_single_feature_auc(
+                    combined_df, target_variable, numeric_features
+                )
+                findings.extend(auc_findings)
+
+            # 9. Categorical class separation (Cramér's V)
+            categorical_features = _get_categorical_features(
+                combined_df, target_variable, required_features
+            )
+            if len(categorical_features) > 0 and len(combined_df) >= 30:
+                cat_findings = check_categorical_class_separation(
+                    combined_df, target_variable, categorical_features
+                )
+                findings.extend(cat_findings)
+
         # Convert findings to issue strings
         for f in findings:
             leakage_issues.append(f.to_issue_string())
@@ -234,6 +252,22 @@ def _get_numeric_features(
         if col == target_variable or col not in df.columns:
             continue
         if np.issubdtype(df[col].dtype, np.number):
+            features.append(col)
+    return features
+
+
+def _get_categorical_features(
+    df: Any, target_variable: str, required_features: List[str]
+) -> List[str]:
+    """Get categorical/object feature columns (excluding target)."""
+    features = []
+    candidates = required_features if required_features else [
+        c for c in df.columns if c != target_variable
+    ]
+    for col in candidates:
+        if col == target_variable or col not in df.columns:
+            continue
+        if not np.issubdtype(df[col].dtype, np.number):
             features.append(col)
     return features
 
@@ -888,6 +922,159 @@ def check_feature_target_logical_dependency(
 
         except Exception as e:
             logger.warning(f"Logical dependency check failed for '{feature}': {e}")
+
+    return findings
+
+
+# =============================================================================
+# 8. SINGLE-FEATURE AUC CHECK
+# =============================================================================
+
+
+def check_single_feature_auc(
+    df: Any, target_variable: str, numeric_features: List[str]
+) -> List[LeakageFinding]:
+    """Flag features where a single column yields high AUC against the target.
+
+    Catches leakage that range-based checks miss when distributions are skewed
+    but ranges overlap (e.g., disease_severity with AUC=0.964).
+
+    Args:
+        df: Combined DataFrame (train + validation)
+        target_variable: Name of target column
+        numeric_features: Numeric feature column names
+
+    Returns:
+        List of LeakageFinding for features with suspiciously high AUC
+    """
+    from sklearn.metrics import roc_auc_score
+
+    findings = []
+    target = df[target_variable].values
+    unique_classes = np.unique(target[~np.isnan(target)] if np.issubdtype(target.dtype, np.floating) else target)
+
+    if len(unique_classes) != 2:
+        return findings  # AUC only defined for binary targets
+
+    for feature in numeric_features:
+        try:
+            mask = df[[feature, target_variable]].notna().all(axis=1)
+            if mask.sum() < 30:
+                continue
+
+            y = df.loc[mask, target_variable].values.astype(float)
+            x = df.loc[mask, feature].values.astype(float)
+
+            # AUC can be < 0.5 if relationship is inverted — check both directions
+            auc = roc_auc_score(y, x)
+            effective_auc = max(auc, 1 - auc)
+
+            if effective_auc > 0.90:
+                severity = LeakageSeverity.CRITICAL
+            elif effective_auc > 0.80:
+                severity = LeakageSeverity.HIGH
+            else:
+                continue
+
+            findings.append(LeakageFinding(
+                check_name="single_feature_auc",
+                severity=severity,
+                feature=feature,
+                description=(
+                    f"Feature '{feature}' alone achieves AUC={effective_auc:.3f} "
+                    f"against target '{target_variable}'. This indicates the feature "
+                    f"nearly perfectly predicts the target by itself."
+                ),
+                evidence={
+                    "auc": round(effective_auc, 4),
+                    "raw_auc": round(auc, 4),
+                    "n_samples": int(mask.sum()),
+                },
+                recommendation=(
+                    f"Feature '{feature}' is likely derived from or tautologically "
+                    f"related to the target. Remove it to prevent leakage."
+                ),
+            ))
+
+        except Exception as e:
+            logger.warning(f"Single-feature AUC check failed for '{feature}': {e}")
+
+    return findings
+
+
+# =============================================================================
+# 9. CATEGORICAL CLASS SEPARATION (Cramér's V)
+# =============================================================================
+
+
+def check_categorical_class_separation(
+    df: Any, target_variable: str, categorical_features: List[str]
+) -> List[LeakageFinding]:
+    """Flag categorical features with high association to the target (Cramér's V).
+
+    Args:
+        df: Combined DataFrame (train + validation)
+        target_variable: Name of target column
+        categorical_features: Categorical feature column names
+
+    Returns:
+        List of LeakageFinding for features with suspiciously high Cramér's V
+    """
+    from scipy.stats import chi2_contingency
+
+    findings = []
+
+    for feature in categorical_features:
+        try:
+            subset = df[[feature, target_variable]].dropna()
+            if len(subset) < 30:
+                continue
+            # Skip high-cardinality categoricals (likely IDs)
+            if subset[feature].nunique() > 50:
+                continue
+
+            contingency = pd.crosstab(subset[feature], subset[target_variable])
+            if contingency.shape[0] < 2 or contingency.shape[1] < 2:
+                continue
+
+            chi2, p_value, dof, _ = chi2_contingency(contingency)
+            n = len(subset)
+            k = min(contingency.shape) - 1
+            if k == 0:
+                continue
+            cramers_v = np.sqrt(chi2 / (n * k))
+
+            if cramers_v > 0.7:
+                severity = LeakageSeverity.CRITICAL
+            elif cramers_v > 0.5:
+                severity = LeakageSeverity.HIGH
+            else:
+                continue
+
+            findings.append(LeakageFinding(
+                check_name="categorical_class_separation",
+                severity=severity,
+                feature=feature,
+                description=(
+                    f"Categorical feature '{feature}' has Cramér's V={cramers_v:.3f} "
+                    f"with target '{target_variable}' (p={p_value:.2e}). "
+                    f"This indicates very high association."
+                ),
+                evidence={
+                    "cramers_v": round(cramers_v, 4),
+                    "chi2": round(chi2, 2),
+                    "p_value": p_value,
+                    "n_categories": int(contingency.shape[0]),
+                    "n_samples": int(n),
+                },
+                recommendation=(
+                    f"Categorical feature '{feature}' is strongly associated with "
+                    f"the target. Investigate whether it is derived from or a proxy for the target."
+                ),
+            ))
+
+        except Exception as e:
+            logger.warning(f"Categorical class separation check failed for '{feature}': {e}")
 
     return findings
 

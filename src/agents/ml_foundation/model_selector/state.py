@@ -24,6 +24,9 @@ class ModelSelectorState(TypedDict, total=False):
     qc_report: Dict[str, Any]  # Must have passed QC gate
     baseline_metrics: Dict[str, Any]  # Baseline metrics from training data
 
+    # Feature characteristics (optional, from tier0 feature discovery)
+    feature_characteristics: Optional[Dict[str, Any]]  # e.g. {"categorical_ratio": 0.6}
+
     # User preferences (optional)
     algorithm_preferences: Optional[List[str]]  # Preferred algorithms
     excluded_algorithms: Optional[List[str]]  # Algorithms to exclude

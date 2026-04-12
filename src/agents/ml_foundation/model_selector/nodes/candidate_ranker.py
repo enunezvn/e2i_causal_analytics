@@ -41,12 +41,17 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
             "error_type": "no_candidates_error",
         }
 
+    # Feature characteristics for categorical-aware scoring
+    feature_chars = state.get("feature_characteristics", {})
+    categorical_ratio = feature_chars.get("categorical_ratio", 0.0) if feature_chars else 0.0
+
     selection_scores = {}
 
     for candidate in candidates:
         algo_name = candidate["name"]
         score = _compute_selection_score(
-            candidate, success_rates, algorithm_preferences, row_count, requires_causal
+            candidate, success_rates, algorithm_preferences, row_count, requires_causal,
+            categorical_ratio=categorical_ratio,
         )
         selection_scores[algo_name] = score
         candidate["selection_score"] = score
@@ -120,6 +125,7 @@ def _compute_selection_score(
     preferences: List[str],
     data_size: int,
     requires_causal: bool = False,
+    categorical_ratio: float = 0.0,
 ) -> float:
     """Compute composite selection score for a candidate.
 
@@ -129,6 +135,8 @@ def _compute_selection_score(
         preferences: User algorithm preferences
         data_size: Number of training samples
         requires_causal: Whether the problem requires causal inference
+        categorical_ratio: Ratio of categorical features (0-1). When >0.5,
+            tree-based models get a mild boost and linear models a mild penalty.
 
     Returns:
         Float score in range [0, 1]
@@ -165,6 +173,17 @@ def _compute_selection_score(
         # PENALTY: Causal models are inappropriate for standard classification
         # They use effect() not predict(), causing issues with standard eval
         score -= 0.15
+
+    # Factor 6: Categorical feature ratio adjustment (+/-0.05)
+    # When >50% of features are categorical, tree-based models handle discrete
+    # splits natively while linear models create sparse dummy features.
+    if categorical_ratio > 0.5:
+        _tree_families = {"gradient_boosting", "random_forest", "tree", "ensemble"}
+        _linear_families = {"linear", "logistic", "ridge", "lasso", "elastic_net"}
+        if algo_family.lower() in _tree_families or algo_name in ("XGBoost", "LightGBM", "RandomForest"):
+            score += 0.05
+        elif algo_family.lower() in _linear_families or algo_name in ("LogisticRegression", "Ridge", "Lasso"):
+            score -= 0.05
 
     # Bonus: User preference (adds up to 0.1)
     if preferences and algo_name in preferences:

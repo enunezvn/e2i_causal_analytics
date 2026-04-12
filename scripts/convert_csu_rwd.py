@@ -709,6 +709,47 @@ class CSUDataConverter:
                 if pd.notna(ce):
                     continuous = int(ce)
 
+            # --- Generic demo column pass-through ---
+            # Forward any demo columns not already explicitly extracted above.
+            # This makes the converter dataset-agnostic: a future dataset with
+            # different demo columns will have them forwarded automatically.
+            _ALREADY_EXTRACTED_DEMO_COLS = {
+                "patid", "gdr_cd", "age", "zipcode_5", "bus", "diagcode",
+                "continuous_enrollment",
+                # ID / date columns (not useful as raw features)
+                "clmid", "pat_planid", "eligeff", "eligend", "yrdob", "indexdt",
+            }
+            extra_demo: dict[str, Any] = {}
+            if demo_row is not None:
+                for col_name in demo_row.index:
+                    if col_name in _ALREADY_EXTRACTED_DEMO_COLS:
+                        continue
+                    val = demo_row[col_name]
+                    # Skip datetime values (not useful as raw features)
+                    if isinstance(val, (pd.Timestamp, datetime)):
+                        continue
+                    if pd.notna(val):
+                        extra_demo[f"demo_{col_name}"] = str(val)
+
+            # age_continuous: raw numeric age (not binned)
+            age_continuous = age  # age is already extracted above as float or None
+
+            # eligibility_duration_days: days between eligeff and eligend
+            eligibility_duration_days = None
+            if demo_row is not None:
+                elig_start = demo_row.get("eligeff")
+                elig_end = demo_row.get("eligend")
+                if pd.notna(elig_start) and pd.notna(elig_end):
+                    try:
+                        eligibility_duration_days = max(0, (elig_end - elig_start).days)
+                    except Exception:
+                        pass
+
+            # Claim counts per table (generic — no column-name assumptions)
+            medication_claim_count = len(self._med_by_pat.get(patid, []))
+            procedure_claim_count = len(self._proc_by_pat.get(patid, []))
+            lab_claim_count = len(self._lab_by_pat.get(patid, []))
+
             # Treatment flags
             treatment_initiated = 1 if patid in self._med_by_pat else 0
             discontinuation = self._derive_discontinuation_flag(patid)
@@ -767,8 +808,7 @@ class CSUDataConverter:
             else:
                 journey_status = "monitoring"
 
-            journeys.append(
-                {
+            journey_dict = {
                     "patient_journey_id": pj_id,
                     "patient_id": pat_id,
                     "patient_hash": _patient_hash(patid),
@@ -809,8 +849,16 @@ class CSUDataConverter:
                     "days_on_therapy": days_on_therapy,
                     "hcp_visits": hcp_visits,
                     "prior_treatments": prior_treatments,
-                }
-            )
+                    # New generic features
+                    "age_continuous": age_continuous,
+                    "eligibility_duration_days": eligibility_duration_days,
+                    "medication_claim_count": medication_claim_count,
+                    "procedure_claim_count": procedure_claim_count,
+                    "lab_claim_count": lab_claim_count,
+            }
+            # Merge in any extra demo columns discovered at runtime
+            journey_dict.update(extra_demo)
+            journeys.append(journey_dict)
 
         logger.info(
             "  Built %d patient journeys (A=%d, B=%d, C=%d)",

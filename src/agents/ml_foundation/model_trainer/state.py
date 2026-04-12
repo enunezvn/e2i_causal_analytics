@@ -127,11 +127,28 @@ class ModelTrainerState(TypedDict, total=False):
 
     # Calibration (classification only)
     brier_score: Optional[float]  # Brier score
-    calibration_error: Optional[float]  # Expected calibration error
+    calibration_error: Optional[float]  # Expected Calibration Error (ECE)
+    calibrated_ece: Optional[float]  # ECE after post-hoc calibration
+    calibration_analysis: Dict[str, Any]  # Full calibration curve data
+    calibrated_test_metrics: Dict[str, float]  # Metrics after post-hoc calibration
+    post_hoc_calibration: Dict[str, Any]  # Calibration method info
+
+    # Imbalance-Robust Metrics
+    mcc: Optional[float]  # Matthews Correlation Coefficient
 
     # Threshold Analysis
-    optimal_threshold: float  # Optimal classification threshold
+    optimal_threshold: float  # Optimal classification threshold (Youden's J)
+    f1_threshold_analysis: Dict[str, float]  # F1-optimal threshold + metrics
     precision_at_k: Dict[int, float]  # {100: 0.35, 500: 0.28}
+
+    # Permutation Test
+    permutation_test: Dict[str, Any]  # p-value, shuffled AUC stats, verdict
+
+    # Cross-Validation
+    cv_results: Dict[str, Any]  # Stratified k-fold metrics
+
+    # Split Stratification
+    split_validation: Dict[str, Any]  # Class ratio drift across splits
 
     # Confidence Intervals
     confidence_interval: Dict[str, tuple]  # {'auc': (0.78, 0.85)}

@@ -323,6 +323,17 @@ class ModelTrainerAgent:
         suspicion_reasons = final_state.get("suspicion_reasons", [])
         investigation_recommendations = final_state.get("investigation_recommendations", [])
 
+        # Advanced validation (from evaluator)
+        permutation_test = final_state.get("permutation_test", {})
+        cv_results = final_state.get("cv_results", {})
+        mcc = final_state.get("mcc")
+        f1_threshold_analysis = final_state.get("f1_threshold_analysis", {})
+        split_validation = final_state.get("split_validation", {})
+        calibrated_ece = final_state.get("calibrated_ece")
+        calibration_analysis = final_state.get("calibration_analysis", {})
+        calibrated_test_metrics = final_state.get("calibrated_test_metrics", {})
+        post_hoc_calibration = final_state.get("post_hoc_calibration", {})
+
         # Extract sample counts from shape tuples (shape is (n_samples, n_features))
         original_train_shape = final_state.get("original_train_shape")
         resampled_train_shape = final_state.get("resampled_train_shape")
@@ -434,6 +445,16 @@ class ModelTrainerAgent:
             "suspicion_level": suspicion_level,
             "suspicion_reasons": suspicion_reasons,
             "investigation_recommendations": investigation_recommendations,
+            # Advanced validation
+            "permutation_test": permutation_test,
+            "cv_results": cv_results,
+            "mcc": mcc,
+            "f1_threshold_analysis": f1_threshold_analysis,
+            "split_validation": split_validation,
+            "calibrated_ece": calibrated_ece,
+            "calibration_analysis": calibration_analysis,
+            "calibrated_test_metrics": calibrated_test_metrics,
+            "post_hoc_calibration": post_hoc_calibration,
         }
 
         # Persist training run to database

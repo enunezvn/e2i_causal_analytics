@@ -19,7 +19,7 @@ from ..state import DataPreparerState
 logger = logging.getLogger(__name__)
 
 # Maximum number of remediation attempts before giving up
-MAX_LEAKAGE_REMEDIATION_ATTEMPTS = 2
+MAX_LEAKAGE_REMEDIATION_ATTEMPTS = 5
 
 
 # =============================================================================
@@ -58,20 +58,39 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
         logger.warning("Leakage remediation skipped per configuration")
         return {"leakage_remediation_status": "not_needed"}
 
-    # Guard against infinite loops
+    # Guard against infinite loops — but preserve work from prior rounds
     if attempts >= MAX_LEAKAGE_REMEDIATION_ATTEMPTS:
-        logger.warning(
-            f"Max leakage remediation attempts ({MAX_LEAKAGE_REMEDIATION_ATTEMPTS}) "
-            "exceeded. Returning failure."
-        )
-        return {
-            "leakage_remediation_status": "failed",
-            "leakage_remediation_viable": False,
-            "leakage_remediation_reasoning": (
-                f"Exhausted {MAX_LEAKAGE_REMEDIATION_ATTEMPTS} remediation attempts. "
-                f"Leaked features ({', '.join(leaked)}) could not be fully remediated."
-            ),
-        }
+        previous_features = state.get("leakage_remediated_features", [])
+        if previous_features:
+            logger.warning(
+                f"Max remediation attempts ({MAX_LEAKAGE_REMEDIATION_ATTEMPTS}) reached. "
+                f"Proceeding with {len(previous_features)} features from prior rounds."
+            )
+            return {
+                "leakage_remediation_status": "max_attempts_reached",
+                "leakage_remediation_attempts": attempts,
+                "leakage_remediation_viable": True,
+                "requires_leakage_revalidation": False,
+                "leakage_remediation_reasoning": (
+                    f"Exhausted {MAX_LEAKAGE_REMEDIATION_ATTEMPTS} remediation attempts. "
+                    f"Proceeding with {len(previous_features)} remediated features "
+                    f"from prior rounds: {', '.join(previous_features[:5])}"
+                    f"{'...' if len(previous_features) > 5 else ''}."
+                ),
+            }
+        else:
+            logger.warning(
+                f"Max remediation attempts ({MAX_LEAKAGE_REMEDIATION_ATTEMPTS}) reached "
+                "with no viable features from any round — halting pipeline."
+            )
+            return {
+                "leakage_remediation_status": "failed",
+                "leakage_remediation_viable": False,
+                "leakage_remediation_reasoning": (
+                    f"Exhausted {MAX_LEAKAGE_REMEDIATION_ATTEMPTS} remediation attempts. "
+                    f"Leaked features ({', '.join(leaked)}) could not be remediated."
+                ),
+            }
 
     logger.info(
         f"Leakage remediation: severity={severity}, "
@@ -455,9 +474,11 @@ def _rule_based_leakage_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
     """
     from .leakage_detector import (
         _aggregate_severity,
+        check_categorical_class_separation,
         check_feature_target_logical_dependency,
         check_mutual_information,
         check_perfect_class_separation,
+        check_single_feature_auc,
         check_zero_variance_within_class,
     )
 
@@ -483,10 +504,14 @@ def _rule_based_leakage_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
                 classifications[feat] = "proxy — implausibly high mutual information"
             elif check == "target_correlation":
                 classifications[feat] = "proxy — near-perfect correlation with target"
+            elif check == "single_feature_auc":
+                classifications[feat] = "proxy — single feature achieves high AUC against target"
+            elif check == "categorical_class_separation":
+                classifications[feat] = "proxy — categorical feature strongly associated with target"
             else:
                 classifications[feat] = f"{check} — {sev} severity"
 
-    # Discover candidate replacements from available numeric columns
+    # Discover candidate replacements from available columns (numeric + low-cardinality categorical)
     candidates = []
     recommended = []
 
@@ -494,16 +519,22 @@ def _rule_based_leakage_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
         name = p["name"]
         if name == target or name in leaked:
             continue
-        if p.get("dtype_kind", "") not in "iufb":
-            continue
         if p["null_pct"] > 50:
             continue
         if p["nunique"] <= 1:
             continue
 
+        dtype_kind = p.get("dtype_kind", "")
+        is_numeric = dtype_kind in "iufb"
+        is_categorical = not is_numeric and p["nunique"] <= 50
+
+        if not is_numeric and not is_categorical:
+            continue
+
         # Run leakage checks on this candidate if we have train_df info
         risk = "clean"
-        rationale = f"numeric, {p['null_pct']}% null, {p['nunique']} unique values"
+        col_type = "numeric" if is_numeric else f"categorical ({p['nunique']} categories)"
+        rationale = f"{col_type}, {p['null_pct']}% null, {p['nunique']} unique values"
 
         candidates.append({"column": name, "assessment": f"{risk}, {rationale}"})
         recommended.append(name)
@@ -549,9 +580,11 @@ def _apply_leakage_remediation(
     """
     from .leakage_detector import (
         _aggregate_severity,
+        check_categorical_class_separation,
         check_feature_target_logical_dependency,
         check_mutual_information,
         check_perfect_class_separation,
+        check_single_feature_auc,
         check_zero_variance_within_class,
     )
 
@@ -614,10 +647,23 @@ def _apply_leakage_remediation(
             continue
 
         if combined[feat].dtype.kind not in "iufb":
-            verified_features.append(feat)  # Non-numeric, skip structural checks
+            # Non-numeric: run categorical class separation check
+            try:
+                cat_findings = check_categorical_class_separation(
+                    combined, target_variable, [feat]
+                )
+                cat_severity = _aggregate_severity(cat_findings)
+                if cat_severity in ("critical", "high"):
+                    logger.info(f"Categorical candidate '{feat}' has {cat_severity} association with target — rejecting")
+                    rejected_features.append(feat)
+                else:
+                    verified_features.append(feat)
+            except Exception as e:
+                logger.warning(f"Categorical check failed for '{feat}': {e}")
+                verified_features.append(feat)  # Accept on check failure
             continue
 
-        # Run the 4 structural checks
+        # Run the 5 structural checks (4 original + single-feature AUC)
         check_findings = []
         numeric_feats = [feat]
         try:
@@ -632,6 +678,9 @@ def _apply_leakage_remediation(
             )
             check_findings.extend(
                 check_feature_target_logical_dependency(combined, target_variable, numeric_feats)
+            )
+            check_findings.extend(
+                check_single_feature_auc(combined, target_variable, numeric_feats)
             )
         except Exception as e:
             logger.warning(f"Leakage check failed for '{feat}': {e}")
@@ -655,6 +704,48 @@ def _apply_leakage_remediation(
                 f"rejected: {rejected_features}"
             ),
         }
+
+    # Combined-feature AUC sanity check: if all verified features together
+    # still produce AUC > 0.95, the feature set collectively leaks
+    if len(verified_features) >= 2 and target_variable in train_df.columns:
+        try:
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.metrics import roc_auc_score
+            from sklearn.preprocessing import StandardScaler
+
+            numeric_verified = [
+                f for f in verified_features
+                if f in train_df.columns and train_df[f].dtype.kind in "iufb"
+            ]
+            if len(numeric_verified) >= 2:
+                combined_check = train_df[numeric_verified + [target_variable]].dropna()
+                if len(combined_check) >= 50:
+                    X_check = combined_check[numeric_verified].values
+                    y_check = combined_check[target_variable].values.astype(float)
+                    scaler = StandardScaler()
+                    X_scaled = scaler.fit_transform(X_check)
+                    lr = LogisticRegression(max_iter=200, solver="lbfgs", random_state=42)
+                    lr.fit(X_scaled, y_check)
+                    y_prob = lr.predict_proba(X_scaled)[:, 1]
+                    combined_auc = roc_auc_score(y_check, y_prob)
+                    if combined_auc > 0.95:
+                        logger.warning(
+                            f"Combined verified features achieve AUC={combined_auc:.3f} "
+                            f"(threshold 0.95) — collective leakage detected"
+                        )
+                        return {
+                            "success": False,
+                            "viable": False,
+                            "reason": (
+                                f"Verified features collectively achieve AUC={combined_auc:.3f} "
+                                f"(> 0.95 threshold). Individual features passed but together "
+                                f"they still leak. Features: {numeric_verified}"
+                            ),
+                        }
+                    else:
+                        logger.info(f"Combined-feature AUC sanity check passed: AUC={combined_auc:.3f}")
+        except Exception as e:
+            logger.warning(f"Combined AUC sanity check failed (non-fatal): {e}")
 
     # Determine which columns to keep in the DataFrames
     # Keep: target, verified features, and non-feature columns (IDs, metadata)

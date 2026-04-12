@@ -5,8 +5,11 @@ This script executes each agent in the Tier 0 pipeline individually
 with detailed output and verification between steps.
 
 Usage:
-    # Run full pipeline
+    # Run full pipeline (synthetic data)
     python scripts/run_tier0_test.py
+
+    # Run with real-world data
+    python scripts/run_tier0_test.py --data-dir data/rwd/csu --brand competitor --target treatment_initiated --indication "Chronic Spontaneous Urticaria (CSU)"
 
     # Run specific step (1-8)
     python scripts/run_tier0_test.py --step 3
@@ -937,7 +940,9 @@ def print_detailed_summary(
             precision = val_metrics.get("precision", 0)
             f1 = val_metrics.get("f1", 0)
 
-            # --- LEAKAGE SUSPICION CHECK (must precede EXCELLENT) ---
+            # --- LEAKAGE SUSPICION CHECK (imbalance-aware) ---
+            # The evaluator now uses adaptive thresholds based on class ratio,
+            # PR-AUC, and MCC — no more hardcoded AUC >= 0.99 check.
             suspicion_level = state.get("suspicion_level", "none")
             leakage_severity = state.get("leakage_severity", "none")
             suspicion_reasons = state.get("suspicion_reasons", [])
@@ -946,10 +951,76 @@ def print_detailed_summary(
             investigation_recs = state.get("investigation_recommendations", [])
 
             is_leakage_suspected = (
-                (auc_roc >= 0.99 and recall >= 0.99 and precision >= 0.99)
-                or suspicion_level in ("high", "critical")
+                suspicion_level in ("high", "critical")
                 or leakage_severity in ("high", "critical")
             )
+
+            # --- VALIDATION DIAGNOSTICS ---
+            permutation = state.get("permutation_test", {})
+            cv_res = state.get("cv_results", {})
+            cal_analysis = state.get("calibration_analysis", {})
+            f1_thresh = state.get("f1_threshold_analysis", {})
+            split_val = state.get("split_validation", {})
+            mcc_val = state.get("mcc")
+            cal_ece = state.get("calibration_error")
+            cal_ece_post = state.get("calibrated_ece")
+            pr_auc_val = state.get("pr_auc") or val_metrics.get("pr_auc") or 0
+
+            print(f"\n  {'─'*60}")
+            print(f"  Validation Diagnostics:")
+            print(f"  {'─'*60}")
+
+            # Permutation test
+            if permutation.get("signal_genuine") is not None:
+                sig = "GENUINE" if permutation["signal_genuine"] else "RANDOM"
+                pval = permutation.get("permutation_pvalue", 0)
+                shuf_mean = permutation.get("permutation_auc_mean", 0)
+                print(f"    Permutation test:  signal={sig} (p={pval:.4f}, shuffled AUC={shuf_mean:.4f})")
+
+            # Cross-validation
+            if cv_res.get("cv_completed"):
+                print(
+                    f"    Stratified 5-fold: AUC={cv_res.get('cv_roc_auc_mean', 0):.4f}"
+                    f"±{cv_res.get('cv_roc_auc_std', 0):.4f}, "
+                    f"PR-AUC={cv_res.get('cv_pr_auc_mean', 0):.4f}"
+                    f"±{cv_res.get('cv_pr_auc_std', 0):.4f}, "
+                    f"MCC={cv_res.get('cv_mcc_mean', 0):.4f}"
+                    f"±{cv_res.get('cv_mcc_std', 0):.4f}"
+                )
+
+            # Imbalance-robust metrics
+            print(f"    PR-AUC:            {pr_auc_val:.4f} (imbalance-robust)")
+            if mcc_val is not None:
+                print(f"    MCC:               {mcc_val:.4f} (class-balanced)")
+
+            # Calibration
+            if cal_ece is not None:
+                ece_str = f"{cal_ece:.4f}"
+                if cal_ece_post is not None:
+                    ece_str += f" → {cal_ece_post:.4f} (after isotonic calibration)"
+                print(f"    ECE:               {ece_str}")
+
+            # F1-optimal threshold
+            if f1_thresh.get("f1_optimal_threshold"):
+                print(
+                    f"    F1-optimal thresh: {f1_thresh['f1_optimal_threshold']:.4f} "
+                    f"(F1={f1_thresh.get('f1_at_optimal', 0):.4f}, "
+                    f"P={f1_thresh.get('precision_at_f1_optimal', 0):.4f}, "
+                    f"R={f1_thresh.get('recall_at_f1_optimal', 0):.4f})"
+                )
+
+            # Split stratification
+            if split_val.get("split_positive_ratios"):
+                ratios = split_val["split_positive_ratios"]
+                strat = "OK" if split_val.get("is_stratified") else "DRIFT"
+                print(
+                    f"    Split stratify:    {strat} "
+                    f"(train={ratios.get('train', 0):.3f}, "
+                    f"val={ratios.get('validation', 0):.3f}, "
+                    f"test={ratios.get('test', 0):.3f})"
+                )
+
+            print(f"  {'─'*60}")
 
             if is_leakage_suspected:
                 verdict = "LEAKAGE_SUSPECTED"
@@ -985,11 +1056,14 @@ def print_detailed_summary(
                     for rec in investigation_recs:
                         print(f"    • {rec}")
 
-                print(f"\n  Key Metrics (suspiciously perfect):")
+                print(f"\n  Key Metrics:")
                 print(f"    • AUC-ROC:   {auc_roc:.4f}")
+                print(f"    • PR-AUC:    {pr_auc_val:.4f}")
                 print(f"    • Recall:    {recall:.4f}")
                 print(f"    • Precision: {precision:.4f}")
                 print(f"    • F1 Score:  {f1:.4f}")
+                if mcc_val is not None:
+                    print(f"    • MCC:       {mcc_val:.4f}")
                 print(f"\n  ❌ Recommendation: {deploy_recommendation}")
 
             # --- Normal verdict logic (only if leakage not suspected) ---
@@ -1023,9 +1097,12 @@ def print_detailed_summary(
             print(f"\n  Assessment: {description}")
             print(f"\n  Key Metrics:")
             print(f"    • AUC-ROC:   {auc_roc:.4f}")
+            print(f"    • PR-AUC:    {pr_auc_val:.4f}")
             print(f"    • Recall:    {recall:.4f} ({recall*100:.1f}% of positives detected)")
             print(f"    • Precision: {precision:.4f} ({precision*100:.1f}% of predictions correct)")
             print(f"    • F1 Score:  {f1:.4f}")
+            if mcc_val is not None:
+                print(f"    • MCC:       {mcc_val:.4f}")
             print(f"    • Positive Predictions: {n_pos_pred}/{total_pred} ({n_pos_pred/total_pred*100:.1f}%)")
             print(f"\n  Recommendation: {deploy_recommendation}")
 
@@ -1041,6 +1118,94 @@ def print_detailed_summary(
         print(f"  • Endpoint: {deployment_manifest.get('endpoint_url', 'N/A')}")
 
     print(f"\n{'='*70}")
+
+
+def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
+    """Load real-world patient journey data from JSON.
+
+    Args:
+        data_dir: Directory containing ``e2i_ml_v3_patient_journeys.json``.
+        target: Target outcome column name.
+
+    Returns:
+        DataFrame with columns matching the Tier 0 pipeline schema.
+    """
+    path = Path(data_dir) / "e2i_ml_v3_patient_journeys.json"
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"RWD data not found at {path}\n"
+            "Ensure the patient journey JSON has been generated "
+            "(e.g. python scripts/convert_csu_rwd.py)."
+        )
+
+    with open(path) as f:
+        records = json.load(f)
+
+    df = pd.DataFrame(records)
+
+    # Map age_group values to pipeline-expected buckets
+    age_map = {
+        "<18": "<50",
+        "18-34": "<50",
+        "35-49": "<50",
+        "50-65": "50-65",
+        "65+": ">65",
+    }
+    if "age_group" in df.columns:
+        df["age_group"] = df["age_group"].map(age_map).fillna("<50")
+
+    # Ensure numeric types for ML features
+    for col in ["days_on_therapy", "hcp_visits", "prior_treatments"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    # Coerce new generic numeric columns from converter
+    for col in ["age_continuous", "eligibility_duration_days",
+                "medication_claim_count", "procedure_claim_count", "lab_claim_count"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Ensure treatment_initiated is int
+    if "treatment_initiated" in df.columns:
+        df["treatment_initiated"] = (
+            pd.to_numeric(df["treatment_initiated"], errors="coerce").fillna(0).astype(int)
+        )
+
+    # Handle discontinuation_flag (may be None for non-medicated patients)
+    if "discontinuation_flag" in df.columns:
+        df["discontinuation_flag"] = pd.to_numeric(
+            df["discontinuation_flag"], errors="coerce"
+        )
+
+    # Ensure journey_status exists
+    if "journey_status" not in df.columns:
+        df["journey_status"] = df.apply(
+            lambda r: "transitioning" if r.get("treatment_initiated", 0) == 1 else "active",
+            axis=1,
+        )
+
+    # If targeting discontinuation_flag, filter to medicated patients only
+    if target == "discontinuation_flag":
+        pre_filter = len(df)
+        df = df[
+            (df["treatment_initiated"] == 1)
+            & df["discontinuation_flag"].notna()
+        ].copy()
+        df["discontinuation_flag"] = df["discontinuation_flag"].astype(int)
+        print(f"  Filtered to medicated patients: {pre_filter} -> {len(df)}")
+
+    print(f"  Loaded {len(df)} RWD patient records from {data_dir}")
+    print(f"  Indication: {CONFIG.indication}")
+    print(f"  Target: {CONFIG.target_outcome}")
+
+    target_col = CONFIG.target_outcome
+    if target_col in df.columns:
+        pos = int(df[target_col].sum())
+        total = len(df)
+        print(f"  Class distribution: {pos}/{total} positive ({pos / total:.1%})")
+
+    return df
 
 
 def generate_sample_data(
@@ -1948,7 +2113,12 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
     return eligible_df, result
 
 
-async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report: dict) -> dict[str, Any]:
+async def step_4_model_selector(
+    experiment_id: str,
+    scope_spec: dict,
+    qc_report: dict,
+    feature_characteristics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Step 4: Select model candidate."""
     import time as time_mod
     step_start = time_mod.time()
@@ -1964,11 +2134,13 @@ async def step_4_model_selector(experiment_id: str, scope_spec: dict, qc_report:
     if "qc_errors" not in normalized_qc_report:
         normalized_qc_report["qc_errors"] = []
 
-    input_data = {
+    input_data: dict[str, Any] = {
         "scope_spec": scope_spec,
         "qc_report": normalized_qc_report,
         "skip_benchmarks": False,  # Enable benchmarks to evaluate alternatives
     }
+    if feature_characteristics:
+        input_data["feature_characteristics"] = feature_characteristics
 
     print_input_section({
         "problem_type": scope_spec.get("problem_type", "binary_classification"),
@@ -2592,7 +2764,7 @@ async def step_6_feature_analyzer(
 
         for i, fi in enumerate(result["feature_importance"][:10], 1):
             if isinstance(fi, dict):
-                name = fi.get("feature", f"feature_{i}")[:25]
+                name = str(fi.get("feature", f"feature_{i}"))[:25]
                 imp = fi.get("importance", 0)
                 print(f"    {name:<25} {imp:<15.4f} #{i:<10}")
             else:
@@ -2605,13 +2777,13 @@ async def step_6_feature_analyzer(
     if has_importance:
         top_features = result["feature_importance"][:3]
         if top_features:
-            top_names = [fi.get("feature", "unknown") if isinstance(fi, dict) else str(fi) for fi in top_features]
+            top_names = [str(fi.get("feature", "unknown")) if isinstance(fi, dict) else str(fi) for fi in top_features]
             observations.append(f"Top predictive features: {', '.join(top_names)}")
 
             # Feature-specific insights
             for fi in top_features:
                 if isinstance(fi, dict):
-                    name = fi.get("feature", "")
+                    name = str(fi.get("feature", ""))
                     imp = fi.get("importance", 0)
                     if "days_on_therapy" in name.lower():
                         observations.append(f"  • Duration on therapy ({imp:.3f}) is a strong predictor")
@@ -3036,6 +3208,7 @@ async def run_pipeline(
     dry_run: bool = False,
     imbalance_ratio: float | None = None,
     include_bentoml: bool = True,
+    data_dir: str | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline or a specific step.
 
@@ -3044,6 +3217,8 @@ async def run_pipeline(
         dry_run: Show what would be done without executing
         imbalance_ratio: If provided, create imbalanced data with this minority ratio
         include_bentoml: If True, deploy real model to BentoML and verify predictions
+        data_dir: If provided, load real-world data from this directory instead of
+                  generating synthetic data
 
     Returns:
         State dictionary containing all pipeline outputs
@@ -3075,9 +3250,13 @@ async def run_pipeline(
     # NOTE: Generate 1500 samples to satisfy scope_spec.minimum_samples=500 and
     # provide enough data for hierarchical CATE analysis (~500 per segment in
     # CausalForestDML's 3-segment cross-fitting, preventing zero-variance leaves)
-    print("\n  Generating sample patient data...")
-    patient_df = generate_sample_data(n_samples=1500, imbalance_ratio=imbalance_ratio)
-    print(f"  Generated {len(patient_df)} patient records")
+    if data_dir:
+        print(f"\n  Loading real-world data from {data_dir}...")
+        patient_df = load_rwd_data(data_dir, target=CONFIG.target_outcome)
+    else:
+        print("\n  Generating sample patient data...")
+        patient_df = generate_sample_data(n_samples=1500, imbalance_ratio=imbalance_ratio)
+        print(f"  Generated {len(patient_df)} patient records")
 
     # Pipeline state
     state: dict[str, Any] = {
@@ -3383,7 +3562,33 @@ async def run_pipeline(
             step_start = time.time()
             scope_spec = state.get("scope_spec", {"problem_type": CONFIG.problem_type})
             qc_report = state.get("qc_report", {"gate_passed": True})
-            result = await step_4_model_selector(experiment_id, scope_spec, qc_report)
+
+            # Compute feature characteristics for model selector scoring
+            _step4_df = state.get("eligible_df", patient_df)
+            _step4_exclude = {
+                "patient_journey_id", "patient_id", "patient_hash", "brand",
+                "journey_start_date", "journey_end_date", "created_at", "updated_at",
+                "source_timestamp", "ingestion_timestamp", "data_split", "split_config_id",
+                "data_source", "data_sources_matched", "source_match_confidence",
+                "source_combination_method", "source_stacking_flag", "data_lag_hours",
+                "primary_diagnosis_desc", "secondary_diagnosis_codes",
+                "state", "zip_code", "comorbidities", "risk_score",
+                "journey_stage", "journey_status",
+                CONFIG.target_outcome, "discontinuation_flag", "treatment_initiated",
+            }
+            _s4_numeric = [c for c in _step4_df.columns if c not in _step4_exclude
+                           and _step4_df[c].dtype.kind in "iufb" and _step4_df[c].nunique() > 1]
+            _s4_categorical = [c for c in _step4_df.columns if c not in _step4_exclude
+                               and _step4_df[c].dtype == object and 2 <= _step4_df[c].nunique() <= 50]
+            _s4_total = len(_s4_numeric) + len(_s4_categorical)
+            _cat_ratio = len(_s4_categorical) / _s4_total if _s4_total > 0 else 0.0
+            feature_characteristics = {"categorical_ratio": _cat_ratio,
+                                       "num_numeric": len(_s4_numeric),
+                                       "num_categorical": len(_s4_categorical)}
+            state["feature_characteristics"] = feature_characteristics
+
+            result = await step_4_model_selector(experiment_id, scope_spec, qc_report,
+                                                 feature_characteristics=feature_characteristics)
             state["model_candidate"] = result.get("model_candidate") or result.get("primary_candidate")
 
             candidate = state["model_candidate"]
@@ -3457,30 +3662,56 @@ async def run_pipeline(
             if remediated:
                 feature_cols = [f for f in remediated if f in eligible_df.columns]
             else:
-                # Discover numeric features, excluding IDs, dates, targets, metadata
+                # Discover features, excluding IDs, dates, targets, metadata
                 _exclude = {
                     "patient_journey_id", "patient_id", "patient_hash", "brand",
                     "journey_start_date", "journey_end_date", "created_at", "updated_at",
                     "source_timestamp", "ingestion_timestamp", "data_split", "split_config_id",
                     "data_source", "data_sources_matched", "source_match_confidence",
                     "source_combination_method", "source_stacking_flag", "data_lag_hours",
-                    "primary_diagnosis_code", "primary_diagnosis_desc", "secondary_diagnosis_codes",
+                    # primary_diagnosis_code removed — it's a legitimate low-cardinality
+                    # feature; leakage detector will vet it
+                    "primary_diagnosis_desc", "secondary_diagnosis_codes",
                     "state", "zip_code", "comorbidities", "risk_score",
+                    # Derived from target — potential leakers
+                    "journey_stage", "journey_status",
                     CONFIG.target_outcome, "discontinuation_flag", "treatment_initiated",
                 }
-                feature_cols = [
+                # Phase 1: Numeric features
+                numeric_cols = [
                     c for c in eligible_df.columns
                     if c not in _exclude
                     and eligible_df[c].dtype.kind in "iufb"
                     and eligible_df[c].nunique() > 1
                     and eligible_df[c].notna().mean() > 0.5
                 ]
+                # Phase 2: Low-cardinality categoricals (e.g. demo_product, demo_lis_dual)
+                categorical_cols = [
+                    c for c in eligible_df.columns
+                    if c not in _exclude
+                    and eligible_df[c].dtype == object
+                    and 2 <= eligible_df[c].nunique() <= 50
+                    and eligible_df[c].notna().mean() > 0.5
+                ]
+                feature_cols = numeric_cols + categorical_cols
             if not feature_cols:
                 # Absolute fallback to historical defaults
                 feature_cols = ["days_on_therapy", "hcp_visits", "prior_treatments"]
 
             X = eligible_df[feature_cols].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
+
+            # === CATEGORICAL ENCODING ===
+            # OrdinalEncoder for categorical columns so sklearn/leakage checks get numeric data.
+            # Tree-based models handle ordinal encoding natively; the ModelTrainerPreprocessor
+            # will do proper encoding downstream.
+            _cat_cols = [c for c in feature_cols if X[c].dtype == object]
+            if _cat_cols:
+                from sklearn.preprocessing import OrdinalEncoder
+                _oe = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+                X[_cat_cols] = _oe.fit_transform(X[_cat_cols].fillna("__missing__"))
+                state["categorical_encoding"] = {"encoder": _oe, "columns": _cat_cols}
+                print(f"  Encoded {len(_cat_cols)} categorical features: {_cat_cols}")
 
             # === PRE-TRAINING LEAKAGE CHECK (on actual pipeline data) ===
             # The data_preparer's leakage detector runs on synthetic data,
@@ -3708,6 +3939,17 @@ async def run_pipeline(
                 state["suspicion_reasons"] = result.get("suspicion_reasons", [])
                 state["investigation_recommendations"] = result.get("investigation_recommendations", [])
 
+                # Propagate advanced validation results
+                state["permutation_test"] = result.get("permutation_test", {})
+                state["cv_results"] = result.get("cv_results", {})
+                state["calibration_analysis"] = result.get("calibration_analysis", {})
+                state["calibration_error"] = result.get("calibration_error")
+                state["calibrated_ece"] = result.get("calibrated_ece")
+                state["f1_threshold_analysis"] = result.get("f1_threshold_analysis", {})
+                state["split_validation"] = result.get("split_validation", {})
+                state["mcc"] = result.get("mcc")
+                state["pr_auc"] = result.get("pr_auc")
+
                 # Determine step status based on both AUC and model usefulness
                 model_usefulness = result.get("model_usefulness", "unknown")
                 if model_usefulness == "useless":
@@ -3790,10 +4032,28 @@ async def run_pipeline(
             X = eligible_df[[c for c in feature_cols if c in eligible_df.columns]].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
 
+            # Apply fitted preprocessor so SHAP receives the same feature space the model expects
+            X_for_shap = X.iloc[:50]
+            fitted_preprocessor = state.get("fitted_preprocessor")
+            if fitted_preprocessor is not None:
+                try:
+                    X_transformed = fitted_preprocessor.transform(X_for_shap)
+                    feature_names_out = getattr(fitted_preprocessor, 'get_feature_names_out', None)
+                    if feature_names_out:
+                        X_for_shap = pd.DataFrame(
+                            X_transformed,
+                            columns=fitted_preprocessor.get_feature_names_out(),
+                            index=X_for_shap.index,
+                        )
+                    else:
+                        X_for_shap = pd.DataFrame(X_transformed, index=X_for_shap.index)
+                except Exception as e:
+                    print(f"  ⚠ Preprocessor transform failed, using raw features: {e}")
+
             result = await step_6_feature_analyzer(
                 experiment_id,
                 state.get("trained_model"),
-                X.iloc[:50],
+                X_for_shap,
                 y.iloc[:50],
                 model_uri=state.get("model_uri")
             )
@@ -3847,7 +4107,7 @@ async def run_pipeline(
                 interpretation=[
                     f"SHAP analysis completed on {samples_analyzed} samples in {compute_time:.2f}s",
                     f"Top driver: {top_feature_name} (importance: {top_feature_importance:.3f})" if top_feature_name else "No dominant feature identified",
-                    f"Feature ranking: {', '.join(list(top_features.keys())[:3])}" if len(top_features) >= 3 else f"Features analyzed: {len(top_features)}",
+                    f"Feature ranking: {', '.join(str(k) for k in list(top_features.keys())[:3])}" if len(top_features) >= 3 else f"Features analyzed: {len(top_features)}",
                 ],
                 result_message=f"Feature analysis complete: {top_feature_name} is top predictor" if top_feature_name else "Feature analysis complete",
             ))
@@ -4033,6 +4293,34 @@ async def run_pipeline(
         print(f"  QC Gate: {'PASSED' if state.get('gate_passed', True) else 'FAILED'}")
         if state.get("eligible_df") is not None:
             print(f"  Cohort Size: {len(state['eligible_df'])}")
+        # Feature Pipeline section
+        feat_chars = state.get("feature_characteristics")
+        cat_enc = state.get("categorical_encoding")
+        leaked = state.get("leaked_features", [])
+        leakage_sev = state.get("leakage_severity")
+        remediated = state.get("leakage_remediated_features")
+        leakage_dropped = state.get("leakage_dropped_features")
+
+        has_feature_info = feat_chars or cat_enc or leaked or remediated
+        if has_feature_info:
+            print(f"\n  Feature Pipeline:")
+            if feat_chars:
+                n_num = feat_chars.get("num_numeric", 0)
+                n_cat = feat_chars.get("num_categorical", 0)
+                cat_ratio = feat_chars.get("categorical_ratio", 0.0)
+                print(f"    Features Discovered: {n_num + n_cat} ({n_num} numeric, {n_cat} categorical)")
+                print(f"    Categorical Ratio: {cat_ratio:.2f}")
+            if cat_enc:
+                enc_cols = cat_enc.get("columns", [])
+                print(f"    Categorical Encoded: {len(enc_cols)} ({', '.join(enc_cols)})")
+            if leaked:
+                print(f"    Leakage Detected: {len(leaked)} features (severity: {leakage_sev or 'unknown'})")
+                print(f"    Leaked: {', '.join(sorted(leaked))}")
+            if leakage_dropped:
+                print(f"    Dropped: {', '.join(sorted(leakage_dropped))}")
+            if remediated:
+                print(f"    Clean Features: {len(remediated)} ({', '.join(remediated)})")
+
         if state.get("validation_metrics"):
             print(f"  Validation Metrics: {state['validation_metrics']}")
         if include_bentoml and state.get("bentoml_persistent"):
@@ -4125,6 +4413,30 @@ def main():
         action="store_true",
         help="Do not save results to file (only print to console)"
     )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Load real-world data from this directory instead of generating synthetic data"
+    )
+    parser.add_argument(
+        "--brand",
+        type=str,
+        default=None,
+        help="Override CONFIG.brand (e.g. 'competitor')"
+    )
+    parser.add_argument(
+        "--target",
+        type=str,
+        default=None,
+        help="Override CONFIG.target_outcome (e.g. 'treatment_initiated')"
+    )
+    parser.add_argument(
+        "--indication",
+        type=str,
+        default=None,
+        help="Override CONFIG.indication (e.g. 'Chronic Spontaneous Urticaria (CSU)')"
+    )
 
     args = parser.parse_args()
 
@@ -4133,6 +4445,12 @@ def main():
         CONFIG.enable_mlflow = False
     CONFIG.enable_opik = args.enable_opik
     CONFIG.hpo_trials = args.hpo_trials
+    if args.brand:
+        CONFIG.brand = args.brand
+    if args.target:
+        CONFIG.target_outcome = args.target
+    if args.indication:
+        CONFIG.indication = args.indication
 
     # Setup output capture if saving results
     output_buffer = None
@@ -4167,6 +4485,7 @@ def main():
             dry_run=args.dry_run,
             imbalance_ratio=args.imbalanced,
             include_bentoml=not args.no_bentoml,
+            data_dir=args.data_dir,
         ))
     finally:
         # Restore stdout
@@ -4175,12 +4494,17 @@ def main():
         # Save results to file
         if not args.no_save and output_buffer:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = Path(args.output_dir) / f"tier0_pipeline_run_{timestamp}.md"
+            prefix = "rwd" if args.data_dir else "tier0"
+            output_file = Path(args.output_dir) / f"{prefix}_pipeline_run_{timestamp}.md"
 
             # Add markdown header
-            md_content = f"# Tier 0 Pipeline Run Results\n\n"
-            md_content += f"**Generated**: {datetime.now().isoformat()}\n\n"
-            md_content += "```\n"
+            md_content = f"# {'RWD' if args.data_dir else 'Tier 0'} Pipeline Run Results\n\n"
+            md_content += f"**Generated**: {datetime.now().isoformat()}\n"
+            if args.data_dir:
+                md_content += f"**Data**: {args.data_dir}\n"
+                md_content += f"**Target**: {CONFIG.target_outcome}\n"
+                md_content += f"**Indication**: {CONFIG.indication}\n"
+            md_content += "\n```\n"
             md_content += output_buffer.getvalue()
             md_content += "```\n"
 

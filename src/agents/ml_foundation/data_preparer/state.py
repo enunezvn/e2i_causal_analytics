@@ -62,7 +62,8 @@ class DataPreparerState(TypedDict, total=False):
 
     # Leakage remediation (LLM-assisted)
     leakage_remediation_status: Literal[
-        "not_needed", "applied", "failed", "manual_required", "error"
+        "not_needed", "applied", "failed", "manual_required", "error",
+        "max_attempts_reached",
     ]
     leakage_remediation_attempts: int
     leakage_remediated_features: List[str]  # Clean features after remediation

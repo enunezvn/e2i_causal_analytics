@@ -16,6 +16,7 @@ from sklearn.metrics import (
     brier_score_loss,
     confusion_matrix,
     f1_score,
+    matthews_corrcoef,
     mean_absolute_error,
     mean_squared_error,
     precision_score,
@@ -23,6 +24,16 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
     roc_curve,
+)
+
+from .advanced_validation import (
+    apply_post_hoc_calibration,
+    check_imbalance_aware_suspicion,
+    compute_calibration_analysis,
+    compute_permutation_test,
+    compute_stratified_cv,
+    optimize_threshold_f1,
+    validate_stratified_splits,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,6 +177,85 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "error_type": "metrics_computation_failed",
         }
 
+    # =========================================================================
+    # ADVANCED VALIDATION (imbalance-aware)
+    # =========================================================================
+    if problem_type == "binary_classification":
+        y_test_proba = predictions.get("y_test_proba")
+
+        # 1. Permutation test — confirm signal is genuine
+        logger.info("Running permutation test (100 shuffles)...")
+        permutation_result = compute_permutation_test(
+            y_test_np, y_test_proba, n_permutations=100
+        )
+        metrics_result["permutation_test"] = permutation_result
+        if permutation_result.get("signal_genuine") is not None:
+            logger.info(
+                f"Permutation test: p={permutation_result['permutation_pvalue']:.4f}, "
+                f"signal_genuine={permutation_result['signal_genuine']}"
+            )
+
+        # 2. Calibration analysis — ECE + calibration curve
+        calibration_result = compute_calibration_analysis(y_test_np, y_test_proba)
+        metrics_result["calibration_error"] = calibration_result.get("calibration_ece")
+        metrics_result["calibration_analysis"] = calibration_result
+
+        # 3. F1-optimal threshold (complements existing Youden's J)
+        f1_threshold_result = optimize_threshold_f1(y_test_np, y_test_proba)
+        metrics_result["f1_threshold_analysis"] = f1_threshold_result
+
+        # 4. MCC from test metrics
+        metrics_result["mcc"] = metrics_result.get("test_metrics", {}).get("mcc")
+
+        # 5. Stratified k-fold CV — validate metric stability
+        if X_train_np is not None and y_train_np is not None:
+            logger.info("Running 5-fold stratified cross-validation...")
+            arrays_X = [x for x in [X_train_np, X_val_np, X_test_np] if x is not None]
+            arrays_y = [y for y in [y_train_np, y_val_np, y_test_np] if y is not None]
+            X_all = np.vstack(arrays_X)
+            y_all = np.concatenate(arrays_y)
+            cv_result = compute_stratified_cv(trained_model, X_all, y_all, n_folds=5)
+            metrics_result["cv_results"] = cv_result
+            if cv_result.get("cv_completed"):
+                logger.info(
+                    f"CV results: AUC={cv_result.get('cv_roc_auc_mean', 0):.4f}"
+                    f"±{cv_result.get('cv_roc_auc_std', 0):.4f}, "
+                    f"PR-AUC={cv_result.get('cv_pr_auc_mean', 0):.4f}"
+                    f"±{cv_result.get('cv_pr_auc_std', 0):.4f}"
+                )
+
+        # 6. Post-hoc calibration (isotonic) — better probability estimates
+        if X_val_np is not None and y_val_np is not None:
+            calibrated_model, cal_info = apply_post_hoc_calibration(
+                trained_model, X_val_np, y_val_np, method="isotonic"
+            )
+            metrics_result["post_hoc_calibration"] = cal_info
+            if cal_info.get("calibration_applied") and X_test_np is not None:
+                cal_proba = calibrated_model.predict_proba(X_test_np)
+                cal_proba_pos = cal_proba[:, 1] if cal_proba.ndim == 2 else cal_proba
+                opt_thresh = metrics_result.get("optimal_threshold", 0.5)
+                cal_pred = (cal_proba_pos >= opt_thresh).astype(int)
+                cal_test_metrics = _compute_split_classification_metrics(
+                    y_test_np, cal_pred, cal_proba
+                )
+                metrics_result["calibrated_test_metrics"] = cal_test_metrics
+                # Compute ECE improvement
+                cal_ece = compute_calibration_analysis(y_test_np, cal_proba)
+                metrics_result["calibrated_ece"] = cal_ece.get("calibration_ece")
+                uncal_ece = metrics_result.get("calibration_error")
+                if uncal_ece is not None and cal_ece.get("calibration_ece") is not None:
+                    logger.info(
+                        f"Calibration: ECE {uncal_ece:.4f} → "
+                        f"{cal_ece['calibration_ece']:.4f} (isotonic)"
+                    )
+
+        # 7. Stratified split validation — check class ratio preservation
+        if y_train_np is not None and y_val_np is not None:
+            split_val = validate_stratified_splits(y_train_np, y_val_np, y_test_np)
+            metrics_result["split_validation"] = split_val
+            if split_val.get("stratification_warning"):
+                logger.warning(split_val["stratification_warning"])
+
     # Check success criteria
     success_results = _check_success_criteria(
         metrics_result["test_metrics"],
@@ -177,9 +267,10 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
         f"Evaluation complete: success_criteria_met={success_results['success_criteria_met']}"
     )
 
-    # Post-training leakage suspicion check
-    suspicion_result = _check_metric_suspicion(
-        metrics_result, problem_type
+    # Post-training leakage suspicion check (imbalance-aware)
+    class_distribution = state.get("class_distribution")
+    suspicion_result = check_imbalance_aware_suspicion(
+        metrics_result, class_distribution, problem_type
     )
 
     if suspicion_result["leakage_suspected"]:
@@ -555,6 +646,8 @@ def _compute_split_classification_metrics(
         "precision_class_1": float(precision_score(y_true, y_pred, pos_label=1, zero_division=0)),
         "recall_class_0": float(recall_score(y_true, y_pred, pos_label=0, zero_division=0)),
         "recall_class_1": float(recall_score(y_true, y_pred, pos_label=1, zero_division=0)),
+        # Matthews Correlation Coefficient — robust to class imbalance
+        "mcc": float(matthews_corrcoef(y_true, y_pred)),
     }
 
     # Probability-based metrics
