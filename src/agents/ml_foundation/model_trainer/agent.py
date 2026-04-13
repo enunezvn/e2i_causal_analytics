@@ -334,6 +334,13 @@ class ModelTrainerAgent:
         calibrated_test_metrics = final_state.get("calibrated_test_metrics", {})
         post_hoc_calibration = final_state.get("post_hoc_calibration", {})
 
+        # Imbalance-aware evaluation fields (from evaluator)
+        precision_constrained = final_state.get("precision_constrained")
+        minority_recall = final_state.get("minority_recall")
+        minority_precision = final_state.get("minority_precision")
+        test_metrics_at_optimal = final_state.get("test_metrics_at_optimal", {})
+        test_metrics_at_05 = final_state.get("test_metrics_at_05", {})
+
         # Extract sample counts from shape tuples (shape is (n_samples, n_features))
         original_train_shape = final_state.get("original_train_shape")
         resampled_train_shape = final_state.get("resampled_train_shape")
@@ -378,6 +385,12 @@ class ModelTrainerAgent:
             "calibration_error": calibration_error,
             "optimal_threshold": optimal_threshold,
             "precision_at_k": precision_at_k,
+            # Imbalance-aware evaluation
+            "precision_constrained": precision_constrained,
+            "minority_recall": minority_recall,
+            "minority_precision": minority_precision,
+            "test_metrics_at_optimal": test_metrics_at_optimal,
+            "test_metrics_at_05": test_metrics_at_05,
             # Regression metrics
             "rmse": rmse,
             "mae": mae,

@@ -158,7 +158,7 @@ class DriftHistoryRepository(BaseRepository[DriftHistoryRecord]):
                 if isinstance(value, datetime):
                     item[key] = value.isoformat()
 
-        await self.client.table(self.table_name).insert(data).execute()
+        self.client.table(self.table_name).insert(data).execute()
 
         return records
 
@@ -304,7 +304,7 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
                     elif value is None:
                         item[key] = None
 
-            await self.client.table(self.table_name).insert(data).execute()
+            self.client.table(self.table_name).insert(data).execute()
 
         return alerts
 
@@ -440,7 +440,7 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
                 elif value is None:
                     data[key] = None
 
-            await self.client.table(self.table_name).insert(data).execute()
+            self.client.table(self.table_name).insert(data).execute()
 
         return record
 
@@ -563,7 +563,7 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
                 if isinstance(value, datetime):
                     item[key] = value.isoformat()
 
-        await self.client.table(self.table_name).insert(data).execute()
+        self.client.table(self.table_name).insert(data).execute()
 
         return records
 
@@ -647,7 +647,7 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
                 elif value is None:
                     data[key] = None
 
-            await self.client.table(self.table_name).insert(data).execute()
+            self.client.table(self.table_name).insert(data).execute()
 
         return record
 

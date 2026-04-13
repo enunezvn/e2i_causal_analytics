@@ -355,6 +355,7 @@ def _filter_hyperparameters(
             "reg_alpha",
             "reg_lambda",
             "num_leaves",
+            "is_unbalance",
             "random_state",
             "n_jobs",
             "verbose",

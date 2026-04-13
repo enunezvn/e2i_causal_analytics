@@ -141,6 +141,13 @@ class ModelTrainerState(TypedDict, total=False):
     f1_threshold_analysis: Dict[str, float]  # F1-optimal threshold + metrics
     precision_at_k: Dict[int, float]  # {100: 0.35, 500: 0.28}
 
+    # Imbalance-Aware Evaluation (from evaluator, propagated through agent)
+    precision_constrained: Optional[Dict[str, Any]]  # Precision-constrained threshold info
+    minority_recall: Optional[float]  # Recall on minority class at optimal threshold
+    minority_precision: Optional[float]  # Precision on minority class at optimal threshold
+    test_metrics_at_optimal: Dict[str, float]  # Test metrics at optimal threshold
+    test_metrics_at_05: Dict[str, float]  # Test metrics at standard 0.5 threshold
+
     # Permutation Test
     permutation_test: Dict[str, Any]  # p-value, shuffled AUC stats, verdict
 
@@ -205,6 +212,13 @@ class ModelTrainerState(TypedDict, total=False):
     suspicion_level: str  # "critical" / "high" / "none"
     suspicion_reasons: List[str]  # Why leakage is suspected
     investigation_recommendations: List[str]  # Recommended next steps
+
+    # Quality Remediation (post-evaluation inner loop)
+    quality_remediation_status: str  # not_needed | enhancing | improved | failed | max_attempts
+    quality_remediation_attempts: int  # counter for inner loop
+    quality_remediation_max_attempts: int  # default 2
+    quality_remediation_history: List[Dict[str, Any]]  # [{strategy, metrics, improved}]
+    enhanced_search_space: Dict[str, Any]  # merged search space with regularization
 
     # Error handling
     error: Optional[str]

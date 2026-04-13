@@ -9,6 +9,7 @@ from .mlflow_logger import log_to_mlflow
 from .model_trainer_node import train_model
 from .preprocessor import fit_preprocessing
 from .qc_gate_checker import check_qc_gate
+from .quality_remediation import diagnose_and_remediate_quality
 from .split_enforcer import enforce_splits
 from .split_loader import load_splits
 
@@ -16,6 +17,7 @@ __all__ = [
     "apply_resampling",
     "check_qc_gate",
     "detect_class_imbalance",
+    "diagnose_and_remediate_quality",
     "enforce_splits",
     "evaluate_model",
     "fit_preprocessing",

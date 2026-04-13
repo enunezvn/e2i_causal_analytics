@@ -129,13 +129,12 @@ ALGORITHM_REGISTRY = {
         "scalability_score": 1.0,
         "hyperparameter_space": {
             "C": {"type": "float", "low": 0.001, "high": 100, "log": True},
-            "penalty": {"type": "categorical", "choices": ["l1", "l2", "elasticnet"]},
-            "solver": {"type": "categorical", "choices": ["lbfgs", "saga"]},
+            "penalty": {"type": "categorical", "choices": ["l1", "l2"]},
         },
         "default_hyperparameters": {
             "C": 1.0,
             "penalty": "l2",
-            "solver": "lbfgs",
+            "solver": "saga",
             "max_iter": 1000,
         },
     },
@@ -170,6 +169,31 @@ ALGORITHM_REGISTRY = {
         "default_hyperparameters": {
             "alpha": 1.0,
         },
+    },
+}
+
+# Regularization-focused search spaces for quality remediation.
+# When a model shows overfitting or poor generalization, these params are
+# merged into the HPO search space to encourage stronger regularization.
+REGULARIZATION_SEARCH_SPACE: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "XGBoost": {
+        "reg_alpha": {"type": "float", "low": 0.01, "high": 10.0, "log": True},
+        "reg_lambda": {"type": "float", "low": 0.01, "high": 10.0, "log": True},
+        "gamma": {"type": "float", "low": 0.0, "high": 5.0},
+        "min_child_weight": {"type": "int", "low": 3, "high": 20},
+    },
+    "LightGBM": {
+        "reg_alpha": {"type": "float", "low": 0.01, "high": 10.0, "log": True},
+        "reg_lambda": {"type": "float", "low": 0.01, "high": 10.0, "log": True},
+        "min_split_gain": {"type": "float", "low": 0.0, "high": 1.0},
+        "min_child_samples": {"type": "int", "low": 10, "high": 100},
+    },
+    "RandomForest": {
+        "max_features": {"type": "categorical", "choices": ["sqrt", "log2"]},
+        "min_samples_leaf": {"type": "int", "low": 5, "high": 50},
+    },
+    "LogisticRegression": {
+        "C": {"type": "float", "low": 0.0001, "high": 1.0, "log": True},
     },
 }
 

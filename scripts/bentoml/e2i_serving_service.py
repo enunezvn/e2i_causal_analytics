@@ -234,8 +234,18 @@ class E2IModelService:
         self._model = None
         self._model_tag: Optional[str] = None
         self._framework: Optional[str] = None
+        self._preprocessor = None
+        self._feature_columns: Optional[List[str]] = None
 
         self._model, self._model_tag, self._framework = _discover_model()
+
+        # Unwrap bundled dict if model is a dict (contains preprocessor)
+        if isinstance(self._model, dict):
+            self._preprocessor = self._model.get("preprocessor")
+            self._feature_columns = self._model.get("feature_columns")
+            self._model = self._model.get("model")
+            if self._preprocessor is not None:
+                logger.info("Unwrapped bundled model with preprocessor")
 
         if self._model is not None:
             logger.info(
@@ -268,6 +278,19 @@ class E2IModelService:
 
         start = time.time()
         arr = np.array(features)
+
+        # Apply preprocessor if bundled with model
+        if self._preprocessor is not None:
+            try:
+                import pandas as pd
+
+                if self._feature_columns and len(self._feature_columns) == arr.shape[1]:
+                    df = pd.DataFrame(arr, columns=self._feature_columns)
+                    arr = self._preprocessor.transform(df)
+                else:
+                    arr = self._preprocessor.transform(arr)
+            except Exception as e:
+                logger.warning("Preprocessor transform failed, using raw input: %s", e)
 
         predictions = self._model.predict(arr).tolist()
 

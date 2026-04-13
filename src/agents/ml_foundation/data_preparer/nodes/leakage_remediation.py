@@ -9,6 +9,7 @@ This follows the same pattern as qc_remediation.py:
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -101,8 +102,55 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
         # Step 1: Gather context for LLM
         context = _gather_leakage_context(state)
 
-        # Step 2: Analyze with LLM (with rule-based fallback)
-        analysis = await _analyze_leakage_with_llm(context)
+        # Step 1.5: Deterministic pre-drop for unambiguous CRITICAL leakage
+        auto_dropped, auto_classifications = _deterministic_pre_drop(context)
+        if auto_dropped:
+            logger.info(f"Deterministic pre-drop: {auto_dropped}")
+            # Remove auto-dropped features from context so LLM only sees ambiguous cases
+            context["leaked_features"] = [
+                f for f in context["leaked_features"] if f not in auto_dropped
+            ]
+            context["leakage_findings"] = [
+                f for f in context["leakage_findings"]
+                if f.get("feature", "") not in auto_dropped
+            ]
+
+        # Step 2: Check cache, then analyze with LLM (with rule-based fallback)
+        cache_key = _compute_cache_key(context)
+        analysis = _load_cached_analysis(cache_key)
+        if analysis is None:
+            if context["leaked_features"]:
+                analysis = await _analyze_leakage_with_llm(context)
+            else:
+                # All leaked features were auto-dropped, no LLM needed
+                analysis = {
+                    "leakage_classifications": {},
+                    "features_to_drop": [],
+                    "replacement_candidates": [],
+                    "recommended_feature_set": [
+                        p["name"] for p in context["column_profiles"]
+                        if p["name"] != context["target_variable"]
+                        and p["name"] not in auto_dropped
+                        and p["null_pct"] <= 50
+                        and p["nunique"] > 1
+                    ],
+                    "viable": True,
+                    "confidence": "high",
+                    "reasoning": "All leaked features had unambiguous CRITICAL leakage and were auto-dropped.",
+                }
+            _save_cached_analysis(cache_key, analysis)
+
+        # Merge auto-drop results back into the analysis
+        if auto_dropped:
+            analysis["leakage_classifications"].update(auto_classifications)
+            for feat in auto_dropped:
+                if feat not in analysis["features_to_drop"]:
+                    analysis["features_to_drop"].append(feat)
+            # Remove auto-dropped features from recommended set
+            analysis["recommended_feature_set"] = [
+                f for f in analysis["recommended_feature_set"]
+                if f not in auto_dropped
+            ]
 
         # Step 3: Apply remediation to DataFrames
         result = _apply_leakage_remediation(state, analysis)
@@ -223,6 +271,148 @@ def _gather_leakage_context(state: DataPreparerState) -> Dict[str, Any]:
 
 
 # =============================================================================
+# DETERMINISTIC PRE-DROP
+# =============================================================================
+
+
+def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[str, str]]:
+    """Auto-drop features with unambiguous CRITICAL leakage.
+
+    Handles cases where no LLM judgment is needed:
+    - logical_dependency with CRITICAL severity (logically equivalent to target)
+    - perfect_class_separation with overlap == 0.0
+
+    Args:
+        context: Leakage context from _gather_leakage_context
+
+    Returns:
+        Tuple of (auto_dropped_features, classifications_dict)
+    """
+    auto_drop: List[str] = []
+    classifications: Dict[str, str] = {}
+
+    for finding in context.get("leakage_findings", []):
+        feat = finding.get("feature", "")
+        check = finding.get("check_name", "")
+        severity = finding.get("severity", "").lower()
+        evidence = finding.get("evidence", {})
+
+        if not feat:
+            continue
+
+        # Case 1: logical_dependency with CRITICAL severity
+        if check == "logical_dependency" and severity == "critical":
+            if feat not in auto_drop:
+                auto_drop.append(feat)
+                classifications[feat] = "tautological — logically equivalent to target (auto-dropped)"
+                logger.info(f"Auto-dropping '{feat}': logical_dependency CRITICAL")
+
+        # Case 2: perfect_class_separation with zero overlap
+        elif check == "perfect_class_separation" and severity == "critical":
+            overlap = evidence.get("overlap", None)
+            if overlap is not None and float(overlap) == 0.0:
+                if feat not in auto_drop:
+                    auto_drop.append(feat)
+                    classifications[feat] = "tautological — perfect class separation with zero overlap (auto-dropped)"
+                    logger.info(f"Auto-dropping '{feat}': perfect_class_separation overlap=0.0")
+
+    return auto_drop, classifications
+
+
+# =============================================================================
+# REMEDIATION CACHE
+# =============================================================================
+
+
+def _compute_cache_key(context: Dict[str, Any]) -> str:
+    """Compute a SHA-256 cache key from the leakage context.
+
+    Args:
+        context: Leakage context
+
+    Returns:
+        Hex digest string
+    """
+    import hashlib
+    import json
+
+    key_data = {
+        "leaked_features": sorted(context.get("leaked_features", [])),
+        "target_variable": context.get("target_variable", ""),
+        "column_names": sorted([p["name"] for p in context.get("column_profiles", [])]),
+        "finding_signatures": sorted([
+            f"{f.get('check_name', '')}:{f.get('feature', '')}:{f.get('severity', '')}"
+            for f in context.get("leakage_findings", [])
+        ]),
+    }
+    key_str = json.dumps(key_data, sort_keys=True)
+    return hashlib.sha256(key_str.encode()).hexdigest()
+
+
+def _get_cache_dir() -> Path:
+    """Get the cache directory for leakage remediation."""
+    from pathlib import Path
+    cache_dir = Path(".cache") / "leakage_remediation"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _load_cached_analysis(key: str) -> Optional[Dict[str, Any]]:
+    """Load a cached remediation analysis if it exists.
+
+    Args:
+        key: SHA-256 cache key
+
+    Returns:
+        Cached analysis dict or None
+    """
+    import json
+    from pathlib import Path
+
+    cache_file = _get_cache_dir() / f"{key}.json"
+    if cache_file.exists():
+        try:
+            with open(cache_file) as f:
+                cached = json.load(f)
+            logger.info(f"Loaded cached leakage remediation: {cache_file.name}")
+            return cached
+        except Exception as e:
+            logger.warning(f"Failed to load cache {cache_file}: {e}")
+    return None
+
+
+def _save_cached_analysis(key: str, analysis: Dict[str, Any]) -> None:
+    """Save a remediation analysis to cache.
+
+    Only stores JSON-serializable fields.
+
+    Args:
+        key: SHA-256 cache key
+        analysis: Analysis dict to cache
+    """
+    import json
+
+    cacheable_fields = {
+        "leakage_classifications",
+        "features_to_drop",
+        "replacement_candidates",
+        "recommended_feature_set",
+        "viable",
+        "confidence",
+        "reasoning",
+    }
+    cache_data = {k: v for k, v in analysis.items() if k in cacheable_fields}
+
+    cache_file = _get_cache_dir() / f"{key}.json"
+    try:
+        with open(cache_file, "w") as f:
+            json.dump(cache_data, f, indent=2)
+        logger.info(f"Cached leakage remediation: {cache_file.name}")
+    except Exception as e:
+        logger.warning(f"Failed to save cache {cache_file}: {e}")
+
+
+# =============================================================================
 # LLM ANALYSIS
 # =============================================================================
 
@@ -247,6 +437,7 @@ async def _analyze_leakage_with_llm(context: Dict[str, Any]) -> Dict[str, Any]:
         response = await client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=2048,
+            temperature=0.0,
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -705,12 +896,13 @@ def _apply_leakage_remediation(
             ),
         }
 
-    # Combined-feature AUC sanity check: if all verified features together
-    # still produce AUC > 0.95, the feature set collectively leaks
+    # Combined-feature AUC sanity check (cross-validated): if all verified
+    # features together still produce AUC > 0.95, try backward elimination
     if len(verified_features) >= 2 and target_variable in train_df.columns:
         try:
             from sklearn.linear_model import LogisticRegression
             from sklearn.metrics import roc_auc_score
+            from sklearn.model_selection import StratifiedKFold, cross_val_predict
             from sklearn.preprocessing import StandardScaler
 
             numeric_verified = [
@@ -722,28 +914,80 @@ def _apply_leakage_remediation(
                 if len(combined_check) >= 50:
                     X_check = combined_check[numeric_verified].values
                     y_check = combined_check[target_variable].values.astype(float)
-                    scaler = StandardScaler()
-                    X_scaled = scaler.fit_transform(X_check)
-                    lr = LogisticRegression(max_iter=200, solver="lbfgs", random_state=42)
-                    lr.fit(X_scaled, y_check)
-                    y_prob = lr.predict_proba(X_scaled)[:, 1]
-                    combined_auc = roc_auc_score(y_check, y_prob)
+
+                    def _cv_auc(X: "np.ndarray", y: "np.ndarray") -> float:
+                        """Cross-validated AUC using out-of-fold predictions."""
+                        minority_count = int(min(y.sum(), len(y) - y.sum()))
+                        n_splits = min(5, max(2, minority_count))
+                        scaler = StandardScaler()
+                        X_scaled = scaler.fit_transform(X)
+                        lr = LogisticRegression(max_iter=200, solver="lbfgs", random_state=42)
+                        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                        y_prob = cross_val_predict(lr, X_scaled, y, cv=cv, method="predict_proba")[:, 1]
+                        return roc_auc_score(y, y_prob)
+
+                    combined_auc = _cv_auc(X_check, y_check)
                     if combined_auc > 0.95:
                         logger.warning(
-                            f"Combined verified features achieve AUC={combined_auc:.3f} "
-                            f"(threshold 0.95) — collective leakage detected"
+                            f"Combined verified features achieve CV AUC={combined_auc:.3f} "
+                            f"(threshold 0.95) — attempting backward elimination"
                         )
-                        return {
-                            "success": False,
-                            "viable": False,
-                            "reason": (
-                                f"Verified features collectively achieve AUC={combined_auc:.3f} "
-                                f"(> 0.95 threshold). Individual features passed but together "
-                                f"they still leak. Features: {numeric_verified}"
-                            ),
-                        }
+                        # Backward elimination: iteratively remove the most
+                        # suspicious feature (highest individual AUC) until
+                        # combined AUC drops below threshold
+                        remaining = list(numeric_verified)
+                        for _elim_round in range(min(10, len(remaining) - 2)):
+                            # Compute individual CV AUC for each remaining feature
+                            individual_aucs = {}
+                            for feat in remaining:
+                                feat_idx = remaining.index(feat)
+                                X_single = combined_check[[feat]].values
+                                y_single = y_check
+                                try:
+                                    individual_aucs[feat] = _cv_auc(X_single, y_single)
+                                except Exception:
+                                    individual_aucs[feat] = 0.5
+
+                            worst_feat = max(individual_aucs, key=individual_aucs.get)
+                            worst_auc = individual_aucs[worst_feat]
+                            logger.info(
+                                f"Elimination round {_elim_round + 1}: removing "
+                                f"'{worst_feat}' (individual AUC={worst_auc:.3f})"
+                            )
+                            remaining.remove(worst_feat)
+                            rejected_features.append(worst_feat)
+
+                            if len(remaining) < 2:
+                                break
+
+                            X_reduced = combined_check[remaining].values
+                            combined_auc = _cv_auc(X_reduced, y_check)
+                            logger.info(f"  Remaining CV AUC={combined_auc:.3f} with {remaining}")
+
+                            if combined_auc <= 0.95:
+                                break
+
+                        # Update verified_features to reflect eliminations
+                        verified_features = [f for f in verified_features if f in remaining]
+
+                        if combined_auc > 0.95 or len(verified_features) < 2:
+                            return {
+                                "success": False,
+                                "viable": False,
+                                "reason": (
+                                    f"After backward elimination, remaining features "
+                                    f"still achieve CV AUC={combined_auc:.3f} (> 0.95) "
+                                    f"or too few remain ({len(verified_features)}). "
+                                    f"Remaining: {verified_features}, "
+                                    f"eliminated: {rejected_features}"
+                                ),
+                            }
+                        logger.info(
+                            f"Backward elimination succeeded: CV AUC={combined_auc:.3f} "
+                            f"with {len(verified_features)} features: {verified_features}"
+                        )
                     else:
-                        logger.info(f"Combined-feature AUC sanity check passed: AUC={combined_auc:.3f}")
+                        logger.info(f"Combined-feature CV AUC sanity check passed: AUC={combined_auc:.3f}")
         except Exception as e:
             logger.warning(f"Combined AUC sanity check failed (non-fatal): {e}")
 

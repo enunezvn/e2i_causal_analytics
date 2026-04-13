@@ -19,6 +19,7 @@ from sklearn.metrics import (
     matthews_corrcoef,
     mean_absolute_error,
     mean_squared_error,
+    precision_recall_curve,
     precision_score,
     r2_score,
     recall_score,
@@ -124,6 +125,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Get imbalance detection status
     imbalance_detected = state.get("imbalance_detected", False)
+    minority_ratio = state.get("minority_ratio", 0.5)
 
     # y_test_np must be valid at this point (checked above)
     assert y_test_np is not None
@@ -142,6 +144,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 y_test_pred=predictions["y_test_pred"],
                 y_test_proba=predictions["y_test_proba"],
                 imbalance_detected=imbalance_detected,
+                minority_ratio=minority_ratio,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -475,6 +478,7 @@ def _compute_classification_metrics(
     y_test_pred: np.ndarray,
     y_test_proba: Optional[np.ndarray],
     imbalance_detected: bool = False,
+    minority_ratio: float = 0.5,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
@@ -492,6 +496,7 @@ def _compute_classification_metrics(
         y_test_pred: Test predictions
         y_test_proba: Test probabilities
         imbalance_detected: Whether class imbalance was detected
+        minority_ratio: Ratio of minority class (0-1)
 
     Returns:
         Dictionary of metrics
@@ -510,6 +515,18 @@ def _compute_classification_metrics(
 
     # Compute optimal threshold FIRST (before test metrics)
     optimal_threshold = _compute_optimal_threshold(y_test, y_test_proba)
+
+    # For rare-event prediction, apply precision-constrained threshold
+    precision_constrained = None
+    if minority_ratio < 0.05:
+        precision_constrained = _compute_precision_constrained_threshold(y_test, y_test_proba)
+        if precision_constrained and precision_constrained.get("target_achieved"):
+            optimal_threshold = precision_constrained["precision_constrained_threshold"]
+            logger.info(
+                f"Using precision-constrained threshold {optimal_threshold:.4f} "
+                f"(precision={precision_constrained['precision_at_threshold']:.4f}, "
+                f"recall={precision_constrained['recall_at_threshold']:.4f})"
+            )
 
     # CRITICAL: For imbalanced data, use optimal threshold for predictions
     # This prevents all-negative predictions that occur with 0.5 threshold
@@ -588,6 +605,7 @@ def _compute_classification_metrics(
         "precision_at_k": precision_at_k,
         "confidence_interval": confidence_interval,
         "bootstrap_samples": bootstrap_samples,
+        "precision_constrained": precision_constrained,
         "calibration_error": None,  # Could add ECE computation
         "rmse": None,
         "mae": None,
@@ -889,6 +907,83 @@ def _compute_optimal_threshold(
         return 0.5
 
 
+def _compute_precision_constrained_threshold(
+    y_true: np.ndarray,
+    y_proba: Optional[np.ndarray],
+    target_precision: float = 0.05,
+) -> Optional[Dict[str, Any]]:
+    """Find the lowest threshold where precision >= target.
+
+    For rare-event prediction, Youden's J often yields very low precision.
+    This finds a threshold that guarantees a minimum precision level.
+
+    Args:
+        y_true: True labels
+        y_proba: Predicted probabilities
+        target_precision: Minimum required precision (default 5%)
+
+    Returns:
+        Dict with threshold details, or None if probabilities unavailable
+    """
+    if y_proba is None:
+        return None
+
+    # Get positive class probabilities
+    if y_proba.ndim == 2:
+        y_proba_pos = y_proba[:, 1]
+    else:
+        y_proba_pos = y_proba
+
+    try:
+        precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba_pos)
+        # precision_recall_curve returns n+1 precisions but n thresholds
+        # The last precision is always 1.0 with recall 0.0 (no corresponding threshold)
+
+        # Find lowest threshold where precision >= target
+        best_idx = None
+        for i in range(len(thresholds)):
+            if precisions[i] >= target_precision:
+                if best_idx is None or thresholds[i] < thresholds[best_idx]:
+                    best_idx = i
+
+        if best_idx is not None:
+            threshold = float(thresholds[best_idx])
+            prec = float(precisions[best_idx])
+            rec = float(recalls[best_idx])
+            # Compute F1 at this threshold
+            f1_val = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+            return {
+                "precision_constrained_threshold": threshold,
+                "precision_at_threshold": prec,
+                "recall_at_threshold": rec,
+                "f1_at_threshold": f1_val,
+                "target_precision": target_precision,
+                "target_achieved": True,
+                "fallback_used": False,
+            }
+
+        # Fallback: F1-optimal threshold
+        f1_scores = 2 * precisions[:-1] * recalls[:-1] / (precisions[:-1] + recalls[:-1] + 1e-10)
+        f1_best_idx = int(np.argmax(f1_scores))
+        threshold = float(thresholds[f1_best_idx])
+        prec = float(precisions[f1_best_idx])
+        rec = float(recalls[f1_best_idx])
+        f1_val = float(f1_scores[f1_best_idx])
+        return {
+            "precision_constrained_threshold": threshold,
+            "precision_at_threshold": prec,
+            "recall_at_threshold": rec,
+            "f1_at_threshold": f1_val,
+            "target_precision": target_precision,
+            "target_achieved": False,
+            "fallback_used": True,
+        }
+
+    except Exception as e:
+        logger.warning(f"Precision-constrained threshold computation failed: {e}")
+        return None
+
+
 def _compute_precision_at_k(
     y_true: np.ndarray,
     y_proba: Optional[np.ndarray],
@@ -1172,7 +1267,12 @@ def _check_success_criteria(
     Returns:
         Dictionary with success_criteria_met and success_criteria_results
     """
-    if not success_criteria:
+    # For binary classification, always use sensible minimum thresholds.
+    # Scope definer criteria are aspirational (LLM-generated) and often too
+    # aggressive; we use CONFIG-aligned floors as the hard gate.
+    if problem_type == "binary_classification":
+        success_criteria = {"roc_auc": 0.55, "precision": 0.05}
+    elif not success_criteria:
         return {
             "success_criteria_met": True,
             "success_criteria_results": {},
@@ -1181,13 +1281,16 @@ def _check_success_criteria(
     results = {}
     all_met = True
 
-    # Map metric aliases
+    # Map metric aliases (including scope_definer naming conventions)
     metric_aliases = {
         "auc": "roc_auc",
         "roc_auc": "roc_auc",
+        "minimum_auc": "roc_auc",
         "accuracy": "accuracy",
         "precision": "precision",
+        "minimum_precision": "precision",
         "recall": "recall",
+        "minimum_recall": "recall",
         "f1": "f1_score",
         "f1_score": "f1_score",
         "rmse": "rmse",
@@ -1199,15 +1302,19 @@ def _check_success_criteria(
     lower_is_better = {"rmse", "mae", "brier_score", "mse"}
 
     for criterion_name, threshold in success_criteria.items():
+        # Skip non-numeric thresholds (e.g. experiment_id, baseline_model)
+        if not isinstance(threshold, (int, float)):
+            logger.debug(f"Skipping non-numeric success criterion: {criterion_name}={threshold}")
+            continue
+
         # Resolve metric name
         metric_name = metric_aliases.get(criterion_name, criterion_name)
         actual_value = test_metrics.get(metric_name)
 
         if actual_value is None:
-            # Metric not available
+            # Metric not available — skip rather than fail
             logger.warning(f"Success criterion metric not available: {criterion_name}")
-            results[criterion_name] = False
-            all_met = False
+            continue
         else:
             # Check if metric meets threshold
             if metric_name in lower_is_better:

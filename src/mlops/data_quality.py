@@ -21,6 +21,8 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 
 import pandas as pd
 
+logger = logging.getLogger(__name__)
+
 try:
     import great_expectations as gx
     from great_expectations.core.expectation_validation_result import (
@@ -28,11 +30,15 @@ try:
     )
 
     GE_AVAILABLE = True
-except ImportError:
+    logger.debug(f"Great Expectations {gx.__version__} loaded successfully")
+except ImportError as e:
     gx = None
     GE_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
+    logger.warning(
+        f"Great Expectations import failed: {e}. "
+        "Data quality validation will use fallback mode. "
+        "Install with: pip install 'great-expectations>=1.0.0'"
+    )
 
 # E2I Brand and Region types
 BrandType = Literal["Remibrutinib", "Fabhalta", "Kisqali"]
@@ -581,6 +587,8 @@ class DataQualityValidator:
             logger.warning(
                 "Great Expectations not available. Install with: pip install great-expectations"
             )
+        else:
+            logger.debug(f"DataQualityValidator initialized with GE {gx.__version__}")
         self._checkpoint_history: List[Dict[str, Any]] = []
         self._alerter = alerter
         self._register_default_suites()

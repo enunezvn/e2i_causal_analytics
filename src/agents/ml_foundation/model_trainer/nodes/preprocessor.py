@@ -151,6 +151,12 @@ class ModelTrainerPreprocessor:
         assert self._pipeline is not None
         return cast(np.ndarray, self._pipeline.transform(X))
 
+    def get_feature_names_out(self):
+        """Return feature names for output features (sklearn convention)."""
+        if self.feature_names_out_ is not None:
+            return np.array(self.feature_names_out_)
+        return None
+
     def fit_transform(self, X: pd.DataFrame, y=None) -> np.ndarray:
         """Fit and transform in one step."""
         return self.fit(X, y).transform(X)

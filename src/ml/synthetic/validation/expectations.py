@@ -14,7 +14,12 @@ import pandas as pd
 try:
     import great_expectations as gx  # noqa: F401
     from great_expectations.core import ExpectationSuite
-    from great_expectations.dataset import PandasDataset
+
+    # PandasDataset was removed in GE 1.x; handle gracefully
+    try:
+        from great_expectations.dataset import PandasDataset
+    except ImportError:
+        PandasDataset = None
 
     GX_AVAILABLE = True
 except ImportError:

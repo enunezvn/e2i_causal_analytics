@@ -78,7 +78,7 @@ class AgentRegistryRepository(BaseRepository):
         # Use Supabase contains() for JSONB array column filtering
         # This translates to PostgreSQL: routes_from_intents @> '["CAUSAL"]'::jsonb
         result = (
-            await self.client.table(self.table_name)
+            self.client.table(self.table_name)
             .select("*")
             .eq("is_active", True)
             .contains("routes_from_intents", [intent.upper()])
@@ -105,7 +105,7 @@ class AgentRegistryRepository(BaseRepository):
 
         # Use Supabase contains() for JSONB array column filtering
         result = (
-            await self.client.table(self.table_name)
+            self.client.table(self.table_name)
             .select("*")
             .eq("is_active", True)
             .contains("capabilities", [capability.lower()])

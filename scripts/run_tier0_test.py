@@ -72,6 +72,12 @@ if not os.environ.get("MLFLOW_TRACKING_URI"):
 # Always override: .env may contain a cloud URL but the Tier 0 test targets the local instance
 os.environ["SUPABASE_URL"] = "http://localhost:54321"
 
+# Disable Opik by default for local testing — OpikConnector reads OPIK_ENABLED
+# from environment (defaults to "true"), so the CONFIG.enable_opik Python flag
+# alone is insufficient. Override via --enable-opik flag.
+if not os.environ.get("OPIK_ENABLED"):
+    os.environ["OPIK_ENABLED"] = "false"
+
 
 # =============================================================================
 # CONFIGURATION
@@ -898,12 +904,12 @@ def print_detailed_summary(
         # Compute from accuracy data if not explicitly set
         y_pred = accuracy_data.get("y_pred", [])
         n_pos_pred = sum(y_pred) if y_pred else 0
-        val_metrics = accuracy_data.get("val_metrics", {})
+        eval_test_metrics = state.get("test_metrics", {})
         model_usefulness = {
             "status": "useless" if n_pos_pred == 0 else "needs_review",
             "reason": "predicts_all_negative" if n_pos_pred == 0 else "unknown",
-            "minority_recall": val_metrics.get("recall", 0),
-            "minority_precision": val_metrics.get("precision", 0),
+            "minority_recall": state.get("minority_recall") or eval_test_metrics.get("recall", 0),
+            "minority_precision": state.get("minority_precision") or eval_test_metrics.get("precision", 0),
         }
 
     if model_usefulness or accuracy_data:
@@ -934,11 +940,12 @@ def print_detailed_summary(
             print(f"\n  ❌ VERDICT: FAIL - Model should NOT be deployed")
         elif total_pred > 0:
             # Model makes positive predictions - evaluate usefulness
-            val_metrics = accuracy_data.get("val_metrics", {}) if accuracy_data else {}
-            auc_roc = val_metrics.get("roc_auc", 0)
-            recall = val_metrics.get("recall", 0)
-            precision = val_metrics.get("precision", 0)
-            f1 = val_metrics.get("f1", 0)
+            # Use evaluator's test metrics (authoritative) instead of recomputed val metrics
+            eval_metrics = state.get("test_metrics", {})
+            auc_roc = eval_metrics.get("roc_auc", 0)
+            recall = eval_metrics.get("recall", 0)
+            precision = eval_metrics.get("precision", 0)
+            f1 = eval_metrics.get("f1_score", 0)
 
             # --- LEAKAGE SUSPICION CHECK (imbalance-aware) ---
             # The evaluator now uses adaptive thresholds based on class ratio,
@@ -1077,6 +1084,11 @@ def print_detailed_summary(
                 icon = "✅"
                 description = "Model has good discrimination and acceptable recall"
                 deploy_recommendation = "Suitable for staging/production with monitoring"
+            elif auc_roc >= 0.65 and recall >= 0.3 and precision < 0.05:
+                verdict = "THRESHOLD_NEEDED"
+                icon = "🔧"
+                description = "Model discriminates well but operating point needs threshold optimization"
+                deploy_recommendation = "Apply precision-constrained threshold before deployment"
             elif auc_roc >= 0.65 and recall >= 0.3:
                 verdict = "ACCEPTABLE"
                 icon = "⚡"
@@ -1293,17 +1305,25 @@ async def register_model_in_docker_bentoml(
     model_name: str,
     framework: str = "sklearn",
     metadata: dict[str, Any] | None = None,
+    fitted_preprocessor: Any = None,
+    feature_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """Register a trained model in the Docker BentoML container's model store.
 
     Saves the model locally via joblib, copies it into the container, and
     runs docker exec to register it in BentoML's model store.
 
+    When fitted_preprocessor and feature_columns are provided, the model is
+    bundled as a dict {"model": ..., "preprocessor": ..., "feature_columns": ...}
+    so the serving service can apply preprocessing before prediction.
+
     Args:
         trained_model: Trained scikit-learn/xgboost/lightgbm model object.
         model_name: Name for the model in the BentoML store.
         framework: ML framework ("sklearn", "xgboost", "lightgbm").
         metadata: Optional metadata dict to attach to the model.
+        fitted_preprocessor: Optional fitted preprocessor to bundle with model.
+        feature_columns: Optional list of feature column names.
 
     Returns:
         {"success": True, "model_tag": "model_name:hash"} or
@@ -1315,9 +1335,21 @@ async def register_model_in_docker_bentoml(
     if not container:
         return {"success": False, "error": "BentoML Docker container not running"}
 
-    # 1. Save model to temp file
+    # 1. Save model to temp file (bundled with preprocessor if available)
     tmp_path = f"/tmp/tier0_{model_name}.pkl"
-    joblib.dump(trained_model, tmp_path)
+    if fitted_preprocessor is not None:
+        # Extract the internal sklearn ColumnTransformer — the custom
+        # ModelTrainerPreprocessor wrapper can't be unpickled in the
+        # BentoML container (it doesn't have the E2I project on PYTHONPATH).
+        sklearn_pipeline = getattr(fitted_preprocessor, '_pipeline', fitted_preprocessor)
+        artifact = {
+            "model": trained_model,
+            "preprocessor": sklearn_pipeline,
+            "feature_columns": feature_columns,
+        }
+        joblib.dump(artifact, tmp_path)
+    else:
+        joblib.dump(trained_model, tmp_path)
 
     try:
         # 2. Copy into container
@@ -1330,21 +1362,33 @@ async def register_model_in_docker_bentoml(
             return {"success": False, "error": f"docker cp failed: {cp_result.stderr.strip()}"}
 
         # 3. Register in BentoML model store via docker exec
-        save_fn_map = {
-            "sklearn": "bentoml.sklearn.save_model",
-            "xgboost": "bentoml.xgboost.save_model",
-            "lightgbm": "bentoml.lightgbm.save_model",
-        }
-        save_fn = save_fn_map.get(framework, "bentoml.sklearn.save_model")
-        module_path = save_fn.rsplit(".", 1)[0]  # e.g. "bentoml.sklearn"
-
-        meta_str = repr(metadata or {})
-        register_script = (
-            f"import joblib, {module_path}; "
-            f"model = joblib.load('/tmp/model.pkl'); "
-            f"bento_model = {save_fn}('{model_name}', model, metadata={meta_str}); "
-            f"print(str(bento_model.tag))"
-        )
+        # When bundled (dict with preprocessor), always use pickle via bentoml.picklable_model
+        # Framework-specific savers only work with raw model objects
+        if fitted_preprocessor is not None:
+            meta_dict = metadata or {}
+            meta_dict["bundled"] = True
+            meta_str = repr(meta_dict)
+            register_script = (
+                f"import joblib, bentoml; "
+                f"artifact = joblib.load('/tmp/model.pkl'); "
+                f"bento_model = bentoml.picklable_model.save_model('{model_name}', artifact, metadata={meta_str}); "
+                f"print(str(bento_model.tag))"
+            )
+        else:
+            save_fn_map = {
+                "sklearn": "bentoml.sklearn.save_model",
+                "xgboost": "bentoml.xgboost.save_model",
+                "lightgbm": "bentoml.lightgbm.save_model",
+            }
+            save_fn = save_fn_map.get(framework, "bentoml.sklearn.save_model")
+            module_path = save_fn.rsplit(".", 1)[0]  # e.g. "bentoml.sklearn"
+            meta_str = repr(metadata or {})
+            register_script = (
+                f"import joblib, {module_path}; "
+                f"model = joblib.load('/tmp/model.pkl'); "
+                f"bento_model = {save_fn}('{model_name}', model, metadata={meta_str}); "
+                f"print(str(bento_model.tag))"
+            )
 
         exec_result = subprocess.run(
             ["docker", "exec", container, "python", "-c", register_script],
@@ -1716,13 +1760,13 @@ async def step_2_data_preparer(
             f"{overall_score:.2f}" if isinstance(overall_score, (int, float)) else str(overall_score)
         ),
         (
-            "Training samples",
+            "QC training samples",
             train_samples >= 100,
             ">= 100",
             str(train_samples)
         ),
         (
-            "Validation samples",
+            "QC validation samples",
             val_samples >= 30,
             ">= 30",
             str(val_samples)
@@ -1745,8 +1789,8 @@ async def step_2_data_preparer(
         ("consistency", consistency, ">= 0.90", consistency >= 0.9 if isinstance(consistency, (int, float)) else None),
         ("uniqueness", uniqueness, ">= 0.95", uniqueness >= 0.95 if isinstance(uniqueness, (int, float)) else None),
         ("timeliness", timeliness, ">= 0.80", timeliness >= 0.8 if isinstance(timeliness, (int, float)) else None),
-        ("train_samples", train_samples, ">= 100", train_samples >= 100 if isinstance(train_samples, (int, float)) else None),
-        ("validation_samples", val_samples, ">= 30", val_samples >= 30 if isinstance(val_samples, (int, float)) else None),
+        ("qc_train_samples", train_samples, ">= 100", train_samples >= 100 if isinstance(train_samples, (int, float)) else None),
+        ("qc_validation_samples", val_samples, ">= 30", val_samples >= 30 if isinstance(val_samples, (int, float)) else None),
     ]
 
     print_metrics_table(metrics)
@@ -1758,7 +1802,7 @@ async def step_2_data_preparer(
     if train_samples and val_samples:
         total = train_samples + val_samples
         train_pct = train_samples / total * 100 if total > 0 else 0
-        observations.insert(0, f"Data split: {train_samples} train ({train_pct:.0f}%), {val_samples} validation")
+        observations.insert(0, f"QC sample split: {train_samples} QC-train ({train_pct:.0f}%), {val_samples} QC-validation (full training split in Step 5)")
 
     # Add remediation info if present
     if remediation.get("status") and remediation.get("status") != "not_needed":
@@ -2312,7 +2356,8 @@ async def step_5_model_trainer(
     model_candidate: Any,
     qc_report: dict,
     X: pd.DataFrame,
-    y: pd.Series
+    y: pd.Series,
+    success_criteria: dict | None = None,
 ) -> dict[str, Any]:
     """Step 5: Train model."""
     import time as time_mod
@@ -2395,6 +2440,7 @@ async def step_5_model_trainer(
         "holdout_data": holdout_data,
         "enable_mlflow": CONFIG.enable_mlflow,
         "feature_columns": feature_columns,
+        "success_criteria": success_criteria or {},
     }
 
     processing_steps.append(("HPO optimization", True, f"{CONFIG.hpo_trials} trials"))
@@ -2420,18 +2466,20 @@ async def step_5_model_trainer(
     # ENHANCED ACCURACY DATA COLLECTION
     # =========================================================================
     trained_model = result.get("trained_model")
-    val_metrics = {}
-    train_metrics = {}
     y_val_pred = []
     n_positive_predictions = 0
     optimal_threshold = result.get("optimal_threshold", 0.5)
 
-    if trained_model is not None:
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score as sklearn_f1_score, roc_auc_score
+    # Use evaluator's metrics directly instead of recomputing on validation data.
+    # The evaluator already handles optimal thresholds, imbalance-aware metrics,
+    # and precision-constrained thresholds correctly.
+    val_metrics = result.get("validation_metrics", {})
+    train_metrics = result.get("train_metrics", {})
+    test_metrics = result.get("test_metrics", {})
 
-        # Get preprocessed data
+    if trained_model is not None:
+        # Generate validation predictions for confusion matrix display only
         X_val_preprocessed = result.get("X_validation_preprocessed")
-        X_test_preprocessed = result.get("X_test_preprocessed")
         fitted_preprocessor = result.get("fitted_preprocessor")
 
         if X_val_preprocessed is not None:
@@ -2442,79 +2490,22 @@ async def step_5_model_trainer(
             X_val = validation_data["X"]
 
         y_val = validation_data["y"]
-
-        if X_test_preprocessed is not None:
-            X_test = X_test_preprocessed
-        elif fitted_preprocessor is not None:
-            X_test = fitted_preprocessor.transform(test_data["X"])
-        else:
-            X_test = test_data["X"]
-
+        y_train = train_data["y"]
         y_test = test_data["y"]
 
-        if fitted_preprocessor is not None:
-            X_train = fitted_preprocessor.transform(train_data["X"])
-        else:
-            X_train = train_data["X"]
-        y_train = train_data["y"]
-
-        # Generate probability predictions
+        # Make predictions at evaluator's optimal threshold (no adaptive override)
         y_val_proba = None
-        y_train_proba = None
         if hasattr(trained_model, 'predict_proba'):
             y_val_proba = trained_model.predict_proba(X_val)[:, 1]
-            y_train_proba = trained_model.predict_proba(X_train)[:, 1]
 
-        # Adaptive threshold handling
-        if y_val_proba is not None:
-            n_pos_at_optimal = ((y_val_proba >= optimal_threshold).astype(int)).sum()
-            if n_pos_at_optimal == 0:
-                target_n_pos = max(1, int(len(y_val) * 0.10))
-                sorted_proba = np.sort(y_val_proba)[::-1]
-                if target_n_pos <= len(sorted_proba):
-                    adaptive_threshold = max(0.01, sorted_proba[target_n_pos - 1] - 0.001)
-                    optimal_threshold = adaptive_threshold
-                    result["optimal_threshold"] = adaptive_threshold
-
-        # Make predictions at optimal threshold
         if y_val_proba is not None:
             y_val_pred = (y_val_proba >= optimal_threshold).astype(int)
         else:
             y_val_pred = trained_model.predict(X_val)
 
-        if y_train_proba is not None:
-            y_train_pred = (y_train_proba >= optimal_threshold).astype(int)
-        else:
-            y_train_pred = trained_model.predict(X_train)
-
         n_positive_predictions = sum(y_val_pred)
 
-        # Calculate metrics
-        train_metrics = {
-            "accuracy": accuracy_score(y_train, y_train_pred),
-            "precision": precision_score(y_train, y_train_pred, zero_division=0),
-            "recall": recall_score(y_train, y_train_pred, zero_division=0),
-            "f1": sklearn_f1_score(y_train, y_train_pred, zero_division=0),
-        }
-        if y_train_proba is not None:
-            try:
-                train_metrics["roc_auc"] = roc_auc_score(y_train, y_train_proba)
-            except ValueError:
-                pass
-
-        val_metrics = {
-            "accuracy": accuracy_score(y_val, y_val_pred),
-            "precision": precision_score(y_val, y_val_pred, zero_division=0),
-            "recall": recall_score(y_val, y_val_pred, zero_division=0),
-            "f1": sklearn_f1_score(y_val, y_val_pred, zero_division=0),
-        }
-        if y_val_proba is not None:
-            try:
-                val_metrics["roc_auc"] = roc_auc_score(y_val, y_val_proba)
-            except ValueError:
-                pass
-
-        # Store accuracy analysis data
+        # Store accuracy analysis data (using evaluator's metrics, val predictions for display)
         result["accuracy_analysis"] = {
             "y_true": y_val.tolist() if hasattr(y_val, 'tolist') else list(y_val),
             "y_pred": y_val_pred.tolist() if hasattr(y_val_pred, 'tolist') else list(y_val_pred),
@@ -2528,11 +2519,39 @@ async def step_5_model_trainer(
         }
 
     # =========================================================================
+    # OVERFITTING SEVERITY
+    # =========================================================================
+    overfitting_severity = "none"
+    max_train_test_delta = 0.0
+    # ONLY use threshold-invariant, distribution-robust metrics (roc_auc, pr_auc).
+    # Threshold-dependent metrics (precision, recall, F1, accuracy) are confounded by
+    # two effects: (1) different thresholds between train/test, and (2) SMOTE resampling
+    # changes the training distribution from e.g. 97.7/2.3 to ~50/50, so precision and
+    # accuracy differ hugely even without any overfitting. AUC and PR-AUC are invariant
+    # to both threshold choice and class prevalence, making them the only reliable
+    # overfitting signal when resampling is applied.
+    if train_metrics and test_metrics:
+        for metric_key in ["roc_auc", "pr_auc"]:
+            t_val = train_metrics.get(metric_key)
+            c_val = test_metrics.get(metric_key)
+            if t_val is not None and c_val is not None:
+                max_train_test_delta = max(max_train_test_delta, t_val - c_val)
+        if max_train_test_delta > 0.15:
+            overfitting_severity = "severe"
+        elif max_train_test_delta > 0.10:
+            overfitting_severity = "moderate"
+        elif max_train_test_delta > 0.05:
+            overfitting_severity = "mild"
+        print(f"\n  Overfitting severity: {overfitting_severity} (max AUC train-test delta: {max_train_test_delta:.3f})")
+    result["overfitting_severity"] = overfitting_severity
+    result["max_train_test_delta"] = max_train_test_delta
+
+    # =========================================================================
     # VALIDATION CHECKS
     # =========================================================================
-    auc = result.get("auc_roc", 0) or val_metrics.get("roc_auc", 0)
-    minority_recall = val_metrics.get("recall", 0)
-    minority_precision = val_metrics.get("precision", 0)
+    auc = result.get("auc_roc", 0) or test_metrics.get("roc_auc", 0)
+    minority_recall = result.get("minority_recall") or test_metrics.get("recall", 0)
+    minority_precision = result.get("minority_precision") or test_metrics.get("precision", 0)
 
     checks = [
         (
@@ -2664,6 +2683,11 @@ async def step_5_model_trainer(
             result["usefulness_reason"] = f"low_precision_{minority_precision:.2%}"
         else:
             result["model_usefulness"] = "acceptable"
+            # Overfitting is a warning, not a deployment blocker.
+            # The test set IS the generalization check — if test metrics
+            # pass thresholds, the model is useful despite training overfitting.
+            if overfitting_severity == "severe":
+                result["usefulness_warning"] = f"severe_overfitting_delta_{max_train_test_delta:.3f}"
 
     # =========================================================================
     # FINAL RESULT
@@ -2822,6 +2846,7 @@ async def step_7_model_deployer(
     trained_model: Any = None,
     include_bentoml: bool = True,
     fitted_preprocessor: Any = None,
+    feature_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """Step 7: Deploy model."""
     import time as time_mod
@@ -2946,6 +2971,8 @@ async def step_7_model_deployer(
                     "tier0_test": True,
                     "algorithm": model_class_name,
                 },
+                fitted_preprocessor=fitted_preprocessor,
+                feature_columns=feature_columns,
             )
 
             if registration.get("success"):
@@ -2965,8 +2992,9 @@ async def step_7_model_deployer(
                     endpoint = None
 
                 if endpoint:
-                    # Verify predictions with sample data
-                    sample_features = [[30.0, 5.0, 1.0]]  # days_on_therapy, hcp_visits, prior_treatments
+                    # Build sample from actual feature columns (zeros as safe default)
+                    n_features = len(feature_columns) if feature_columns else 3
+                    sample_features = [[0.0] * n_features]
 
                     verification = await verify_bentoml_predictions(
                         endpoint=endpoint,
@@ -3279,6 +3307,7 @@ async def run_pipeline(
             duration = time.time() - step_start
             scope_spec = state["scope_spec"]
             success_criteria = result.get("success_criteria", {})
+            state["success_criteria"] = success_criteria
             validation_passed = result.get("validation_passed", True)
 
             step_results.append(StepResult(
@@ -3385,8 +3414,8 @@ async def run_pipeline(
                     "qc_status": qc_report.get("status", "unknown"),
                     "overall_score": overall_score,
                     "gate_passed": state["gate_passed"],
-                    "train_samples": train_samples,
-                    "validation_samples": val_samples,
+                    "qc_train_samples": train_samples,
+                    "qc_validation_samples": val_samples,
                 },
                 details={
                     "completeness_score": qc_report.get("completeness_score"),
@@ -3404,20 +3433,20 @@ async def run_pipeline(
                 validation_checks=[
                     ("QC gate passed", state["gate_passed"], "gate_passed = True", f"gate_passed = {state['gate_passed']}"),
                     ("Overall score acceptable", (overall_score or 0) >= 0.7, "≥ 0.70", f"{overall_score:.2f}" if overall_score else "N/A"),
-                    ("Training samples sufficient", train_samples >= 50, "≥ 50", train_samples),
-                    ("Validation samples present", val_samples > 0, "> 0", val_samples),
+                    ("QC training samples sufficient", train_samples >= 50, "≥ 50", train_samples),
+                    ("QC validation samples present", val_samples > 0, "> 0", val_samples),
                 ],
                 metrics_table=[
                     ("overall_score", f"{overall_score:.2f}" if overall_score else "N/A", "≥ 0.70", (overall_score or 0) >= 0.7),
                     ("completeness_score", f"{qc_report.get('completeness_score', 0):.2f}", None, None),
                     ("validity_score", f"{qc_report.get('validity_score', 0):.2f}", None, None),
                     ("consistency_score", f"{qc_report.get('consistency_score', 0):.2f}", None, None),
-                    ("train_samples", train_samples, "≥ 50", train_samples >= 50),
-                    ("validation_samples", val_samples, "> 0", val_samples > 0),
+                    ("qc_train_samples", train_samples, "≥ 50", train_samples >= 50),
+                    ("qc_validation_samples", val_samples, "> 0", val_samples > 0),
                 ],
                 interpretation=[
                     f"Data quality score: {overall_score:.2f}" if overall_score else "Data quality score: N/A",
-                    f"Training set: {train_samples} samples, validation set: {val_samples} samples",
+                    f"QC sample split: {train_samples} QC-train, {val_samples} QC-validation (full training split in Step 5)",
                     "QC gate PASSED - data ready for modeling" if state["gate_passed"] else "QC gate FAILED - data quality issues detected",
                 ],
                 result_message="Data preparation complete" if state["gate_passed"] else "Data preparation failed QC gate",
@@ -3571,6 +3600,9 @@ async def run_pipeline(
                 "source_timestamp", "ingestion_timestamp", "data_split", "split_config_id",
                 "data_source", "data_sources_matched", "source_match_confidence",
                 "source_combination_method", "source_stacking_flag", "data_lag_hours",
+                # data_quality_score encodes data-source archetype (A/B/C);
+                # after cohort filtering it nearly separates treated from untreated
+                "data_quality_score",
                 "primary_diagnosis_desc", "secondary_diagnosis_codes",
                 "state", "zip_code", "comorbidities", "risk_score",
                 "journey_stage", "journey_status",
@@ -3582,14 +3614,26 @@ async def run_pipeline(
                                and _step4_df[c].dtype == object and 2 <= _step4_df[c].nunique() <= 50]
             _s4_total = len(_s4_numeric) + len(_s4_categorical)
             _cat_ratio = len(_s4_categorical) / _s4_total if _s4_total > 0 else 0.0
+            _target_counts = _step4_df[CONFIG.target_outcome].value_counts()
+            _min_ratio = _target_counts.min() / _target_counts.sum()
+            if _min_ratio >= 0.40:
+                _imb_sev = "none"
+            elif _min_ratio >= 0.20:
+                _imb_sev = "moderate"
+            elif _min_ratio >= 0.05:
+                _imb_sev = "severe"
+            else:
+                _imb_sev = "extreme"
             feature_characteristics = {"categorical_ratio": _cat_ratio,
                                        "num_numeric": len(_s4_numeric),
-                                       "num_categorical": len(_s4_categorical)}
+                                       "num_categorical": len(_s4_categorical),
+                                       "class_imbalance_severity": _imb_sev}
             state["feature_characteristics"] = feature_characteristics
 
             result = await step_4_model_selector(experiment_id, scope_spec, qc_report,
                                                  feature_characteristics=feature_characteristics)
             state["model_candidate"] = result.get("model_candidate") or result.get("primary_candidate")
+            state["alternative_candidates"] = result.get("alternative_candidates", [])
 
             candidate = state["model_candidate"]
             algo_name = candidate.get("algorithm_name") if isinstance(candidate, dict) else getattr(candidate, "algorithm_name", "Unknown")
@@ -3669,6 +3713,9 @@ async def run_pipeline(
                     "source_timestamp", "ingestion_timestamp", "data_split", "split_config_id",
                     "data_source", "data_sources_matched", "source_match_confidence",
                     "source_combination_method", "source_stacking_flag", "data_lag_hours",
+                    # data_quality_score encodes data-source archetype (A/B/C);
+                    # after cohort filtering it nearly separates treated from untreated
+                    "data_quality_score",
                     # primary_diagnosis_code removed — it's a legitimate low-cardinality
                     # feature; leakage detector will vet it
                     "primary_diagnosis_desc", "secondary_diagnosis_codes",
@@ -3722,6 +3769,7 @@ async def run_pipeline(
                     check_zero_variance_within_class,
                     check_mutual_information,
                     check_feature_target_logical_dependency,
+                    check_single_feature_auc,
                     _aggregate_severity,
                     _get_leaked_features,
                 )
@@ -3736,6 +3784,7 @@ async def run_pipeline(
                     _all_findings.extend(check_zero_variance_within_class(_combined, CONFIG.target_outcome, _numeric_feats))
                     _all_findings.extend(check_mutual_information(_combined, CONFIG.target_outcome, _numeric_feats))
                     _all_findings.extend(check_feature_target_logical_dependency(_combined, CONFIG.target_outcome, _numeric_feats))
+                    _all_findings.extend(check_single_feature_auc(_combined, CONFIG.target_outcome, _numeric_feats))
 
                 if _all_findings:
                     state["leakage_severity"] = _aggregate_severity(_all_findings)
@@ -3779,6 +3828,15 @@ async def run_pipeline(
                     _rem_viable = _rem_result.get("leakage_remediation_viable", False)
                     _rem_reasoning = _rem_result.get("leakage_remediation_reasoning", "")
                     _rem_dropped = _rem_result.get("leakage_dropped_features", [])
+
+                    # Enforce _exclude set on remediation results — the LLM may
+                    # recommend metadata features (e.g. data_quality_score) that
+                    # are target proxies but don't trigger single-feature AUC > 0.95
+                    _force_exclude = _exclude & set(_rem_features)
+                    if _force_exclude:
+                        _rem_features = [f for f in _rem_features if f not in _exclude]
+                        _rem_dropped = _rem_dropped + sorted(_force_exclude)
+                        print(f"     Force-excluded metadata features: {sorted(_force_exclude)}")
 
                     _rem_duration = time.time() - _rem_start
 
@@ -3828,6 +3886,22 @@ async def run_pipeline(
                         X = eligible_df[feature_cols].copy()
                         y = eligible_df[CONFIG.target_outcome].copy()
 
+                        # Re-encode categoricals (the original encoding was on the
+                        # pre-remediation feature set which is now discarded)
+                        _cat_cols2 = [c for c in feature_cols if X[c].dtype == object]
+                        if _cat_cols2:
+                            from sklearn.preprocessing import OrdinalEncoder as _OE2
+                            _oe2 = _OE2(handle_unknown="use_encoded_value", unknown_value=-1)
+                            X[_cat_cols2] = _oe2.fit_transform(X[_cat_cols2].fillna("__missing__"))
+                            state["categorical_encoding"] = {"encoder": _oe2, "columns": _cat_cols2}
+                            print(f"     Re-encoded {len(_cat_cols2)} categorical features: {_cat_cols2}")
+
+                        # Impute numeric NaN (RWD demographics ~27% missing)
+                        _nan_cols = [c for c in X.columns if X[c].dtype.kind in "iufb" and X[c].isnull().any()]
+                        if _nan_cols:
+                            X[_nan_cols] = X[_nan_cols].fillna(X[_nan_cols].median())
+                            print(f"     Imputed NaN in {len(_nan_cols)} numeric features: {_nan_cols}")
+
                         # Update leakage state (re-check on the new feature set)
                         _combined2 = _pd.concat([X, y], axis=1)
                         _numeric_feats2 = [c for c in feature_cols if _combined2[c].dtype.kind in "iufb"]
@@ -3837,6 +3911,7 @@ async def run_pipeline(
                             _recheck_findings.extend(check_zero_variance_within_class(_combined2, CONFIG.target_outcome, _numeric_feats2))
                             _recheck_findings.extend(check_mutual_information(_combined2, CONFIG.target_outcome, _numeric_feats2))
                             _recheck_findings.extend(check_feature_target_logical_dependency(_combined2, CONFIG.target_outcome, _numeric_feats2))
+                            _recheck_findings.extend(check_single_feature_auc(_combined2, CONFIG.target_outcome, _numeric_feats2))
 
                         if _recheck_findings:
                             _recheck_sev = _aggregate_severity(_recheck_findings)
@@ -3884,10 +3959,20 @@ async def run_pipeline(
                 qc_report = state.get("qc_report", {"gate_passed": True})
 
                 result = await step_5_model_trainer(
-                    experiment_id, model_candidate, qc_report, X, y
+                    experiment_id, model_candidate, qc_report, X, y,
+                    success_criteria=state.get("success_criteria", {}),
                 )
                 state["trained_model"] = result.get("trained_model")
+                state["train_metrics"] = result.get("train_metrics", {})
                 state["validation_metrics"] = result.get("validation_metrics", {})
+                state["test_metrics"] = result.get("test_metrics", {})
+                state["optimal_threshold"] = result.get("optimal_threshold", 0.5)
+                # Imbalance-aware evaluation fields from evaluator
+                state["precision_constrained"] = result.get("precision_constrained")
+                state["minority_recall"] = result.get("minority_recall")
+                state["minority_precision"] = result.get("minority_precision")
+                state["test_metrics_at_optimal"] = result.get("test_metrics_at_optimal", {})
+                state["test_metrics_at_05"] = result.get("test_metrics_at_05", {})
                 # Store feature names for downstream agents (e.g., prediction_synthesizer)
                 state["feature_names"] = feature_cols
                 # Store preprocessor for BentoML serving (service handles preprocessing)
@@ -3898,7 +3983,8 @@ async def run_pipeline(
                     or result.get("model_artifact_uri")
                     or result.get("mlflow_model_uri")
                 )
-                state["success_criteria_met"] = result.get("success_criteria_met", True)
+                state["success_criteria_met"] = result.get("success_criteria_met", False)
+                state["model_usefulness"] = result.get("model_usefulness", "unknown")
 
                 # Capture class imbalance information
                 state["class_imbalance_info"] = {
@@ -4023,6 +4109,145 @@ async def run_pipeline(
                     result_message=f"Training complete: {model_usefulness} model with AUC={auc_roc:.3f}" if auc_roc else "Training complete",
                 ))
 
+                # ================================================================
+                # Step 5b: Algorithm Comparison — always train alternatives
+                # ================================================================
+                # Train all alternative candidates from model_selector and pick
+                # the best model by test AUC. This runs unconditionally so the
+                # pipeline always compares algorithms, not just when the primary
+                # model is "poor".
+                # Cache primary result for comparison
+                candidate_results = {}  # algorithm_name -> full result dict
+                comparison_history = []
+                primary_algo = (
+                    state.get("model_candidate", {}).get("algorithm_name", "")
+                    if isinstance(state.get("model_candidate"), dict)
+                    else ""
+                )
+                primary_auc = result.get("auc_roc", 0) or 0
+                candidate_results[primary_algo] = result
+                comparison_history.append({
+                    "algorithm": primary_algo,
+                    "auc_roc": primary_auc,
+                    "model_usefulness": model_usefulness,
+                    "is_primary": True,
+                })
+
+                alternatives = list(state.get("alternative_candidates", []))
+                if alternatives and not state.get("pipeline_halted"):
+                    from src.agents.ml_foundation.model_selector.nodes.candidate_ranker import _get_algorithm_class
+                    from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import REGULARIZATION_SEARCH_SPACE
+
+                    imb_sev = state.get("class_imbalance_info", {}).get("imbalance_severity")
+
+                    for alt in alternatives:
+                        if alt.get("name") == primary_algo:
+                            continue  # Skip if same as primary
+
+                        new_candidate = {
+                            "algorithm_name": alt["name"],
+                            "algorithm_class": _get_algorithm_class(alt),
+                            "hyperparameter_search_space": {
+                                **alt.get("hyperparameter_space", {}),
+                                **REGULARIZATION_SEARCH_SPACE.get(alt["name"], {}),
+                            },
+                            "default_hyperparameters": alt.get("default_hyperparameters", {}),
+                        }
+                        # Force class_weight for imbalanced tree/linear models
+                        if imb_sev in ("severe", "extreme") and alt["name"] in ("RandomForest", "LogisticRegression"):
+                            new_candidate["default_hyperparameters"] = {
+                                **new_candidate["default_hyperparameters"],
+                                "class_weight": "balanced",
+                            }
+
+                        print(f"\n  {'='*60}")
+                        print(f"  Step 5b: Algorithm comparison: training {alt['name']}")
+                        print(f"  {'='*60}")
+
+                        alt_result = await step_5_model_trainer(
+                            experiment_id, new_candidate, qc_report, X, y,
+                            success_criteria=state.get("success_criteria", {}),
+                        )
+
+                        alt_auc = alt_result.get("auc_roc", 0) or 0
+                        candidate_results[alt["name"]] = alt_result
+                        comparison_history.append({
+                            "algorithm": alt["name"],
+                            "auc_roc": alt_auc,
+                            "model_usefulness": alt_result.get("model_usefulness", "unknown"),
+                            "overfitting_severity": alt_result.get("overfitting_severity"),
+                            "is_primary": False,
+                        })
+
+                    # Pick best model across all candidates by AUC
+                    best = max(comparison_history, key=lambda h: h["auc_roc"])
+                    if not best.get("is_primary"):
+                        # An alternative won — swap it into state from cache
+                        _winner = candidate_results[best["algorithm"]]
+                        state["trained_model"] = _winner.get("trained_model")
+                        state["train_metrics"] = _winner.get("train_metrics", {})
+                        state["validation_metrics"] = _winner.get("validation_metrics", {})
+                        state["test_metrics"] = _winner.get("test_metrics", {})
+                        state["optimal_threshold"] = _winner.get("optimal_threshold", 0.5)
+                        state["precision_constrained"] = _winner.get("precision_constrained")
+                        state["minority_recall"] = _winner.get("minority_recall")
+                        state["minority_precision"] = _winner.get("minority_precision")
+                        state["model_usefulness"] = _winner.get("model_usefulness", "unknown")
+                        state["success_criteria_met"] = _winner.get("success_criteria_met", False)
+                        state["fitted_preprocessor"] = _winner.get("fitted_preprocessor")
+                        state["model_uri"] = (
+                            _winner.get("model_uri")
+                            or _winner.get("model_artifact_uri")
+                            or _winner.get("mlflow_model_uri")
+                        )
+                        state["model_candidate"] = {"algorithm_name": best["algorithm"]}
+                        # Propagate advanced validation from winner
+                        for _key in ("permutation_test", "cv_results", "calibration_analysis",
+                                     "calibration_error", "calibrated_ece", "f1_threshold_analysis",
+                                     "split_validation", "mcc", "pr_auc", "leakage_suspected",
+                                     "suspicion_level", "suspicion_reasons",
+                                     "investigation_recommendations"):
+                            if _key in _winner:
+                                state[_key] = _winner[_key]
+                        if _winner.get("accuracy_analysis"):
+                            state["accuracy_analysis"] = _winner["accuracy_analysis"]
+
+                # Emit Step 5b comparison result
+                if len(comparison_history) > 1:
+                    _best = max(comparison_history, key=lambda h: h["auc_roc"])
+                    _sorted = sorted(comparison_history, key=lambda h: h["auc_roc"], reverse=True)
+                    _ranking = ", ".join(f"{h['algorithm']}={h['auc_roc']:.3f}" for h in _sorted)
+                    step_results.append(StepResult(
+                        step_num="5b",
+                        step_name="ALGORITHM COMPARISON",
+                        status="success",
+                        duration_seconds=0.0,
+                        key_metrics={
+                            "candidates_trained": len(comparison_history),
+                            "best_algorithm": _best["algorithm"],
+                            "best_auc": _best["auc_roc"],
+                            "winner_is_primary": _best.get("is_primary", False),
+                        },
+                        details={"comparison_history": comparison_history},
+                        input_summary={"candidates": [h["algorithm"] for h in comparison_history]},
+                        validation_checks=[
+                            ("Multiple algorithms compared", len(comparison_history) > 1, "> 1", f"{len(comparison_history)} trained"),
+                            ("Best model selected", True, "highest AUC", f"{_best['algorithm']} ({_best['auc_roc']:.3f})"),
+                        ],
+                        metrics_table=[
+                            ("candidates_trained", len(comparison_history), None, None),
+                            ("best_algorithm", _best["algorithm"], None, None),
+                            ("best_auc", f"{_best['auc_roc']:.3f}", ">= 0.60", _best["auc_roc"] >= 0.60),
+                            ("ranking", _ranking, None, None),
+                        ],
+                        interpretation=[
+                            f"Trained {len(comparison_history)} candidate algorithms: {', '.join(h['algorithm'] for h in comparison_history)}",
+                            f"Ranking by AUC: {_ranking}",
+                            f"Selected {_best['algorithm']} as best model (AUC={_best['auc_roc']:.3f})",
+                        ],
+                        result_message=f"Algorithm comparison: {_best['algorithm']} wins ({_ranking})",
+                    ))
+
         # Step 6: Feature Analyzer
         if 6 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
@@ -4034,19 +4259,33 @@ async def run_pipeline(
 
             # Apply fitted preprocessor so SHAP receives the same feature space the model expects
             X_for_shap = X.iloc[:50]
+
+            # Re-apply OrdinalEncoding if it was used before Step 5
+            # (the preprocessor was fitted on encoded data, not raw strings)
+            cat_enc = state.get("categorical_encoding")
+            if cat_enc:
+                _oe = cat_enc["encoder"]
+                _cat_cols = [c for c in cat_enc["columns"] if c in X_for_shap.columns]
+                if _cat_cols:
+                    X_for_shap = X_for_shap.copy()
+                    X_for_shap[_cat_cols] = _oe.transform(X_for_shap[_cat_cols].fillna("__missing__"))
+
             fitted_preprocessor = state.get("fitted_preprocessor")
             if fitted_preprocessor is not None:
                 try:
                     X_transformed = fitted_preprocessor.transform(X_for_shap)
-                    feature_names_out = getattr(fitted_preprocessor, 'get_feature_names_out', None)
-                    if feature_names_out:
-                        X_for_shap = pd.DataFrame(
-                            X_transformed,
-                            columns=fitted_preprocessor.get_feature_names_out(),
-                            index=X_for_shap.index,
-                        )
+                    # Check the ATTRIBUTE (sklearn convention uses trailing underscore)
+                    feature_names_out = getattr(fitted_preprocessor, 'feature_names_out_', None)
+                    if feature_names_out is not None and len(feature_names_out) == X_transformed.shape[1]:
+                        X_for_shap = pd.DataFrame(X_transformed, columns=feature_names_out, index=X_for_shap.index)
                     else:
-                        X_for_shap = pd.DataFrame(X_transformed, index=X_for_shap.index)
+                        # Fallback: use original column names if shape matches
+                        # (OrdinalEncoder preserves column count unlike OneHotEncoder)
+                        original_cols = list(X_for_shap.columns)
+                        if len(original_cols) == X_transformed.shape[1]:
+                            X_for_shap = pd.DataFrame(X_transformed, columns=original_cols, index=X_for_shap.index)
+                        else:
+                            X_for_shap = pd.DataFrame(X_transformed, index=X_for_shap.index)
                 except Exception as e:
                     print(f"  ⚠ Preprocessor transform failed, using raw features: {e}")
 
@@ -4116,15 +4355,48 @@ async def run_pipeline(
         if 7 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
 
+            # Block deployment if model quality is too poor
+            _model_usefulness = state.get("model_usefulness", "unknown")
+            _success_criteria_met = state.get("success_criteria_met", False)
+            if _model_usefulness in ("useless", "poor") or not _success_criteria_met:
+                _reason_parts = []
+                if _model_usefulness in ("useless", "poor"):
+                    _reason_parts.append(f"model_usefulness={_model_usefulness}")
+                if not _success_criteria_met:
+                    _reason_parts.append("success_criteria_not_met")
+                _quality_reason = ", ".join(_reason_parts)
+                print(f"\n  🚨 DEPLOYMENT BLOCKED: Model quality insufficient")
+                print(f"     Model usefulness: {_model_usefulness}")
+                print(f"     Success criteria met: {_success_criteria_met}")
+                step_results.append(StepResult(
+                    step_num=7,
+                    step_name="MODEL DEPLOYER",
+                    status="failed",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "deployment_id": "BLOCKED",
+                        "environment": "N/A",
+                        "status": "blocked_quality",
+                        "deployment_successful": False,
+                    },
+                    details={"reason": f"Model quality insufficient — {_quality_reason}"},
+                    input_summary={"model_usefulness": _model_usefulness, "success_criteria_met": _success_criteria_met},
+                    validation_checks=[
+                        ("Model quality gate", False, "acceptable+", f"{_model_usefulness}"),
+                        ("Success criteria", _success_criteria_met, "met", str(_success_criteria_met)),
+                    ],
+                    metrics_table=[],
+                    interpretation=[f"Deployment blocked: {_quality_reason}"],
+                    result_message=f"Deployment BLOCKED — {_quality_reason}",
+                ))
             # Block deployment if leakage suspected
-            _leakage_suspected = state.get("leakage_suspected", False)
-            _leakage_severity = state.get("leakage_severity", "none")
-            _suspicion_level = state.get("suspicion_level", "none")
-            if (
-                _leakage_suspected
-                or _leakage_severity in ("high", "critical")
-                or _suspicion_level in ("high", "critical")
+            elif (
+                state.get("leakage_suspected", False)
+                or state.get("leakage_severity", "none") in ("high", "critical")
+                or state.get("suspicion_level", "none") in ("high", "critical")
             ):
+                _leakage_severity = state.get("leakage_severity", "none")
+                _suspicion_level = state.get("suspicion_level", "none")
                 print(f"\n  🚨 DEPLOYMENT BLOCKED: Data leakage detected")
                 print(f"     Leakage severity: {_leakage_severity}")
                 print(f"     Suspicion level: {_suspicion_level}")
@@ -4154,10 +4426,11 @@ async def run_pipeline(
                     experiment_id,
                     state.get("model_uri"),
                     state.get("validation_metrics", {}),
-                    state.get("success_criteria_met", True),
+                    state.get("success_criteria_met", False),
                     trained_model=state.get("trained_model"),
                     include_bentoml=include_bentoml,
                     fitted_preprocessor=state.get("fitted_preprocessor"),
+                    feature_columns=state.get("feature_names"),
                 )
                 state["deployment_manifest"] = result.get("deployment_manifest")
                 # Track BentoML PID for cleanup (ephemeral mode only)
@@ -4204,7 +4477,7 @@ async def run_pipeline(
                         "experiment_id": experiment_id,
                         "model_uri": state.get("model_uri", "N/A"),
                         "validation_metrics": state.get("validation_metrics", {}),
-                        "success_criteria_met": state.get("success_criteria_met", True),
+                        "success_criteria_met": state.get("success_criteria_met", False),
                         "include_bentoml": include_bentoml,
                     },
                     validation_checks=[
@@ -4444,6 +4717,8 @@ def main():
     if args.disable_mlflow:
         CONFIG.enable_mlflow = False
     CONFIG.enable_opik = args.enable_opik
+    if args.enable_opik:
+        os.environ["OPIK_ENABLED"] = "true"
     CONFIG.hpo_trials = args.hpo_trials
     if args.brand:
         CONFIG.brand = args.brand

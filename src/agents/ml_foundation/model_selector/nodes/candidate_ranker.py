@@ -44,6 +44,7 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
     # Feature characteristics for categorical-aware scoring
     feature_chars = state.get("feature_characteristics", {})
     categorical_ratio = feature_chars.get("categorical_ratio", 0.0) if feature_chars else 0.0
+    class_imbalance_severity = feature_chars.get("class_imbalance_severity") if feature_chars else None
 
     selection_scores = {}
 
@@ -52,6 +53,7 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
         score = _compute_selection_score(
             candidate, success_rates, algorithm_preferences, row_count, requires_causal,
             categorical_ratio=categorical_ratio,
+            class_imbalance_severity=class_imbalance_severity,
         )
         selection_scores[algo_name] = score
         candidate["selection_score"] = score
@@ -126,6 +128,7 @@ def _compute_selection_score(
     data_size: int,
     requires_causal: bool = False,
     categorical_ratio: float = 0.0,
+    class_imbalance_severity: str | None = None,
 ) -> float:
     """Compute composite selection score for a candidate.
 
@@ -136,7 +139,8 @@ def _compute_selection_score(
         data_size: Number of training samples
         requires_causal: Whether the problem requires causal inference
         categorical_ratio: Ratio of categorical features (0-1). When >0.5,
-            tree-based models get a mild boost and linear models a mild penalty.
+            tree-based models get a proportional boost and linear models a proportional penalty.
+        class_imbalance_severity: Severity of class imbalance (none/moderate/severe/extreme).
 
     Returns:
         Float score in range [0, 1]
@@ -174,16 +178,27 @@ def _compute_selection_score(
         # They use effect() not predict(), causing issues with standard eval
         score -= 0.15
 
-    # Factor 6: Categorical feature ratio adjustment (+/-0.05)
+    # Factor 6: Categorical feature ratio adjustment (proportional, capped at +/-0.10)
     # When >50% of features are categorical, tree-based models handle discrete
     # splits natively while linear models create sparse dummy features.
     if categorical_ratio > 0.5:
         _tree_families = {"gradient_boosting", "random_forest", "tree", "ensemble"}
         _linear_families = {"linear", "logistic", "ridge", "lasso", "elastic_net"}
+        adjustment = min(0.10, 0.10 * categorical_ratio)
         if algo_family.lower() in _tree_families or algo_name in ("XGBoost", "LightGBM", "RandomForest"):
-            score += 0.05
+            score += adjustment
         elif algo_family.lower() in _linear_families or algo_name in ("LogisticRegression", "Ridge", "Lasso"):
-            score -= 0.05
+            score -= adjustment
+
+    # Factor 7: Class imbalance adjustment for tree vs linear models
+    if class_imbalance_severity in ("severe", "extreme"):
+        _tree_families_imb = {"gradient_boosting", "random_forest", "tree", "ensemble"}
+        _linear_families_imb = {"linear", "logistic", "ridge", "lasso", "elastic_net"}
+        imb_adj = 0.10 if class_imbalance_severity == "extreme" else 0.05
+        if algo_family.lower() in _tree_families_imb or algo_name in ("XGBoost", "LightGBM", "RandomForest"):
+            score += imb_adj
+        elif algo_family.lower() in _linear_families_imb or algo_name in ("LogisticRegression", "Ridge", "Lasso"):
+            score -= imb_adj
 
     # Bonus: User preference (adds up to 0.1)
     if preferences and algo_name in preferences:

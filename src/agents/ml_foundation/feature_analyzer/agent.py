@@ -258,6 +258,8 @@ class FeatureAnalyzerAgent:
             }
 
             # Store to database (ml_shap_analyses table)
+            # Pass model_registry_id from input if available (set by upstream agents)
+            output["model_registry_id"] = input_data.get("model_registry_id")
             await self._store_to_database(output)
 
             # Log execution time
@@ -445,8 +447,8 @@ class FeatureAnalyzerAgent:
                 "model_version": output.get("model_version"),
             }
 
-            # Get model_registry_id from shap_analysis if available
-            model_registry_id = output.get("shap_analysis", {}).get("model_registry_id")
+            # Get model_registry_id from input (passed by upstream agent or test)
+            model_registry_id = output.get("model_registry_id")
 
             result = await repo.store_analysis(
                 analysis_dict=analysis_dict,

@@ -121,6 +121,9 @@ Consider:
 1. Dataset size - SMOTE needs k_neighbors (typically 5) minority samples
 2. Algorithm type - tree-based models handle class_weight well
 3. Severity level - extreme imbalance may need combined approaches
+4. CRITICAL: Tree-based models (XGBoost, LightGBM, RandomForest) should use class_weight
+   instead of SMOTE/combined for severe/extreme imbalance — they memorize synthetic samples,
+   causing severe overfitting (train AUC ~1.0, test AUC 0.70-0.78)
 
 Respond in exactly this format:
 STRATEGY: <strategy_name>
@@ -172,10 +175,9 @@ def _heuristic_strategy(
     """
     severity = metrics["severity"]
     minority_count = metrics["minority_count"]
-    metrics["total_samples"]
 
     # Tree-based models handle class weights well
-    tree_models = ["XGBoost", "LightGBM", "RandomForest", "GradientBoosting", "CausalForest"]
+    tree_models = ["XGBoost", "LightGBM", "RandomForest", "GradientBoosting", "CausalForest", "ExtraTrees"]
     is_tree_model = algorithm_name in tree_models
 
     if severity == "none":
@@ -190,11 +192,23 @@ def _heuristic_strategy(
         return "random_oversample", "Moderate imbalance - light oversampling recommended"
 
     if severity == "severe":
-        if minority_count >= 10:  # Enough samples for SMOTE
+        if is_tree_model:
+            return (
+                "class_weight",
+                "Severe imbalance - tree models handle class weights natively, "
+                "avoiding SMOTE synthetic sample memorization",
+            )
+        if minority_count >= 10:
             return "smote", "Severe imbalance with sufficient minority samples for SMOTE"
         return "random_oversample", "Severe imbalance but too few minority samples for SMOTE"
 
     # Extreme imbalance
+    if is_tree_model:
+        return (
+            "class_weight",
+            "Extreme imbalance - tree models handle class weights natively, "
+            "avoiding SMOTE synthetic sample memorization",
+        )
     if minority_count >= 10:
         return "combined", "Extreme imbalance - combining SMOTE with class weights"
     elif minority_count >= 5:

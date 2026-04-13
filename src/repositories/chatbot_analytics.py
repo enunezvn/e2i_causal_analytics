@@ -115,7 +115,7 @@ class ChatbotAnalyticsRepository(BaseRepository):
         data = {k: v for k, v in data.items() if v is not None}
 
         try:
-            result = await self.client.table(self.table_name).insert(data).execute()
+            result = self.client.table(self.table_name).insert(data).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             # Log error but don't fail the request

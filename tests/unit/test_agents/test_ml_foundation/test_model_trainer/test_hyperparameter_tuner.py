@@ -231,6 +231,154 @@ class TestGetFixedParams:
 
         assert params == {}
 
+    # --- Extreme imbalance: aggressive caps + subsampling ---
+
+    def test_xgboost_extreme_caps(self):
+        """XGBoost extreme: max_depth=4, min_child_weight=10, gamma=1.0, subsample/colsample=0.7."""
+        params = _get_fixed_params(
+            "XGBoost",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+        )
+        assert params["max_depth"] == 4
+        assert params["min_child_weight"] == 10
+        assert params["gamma"] == 1.0
+        assert params["subsample"] == 0.7
+        assert params["colsample_bytree"] == 0.7
+
+    def test_lightgbm_extreme_caps(self):
+        """LightGBM extreme: max_depth=4, num_leaves=15, subsampling with freq=1."""
+        params = _get_fixed_params(
+            "LightGBM",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+        )
+        assert params["max_depth"] == 4
+        assert params["num_leaves"] == 15
+        assert params["min_child_samples"] == 20
+        assert params["subsample"] == 0.7
+        assert params["subsample_freq"] == 1
+        assert params["colsample_bytree"] == 0.7
+
+    def test_random_forest_extreme_caps(self):
+        """RandomForest extreme: max_depth=6, min_samples_leaf=10, min_split=20, sqrt features."""
+        params = _get_fixed_params(
+            "RandomForest",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+        )
+        assert params["max_depth"] == 6
+        assert params["min_samples_leaf"] == 10
+        assert params["min_samples_split"] == 20
+        assert params["max_features"] == "sqrt"
+
+    # --- Severe imbalance: moderate caps, no subsampling ---
+
+    def test_xgboost_severe_caps(self):
+        """XGBoost severe: max_depth=6, min_child_weight=5, no subsampling forced."""
+        params = _get_fixed_params(
+            "XGBoost",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 900, 1: 100},
+            imbalance_severity="severe",
+        )
+        assert params["max_depth"] == 6
+        assert params["min_child_weight"] == 5
+        assert "subsample" not in params
+        assert "colsample_bytree" not in params
+
+    def test_lightgbm_severe_caps(self):
+        """LightGBM severe: max_depth=6, num_leaves=31, no subsampling forced."""
+        params = _get_fixed_params(
+            "LightGBM",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 900, 1: 100},
+            imbalance_severity="severe",
+        )
+        assert params["max_depth"] == 6
+        assert params["num_leaves"] == 31
+        assert params["min_child_samples"] == 20
+        assert "subsample" not in params
+
+    def test_random_forest_severe_caps(self):
+        """RandomForest severe: max_depth=8, min_samples_leaf=5."""
+        params = _get_fixed_params(
+            "RandomForest",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 900, 1: 100},
+            imbalance_severity="severe",
+        )
+        assert params["max_depth"] == 8
+        assert params["min_samples_leaf"] == 5
+
+    # --- Guard tests ---
+
+    def test_no_caps_for_moderate_imbalance(self):
+        """No depth/leaf caps should apply for moderate imbalance."""
+        params = _get_fixed_params(
+            "XGBoost",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 750, 1: 250},
+            imbalance_severity="moderate",
+        )
+        assert "max_depth" not in params
+        assert "min_child_weight" not in params
+
+    def test_no_depth_cap_for_logistic_regression(self):
+        """LogisticRegression should NOT get depth caps even at extreme imbalance."""
+        params = _get_fixed_params(
+            "LogisticRegression",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+        )
+        assert "max_depth" not in params
+
+    def test_lightgbm_subsample_freq_required(self):
+        """LightGBM must set subsample_freq=1 when subsample is set, or it's silently ignored."""
+        params = _get_fixed_params(
+            "LightGBM",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+        )
+        assert "subsample" in params
+        assert params["subsample_freq"] == 1
+
+    def test_scale_pos_weight_computed_correctly(self):
+        """XGBoost scale_pos_weight should equal majority/minority ratio."""
+        params = _get_fixed_params(
+            "XGBoost",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+        )
+        assert params["scale_pos_weight"] == pytest.approx(970 / 30)
+
+    def test_no_class_weight_when_imbalance_not_detected(self):
+        """No class weight params should be set when imbalance_detected=False."""
+        params = _get_fixed_params("XGBoost", imbalance_detected=False)
+        assert "scale_pos_weight" not in params
+
+        params = _get_fixed_params("LightGBM", imbalance_detected=False)
+        assert "is_unbalance" not in params
+
+        params = _get_fixed_params("RandomForest", imbalance_detected=False)
+        assert "class_weight" not in params
+
 
 class TestGetHpoPatternMemory:
     """Tests for _get_hpo_pattern_memory helper."""

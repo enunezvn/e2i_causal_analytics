@@ -21,6 +21,7 @@ from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPrune
 from optuna.samplers import CmaEsSampler, RandomSampler, TPESampler
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
@@ -480,7 +481,7 @@ class OptunaOptimizer:
             params = OptunaOptimizer.suggest_from_search_space(trial, search_space)
 
             # Merge with fixed parameters
-            all_params = {**fixed_params, **params}
+            all_params = {**params, **fixed_params}
 
             try:
                 # Create model
@@ -557,7 +558,7 @@ class OptunaOptimizer:
             params = OptunaOptimizer.suggest_from_search_space(trial, search_space)
 
             # Merge with fixed parameters
-            all_params = {**fixed_params, **params}
+            all_params = {**params, **fixed_params}
 
             # Add early stopping for compatible models
             if early_stopping_rounds:
@@ -651,6 +652,8 @@ class OptunaOptimizer:
                     y_pred,
                     average="weighted" if problem_type == "multiclass_classification" else "binary",
                 ))
+            elif metric == "average_precision":
+                return float(average_precision_score(y, y_proba))
             else:
                 return float(accuracy_score(y, y_pred))
         else:  # Regression

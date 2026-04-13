@@ -209,6 +209,52 @@ class TestHeuristicStrategy:
         strategy, _ = _heuristic_strategy(metrics, model_name)
         assert strategy == "class_weight"
 
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "XGBoost",
+            "LightGBM",
+            "RandomForest",
+            "GradientBoosting",
+            "CausalForest",
+        ],
+    )
+    def test_severe_tree_returns_class_weight(self, model_name):
+        """Tree models should get class_weight instead of SMOTE at severe imbalance."""
+        metrics = {"severity": "severe", "minority_count": 15, "total_samples": 100}
+        strategy, rationale = _heuristic_strategy(metrics, model_name)
+        assert strategy == "class_weight"
+        assert "memorization" in rationale.lower() or "synthetic" in rationale.lower()
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "XGBoost",
+            "LightGBM",
+            "RandomForest",
+            "GradientBoosting",
+            "CausalForest",
+        ],
+    )
+    def test_extreme_tree_returns_class_weight(self, model_name):
+        """Tree models should get class_weight instead of combined at extreme imbalance."""
+        metrics = {"severity": "extreme", "minority_count": 15, "total_samples": 1000}
+        strategy, rationale = _heuristic_strategy(metrics, model_name)
+        assert strategy == "class_weight"
+        assert "memorization" in rationale.lower() or "synthetic" in rationale.lower()
+
+    def test_severe_non_tree_still_returns_smote(self):
+        """Non-tree models should still get SMOTE at severe imbalance."""
+        metrics = {"severity": "severe", "minority_count": 15, "total_samples": 100}
+        strategy, _ = _heuristic_strategy(metrics, "LogisticRegression")
+        assert strategy == "smote"
+
+    def test_extreme_non_tree_still_returns_combined(self):
+        """Non-tree models should still get combined at extreme imbalance."""
+        metrics = {"severity": "extreme", "minority_count": 15, "total_samples": 100}
+        strategy, _ = _heuristic_strategy(metrics, "LogisticRegression")
+        assert strategy == "combined"
+
 
 # ============================================================================
 # Test _get_llm_recommendation

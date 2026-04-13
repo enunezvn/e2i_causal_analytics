@@ -56,7 +56,7 @@ class BaseRepository(ABC, Generic[T]):
         if split:
             query = query.eq("split_assignment", split)
 
-        result = await query.execute()
+        result = query.execute()
         return self._to_model(parse_supabase_row(result.data[0])) if result.data else None
 
     async def get_many(
@@ -90,7 +90,7 @@ class BaseRepository(ABC, Generic[T]):
             query = query.eq("split_assignment", split)
 
         query = query.limit(limit).offset(offset)
-        result = await query.execute()
+        result = query.execute()
 
         return [self._to_model(row) for row in parse_supabase_rows(result.data)]
 
@@ -108,7 +108,7 @@ class BaseRepository(ABC, Generic[T]):
             return entity
 
         data = entity.model_dump() if hasattr(entity, "model_dump") else entity
-        result = await self.client.table(self.table_name).insert(data).execute()
+        result = self.client.table(self.table_name).insert(data).execute()
 
         return self._to_model(parse_supabase_row(result.data[0])) if result.data else entity
 
@@ -126,7 +126,7 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return None
 
-        result = await self.client.table(self.table_name).update(updates).eq("id", id).execute()
+        result = self.client.table(self.table_name).update(updates).eq("id", id).execute()
 
         return self._to_model(parse_supabase_row(result.data[0])) if result.data else None
 
@@ -143,7 +143,7 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return False
 
-        result = await self.client.table(self.table_name).delete().eq("id", id).execute()
+        result = self.client.table(self.table_name).delete().eq("id", id).execute()
 
         return len(result.data) > 0
 

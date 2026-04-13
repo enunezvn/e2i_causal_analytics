@@ -250,8 +250,9 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
     y_train_np = _ensure_numpy(y_train)
     y_val_np = _ensure_numpy(y_validation)
 
-    # Determine optimization metric based on problem type
-    metric = _get_default_metric(problem_type)
+    # Determine optimization metric based on problem type and imbalance
+    imbalance_severity = state.get("imbalance_severity", "none")
+    metric = _get_default_metric(problem_type, imbalance_severity=imbalance_severity)
 
     # Calculate timeout in seconds
     timeout_seconds = int(hpo_timeout_hours * 3600) if hpo_timeout_hours else 3600
@@ -345,7 +346,15 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
             imbalance_detected=imbalance_detected,
             recommended_strategy=recommended_strategy,
             class_distribution=class_distribution,
+            imbalance_severity=state.get("imbalance_severity", "none"),
         )
+
+        # Filter search space to exclude params already pinned in fixed_params —
+        # otherwise Optuna wastes trial budget sampling values that get overridden
+        effective_search_space = {
+            k: v for k, v in hyperparameter_search_space.items()
+            if k not in fixed_params
+        }
 
         # Create validation-based objective function
         objective = optimizer.create_validation_objective(
@@ -354,7 +363,7 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
             y_train=y_train_np,
             X_val=X_val,
             y_val=y_val_np,
-            search_space=hyperparameter_search_space,
+            search_space=effective_search_space,
             problem_type=problem_type,
             metric=metric,
             fixed_params=fixed_params,
@@ -533,16 +542,26 @@ def _ensure_numpy(data: Any) -> np.ndarray:
     return np.asarray(data)
 
 
-def _get_default_metric(problem_type: str) -> str:
+def _get_default_metric(
+    problem_type: str,
+    imbalance_severity: str = "none",
+) -> str:
     """Get default optimization metric for problem type.
+
+    For extreme/severe class imbalance, uses average_precision (PR-AUC)
+    instead of roc_auc because AUC is threshold-invariant and can be
+    misleadingly high even when the model predicts all negatives.
 
     Args:
         problem_type: Problem type string
+        imbalance_severity: Class imbalance severity (none, moderate, severe, extreme)
 
     Returns:
         Metric name for optimization
     """
     if problem_type == "binary_classification":
+        if imbalance_severity in ("severe", "extreme"):
+            return "average_precision"
         return "roc_auc"
     elif problem_type == "multiclass_classification":
         return "f1"
@@ -557,6 +576,7 @@ def _get_fixed_params(
     imbalance_detected: bool = False,
     recommended_strategy: str = "none",
     class_distribution: Optional[Dict[int, int]] = None,
+    imbalance_severity: str = "none",
 ) -> Dict[str, Any]:
     """Get fixed parameters for algorithm that shouldn't be tuned.
 
@@ -567,6 +587,7 @@ def _get_fixed_params(
         imbalance_detected: Whether class imbalance was detected
         recommended_strategy: Recommended remediation strategy
         class_distribution: Class distribution dict {class: count}
+        imbalance_severity: Class imbalance severity (none, moderate, severe, extreme)
 
     Returns:
         Dictionary of fixed parameters
@@ -594,6 +615,7 @@ def _get_fixed_params(
         fixed_params = {
             "random_state": 42,
             "max_iter": 1000,
+            "solver": "saga",
         }
     elif algorithm_name in ["Ridge", "Lasso"]:
         fixed_params = {
@@ -650,5 +672,40 @@ def _get_fixed_params(
                     # sklearn GradientBoosting doesn't support class_weight directly
                     # but we can adjust sample weights during training
                     pass
+
+    # Regularization caps for imbalanced datasets (mutually exclusive tiers).
+    # Severe (5-20% minority) gets moderate depth/leaf caps.
+    # Extreme (<5% minority) gets aggressive caps + subsampling.
+    if imbalance_severity == "severe":
+        if algorithm_name == "XGBoost":
+            fixed_params["max_depth"] = min(fixed_params.get("max_depth", 6), 6)
+            fixed_params["min_child_weight"] = max(fixed_params.get("min_child_weight", 1), 5)
+        elif algorithm_name == "LightGBM":
+            fixed_params["max_depth"] = min(fixed_params.get("max_depth", 6), 6)
+            fixed_params["num_leaves"] = min(fixed_params.get("num_leaves", 31), 31)
+            fixed_params["min_child_samples"] = max(fixed_params.get("min_child_samples", 20), 20)
+        elif algorithm_name == "RandomForest":
+            fixed_params["max_depth"] = min(fixed_params.get("max_depth", 8), 8)
+            fixed_params["min_samples_leaf"] = max(fixed_params.get("min_samples_leaf", 2), 5)
+
+    elif imbalance_severity == "extreme":
+        if algorithm_name == "XGBoost":
+            fixed_params["max_depth"] = min(fixed_params.get("max_depth", 4), 4)
+            fixed_params["min_child_weight"] = max(fixed_params.get("min_child_weight", 1), 10)
+            fixed_params["gamma"] = max(fixed_params.get("gamma", 0), 1.0)
+            fixed_params["subsample"] = 0.7
+            fixed_params["colsample_bytree"] = 0.7
+        elif algorithm_name == "LightGBM":
+            fixed_params["max_depth"] = min(fixed_params.get("max_depth", 4), 4)
+            fixed_params["num_leaves"] = min(fixed_params.get("num_leaves", 15), 15)
+            fixed_params["min_child_samples"] = max(fixed_params.get("min_child_samples", 20), 20)
+            fixed_params["subsample"] = 0.7
+            fixed_params["subsample_freq"] = 1  # Required or LightGBM silently ignores subsample
+            fixed_params["colsample_bytree"] = 0.7
+        elif algorithm_name == "RandomForest":
+            fixed_params["max_depth"] = min(fixed_params.get("max_depth", 6), 6)
+            fixed_params["min_samples_leaf"] = max(fixed_params.get("min_samples_leaf", 2), 10)
+            fixed_params["min_samples_split"] = max(fixed_params.get("min_samples_split", 2), 20)
+            fixed_params["max_features"] = "sqrt"
 
     return fixed_params

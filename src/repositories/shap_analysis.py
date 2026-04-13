@@ -82,7 +82,7 @@ class ShapAnalysisRepository(BaseRepository):
             # Remove None values for optional fields
             db_record = {k: v for k, v in db_record.items() if v is not None}
 
-            result = await self.client.table(self.table_name).insert(db_record).execute()
+            result = self.client.table(self.table_name).insert(db_record).execute()
 
             if result.data:
                 logger.info(
@@ -117,7 +117,7 @@ class ShapAnalysisRepository(BaseRepository):
             return []
 
         try:
-            result = await (
+            result = (
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("model_registry_id", model_registry_id)
@@ -149,7 +149,7 @@ class ShapAnalysisRepository(BaseRepository):
             return None
 
         try:
-            result = await (
+            result = (
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("model_registry_id", model_registry_id)
@@ -182,7 +182,7 @@ class ShapAnalysisRepository(BaseRepository):
             return []
 
         try:
-            result = await (
+            result = (
                 self.client.table(self.table_name)
                 .select("id, global_importance, computed_at")
                 .eq("model_registry_id", model_registry_id)

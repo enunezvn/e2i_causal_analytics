@@ -82,7 +82,7 @@ class ChatbotMessageRepository(BaseRepository):
             "metadata": metadata or {},
         }
 
-        result = await self.client.table(self.table_name).insert(data).execute()
+        result = self.client.table(self.table_name).insert(data).execute()
 
         return self._to_model(result.data[0]) if result.data else None
 
