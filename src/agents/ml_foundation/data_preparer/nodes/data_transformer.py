@@ -53,7 +53,11 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         # Get configuration from scope_spec
         scope_spec = state.get("scope_spec", {})
         target_column = scope_spec.get("target_column")
-        exclude_columns = scope_spec.get("exclude_columns", [])
+        # Merge explicit runtime override (`exclude_columns`) with the canonical
+        # scope-declared list (`excluded_features`) so both sources are honored.
+        exclude_columns = list(scope_spec.get("exclude_columns", [])) + list(
+            scope_spec.get("excluded_features", [])
+        )
         scaling_method = scope_spec.get("scaling_method", "standard")
         encoding_method = scope_spec.get("encoding_method", "label")
         imputation_strategy = scope_spec.get("imputation_strategy", "mean")

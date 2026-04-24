@@ -98,6 +98,10 @@ class TestConfig:
     min_minority_precision: float = 0.05  # At least 5% of predicted positives should be correct
     enable_mlflow: bool = True  # MLflow must be enabled for model_uri to be generated
     enable_opik: bool = False
+    # Minimum viable samples per split (forwarded into ModelTrainerState).
+    # Default 10 matches split_enforcer's internal default; override via
+    # --min-samples-per-split for small-cohort RWD runs (e.g., Optum n=47).
+    min_samples_per_split: int = 10
 
 
 CONFIG = TestConfig()
@@ -2448,6 +2452,7 @@ async def step_5_model_trainer(
         "enable_mlflow": CONFIG.enable_mlflow,
         "feature_columns": feature_columns,
         "success_criteria": success_criteria or {},
+        "min_samples_per_split": CONFIG.min_samples_per_split,
     }
 
     processing_steps.append(("HPO optimization", True, f"{CONFIG.hpo_trials} trials"))
@@ -3731,6 +3736,11 @@ async def run_pipeline(
                     "journey_stage", "journey_status",
                     CONFIG.target_outcome, "discontinuation_flag", "treatment_initiated",
                 }
+                # Merge scope_definer's canonical excluded_features (PII, temporal
+                # leakage, pipeline construction metadata like index_date /
+                # lookback_start_date / prediction_end_date) so Step 5's feature
+                # discovery honors the same policy as data_preparer.
+                _exclude |= set(state.get("scope_spec", {}).get("excluded_features", []) or [])
                 # Phase 1: Numeric features
                 numeric_cols = [
                     c for c in eligible_df.columns
@@ -4666,6 +4676,15 @@ def main():
         help="Number of HPO trials (default: 10)"
     )
     parser.add_argument(
+        "--min-samples-per-split",
+        type=int,
+        default=10,
+        help=(
+            "Minimum viable samples per split for split_enforcer gate "
+            "(default: 10; lower for small-cohort RWD, e.g. 5 for Optum n=47)"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be done without executing"
@@ -4727,6 +4746,7 @@ def main():
     if args.enable_opik:
         os.environ["OPIK_ENABLED"] = "true"
     CONFIG.hpo_trials = args.hpo_trials
+    CONFIG.min_samples_per_split = args.min_samples_per_split
     if args.brand:
         CONFIG.brand = args.brand
     if args.target:

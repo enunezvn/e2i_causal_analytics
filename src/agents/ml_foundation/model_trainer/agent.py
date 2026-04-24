@@ -201,6 +201,8 @@ class ModelTrainerAgent:
             "validation_data": input_data.get("validation_data") or {},
             "test_data": input_data.get("test_data") or {},
             "holdout_data": input_data.get("holdout_data") or {},
+            # Configurable minimum samples per split (consumed by split_enforcer)
+            "min_samples_per_split": input_data.get("min_samples_per_split", 10),
         }
 
         # Execute LangGraph workflow with optional Opik tracing

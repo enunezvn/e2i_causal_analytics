@@ -1455,19 +1455,23 @@ class OptumDataConverter:
     def _run_pilot_audit(
         self, cohort: str, journeys: list[dict[str, Any]]
     ) -> None:
-        """Run the data_preparer leakage_detector on the converter output.
+        """Run a fast leakage audit on the converter output.
 
         Per spec §11: zero CRITICAL findings, <3 HIGH before running the full
-        tier-0 pipeline. Imports the detector lazily so the converter has no
-        runtime dep on the agent package when --pilot-audit is disabled.
+        tier-0 pipeline. This is a pre-flight sanity check only — the
+        authoritative detection runs in data_preparer.leakage_detector during
+        Tier-0. Uses the synchronous pure-function helpers exported from
+        leakage_detector (taking a plain DataFrame + target column), not the
+        async agent-node ``detect_leakage(state)``.
         """
         logger.info("  Running pilot audit on cohort %s (%d journeys)", cohort, len(journeys))
         try:
             from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import (
-                detect_leakage,
+                check_perfect_class_separation,
+                check_single_feature_auc,
             )
         except Exception as exc:
-            logger.warning("  Pilot audit skipped — could not import leakage_detector: %s", exc)
+            logger.warning("  Pilot audit skipped — could not import leakage checks: %s", exc)
             return
 
         df = pd.DataFrame(journeys)
@@ -1480,19 +1484,37 @@ class OptumDataConverter:
             logger.warning("  Pilot audit skipped — target column %s missing", target_col)
             return
 
+        numeric_features = [
+            c for c in df.columns
+            if c != target_col and pd.api.types.is_numeric_dtype(df[c])
+        ]
+
         try:
-            findings = detect_leakage(df, target=target_col)
+            findings: list[Any] = []
+            findings.extend(
+                check_single_feature_auc(df, target_col, numeric_features)
+            )
+            findings.extend(
+                check_perfect_class_separation(df, target_col, numeric_features)
+            )
         except Exception as exc:
             logger.warning("  Pilot audit run failed: %s", exc)
             return
 
-        # Count severity tiers
+        # Count severity tiers (LeakageFinding.severity is an Enum)
         sev_counts: dict[str, int] = {}
-        if isinstance(findings, list):
-            for f in findings:
-                sev = (f.get("severity") if isinstance(f, dict) else "") or ""
-                sev_counts[sev] = sev_counts.get(sev, 0) + 1
+        for f in findings:
+            sev = getattr(getattr(f, "severity", None), "value", "") or ""
+            sev_counts[sev] = sev_counts.get(sev, 0) + 1
         logger.info("  Pilot audit findings by severity: %s", sev_counts)
+
+        # §11 gate: zero CRITICAL, fewer than 3 HIGH
+        if sev_counts.get("critical", 0) > 0 or sev_counts.get("high", 0) >= 3:
+            logger.warning(
+                "  Pilot audit GATE FAILED for cohort %s: %s — run data_preparer.leakage_detector for details",
+                cohort,
+                sev_counts,
+            )
 
 
 # --------------------------------------------------------------------------- #

@@ -102,8 +102,8 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     else:
         ratio_checks.append(f"Holdout split: {holdout_ratio:.2%} ✓")
 
-    # Check for minimum sample sizes
-    min_samples_per_split = 10  # Minimum viable samples
+    # Check for minimum sample sizes (configurable via state override)
+    min_samples_per_split = state.get("min_samples_per_split", 10)
     leakage_warnings = []
 
     if train_samples < min_samples_per_split:
@@ -186,9 +186,13 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     # Set error when validation fails so agent can detect it
     if not ratios_valid:
         failed_checks = [c for c in ratio_checks if "✓" not in c]
+        # Include leakage_warnings (minimum-sample failures etc.) in the error
+        # message; otherwise ratio-check-only errors produce empty "Failures:"
+        # strings when the real failure is a sample-count gate.
+        all_failures = failed_checks + leakage_warnings
         result["error"] = (
             f"Split validation failed: {split_validation_message}. "
-            f"Failed checks: {', '.join(failed_checks[:3])}"
+            f"Failures: {', '.join(all_failures[:5])}"
         )
         result["error_type"] = "split_validation_error"
 

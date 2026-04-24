@@ -155,8 +155,9 @@ def _define_required_features(state: Dict[str, Any]) -> List[str]:
 
 
 def _define_excluded_features(state: Dict[str, Any]) -> List[str]:
-    """Define features to exclude (PII, leakage risks)."""
+    """Define features to exclude (PII, leakage risks, pipeline metadata)."""
     return [
+        # PII
         "hcp_name",
         "hcp_npi",
         "patient_name",
@@ -164,7 +165,14 @@ def _define_excluded_features(state: Dict[str, Any]) -> List[str]:
         "exact_address",
         "phone_number",
         "email_address",
-        "future_prescription_data",  # Temporal leakage
+        # Temporal leakage
+        "future_prescription_data",
+        # Pipeline construction metadata (never clinical predictors)
+        "index_date",
+        "lookback_start_date",
+        "prediction_end_date",
+        "cohort_entry_date",
+        "observation_end_date",
     ]
 
 

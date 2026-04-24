@@ -51,6 +51,7 @@ class ModelTrainerState(TypedDict, total=False):
     holdout_data: Dict[str, Any]  # Holdout split (X, y, row_count) - LOCKED
 
     # Split Validation
+    min_samples_per_split: int  # Minimum viable samples per split (default 10)
     split_ratios_valid: bool  # Whether splits match expected ratios
     train_samples: int
     validation_samples: int

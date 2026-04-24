@@ -136,6 +136,17 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             if validation_df is not None and target_variable in validation_df.columns:
                 combined_df = pd.concat([train_df, validation_df], ignore_index=True)
 
+            # Honor scope_spec["excluded_features"] (PII, temporal leakage,
+            # pipeline construction metadata) so the structural checks don't fire
+            # on columns the pipeline is already committed to dropping.
+            excluded_features = scope_spec.get("excluded_features", []) or []
+            cols_to_drop = [
+                c for c in excluded_features
+                if c in combined_df.columns and c != target_variable
+            ]
+            if cols_to_drop:
+                combined_df = combined_df.drop(columns=cols_to_drop)
+
             numeric_features = _get_numeric_features(combined_df, target_variable, required_features)
 
             if len(numeric_features) > 0 and len(combined_df) >= 30:
@@ -586,6 +597,22 @@ def check_perfect_class_separation(
             class_1 = feat_valid[tgt_valid == 1]
 
             if len(class_0) < 5 or len(class_1) < 5:
+                continue
+
+            # Rare-event guard for binary/low-cardinality features.
+            # With a small positive class, a binary feature where all positives
+            # happen to be 0 (or all 1) trivially produces overlap_fraction=0
+            # even when the feature is a legitimate pre-index predictor. Skip
+            # the check when (a) feature is binary/near-binary (≤2 unique
+            # values in the combined valid set) AND (b) positive class is
+            # small (n < 30 or positive rate < 5%).
+            n_unique = feat_valid.nunique()
+            pos_rate = len(class_1) / max(len(feat_valid), 1)
+            if n_unique <= 2 and (len(class_1) < 30 or pos_rate < 0.05):
+                logger.debug(
+                    f"Skipping perfect_class_separation for binary feature '{feature}' — "
+                    f"rare-event cohort (n_pos={len(class_1)}, pos_rate={pos_rate:.2%})"
+                )
                 continue
 
             min_0, max_0 = float(class_0.min()), float(class_0.max())

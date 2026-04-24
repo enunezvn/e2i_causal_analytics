@@ -68,6 +68,7 @@ class OptumTestConfig:
     min_minority_precision: float = 0.05
     enable_mlflow: bool = True
     enable_opik: bool = False
+    min_samples_per_split: int = 10
 
 
 def apply_overrides(cohort: str, overrides: OptumTestConfig) -> None:
@@ -82,6 +83,7 @@ def apply_overrides(cohort: str, overrides: OptumTestConfig) -> None:
     tier0.CONFIG.min_minority_precision = overrides.min_minority_precision
     tier0.CONFIG.enable_mlflow = overrides.enable_mlflow
     tier0.CONFIG.enable_opik = overrides.enable_opik
+    tier0.CONFIG.min_samples_per_split = overrides.min_samples_per_split
     tier0.CONFIG.target_outcome = COHORT_TARGETS[cohort]
 
 
@@ -127,6 +129,15 @@ def main() -> int:
         default=0.65,
         help="Minimum validation AUC for success (default 0.65)",
     )
+    parser.add_argument(
+        "--min-samples-per-split",
+        type=int,
+        default=10,
+        help=(
+            "Minimum viable samples per split for split_enforcer gate "
+            "(default: 10; set to 5 for discontinuation/persistence cohorts at n=47)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -135,6 +146,7 @@ def main() -> int:
         enable_mlflow=not args.disable_mlflow,
         enable_opik=args.enable_opik,
         hpo_trials=args.hpo_trials,
+        min_samples_per_split=args.min_samples_per_split,
     )
     if args.enable_opik:
         os.environ["OPIK_ENABLED"] = "true"
