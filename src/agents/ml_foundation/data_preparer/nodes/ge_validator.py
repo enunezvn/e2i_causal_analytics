@@ -44,9 +44,12 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
                 "ge_validation_reason": "No training data available",
             }
 
-        # Determine suite name from data source
+        # Determine suite name from data source.
+        # data_source may now be a dict (file ingestion) — in that case we have
+        # no suite name to pull from; fall back to the generic suite.
         scope_spec = state.get("scope_spec", {})
-        data_source = state.get("data_source") or scope_spec.get("data_source", "business_metrics")
+        _ds_raw = state.get("data_source") or scope_spec.get("data_source", "business_metrics")
+        data_source: str = _ds_raw if isinstance(_ds_raw, str) else "business_metrics"
 
         # Get the validator
         validator = get_data_quality_validator()

@@ -1133,28 +1133,35 @@ def print_detailed_summary(
 
 
 def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
-    """Load real-world patient journey data from JSON.
+    """Load real-world patient journey data from JSON or parquet.
+
+    Prefers ``e2i_ml_v3_patient_journeys.parquet`` if present (Optum converter
+    output); falls back to ``...json`` (CSU converter output). Either format
+    yields a DataFrame with the same schema.
 
     Args:
-        data_dir: Directory containing ``e2i_ml_v3_patient_journeys.json``.
+        data_dir: Directory containing ``e2i_ml_v3_patient_journeys.*``.
         target: Target outcome column name.
 
     Returns:
         DataFrame with columns matching the Tier 0 pipeline schema.
     """
-    path = Path(data_dir) / "e2i_ml_v3_patient_journeys.json"
+    base = Path(data_dir)
+    parquet_path = base / "e2i_ml_v3_patient_journeys.parquet"
+    json_path = base / "e2i_ml_v3_patient_journeys.json"
 
-    if not path.exists():
+    if parquet_path.exists():
+        df = pd.read_parquet(parquet_path)
+    elif json_path.exists():
+        with open(json_path) as f:
+            records = json.load(f)
+        df = pd.DataFrame(records)
+    else:
         raise FileNotFoundError(
-            f"RWD data not found at {path}\n"
-            "Ensure the patient journey JSON has been generated "
-            "(e.g. python scripts/convert_csu_rwd.py)."
+            f"RWD data not found at {parquet_path} or {json_path}\n"
+            "Ensure the patient journey file has been generated "
+            "(e.g. python scripts/convert_csu_rwd.py or convert_optum_rwd.py)."
         )
-
-    with open(path) as f:
-        records = json.load(f)
-
-    df = pd.DataFrame(records)
 
     # Map age_group values to pipeline-expected buckets
     age_map = {

@@ -15,12 +15,43 @@
 | Field | Type | Required | Implemented | Notes |
 |-------|------|----------|-------------|-------|
 | `scope_spec` | ScopeSpec | ✅ | ✅ | agent.py:98 validates presence |
-| `data_source` | str | ✅ | ✅ | agent.py:100 validates presence |
+| `data_source` | str \| dict | ✅ | ✅ | agent.py:100 validates presence |
 | `split_id` | Optional[str] | ❌ | ✅ | agent.py:115 accepts optional |
 | `validation_suite` | Optional[str] | ❌ | ✅ | agent.py:116 accepts optional |
 | `skip_leakage_check` | bool | ❌ | ✅ | agent.py:117 with default False |
 
 **Status**: ✅ **COMPLIANT** - All required inputs validated, optional inputs supported
+
+### `data_source` Shape
+
+Three ingestion paths are dispatched by `data_loader.py`:
+
+| Shape | Path | Example |
+|-------|------|---------|
+| `str` | Supabase table/view | `"business_metrics"` |
+| `{"type": "file_dir", "path": "<dir>"}` | Directory with canonical `e2i_ml_v3_*` files | `{"type": "file_dir", "path": "data/rwd/optum/initiation"}` |
+| `{"type": "files", "paths": {"patient_journeys": "<p>", ...}}` | Explicit file map | `{"type": "files", "paths": {"patient_journeys": "x.parquet"}}` |
+
+When `use_sample_data=True` is set on `scope_spec`, the sample generator path
+takes precedence over Supabase (but not over file-based ingestion).
+
+### File Ingestion Invariants
+
+- Supported extensions: `.parquet`, `.pq`, `.json` (top-level list of records),
+  `.csv`. Dispatched by `FileIngestor` in `ingestion/file_ingestor.py`.
+- The directory path **must** contain a readable
+  `e2i_ml_v3_patient_journeys.{parquet,json,csv}`; missing → `IngestionError`.
+- Ancillary canonical files (`e2i_ml_v3_treatment_events`,
+  `e2i_ml_v3_hcp_profiles`) are optional for the file path.
+- If `patient_journeys` has a `data_split` column (produced by an upstream
+  converter's chronological splitter), it is honored verbatim — labels
+  `train`, `validation`/`val`, `test`, `holdout` are recognised.
+- If `data_split` is absent, `get_data_splitter()` is used with this
+  preference order: entity split (if `entity_column` in DataFrame) →
+  temporal split (if `date_column` in DataFrame) → random.
+- **No cleaning, no transformation** happens during ingestion; downstream
+  schema_validator / quality_checker / leakage_detector nodes catch
+  malformed data.
 
 ---
 

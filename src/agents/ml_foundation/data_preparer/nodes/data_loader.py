@@ -1,17 +1,24 @@
 """Data loader node for data_preparer agent.
 
-This node loads data from Supabase using MLDataLoader from Phase 1.
+Supports three ingestion paths:
+  - Supabase tables (default; ``data_source`` is a table name string)
+  - Sample data generator (``use_sample_data=True``)
+  - Local files (``data_source`` is a dict — see ``_load_from_files``)
 """
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional
+
+import pandas as pd
 
 # Use direct module imports to avoid circular import with src.repositories
 from src.repositories.data_splitter import get_data_splitter
 from src.repositories.ml_data_loader import get_ml_data_loader
 from src.repositories.sample_data import SampleDataGenerator
 
+from ..ingestion import FileIngestor, IngestionError
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -49,19 +56,34 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
         test_days = scope_spec.get("test_days", 30)
         use_sample_data = scope_spec.get("use_sample_data", False)
 
-        # Check if we should use sample data (for testing/development)
-        if use_sample_data:
+        # Route on data_source shape:
+        #   - dict with "type" in {"file_dir", "files"} → local file ingestion
+        #   - use_sample_data=True → synthetic generator
+        #   - otherwise → Supabase
+        if isinstance(data_source, dict) and data_source.get("type") in (
+            "file_dir",
+            "files",
+        ):
+            logger.info("Loading from files: %s", data_source.get("type"))
+            dataset = _load_from_files(
+                data_source=data_source,
+                entity_column=entity_column,
+                date_column=date_column,
+            )
+        elif use_sample_data:
+            # Narrow to str for the table-name branches (dict path handled above).
+            ds_str = data_source if isinstance(data_source, str) else str(data_source)
             logger.info("Using sample data generator")
             dataset = await _load_sample_data(
-                data_source=data_source,
+                data_source=ds_str,
                 n_samples=scope_spec.get("sample_size", 1000),
                 entity_column=entity_column,
                 date_column=date_column,
             )
         else:
-            # Load from Supabase
+            ds_str = data_source if isinstance(data_source, str) else str(data_source)
             dataset = await _load_from_supabase(
-                data_source=data_source,
+                data_source=ds_str,
                 filters=filters,
                 date_column=date_column,
                 entity_column=entity_column,
@@ -166,6 +188,113 @@ async def _load_from_supabase(
         }
 
     return result
+
+
+def _load_from_files(
+    data_source: Dict[str, Any],
+    entity_column: Optional[str],
+    date_column: str,
+) -> Dict[str, Any]:
+    """Load patient-journey data from local files.
+
+    Accepted ``data_source`` shapes:
+      - ``{"type": "file_dir", "path": "/path/to/dir"}`` — reads canonical
+        ``e2i_ml_v3_*`` files from the directory.
+      - ``{"type": "files", "paths": {"patient_journeys": "/...", ...}}`` —
+        reads each file from an explicit mapping.
+
+    Splitting policy:
+      - If ``patient_journeys`` has a ``data_split`` column (produced
+        upstream by a converter's chronological splitter), use it verbatim.
+      - Otherwise fall back to ``get_data_splitter()`` — prefer entity
+        split when ``entity_column`` exists, then temporal on ``date_column``,
+        then random.
+
+    No cleaning, no transformation — downstream nodes catch data issues.
+    """
+    ingestor = FileIngestor()
+
+    if data_source["type"] == "file_dir":
+        path = data_source.get("path")
+        if not path:
+            raise IngestionError("data_source.path required for type='file_dir'")
+        frames = ingestor.ingest_directory(Path(path))
+    elif data_source["type"] == "files":
+        paths = data_source.get("paths")
+        if not paths or not isinstance(paths, Mapping):
+            raise IngestionError(
+                "data_source.paths required for type='files' (got: %r)" % (paths,)
+            )
+        frames = ingestor.ingest_mapping(paths)
+    else:
+        raise IngestionError(
+            f"Unknown file data_source type: {data_source.get('type')!r}"
+        )
+
+    if "patient_journeys" not in frames:
+        raise IngestionError(
+            "File ingestion produced no 'patient_journeys' DataFrame — "
+            "downstream nodes require it as the primary table"
+        )
+
+    df = frames["patient_journeys"]
+    logger.info("Loaded patient_journeys: %d rows, %d cols", len(df), len(df.columns))
+
+    # Prefer precomputed split from converter.
+    if "data_split" in df.columns:
+        logger.info("Using precomputed 'data_split' column from ingested data")
+        return _split_from_column(df)
+
+    # Fallback: standard splitter.
+    splitter = get_data_splitter()
+    if entity_column and entity_column in df.columns:
+        logger.info("Applying entity split on '%s'", entity_column)
+        result = splitter.entity_split(df, entity_column=entity_column)
+    elif date_column in df.columns:
+        logger.info("Applying temporal split on '%s'", date_column)
+        result = splitter.temporal_split(
+            df,
+            date_column=date_column,
+            val_days=30,
+            test_days=30,
+        )
+    else:
+        logger.info("No entity or date column — applying random split")
+        result = splitter.random_split(df)
+
+    return {
+        "train": result.train,
+        "val": result.val,
+        "test": result.test,
+        "holdout": result.holdout,
+    }
+
+
+def _split_from_column(df: pd.DataFrame) -> Dict[str, Any]:
+    """Partition DataFrame by its ``data_split`` column.
+
+    Accepts converter-produced labels: 'train', 'validation'/'val', 'test',
+    'holdout'. Empty splits are returned as empty DataFrames matching the
+    original schema.
+    """
+    split_col = df["data_split"]
+    train = df[split_col == "train"].reset_index(drop=True)
+    val = df[split_col.isin(["validation", "val"])].reset_index(drop=True)
+    test = df[split_col == "test"].reset_index(drop=True)
+    holdout = df[split_col == "holdout"].reset_index(drop=True)
+    logger.info(
+        "Split from 'data_split' column: train=%d, val=%d, test=%d, holdout=%d",
+        len(train),
+        len(val),
+        len(test),
+        len(holdout),
+    )
+    return {
+        "train": train,
+        "val": val,
+        "test": test,
+        "holdout": holdout if len(holdout) > 0 else None,
+    }
 
 
 async def _load_sample_data(

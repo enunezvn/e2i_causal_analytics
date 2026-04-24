@@ -3,7 +3,7 @@
 This module defines the TypedDict state used by the data_preparer LangGraph.
 """
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from uuid import UUID
 
 
@@ -20,7 +20,13 @@ class DataPreparerState(TypedDict, total=False):
     scope_spec: Dict[str, Any]  # ScopeSpec from scope_definer
 
     # Data source configuration
-    data_source: str  # Table/view name
+    # May be either:
+    #   - str: Supabase table/view name (default path)
+    #   - dict: file ingestion descriptor. Two shapes:
+    #       {"type": "file_dir", "path": "<dir>"} — read canonical
+    #         e2i_ml_v3_* files from a directory
+    #       {"type": "files", "paths": {"patient_journeys": "<path>", ...}}
+    data_source: Union[str, Dict[str, Any]]
     split_id: Optional[str]  # ML split ID (if using existing split)
 
     # Validation configuration
