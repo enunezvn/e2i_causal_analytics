@@ -8,7 +8,7 @@ from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import pandera.pandas as pa
-from pandera import Check, Column, DataFrameSchema
+from pandera.pandas import Check, Column, DataFrameSchema
 
 from ..config import (
     Brand,

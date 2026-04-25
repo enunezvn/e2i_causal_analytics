@@ -26,8 +26,8 @@ from typing import Any, Dict, Optional, Type
 
 import pandas as pd
 import pandera.pandas as pa
-from pandera import DataFrameModel, Field
-from pandera.typing import Series
+from pandera.pandas import DataFrameModel, Field
+from pandera.typing.pandas import Series
 
 logger = logging.getLogger(__name__)
 
