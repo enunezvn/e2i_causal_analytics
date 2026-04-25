@@ -60,17 +60,12 @@ def run_migration(migration_file: str) -> None:
 
         database_url = os.getenv("DATABASE_URL")
         if database_url:
-            # Use psycopg2 for direct SQL execution
-            import psycopg2
+            import psycopg
 
-            print("🔌 Connecting via psycopg2...")
-            conn = psycopg2.connect(database_url)
-            conn.autocommit = True
-
-            with conn.cursor() as cursor:
-                cursor.execute(sql)
-
-            conn.close()
+            print("🔌 Connecting via psycopg (v3)...")
+            with psycopg.connect(database_url, autocommit=True) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(sql)
             print("✅ Migration completed successfully!")
         else:
             print("⚠️  DATABASE_URL not set. Cannot execute raw SQL via Supabase client.")

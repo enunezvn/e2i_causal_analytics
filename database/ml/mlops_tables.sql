@@ -15,6 +15,22 @@ ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'feature_analyzer';
 ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'model_deployer';
 ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'observability_connector';
 
+-- Add Tier 1-5 agent names so observability spans can be persisted
+-- (mirrors database/migrations/023_extend_agent_name_enum.sql so a
+-- fresh-DB rebuild stays in parity with the live schema).
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'orchestrator';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'tool_composer';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'causal_impact';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'gap_analyzer';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'heterogeneous_optimizer';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'drift_monitor';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'experiment_designer';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'health_score';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'prediction_synthesizer';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'resource_optimizer';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'explainer';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'feedback_learner';
+
 -- Create agent tier enum
 DO $$ BEGIN
     CREATE TYPE agent_tier_enum AS ENUM (
