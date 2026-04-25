@@ -244,7 +244,7 @@ def _detect_categorical_columns(df: pd.DataFrame) -> List[str]:
 
     for col in df.columns:
         # Check if object/category type
-        if df[col].dtype == "object" or pd.api.types.is_categorical_dtype(df[col]):
+        if df[col].dtype == "object" or isinstance(df[col].dtype, pd.CategoricalDtype):
             categorical_cols.append(col)
         # Check if low cardinality integer (likely categorical)
         elif pd.api.types.is_integer_dtype(df[col]):

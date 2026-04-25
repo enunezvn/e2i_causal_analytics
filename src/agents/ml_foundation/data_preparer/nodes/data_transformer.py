@@ -351,7 +351,7 @@ def _identify_column_types(
             datetime_cols.append(col)
         elif pd.api.types.is_numeric_dtype(dtype):
             numeric_cols.append(col)
-        elif pd.api.types.is_categorical_dtype(dtype) or dtype == object:
+        elif isinstance(dtype, pd.CategoricalDtype) or dtype == object:
             # Check if it looks like a categorical
             n_unique = df[col].nunique()
             n_total = len(df)
