@@ -93,10 +93,15 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "error_type": "missing_test_data",
         }
 
-    # Convert to numpy
-    X_train_np = _ensure_numpy(X_train_preprocessed)
-    X_val_np = _ensure_numpy(X_validation_preprocessed)
-    X_test_np = _ensure_numpy(X_test_preprocessed)
+    # The preprocessor (preprocessor.py:152) returns a numpy array, so
+    # X_*_preprocessed is numpy. LightGBM 4.x stores feature_names_in_
+    # at fit time even on numpy input ('Column_0..N'), and sklearn warns
+    # on every predict where X has no feature names. Wrap X with the
+    # preprocessor's post-encoding feature names so predict sees them
+    # consistently. y_* stays numpy — metric helpers expect plain arrays.
+    X_train_np = _wrap_with_feature_names(X_train_preprocessed, state)
+    X_val_np = _wrap_with_feature_names(X_validation_preprocessed, state)
+    X_test_np = _wrap_with_feature_names(X_test_preprocessed, state)
     y_train_np = _ensure_numpy(y_train)
     y_val_np = _ensure_numpy(y_validation)
     y_test_np = _ensure_numpy(y_test)
@@ -213,9 +218,23 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
         # 5. Stratified k-fold CV — validate metric stability
         if X_train_np is not None and y_train_np is not None:
             logger.info("Running 5-fold stratified cross-validation...")
-            arrays_X = [x for x in [X_train_np, X_val_np, X_test_np] if x is not None]
+            # Concatenate while preserving feature names. If all inputs
+            # are DataFrames (the post-#13 path), pd.concat keeps column
+            # names so each cloned LGBM fold fit/predicts with names —
+            # avoiding the 'X does not have valid feature names' warnings
+            # that would re-appear if we np.vstack'd to a bare ndarray.
+            try:
+                import pandas as pd
+            except ImportError:
+                pd = None  # type: ignore[assignment]
+            xs = [x for x in [X_train_np, X_val_np, X_test_np] if x is not None]
             arrays_y = [y for y in [y_train_np, y_val_np, y_test_np] if y is not None]
-            X_all = np.vstack(arrays_X)
+            if pd is not None and all(isinstance(x, pd.DataFrame) for x in xs):
+                X_all = pd.concat(xs, axis=0, ignore_index=True)
+            else:
+                X_all = np.vstack(
+                    [x.to_numpy() if hasattr(x, "to_numpy") else x for x in xs]
+                )
             y_all = np.concatenate(arrays_y)
             cv_result = compute_stratified_cv(trained_model, X_all, y_all, n_folds=5)
             metrics_result["cv_results"] = cv_result
@@ -1378,3 +1397,30 @@ def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
         return np.array(data)
 
     return data  # type: ignore[no-any-return]
+
+
+def _wrap_with_feature_names(data: Any, state: Dict[str, Any]) -> Any:
+    """Return X as a DataFrame with the preprocessor's output feature names.
+
+    Falls back to the original `data` when the preprocessor or names are
+    unavailable or the column count does not match. See the comment on
+    the call site for why this matters for LightGBM 4.x.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return data
+    if data is None or isinstance(data, pd.DataFrame):
+        return data
+    if not isinstance(data, np.ndarray) or data.ndim != 2:
+        return data
+    preprocessor = state.get("preprocessor")
+    names = None
+    if preprocessor is not None and hasattr(preprocessor, "get_feature_names_out"):
+        try:
+            names = preprocessor.get_feature_names_out()
+        except Exception:
+            names = None
+    if names is None or len(names) != data.shape[1]:
+        return data
+    return pd.DataFrame(data, columns=list(names))

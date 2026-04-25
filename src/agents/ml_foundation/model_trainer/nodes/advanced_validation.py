@@ -115,8 +115,14 @@ def compute_stratified_cv(
         "roc_auc": [], "pr_auc": [], "f1": [], "mcc": [],
     }
 
+    # DataFrame integer-position slicing requires .iloc; numpy uses []
+    _is_df = hasattr(X, "iloc")
+
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
-        X_fold_train, X_fold_val = X[train_idx], X[val_idx]
+        if _is_df:
+            X_fold_train, X_fold_val = X.iloc[train_idx], X.iloc[val_idx]
+        else:
+            X_fold_train, X_fold_val = X[train_idx], X[val_idx]
         y_fold_train, y_fold_val = y[train_idx], y[val_idx]
 
         try:

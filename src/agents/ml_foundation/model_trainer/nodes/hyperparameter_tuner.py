@@ -244,9 +244,18 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
             "hpo_duration_seconds": 0.0,
         }
 
-    # Convert to numpy arrays if needed
-    X_train = _ensure_numpy(X_train_preprocessed)
-    X_val = _ensure_numpy(X_validation_preprocessed)
+    # Wrap X as DataFrame with the preprocessor's output feature names.
+    # The model_trainer preprocessor (preprocessor.py:152) returns a
+    # numpy array. LightGBM 4.x stores `feature_names_in_` as
+    # ['Column_0',...,'Column_N'] when fit on a bare numpy array, then
+    # sklearn warns on every subsequent numpy predict — leaking ~85
+    # UserWarnings per LightGBM HPO. Wrapping with the engineered
+    # feature names keeps fit and predict aligned and surfaces the real
+    # post-encoding column identities to downstream tools (SHAP, etc.).
+    # y_* still goes through _ensure_numpy because Optuna metric
+    # helpers expect plain arrays.
+    X_train = _wrap_with_feature_names(X_train_preprocessed, state)
+    X_val = _wrap_with_feature_names(X_validation_preprocessed, state)
     y_train_np = _ensure_numpy(y_train)
     y_val_np = _ensure_numpy(y_validation)
 
@@ -540,6 +549,37 @@ def _ensure_numpy(data: Any) -> np.ndarray:
 
     # Convert to array
     return np.asarray(data)
+
+
+def _wrap_with_feature_names(data: Any, state: Dict[str, Any]) -> Any:
+    """Return X as a DataFrame with the preprocessor's output feature names.
+
+    If `data` is already a DataFrame it is returned unchanged. If it is a
+    2-D numpy array and the state's preprocessor exposes
+    `get_feature_names_out()` whose length matches the column count, wrap
+    it in a DataFrame so LightGBM/sklearn see consistent feature names
+    across fit and predict. Falls through to the original `data` if any
+    of those preconditions fail — the worst case is the warning we are
+    already trying to fix, never an error.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return data
+    if data is None or isinstance(data, pd.DataFrame):
+        return data
+    if not isinstance(data, np.ndarray) or data.ndim != 2:
+        return data
+    preprocessor = state.get("preprocessor")
+    names = None
+    if preprocessor is not None and hasattr(preprocessor, "get_feature_names_out"):
+        try:
+            names = preprocessor.get_feature_names_out()
+        except Exception:
+            names = None
+    if names is None or len(names) != data.shape[1]:
+        return data
+    return pd.DataFrame(data, columns=list(names))
 
 
 def _get_default_metric(

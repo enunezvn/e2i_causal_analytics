@@ -2576,6 +2576,23 @@ async def step_5_model_trainer(
         else:
             X_val = validation_data["X"]
 
+        # Match feature names that LightGBM 4.x sees at fit so predict
+        # doesn't emit "X does not have valid feature names" UserWarning.
+        # The model_trainer preprocessor returns numpy from transform();
+        # wrap with engineered names if the trainer also exposes them.
+        if (
+            isinstance(X_val, np.ndarray)
+            and X_val.ndim == 2
+            and fitted_preprocessor is not None
+            and hasattr(fitted_preprocessor, "get_feature_names_out")
+        ):
+            try:
+                _names = fitted_preprocessor.get_feature_names_out()
+                if _names is not None and len(_names) == X_val.shape[1]:
+                    X_val = pd.DataFrame(X_val, columns=list(_names))
+            except Exception:
+                pass
+
         y_val = validation_data["y"]
         y_train = train_data["y"]
         y_test = test_data["y"]

@@ -136,8 +136,15 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
     final_epoch = None
 
     try:
-        # Convert to numpy if needed
-        X_train_np = _ensure_numpy(X_train_preprocessed)
+        # Wrap X_train with the preprocessor's output feature names so
+        # LightGBM 4.x doesn't auto-fill `feature_names_in_` with default
+        # 'Column_0..N' (which then warns on every numpy predict call in
+        # the evaluator). Using post-encoding names also makes SHAP's
+        # downstream feature_names_in_ read produce the correct labels —
+        # the prior code overrode feature_names_in_ with the *pre*-encoding
+        # `feature_columns`, which mismatches the actual fitted feature
+        # count and was silently passing wrong labels to SHAP.
+        X_train_np = _wrap_with_feature_names(X_train_preprocessed, state)
         y_train_np = _ensure_numpy(y_train)
 
         # Fit model
@@ -151,14 +158,23 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
             f"Model training completed: early_stopped={early_stopped}, final_epoch={final_epoch}"
         )
 
-        # Set feature names on model for SHAP compatibility
-        if feature_columns is not None and len(feature_columns) > 0:
-            try:
-                model.feature_names_in_ = np.array(feature_columns)
-                logger.info(f"Set feature_names_in_ with {len(feature_columns)} features")
-            except (AttributeError, TypeError) as e:
-                # Model doesn't support this attribute - this is fine
-                logger.debug(f"Could not set feature_names_in_: {e}")
+        # Fallback: if the wrap couldn't attach names (preprocessor
+        # missing feature_names_out_ or shape mismatch), and we have
+        # raw input column names, set them so SHAP still has labels.
+        # Skip when fit already populated feature_names_in_ correctly.
+        if (
+            not hasattr(model, "feature_names_in_")
+            or model.feature_names_in_ is None
+            or (hasattr(model.feature_names_in_, "__len__") and len(model.feature_names_in_) == 0)
+        ):
+            if feature_columns is not None and len(feature_columns) > 0:
+                try:
+                    model.feature_names_in_ = np.array(feature_columns)
+                    logger.info(
+                        f"Set feature_names_in_ fallback with {len(feature_columns)} features"
+                    )
+                except (AttributeError, TypeError) as e:
+                    logger.debug(f"Could not set feature_names_in_: {e}")
 
     except Exception as e:
         logger.error(f"Model training failed: {e}")
@@ -649,6 +665,33 @@ def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
         return np.array(data)
 
     return data  # type: ignore[no-any-return]
+
+
+def _wrap_with_feature_names(data: Any, state: Dict[str, Any]) -> Any:
+    """Return X as a DataFrame with the preprocessor's output feature names.
+
+    Falls back to the original `data` when the preprocessor or names are
+    unavailable or the column count does not match. See the comment on
+    the call site in train_model() for why this matters for LightGBM 4.x.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return data
+    if data is None or isinstance(data, pd.DataFrame):
+        return data
+    if not isinstance(data, np.ndarray) or data.ndim != 2:
+        return data
+    preprocessor = state.get("preprocessor")
+    names = None
+    if preprocessor is not None and hasattr(preprocessor, "get_feature_names_out"):
+        try:
+            names = preprocessor.get_feature_names_out()
+        except Exception:
+            names = None
+    if names is None or len(names) != data.shape[1]:
+        return data
+    return pd.DataFrame(data, columns=list(names))
 
 
 def _get_shape(data: Any) -> str:
