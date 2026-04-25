@@ -248,14 +248,23 @@ class ScopeDefinerAgent:
             scope_spec = output.get("scope_spec", {})
             success_criteria = output.get("success_criteria", {})
 
+            # Coalesce sentinel values to NULL — the in-memory state uses
+            # "all" / "unknown" for "no specific filter", but the DB enums
+            # (region_type, brand_type) don't include those values, so NULL
+            # is the right representation at the persistence boundary.
+            raw_region = scope_spec.get("region")
+            db_region = None if raw_region in (None, "", "all") else raw_region
+            raw_brand = scope_spec.get("brand")
+            db_brand = None if raw_brand in (None, "", "unknown") else raw_brand
+
             # Create experiment record
             result = await repo.create_experiment(
                 name=output.get("experiment_name", f"exp_{output.get('experiment_id', 'unknown')}"),
                 mlflow_experiment_id=output.get("experiment_id", ""),
                 prediction_target=scope_spec.get("target_variable", ""),
                 description=scope_spec.get("problem_description", ""),
-                brand=scope_spec.get("brand", "unknown"),
-                region=scope_spec.get("region", "all"),
+                brand=db_brand,
+                region=db_region,
                 created_by="scope_definer",
                 success_criteria=success_criteria,
             )
