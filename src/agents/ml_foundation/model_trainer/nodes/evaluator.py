@@ -1267,18 +1267,13 @@ def _check_success_criteria(
     Returns:
         Dictionary with success_criteria_met and success_criteria_results
     """
-    # For binary classification, always use sensible minimum thresholds.
-    # Scope definer criteria are aspirational (LLM-generated) and often too
-    # aggressive; we use CONFIG-aligned floors as the hard gate.
-    if problem_type == "binary_classification":
-        success_criteria = {"roc_auc": 0.55, "precision": 0.05}
-    elif not success_criteria:
+    if not success_criteria:
         return {
             "success_criteria_met": True,
             "success_criteria_results": {},
         }
 
-    results = {}
+    results: Dict[str, bool] = {}
     all_met = True
 
     # Map metric aliases (including scope_definer naming conventions)
@@ -1293,17 +1288,22 @@ def _check_success_criteria(
         "minimum_recall": "recall",
         "f1": "f1_score",
         "f1_score": "f1_score",
+        "minimum_f1": "f1_score",
         "rmse": "rmse",
+        "minimum_rmse": "rmse",
         "mae": "mae",
         "r2": "r2",
+        "minimum_r2": "r2",
+        "mape": "mape",
+        "minimum_mape": "mape",
     }
 
     # Metrics where lower is better
-    lower_is_better = {"rmse", "mae", "brier_score", "mse"}
+    lower_is_better = {"rmse", "mae", "brier_score", "mse", "mape"}
 
     for criterion_name, threshold in success_criteria.items():
-        # Skip non-numeric thresholds (e.g. experiment_id, baseline_model)
-        if not isinstance(threshold, (int, float)):
+        # Skip non-numeric thresholds (e.g. experiment_id, baseline_model, None placeholders)
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
             logger.debug(f"Skipping non-numeric success criterion: {criterion_name}={threshold}")
             continue
 
@@ -1312,28 +1312,36 @@ def _check_success_criteria(
         actual_value = test_metrics.get(metric_name)
 
         if actual_value is None:
-            # Metric not available — skip rather than fail
-            logger.warning(f"Success criterion metric not available: {criterion_name}")
+            # Metric requested by caller but not produced by the evaluator — this is a
+            # genuine failure of the success contract, not a soft skip. Returning True
+            # for "met" when we never actually checked the metric would silently mask
+            # the gap.
+            logger.warning(
+                f"Success criterion metric not available: {criterion_name} "
+                f"(resolved to '{metric_name}', missing from test_metrics)"
+            )
+            results[criterion_name] = False
+            all_met = False
             continue
-        else:
-            # Check if metric meets threshold
-            if metric_name in lower_is_better:
-                met = actual_value <= threshold
-            else:
-                met = actual_value >= threshold
 
-            results[criterion_name] = met
-            if not met:
-                logger.info(
-                    f"Success criterion not met: {criterion_name}={actual_value:.4f} "
-                    f"(threshold={threshold})"
-                )
-                all_met = False
-            else:
-                logger.info(
-                    f"Success criterion met: {criterion_name}={actual_value:.4f} "
-                    f"(threshold={threshold})"
-                )
+        # Check if metric meets threshold
+        if metric_name in lower_is_better:
+            met = actual_value <= threshold
+        else:
+            met = actual_value >= threshold
+
+        results[criterion_name] = met
+        if not met:
+            logger.info(
+                f"Success criterion not met: {criterion_name}={actual_value:.4f} "
+                f"(threshold={threshold})"
+            )
+            all_met = False
+        else:
+            logger.info(
+                f"Success criterion met: {criterion_name}={actual_value:.4f} "
+                f"(threshold={threshold})"
+            )
 
     return {
         "success_criteria_met": all_met,

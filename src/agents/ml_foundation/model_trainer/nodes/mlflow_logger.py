@@ -376,7 +376,7 @@ async def _log_model_artifact(
         logger.info(f"Attempting to log model with flavor={flavor}")
         model_uri = await run.log_model(
             model=model,
-            artifact_path="model",
+            name="model",
             flavor=flavor,
         )
         logger.info(f"Successfully logged model: {model_uri}")
@@ -388,7 +388,7 @@ async def _log_model_artifact(
             logger.info("Attempting fallback to sklearn flavor")
             model_uri = await run.log_model(
                 model=model,
-                artifact_path="model",
+                name="model",
                 flavor="sklearn",
             )
             logger.info(f"Successfully logged model with sklearn fallback: {model_uri}")

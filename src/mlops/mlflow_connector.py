@@ -33,7 +33,7 @@ Usage:
         run.log_params({"n_estimators": 100, "max_depth": 6})
         # ... training code ...
         run.log_metrics({"auc": 0.85, "precision": 0.78})
-        run.log_model(model, "model")
+        run.log_model(model, name="model")
 
     # Register model to registry
     model_version = await mlflow_conn.register_model(
@@ -328,7 +328,7 @@ class MLflowRun:
     async def log_model(
         self,
         model: Any,
-        artifact_path: str,
+        name: str,
         flavor: str = "sklearn",
         registered_model_name: Optional[str] = None,
         **kwargs: Any,
@@ -337,7 +337,7 @@ class MLflowRun:
 
         Args:
             model: The trained model object
-            artifact_path: Path within artifact store
+            name: Name/path within artifact store (MLflow 3.x parameter name; replaces deprecated artifact_path)
             flavor: MLflow flavor (sklearn, xgboost, lightgbm, etc.)
             registered_model_name: If provided, also register the model
             **kwargs: Additional arguments for the specific flavor
@@ -346,13 +346,13 @@ class MLflowRun:
             Model URI if successful
         """
         model_uri = await self.connector._log_model(
-            self.run_id, model, artifact_path, flavor, **kwargs
+            self.run_id, model, name, flavor, **kwargs
         )
         if model_uri and registered_model_name:
             await self.connector.register_model(
                 run_id=self.run_id,
                 model_name=registered_model_name,
-                model_path=artifact_path,
+                model_path=name,
             )
         return model_uri
 
@@ -857,7 +857,7 @@ class MLflowConnector:
         self,
         run_id: str,
         model: Any,
-        artifact_path: str,
+        name: str,
         flavor: str = "sklearn",
         **kwargs: Any,
     ) -> Optional[str]:
@@ -875,20 +875,20 @@ class MLflowConnector:
             # MLflow 3.x log_model returns ModelInfo with model_uri attribute
             model_info = None
             if flavor == "sklearn":
-                model_info = self._mlflow.sklearn.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.sklearn.log_model(model, name=name, **kwargs)
             elif flavor == "xgboost":
-                model_info = self._mlflow.xgboost.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.xgboost.log_model(model, name=name, **kwargs)
             elif flavor == "lightgbm":
-                model_info = self._mlflow.lightgbm.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.lightgbm.log_model(model, name=name, **kwargs)
             elif flavor == "pytorch":
-                model_info = self._mlflow.pytorch.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.pytorch.log_model(model, name=name, **kwargs)
             elif flavor == "tensorflow":
-                model_info = self._mlflow.tensorflow.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.tensorflow.log_model(model, name=name, **kwargs)
             elif flavor == "pyfunc":
-                model_info = self._mlflow.pyfunc.log_model(artifact_path, **kwargs)
+                model_info = self._mlflow.pyfunc.log_model(name=name, **kwargs)
             else:
                 # Try generic sklearn as fallback
-                model_info = self._mlflow.sklearn.log_model(model, artifact_path, **kwargs)
+                model_info = self._mlflow.sklearn.log_model(model, name=name, **kwargs)
 
             self.circuit_breaker.record_success()
 
@@ -897,7 +897,7 @@ class MLflowConnector:
             if model_info is not None and hasattr(model_info, "model_uri"):
                 model_uri = model_info.model_uri
             else:
-                model_uri = f"runs:/{run_id}/{artifact_path}"
+                model_uri = f"runs:/{run_id}/{name}"
 
             logger.info(f"Logged model to: {model_uri}")
             return cast(str, model_uri)

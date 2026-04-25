@@ -29,6 +29,12 @@ class MockBinaryClassifier:
         proba = np.random.rand(len(X))
         return np.column_stack([1 - proba, proba])
 
+    def get_params(self, deep: bool = True) -> dict:
+        return {}
+
+    def fit(self, X, y):
+        return self
+
 
 class MockRegressor:
     """Mock trained regressor."""

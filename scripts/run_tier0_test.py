@@ -2669,7 +2669,7 @@ async def step_5_model_trainer(
         ("accuracy", val_metrics.get("accuracy"), None, None),
         ("precision", minority_precision, f">= {CONFIG.min_minority_precision:.0%}", minority_precision >= CONFIG.min_minority_precision),
         ("recall", minority_recall, f">= {CONFIG.min_minority_recall:.0%}", minority_recall >= CONFIG.min_minority_recall),
-        ("f1_score", val_metrics.get("f1"), None, None),
+        ("f1_score", val_metrics.get("f1_score"), None, None),
         ("optimal_threshold", optimal_threshold, None, None),
         ("positive_predictions", n_positive_predictions, "> 0", n_positive_predictions > 0),
         ("hpo_trials_run", result.get("hpo_trials_run"), None, None),
