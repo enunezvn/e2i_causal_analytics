@@ -69,11 +69,23 @@ def init_supabase() -> Optional[Any]:
     logger.info(f"Initializing Supabase connection to {SUPABASE_URL[:50]}...")
 
     try:
+        import httpx
         from supabase import create_client
+        from supabase.client import ClientOptions
 
         # Use service key if available for admin operations, otherwise use anon key
         key = SUPABASE_SERVICE_KEY if SUPABASE_SERVICE_KEY else SUPABASE_KEY
-        _supabase_client = create_client(SUPABASE_URL, key)
+
+        # Pass an explicit ClientOptions to avoid supabase-py's default
+        # `timeout=<int>` / legacy verify path-string forwarding to httpx,
+        # which now emits DeprecationWarnings on httpx >= 0.27.
+        options = ClientOptions(
+            postgrest_client_timeout=httpx.Timeout(30.0, connect=10.0),
+            storage_client_timeout=30,
+            function_client_timeout=30,
+            schema="public",
+        )
+        _supabase_client = create_client(SUPABASE_URL, key, options=options)
 
         # Verify connection by checking auth
         logger.info("Supabase client initialized successfully")
