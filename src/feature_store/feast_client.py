@@ -24,7 +24,7 @@ import logging
 import os
 import re
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -510,7 +510,7 @@ class FeastClient:
             return {"feature_views": [], "rows_materialized": 0, "status": "skipped"}
 
         try:
-            start_time = datetime.now()
+            start_time = datetime.now(timezone.utc)
 
             if feature_views:
                 self._store.materialize(
@@ -524,7 +524,7 @@ class FeastClient:
                     end_date=end_date,
                 )
 
-            duration = (datetime.now() - start_time).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
             logger.info(
                 f"Materialization completed in {duration:.2f}s. Views: {feature_views or 'all'}"
@@ -533,7 +533,7 @@ class FeastClient:
             # Track materialization timestamps
             materialized_views = feature_views or self._get_all_feature_view_names()
             for view_name in materialized_views:
-                self._materialization_timestamps[view_name] = datetime.now()
+                self._materialization_timestamps[view_name] = datetime.now(timezone.utc)
 
             return {
                 "feature_views": materialized_views,
@@ -575,7 +575,7 @@ class FeastClient:
             return {"status": "skipped"}
 
         try:
-            start_time = datetime.now()
+            start_time = datetime.now(timezone.utc)
 
             if feature_views:
                 self._store.materialize_incremental(
@@ -585,12 +585,12 @@ class FeastClient:
             else:
                 self._store.materialize_incremental(end_date=end_date)
 
-            duration = (datetime.now() - start_time).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
             # Track materialization timestamps
             materialized_views = feature_views or self._get_all_feature_view_names()
             for view_name in materialized_views:
-                self._materialization_timestamps[view_name] = datetime.now()
+                self._materialization_timestamps[view_name] = datetime.now(timezone.utc)
 
             return {
                 "feature_views": materialized_views,
@@ -677,7 +677,7 @@ class FeastClient:
             cache_time = self._stats_cache_time.get(cache_key)
             if (
                 cache_time
-                and (datetime.now() - cache_time).total_seconds() < self.config.cache_ttl_seconds
+                and (datetime.now(timezone.utc) - cache_time).total_seconds() < self.config.cache_ttl_seconds
             ):
                 return self._stats_cache[cache_key]
 
@@ -691,7 +691,7 @@ class FeastClient:
 
             if stats:
                 self._stats_cache[cache_key] = stats
-                self._stats_cache_time[cache_key] = datetime.now()
+                self._stats_cache_time[cache_key] = datetime.now(timezone.utc)
 
             return stats
 
@@ -733,7 +733,7 @@ class FeastClient:
                 feature_name=feature_name,
                 count=0,
                 null_count=0,
-                last_updated=datetime.now(),
+                last_updated=datetime.now(timezone.utc),
             )
 
         # Query statistics from Supabase
@@ -765,7 +765,7 @@ class FeastClient:
             feature_name=feature_name,
             count=0,
             null_count=0,
-            last_updated=datetime.now(),
+            last_updated=datetime.now(timezone.utc),
         )
 
     def _infer_source_table(self, feature_view: str) -> Optional[str]:
@@ -839,7 +839,7 @@ class FeastClient:
                     max_value=float(row["max_val"]) if row.get("max_val") else None,
                     mean_value=float(row["mean_val"]) if row.get("mean_val") else None,
                     stddev_value=float(row["stddev_val"]) if row.get("stddev_val") else None,
-                    last_updated=datetime.now(),
+                    last_updated=datetime.now(timezone.utc),
                 )
         except Exception as e:
             # Try simpler count-only query if stats query fails
@@ -856,7 +856,7 @@ class FeastClient:
                     feature_name=column_name,
                     count=total_count,
                     null_count=0,
-                    last_updated=datetime.now(),
+                    last_updated=datetime.now(timezone.utc),
                 )
             except Exception as count_error:
                 logger.warning(f"Count query also failed: {count_error}")
@@ -867,7 +867,7 @@ class FeastClient:
             feature_name=column_name,
             count=0,
             null_count=0,
-            last_updated=datetime.now(),
+            last_updated=datetime.now(timezone.utc),
         )
 
     async def _compute_stats_from_feast(
@@ -902,7 +902,7 @@ class FeastClient:
                 pass
 
             # For now, get a sample of recent data
-            end_date = datetime.now()
+            end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=30)
 
             # Create minimal entity df for sampling
@@ -939,7 +939,7 @@ class FeastClient:
                     max_value=float(series.max()) if pd.notna(series.max()) else None,
                     mean_value=float(series.mean()) if pd.notna(series.mean()) else None,
                     stddev_value=float(series.std()) if pd.notna(series.std()) else None,
-                    last_updated=datetime.now(),
+                    last_updated=datetime.now(timezone.utc),
                 )
 
         except Exception as e:
@@ -951,7 +951,7 @@ class FeastClient:
             feature_name=feature_name,
             count=0,
             null_count=0,
-            last_updated=datetime.now(),
+            last_updated=datetime.now(timezone.utc),
         )
 
     async def list_feature_views(self) -> List[Dict[str, Any]]:
@@ -1056,7 +1056,7 @@ class FeastClient:
             )
 
         # Calculate age in hours
-        age_seconds = (datetime.now() - last_materialized).total_seconds()
+        age_seconds = (datetime.now(timezone.utc) - last_materialized).total_seconds()
         age_hours = age_seconds / 3600.0
 
         # Determine status
@@ -1122,7 +1122,7 @@ class FeastClient:
             feature_view: Name of the feature view.
             timestamp: Materialization timestamp (defaults to now).
         """
-        self._materialization_timestamps[feature_view] = timestamp or datetime.now()
+        self._materialization_timestamps[feature_view] = timestamp or datetime.now(timezone.utc)
         logger.debug(f"Recorded materialization for {feature_view}")
 
     async def apply(self) -> bool:
