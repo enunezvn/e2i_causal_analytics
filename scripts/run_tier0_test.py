@@ -637,6 +637,77 @@ def print_data_distribution_analysis(y_train: np.ndarray, y_val: np.ndarray, y_t
         calc_dist(y_test, "Test Set")
 
 
+def _compute_verdict(
+    auc_roc: float,
+    recall: float,
+    precision: float,
+    overfitting_severity: str | None = None,
+    train_val_delta: float | None = None,
+) -> tuple[str, str, str, str]:
+    """Compute model usefulness verdict with overfitting gate.
+
+    Severe overfitting (overfitting_severity=='severe' or train_val_delta > 0.15)
+    downgrades EXCELLENT/GOOD/ACCEPTABLE verdicts to MARGINAL so the verdict
+    honestly reflects generalization risk.
+
+    Returns:
+        (verdict, icon, description, deploy_recommendation)
+    """
+    severe_overfit = (
+        overfitting_severity == "severe"
+        or (train_val_delta is not None and train_val_delta > 0.15)
+    )
+
+    if auc_roc >= 0.85 and recall >= 0.7 and not severe_overfit:
+        return (
+            "EXCELLENT",
+            "🌟",
+            "Model has strong discrimination and high recall",
+            "Ready for production deployment",
+        )
+    if auc_roc >= 0.75 and recall >= 0.5 and not severe_overfit:
+        return (
+            "GOOD",
+            "✅",
+            "Model has good discrimination and acceptable recall",
+            "Suitable for staging/production with monitoring",
+        )
+    if auc_roc >= 0.65 and recall >= 0.3 and precision < 0.05:
+        return (
+            "THRESHOLD_NEEDED",
+            "🔧",
+            "Model discriminates well but operating point needs threshold optimization",
+            "Apply precision-constrained threshold before deployment",
+        )
+    if auc_roc >= 0.65 and recall >= 0.3 and not severe_overfit:
+        return (
+            "ACCEPTABLE",
+            "⚡",
+            "Model has moderate performance, meets minimum thresholds",
+            "Deploy with caution, monitor closely",
+        )
+    if auc_roc >= 0.55 or severe_overfit:
+        if severe_overfit:
+            return (
+                "MARGINAL",
+                "⚠️",
+                "Severe overfitting detected (train-val AUC Δ > 0.15)",
+                "Reduce model capacity / add regularization before deployment",
+            )
+        return (
+            "MARGINAL",
+            "⚠️",
+            "Model barely exceeds random chance",
+            "Consider retraining with more data or different approach",
+        )
+    return (
+        "POOR",
+        "❌",
+        "Model performs near or below random chance",
+        "Do not deploy, requires significant improvement",
+    )
+
+
 def print_detailed_summary(
     experiment_id: str,
     step_results: list[StepResult],
@@ -1078,36 +1149,26 @@ def print_detailed_summary(
                 print(f"\n  ❌ Recommendation: {deploy_recommendation}")
 
             # --- Normal verdict logic (only if leakage not suspected) ---
-            elif auc_roc >= 0.85 and recall >= 0.7:
-                verdict = "EXCELLENT"
-                icon = "🌟"
-                description = "Model has strong discrimination and high recall"
-                deploy_recommendation = "Ready for production deployment"
-            elif auc_roc >= 0.75 and recall >= 0.5:
-                verdict = "GOOD"
-                icon = "✅"
-                description = "Model has good discrimination and acceptable recall"
-                deploy_recommendation = "Suitable for staging/production with monitoring"
-            elif auc_roc >= 0.65 and recall >= 0.3 and precision < 0.05:
-                verdict = "THRESHOLD_NEEDED"
-                icon = "🔧"
-                description = "Model discriminates well but operating point needs threshold optimization"
-                deploy_recommendation = "Apply precision-constrained threshold before deployment"
-            elif auc_roc >= 0.65 and recall >= 0.3:
-                verdict = "ACCEPTABLE"
-                icon = "⚡"
-                description = "Model has moderate performance, meets minimum thresholds"
-                deploy_recommendation = "Deploy with caution, monitor closely"
-            elif auc_roc >= 0.55:
-                verdict = "MARGINAL"
-                icon = "⚠️"
-                description = "Model barely exceeds random chance"
-                deploy_recommendation = "Consider retraining with more data or different approach"
             else:
-                verdict = "POOR"
-                icon = "❌"
-                description = "Model performs near or below random chance"
-                deploy_recommendation = "Do not deploy, requires significant improvement"
+                overfitting_severity = state.get("overfitting_severity")
+                _train_auc = state.get("train_metrics", {}).get("roc_auc")
+                _val_auc = state.get("validation_metrics", {}).get("roc_auc")
+                if _train_auc is None and accuracy_data:
+                    _train_auc = accuracy_data.get("train_metrics", {}).get("roc_auc")
+                if _val_auc is None and accuracy_data:
+                    _val_auc = accuracy_data.get("val_metrics", {}).get("roc_auc")
+                train_val_delta = (
+                    _train_auc - _val_auc
+                    if (_train_auc is not None and _val_auc is not None)
+                    else None
+                )
+                verdict, icon, description, deploy_recommendation = _compute_verdict(
+                    auc_roc=auc_roc,
+                    recall=recall,
+                    precision=precision,
+                    overfitting_severity=overfitting_severity,
+                    train_val_delta=train_val_delta,
+                )
 
             print(f"\n  {icon} VERDICT: {verdict}")
             print(f"\n  Assessment: {description}")
@@ -4476,10 +4537,18 @@ async def run_pipeline(
                 deployment_status = manifest.get("status", "unknown")
                 deployment_successful = result.get("deployment_successful", False)
                 bentoml_verified = bentoml_serving.get("prediction_test", False) if bentoml_serving else None
+                # Overall step success requires both the deploy flag AND the validation checks to hold.
+                _deployment_id_valid = bool(deployment_id) and deployment_id != "N/A"
+                _status_healthy = deployment_status == "healthy"
+                _all_checks_pass = (
+                    deployment_successful
+                    and _deployment_id_valid
+                    and _status_healthy
+                )
                 step_results.append(StepResult(
                     step_num=7,
                     step_name="MODEL DEPLOYER",
-                    status="success" if deployment_successful else "warning",
+                    status="success" if _all_checks_pass else "warning",
                     duration_seconds=time.time() - step_start,
                     key_metrics={
                         "deployment_id": deployment_id,
@@ -4499,14 +4568,14 @@ async def run_pipeline(
                     },
                     validation_checks=[
                         ("Deployment successful", deployment_successful, "True", str(deployment_successful)),
-                        ("Deployment ID assigned", deployment_id != "N/A", "ID present", deployment_id),
+                        ("Deployment ID assigned", _deployment_id_valid, "ID present", deployment_id),
                         ("Environment set", environment is not None, "env specified", environment),
                         ("BentoML verified", bentoml_verified if include_bentoml else True, "True", str(bentoml_verified) if include_bentoml else "N/A (not enabled)"),
                     ],
                     metrics_table=[
                         ("deployment_id", deployment_id, None, None),
                         ("environment", environment, None, None),
-                        ("status", deployment_status, "deployed", deployment_status == "deployed"),
+                        ("status", deployment_status, "healthy", _status_healthy),
                         ("bentoml_verified", str(bentoml_verified) if include_bentoml else "N/A", None, None),
                         ("latency_ms", f"{bentoml_serving.get('latency_ms', 'N/A')}" if bentoml_serving else "N/A", None, None),
                     ],

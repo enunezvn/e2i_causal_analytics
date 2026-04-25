@@ -155,6 +155,7 @@ project_index.json
 
 # Script caches
 scripts/tier0_output_cache/
+.cache/
 
 # Internal / private docs
 product-development/

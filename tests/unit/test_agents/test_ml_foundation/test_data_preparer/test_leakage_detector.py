@@ -177,20 +177,23 @@ async def test_leakage_adds_to_blocking_issues(mock_state_target_leakage):
 
 def test_check_target_leakage_direct():
     """Test check_target_leakage function directly."""
-    # Create data with perfect correlation (leakage!)
+    rng = np.random.RandomState(42)
+    n = 20
+    target = np.arange(n)
     df = pd.DataFrame(
         {
-            "leaky": [1, 2, 3, 4, 5],
-            "target": [1, 2, 3, 4, 5],  # Perfect correlation!
-            "clean": [5, 4, 3, 2, 1],
+            "leaky": target.copy(),            # perfect correlation -> CRITICAL
+            "target": target,
+            "clean": rng.permutation(n),       # uncorrelated -> no finding
         }
     )
 
-    issues = check_target_leakage(df, "target", ["leaky", "clean"])
+    issues, findings = check_target_leakage(df, "target", ["leaky", "clean"])
 
-    # Should detect leaky feature
+    # Should detect leaky feature in both legacy and structured outputs
     assert len(issues) > 0
     assert any("leaky" in issue for issue in issues)
+    assert any(f.feature == "leaky" for f in findings)
 
 
 def test_check_train_test_contamination_direct():

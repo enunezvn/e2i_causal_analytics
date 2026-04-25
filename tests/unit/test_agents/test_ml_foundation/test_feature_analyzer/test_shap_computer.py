@@ -42,7 +42,11 @@ class TestComputeSHAP:
     async def test_computes_shap_for_tree_model(
         self, mock_shap, mock_mlflow, mock_random_forest_model
     ):
-        """Should compute SHAP values for tree-based models using TreeExplainer."""
+        """Should compute SHAP values for tree-based models using TreeExplainer.
+
+        Uses SHAP >=0.42 return contract: 3-D ndarray (n, f, n_classes) for binary
+        classifiers and length-2 expected_value array.
+        """
         # Setup
         state = {
             "model_uri": "runs:/abc123/model",
@@ -55,10 +59,11 @@ class TestComputeSHAP:
             info=Mock(run_id="abc123"), data=Mock(params={"model_version": "v1"})
         )
 
-        # Mock TreeExplainer
+        # Mock TreeExplainer with SHAP 0.48 return shape:
+        # shap_values -> (n_samples, n_features, n_classes); expected_value -> len-2 array
         mock_explainer = Mock()
-        mock_explainer.shap_values.return_value = np.random.rand(100, 5)
-        mock_explainer.expected_value = 0.5
+        mock_explainer.shap_values.return_value = np.random.rand(100, 5, 2)
+        mock_explainer.expected_value = np.array([0.4, 0.6])
         mock_shap.TreeExplainer.return_value = mock_explainer
 
         # Execute
@@ -68,12 +73,83 @@ class TestComputeSHAP:
         assert "error" not in result
         assert result["explainer_type"] == "TreeExplainer"
         assert "shap_values" in result
+        # Normalization must collapse the class axis to a 2-D (n, f) array
+        assert result["shap_values"].ndim == 2
+        assert result["shap_values"].shape == (100, 5)
+        # base_value must be a Python float (not ndarray / np.number)
+        assert isinstance(result["base_value"], float)
         assert "global_importance" in result
+        # Every feature's importance should be a scalar float
+        for _, value in result["global_importance"].items():
+            assert isinstance(value, float)
         assert "global_importance_ranked" in result
         assert "feature_directions" in result
         assert "top_features" in result
         assert len(result["top_features"]) == 5
         assert result["samples_analyzed"] == 100
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
+    async def test_tree_model_legacy_list_return(
+        self, mock_shap, mock_mlflow, mock_random_forest_model
+    ):
+        """Should handle legacy SHAP list return: [class_0_vals, class_1_vals]."""
+        state = {
+            "model_uri": "runs:/legacy123/model",
+            "experiment_id": "exp_legacy",
+            "max_samples": 100,
+        }
+
+        mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
+        mock_mlflow.get_run.return_value = Mock(
+            info=Mock(run_id="legacy123"), data=Mock(params={})
+        )
+
+        mock_explainer = Mock()
+        mock_explainer.shap_values.return_value = [
+            np.random.rand(100, 5),  # class 0
+            np.random.rand(100, 5),  # class 1
+        ]
+        mock_explainer.expected_value = [0.4, 0.6]
+        mock_shap.TreeExplainer.return_value = mock_explainer
+
+        result = await compute_shap(state)
+
+        assert "error" not in result
+        assert result["shap_values"].ndim == 2
+        assert result["shap_values"].shape == (100, 5)
+        assert isinstance(result["base_value"], float)
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
+    async def test_linear_model_array_base_value(
+        self, mock_shap, mock_mlflow, mock_linear_model
+    ):
+        """Should handle LinearExplainer returning 2-D values and length-1 base_value array."""
+        state = {
+            "model_uri": "runs:/lin_arr/model",
+            "experiment_id": "exp_lin_arr",
+            "max_samples": 50,
+        }
+
+        mock_mlflow.sklearn.load_model.return_value = mock_linear_model
+        mock_mlflow.get_run.return_value = Mock(
+            info=Mock(run_id="lin_arr"), data=Mock(params={})
+        )
+
+        mock_explainer = Mock()
+        mock_explainer.shap_values.return_value = np.random.rand(50, 3)
+        mock_explainer.expected_value = np.array([0.3])  # length-1 array
+        mock_shap.LinearExplainer.return_value = mock_explainer
+
+        result = await compute_shap(state)
+
+        assert "error" not in result
+        assert result["explainer_type"] == "LinearExplainer"
+        assert result["shap_values"].ndim == 2
+        assert result["shap_values"].shape == (50, 3)
+        assert isinstance(result["base_value"], float)
+        assert result["base_value"] == pytest.approx(0.3)
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")

@@ -162,6 +162,33 @@ def _anonymize_feature_names(
     return anonymized, mapping
 
 
+def _normalize_shap_binary(
+    vals: Any, base: Any
+) -> Tuple[np.ndarray, float]:
+    """Normalize SHAP output to 2-D values and scalar base value for binary classification.
+
+    SHAP >=0.42 TreeExplainer returns a 3-D ndarray (n, f, n_classes) for binary;
+    legacy SHAP returned a list[ndarray, ndarray]. LinearExplainer/KernelExplainer
+    can return 2-D arrays with a scalar or length-n_classes base_value.
+    """
+    if isinstance(vals, list):
+        vals = vals[1] if len(vals) > 1 else vals[0]
+    elif isinstance(vals, np.ndarray) and vals.ndim == 3:
+        vals = vals[:, :, 1] if vals.shape[2] > 1 else vals[:, :, 0]
+
+    if isinstance(base, (list, tuple)):
+        base = base[1] if len(base) > 1 else base[0]
+    if isinstance(base, np.ndarray):
+        flat = base.flatten()
+        base = float(flat[1]) if flat.size > 1 else float(flat[0])
+    elif isinstance(base, np.number):
+        base = float(base)
+    elif not isinstance(base, float):
+        base = float(base)
+
+    return vals, base
+
+
 async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
     """Compute SHAP values for the trained model.
 
@@ -286,28 +313,29 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
         if explainer_type == "TreeExplainer":
             explainer = shap.TreeExplainer(loaded_model)
             shap_values_raw = explainer.shap_values(X_sample)
-            base_value = explainer.expected_value
-
-            # Handle multi-output case (e.g., binary classification)
-            if isinstance(shap_values_raw, list):
-                shap_values = shap_values_raw[1]  # Use positive class
-                if isinstance(base_value, (list, np.ndarray)):
-                    base_value = base_value[1]
-            else:
-                shap_values = shap_values_raw
+            base_value_raw = explainer.expected_value
+            shap_values, base_value = _normalize_shap_binary(
+                shap_values_raw, base_value_raw
+            )
 
         elif explainer_type == "LinearExplainer":
             explainer = shap.LinearExplainer(loaded_model, X_sample)
-            shap_values = explainer.shap_values(X_sample)
-            base_value = explainer.expected_value
+            shap_values_raw = explainer.shap_values(X_sample)
+            base_value_raw = explainer.expected_value
+            shap_values, base_value = _normalize_shap_binary(
+                shap_values_raw, base_value_raw
+            )
 
         else:  # KernelExplainer (fallback)
             # Use a small background dataset for kernel explainer
             background_size = min(100, len(X_sample) // 10)
             background = shap.kmeans(X_sample, background_size)
             explainer = shap.KernelExplainer(loaded_model.predict, background)
-            shap_values = explainer.shap_values(X_sample[:100])  # Limit for speed
-            base_value = explainer.expected_value
+            shap_values_raw = explainer.shap_values(X_sample[:100])  # Limit for speed
+            base_value_raw = explainer.expected_value
+            shap_values, base_value = _normalize_shap_binary(
+                shap_values_raw, base_value_raw
+            )
             samples_analyzed = min(100, samples_analyzed)
 
         # Compute global importance (mean absolute SHAP values)
@@ -360,9 +388,7 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             "y_sample": y_sample,
             "samples_analyzed": samples_analyzed,
             "shap_values": shap_values,
-            "base_value": (
-                float(base_value) if isinstance(base_value, (np.number, np.ndarray)) else base_value
-            ),
+            "base_value": base_value,
             "global_importance": global_importance,
             "global_importance_ranked": global_importance_ranked,
             "feature_directions": feature_directions,

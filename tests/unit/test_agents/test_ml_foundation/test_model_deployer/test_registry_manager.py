@@ -35,6 +35,39 @@ class TestRegisterModel:
         assert result["model_version"] == 1
         assert result["current_stage"] == "None"
         assert "registration_timestamp" in result
+        # The register path must also propagate deployment identity + status so the
+        # runner's deployment manifest reflects reality (not empty-string/"pending").
+        assert result["deployment_id"] == "test_deployment:v1"
+        assert result["deployment_status"] == "healthy"
+        assert "deployed_at" in result
+
+    @pytest.mark.asyncio
+    async def test_register_model_sets_deployment_id_and_status(self):
+        """register_model must set deployment_id + deployment_status='healthy' on success.
+
+        Regression test for the bug where the register-only path left deployment_id=''
+        and deployment_status='pending', causing Tier-0 validation checks to falsely pass
+        (empty string bypassed `!= "N/A"`) and the status check to fail against an
+        unreachable 'deployed' sentinel.
+        """
+        state = {
+            "model_uri": "runs:/abc/model",
+            "deployment_name": "rwd_model",
+            "experiment_id": "exp_42",
+        }
+
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes.registry_manager._register_model_mlflow",
+            return_value=("rwd_model", 3, "None"),
+        ):
+            result = await register_model(state)
+
+        assert result["deployment_id"] == "rwd_model:v3"
+        assert result["deployment_id"] != ""
+        assert result["deployment_status"] == "healthy"
+        assert result["deployment_status"] in {
+            "pending", "deploying", "healthy", "unhealthy", "failed"
+        }
 
     @pytest.mark.asyncio
     async def test_register_model_missing_model_uri(self):
