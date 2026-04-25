@@ -29,12 +29,12 @@ from .state import FeatureAnalyzerState
 logger = logging.getLogger(__name__)
 
 
-def _get_shap_repository():
+async def _get_shap_repository():
     """Get ShapAnalysisRepository (lazy import to avoid circular deps)."""
     try:
         from src.repositories.shap_analysis import get_shap_analysis_repository
 
-        return get_shap_analysis_repository()
+        return await get_shap_analysis_repository()
     except Exception as e:
         logger.warning(f"Could not get SHAP repository: {e}")
         return None
@@ -429,7 +429,7 @@ class FeatureAnalyzerAgent:
             output: Agent output to store
         """
         try:
-            repo = _get_shap_repository()
+            repo = await _get_shap_repository()
             if repo is None:
                 logger.debug("Skipping SHAP analysis persistence (no repository)")
                 return

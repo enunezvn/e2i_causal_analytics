@@ -262,7 +262,7 @@ class RealTimeSHAPService:
         # Initialize SHAP repository if not provided
         if self.shap_repo is None:
             try:
-                self.shap_repo = get_shap_analysis_repository()
+                self.shap_repo = await get_shap_analysis_repository()
             except Exception as e:
                 logger.warning(f"SHAP repository not available: {e}")
 
@@ -726,7 +726,7 @@ async def get_explanation_history(
     masked_patient_id = mask_identifier(patient_id)
 
     try:
-        repo = get_shap_analysis_repository()
+        repo = await get_shap_analysis_repository()
         if repo.client is None:
             return {
                 "patient_id": masked_patient_id,

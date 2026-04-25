@@ -118,7 +118,7 @@ class ExpertReviewRepository(BaseRepository):
         row = {k: v for k, v in row.items() if v is not None}
 
         try:
-            result = self.client.table(self.table_name).insert(row).execute()
+            result = await self.client.table(self.table_name).insert(row).execute()
             review_id = result.data[0]["review_id"] if result.data else None
             logger.info(f"Created expert review {review_id} for DAG {dag_version_hash}")
             return review_id
@@ -430,7 +430,7 @@ class ExpertReviewRepository(BaseRepository):
         row = {k: v for k, v in row.items() if v is not None}
 
         try:
-            result = self.client.table(self.table_name).insert(row).execute()
+            result = await self.client.table(self.table_name).insert(row).execute()
             review_id = result.data[0]["review_id"] if result.data else None
             logger.info(f"Created renewal review {review_id} superseding {original_review_id}")
             return review_id

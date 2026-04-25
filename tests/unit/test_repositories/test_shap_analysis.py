@@ -352,24 +352,26 @@ class TestGetFeatureImportanceTrends(TestShapAnalysisRepository):
 class TestGetShapAnalysisRepository:
     """Tests for get_shap_analysis_repository singleton function."""
 
-    def test_returns_repository_instance(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_returns_repository_instance(self, monkeypatch):
         """Test that a repository instance is returned."""
         # Reset singleton
         import src.repositories.shap_analysis as module
 
         monkeypatch.setattr(module, "_shap_analysis_repository", None)
 
-        repo = get_shap_analysis_repository()
+        repo = await get_shap_analysis_repository()
 
         assert isinstance(repo, ShapAnalysisRepository)
 
-    def test_returns_same_instance(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_returns_same_instance(self, monkeypatch):
         """Test that the same instance is returned on subsequent calls."""
         import src.repositories.shap_analysis as module
 
         monkeypatch.setattr(module, "_shap_analysis_repository", None)
 
-        repo1 = get_shap_analysis_repository()
-        repo2 = get_shap_analysis_repository()
+        repo1 = await get_shap_analysis_repository()
+        repo2 = await get_shap_analysis_repository()
 
         assert repo1 is repo2

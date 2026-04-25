@@ -82,7 +82,7 @@ class ShapAnalysisRepository(BaseRepository):
             # Remove None values for optional fields
             db_record = {k: v for k, v in db_record.items() if v is not None}
 
-            result = self.client.table(self.table_name).insert(db_record).execute()
+            result = await self.client.table(self.table_name).insert(db_record).execute()
 
             if result.data:
                 logger.info(
@@ -117,7 +117,7 @@ class ShapAnalysisRepository(BaseRepository):
             return []
 
         try:
-            result = (
+            result = await (
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("model_registry_id", model_registry_id)
@@ -149,7 +149,7 @@ class ShapAnalysisRepository(BaseRepository):
             return None
 
         try:
-            result = (
+            result = await (
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("model_registry_id", model_registry_id)
@@ -182,7 +182,7 @@ class ShapAnalysisRepository(BaseRepository):
             return []
 
         try:
-            result = (
+            result = await (
                 self.client.table(self.table_name)
                 .select("id, global_importance, computed_at")
                 .eq("model_registry_id", model_registry_id)
@@ -202,19 +202,22 @@ class ShapAnalysisRepository(BaseRepository):
 _shap_analysis_repository: Optional[ShapAnalysisRepository] = None
 
 
-def get_shap_analysis_repository() -> ShapAnalysisRepository:
+async def get_shap_analysis_repository() -> ShapAnalysisRepository:
     """Get singleton ShapAnalysisRepository instance.
 
+    The repository's async methods require an async Supabase client; the factory
+    is async so it can `await get_async_supabase_client()`.
+
     Returns:
-        ShapAnalysisRepository with Supabase client if available
+        ShapAnalysisRepository with async Supabase client if available
     """
     global _shap_analysis_repository
 
     if _shap_analysis_repository is None:
         try:
-            from src.memory.services.factories import get_supabase_client
+            from src.memory.services.factories import get_async_supabase_client
 
-            client = get_supabase_client()
+            client = await get_async_supabase_client()
             _shap_analysis_repository = ShapAnalysisRepository(supabase_client=client)
         except Exception as e:
             logger.warning(f"Could not initialize SHAP repository with client: {e}")

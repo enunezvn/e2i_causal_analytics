@@ -434,7 +434,7 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
         if self.client:
             data = experiment.to_dict()
             data.pop("id", None)  # Let DB generate ID
-            result = self.client.table(self.table_name).insert(data).execute()
+            result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
 
@@ -536,7 +536,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if self.client:
             data = run.to_dict()
             data.pop("id", None)
-            result = self.client.table(self.table_name).insert(data).execute()
+            result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
 
@@ -572,7 +572,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
             updates["test_metrics"] = test_metrics
 
         if updates:
-            self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
+            await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
             return True
 
         return False
@@ -612,7 +612,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if error_message:
             updates["error_message"] = error_message
 
-        self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
+        await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
         return True
 
     async def get_runs_for_experiment(
@@ -694,7 +694,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
             updates["optuna_trial_number"] = optuna_trial_number
         updates["is_best_trial"] = is_best_trial
 
-        self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
+        await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
         return True
 
     async def create_run_with_hpo(
@@ -755,7 +755,7 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if self.client:
             data = run.to_dict()
             data.pop("id", None)
-            result = self.client.table(self.table_name).insert(data).execute()
+            result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
 
@@ -863,7 +863,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if self.client:
             data = model.to_dict()
             data.pop("id", None)
-            result = self.client.table(self.table_name).insert(data).execute()
+            result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
 
@@ -911,7 +911,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if new_stage == "production":
             updates["is_champion"] = True
 
-        self.client.table(self.table_name).update(updates).eq("id", str(model_id)).execute()
+        await self.client.table(self.table_name).update(updates).eq("id", str(model_id)).execute()
 
         return True
 
@@ -1011,7 +1011,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         }
 
         try:
-            result = self.client.table(self.table_name).insert(data).execute()
+            result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
             return None

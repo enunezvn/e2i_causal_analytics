@@ -2462,21 +2462,35 @@ async def step_5_model_trainer(
     if "qc_passed" not in normalized_qc_report:
         normalized_qc_report["qc_passed"] = normalized_qc_report.get("gate_passed", True)
 
-    # Split data using E2I required ratios: 60%/20%/15%/5%
-    n = len(X)
-    train_size = int(0.60 * n)
-    val_size = int(0.20 * n)
-    test_size = int(0.15 * n)
-    holdout_size = n - train_size - val_size - test_size
+    # Split data using E2I required ratios: 60%/20%/15%/5%, stratified on y to
+    # preserve minority-class proportions across train/val/test/holdout.
+    from sklearn.model_selection import train_test_split
 
-    train_end = train_size
-    val_end = train_end + val_size
-    test_end = val_end + test_size
+    # Stage 1: peel off 5% holdout, stratified on y -> trainval_test (95%) + holdout (5%)
+    trainval_test_X, holdout_X, trainval_test_y, holdout_y = train_test_split(
+        X, y, test_size=0.05, stratify=y, random_state=42,
+    )
+    # Stage 2: from trainval_test (95%), peel off test -> trainval (80%) + test (15% of total)
+    trainval_X, test_X, trainval_y, test_y = train_test_split(
+        trainval_test_X, trainval_test_y,
+        test_size=0.15 / 0.95, stratify=trainval_test_y, random_state=42,
+    )
+    # Stage 3: from trainval (80%), split into train (60%) + val (20%)
+    train_X, val_X, train_y, val_y = train_test_split(
+        trainval_X, trainval_y,
+        test_size=0.25, stratify=trainval_y, random_state=42,
+    )
 
-    train_data = {"X": X.iloc[:train_end], "y": y.iloc[:train_end], "row_count": train_size}
-    validation_data = {"X": X.iloc[train_end:val_end], "y": y.iloc[train_end:val_end], "row_count": val_size}
-    test_data = {"X": X.iloc[val_end:test_end], "y": y.iloc[val_end:test_end], "row_count": test_size}
-    holdout_data = {"X": X.iloc[test_end:], "y": y.iloc[test_end:], "row_count": holdout_size}
+    train_size = len(train_X)
+    val_size = len(val_X)
+    test_size = len(test_X)
+    holdout_size = len(holdout_X)
+    n = train_size + val_size + test_size + holdout_size
+
+    train_data = {"X": train_X, "y": train_y, "row_count": train_size}
+    validation_data = {"X": val_X, "y": val_y, "row_count": val_size}
+    test_data = {"X": test_X, "y": test_y, "row_count": test_size}
+    holdout_data = {"X": holdout_X, "y": holdout_y, "row_count": holdout_size}
 
     feature_columns = list(X.columns)
 

@@ -224,7 +224,7 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
         if self.client:
             data = deployment.to_dict()
             data.pop("id", None)  # Let DB generate ID
-            result = self.client.table(self.table_name).insert(data).execute()
+            result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
 

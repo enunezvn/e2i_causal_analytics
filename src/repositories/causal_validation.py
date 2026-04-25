@@ -95,7 +95,7 @@ class CausalValidationRepository(BaseRepository):
             rows.append(row)
 
         try:
-            result = self.client.table(self.table_name).insert(rows).execute()
+            result = await self.client.table(self.table_name).insert(rows).execute()
             validation_ids = [row["validation_id"] for row in result.data]
             logger.info(
                 f"Saved {len(validation_ids)} validation records for estimate {estimate_id}"
@@ -160,7 +160,7 @@ class CausalValidationRepository(BaseRepository):
         }
 
         try:
-            result = self.client.table(self.table_name).insert(row).execute()
+            result = await self.client.table(self.table_name).insert(row).execute()
             return result.data[0]["validation_id"] if result.data else None
         except Exception as e:
             logger.error(f"Failed to save validation test: {e}")

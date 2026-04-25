@@ -70,7 +70,7 @@ class DataQualityReportRepository(BaseRepository):
             # Remove None values for optional fields
             db_record = {k: v for k, v in db_record.items() if v is not None}
 
-            result = self.client.table(self.table_name).insert(db_record).execute()
+            result = await self.client.table(self.table_name).insert(db_record).execute()
 
             if result.data:
                 logger.info(f"Stored DQ report: {db_record.get('report_name')}")
