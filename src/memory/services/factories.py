@@ -610,6 +610,31 @@ def get_supabase_client():
         raise ServiceConnectionError("Supabase", f"Failed to create client: {e}", e) from e
 
 
+def _build_async_supabase_options():
+    """Build AsyncClientOptions with an explicit httpx.AsyncClient.
+
+    Providing `httpx_client` makes supabase-py take the early-return
+    branch in `_create_postgrest_client` (and storage/functions helpers),
+    so it never forwards the deprecated `timeout=`/`verify=` kwargs to
+    AsyncPostgrestClient. Without this, supabase-py emits two
+    DeprecationWarnings per async client creation.
+    """
+    import httpx
+    from supabase.lib.client_options import AsyncClientOptions
+
+    httpx_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        follow_redirects=True,
+    )
+    return AsyncClientOptions(
+        postgrest_client_timeout=httpx.Timeout(30.0, connect=10.0),
+        storage_client_timeout=30,
+        function_client_timeout=30,
+        schema="public",
+        httpx_client=httpx_client,
+    )
+
+
 async def get_async_supabase_client():
     """
     Get async Supabase client for use in async contexts.
@@ -656,7 +681,7 @@ async def get_async_supabase_client():
     logger.info(f"Creating async Supabase client for: {url}")
 
     try:
-        _async_supabase_client = await acreate_client(url, key)
+        _async_supabase_client = await acreate_client(url, key, options=_build_async_supabase_options())
         return _async_supabase_client
     except Exception as e:
         raise ServiceConnectionError("Supabase", f"Failed to create async client: {e}", e) from e
@@ -719,7 +744,9 @@ async def get_async_supabase_service_client():
     logger.info(f"Creating async Supabase service client for: {url} (using {key_type} key)")
 
     try:
-        _async_supabase_service_client = await acreate_client(url, key)
+        _async_supabase_service_client = await acreate_client(
+            url, key, options=_build_async_supabase_options()
+        )
         return _async_supabase_service_client
     except Exception as e:
         raise ServiceConnectionError(
