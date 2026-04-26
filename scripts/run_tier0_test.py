@@ -2553,7 +2553,22 @@ async def step_5_model_trainer(
                 "pre_assigned_splits supplied without entity_ids — cannot "
                 "reapply cached splits without an entity column"
             )
-        labels = entity_ids.map(pre_assigned_splits)
+        # Validate label vocabulary BEFORE building masks: a typo like
+        # "trian" would otherwise produce silently-empty splits and a
+        # nonsensical training run (4-IMP-1).
+        valid_labels = {"train", "val", "test", "holdout"}
+        unique_supplied_labels = set(pre_assigned_splits.values())
+        invalid_labels = unique_supplied_labels - valid_labels
+        if invalid_labels:
+            raise ValueError(
+                f"pre_assigned_splits contains unknown split labels: "
+                f"{sorted(invalid_labels)}; expected only {sorted(valid_labels)}"
+            )
+        # Realign labels to X.index so the row-mask comparisons line up
+        # with X / y exactly (4-IMP-2: mirror branch 2's index alignment).
+        labels = pd.Series(entity_ids.values, index=X.index).map(
+            pre_assigned_splits
+        )
         if labels.isna().any():
             missing = int(labels.isna().sum())
             raise ValueError(
@@ -2582,7 +2597,8 @@ async def step_5_model_trainer(
     elif use_combined:
         # ----- branch 2: combined entity+temporal split --------------------
         # Step A: peel off 5% holdout (entity-isolated) via deterministic
-        #   hash, so the same entities always land in holdout across reruns.
+        #   permutation, so the same entities always land in holdout across
+        #   reruns.
         # Step B: try combined_split on the remaining 95% to produce
         #   train/val/test using temporal + entity-level boundaries.  If the
         #   date span is too compressed for the desired ratios, fall back
@@ -2609,7 +2625,7 @@ async def step_5_model_trainer(
         else:  # pragma: no cover - defensive
             dates_aligned = pd.Series(pd.NaT, index=X.index)
 
-        # Step A — entity-level holdout via deterministic hash
+        # Step A — entity-level holdout via deterministic permutation
         unique_entities = list(eids_aligned.unique())
         rng = np.random.default_rng(42)
         permuted = list(rng.permutation(len(unique_entities)))
@@ -2640,7 +2656,10 @@ async def step_5_model_trainer(
             date_min = work_df["__date__"].min()
             date_max = work_df["__date__"].max()
             span_days = max((date_max - date_min).days, 1)
-        except Exception:
+        except (TypeError, ValueError):
+            # Narrow catch: ``.min()`` on a non-datetime column raises
+            # TypeError; ``.days`` on NaT raises ValueError. Anything else
+            # is a real bug and should propagate. (4-MIN-5)
             span_days = 30
         val_days = max(1, int(round(span_days * 0.20)))
         test_days = max(1, int(round(span_days * 0.15)))

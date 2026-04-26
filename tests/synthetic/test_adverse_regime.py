@@ -166,34 +166,22 @@ class TestAdverseRegimeE2E:
 
     def test_resampling_strategy_upgrades_to_combined(self, pipeline_state):
         """Per Block 4 plan: at extreme imbalance with a non-tree model the
-        deterministic heuristic upgrades to ``combined`` (SMOTE + class
-        weights). The LLM call may pick a different strategy — accept any
-        of the extreme-imbalance strategies, but combined is the spec.
+        deterministic strategy matrix upgrades to ``combined`` (SMOTE +
+        class weights).
+
+        Block 6A (`a8069cf`) replaced the LLM-based imbalance strategy
+        selection with a deterministic matrix lookup, so any deviation
+        from ``combined`` at extreme imbalance + non-tree model is a real
+        bug rather than transient LLM noise. (4-MIN-4: re-tighten from
+        soft-warn to fail-loud now that the determinism guarantee holds.)
         """
         info = pipeline_state.get("class_imbalance_info", {})
         strategy = info.get("recommended_strategy")
-        # Spec: combined. Accept the LLM's alternative non-degenerate picks
-        # so transient API failures don't fail this guard.
-        assert strategy in {
-            "combined",
-            "smote",
-            "smote_tomek",
-            "class_weight",
-            "random_oversample",
-        }, (
-            f"Unexpected resampling strategy at extreme imbalance: "
-            f"strategy={strategy!r}, info={info}"
+        assert strategy == "combined", (
+            f"After 6A determinism, extreme imbalance + non-tree model "
+            f"must yield strategy='combined' (SMOTE + class weights). "
+            f"Got strategy={strategy!r}; full info={info}"
         )
-        # Soft preference assertion — record but don't fail when LLM picks
-        # an alternative.  The plan asks for combined; if a different
-        # strategy is selected we surface it via warning.
-        if strategy != "combined":
-            import warnings as _warnings
-            _warnings.warn(
-                f"Block 4 plan asks for 'combined' at extreme imbalance; "
-                f"got {strategy!r}. Likely LLM picked a non-default option.",
-                stacklevel=2,
-            )
 
     def test_pipeline_persists_split_assignments(self, pipeline_state):
         """``split_assignments`` must end up on state for cache reuse

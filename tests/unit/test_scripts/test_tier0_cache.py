@@ -322,3 +322,78 @@ def test_step_5_split_mode_validation(tier0_module):
 
     with pytest.raises(ValueError, match="split_mode"):
         asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_step_5_pre_assigned_splits_rejects_unknown_labels(tier0_module):
+    """Block 4 4-IMP-1: ``pre_assigned_splits`` must reject unknown
+    label values (e.g. typo ``"trian"``) loudly, BEFORE training, so a
+    cache-corruption silently producing empty splits is impossible."""
+    X, y, entity_ids, dates = _toy_dataset(n_entities=20)
+    # Inject a typo into one entity's label.
+    pre_assignments: dict[str, str] = {}
+    for idx, eid in enumerate(entity_ids):
+        if idx == 0:
+            pre_assignments[eid] = "trian"  # deliberate typo
+        elif idx % 4 == 0:
+            pre_assignments[eid] = "test"
+        elif idx % 4 == 1:
+            pre_assignments[eid] = "val"
+        elif idx % 4 == 2:
+            pre_assignments[eid] = "holdout"
+        else:
+            pre_assignments[eid] = "train"
+
+    class _StubAgent:
+        async def run(self, payload):  # pragma: no cover - never called
+            return {}
+
+    import src.agents.ml_foundation.model_trainer as mt_pkg
+
+    original_agent = getattr(mt_pkg, "ModelTrainerAgent", None)
+    mt_pkg.ModelTrainerAgent = _StubAgent  # type: ignore[attr-defined,misc]
+    try:
+        with pytest.raises(ValueError, match="unknown split labels"):
+            await tier0_module.step_5_model_trainer(
+                "test_exp",
+                {"algorithm_name": "LogisticRegression"},
+                {"qc_passed": True},
+                X,
+                y,
+                success_criteria={},
+                entity_ids=entity_ids,
+                dates=dates,
+                split_mode="auto",
+                pre_assigned_splits=pre_assignments,
+            )
+    finally:
+        if original_agent is not None:
+            mt_pkg.ModelTrainerAgent = original_agent  # type: ignore[attr-defined,misc]
+
+
+def test_step_5_combined_mode_requires_entity_and_date(tier0_module):
+    """Block 4 4-MIN-2: ``split_mode='combined'`` is strict-mode (extra
+    spec) and must surface a clear ValueError when ``entity_ids`` /
+    ``dates`` are absent — no silent fallback to legacy random."""
+    import asyncio
+
+    X, y, _entity_ids, _dates = _toy_dataset(n_entities=10)
+
+    async def _run_no_entity():
+        return await tier0_module.step_5_model_trainer(
+            "test_exp",
+            {"algorithm_name": "LogisticRegression"},
+            {"qc_passed": True},
+            X,
+            y,
+            success_criteria={},
+            entity_ids=None,
+            dates=None,
+            split_mode="combined",
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="combined.*requires both entity_ids and dates",
+    ):
+        asyncio.run(_run_no_entity())
