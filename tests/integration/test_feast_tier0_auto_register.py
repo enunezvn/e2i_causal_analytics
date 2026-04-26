@@ -60,9 +60,6 @@ import pytest
 # Skip the entire module if the Feast Python SDK is not importable.
 pytest.importorskip("feast", reason="Feast SDK not installed; skipping auto-register tests.")
 
-# Optional dependency for entity-row construction (mirrors parity test).
-pd = pytest.importorskip("pandas", reason="pandas required for FeatureView round-trip.")
-
 # Loading the registry + applying a FeatureView is heavy (Pydantic + dask).
 # The 30s default pytest timeout is too tight; mirror the parity test's
 # 180s ceiling so the entire module shares a consistent budget.
