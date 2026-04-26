@@ -110,7 +110,8 @@ archive/
 
 # Documentation - ignore generated/local-only subdirectories
 docs/Archive/
-docs/results/
+docs/results/*
+!docs/results/tier0_remediation_baseline_*.md
 
 # OS
 Thumbs.db
