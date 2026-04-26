@@ -115,6 +115,25 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
                 feature_config.get("event_timestamp_column")
                 or state.get("event_timestamp_column")
             )
+            # Block 1B contract: temporal feature generation REQUIRES entity
+            # and timestamp columns. Silently falling back to naive shift is
+            # exactly the regression Block 1B fixes, so we fail fast with a
+            # message that points to the missing config rather than no-op.
+            if not entity_id_column or not event_timestamp_column:
+                missing = []
+                if not entity_id_column:
+                    missing.append("entity_id_column")
+                if not event_timestamp_column:
+                    missing.append("event_timestamp_column")
+                raise ValueError(
+                    "Temporal feature generation requires "
+                    f"{', '.join(missing)}. Set on feature_config "
+                    "(or directly on state) when temporal_columns is "
+                    "non-empty, or disable temporal features via "
+                    "feature_config['generate_temporal']=False. Lag/rolling "
+                    "computed without per-entity grouping leaks across "
+                    "patient histories — see Block 1B (#2)."
+                )
 
             combined_df, split_index = _concat_with_split_markers(
                 X_train, X_val, X_test
@@ -277,8 +296,8 @@ def _detect_numeric_columns(df: pd.DataFrame) -> List[str]:
 def _generate_temporal_features(
     df: pd.DataFrame,
     temporal_columns: List[str],
-    entity_id_column: Optional[str] = None,
-    event_timestamp_column: Optional[str] = None,
+    entity_id_column: str,
+    event_timestamp_column: str,
     lag_periods: Optional[List[int]] = None,
     rolling_windows: Optional[List[int]] = None,
 ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
@@ -289,30 +308,61 @@ def _generate_temporal_features(
     - Rolling statistics (mean, std over window, entity-grouped)
     - Date part extraction (if datetime)
 
-    Lag and rolling windows are computed PER ENTITY when ``entity_id_column``
-    is provided. The DataFrame is sorted by ``(entity_id, event_timestamp)``
-    before grouping so the resulting shifts honor chronological order within
-    each entity. Without grouping, lag at row 0 of entity B would erroneously
-    pull entity A's tail value.
+    Lag and rolling windows are computed PER ENTITY. The DataFrame is sorted
+    by ``(entity_id, event_timestamp)`` before grouping so the resulting
+    shifts honor chronological order within each entity. Without grouping,
+    lag at row 0 of entity B would erroneously pull entity A's tail value —
+    that is exactly the regression Block 1B fixes.
 
-    Callers should pass the *concatenated* train+val+test frame; otherwise the
-    last row of train would never see val's first row even within the same
-    entity, defeating the point of grouping.
+    Callers should pass the *concatenated* train+val+test frame; otherwise
+    the last row of train would never see val's first row even within the
+    same entity, defeating the point of grouping.
 
     Args:
         df: Input DataFrame (typically the concatenated train+val+test).
         temporal_columns: Columns to generate temporal features for.
         entity_id_column: Column identifying the entity (e.g. ``patient_id``).
-            If None, lag/rolling falls back to row-order shift on the full
-            frame. Datetime date-part extraction does not need this.
-        event_timestamp_column: Column for chronological ordering within an
-            entity. If None, lag/rolling preserves the input row order.
+            REQUIRED. Must exist in ``df``. Datetime date-part extraction
+            does not actually need this, but the contract still requires it
+            so callers can never accidentally drop the per-entity grouping.
+        event_timestamp_column: Column for chronological ordering inside
+            each entity. REQUIRED. Must exist in ``df``.
         lag_periods: Lag periods to create (default ``[1, 7, 30]``).
         rolling_windows: Rolling window sizes (default ``[7, 30]``).
 
     Returns:
         Tuple of (transformed DataFrame, feature metadata list).
+
+    Raises:
+        ValueError: If ``entity_id_column`` or ``event_timestamp_column`` is
+            empty, or if either column is missing from ``df``. Block 1B
+            tightens this contract so a future caller cannot silently
+            re-introduce naive cross-entity shift.
     """
+    # Strict contract: both grouping keys must be supplied AND present.
+    # Empty / None values would silently re-enable cross-entity leakage.
+    if not entity_id_column:
+        raise ValueError(
+            "_generate_temporal_features requires a non-empty "
+            "entity_id_column. Lag/rolling without per-entity grouping "
+            "leaks across entities — see Block 1B (#2)."
+        )
+    if not event_timestamp_column:
+        raise ValueError(
+            "_generate_temporal_features requires a non-empty "
+            "event_timestamp_column for chronological ordering."
+        )
+    if entity_id_column not in df.columns:
+        raise ValueError(
+            f"entity_id_column={entity_id_column!r} not found in DataFrame; "
+            f"available columns: {list(df.columns)}"
+        )
+    if event_timestamp_column not in df.columns:
+        raise ValueError(
+            f"event_timestamp_column={event_timestamp_column!r} not found "
+            f"in DataFrame; available columns: {list(df.columns)}"
+        )
+
     if rolling_windows is None:
         rolling_windows = [7, 30]
     if lag_periods is None:
@@ -322,15 +372,9 @@ def _generate_temporal_features(
 
     # Sort by (entity, event_timestamp) once, up front, so all subsequent
     # groupby().shift / rolling() calls see chronologically ordered groups.
-    sort_keys: List[str] = []
-    if entity_id_column and entity_id_column in df.columns:
-        sort_keys.append(entity_id_column)
-    if event_timestamp_column and event_timestamp_column in df.columns:
-        sort_keys.append(event_timestamp_column)
-    if sort_keys:
-        df = df.sort_values(sort_keys, kind="mergesort").reset_index(drop=True)
-
-    use_groupby = bool(entity_id_column and entity_id_column in df.columns)
+    df = df.sort_values(
+        [entity_id_column, event_timestamp_column], kind="mergesort"
+    ).reset_index(drop=True)
 
     for col in temporal_columns:
         if col not in df.columns:
@@ -388,18 +432,14 @@ def _generate_temporal_features(
 
         # Handle numeric columns - create lags and rolling stats
         elif pd.api.types.is_numeric_dtype(df[col]):
-            # Lag features
+            # Lag features (entity-grouped). group_keys=False keeps the
+            # original index alignment so the assignment back to df[new_col]
+            # doesn't re-introduce the entity id as a level.
             for lag in lag_periods:
                 new_col = f"{col}_lag_{lag}"
-                if use_groupby:
-                    # group_keys=False keeps the original index alignment so
-                    # the assignment back to df[new_col] doesn't re-introduce
-                    # the entity id as a level.
-                    df[new_col] = df.groupby(entity_id_column, group_keys=False)[
-                        col
-                    ].shift(lag)
-                else:
-                    df[new_col] = df[col].shift(lag)
+                df[new_col] = df.groupby(entity_id_column, group_keys=False)[
+                    col
+                ].shift(lag)
                 metadata.append(
                     {
                         "name": new_col,
@@ -407,25 +447,22 @@ def _generate_temporal_features(
                         "type": TEMPORAL_FEATURES,
                         "transformation": f"lag_{lag}",
                         "lag_period": lag,
-                        "entity_id_column": entity_id_column if use_groupby else None,
+                        "entity_id_column": entity_id_column,
                     }
                 )
 
-            # Rolling statistics
+            # Rolling statistics (entity-grouped).
             for window in rolling_windows:
-                if use_groupby:
-                    rolled = df.groupby(entity_id_column, group_keys=False)[col].rolling(
-                        window=window, min_periods=1
-                    )
-                else:
-                    rolled = df[col].rolling(window=window, min_periods=1)
+                rolled = df.groupby(entity_id_column, group_keys=False)[col].rolling(
+                    window=window, min_periods=1
+                )
 
                 # Rolling mean
                 new_col = f"{col}_rolling_mean_{window}"
                 rolled_mean = rolled.mean()
                 # GroupBy.rolling adds the group key as an index level;
-                # reset_index(level=0, drop=True) realigns it to the row index.
-                if use_groupby and isinstance(rolled_mean.index, pd.MultiIndex):
+                # reset_index(level=0, drop=True) realigns to the row index.
+                if isinstance(rolled_mean.index, pd.MultiIndex):
                     rolled_mean = rolled_mean.reset_index(level=0, drop=True)
                 df[new_col] = rolled_mean
                 metadata.append(
@@ -435,14 +472,14 @@ def _generate_temporal_features(
                         "type": TEMPORAL_FEATURES,
                         "transformation": f"rolling_mean_{window}",
                         "window_size": window,
-                        "entity_id_column": entity_id_column if use_groupby else None,
+                        "entity_id_column": entity_id_column,
                     }
                 )
 
                 # Rolling std
                 new_col = f"{col}_rolling_std_{window}"
                 rolled_std = rolled.std()
-                if use_groupby and isinstance(rolled_std.index, pd.MultiIndex):
+                if isinstance(rolled_std.index, pd.MultiIndex):
                     rolled_std = rolled_std.reset_index(level=0, drop=True)
                 df[new_col] = rolled_std
                 metadata.append(
@@ -452,7 +489,7 @@ def _generate_temporal_features(
                         "type": TEMPORAL_FEATURES,
                         "transformation": f"rolling_std_{window}",
                         "window_size": window,
-                        "entity_id_column": entity_id_column if use_groupby else None,
+                        "entity_id_column": entity_id_column,
                     }
                 )
 

@@ -92,16 +92,29 @@ class TestDetectionFunctions:
 
 
 class TestTemporalFeatures:
-    """Tests for temporal feature generation."""
+    """Tests for temporal feature generation.
+
+    Block 1B tightens the contract so ``entity_id_column`` and
+    ``event_timestamp_column`` are required. Tests in this class always
+    pass them; the single-entity panel guarantees lag/rolling behaviour
+    is identical to the (deleted) cross-entity path.
+    """
 
     def test_generate_date_parts_from_datetime(self):
         """Should generate date part features from datetime column."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 10,
+                "event_ts": pd.date_range("2024-01-01", periods=10, freq="D"),
                 "date": pd.date_range("2024-01-01", periods=10, freq="D"),
             }
         )
-        result_df, metadata = _generate_temporal_features(df, temporal_columns=["date"])
+        result_df, metadata = _generate_temporal_features(
+            df,
+            temporal_columns=["date"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+        )
         assert "date_dayofweek" in result_df.columns
         assert "date_month" in result_df.columns
         assert "date_quarter" in result_df.columns
@@ -112,15 +125,21 @@ class TestTemporalFeatures:
         """Should generate lag features from numeric columns."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 20,
+                "event_ts": pd.date_range("2024-01-01", periods=20, freq="D"),
                 "value": range(20),
             }
         )
         result_df, metadata = _generate_temporal_features(
-            df, temporal_columns=["value"], lag_periods=[1, 2]
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            lag_periods=[1, 2],
         )
         assert "value_lag_1" in result_df.columns
         assert "value_lag_2" in result_df.columns
-        # Check lag values
+        # Check lag values (single entity ⇒ lag chain is the value sequence).
         assert pd.isna(result_df["value_lag_1"].iloc[0])
         assert result_df["value_lag_1"].iloc[1] == 0
 
@@ -128,11 +147,18 @@ class TestTemporalFeatures:
         """Should generate rolling statistics from numeric columns."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 20,
+                "event_ts": pd.date_range("2024-01-01", periods=20, freq="D"),
                 "value": range(20),
             }
         )
         result_df, metadata = _generate_temporal_features(
-            df, temporal_columns=["value"], rolling_windows=[3], lag_periods=[]
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            rolling_windows=[3],
+            lag_periods=[],
         )
         assert "value_rolling_mean_3" in result_df.columns
         assert "value_rolling_std_3" in result_df.columns
@@ -141,10 +167,17 @@ class TestTemporalFeatures:
         """Should return proper metadata structure."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 5,
+                "event_ts": pd.date_range("2024-01-01", periods=5, freq="D"),
                 "date": pd.date_range("2024-01-01", periods=5, freq="D"),
             }
         )
-        _, metadata = _generate_temporal_features(df, temporal_columns=["date"])
+        _, metadata = _generate_temporal_features(
+            df,
+            temporal_columns=["date"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+        )
 
         assert len(metadata) > 0
         for meta in metadata:
@@ -226,32 +259,61 @@ class TestEntityGroupedTemporalFeatures:
             # Row index 4 must equal day-3 value (base + 3).
             assert entity_rows.iloc[4]["value_lag_1"] == base + 3
 
-    def test_lag_without_groupby_leaks_across_entities(self):
-        """Sanity check: omitting ``entity_id_column`` reproduces the bug.
+    def test_missing_entity_or_timestamp_raises(self):
+        """Contract sentinel: omitting either grouping key MUST raise.
 
-        This locks in the test invariant — if the test above ever stops
-        catching the regression, this companion test would still fail when
-        the groupby behaviour is silently dropped.
+        Block 1B tightens the previously-graceful fallback so a future
+        caller cannot silently re-introduce naive cross-entity shift —
+        which is exactly the leakage finding #2 documents. Both
+        ``entity_id_column`` and ``event_timestamp_column`` are now
+        required, and a missing or absent column fails fast with a
+        message pointing back to Block 1B.
         """
-        df = self._three_patient_panel().sort_values(
-            ["patient_id", "event_ts"]
-        ).reset_index(drop=True)
+        df = self._three_patient_panel()
 
-        result_df, _ = _generate_temporal_features(
-            df,
-            temporal_columns=["value"],
-            entity_id_column=None,  # explicit no-groupby path
-            event_timestamp_column=None,
-            lag_periods=[1],
-            rolling_windows=[],
-        )
+        # Empty entity_id_column.
+        with pytest.raises(ValueError, match="entity_id_column"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="",
+                event_timestamp_column="event_ts",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
 
-        # Without grouping, the first row of patient B (index 5) should see
-        # patient A's last value (5) as its lag, not NaN.
-        assert result_df.iloc[5]["patient_id"] == "B"
-        assert result_df.iloc[5]["value"] == 100
-        # lag_1 leaks: equals patient A's day-4 value.
-        assert result_df.iloc[5]["value_lag_1"] == 5
+        # Empty event_timestamp_column.
+        with pytest.raises(ValueError, match="event_timestamp_column"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="patient_id",
+                event_timestamp_column="",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
+
+        # Entity column name not present in the DataFrame.
+        with pytest.raises(ValueError, match="not found in DataFrame"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="bogus_entity",
+                event_timestamp_column="event_ts",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
+
+        # Timestamp column name not present in the DataFrame.
+        with pytest.raises(ValueError, match="not found in DataFrame"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="patient_id",
+                event_timestamp_column="bogus_ts",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
 
     def test_rolling_groupby_entity(self):
         """Rolling mean must be entity-scoped, not cross-entity."""
@@ -550,6 +612,7 @@ class TestGenerateFeaturesNode:
         state = {
             "X_train": pd.DataFrame(
                 {
+                    "patient_id": [f"p_{i % 10}" for i in range(100)],
                     "date": pd.date_range("2024-01-01", periods=100, freq="D"),
                     "region": ["East", "West"] * 50,
                     "value1": np.random.rand(100),
@@ -560,6 +623,8 @@ class TestGenerateFeaturesNode:
             ),
             "y_train": pd.Series(np.random.randint(0, 2, 100)),
             "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "date",
             "feature_config": {
                 "generate_temporal": True,
                 "generate_interactions": True,
@@ -582,11 +647,15 @@ class TestGenerateFeaturesNode:
         """Should apply same transformations to validation data."""
         train_df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 50,
+                "event_ts": pd.date_range("2024-01-01", periods=50, freq="D"),
                 "value": range(50),
             }
         )
         val_df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 20,
+                "event_ts": pd.date_range("2024-02-20", periods=20, freq="D"),
                 "value": range(50, 70),
             }
         )
@@ -596,6 +665,8 @@ class TestGenerateFeaturesNode:
             "X_val": val_df,
             "y_train": pd.Series([0, 1] * 25),
             "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "event_ts",
             "feature_config": {
                 "generate_temporal": True,
                 "rolling_windows": [3],
@@ -613,12 +684,15 @@ class TestGenerateFeaturesNode:
         state = {
             "X_train": pd.DataFrame(
                 {
+                    "patient_id": ["A"] * 20,
                     "date": pd.date_range("2024-01-01", periods=20, freq="D"),
                     "value": range(20),
                 }
             ),
             "y_train": pd.Series([0, 1] * 10),
             "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "date",
             "feature_config": {"generate_temporal": True, "lag_periods": [1]},
         }
 
@@ -630,6 +704,33 @@ class TestGenerateFeaturesNode:
         for feat in result["generated_features"]:
             assert "name" in feat
             assert "type" in feat
+
+    async def test_missing_entity_columns_returns_error_when_temporal_enabled(self):
+        """Caller-side strict check: missing keys → error dict, not silent no-op.
+
+        ``generate_features`` raises a ``ValueError`` when temporal
+        generation is requested without entity/timestamp columns; the
+        node's outer ``try/except`` converts it to the standard error
+        envelope so the LangGraph still flows.
+        """
+        state = {
+            "X_train": pd.DataFrame(
+                {
+                    "date": pd.date_range("2024-01-01", periods=10, freq="D"),
+                    "value": range(10),
+                }
+            ),
+            "y_train": pd.Series([0, 1] * 5),
+            "problem_type": "classification",
+            # No entity_id_column / event_timestamp_column on state OR config.
+            "feature_config": {"generate_temporal": True, "lag_periods": [1]},
+        }
+
+        result = await generate_features(state)
+
+        assert result.get("error") is not None
+        assert "entity_id_column" in result["error"]
+        assert "event_timestamp_column" in result["error"]
 
     async def test_handles_empty_config(self):
         """Should handle empty or missing feature config."""
