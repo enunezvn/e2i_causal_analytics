@@ -7,11 +7,16 @@ Tests feature generation capabilities:
 - Aggregate features (row-wise statistics)
 """
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.agents.ml_foundation.feature_analyzer.nodes.feature_generator import (
+    _SPLIT_MARKER_COL,
+    _SPLIT_ROW_ID_COL,
+    _concat_with_split_markers,
     _detect_categorical_columns,
     _detect_numeric_columns,
     _detect_temporal_columns,
@@ -416,6 +421,40 @@ class TestGenerateFeaturesEntityGroupedPipeline:
         )
         b_val = x_val[x_val["patient_id"] == "B"].iloc[0]
         assert b_val["value_lag_1"] == 103
+
+
+class TestConcatWithSplitMarkersGuards:
+    """Block 1B-M1: refuse to clobber caller columns with internal markers.
+
+    The marker columns use dunder names so the chance of a real collision is
+    near zero, but a silent overwrite would scramble the round-trip back to
+    per-split frames in ``_split_by_markers``. The guard makes the failure
+    loud so callers see it instantly.
+    """
+
+    @pytest.mark.parametrize("reserved", [_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL])
+    def test_raises_when_reserved_column_already_present_on_train(self, reserved):
+        train = pd.DataFrame({"value": [1, 2], reserved: ["x", "y"]})
+        val = pd.DataFrame({"value": [3]})
+
+        with pytest.raises(ValueError, match=re.escape(reserved)):
+            _concat_with_split_markers(train, val, None)
+
+    @pytest.mark.parametrize("reserved", [_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL])
+    def test_raises_when_reserved_column_already_present_on_val(self, reserved):
+        train = pd.DataFrame({"value": [1]})
+        val = pd.DataFrame({"value": [2], reserved: ["x"]})
+
+        with pytest.raises(ValueError, match=re.escape(reserved)):
+            _concat_with_split_markers(train, val, None)
+
+    @pytest.mark.parametrize("reserved", [_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL])
+    def test_raises_when_reserved_column_already_present_on_test(self, reserved):
+        train = pd.DataFrame({"value": [1]})
+        test = pd.DataFrame({"value": [2], reserved: ["x"]})
+
+        with pytest.raises(ValueError, match=re.escape(reserved)):
+            _concat_with_split_markers(train, None, test)
 
 
 class TestInteractionFeatures:

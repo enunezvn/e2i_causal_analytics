@@ -531,7 +531,33 @@ def _concat_with_split_markers(
               the synthetic identifiers carried inside the combined frame for
               this split's rows; ``original_index`` is what each row's pandas
               index used to be on the caller's input frame.
+
+    Raises:
+        ValueError: If any input frame already contains a column named
+            ``_SPLIT_MARKER_COL`` or ``_SPLIT_ROW_ID_COL``. The dunder names
+            are deliberately unlikely to collide with caller columns, but a
+            collision would silently overwrite caller data and produce
+            mis-routed splits in ``_split_by_markers``.
     """
+    # Block 1B-M1: refuse to clobber caller columns even if their names
+    # happen to match our internal markers. Cheaper to fail loud than to
+    # silently scramble the round-trip.
+    reserved = {_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL}
+    for split_name, frame in (
+        ("X_train", X_train),
+        ("X_val", X_val),
+        ("X_test", X_test),
+    ):
+        if frame is None:
+            continue
+        clash = reserved.intersection(frame.columns)
+        if clash:
+            raise ValueError(
+                f"{split_name} contains reserved internal column(s) "
+                f"{sorted(clash)}; rename caller columns or remove them "
+                "before passing to feature generation."
+            )
+
     pieces: List[pd.DataFrame] = []
     split_meta: Dict[str, Tuple[pd.Index, np.ndarray]] = {}
 

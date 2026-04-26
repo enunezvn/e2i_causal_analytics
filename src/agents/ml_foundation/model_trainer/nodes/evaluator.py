@@ -7,6 +7,7 @@ Version: 2.0.0
 """
 
 import logging
+import math
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
@@ -38,6 +39,19 @@ from .advanced_validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _positive_class_proba(y_proba: np.ndarray) -> np.ndarray:
+    """Return the positive-class probability column from a 1D or 2D proba array.
+
+    sklearn's ``predict_proba`` returns a 2D ``(n_samples, n_classes)`` array
+    where column 1 is P(class=1) for binary classifiers. Some callers
+    (calibrators, custom wrappers) may already pass the 1D positive-class
+    column. This helper accepts either shape and returns the 1D array.
+    """
+    if y_proba.ndim == 2:
+        return y_proba[:, 1]
+    return y_proba
 
 
 async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -254,7 +268,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             metrics_result["post_hoc_calibration"] = cal_info
             if cal_info.get("calibration_applied") and X_test_np is not None:
                 cal_proba = calibrated_model.predict_proba(X_test_np)
-                cal_proba_pos = cal_proba[:, 1] if cal_proba.ndim == 2 else cal_proba
+                cal_proba_pos = _positive_class_proba(cal_proba)
                 opt_thresh = metrics_result.get("optimal_threshold", 0.5)
                 cal_pred = (cal_proba_pos >= opt_thresh).astype(int)
                 cal_test_metrics = _compute_split_classification_metrics(
@@ -611,10 +625,7 @@ def _compute_classification_metrics(
     validation_metrics: Dict[str, Any] = {}
     if y_validation is not None and y_validation_pred is not None:
         if y_validation_proba is not None:
-            if y_validation_proba.ndim == 2:
-                y_val_proba_pos = y_validation_proba[:, 1]
-            else:
-                y_val_proba_pos = y_validation_proba
+            y_val_proba_pos = _positive_class_proba(y_validation_proba)
             y_validation_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
             validation_metrics = cast(
                 Dict[str, Any],
@@ -634,14 +645,13 @@ def _compute_classification_metrics(
 
     # CRITICAL: For imbalanced data, apply the FROZEN threshold tuned on
     # validation to test predictions. No re-tuning on test.
+    # math.isclose tolerates the tiny float drift _compute_optimal_threshold
+    # can return when its sklearn input lands exactly on the default — we
+    # only want the rebinarisation pass when the chosen threshold is
+    # meaningfully different from 0.5.
     y_test_pred_optimal = y_test_pred  # Default to model predictions
-    if y_test_proba is not None and optimal_threshold != 0.5:
-        # Get positive class probabilities
-        if y_test_proba.ndim == 2:
-            y_proba_pos = y_test_proba[:, 1]
-        else:
-            y_proba_pos = y_test_proba
-        # Apply frozen threshold (tuned on validation) to test
+    if y_test_proba is not None and not math.isclose(optimal_threshold, 0.5):
+        y_proba_pos = _positive_class_proba(y_test_proba)
         y_test_pred_optimal = (y_proba_pos >= optimal_threshold).astype(int)
         logger.info(
             f"Applying frozen threshold {optimal_threshold:.4f} "
@@ -776,11 +786,7 @@ def _compute_split_classification_metrics(
 
     # Probability-based metrics
     if y_proba is not None:
-        # Get positive class probabilities
-        if y_proba.ndim == 2:
-            y_proba_pos = y_proba[:, 1]
-        else:
-            y_proba_pos = y_proba
+        y_proba_pos = _positive_class_proba(y_proba)
 
         try:
             metrics["roc_auc"] = float(roc_auc_score(y_true, y_proba_pos))
@@ -997,11 +1003,7 @@ def _compute_optimal_threshold(
     if y_proba is None:
         return 0.5
 
-    # Get positive class probabilities
-    if y_proba.ndim == 2:
-        y_proba_pos = y_proba[:, 1]
-    else:
-        y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba)
 
     try:
         fpr, tpr, thresholds = roc_curve(y_true, y_proba_pos)
@@ -1043,11 +1045,7 @@ def _compute_precision_constrained_threshold(
     if y_proba is None:
         return None
 
-    # Get positive class probabilities
-    if y_proba.ndim == 2:
-        y_proba_pos = y_proba[:, 1]
-    else:
-        y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba)
 
     try:
         precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba_pos)
@@ -1117,11 +1115,7 @@ def _compute_precision_at_k(
     if y_proba is None:
         return {}
 
-    # Get positive class probabilities
-    if y_proba.ndim == 2:
-        y_proba_pos = y_proba[:, 1]
-    else:
-        y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba)
 
     n_samples = len(y_true)
     result = {}
@@ -1165,12 +1159,7 @@ def _compute_bootstrap_ci(
     alpha = (1 - confidence) / 2
 
     # Get positive class probabilities if available
-    y_proba_pos = None
-    if y_proba is not None:
-        if y_proba.ndim == 2:
-            y_proba_pos = y_proba[:, 1]
-        else:
-            y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba) if y_proba is not None else None
 
     # Store bootstrap metrics
     bootstrap_metrics: Dict[str, List[float]] = {}

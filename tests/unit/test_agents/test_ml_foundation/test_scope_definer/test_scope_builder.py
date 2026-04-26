@@ -307,6 +307,30 @@ def test_normalise_prediction_timestamp_returns_none_for_empty(value):
     assert _normalise_prediction_timestamp(value) is None
 
 
+def test_normalise_prediction_timestamp_falls_back_to_str_for_unknown_types():
+    """Unknown types route through ``str(value)``.
+
+    The helper is permissive on purpose — anything not recognised as
+    ``datetime`` / ``pd.Timestamp`` / ``str`` / empty is round-tripped as
+    its string representation. Locking this in so future input shapes
+    (numpy datetimes, custom datetime-like objects) don't regress to
+    silently dropping the value.
+    """
+
+    class _StringableTimestamp:
+        def __str__(self) -> str:
+            return "2026-04-26T00:00:00+00:00"
+
+    assert (
+        _normalise_prediction_timestamp(_StringableTimestamp())
+        == "2026-04-26T00:00:00+00:00"
+    )
+    # Numeric inputs are an obvious abuse — but the contract says coerce,
+    # not raise. Document the permissiveness so callers know to validate
+    # upstream when they care.
+    assert _normalise_prediction_timestamp(1714089600) == "1714089600"
+
+
 @pytest.mark.asyncio
 async def test_build_scope_propagates_prediction_timestamp_when_provided():
     """``prediction_timestamp`` from state lands on ``scope_spec``."""

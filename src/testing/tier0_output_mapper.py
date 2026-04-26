@@ -133,6 +133,15 @@ class Tier0OutputMapper:
         Returns ``None`` when neither path provides a value. Block 4+ will
         wire the resolved timestamp into temporal feature builders and
         post-prediction event filters; for now it is plumbing only.
+
+        Storage round-trip (Block 1B-M8): ``scope_definer.scope_builder``
+        normalises any ``datetime``/``pd.Timestamp``/``str`` input into an
+        ISO 8601 string for stable storage in ``scope_spec``. This method
+        coerces back to ``pd.Timestamp`` at consumption so every Tier 1-5
+        agent sees the same type regardless of how the value entered the
+        pipeline. Top-level ``state["prediction_timestamp"]`` overrides
+        ``scope_spec`` and may itself be any of those input types — it is
+        coerced the same way.
         """
         ts = self.state.get("prediction_timestamp")
         if ts is None:

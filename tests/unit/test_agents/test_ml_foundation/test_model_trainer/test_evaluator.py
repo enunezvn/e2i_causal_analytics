@@ -12,8 +12,20 @@ from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
     _compute_classification_metrics,
     _compute_optimal_threshold,
     _compute_precision_at_k,
+    _positive_class_proba,
     evaluate_model,
 )
+
+# ============================================================================
+# Shared fixture sizing — keep splits tiny so every test fits in one pytest
+# tick. Lifted from inline numerals so a single edit propagates everywhere.
+# ============================================================================
+N_TRAIN_SAMPLES = 100
+N_VAL_SAMPLES = 30
+N_TEST_SAMPLES = 20
+N_FEATURES = 5
+RANDOM_STATE = 42
+RF_N_ESTIMATORS = 10
 
 # ============================================================================
 # Test fixtures
@@ -54,17 +66,17 @@ class MockClassifierNoProba:
 @pytest.fixture
 def binary_classification_state():
     """Create state for binary classification evaluation."""
-    np.random.seed(42)
+    np.random.seed(RANDOM_STATE)
     model = MockBinaryClassifier()
     return {
         "trained_model": model,
         "problem_type": "binary_classification",
-        "X_train_preprocessed": np.random.rand(100, 5),
-        "X_validation_preprocessed": np.random.rand(30, 5),
-        "X_test_preprocessed": np.random.rand(20, 5),
-        "train_data": {"y": np.random.randint(0, 2, 100)},
-        "validation_data": {"y": np.random.randint(0, 2, 30)},
-        "test_data": {"y": np.random.randint(0, 2, 20)},
+        "X_train_preprocessed": np.random.rand(N_TRAIN_SAMPLES, N_FEATURES),
+        "X_validation_preprocessed": np.random.rand(N_VAL_SAMPLES, N_FEATURES),
+        "X_test_preprocessed": np.random.rand(N_TEST_SAMPLES, N_FEATURES),
+        "train_data": {"y": np.random.randint(0, 2, N_TRAIN_SAMPLES)},
+        "validation_data": {"y": np.random.randint(0, 2, N_VAL_SAMPLES)},
+        "test_data": {"y": np.random.randint(0, 2, N_TEST_SAMPLES)},
         "success_criteria": {},
     }
 
@@ -72,17 +84,17 @@ def binary_classification_state():
 @pytest.fixture
 def regression_state():
     """Create state for regression evaluation."""
-    np.random.seed(42)
+    np.random.seed(RANDOM_STATE)
     model = MockRegressor()
     return {
         "trained_model": model,
         "problem_type": "regression",
-        "X_train_preprocessed": np.random.rand(100, 5),
-        "X_validation_preprocessed": np.random.rand(30, 5),
-        "X_test_preprocessed": np.random.rand(20, 5),
-        "train_data": {"y": np.random.rand(100)},
-        "validation_data": {"y": np.random.rand(30)},
-        "test_data": {"y": np.random.rand(20)},
+        "X_train_preprocessed": np.random.rand(N_TRAIN_SAMPLES, N_FEATURES),
+        "X_validation_preprocessed": np.random.rand(N_VAL_SAMPLES, N_FEATURES),
+        "X_test_preprocessed": np.random.rand(N_TEST_SAMPLES, N_FEATURES),
+        "train_data": {"y": np.random.rand(N_TRAIN_SAMPLES)},
+        "validation_data": {"y": np.random.rand(N_VAL_SAMPLES)},
+        "test_data": {"y": np.random.rand(N_TEST_SAMPLES)},
         "success_criteria": {},
     }
 
@@ -90,15 +102,15 @@ def regression_state():
 @pytest.fixture
 def real_classifier_state():
     """Create state with real trained classifier for accurate testing."""
-    np.random.seed(42)
-    X_train = np.random.rand(100, 5)
-    y_train = np.random.randint(0, 2, 100)
-    X_val = np.random.rand(30, 5)
-    y_val = np.random.randint(0, 2, 30)
-    X_test = np.random.rand(20, 5)
-    y_test = np.random.randint(0, 2, 20)
+    np.random.seed(RANDOM_STATE)
+    X_train = np.random.rand(N_TRAIN_SAMPLES, N_FEATURES)
+    y_train = np.random.randint(0, 2, N_TRAIN_SAMPLES)
+    X_val = np.random.rand(N_VAL_SAMPLES, N_FEATURES)
+    y_val = np.random.randint(0, 2, N_VAL_SAMPLES)
+    X_test = np.random.rand(N_TEST_SAMPLES, N_FEATURES)
+    y_test = np.random.randint(0, 2, N_TEST_SAMPLES)
 
-    model = RandomForestClassifier(n_estimators=10, random_state=42)
+    model = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE)
     model.fit(X_train, y_train)
 
     return {
@@ -117,15 +129,15 @@ def real_classifier_state():
 @pytest.fixture
 def real_regressor_state():
     """Create state with real trained regressor."""
-    np.random.seed(42)
-    X_train = np.random.rand(100, 5)
-    y_train = np.random.rand(100)
-    X_val = np.random.rand(30, 5)
-    y_val = np.random.rand(30)
-    X_test = np.random.rand(20, 5)
-    y_test = np.random.rand(20)
+    np.random.seed(RANDOM_STATE)
+    X_train = np.random.rand(N_TRAIN_SAMPLES, N_FEATURES)
+    y_train = np.random.rand(N_TRAIN_SAMPLES)
+    X_val = np.random.rand(N_VAL_SAMPLES, N_FEATURES)
+    y_val = np.random.rand(N_VAL_SAMPLES)
+    X_test = np.random.rand(N_TEST_SAMPLES, N_FEATURES)
+    y_test = np.random.rand(N_TEST_SAMPLES)
 
-    model = RandomForestRegressor(n_estimators=10, random_state=42)
+    model = RandomForestRegressor(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE)
     model.fit(X_train, y_train)
 
     return {
@@ -229,8 +241,8 @@ class TestEvaluateModel:
         """Should return error when trained_model is None."""
         state = {
             "problem_type": "binary_classification",
-            "X_test_preprocessed": np.random.rand(20, 5),
-            "test_data": {"y": np.random.randint(0, 2, 20)},
+            "X_test_preprocessed": np.random.rand(N_TEST_SAMPLES, N_FEATURES),
+            "test_data": {"y": np.random.randint(0, 2, N_TEST_SAMPLES)},
         }
 
         result = await evaluate_model(state)
@@ -259,12 +271,12 @@ class TestEvaluateModel:
 
     async def test_handles_model_without_predict_proba(self):
         """Should handle classifiers without predict_proba."""
-        np.random.seed(42)
+        np.random.seed(RANDOM_STATE)
         state = {
             "trained_model": MockClassifierNoProba(),
             "problem_type": "binary_classification",
-            "X_test_preprocessed": np.random.rand(20, 5),
-            "test_data": {"y": np.random.randint(0, 2, 20)},
+            "X_test_preprocessed": np.random.rand(N_TEST_SAMPLES, N_FEATURES),
+            "test_data": {"y": np.random.randint(0, 2, N_TEST_SAMPLES)},
             "success_criteria": {},
         }
 
@@ -689,3 +701,81 @@ class TestThresholdTunedOnValidationOnly:
         # And it must NOT match the test-derived value
         test_only = _compute_optimal_threshold(y_test, y_test_proba)
         assert result["optimal_threshold"] != pytest.approx(test_only, abs=0.05)
+
+
+# ============================================================================
+# Helper: _positive_class_proba (1A-M3 dedup)
+# ============================================================================
+
+
+class TestPositiveClassProba:
+    """Locks the contract of the shared positive-class extraction helper.
+
+    All callers in evaluator.py route through this helper, so the test
+    here is the canonical guarantee that 1D and 2D proba arrays are both
+    accepted and that the 2D path returns the column-1 view.
+    """
+
+    def test_returns_column_1_for_2d_array(self):
+        proba = np.array([[0.1, 0.9], [0.7, 0.3], [0.4, 0.6]])
+        result = _positive_class_proba(proba)
+        np.testing.assert_array_equal(result, np.array([0.9, 0.3, 0.6]))
+
+    def test_returns_unchanged_for_1d_array(self):
+        proba = np.array([0.9, 0.3, 0.6])
+        result = _positive_class_proba(proba)
+        # Same reference is fine — caller only reads it.
+        np.testing.assert_array_equal(result, proba)
+
+
+# ============================================================================
+# 1A-M2: rebinarisation gate uses math.isclose, not raw float ==
+# ============================================================================
+
+
+class TestThresholdRebinarisationGuard:
+    """When the validation-tuned threshold lands on (or vanishingly close to)
+    0.5, the test-set rebinarisation should be skipped — there's no point
+    re-applying ``proba >= 0.5`` if the model already does that. Direct
+    ``!= 0.5`` would treat ``0.5 + 1e-15`` as different, triggering a
+    no-op rebinarisation path. ``math.isclose`` collapses that gap.
+    """
+
+    def test_threshold_within_isclose_tolerance_skips_rebinarisation(self):
+        """When the chosen threshold is essentially 0.5, test_metrics_at_05
+        and test_metrics_at_optimal must be identical — the optimal-path
+        binarisation never runs."""
+        np.random.seed(RANDOM_STATE)
+        n = 80
+        # Validation set whose Youden's J optimum returns sklearn's `inf`
+        # sentinel (random labels make every operating point equivalent),
+        # which the upstream guard clamps back to 0.5. Test set then sees
+        # threshold == 0.5 and must NOT re-binarise.
+        y_val = np.random.randint(0, 2, n)
+        y_val_proba = np.column_stack([np.full(n, 0.5), np.full(n, 0.5)])
+        y_val_pred = (y_val_proba[:, 1] >= 0.5).astype(int)
+
+        y_test = np.random.randint(0, 2, n)
+        y_test_proba = np.column_stack([np.random.rand(n), np.random.rand(n)])
+        y_test_proba[:, 0] = 1 - y_test_proba[:, 1]
+        y_test_pred = (y_test_proba[:, 1] >= 0.5).astype(int)
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+        )
+
+        # Threshold falls back to 0.5 (the all-0.5 proba degenerates Youden's
+        # J), so the rebinarisation gate must skip.
+        assert result["optimal_threshold"] == 0.5
+        # Same y_pred → identical metrics in both at-0.5 and at-optimal blocks.
+        assert result["test_metrics_at_05"] == result["test_metrics_at_optimal"]

@@ -51,6 +51,11 @@ class ScopeDefinerState(TypedDict, total=False):
     # downstream agents can clip lookback windows and post-prediction filters.
     # Accepts datetime, str, or pd.Timestamp at the API boundary; the scope
     # builder normalises to ISO 8601 string for storage in scope_spec.
+    #
+    # Distinguish from ``prediction_horizon_days`` (read from state via
+    # ``state.get("prediction_horizon_days", 30)`` in scope_builder): the
+    # horizon is a *duration* in days, while this field is the *anchor*
+    # timestamp. Together they define the prediction window.
     prediction_timestamp: Optional[Any]
 
     # === INTERMEDIATE FIELDS ===

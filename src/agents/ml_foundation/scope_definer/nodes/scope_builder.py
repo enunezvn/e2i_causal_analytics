@@ -90,7 +90,13 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
     # business spec so downstream agents (Tier 1-5) share a single anchor.
     prediction_timestamp = _normalise_prediction_timestamp(state.get("prediction_timestamp"))
 
-    # Build complete ScopeSpec
+    # Build complete ScopeSpec.
+    # Naming guard (Block 1B-M6): the two ``prediction_*`` fields below are
+    # NOT redundant — ``prediction_horizon_days`` is a *duration* (e.g. "30
+    # days lookahead from the cutoff"), while ``prediction_timestamp`` is the
+    # *anchor* (the inference cutoff itself, e.g. ``2026-04-26T00:00``).
+    # Together they define a half-open prediction window
+    # ``[prediction_timestamp, prediction_timestamp + horizon)``.
     scope_spec = {
         "experiment_id": experiment_id,
         "experiment_name": experiment_name,
