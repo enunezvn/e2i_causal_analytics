@@ -105,6 +105,11 @@ logs/
 # It contains real secrets when rendered; never commit.
 feature_repo/feature_store.yaml
 
+# Feast registry blobs — `*.db` covers SQLite today, but Feast supports
+# other registry backends (json, file-based) too. Glob at the path level
+# so we're robust to future filename changes. (3B-M-1)
+feature_repo/data/registry.*
+
 # Temporary
 tmp/
 temp/

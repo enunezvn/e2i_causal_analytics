@@ -61,8 +61,34 @@ Treat the registry the same way you treat compiled artifacts:
   `tests/integration/test_feast_apply_idempotent.py`).
 
 CI runs `feast apply --skip-source-validation` against this directory on every
-push (see `.github/workflows/backend-tests.yml` job `feast-apply`) so a broken
-feature definition fails before merge.
+push (see `.github/workflows/feast-apply.yml`, job `Feast Apply &
+Idempotency`) so a broken feature definition fails before merge. The
+workflow's path filter is narrowed to `feature_repo/**` and
+`docker/Dockerfile.feast` so changes to `src/`, `tests/`, etc. do not
+unnecessarily trigger the Feast apply gate.
+
+### Test gating layers (3B-M-8)
+
+Feast integration tests are deliberately gated behind multiple
+`pytest.importorskip(...)` calls so the suite stays usable on CI runners
+that strip optional deps:
+
+1. `pytest.importorskip("feast", ...)` — skips a test module entirely
+   when the Feast Python SDK is not installed (e.g. backend-tests.yml's
+   `unit-tests` job which doesn't pull `feast[postgres]==0.43.0`).
+2. `pytest.importorskip("pandas", ...)` — required by the parity test
+   for entity-row dataframe construction; pandas is in the base
+   requirements.txt but the gate keeps the test self-documenting.
+3. `pytest.importorskip("sqlalchemy", ...)` — required by
+   `_sample_entity_ids` to probe the offline Postgres store directly;
+   sqlalchemy is also in base requirements.txt.
+4. The integration suite additionally checks `FEAST_INTEGRATION=1` via
+   `tests/integration/_feast_helpers.feast_integration_available()` so
+   tests that need a live Feast deployment skip cleanly when running
+   against a vanilla unit-tests environment.
+
+These layers compose: a runner missing pandas would skip at layer 2,
+even if Feast itself was installed.
 
 ### When to apply
 

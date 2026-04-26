@@ -4,9 +4,12 @@ on:
   push:
     branches: [main, develop]
     paths:
+      # Note: `feature_repo/**` is intentionally excluded — Feast apply
+      # has its own dedicated workflow (`feast-apply.yml`) so changes
+      # under `feature_repo/` do not trigger the heavy backend test
+      # matrix unnecessarily. (3B-M-3)
       - 'src/**'
       - 'tests/**'
-      - 'feature_repo/**'
       - 'pyproject.toml'
       - 'requirements.txt'
       - '.github/workflows/backend-tests.yml'
@@ -15,7 +18,6 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
-      - 'feature_repo/**'
       - 'pyproject.toml'
       - 'requirements.txt'
       - '.github/workflows/backend-tests.yml'
@@ -48,89 +50,9 @@ jobs:
       - name: Run Ruff formatter check
         run: ruff format --check src/ tests/
 
-  feast-apply:
-    name: Feast Registry Apply
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: Verify CI Feast version matches production container
-        # Production runs `feastdev/feature-server:0.43.0` (see
-        # `docker/Dockerfile.feast`). If CI installs a different Feast version,
-        # we risk: (a) green-lighting a definition that breaks 0.43 startup, or
-        # (b) failing on a deprecation that 0.43 still accepts. Fail loudly
-        # before installing anything if the Dockerfile pin drifts.
-        run: |
-          set -euo pipefail
-          DOCKERFILE_VERSION=$(grep -oP 'feastdev/feature-server:\K[0-9.]+' docker/Dockerfile.feast)
-          if [ "$DOCKERFILE_VERSION" != "0.43.0" ]; then
-            echo "ERROR: docker/Dockerfile.feast pins $DOCKERFILE_VERSION but CI expects 0.43.0"
-            echo "Update both this workflow's pip install pin and the version assertion to match."
-            exit 1
-          fi
-          echo "Production Feast version $DOCKERFILE_VERSION matches CI pin 0.43.0."
-
-      - name: Install Feast (with PostgreSQL offline store)
-        # Install just the Feast SDK + the postgres contrib offline store used
-        # by `feature_repo/data_sources.py`. The version pin matches the
-        # production container (`feastdev/feature-server:0.43.0`) so CI tests
-        # the exact runtime — drift would let CI green-light definitions that
-        # break the production server (or vice versa). We deliberately do NOT
-        # pull the full project requirements.txt — Feast runs in its own
-        # container in production and dragging in the rest of the stack
-        # inflates CI by a few minutes per run.
-        run: |
-          pip install --upgrade pip
-          pip install 'feast[postgres]==0.43.0'
-
-      - name: Apply feature definitions
-        # --skip-source-validation lets us regenerate the registry without a
-        # reachable Postgres/Redis backend. The Feast container does NOT
-        # re-apply on startup (it just runs `feast serve`), so this CI step is
-        # purely a "do the Python definitions parse and produce a valid
-        # registry" gate; deployment scripts apply against the live registry
-        # store separately.
-        run: feast --chdir feature_repo apply --skip-source-validation
-
-      - name: Verify registry is structurally idempotent
-        # A second apply must produce the same entity + feature-view inventory
-        # as the first. The registry file hash itself drifts every apply (it
-        # embeds last_updated_timestamp), so we compare the structural
-        # inventory instead. This catches non-deterministic feature defs and
-        # accidental in-process state leaks.
-        #
-        # SCOPE LIMITATION: this gate compares entity + feature-view NAMES
-        # only. It does NOT detect intra-FV changes (dtype flips, TTL drift,
-        # source rename, schema-field add/remove). A schema-deep diff is
-        # planned for Block 6B's Feast integration suite. Treat this as the
-        # minimum-viable gate against non-deterministic apply behaviour.
-        run: |
-          set -euo pipefail
-          cd feature_repo
-          entities_before=$(feast entities list | awk 'NR>1 && NF {print $1}' | sort)
-          fvs_before=$(feast feature-views list | awk 'NR>1 && NF {print $1}' | sort)
-          feast apply --skip-source-validation
-          entities_after=$(feast entities list | awk 'NR>1 && NF {print $1}' | sort)
-          fvs_after=$(feast feature-views list | awk 'NR>1 && NF {print $1}' | sort)
-          if [ "$entities_before" != "$entities_after" ]; then
-            echo "ENTITY DRIFT between consecutive feast apply runs:"
-            diff <(printf '%s\n' "$entities_before") <(printf '%s\n' "$entities_after") || true
-            exit 1
-          fi
-          if [ "$fvs_before" != "$fvs_after" ]; then
-            echo "FEATURE-VIEW DRIFT between consecutive feast apply runs:"
-            diff <(printf '%s\n' "$fvs_before") <(printf '%s\n' "$fvs_after") || true
-            exit 1
-          fi
-          echo "Feast registry is structurally idempotent."
+  # NOTE: feast-apply moved to .github/workflows/feast-apply.yml so
+  # changes under feature_repo/** do not trigger the full backend test
+  # matrix. See "Feast Apply & Idempotency" workflow. (3B-M-3, 3B-M-7)
 
   type-check:
     name: Type Check (MyPy)
@@ -309,17 +231,13 @@ jobs:
   ci-success:
     name: Backend CI Success
     runs-on: ubuntu-latest
-    needs: [lint, feast-apply, type-check, unit-tests, integration-tests]
+    needs: [lint, type-check, unit-tests, integration-tests]
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
           if [[ "${{ needs.lint.result }}" != "success" ]]; then
             echo "Lint failed"
-            exit 1
-          fi
-          if [[ "${{ needs.feast-apply.result }}" != "success" ]]; then
-            echo "Feast apply failed"
             exit 1
           fi
           if [[ "${{ needs.unit-tests.result }}" != "success" ]]; then

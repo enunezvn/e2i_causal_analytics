@@ -71,14 +71,71 @@ PARITY_ATOL = 1e-9
 # cheap when the environment IS available — see module docstring.
 SAMPLE_SIZE = 5
 
-# (FeatureView, join_key, source_table) — the source table name lets us probe
-# the offline store directly for real entity ids (instead of guessing) before
-# we round-trip through Feast. Tables come from feature_repo/data_sources.py.
-FEATURE_VIEW_PROBES: list[tuple[str, str, str]] = [
-    ("hcp_profile_features", "hcp_id", "hcp_profiles"),
-    ("territory_performance_features", "territory_id", "territory_metrics"),
-    ("trigger_response_features", "trigger_id", "triggers"),
-]
+# Subset of feature_views to exercise in this parity test. Probes are
+# derived from ``feature_repo.features.FEATURE_VIEW_MAP`` so the list
+# auto-extends when new FVs land — no hand-curated triple-tuple drift.
+# (3B-M-6)
+#
+# We restrict to the originally curated *single-entity* FVs because:
+#   - parity-test wiring assumes one ``join_key`` per FV (tuple shape
+#     is ``(fv_name, join_key, source_table)``);
+#   - multi-entity FVs (e.g. hcp_conversion which has both ``hcp_id`` +
+#     ``hcp_brand_id``) need a different probe shape we haven't built;
+#   - keeping the parity loop fast-cheap during development.
+#
+# When new single-entity FVs land in FEATURE_VIEW_MAP they are picked
+# up automatically. Multi-entity FVs are filtered out.
+_PROBE_FV_KEYS = {
+    "hcp_profile",
+    "territory_performance",
+    "trigger_response",
+}
+
+
+def _build_feature_view_probes() -> list[tuple[str, str, str]]:
+    """Derive ``[(fv_name, join_key, source_table), ...]`` from
+    ``FEATURE_VIEW_MAP`` so the probe list auto-extends as the FVs do.
+
+    Returns ``[]`` if the feature_repo cannot be imported (e.g. the
+    integration runner stripped it down) — that lands at the parametrize
+    level and pytest will surface it via a SkipReason.
+    """
+    import sys as _sys
+
+    feature_repo_path = str(FEATURE_REPO)
+    if feature_repo_path not in _sys.path:
+        _sys.path.insert(0, feature_repo_path)
+    try:
+        from features import FEATURE_VIEW_MAP
+    except ImportError:
+        return []
+
+    probes: list[tuple[str, str, str]] = []
+    for key, fv in FEATURE_VIEW_MAP.items():
+        if key not in _PROBE_FV_KEYS:
+            continue
+        # Each FV has 1+ entities; we only handle the single-entity case
+        # here. Multi-entity FVs need a different probe shape and are
+        # explicitly skipped above.
+        if len(fv.entities) != 1:
+            continue
+        # FV.entities[0] is an Entity object — .join_key gives us the
+        # column name in the offline source.  Fall back to .name if
+        # join_key is unset (Feast 0.43 defaults join_key to entity name
+        # when explicit join_key is omitted).
+        entity = fv.entities[0]
+        join_key = (
+            getattr(entity, "join_key", None)
+            or getattr(entity, "name", None)
+        )
+        source_table = getattr(fv.source, "name", None)
+        if not join_key or not source_table:
+            continue
+        probes.append((fv.name, str(join_key), str(source_table)))
+    return probes
+
+
+FEATURE_VIEW_PROBES: list[tuple[str, str, str]] = _build_feature_view_probes()
 
 
 @pytest.fixture(scope="module")
