@@ -294,7 +294,71 @@ async def test_audit_report_serializable(base_train_df):
 
 
 # ---------------------------------------------------------------------------
-# 7. Strict-JSON safety for non-finite SMD (constants-with-different-mean)
+# 7. Threshold override via scope_spec["sampling_frame_audit"]
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("numeric_threshold", "expected_flagged"),
+    [
+        # Default 0.5 threshold flags a moderate shift...
+        (0.5, True),
+        # ...a permissive override (5.0) does NOT flag the same shift.
+        (5.0, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_audit_threshold_override_changes_drift_flag(
+    base_train_df, numeric_threshold, expected_flagged
+):
+    """``scope_spec["sampling_frame_audit"]`` overrides drift thresholds.
+
+    A shifted reference (mean 55 vs train ~50) yields an SMD of ~0.5.
+    Under the default 0.5 threshold this is at the boundary; we assert
+    that bumping the threshold to 5.0 explicitly disables the flag.
+    The contract this test locks in is that ``drift_flagged`` follows
+    ``audit_config["numeric_drift_threshold"]`` rather than the module
+    default.
+    """
+    # Reference mean shifted by ~0.5 sigma off train_df["age"] (mean=50, std=10).
+    reference = {
+        "distributions": {
+            "age": {
+                "mean": 55.0,
+                "std": 10.0,
+                "quantiles": {"q25": 48.0, "q50": 55.0, "q75": 62.0},
+            },
+        },
+    }
+    state: Dict[str, Any] = {
+        "experiment_id": "exp_audit_threshold_override",
+        "scope_spec": {
+            "deployment_reference": reference,
+            "sampling_frame_audit": {
+                "numeric_drift_threshold": numeric_threshold,
+            },
+        },
+        "train_df": base_train_df,
+        "blocking_issues": [],
+    }
+
+    result = await audit_sampling_frame(state)
+    report = result["sampling_frame_audit_report"]
+
+    # The override should propagate into the report's threshold metadata so
+    # consumers can see what threshold the decision was made against.
+    assert report["thresholds"]["numeric_drift_threshold"] == numeric_threshold
+
+    age_entry = report["per_column"]["age"]
+    assert age_entry["drift_flagged"] is expected_flagged, (
+        f"With numeric_drift_threshold={numeric_threshold!r}, expected "
+        f"drift_flagged={expected_flagged!r}, got {age_entry['drift_flagged']!r} "
+        f"(metric_value={age_entry.get('metric_value')!r})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. Strict-JSON safety for non-finite SMD (constants-with-different-mean)
 # ---------------------------------------------------------------------------
 
 

@@ -92,7 +92,7 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
 
     scope_spec = state.get("scope_spec") or {}
     deployment_reference = scope_spec.get("deployment_reference")
-    audit_config = scope_spec.get("sampling_frame_audit") or {}
+    audit_config = scope_spec.get("sampling_frame_audit", {})
 
     numeric_threshold = float(
         audit_config.get(
@@ -133,10 +133,14 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
         return {"sampling_frame_audit_report": report}
 
     train_df = state.get("train_df")
-    if train_df is None or not hasattr(train_df, "columns"):
+    if not isinstance(train_df, pd.DataFrame):
         # train_df missing/invalid — record an error-status advisory but do
         # NOT block. The downstream schema/quality nodes are the source of
-        # truth for hard failures here.
+        # truth for hard failures here. ``isinstance`` is preferred over
+        # duck-typed ``hasattr("columns")`` because the audit's downstream
+        # logic depends on full DataFrame semantics (``.value_counts``,
+        # ``.quantile``, etc.), not just the existence of a ``columns``
+        # attribute.
         report = {
             "status": "error",
             "message": "train_df missing or not a DataFrame; audit skipped.",
@@ -321,6 +325,13 @@ def _audit_numeric(
     else:
         drift_flagged = smd > threshold
 
+    # ``quantile_diffs`` is a SUPPLEMENTARY debug payload — it's emitted
+    # so consumers (Grafana, Opik) can show the q25/q50/q75 train-vs-ref
+    # delta for visual sanity-checking, but the drift decision itself is
+    # taken from ``standardized_mean_diff`` above. We deliberately do NOT
+    # cross-reference quantile drift in the ``drift_flagged`` boolean —
+    # adding a second drift signal would force a multiple-comparisons
+    # correction we don't want at this layer.
     quantile_diffs: Dict[str, float] = {}
     ref_quantiles = ref_stats.get("quantiles")
     if isinstance(ref_quantiles, Mapping):
@@ -467,6 +478,12 @@ def _kl_divergence(p_vec: np.ndarray, q_vec: np.ndarray) -> float:
     mask = p_vec > 0
     if not mask.any():
         return 0.0
+    # Floor q at 1e-12 only inside the masked positions: this avoids log(0)
+    # without biasing terms where p_i > 0 and q_i > 0 normally. The 1e-12
+    # epsilon is far below the typical normalised-probability resolution
+    # for our use case (counts in the hundreds), so its contribution to
+    # the sum is dwarfed by genuine signal whenever the divergence is
+    # non-zero.
     safe_q = np.where(q_vec > 0, q_vec, 1e-12)
     return float(np.sum(p_vec[mask] * np.log(p_vec[mask] / safe_q[mask])))
 
