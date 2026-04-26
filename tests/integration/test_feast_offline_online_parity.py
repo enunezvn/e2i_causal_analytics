@@ -39,12 +39,13 @@ Findings reference: Block 3B (#4 residual, parity invariant; I-3 fix).
 from __future__ import annotations
 
 import math
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.integration._feast_helpers import feast_integration_available
 
 # Skip the entire module if the Feast Python SDK is not importable.
 pytest.importorskip("feast", reason="Feast SDK not installed; skipping parity tests.")
@@ -80,15 +81,6 @@ FEATURE_VIEW_PROBES: list[tuple[str, str, str]] = [
 ]
 
 
-def _feast_integration_available() -> bool:
-    """True iff the caller has opted into the live Feast parity check.
-
-    The droplet (and only the droplet) sets ``FEAST_INTEGRATION=1`` in its
-    environment so this test runs there but stays a no-op everywhere else.
-    """
-    return os.environ.get("FEAST_INTEGRATION", "").strip().lower() in {"1", "true", "yes"}
-
-
 @pytest.fixture(scope="module")
 def feature_store() -> Any:
     """Construct a Feast ``FeatureStore`` rooted at ``feature_repo/``.
@@ -96,7 +88,7 @@ def feature_store() -> Any:
     Skips the test if the registry can't be loaded or the env var hasn't been
     set. The fixture is module-scoped so we pay the registry-load cost once.
     """
-    if not _feast_integration_available():
+    if not feast_integration_available():
         pytest.skip(
             "FEAST_INTEGRATION not set; skipping offline/online parity. "
             "Set FEAST_INTEGRATION=1 on a host with reachable Feast stores."

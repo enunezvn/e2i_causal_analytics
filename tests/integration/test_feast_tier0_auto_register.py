@@ -49,13 +49,14 @@ Findings reference: Block 5B (#14, auto-register integration round-trip).
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 import warnings
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.integration._feast_helpers import feast_integration_available
 
 # Skip the entire module if the Feast Python SDK is not importable.
 pytest.importorskip("feast", reason="Feast SDK not installed; skipping auto-register tests.")
@@ -80,16 +81,6 @@ BATCH_SOURCE_NAME = "business_metrics_source"
 SELECTED_FEATURES = ["trx_count", "nrx_count"]
 
 
-def _feast_integration_available() -> bool:
-    """True iff the caller has opted into the live Feast auto-register check.
-
-    The droplet (and only the droplet) sets ``FEAST_INTEGRATION=1`` in its
-    environment so this test runs there but stays a no-op everywhere else.
-    Mirrors ``test_feast_offline_online_parity._feast_integration_available``.
-    """
-    return os.environ.get("FEAST_INTEGRATION", "").strip().lower() in {"1", "true", "yes"}
-
-
 @pytest.fixture(scope="module")
 def feature_store() -> Any:
     """Construct a Feast ``FeatureStore`` rooted at ``feature_repo/``.
@@ -105,7 +96,7 @@ def feature_store() -> Any:
       auto-register helper depends on those being there, and the user
       can fix it with ``feast apply``.
     """
-    if not _feast_integration_available():
+    if not feast_integration_available():
         pytest.skip(
             "FEAST_INTEGRATION not set; skipping auto-register integration. "
             "Set FEAST_INTEGRATION=1 on a host with a bootstrapped Feast registry."

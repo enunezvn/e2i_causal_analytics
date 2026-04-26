@@ -81,7 +81,6 @@ idempotency).
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -89,6 +88,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.integration._feast_helpers import (
+    feast_integration_available,
+    push_source_name,
+)
 
 # Skip the entire module if the Feast Python SDK is not importable.
 pytest.importorskip("feast", reason="Feast SDK not installed; skipping integration suite.")
@@ -124,17 +128,6 @@ SELECTED_FEATURES = ["trx_count", "nrx_count"]
 TEST_TTL = timedelta(days=14)
 
 
-def _feast_integration_available() -> bool:
-    """True iff the caller has opted into the live Feast integration suite.
-
-    The droplet (and only the droplet) sets ``FEAST_INTEGRATION=1`` in its
-    environment so this suite runs there but stays a no-op everywhere else.
-    Mirrors the gate from ``test_feast_offline_online_parity`` and
-    ``test_feast_tier0_auto_register``.
-    """
-    return os.environ.get("FEAST_INTEGRATION", "").strip().lower() in {"1", "true", "yes"}
-
-
 def _unique_fv_name(prefix: str) -> str:
     """Build a UUID-suffixed FV name so concurrent CI doesn't collide.
 
@@ -157,7 +150,7 @@ def feast_client() -> Any:
     * ``FeastClient.initialize`` raises (registry unreachable, etc.).
     * The pre-existing entity / batch source isn't applied.
     """
-    if not _feast_integration_available():
+    if not feast_integration_available():
         pytest.skip(
             "FEAST_INTEGRATION not set; skipping Feast integration suite. "
             "Set FEAST_INTEGRATION=1 on a host with a bootstrapped Feast registry."
@@ -333,7 +326,7 @@ def test_materialize_via_push_round_trips_to_online_store(feast_client: Any) -> 
     from feast.data_source import PushMode
 
     fv_name = _unique_fv_name("materialize")
-    push_source_name = f"{fv_name}_push_source"
+    push_src = push_source_name(fv_name)
     store = feast_client._store
 
     try:
@@ -363,8 +356,10 @@ def test_materialize_via_push_round_trips_to_online_store(feast_client: Any) -> 
         )
 
         # Feast 0.43 stamps the FV's auto-generated PushSource as
-        # ``{fv_name}_push_source`` (see FeastClient.register_feature_view).
-        store.push(push_source_name, push_df, to=PushMode.ONLINE)
+        # ``{fv_name}_push_source`` (see FeastClient.register_feature_view;
+        # ``push_source_name`` is the single source of truth for that
+        # convention, shared with the parity / auto-register suites).
+        store.push(push_src, push_df, to=PushMode.ONLINE)
 
         # Round-trip through online features.
         feature_refs = [f"{fv_name}:{f}" for f in SELECTED_FEATURES]
@@ -492,7 +487,7 @@ def test_get_online_features_round_trips_pushed_values(feast_client: Any) -> Non
     from feast.data_source import PushMode
 
     fv_name = _unique_fv_name("online")
-    push_source_name = f"{fv_name}_push_source"
+    push_src = push_source_name(fv_name)
     store = feast_client._store
 
     try:
@@ -519,7 +514,7 @@ def test_get_online_features_round_trips_pushed_values(feast_client: Any) -> Non
                 "created_at": [push_ts, push_ts, push_ts],
             }
         )
-        store.push(push_source_name, push_df, to=PushMode.ONLINE)
+        store.push(push_src, push_df, to=PushMode.ONLINE)
 
         feature_refs = [f"{fv_name}:{f}" for f in SELECTED_FEATURES]
         entity_rows = [{ENTITY_JOIN_KEY: eid} for eid in push_df[ENTITY_JOIN_KEY]]
@@ -639,20 +634,11 @@ def test_re_registration_with_identical_spec_is_idempotent(
 # Schema-deep idempotency check (proto-byte diff)
 # =============================================================================
 #
-# Plan-language: "registry-proto-aware comparison rather than name-set
-# comparison". Feast 0.43 makes idempotency contingent on byte equality of
-# the FV proto, so the cleanest detection is `to_proto().SerializeToString()`
-# byte comparison. We test the three drift cases the plan calls out:
-#   * TTL change
-#   * schema field add (rename also covered by add+remove)
-#   * source rename (FV keeps its name, swaps its source)
-#
-# These are NOT tests of "Feast detects drift and fails apply" — Feast 0.43
-# happily upserts non-byte-identical specs. They're tests of "OUR diff
-# mechanism (proto-byte comparison) detects drift", which is what the plan
-# actually asks for. If Feast's apply later starts rejecting drift, we'd add
-# a separate failing-apply assertion; until then, the contract is "we can
-# tell when it changed".
+# Per the module docstring, the plan asks for "registry-proto-aware
+# comparison" — these tests assert that OUR diff mechanism (proto-byte
+# comparison) catches the three drift cases (TTL change, schema add/remove,
+# source rename). They are NOT assertions about whether Feast itself
+# rejects drifted specs — Feast 0.43 upserts them happily.
 
 
 def _build_minimal_feature_view(
@@ -668,15 +654,22 @@ def _build_minimal_feature_view(
     skips the apply call so we can compute ``to_proto().SerializeToString()``
     on a hypothetical-but-not-yet-applied FV.
 
-    The ``source_name`` lets the source-rename test perturb the PushSource
-    name while keeping the FV name fixed. When ``source_name`` is None the
-    PushSource follows the canonical ``{name}_push_source`` convention.
+    The ``source_name`` argument perturbs the **outer** ``PushSource``
+    name (the source the FV directly attaches to), NOT the inner
+    ``FileSource`` (the throwaway stub backing the PushSource). This is
+    the layer that matters for the source-rename drift test because Feast
+    serialises the PushSource name into the FV proto; the FileSource
+    identity rides along but isn't the perturbation surface here. When
+    ``source_name`` is ``None`` the PushSource follows the canonical
+    ``{name}_push_source`` convention shared with
+    ``FeastClient.register_feature_view`` (and the
+    ``push_source_name`` helper in ``_feast_helpers``).
     """
     from feast import Entity, FeatureView, Field, PushSource
     from feast.types import Float64
 
     schema = [Field(name=fn, dtype=Float64) for fn in feature_names]
-    push_source_name = source_name if source_name is not None else f"{name}_push_source"
+    push_src = source_name if source_name is not None else push_source_name(name)
 
     # We build a stub batch source ref — we do NOT apply this FV, so the
     # batch source identity doesn't have to round-trip through Feast. The
@@ -689,7 +682,7 @@ def _build_minimal_feature_view(
         path=f"/tmp/{name}_stub.parquet",
         timestamp_field="event_timestamp",
     )
-    push_source = PushSource(name=push_source_name, batch_source=batch_source)
+    push_source = PushSource(name=push_src, batch_source=batch_source)
 
     entity = Entity(name=ENTITY_NAME, join_keys=[ENTITY_JOIN_KEY])
 
@@ -797,13 +790,13 @@ def test_schema_deep_diff_detects_source_rename() -> None:
         name,
         ttl=TEST_TTL,
         feature_names=list(SELECTED_FEATURES),
-        source_name=f"{name}_push_source",
+        source_name=push_source_name(name),
     )
     drifted = _build_minimal_feature_view(
         name,
         ttl=TEST_TTL,
         feature_names=list(SELECTED_FEATURES),
-        source_name=f"{name}_push_source_renamed",
+        source_name=f"{push_source_name(name)}_renamed",
     )
 
     base_bytes = _proto_bytes(base)
