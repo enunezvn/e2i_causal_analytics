@@ -4,7 +4,14 @@ Block 1B (#18): the misleading comment claiming ``LabelEncoder`` was fit on
 "all unique values across splits" was deleted. These tests lock in the
 correct behaviour: encoders fit on TRAIN only, with ``_safe_label_encode``
 absorbing unseen categories at val/test time.
+
+Block 6B (#17): ``scope_spec['exclude_columns']`` is now deprecated in
+favour of the canonical ``scope_spec['excluded_features']``. Both keys are
+honored at runtime, but populating ``exclude_columns`` emits a
+``DeprecationWarning`` so callers can migrate.
 """
+
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -209,3 +216,91 @@ async def test_imputer_fits_on_train_only(disjoint_categorical_splits):
     # SimpleImputer's ``statistics_`` is computed from the training data only.
     expected_train_mean = train_df["value"].dropna().mean()
     assert imputers["numeric"].statistics_[0] == pytest.approx(expected_train_mean)
+
+
+# ---------------------------------------------------------------------------
+# Block 6B (#17): exclude_columns / excluded_features consolidation
+# ---------------------------------------------------------------------------
+
+
+def _exclude_columns_state(extra_scope: dict | None = None) -> dict:
+    """Build a minimal valid state for transform_data with overridable scope.
+
+    The DataFrame includes a high-cardinality string ID column so that — if
+    the exclusion is honored — the ``brand`` column is the only categorical
+    candidate for label-encoding. If the ID were *not* excluded it would
+    also be label-encoded (or dropped as high-cardinality), which is the
+    behaviour we want to verify the deprecation path preserves.
+    """
+    train_df = pd.DataFrame(
+        {
+            "patient_id": ["p001", "p002", "p003", "p004"],
+            "brand": ["A", "B", "A", "B"],
+            "value": [1.0, 2.0, 3.0, 4.0],
+            "target": [0, 1, 0, 1],
+        }
+    )
+    scope_spec: dict = {
+        "target_column": "target",
+        "encoding_method": "label",
+        "scaling_method": "minmax",
+        "imputation_strategy": "mean",
+        "extract_datetime_features": False,
+    }
+    if extra_scope:
+        scope_spec.update(extra_scope)
+    return {
+        "experiment_id": "exp_exclude_columns_deprecation",
+        "scope_spec": scope_spec,
+        "train_df": train_df,
+    }
+
+
+def _encoded_column_names(transformations_applied: list[dict]) -> set[str]:
+    """Collect every column name that participated in any transformation."""
+    touched: set[str] = set()
+    for entry in transformations_applied:
+        for key in ("columns", "original_columns", "new_features"):
+            cols = entry.get(key)
+            if cols:
+                touched.update(cols)
+    return touched
+
+
+@pytest.mark.asyncio
+async def test_exclude_columns_deprecation_warning():
+    """Populating ``exclude_columns`` emits a ``DeprecationWarning``."""
+    state = _exclude_columns_state(
+        {"exclude_columns": ["patient_id"]}
+    )
+
+    with pytest.warns(DeprecationWarning, match="exclude_columns"):
+        result = await transform_data(state)
+
+    # Behavioural contract: the legacy key still excludes the column from
+    # transformation (encoding, scaling, imputation), so the warning is
+    # advisory while the underlying behaviour is preserved.
+    touched = _encoded_column_names(result["transformations_applied"])
+    assert "patient_id" not in touched
+    # And the canonical column (brand) was still encoded.
+    assert "brand" in touched
+
+
+@pytest.mark.asyncio
+async def test_excluded_features_alone_no_warning():
+    """Using only the canonical key must NOT trigger the warning."""
+    state = _exclude_columns_state(
+        {"excluded_features": ["patient_id"]}
+    )
+
+    with warnings.catch_warnings():
+        # Treat any DeprecationWarning as an error — if the canonical path
+        # somehow emits one, this turns the test red instead of silently
+        # ignoring it.
+        warnings.simplefilter("error", DeprecationWarning)
+        result = await transform_data(state)
+
+    # The canonical path keeps the column out of transformation.
+    touched = _encoded_column_names(result["transformations_applied"])
+    assert "patient_id" not in touched
+    assert "brand" in touched

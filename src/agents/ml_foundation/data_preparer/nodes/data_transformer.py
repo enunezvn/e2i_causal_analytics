@@ -5,6 +5,7 @@ Applies transformations consistently across train/val/test splits.
 """
 
 import logging
+import warnings
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
@@ -16,6 +17,13 @@ from sklearn.preprocessing import LabelEncoder, MinMaxScaler, OneHotEncoder, Sta
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+
+_EXCLUDE_COLUMNS_DEPRECATION_MESSAGE = (
+    "scope_spec['exclude_columns'] is deprecated; use 'excluded_features' "
+    "instead. Both keys are honored today, but 'exclude_columns' will be "
+    "removed in a future tier-0 release."
+)
 
 
 async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
@@ -53,9 +61,19 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         # Get configuration from scope_spec
         scope_spec = state.get("scope_spec", {})
         target_column = scope_spec.get("target_column")
-        # Merge explicit runtime override (`exclude_columns`) with the canonical
-        # scope-declared list (`excluded_features`) so both sources are honored.
-        exclude_columns = list(scope_spec.get("exclude_columns", [])) + list(
+        # `excluded_features` is the canonical scope-declared list; the
+        # legacy `exclude_columns` runtime override is still honored for
+        # backward compatibility, but emits a DeprecationWarning when
+        # populated. Both lists are merged so callers in transition do not
+        # silently lose excluded columns.
+        legacy_exclude_columns = list(scope_spec.get("exclude_columns", []))
+        if legacy_exclude_columns:
+            warnings.warn(
+                _EXCLUDE_COLUMNS_DEPRECATION_MESSAGE,
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        exclude_columns = legacy_exclude_columns + list(
             scope_spec.get("excluded_features", [])
         )
         scaling_method = scope_spec.get("scaling_method", "standard")

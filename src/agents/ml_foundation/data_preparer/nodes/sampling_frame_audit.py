@@ -1,0 +1,469 @@
+"""Sampling-frame audit node for the data_preparer agent.
+
+This node performs an *advisory* drift comparison between the training
+distribution and an optional ``deployment_reference`` declared on
+``scope_spec``. It is intended to surface sampling-frame mismatches before
+training without blocking the pipeline.
+
+The reference is OPTIONAL — when no ``deployment_reference`` is provided in
+``scope_spec`` (the default for synthetic data), the node emits an advisory
+``"no_reference_provided"`` entry to ``state["sampling_frame_audit_report"]``
+and passes through.
+
+When present, ``deployment_reference`` must follow this shape:
+
+.. code-block:: python
+
+    {
+        "distributions": {
+            "<column_name>": {
+                # Numeric columns
+                "mean": float,
+                "std": float,
+                "quantiles": {"q25": float, "q50": float, "q75": float},
+                # Categorical columns (mutually exclusive with numeric stats)
+                "categorical_freq": {"<value>": float, ...},  # frequencies in [0, 1]
+            },
+            ...
+        },
+        "n_reference_samples": int,  # optional — used in the report metadata
+    }
+
+Drift methodology (one consistent approach, documented up-front):
+
+* **Numeric** — ``standardized_mean_diff`` (Cohen's d using a pooled std):
+  ``|mean_train - mean_ref| / pooled_std``. A column is flagged when this
+  exceeds ``numeric_drift_threshold`` (default ``0.5``).
+* **Categorical** — Jensen–Shannon divergence between the two frequency
+  vectors. A column is flagged when this exceeds
+  ``categorical_drift_threshold`` (default ``0.2``). The JS divergence is
+  computed in nats (natural log) and is bounded by ``ln(2) ≈ 0.693``.
+
+Failures are NON-BLOCKING. The node emits a ``WARNING`` log and adds an
+advisory entry to state under ``sampling_frame_audit_report`` — it does NOT
+populate ``blocking_issues``.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Optional
+
+import numpy as np
+import pandas as pd
+
+from ..state import DataPreparerState
+
+logger = logging.getLogger(__name__)
+
+
+# Default drift thresholds (overridable via scope_spec["sampling_frame_audit"])
+DEFAULT_NUMERIC_DRIFT_THRESHOLD = 0.5  # Cohen's d
+DEFAULT_CATEGORICAL_DRIFT_THRESHOLD = 0.2  # JS divergence (nats)
+
+
+async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
+    """Compare training distribution to ``scope_spec.deployment_reference``.
+
+    The audit is advisory: it surfaces possible sampling-frame drift, but it
+    does NOT add anything to ``blocking_issues``. The report is written to
+    ``sampling_frame_audit_report`` for downstream consumers.
+
+    Args:
+        state: Current data_preparer agent state. Must contain ``train_df``;
+            reads optional ``scope_spec["deployment_reference"]`` and
+            ``scope_spec["sampling_frame_audit"]`` (threshold overrides).
+
+    Returns:
+        Partial state update with ``sampling_frame_audit_report``. The report
+        is JSON-serialisable (no numpy types, no DataFrames).
+    """
+    experiment_id = state.get("experiment_id", "unknown")
+    logger.info(
+        "Running sampling-frame audit for experiment %s", experiment_id
+    )
+
+    scope_spec = state.get("scope_spec") or {}
+    deployment_reference = scope_spec.get("deployment_reference")
+    audit_config = scope_spec.get("sampling_frame_audit") or {}
+
+    numeric_threshold = float(
+        audit_config.get(
+            "numeric_drift_threshold", DEFAULT_NUMERIC_DRIFT_THRESHOLD
+        )
+    )
+    categorical_threshold = float(
+        audit_config.get(
+            "categorical_drift_threshold", DEFAULT_CATEGORICAL_DRIFT_THRESHOLD
+        )
+    )
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    # No reference → advisory pass-through
+    if not deployment_reference:
+        report: Dict[str, Any] = {
+            "status": "no_reference_provided",
+            "message": (
+                "scope_spec['deployment_reference'] not provided; "
+                "skipping sampling-frame audit. This is expected for "
+                "synthetic-data runs."
+            ),
+            "drift_detected": False,
+            "columns_checked": 0,
+            "columns_with_drift": [],
+            "per_column": {},
+            "thresholds": {
+                "numeric_drift_threshold": numeric_threshold,
+                "categorical_drift_threshold": categorical_threshold,
+            },
+            "audited_at": timestamp,
+        }
+        logger.info(
+            "Sampling-frame audit skipped (no deployment_reference) for %s",
+            experiment_id,
+        )
+        return {"sampling_frame_audit_report": report}
+
+    train_df = state.get("train_df")
+    if train_df is None or not hasattr(train_df, "columns"):
+        # train_df missing/invalid — record an error-status advisory but do
+        # NOT block. The downstream schema/quality nodes are the source of
+        # truth for hard failures here.
+        report = {
+            "status": "error",
+            "message": "train_df missing or not a DataFrame; audit skipped.",
+            "drift_detected": False,
+            "columns_checked": 0,
+            "columns_with_drift": [],
+            "per_column": {},
+            "thresholds": {
+                "numeric_drift_threshold": numeric_threshold,
+                "categorical_drift_threshold": categorical_threshold,
+            },
+            "audited_at": timestamp,
+        }
+        logger.warning(
+            "Sampling-frame audit skipped: train_df missing/invalid for %s",
+            experiment_id,
+        )
+        return {"sampling_frame_audit_report": report}
+
+    distributions = deployment_reference.get("distributions") or {}
+    if not isinstance(distributions, Mapping):
+        distributions = {}
+
+    per_column: Dict[str, Dict[str, Any]] = {}
+    columns_with_drift: List[str] = []
+    columns_checked = 0
+
+    for col, ref_stats in distributions.items():
+        if col not in train_df.columns:
+            per_column[col] = {
+                "status": "skipped_missing_column",
+                "message": (
+                    f"Column '{col}' present in deployment_reference but "
+                    "missing from train_df."
+                ),
+                "drift_flagged": False,
+            }
+            continue
+
+        if not isinstance(ref_stats, Mapping):
+            per_column[col] = {
+                "status": "skipped_invalid_reference",
+                "message": (
+                    f"Reference stats for '{col}' must be a mapping; "
+                    f"got {type(ref_stats).__name__}."
+                ),
+                "drift_flagged": False,
+            }
+            continue
+
+        is_categorical_ref = "categorical_freq" in ref_stats
+        is_numeric_ref = (
+            "mean" in ref_stats
+            or "std" in ref_stats
+            or "quantiles" in ref_stats
+        )
+
+        if is_categorical_ref:
+            entry = _audit_categorical(
+                train_df[col],
+                ref_stats,
+                categorical_threshold,
+            )
+        elif is_numeric_ref:
+            entry = _audit_numeric(
+                train_df[col],
+                ref_stats,
+                numeric_threshold,
+            )
+        else:
+            per_column[col] = {
+                "status": "skipped_invalid_reference",
+                "message": (
+                    f"Reference stats for '{col}' lack both numeric "
+                    "(mean/std) and categorical (categorical_freq) keys."
+                ),
+                "drift_flagged": False,
+            }
+            continue
+
+        per_column[col] = entry
+        columns_checked += 1
+        if entry.get("drift_flagged"):
+            columns_with_drift.append(col)
+
+    drift_detected = len(columns_with_drift) > 0
+    status = "drift_detected" if drift_detected else "no_drift"
+
+    report = {
+        "status": status,
+        "drift_detected": drift_detected,
+        "columns_checked": columns_checked,
+        "columns_with_drift": columns_with_drift,
+        "per_column": per_column,
+        "thresholds": {
+            "numeric_drift_threshold": numeric_threshold,
+            "categorical_drift_threshold": categorical_threshold,
+        },
+        "n_reference_samples": _coerce_int(
+            deployment_reference.get("n_reference_samples")
+        ),
+        "n_train_samples": int(len(train_df)),
+        "audited_at": timestamp,
+    }
+
+    if drift_detected:
+        logger.warning(
+            "Sampling-frame audit detected drift in %d/%d columns: %s "
+            "(advisory — pipeline NOT blocked)",
+            len(columns_with_drift),
+            columns_checked,
+            ", ".join(columns_with_drift),
+        )
+    else:
+        logger.info(
+            "Sampling-frame audit: no drift detected across %d columns",
+            columns_checked,
+        )
+
+    return {"sampling_frame_audit_report": report}
+
+
+def _audit_numeric(
+    series: pd.Series,
+    ref_stats: Mapping[str, Any],
+    threshold: float,
+) -> Dict[str, Any]:
+    """Compute numeric drift via pooled-std standardised mean difference."""
+    train_values = pd.to_numeric(series, errors="coerce").dropna()
+    n_train = int(train_values.shape[0])
+
+    if n_train == 0:
+        return {
+            "status": "skipped_empty_train",
+            "message": (
+                "No non-null numeric values available in train_df for "
+                "this column."
+            ),
+            "drift_flagged": False,
+        }
+
+    train_mean = float(train_values.mean())
+    train_std = float(train_values.std(ddof=1)) if n_train > 1 else 0.0
+
+    ref_mean = _coerce_float(ref_stats.get("mean"))
+    ref_std = _coerce_float(ref_stats.get("std"))
+
+    if ref_mean is None:
+        return {
+            "status": "skipped_invalid_reference",
+            "message": "Reference 'mean' missing or not numeric.",
+            "drift_flagged": False,
+        }
+
+    # Pooled std with a small epsilon to avoid div-by-zero when both stds
+    # collapse to 0 (happens when both train and reference are constants).
+    train_var = train_std**2
+    ref_var = ref_std**2 if ref_std is not None else 0.0
+    pooled_std = math.sqrt((train_var + ref_var) / 2.0) if (
+        train_var + ref_var
+    ) > 0 else 0.0
+
+    if pooled_std == 0.0:
+        # Both are constants — drift is binary (means equal or not).
+        smd = 0.0 if math.isclose(train_mean, ref_mean) else float("inf")
+    else:
+        smd = abs(train_mean - ref_mean) / pooled_std
+
+    drift_flagged = math.isfinite(smd) and smd > threshold or (
+        not math.isfinite(smd)
+    )
+
+    quantile_diffs: Dict[str, float] = {}
+    ref_quantiles = ref_stats.get("quantiles")
+    if isinstance(ref_quantiles, Mapping):
+        # Compute equivalent train quantiles where the keys map to standard
+        # quantile values: q25 → 0.25, q50 → 0.50, q75 → 0.75. Unknown keys
+        # are ignored.
+        quantile_map = {"q25": 0.25, "q50": 0.50, "q75": 0.75}
+        for key, q in quantile_map.items():
+            ref_q = _coerce_float(ref_quantiles.get(key))
+            if ref_q is None:
+                continue
+            train_q = float(train_values.quantile(q))
+            quantile_diffs[key] = float(train_q - ref_q)
+
+    return {
+        "status": "checked",
+        "type": "numeric",
+        "metric": "standardized_mean_diff",
+        "metric_value": (
+            float(smd) if math.isfinite(smd) else float("inf")
+        ),
+        "threshold": float(threshold),
+        "drift_flagged": bool(drift_flagged),
+        "train_mean": train_mean,
+        "train_std": train_std,
+        "reference_mean": float(ref_mean),
+        "reference_std": (
+            float(ref_std) if ref_std is not None else None
+        ),
+        "n_train_samples": n_train,
+        "quantile_diffs": quantile_diffs,
+    }
+
+
+def _audit_categorical(
+    series: pd.Series,
+    ref_stats: Mapping[str, Any],
+    threshold: float,
+) -> Dict[str, Any]:
+    """Compute categorical drift via Jensen–Shannon divergence."""
+    train_values = series.dropna().astype(str)
+    n_train = int(train_values.shape[0])
+
+    if n_train == 0:
+        return {
+            "status": "skipped_empty_train",
+            "message": (
+                "No non-null categorical values available in train_df "
+                "for this column."
+            ),
+            "drift_flagged": False,
+        }
+
+    raw_ref_freq = ref_stats.get("categorical_freq")
+    if not isinstance(raw_ref_freq, Mapping) or not raw_ref_freq:
+        return {
+            "status": "skipped_invalid_reference",
+            "message": (
+                "Reference 'categorical_freq' missing, empty, or not a "
+                "mapping."
+            ),
+            "drift_flagged": False,
+        }
+
+    # Coerce reference frequencies to a normalised distribution over a
+    # union of categories with the train distribution.
+    ref_freq: Dict[str, float] = {}
+    for key, value in raw_ref_freq.items():
+        coerced = _coerce_float(value)
+        if coerced is None or coerced < 0.0:
+            continue
+        ref_freq[str(key)] = coerced
+
+    if not ref_freq:
+        return {
+            "status": "skipped_invalid_reference",
+            "message": (
+                "Reference 'categorical_freq' has no non-negative "
+                "numeric entries."
+            ),
+            "drift_flagged": False,
+        }
+
+    train_counts = train_values.value_counts()
+    train_freq = (train_counts / train_counts.sum()).to_dict()
+
+    js = _jensen_shannon_divergence(train_freq, ref_freq)
+    drift_flagged = js > threshold
+
+    return {
+        "status": "checked",
+        "type": "categorical",
+        "metric": "jensen_shannon_divergence",
+        "metric_value": float(js),
+        "threshold": float(threshold),
+        "drift_flagged": bool(drift_flagged),
+        "train_freq": {str(k): float(v) for k, v in train_freq.items()},
+        "reference_freq": {str(k): float(v) for k, v in ref_freq.items()},
+        "n_train_samples": n_train,
+    }
+
+
+def _jensen_shannon_divergence(
+    p: Mapping[str, float], q: Mapping[str, float]
+) -> float:
+    """Symmetric JS divergence (in nats) between two discrete distributions.
+
+    Both inputs are normalised to sum to 1 over the union of their support.
+    The result is bounded by ``ln(2) ≈ 0.693``.
+    """
+    keys = sorted(set(p.keys()) | set(q.keys()))
+    if not keys:
+        return 0.0
+
+    p_sum = sum(max(0.0, float(v)) for v in p.values()) or 1.0
+    q_sum = sum(max(0.0, float(v)) for v in q.values()) or 1.0
+
+    p_vec = np.array(
+        [max(0.0, float(p.get(k, 0.0))) / p_sum for k in keys],
+        dtype=float,
+    )
+    q_vec = np.array(
+        [max(0.0, float(q.get(k, 0.0))) / q_sum for k in keys],
+        dtype=float,
+    )
+
+    m_vec = 0.5 * (p_vec + q_vec)
+
+    return 0.5 * _kl_divergence(p_vec, m_vec) + 0.5 * _kl_divergence(
+        q_vec, m_vec
+    )
+
+
+def _kl_divergence(p_vec: np.ndarray, q_vec: np.ndarray) -> float:
+    """KL(p || q) in nats. Skips terms where ``p`` is 0 (0 log 0 := 0)."""
+    mask = p_vec > 0
+    if not mask.any():
+        return 0.0
+    safe_q = np.where(q_vec > 0, q_vec, 1e-12)
+    return float(np.sum(p_vec[mask] * np.log(p_vec[mask] / safe_q[mask])))
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    """Best-effort float coercion that returns None on failure or non-finite."""
+    if value is None:
+        return None
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(coerced):
+        return None
+    return coerced
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    """Best-effort int coercion that returns None on failure."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

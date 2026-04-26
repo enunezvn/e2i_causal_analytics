@@ -40,6 +40,13 @@ class DataPreparerState(TypedDict, total=False):
     test_df: Any  # pandas DataFrame (test split)
     holdout_df: Any  # pandas DataFrame (holdout split)
 
+    # Sampling-frame audit (advisory; emitted by audit_sampling_frame node)
+    # Compares train_df distribution to scope_spec["deployment_reference"].
+    # Failures are non-blocking: status surfaces in the report, never in
+    # blocking_issues. See nodes/sampling_frame_audit.py for the report
+    # schema.
+    sampling_frame_audit_report: Optional[Dict[str, Any]]
+
     # Schema validation (Pandera)
     schema_validation_status: Literal["passed", "failed", "skipped", "error"]
     schema_validation_errors: List[Dict[str, Any]]

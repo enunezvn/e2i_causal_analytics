@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
+    audit_sampling_frame,
     compute_baseline_metrics,
     detect_leakage,
     load_data,
@@ -36,15 +37,16 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
 
     The graph executes the following pipeline:
     1. load_data - Load and split data from Supabase using MLDataLoader
-    2. run_schema_validation - Pandera schema validation (fast, ~10ms)
-    3. run_quality_checks - Validate data quality (completeness, validity, etc.)
-    4. run_ge_validation - Great Expectations validation (business rules)
-    5. detect_leakage - Check for data leakage (temporal, target, train-test)
-    6. transform_data - Encode, scale, and impute features
-    7. register_features_in_feast - Register features in Feast feature store
-    8. compute_baseline_metrics - Compute baseline metrics from train split
-    9. finalize_output - Generate final output and QC gate decision
-    10. qc_remediation - LLM-assisted review and remediation if QC fails
+    2. audit_sampling_frame - Advisory drift audit vs scope_spec.deployment_reference
+    3. run_schema_validation - Pandera schema validation (fast, ~10ms)
+    4. run_quality_checks - Validate data quality (completeness, validity, etc.)
+    5. run_ge_validation - Great Expectations validation (business rules)
+    6. detect_leakage - Check for data leakage (temporal, target, train-test)
+    7. transform_data - Encode, scale, and impute features
+    8. register_features_in_feast - Register features in Feast feature store
+    9. compute_baseline_metrics - Compute baseline metrics from train split
+    10. finalize_output - Generate final output and QC gate decision
+    11. qc_remediation - LLM-assisted review and remediation if QC fails
 
     QC Remediation Loop:
     - If QC gate fails, routes to LLM-assisted remediation review
@@ -71,6 +73,7 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
 
     # Add nodes
     graph.add_node("load_data", load_data)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("audit_sampling_frame", audit_sampling_frame)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("run_schema_validation", run_schema_validation)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("run_quality_checks", run_quality_checks)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("run_ge_validation", run_ge_validation)  # type: ignore[type-var,arg-type,call-overload]
@@ -84,7 +87,8 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
 
     # Define edges (sequential execution with QC remediation loop)
     graph.set_entry_point("load_data")
-    graph.add_edge("load_data", "run_schema_validation")
+    graph.add_edge("load_data", "audit_sampling_frame")
+    graph.add_edge("audit_sampling_frame", "run_schema_validation")
     graph.add_edge("run_schema_validation", "run_quality_checks")
     graph.add_edge("run_quality_checks", "run_ge_validation")
     graph.add_edge("run_ge_validation", "detect_leakage")
