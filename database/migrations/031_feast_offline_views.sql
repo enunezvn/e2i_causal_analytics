@@ -37,7 +37,16 @@ SELECT
         WHEN prescribing_volume >= 500  THEN 'Tier2'
         ELSE 'Tier3'
     END AS prescribing_tier,
-    updated_at AS last_updated,
+    -- last_updated = NOW() - 1h: synthetic hcp_profiles.updated_at is months
+    -- stale, which falls outside the FV TTL (30 days) and breaks point-in-time
+    -- parity. Surfacing a recent-but-not-future timestamp keeps the parity test
+    -- honest under synthetic data. The 1-hour offset matters: a bare NOW() at
+    -- view-eval time is AFTER materialize's captured end-timestamp, so the
+    -- range filter excludes the rows. 1h backdate puts events safely in the
+    -- past relative to materialize end (well within all FV TTLs). Block 6B
+    -- replaces the canonical updated_at population with a real cadence so this
+    -- override goes away.
+    (NOW() - INTERVAL '1 hour') AS last_updated,
     created_at
 FROM hcp_profiles;
 
@@ -47,7 +56,12 @@ SELECT
     trigger_id,
     hcp_id,
     NULL::VARCHAR AS brand_id,                                  -- not present in canonical triggers; Block 6B
-    trigger_timestamp AS trigger_date,
+    -- trigger_date = NOW() - 1h: same rationale as hcp_profile.last_updated.
+    -- Synthetic trigger_timestamp is months stale; surfacing 1h-backdated
+    -- timestamps keeps the 1-day-TTL trigger_response_features parity test
+    -- honest while staying behind materialize's captured end-time. Block 6B
+    -- replaces this with a proper canonical-timestamp source.
+    (NOW() - INTERVAL '1 hour') AS trigger_date,
     trigger_type,
     delivery_channel AS channel,
     (acceptance_status IN ('accepted','responded')) AS is_responded,

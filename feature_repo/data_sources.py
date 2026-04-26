@@ -35,6 +35,7 @@ business_metrics_source = PostgreSQLSource(
             hcp_id::VARCHAR,
             territory_id::VARCHAR,
             brand_id::VARCHAR,
+            (hcp_id::TEXT || '_' || brand_id::TEXT) AS hcp_brand_id,
             event_timestamp,
             trx_count,
             nrx_count,
@@ -46,6 +47,9 @@ business_metrics_source = PostgreSQLSource(
             created_at
         FROM feast_business_metrics_source
         WHERE event_timestamp >= NOW() - INTERVAL '365 days'
+          AND hcp_id IS NOT NULL AND hcp_id <> ''
+          AND brand_id IS NOT NULL AND brand_id <> ''
+          AND territory_id IS NOT NULL AND territory_id <> ''
     """,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_at",
@@ -64,6 +68,7 @@ patient_journey_source = PostgreSQLSource(
         SELECT
             patient_id::VARCHAR,
             brand_id::VARCHAR,
+            (patient_id::TEXT || '_' || brand_id::TEXT) AS patient_brand_id,
             event_date AS event_timestamp,
             therapy_start_date,
             days_on_therapy,
@@ -92,6 +97,7 @@ triggers_source = PostgreSQLSource(
             trigger_id::VARCHAR,
             hcp_id::VARCHAR,
             brand_id::VARCHAR,
+            (hcp_id::TEXT || '_' || COALESCE(brand_id::TEXT, 'UNKNOWN')) AS hcp_brand_id,
             trigger_date AS event_timestamp,
             trigger_type,
             channel,

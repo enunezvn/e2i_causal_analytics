@@ -4,11 +4,14 @@
 # =============================================================================
 # 1. Validates required env vars (SUPABASE_POSTGRES_PASSWORD, REDIS_PASSWORD).
 # 2. Validates that the feature-repo source has been bind-mounted at /feast-src.
-# 3. Populates /feast (writable container layer) by symlinking the source
+# 3. Populates /feast (writable container layer) by COPYING the source
 #    Python files in from /feast-src and rendering feature_store.yaml from
 #    feature_store.yaml.tmpl with the secret env vars substituted in. The
 #    rendered yaml lives only in the running container — it is never written
 #    back to the host bind mount and is therefore never committed.
+#    Symlinks are NOT used: Feast 0.43.0's parse_repo resolves symlinks to
+#    their target and then runs path.relative_to(cwd), which fails because
+#    the symlink target /feast-src/*.py is outside /feast (the working dir).
 # 4. Runs `feast apply --skip-source-validation` (idempotent — see
 #    tests/integration/test_feast_apply_idempotent.py). `--skip-source-validation`
 #    avoids needing offline-store (Postgres) reachability on cold start; live
@@ -29,13 +32,15 @@ if [ ! -f /feast-src/feature_store.yaml.tmpl ]; then
     exit 1
 fi
 
-# Populate /feast with symlinks to source. /feast/data is a separate volume
-# (registry + materialization output) and is left alone.
+# Populate /feast by copying source .py files in from /feast-src. /feast/data
+# is a separate volume (registry + materialization output) and is left alone.
+# Copy (not symlink) because Feast 0.43.0 parse_repo rejects symlinks whose
+# targets resolve outside the working dir.
 mkdir -p /feast/features
-ln -sf /feast-src/entities.py     /feast/entities.py
-ln -sf /feast-src/data_sources.py /feast/data_sources.py
+cp -f /feast-src/entities.py     /feast/entities.py
+cp -f /feast-src/data_sources.py /feast/data_sources.py
 for f in /feast-src/features/*.py; do
-    ln -sf "$f" "/feast/features/$(basename "$f")"
+    cp -f "$f" "/feast/features/$(basename "$f")"
 done
 
 # Render feature_store.yaml. Use Python (robust to special chars in password).
