@@ -188,6 +188,12 @@ async def test_register_features_stale_features_warning(mock_state_with_train_da
             "recommendations": ["Run materialization for feature_view"],
         }
     )
+    # Without this, ``adapter._feast_client`` would be an auto-spawned
+    # MagicMock and ``getattr(mock, "_fallback_used", False)`` would
+    # return another truthy MagicMock — so the explicit
+    # ``feast_fallback_used is False`` assertion below would fail under
+    # the (correct) post-Block-2-polish direct-attribute access.
+    adapter._feast_client = None
 
     with patch(
         "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
@@ -205,6 +211,12 @@ async def test_register_features_stale_features_warning(mock_state_with_train_da
     assert any(
         "Feast features stale" in issue for issue in result.get("blocking_issues", [])
     )
+    # Explicit type check — adapter._feast_client=None means the
+    # ``if feast_client is not None`` branch in the registrar is skipped,
+    # so the key may be absent. When present (e.g. in fallback paths), it
+    # must be a real bool, never a MagicMock. (Block 2 polish)
+    if "feast_fallback_used" in result:
+        assert result["feast_fallback_used"] is False
 
 
 @pytest.mark.asyncio

@@ -170,7 +170,11 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
                 )
 
         # Propagate fallback flag so model_trainer can tag the MLflow run.
-        feast_client = getattr(adapter, "_feast_client", None)
+        # FeatureAnalyzerAdapter.__init__ always sets ``_feast_client``
+        # (it stores either the injected client or None), so we read
+        # directly rather than via ``getattr(..., None)`` — the
+        # defensive chain hid the contract. (Block 2 polish)
+        feast_client = adapter._feast_client
         if feast_client is not None:
             updates["feast_fallback_used"] = getattr(feast_client, "_fallback_used", False)
 

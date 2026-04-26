@@ -76,7 +76,17 @@ FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
 FEAST_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
 
 
-class FeastFallbackError(Exception):
+class FeastError(Exception):
+    """Base class for Feast-specific errors raised by this module.
+
+    Subclassed by :class:`FeastFallbackError` and any future
+    Feast-domain exception. Catchers that want "anything from this
+    module" can ``except FeastError:`` without enumerating every
+    subclass.
+    """
+
+
+class FeastFallbackError(FeastError):
     """Raised when the Feast historical-features fallback fires in production."""
 
 
@@ -1188,11 +1198,16 @@ class FeastClient:
         2. Configured staleness thresholds
 
         Status levels:
-        - FRESH: Within warning threshold
-        - WARNING: Between warning and max staleness
-        - STALE: Beyond max staleness but within 2x
-        - EXPIRED: Beyond 2x max staleness
-        - UNKNOWN: No materialization record or check failure
+        - FRESH: Within warning threshold.
+        - WARNING: Between warning and max staleness.
+        - STALE: Beyond max staleness but within 2x.
+        - EXPIRED: Beyond 2x max staleness.
+        - UNKNOWN: Either (a) no materialization record exists for this
+          feature view, or (b) the freshness check itself raised an
+          unexpected exception. The two are conflated into UNKNOWN
+          because the *consequence* — block-by-default unless
+          ``ALLOW_STALE_FEAST=1`` overrides it — is the same. The
+          warning log line distinguishes the two for ops.
 
         On any unexpected exception the method defaults to treating features
         as **stale** (``is_fresh=False``, ``freshness_status=UNKNOWN``) so
@@ -1276,6 +1291,17 @@ class FeastClient:
                 message=message,
             )
 
+        except FeastFallbackError:
+            # Pre-emptive guard: if a future refactor of
+            # ``_ensure_initialized`` (or any helper above) starts
+            # raising FeastFallbackError, the broad ``except Exception``
+            # below would swallow it into an UNKNOWN status — masking a
+            # production-policy violation. Mirror the
+            # ``get_historical_features`` pattern so the contract holds
+            # under future refactors. Latent today (no current path
+            # raises FeastFallbackError here), defensive against
+            # tomorrow. (Block 2 polish)
+            raise
         except Exception as e:
             allow_stale = os.environ.get("ALLOW_STALE_FEAST") == "1"
             logger.warning(

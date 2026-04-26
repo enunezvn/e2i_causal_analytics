@@ -324,7 +324,12 @@ class TestFeastFallbackTag:
             result = await log_to_mlflow(training_state)
 
         assert result["mlflow_status"] == "success"
-        # Inspect the kwargs passed to start_run
+        # The tag MUST be set on start_run (not via a later set_tag call),
+        # because tags applied at run-start are what MLflow's run-search /
+        # model-registry filters key on. If the registrar fallback flag
+        # were attached after the run starts, downstream consumers couldn't
+        # filter MLflow runs by ``feast_fallback`` to identify training
+        # runs that used point-in-time-incorrect features.
         call_kwargs = mock_mlflow_connector.start_run.call_args[1]
         assert call_kwargs["tags"]["feast_fallback"] == "True"
 
