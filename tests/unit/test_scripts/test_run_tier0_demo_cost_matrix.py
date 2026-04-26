@@ -7,15 +7,22 @@ emitted ``business_utility``. Block 5B closes that verification gap by
 auto-injecting a unit-shape placeholder unless the new
 ``--no-demo-cost-matrix`` flag is passed.
 
-These tests assert the CLI plumbing in isolation (the helper +
+These tests assert the CLI plumbing in isolation (the helpers +
 argparse), without spinning up the full pipeline:
 
   - ``_default_demo_cost_matrix()`` returns the unit-shape contract.
-  - argparse parses ``--no-demo-cost-matrix`` (default ``False``).
-  - When the flag is absent, the auto-inject path writes the
-    placeholder onto ``scope_spec["cost_matrix"]``.
-  - When the flag is present, the auto-inject is suppressed and
-    ``scope_spec`` carries no ``cost_matrix`` key.
+  - ``_build_parser()`` produces a parser that recognises
+    ``--no-demo-cost-matrix`` (default ``False``).
+  - ``_should_inject_demo_cost_matrix(scope_spec, inject)`` returns
+    ``True`` only when injection is requested AND the scope_spec has
+    no usable cost_matrix.
+
+Block 6B-polish chunk 2 / 5B-I-2 + I-3: the previous version mocked
+the inject branch with a hand-rolled re-implementation and read the
+parser via subprocess ``--help``. Both are now replaced by direct
+imports of the real helpers from ``scripts/run_tier0_test`` so a drift
+in the production decision rule is caught here, not just in the
+synthetic e2e gate.
 
 The full e2e check that ``business_utility`` lands in
 ``validation_metrics``/``test_metrics`` is covered separately by the
@@ -31,7 +38,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.run_tier0_test import _default_demo_cost_matrix  # noqa: E402
+from scripts.run_tier0_test import (  # noqa: E402
+    _build_parser,
+    _default_demo_cost_matrix,
+    _should_inject_demo_cost_matrix,
+)
 
 # ---------------------------------------------------------------------------
 # Helper contract
@@ -85,126 +96,91 @@ class TestDefaultDemoCostMatrix:
 
 
 # ---------------------------------------------------------------------------
-# Argparse plumbing
+# Argparse plumbing — exercise the REAL parser via _build_parser
 # ---------------------------------------------------------------------------
-
-
-def _parse_args(argv: list[str]):
-    """Reconstruct the script's argparse parser without invoking ``main()``.
-
-    ``main()`` calls ``parser.parse_args()`` and then runs the pipeline,
-    which is way too heavy for a unit test. Instead we re-create the
-    same ArgumentParser shape and only assert on the parsed flag. The
-    flag is the only piece the test cares about; if the script's parser
-    drifts, this test will fail loudly because ``argv`` no longer
-    matches.
-    """
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--no-demo-cost-matrix", action="store_true")
-    return parser.parse_args(argv)
 
 
 class TestArgparseFlag:
     """The ``--no-demo-cost-matrix`` flag is a boolean opt-out: default
     ``False`` (auto-inject ON), present in argv → ``True`` (auto-inject
-    OFF)."""
+    OFF). 5B-I-3: tests now exercise the real parser, no subprocess."""
 
     def test_flag_default_is_false(self):
-        ns = _parse_args([])
+        parser = _build_parser()
+        # parse only the args we care about — argparse will accept []
+        # and use defaults for everything.
+        ns = parser.parse_args([])
         assert ns.no_demo_cost_matrix is False
 
     def test_flag_when_passed_is_true(self):
-        ns = _parse_args(["--no-demo-cost-matrix"])
+        parser = _build_parser()
+        ns = parser.parse_args(["--no-demo-cost-matrix"])
         assert ns.no_demo_cost_matrix is True
 
-    def test_real_script_parser_recognises_flag(self):
-        """Sanity check: the actual ``main()`` parser must accept the
-        flag without error. We can't easily isolate the parser (it's
-        local to ``main``) but we can confirm ``--help`` mentions it.
-        """
-        import subprocess
+    def test_real_parser_recognises_flag(self):
+        """Sanity check: the real parser MUST register the flag.
 
-        # Just confirm the flag is in --help output. ``main()`` is
-        # heavy — ``--help`` short-circuits before any pipeline runs.
-        result = subprocess.run(
-            [sys.executable, "scripts/run_tier0_test.py", "--help"],
-            cwd=str(PROJECT_ROOT),
-            capture_output=True,
-            text=True,
-            timeout=30,
+        5B-I-3: replaces the subprocess-with-magic-number ``--help``
+        test from the previous iteration; we now query the parser
+        directly for the action."""
+        parser = _build_parser()
+        flag_actions = [
+            a for a in parser._actions if "--no-demo-cost-matrix" in a.option_strings
+        ]
+        assert len(flag_actions) == 1, (
+            "Expected exactly one --no-demo-cost-matrix action; "
+            f"found {len(flag_actions)}: {[a.option_strings for a in flag_actions]}"
         )
-        assert result.returncode == 0, (
-            f"--help exited non-zero: stderr={result.stderr}"
-        )
-        assert "--no-demo-cost-matrix" in result.stdout, (
-            "argparse did not register --no-demo-cost-matrix; help text:\n"
-            + result.stdout
-        )
+        action = flag_actions[0]
+        # The flag is a store_true boolean opt-out.
+        assert action.dest == "no_demo_cost_matrix"
+        assert action.default is False
+        # store_true actions have const=True (so passing the flag yields True).
+        assert action.const is True
 
 
 # ---------------------------------------------------------------------------
-# Auto-inject behaviour (mimics the run_pipeline branch)
+# Auto-inject decision — exercise the REAL helper from run_tier0_test
 # ---------------------------------------------------------------------------
 
 
 class TestAutoInjectBranch:
-    """The auto-inject lives at ``run_pipeline`` line ~3753. It runs
-    AFTER step_1 returns and writes the placeholder onto ``scope_spec``
-    when (a) ``inject_demo_cost_matrix`` is True AND (b) ``cost_matrix``
-    is not already present. We replicate that branch logic here so the
-    test catches drift without invoking the full pipeline.
+    """5B-I-2: the inject decision is now ``_should_inject_demo_cost_matrix``
+    inside ``scripts/run_tier0_test``. Tests import and exercise the real
+    helper rather than mocking the branch logic. Search the script for
+    "Block 5B (#10): auto-inject" to find the call site that consumes
+    this helper.
     """
 
-    @staticmethod
-    def _apply_branch(scope_spec: dict, inject: bool) -> dict:
-        """Mirror the run_pipeline branch exactly. Keep this in sync with
-        ``scripts/run_tier0_test.py`` (search ``Block 5B (#10): auto-
-        inject the unit-shape placeholder``).
-
-        Note: scope_definer always emits ``cost_matrix`` as a key (with a
-        ``None`` default) so we use ``.get("cost_matrix")`` falsiness as
-        the "un-set" check, not raw key presence. A populated dict is
-        preserved (caller already has a real matrix).
-        """
-        if inject and not scope_spec.get("cost_matrix"):
-            scope_spec["cost_matrix"] = _default_demo_cost_matrix()
-        return scope_spec
-
-    def test_flag_absent_injects_placeholder(self):
-        """Default behaviour: ``--no-demo-cost-matrix`` not passed →
-        ``scope_spec["cost_matrix"]`` is the unit-shape placeholder."""
+    def test_flag_absent_injects_when_no_existing_matrix(self):
+        """Default behaviour: inject=True + no existing matrix → True."""
         scope_spec: dict = {"experiment_id": "exp_001"}
-        result = self._apply_branch(scope_spec, inject=True)
-        assert result["cost_matrix"] == {
-            "tp": 1.0,
-            "fp": -0.05,
-            "fn": -1.0,
-            "tn": 0.0,
-        }
+        assert _should_inject_demo_cost_matrix(scope_spec, inject=True) is True
 
     def test_flag_present_suppresses_inject(self):
-        """``--no-demo-cost-matrix`` passed → no ``cost_matrix`` key."""
+        """``--no-demo-cost-matrix`` passed → False even with no matrix."""
         scope_spec: dict = {"experiment_id": "exp_002"}
-        result = self._apply_branch(scope_spec, inject=False)
-        assert "cost_matrix" not in result
+        assert _should_inject_demo_cost_matrix(scope_spec, inject=False) is False
 
     def test_existing_cost_matrix_is_preserved(self):
         """If scope_definer already produced a cost_matrix (e.g. a
-        future LLM-driven path), the auto-inject MUST NOT overwrite
-        it — the placeholder is a fallback, not a stomp."""
+        future LLM-driven path), the helper returns False so the
+        existing matrix is preserved."""
         existing = {"tp": 250.0, "fp": -25.0, "fn": -200.0, "tn": 0.0}
         scope_spec: dict = {"experiment_id": "exp_003", "cost_matrix": existing}
-        result = self._apply_branch(scope_spec, inject=True)
-        assert result["cost_matrix"] == existing
+        assert _should_inject_demo_cost_matrix(scope_spec, inject=True) is False
 
     def test_scope_definer_default_none_value_triggers_inject(self):
-        """ScopeDefinerAgent emits ``cost_matrix=None`` by default (see
-        ``scope_builder._validate_cost_matrix``). The auto-inject MUST
-        treat a present-but-None key as un-set; the previous bug was
-        that ``"cost_matrix" not in scope_spec`` returned False against
-        ``{"cost_matrix": None}`` and the placeholder never landed."""
+        """ScopeDefinerAgent emits ``cost_matrix=None`` by default. The
+        helper MUST treat present-but-None as un-set (the previous bug
+        was that ``"cost_matrix" not in scope_spec`` returned False
+        against ``{"cost_matrix": None}`` and the placeholder never
+        landed)."""
         scope_spec: dict = {"experiment_id": "exp_004", "cost_matrix": None}
-        result = self._apply_branch(scope_spec, inject=True)
-        assert result["cost_matrix"] == _default_demo_cost_matrix()
+        assert _should_inject_demo_cost_matrix(scope_spec, inject=True) is True
+
+    def test_empty_dict_cost_matrix_triggers_inject(self):
+        """Edge case: ``cost_matrix={}`` is falsy and should trigger
+        inject (an empty dict provides no signal to the evaluator)."""
+        scope_spec: dict = {"experiment_id": "exp_005", "cost_matrix": {}}
+        assert _should_inject_demo_cost_matrix(scope_spec, inject=True) is True

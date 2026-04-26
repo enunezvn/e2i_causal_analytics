@@ -151,8 +151,12 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 # number as a tag so the MLflow UI can display "what this
                 # run was worth" alongside accuracy/AUC. Mirrors the
                 # feast_fallback tag pattern. ``"N/A"`` when no
-                # cost_matrix was provided (validation_metrics omits the
-                # key in that case — see evaluator.py:715).
+                # cost_matrix was provided (validation_metrics omits
+                # the key in that case — see evaluator.py: the
+                # ``if cost_matrix is not None`` short-circuit in
+                # ``_compute_classification_metrics`` skips
+                # business_utility computation, so the metrics dict
+                # never picks up the key).
                 "business_utility": str(
                     validation_metrics.get("business_utility", "N/A")
                 ),

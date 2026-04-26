@@ -3683,6 +3683,32 @@ def _default_demo_cost_matrix() -> Dict[str, float]:
     return {"tp": 1.0, "fp": -0.05, "fn": -1.0, "tn": 0.0}
 
 
+def _should_inject_demo_cost_matrix(
+    scope_spec: Dict[str, Any],
+    inject: bool,
+) -> bool:
+    """Decide whether the run_pipeline branch should auto-inject the
+    placeholder cost matrix.
+
+    Block 5B (#10) decision rule:
+      - If the caller passed ``--no-demo-cost-matrix`` (``inject=False``),
+        always skip injection — even when ``scope_spec`` has no matrix.
+        That is the explicit "reproduce the pre-Block-5B baseline" path.
+      - If the caller did not opt out (``inject=True``), inject only
+        when ``scope_spec.cost_matrix`` is falsy. ``scope_definer``
+        always emits the key with a default of ``None`` (see
+        ``scope_builder._validate_cost_matrix``), so ``"cost_matrix"
+        not in scope_spec`` would miss that case — we treat both
+        "missing" and "present-but-None" as un-set.
+
+    Pulled out into a helper so the in-process unit test can exercise
+    the real decision branch (5B-I-2).
+    """
+    if not inject:
+        return False
+    return not scope_spec.get("cost_matrix")
+
+
 async def run_pipeline(
     step: int | None = None,
     dry_run: bool = False,
@@ -3811,15 +3837,10 @@ async def run_pipeline(
             # gap: without a cost matrix the evaluator short-circuits
             # business_utility, so a default ``python scripts/run_tier0_test.py``
             # run produced no business_utility number to verify against.
-            #
-            # ScopeDefinerAgent always emits ``cost_matrix`` as a key on
-            # the spec but defaults the value to ``None`` (see
-            # ``scope_builder._validate_cost_matrix`` returning ``None`` on
-            # missing/empty input). So we treat both "key absent" and
-            # "key present with None" as the un-set state for inject
-            # purposes — only an already-populated dict is preserved.
-            if inject_demo_cost_matrix and not state["scope_spec"].get(
-                "cost_matrix"
+            # Decision logic extracted to ``_should_inject_demo_cost_matrix``
+            # so unit tests exercise the real branch (5B-I-2).
+            if _should_inject_demo_cost_matrix(
+                state["scope_spec"], inject_demo_cost_matrix
             ):
                 state["scope_spec"]["cost_matrix"] = _default_demo_cost_matrix()
             duration = time.time() - step_start
@@ -5201,12 +5222,14 @@ async def run_pipeline(
     return state
 
 
-def main():
-    """Main entry point."""
-    import sys
-    import io
-    from pathlib import Path
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the run_tier0_test CLI argparse parser.
 
+    Extracted from ``main()`` so unit tests can exercise the real
+    parser (5B-I-3) without spawning a subprocess just to read
+    ``--help`` output. The previous subprocess-based test was
+    needlessly slow and brittle to PATH / venv differences.
+    """
     parser = argparse.ArgumentParser(
         description="Run Tier 0 MLOps workflow test"
     )
@@ -5333,7 +5356,16 @@ def main():
             "through the pipeline."
         ),
     )
+    return parser
 
+
+def main():
+    """Main entry point."""
+    import sys
+    import io
+    from pathlib import Path
+
+    parser = _build_parser()
     args = parser.parse_args()
 
     # Update config
