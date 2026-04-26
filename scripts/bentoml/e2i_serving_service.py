@@ -12,6 +12,13 @@ Model discovery order:
 Framework auto-detection from model metadata:
   - sklearn, xgboost, lightgbm, or pickle fallback
 
+Online feature retrieval:
+  When ``PredictionInput.entity_ids`` and ``PredictionInput.feature_view`` are
+  both supplied, the service fetches feature rows from the Feast online store
+  over HTTP at ``FEAST_HTTP_ENDPOINT`` (falls back to ``FEAST_URL``, then
+  ``http://feast:6566``) before running model inference. The legacy
+  ``features: List[List[float]]`` path remains the default and is unchanged.
+
 Version: 1.0.0
 """
 
@@ -27,20 +34,74 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # =============================================================================
+# Feast HTTP endpoint resolution
+# =============================================================================
+#
+# Precedence:
+#   1. FEAST_HTTP_ENDPOINT (preferred — explicit serving endpoint)
+#   2. FEAST_URL           (fallback — shared with src/* compose config)
+#   3. "http://feast:6566" (default — Feast container in docker-compose)
+
+
+def _resolve_feast_endpoint() -> str:
+    """Return the Feast online-features HTTP base URL, with fallbacks."""
+    return (
+        os.environ.get("FEAST_HTTP_ENDPOINT")
+        or os.environ.get("FEAST_URL")
+        or "http://feast:6566"
+    )
+
+# =============================================================================
 # Request/Response Models (matching mock_service.py contract)
 # =============================================================================
 
 
 class PredictionInput(BaseModel):
-    """Input schema for prediction requests."""
+    """Input schema for prediction requests.
+
+    Two mutually-supportive paths:
+      1. Direct features:   ``features`` is a feature matrix (samples x features).
+      2. Feast online:      ``entity_ids`` + ``feature_view`` triggers a Feast HTTP
+         lookup before inference. ``features`` becomes optional in that case.
+
+    When both are present the Feast lookup wins and ``features`` is ignored,
+    matching the API-route contract that ``entity_id`` indicates a feature-store
+    fetch is desired.
+    """
 
     features: List[List[float]] = Field(
-        ...,
-        description="Feature matrix (samples x features)",
+        default_factory=list,
+        description=(
+            "Feature matrix (samples x features). Optional when entity_ids + "
+            "feature_view are provided — features will be fetched from Feast."
+        ),
     )
     model_type: str = Field(
         default="classification",
         description="Type of prediction: classification or regression",
+    )
+    entity_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional entity IDs to look up in the Feast online store. When set "
+            "alongside ``feature_view``, the service fetches features over HTTP "
+            "before running inference. Ignored when ``feature_view`` is None."
+        ),
+    )
+    feature_view: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional Feast feature view name (e.g. 'patient_engagement_features'). "
+            "Combined with ``entity_ids`` to fetch features over Feast HTTP. "
+            "All features in the view are requested via the ':*' wildcard."
+        ),
+    )
+    entity_key: str = Field(
+        default="patient_id",
+        description=(
+            "Entity-key column name expected by the Feast feature view. "
+            "Defaults to 'patient_id' to match the project's primary entity."
+        ),
     )
 
 
@@ -66,6 +127,14 @@ class PredictionOutput(BaseModel):
     is_mock: bool = Field(
         default=False,
         description="Indicates this is a mock response",
+    )
+    feature_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Telemetry tag describing where the features came from: "
+            "'feast_online' when fetched via Feast HTTP, 'user_provided' when "
+            "passed directly in the request, or None for batch/legacy paths."
+        ),
     )
 
 
@@ -256,11 +325,17 @@ class E2IModelService:
         else:
             logger.warning("E2I Model Service initialized in degraded mode (no model)")
 
-    def _run_prediction(self, features: List[List[float]]) -> PredictionOutput:
+    def _run_prediction(
+        self,
+        features: List[List[float]],
+        feature_source: Optional[str] = None,
+    ) -> PredictionOutput:
         """Run prediction using the loaded model.
 
         Args:
             features: Feature matrix
+            feature_source: Optional telemetry tag describing feature origin
+                ('feast_online' | 'user_provided' | None).
 
         Returns:
             Prediction output
@@ -274,6 +349,7 @@ class E2IModelService:
                 model_id="no_model",
                 prediction_time_ms=0.0,
                 is_mock=False,
+                feature_source=feature_source,
             )
 
         start = time.time()
@@ -315,19 +391,128 @@ class E2IModelService:
             model_id=self._model_tag or "unknown",
             prediction_time_ms=elapsed_ms,
             is_mock=False,
+            feature_source=feature_source,
         )
+
+    async def _fetch_features_from_feast(
+        self,
+        entity_ids: List[str],
+        feature_view: str,
+        entity_key: str,
+    ) -> List[List[float]]:
+        """Fetch a feature matrix from the Feast online store over HTTP.
+
+        Calls Feast's standard ``POST /get-online-features`` endpoint and
+        reshapes the per-feature column response into a row-major matrix
+        ordered to match ``entity_ids``.
+
+        Args:
+            entity_ids: List of entity IDs to look up.
+            feature_view: Feast feature view name. All features in the view
+                are requested via ``"<feature_view>:*"``.
+            entity_key: Entity-key column name expected by the feature view.
+
+        Returns:
+            Feature matrix (samples x features). Numeric coercion is applied;
+            non-numeric / missing values become 0.0 so downstream model.predict
+            does not crash on dtype.
+
+        Raises:
+            RuntimeError: If httpx is unavailable, the Feast call fails, or
+                the response payload is malformed. The caller surfaces this
+                back to the client rather than silently filling zeros.
+        """
+        try:
+            import httpx  # type: ignore[import-not-found]
+        except ImportError as e:  # pragma: no cover - container always installs httpx
+            raise RuntimeError(
+                "httpx is required for Feast HTTP feature fetch but is not installed"
+            ) from e
+
+        endpoint = _resolve_feast_endpoint().rstrip("/")
+        url = f"{endpoint}/get-online-features"
+        payload = {
+            "features": [f"{feature_view}:*"],
+            "entities": {entity_key: list(entity_ids)},
+            "full_feature_names": False,
+        }
+
+        logger.info(
+            "Fetching %d entities from Feast view '%s' via %s",
+            len(entity_ids),
+            feature_view,
+            url,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                body = response.json()
+        except Exception as e:
+            raise RuntimeError(
+                f"Feast online-features call failed ({url}): {e}"
+            ) from e
+
+        # Feast 0.43 response shape (column-oriented):
+        #   {"metadata": {"feature_names": [...]},
+        #    "results":  [{"values": [...], "statuses": [...], ...}, ...]}
+        metadata = body.get("metadata", {})
+        feature_names: List[str] = list(metadata.get("feature_names", []))
+        results = body.get("results", [])
+
+        if not feature_names or not results:
+            raise RuntimeError(
+                f"Feast response missing feature_names/results: keys={list(body.keys())}"
+            )
+
+        # Drop the entity-key column from feature columns; we want feature values only.
+        feature_columns = {
+            name: results[idx].get("values", [])
+            for idx, name in enumerate(feature_names)
+            if name != entity_key
+        }
+
+        n_rows = len(entity_ids)
+        matrix: List[List[float]] = []
+        for row_idx in range(n_rows):
+            row: List[float] = []
+            for col_values in feature_columns.values():
+                raw = col_values[row_idx] if row_idx < len(col_values) else None
+                try:
+                    row.append(float(raw) if raw is not None else 0.0)
+                except (TypeError, ValueError):
+                    row.append(0.0)
+            matrix.append(row)
+
+        return matrix
 
     @bentoml.api
     async def predict(self, input_data: PredictionInput) -> PredictionOutput:
         """Run prediction on input features.
 
+        Two paths:
+          - ``entity_ids`` + ``feature_view`` set → fetch features from the
+            Feast online store over HTTP, tag ``feature_source='feast_online'``.
+          - Otherwise → use the supplied ``features`` matrix directly,
+            tag ``feature_source='user_provided'`` (None when matrix is empty).
+
         Args:
             input_data: Features and configuration
 
         Returns:
-            Model predictions
+            Model predictions with a ``feature_source`` telemetry tag.
         """
-        return self._run_prediction(input_data.features)
+        if input_data.entity_ids and input_data.feature_view:
+            features = await self._fetch_features_from_feast(
+                entity_ids=input_data.entity_ids,
+                feature_view=input_data.feature_view,
+                entity_key=input_data.entity_key,
+            )
+            return self._run_prediction(features, feature_source="feast_online")
+
+        feature_source = "user_provided" if input_data.features else None
+        return self._run_prediction(input_data.features, feature_source=feature_source)
 
     @bentoml.api
     async def predict_batch(
