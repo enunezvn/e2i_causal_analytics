@@ -15,6 +15,11 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from src.utils.project_root import (
+    ProjectRootNotFoundError,
+    find_project_root,
+)
+
 
 @dataclass
 class SkillMetadata:
@@ -102,21 +107,24 @@ class SkillLoader:
             base_path: Base path for skills directory. If None, uses default.
         """
         if base_path is None:
-            # Try to find project root
-            self.base_path = self._find_project_root() / self.DEFAULT_BASE_PATH
+            # Resolve via the shared util. The skills loader anchors on
+            # ``pyproject.toml`` OR ``.claude/`` because some checkouts
+            # predate ``pyproject.toml`` adoption and only carry the
+            # ``.claude/`` directory. If neither anchor resolves
+            # (unlikely outside a stripped-down test env), fall back
+            # to ``Path.cwd()`` to preserve the historical defensive
+            # behavior of this loader. The shared util itself raises;
+            # we catch it here so the loader stays import-safe.
+            try:
+                project_root = find_project_root(
+                    start=Path(__file__),
+                    markers=("pyproject.toml", ".claude"),
+                )
+            except ProjectRootNotFoundError:
+                project_root = Path.cwd()
+            self.base_path = project_root / self.DEFAULT_BASE_PATH
         else:
             self.base_path = Path(base_path)
-
-    def _find_project_root(self) -> Path:
-        """Find the project root directory."""
-        # Start from current file location and walk up
-        current = Path(__file__).resolve().parent
-        while current != current.parent:
-            if (current / "pyproject.toml").exists() or (current / ".claude").exists():
-                return current
-            current = current.parent
-        # Fallback to current working directory
-        return Path.cwd()
 
     @lru_cache(maxsize=50)  # noqa: B019
     def load(self, skill_path: str) -> Skill:
