@@ -1,0 +1,87 @@
+# Imbalance strategy decision matrix (Tier-0 Block 6A, Findings #9, #16)
+#
+# This file replaces the LLM-based strategy selection in
+# `src/agents/ml_foundation/model_trainer/nodes/detect_class_imbalance.py`
+# with a deterministic, configurable lookup table.
+#
+# Defaults below were calibrated to reproduce the exact behavior of the
+# pre-Block-6A `_heuristic_strategy` fallback for every (severity x
+# tree/non-tree x minority_count band) combination, so the existing test
+# set continues to pass without changes.
+#
+# To change behavior, override severity bands or any matrix entry; the
+# loader (`_load_imbalance_config`) accepts an explicit path argument so
+# unit tests can swap in alternate configurations.
+
+# Severity bands keyed by minority_class_ratio (minority_count / total).
+# A row with severity=X is selected when minority_ratio >= bands[X] AND
+# minority_ratio is below the next-stricter band. The implicit lowest
+# bucket below `severe` is "extreme".
+severity_bands:
+  none: 0.40        # minority_ratio >= 0.40           -> "none"
+  moderate: 0.20    # 0.20 <= minority_ratio < 0.40    -> "moderate"
+  severe: 0.05      # 0.05 <= minority_ratio < 0.20    -> "severe"
+  # below severe -> "extreme"
+
+# Models that natively handle class weights without resampling.
+# Used to pick the `tree` vs `non_tree` branch of `strategy_matrix`.
+tree_models:
+  - XGBoost
+  - LightGBM
+  - RandomForest
+  - GradientBoosting
+  - CausalForest
+  - ExtraTrees
+
+# Strategy decision matrix.
+# Outer key  : severity ("none" / "moderate" / "severe" / "extreme")
+# Inner key  : "tree" / "non_tree" / "default"
+# Inner value: either a single {strategy, rationale} dict, OR a list of
+#              {min_minority_count, strategy, rationale} rules. The list
+#              is evaluated by descending min_minority_count, first
+#              applicable rule wins (loader sorts defensively at load
+#              time so an unsorted YAML still produces the right answer).
+strategy_matrix:
+  none:
+    default:
+      strategy: none
+      rationale: "Class distribution is balanced (minority >= 40%)"
+
+  moderate:
+    tree:
+      strategy: class_weight
+      rationale: "Moderate imbalance - tree models handle class weights efficiently"
+    non_tree:
+      strategy: random_oversample
+      rationale: "Moderate imbalance - light oversampling recommended"
+
+  severe:
+    tree:
+      strategy: class_weight
+      rationale: >-
+        Severe imbalance - tree models handle class weights natively,
+        avoiding SMOTE synthetic sample memorization
+    non_tree:
+      - min_minority_count: 10
+        strategy: smote
+        rationale: "Severe imbalance with sufficient minority samples for SMOTE"
+      - min_minority_count: 0
+        strategy: random_oversample
+        rationale: "Severe imbalance but too few minority samples for SMOTE"
+
+  extreme:
+    tree:
+      strategy: class_weight
+      rationale: >-
+        Extreme imbalance - tree models handle class weights natively,
+        avoiding SMOTE synthetic sample memorization
+    non_tree:
+      - min_minority_count: 10
+        strategy: combined
+        rationale: "Extreme imbalance - combining SMOTE with class weights"
+      - min_minority_count: 5
+        strategy: random_oversample
+        rationale: "Extreme imbalance with minimal minority samples"
+      - min_minority_count: 0
+        strategy: class_weight
+        rationale: "Extreme imbalance with too few samples for resampling"
