@@ -10,7 +10,7 @@ This is a deterministic computation node with no LLM calls.
 
 import logging
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,11 @@ TEMPORAL_FEATURES = "temporal"
 INTERACTION_FEATURES = "interaction"
 DOMAIN_FEATURES = "domain"
 AGGREGATE_FEATURES = "aggregate"
+
+# Internal split-membership marker column. Lives only inside generate_features
+# while the train/val/test rows are concatenated for entity-grouped lag/rolling
+# computation; stripped before each split is returned to the caller.
+_SPLIT_MARKER_COL = "__feature_gen_split__"
 
 
 async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -44,6 +49,11 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
             - temporal_columns: List of columns for temporal features
             - categorical_columns: List of columns for interactions
             - numeric_columns: List of numeric columns
+            - entity_id_column: Column identifying the entity for groupby-aware
+              lag/rolling (e.g. ``patient_id``). May also be set on
+              ``feature_config["entity_id_column"]``.
+            - event_timestamp_column: Column for chronological ordering inside
+              each entity. May also live on ``feature_config``.
             - feature_config: Custom feature generation config
 
     Returns:
@@ -90,31 +100,36 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
         # 1. Generate temporal features
+        # Lag and rolling windows are entity-grouped and chronologically ordered,
+        # so we MUST compute them on the concatenated train+val+test before each
+        # split would otherwise truncate the per-entity history. We tag each row
+        # with a split marker, run _generate_temporal_features ONCE on the full
+        # frame, then split back on the marker. The per-row interaction/domain/
+        # aggregate steps below do NOT need this round-trip — they're row-local.
         if feature_config.get("generate_temporal", True) and temporal_columns:
-            X_train, temporal_meta = _generate_temporal_features(
-                X_train,
+            entity_id_column = (
+                feature_config.get("entity_id_column")
+                or state.get("entity_id_column")
+            )
+            event_timestamp_column = (
+                feature_config.get("event_timestamp_column")
+                or state.get("event_timestamp_column")
+            )
+
+            combined_df, split_index = _concat_with_split_markers(
+                X_train, X_val, X_test
+            )
+            combined_df, temporal_meta = _generate_temporal_features(
+                combined_df,
                 temporal_columns,
+                entity_id_column=entity_id_column,
+                event_timestamp_column=event_timestamp_column,
                 lag_periods=feature_config.get("lag_periods", [1, 7, 30]),
                 rolling_windows=feature_config.get("rolling_windows", [7, 30]),
             )
+            X_train, X_val, X_test = _split_by_markers(combined_df, split_index)
             feature_metadata["temporal"] = temporal_meta
             generated_features.extend(temporal_meta)
-
-            # Apply same transformations to val/test
-            if X_val is not None:
-                X_val, _ = _generate_temporal_features(
-                    X_val,
-                    temporal_columns,
-                    lag_periods=feature_config.get("lag_periods", [1, 7, 30]),
-                    rolling_windows=feature_config.get("rolling_windows", [7, 30]),
-                )
-            if X_test is not None:
-                X_test, _ = _generate_temporal_features(
-                    X_test,
-                    temporal_columns,
-                    lag_periods=feature_config.get("lag_periods", [1, 7, 30]),
-                    rolling_windows=feature_config.get("rolling_windows", [7, 30]),
-                )
 
         # 2. Generate interaction features
         if feature_config.get("generate_interactions", True) and categorical_columns:
@@ -262,24 +277,41 @@ def _detect_numeric_columns(df: pd.DataFrame) -> List[str]:
 def _generate_temporal_features(
     df: pd.DataFrame,
     temporal_columns: List[str],
-    lag_periods: List[int] | None = None,
-    rolling_windows: List[int] | None = None,
+    entity_id_column: Optional[str] = None,
+    event_timestamp_column: Optional[str] = None,
+    lag_periods: Optional[List[int]] = None,
+    rolling_windows: Optional[List[int]] = None,
 ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """Generate temporal features from time-series columns.
 
     Creates:
-    - Lag features (shift by N periods)
-    - Rolling statistics (mean, std over window)
+    - Lag features (shift by N periods, entity-grouped)
+    - Rolling statistics (mean, std over window, entity-grouped)
     - Date part extraction (if datetime)
 
+    Lag and rolling windows are computed PER ENTITY when ``entity_id_column``
+    is provided. The DataFrame is sorted by ``(entity_id, event_timestamp)``
+    before grouping so the resulting shifts honor chronological order within
+    each entity. Without grouping, lag at row 0 of entity B would erroneously
+    pull entity A's tail value.
+
+    Callers should pass the *concatenated* train+val+test frame; otherwise the
+    last row of train would never see val's first row even within the same
+    entity, defeating the point of grouping.
+
     Args:
-        df: Input DataFrame
-        temporal_columns: Columns to generate temporal features for
-        lag_periods: List of lag periods to create
-        rolling_windows: List of rolling window sizes
+        df: Input DataFrame (typically the concatenated train+val+test).
+        temporal_columns: Columns to generate temporal features for.
+        entity_id_column: Column identifying the entity (e.g. ``patient_id``).
+            If None, lag/rolling falls back to row-order shift on the full
+            frame. Datetime date-part extraction does not need this.
+        event_timestamp_column: Column for chronological ordering within an
+            entity. If None, lag/rolling preserves the input row order.
+        lag_periods: Lag periods to create (default ``[1, 7, 30]``).
+        rolling_windows: Rolling window sizes (default ``[7, 30]``).
 
     Returns:
-        Tuple of (transformed DataFrame, feature metadata list)
+        Tuple of (transformed DataFrame, feature metadata list).
     """
     if rolling_windows is None:
         rolling_windows = [7, 30]
@@ -288,11 +320,23 @@ def _generate_temporal_features(
     df = df.copy()
     metadata: List[Dict[str, Any]] = []
 
+    # Sort by (entity, event_timestamp) once, up front, so all subsequent
+    # groupby().shift / rolling() calls see chronologically ordered groups.
+    sort_keys: List[str] = []
+    if entity_id_column and entity_id_column in df.columns:
+        sort_keys.append(entity_id_column)
+    if event_timestamp_column and event_timestamp_column in df.columns:
+        sort_keys.append(event_timestamp_column)
+    if sort_keys:
+        df = df.sort_values(sort_keys, kind="mergesort").reset_index(drop=True)
+
+    use_groupby = bool(entity_id_column and entity_id_column in df.columns)
+
     for col in temporal_columns:
         if col not in df.columns:
             continue
 
-        # Handle datetime columns - extract date parts
+        # Handle datetime columns - extract date parts (row-local, no grouping)
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             # Day of week (0=Monday, 6=Sunday)
             new_col = f"{col}_dayofweek"
@@ -347,7 +391,15 @@ def _generate_temporal_features(
             # Lag features
             for lag in lag_periods:
                 new_col = f"{col}_lag_{lag}"
-                df[new_col] = df[col].shift(lag)
+                if use_groupby:
+                    # group_keys=False keeps the original index alignment so
+                    # the assignment back to df[new_col] doesn't re-introduce
+                    # the entity id as a level.
+                    df[new_col] = df.groupby(entity_id_column, group_keys=False)[
+                        col
+                    ].shift(lag)
+                else:
+                    df[new_col] = df[col].shift(lag)
                 metadata.append(
                     {
                         "name": new_col,
@@ -355,14 +407,27 @@ def _generate_temporal_features(
                         "type": TEMPORAL_FEATURES,
                         "transformation": f"lag_{lag}",
                         "lag_period": lag,
+                        "entity_id_column": entity_id_column if use_groupby else None,
                     }
                 )
 
             # Rolling statistics
             for window in rolling_windows:
+                if use_groupby:
+                    rolled = df.groupby(entity_id_column, group_keys=False)[col].rolling(
+                        window=window, min_periods=1
+                    )
+                else:
+                    rolled = df[col].rolling(window=window, min_periods=1)
+
                 # Rolling mean
                 new_col = f"{col}_rolling_mean_{window}"
-                df[new_col] = df[col].rolling(window=window, min_periods=1).mean()
+                rolled_mean = rolled.mean()
+                # GroupBy.rolling adds the group key as an index level;
+                # reset_index(level=0, drop=True) realigns it to the row index.
+                if use_groupby and isinstance(rolled_mean.index, pd.MultiIndex):
+                    rolled_mean = rolled_mean.reset_index(level=0, drop=True)
+                df[new_col] = rolled_mean
                 metadata.append(
                     {
                         "name": new_col,
@@ -370,12 +435,16 @@ def _generate_temporal_features(
                         "type": TEMPORAL_FEATURES,
                         "transformation": f"rolling_mean_{window}",
                         "window_size": window,
+                        "entity_id_column": entity_id_column if use_groupby else None,
                     }
                 )
 
                 # Rolling std
                 new_col = f"{col}_rolling_std_{window}"
-                df[new_col] = df[col].rolling(window=window, min_periods=1).std()
+                rolled_std = rolled.std()
+                if use_groupby and isinstance(rolled_std.index, pd.MultiIndex):
+                    rolled_std = rolled_std.reset_index(level=0, drop=True)
+                df[new_col] = rolled_std
                 metadata.append(
                     {
                         "name": new_col,
@@ -383,10 +452,116 @@ def _generate_temporal_features(
                         "type": TEMPORAL_FEATURES,
                         "transformation": f"rolling_std_{window}",
                         "window_size": window,
+                        "entity_id_column": entity_id_column if use_groupby else None,
                     }
                 )
 
     return df, metadata
+
+
+_SPLIT_ROW_ID_COL = "__feature_gen_row_id__"
+
+
+def _concat_with_split_markers(
+    X_train: pd.DataFrame,
+    X_val: Optional[pd.DataFrame],
+    X_test: Optional[pd.DataFrame],
+) -> Tuple[
+    pd.DataFrame,
+    Dict[str, Tuple[pd.Index, np.ndarray]],
+]:
+    """Concatenate splits, tagging each row with its split-membership marker.
+
+    Each split's original row index is preserved in the returned map so that
+    ``_split_by_markers`` can restore the caller's original row ordering even
+    after ``_generate_temporal_features`` sorts by ``(entity, timestamp)`` and
+    resets the row index.
+
+    The combined frame uses a synthetic monotonic ``_SPLIT_ROW_ID_COL`` to give
+    every row a unique identifier independent of split-local pandas indices
+    (which can collide across splits — both train and val often start at 0).
+
+    Args:
+        X_train: Training split (required).
+        X_val: Validation split (optional).
+        X_test: Test split (optional).
+
+    Returns:
+        Tuple of:
+            - combined DataFrame with ``_SPLIT_MARKER_COL`` and
+              ``_SPLIT_ROW_ID_COL`` injected.
+            - map ``split_name -> (original_index, row_ids)``. ``row_ids`` are
+              the synthetic identifiers carried inside the combined frame for
+              this split's rows; ``original_index`` is what each row's pandas
+              index used to be on the caller's input frame.
+    """
+    pieces: List[pd.DataFrame] = []
+    split_meta: Dict[str, Tuple[pd.Index, np.ndarray]] = {}
+
+    next_row_id = 0
+
+    def _tag(piece: pd.DataFrame, split_name: str) -> pd.DataFrame:
+        nonlocal next_row_id
+        piece = piece.copy()
+        n = len(piece)
+        row_ids = np.arange(next_row_id, next_row_id + n, dtype=np.int64)
+        next_row_id += n
+        piece[_SPLIT_MARKER_COL] = split_name
+        piece[_SPLIT_ROW_ID_COL] = row_ids
+        split_meta[split_name] = (piece.index.copy(), row_ids)
+        return piece
+
+    pieces.append(_tag(X_train, "train"))
+    if X_val is not None:
+        pieces.append(_tag(X_val, "val"))
+    if X_test is not None:
+        pieces.append(_tag(X_test, "test"))
+
+    # ignore_index=True is fine — we use _SPLIT_ROW_ID_COL for round-tripping.
+    combined = pd.concat(pieces, axis=0, ignore_index=True)
+    return combined, split_meta
+
+
+def _split_by_markers(
+    combined_df: pd.DataFrame,
+    split_meta: Dict[str, Tuple[pd.Index, np.ndarray]],
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """Split a combined DataFrame back into (train, val, test) using markers.
+
+    Restores each split to its original row ordering (the index captured at
+    concatenation time) and strips the internal marker columns.
+
+    Args:
+        combined_df: DataFrame produced by ``_concat_with_split_markers`` and
+            transformed in place by per-row generators.
+        split_meta: Map of ``split_name -> (original_index, row_ids)`` produced
+            by ``_concat_with_split_markers``.
+
+    Returns:
+        Tuple of (X_train, X_val, X_test). val/test may be None when absent.
+    """
+    feature_cols = [
+        c
+        for c in combined_df.columns
+        if c not in (_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL)
+    ]
+
+    def _restore(split_name: str) -> Optional[pd.DataFrame]:
+        if split_name not in split_meta:
+            return None
+        original_index, row_ids = split_meta[split_name]
+        # Pull the rows for this split via the synthetic row id, then put
+        # them back in their original order via reindex on the same id.
+        subset = combined_df.set_index(_SPLIT_ROW_ID_COL).loc[row_ids, feature_cols]
+        subset.index = original_index
+        return subset
+
+    train_df = _restore("train")
+    val_df = _restore("val")
+    test_df = _restore("test")
+    # train is always present — typing reflects that.
+    assert train_df is not None
+    return train_df, val_df, test_df
 
 
 def _generate_interaction_features(

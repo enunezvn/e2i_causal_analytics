@@ -170,7 +170,6 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
             if encoding_method == "label":
                 for col in categorical_cols:
                     encoder = LabelEncoder()
-                    # Fit on all unique values across splits to handle unseen values
                     all_values = train_df[col].astype(str).tolist()
                     encoder.fit(all_values)
                     encoders[col] = encoder

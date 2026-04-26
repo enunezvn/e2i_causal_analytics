@@ -5,7 +5,33 @@ This module builds the complete ScopeSpec from business requirements.
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, cast
+
+
+def _normalise_prediction_timestamp(value: Any) -> Optional[str]:
+    """Coerce a prediction_timestamp input to an ISO 8601 string.
+
+    Accepts ``datetime``, ``pd.Timestamp``, or ISO-format ``str`` and returns
+    the normalised string form for stable storage in ``scope_spec``. Returns
+    ``None`` when the input is missing or empty so downstream agents can
+    distinguish "not provided" from "explicit timestamp".
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    # Late import to keep scope_builder dependency-light.
+    try:
+        import pandas as pd
+
+        if isinstance(value, pd.Timestamp):
+            # pd.Timestamp.isoformat is typed as Any in pandas-stubs, so cast.
+            return cast(str, value.isoformat())
+    except ImportError:  # pragma: no cover - pandas is a hard dep elsewhere
+        pass
+    if isinstance(value, str):
+        return value
+    return str(value)
 
 
 async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -60,6 +86,10 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
     # Determine minimum samples
     minimum_samples = _calculate_minimum_samples(problem_type)
 
+    # Block 1B: forward the optional inference cutoff timestamp from the
+    # business spec so downstream agents (Tier 1-5) share a single anchor.
+    prediction_timestamp = _normalise_prediction_timestamp(state.get("prediction_timestamp"))
+
     # Build complete ScopeSpec
     scope_spec = {
         "experiment_id": experiment_id,
@@ -67,6 +97,7 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
         "problem_type": problem_type,
         "prediction_target": prediction_target,
         "prediction_horizon_days": prediction_horizon,
+        "prediction_timestamp": prediction_timestamp,
         "target_population": target_population,
         "inclusion_criteria": inclusion_criteria,
         "exclusion_criteria": exclusion_criteria,

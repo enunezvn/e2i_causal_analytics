@@ -154,6 +154,208 @@ class TestTemporalFeatures:
             assert "transformation" in meta
 
 
+class TestEntityGroupedTemporalFeatures:
+    """Tests for entity-grouped lag/rolling feature generation (Block 1B).
+
+    These tests cover finding #2 in the tier0 remediation plan: lag and
+    rolling-window features must be computed per entity, not on the raw row
+    order, otherwise the first row of one entity sees the previous entity's
+    tail value and leaks across patients.
+    """
+
+    def _three_patient_panel(self) -> pd.DataFrame:
+        """Build a synthetic 3 patients × 5 rows panel.
+
+        Each patient's ``value`` series increases monotonically so we can
+        assert per-entity lag/rolling output without ambiguity.
+        """
+        rows = []
+        # Patient A: values 1..5 across 5 days.
+        # Patient B: values 100..104.
+        # Patient C: values 1000..1004.
+        # Interleaving rows by date forces the implementation to use
+        # (entity_id, event_timestamp) sorting; row order alone is wrong.
+        for day in range(5):
+            ts = pd.Timestamp("2026-01-01") + pd.Timedelta(days=day)
+            rows.append({"patient_id": "A", "event_ts": ts, "value": 1 + day})
+            rows.append({"patient_id": "B", "event_ts": ts, "value": 100 + day})
+            rows.append({"patient_id": "C", "event_ts": ts, "value": 1000 + day})
+        # Shuffle so the input is intentionally not pre-sorted.
+        df = pd.DataFrame(rows).sample(frac=1.0, random_state=0).reset_index(drop=True)
+        return df
+
+    def test_lag_groupby_entity(self):
+        """``lag_1`` MUST start NaN at the first row of each entity.
+
+        If the implementation forgot the per-entity groupby, patient B's
+        first row would erroneously see patient A's last value as ``lag_1``.
+        We assert NaN to catch that regression.
+        """
+        df = self._three_patient_panel()
+
+        result_df, _ = _generate_temporal_features(
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            lag_periods=[1],
+            rolling_windows=[],
+        )
+
+        # Sort by (patient_id, event_ts) so we can index the first row per
+        # entity directly. _generate_temporal_features sorts in place; this
+        # guarantees the assertions are deterministic.
+        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(
+            drop=True
+        )
+
+        # First row of each entity must have lag_1 == NaN.
+        for entity in ("A", "B", "C"):
+            first = sorted_result[sorted_result["patient_id"] == entity].iloc[0]
+            assert pd.isna(first["value_lag_1"]), (
+                f"lag_1 at first row of patient {entity} must be NaN; "
+                f"got {first['value_lag_1']!r}. Without entity grouping the "
+                "function would leak patient A's value here."
+            )
+
+        # Subsequent rows in each entity must lag the entity's own series.
+        for entity, base in (("A", 1), ("B", 100), ("C", 1000)):
+            entity_rows = sorted_result[sorted_result["patient_id"] == entity]
+            # Row index 1 within the entity (second day) must equal day-0 value.
+            assert entity_rows.iloc[1]["value_lag_1"] == base
+            # Row index 4 must equal day-3 value (base + 3).
+            assert entity_rows.iloc[4]["value_lag_1"] == base + 3
+
+    def test_lag_without_groupby_leaks_across_entities(self):
+        """Sanity check: omitting ``entity_id_column`` reproduces the bug.
+
+        This locks in the test invariant — if the test above ever stops
+        catching the regression, this companion test would still fail when
+        the groupby behaviour is silently dropped.
+        """
+        df = self._three_patient_panel().sort_values(
+            ["patient_id", "event_ts"]
+        ).reset_index(drop=True)
+
+        result_df, _ = _generate_temporal_features(
+            df,
+            temporal_columns=["value"],
+            entity_id_column=None,  # explicit no-groupby path
+            event_timestamp_column=None,
+            lag_periods=[1],
+            rolling_windows=[],
+        )
+
+        # Without grouping, the first row of patient B (index 5) should see
+        # patient A's last value (5) as its lag, not NaN.
+        assert result_df.iloc[5]["patient_id"] == "B"
+        assert result_df.iloc[5]["value"] == 100
+        # lag_1 leaks: equals patient A's day-4 value.
+        assert result_df.iloc[5]["value_lag_1"] == 5
+
+    def test_rolling_groupby_entity(self):
+        """Rolling mean must be entity-scoped, not cross-entity."""
+        df = self._three_patient_panel()
+
+        result_df, _ = _generate_temporal_features(
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            lag_periods=[],
+            rolling_windows=[3],
+        )
+
+        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(
+            drop=True
+        )
+
+        # Patient B day-2 rolling mean(3) over [100, 101, 102] = 101.0.
+        # If grouping leaked, the window would have absorbed patient A's tail.
+        b_day2 = sorted_result[sorted_result["patient_id"] == "B"].iloc[2]
+        assert b_day2["value_rolling_mean_3"] == pytest.approx(101.0)
+
+        # Patient C day-2 rolling mean(3) over [1000, 1001, 1002] = 1001.0.
+        c_day2 = sorted_result[sorted_result["patient_id"] == "C"].iloc[2]
+        assert c_day2["value_rolling_mean_3"] == pytest.approx(1001.0)
+
+
+@pytest.mark.asyncio
+class TestGenerateFeaturesEntityGroupedPipeline:
+    """Integration: ``generate_features`` must apply grouping across splits.
+
+    The full pipeline runs ``_generate_temporal_features`` ONCE on the
+    concatenated train+val+test, then re-splits via internal markers. This
+    ensures lag chains span split boundaries within an entity.
+    """
+
+    async def test_lag_chain_spans_train_val_within_entity(self):
+        """Validation row 0 (patient with train history) must see train tail.
+
+        If ``generate_features`` ran ``_generate_temporal_features``
+        per-split (the pre-Block-1B behaviour), patient B's first
+        validation row would have ``lag_1 == NaN``. With the Block 1B
+        refactor it should pull the last train value for the same entity.
+        """
+        # Build a 2 patients × 4 rows train + 2 patients × 1 row val panel.
+        train_rows = []
+        for day in range(4):
+            ts = pd.Timestamp("2026-01-01") + pd.Timedelta(days=day)
+            train_rows.append({"patient_id": "A", "event_ts": ts, "value": 1 + day})
+            train_rows.append({"patient_id": "B", "event_ts": ts, "value": 100 + day})
+        train_df = pd.DataFrame(train_rows)
+
+        val_rows = [
+            {
+                "patient_id": "A",
+                "event_ts": pd.Timestamp("2026-01-05"),
+                "value": 5.0,
+            },
+            {
+                "patient_id": "B",
+                "event_ts": pd.Timestamp("2026-01-05"),
+                "value": 104.0,
+            },
+        ]
+        val_df = pd.DataFrame(val_rows)
+
+        state = {
+            "X_train": train_df,
+            "X_val": val_df,
+            "y_train": pd.Series([0, 1] * 4),
+            "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "event_ts",
+            "feature_config": {
+                "generate_temporal": True,
+                "generate_interactions": False,
+                "generate_domain": False,
+                "generate_aggregates": False,
+                "lag_periods": [1],
+                "rolling_windows": [],
+                # Skip nan-fill so we can assert raw lag values.
+                "nan_fill_strategy": "zero",
+            },
+            "temporal_columns": ["value"],
+        }
+
+        result = await generate_features(state)
+        assert "X_val_generated" in result
+        assert result.get("error") is None
+
+        x_val = result["X_val_generated"]
+        # Patient A's val row must see train day-3 value (4) as its lag_1,
+        # not 0 (which would mean nan-fill swallowed a per-split NaN).
+        a_val = x_val[x_val["patient_id"] == "A"].iloc[0]
+        assert a_val["value_lag_1"] == 4, (
+            "Validation lag_1 must reach back into the training tail for the "
+            "same entity. A NaN/zero here means the splits were processed "
+            "independently and the lag chain is broken."
+        )
+        b_val = x_val[x_val["patient_id"] == "B"].iloc[0]
+        assert b_val["value_lag_1"] == 103
+
+
 class TestInteractionFeatures:
     """Tests for interaction feature generation."""
 

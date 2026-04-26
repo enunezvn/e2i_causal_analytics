@@ -46,6 +46,13 @@ class ScopeDefinerState(TypedDict, total=False):
     region: Optional[str]  # Region context
     use_case: Optional[str]  # Use case category
 
+    # Temporal anchoring (Block 1B scaffolding; consumed in Block 4+).
+    # Inference cutoff time the model predicts from — feeds scope_spec so
+    # downstream agents can clip lookback windows and post-prediction filters.
+    # Accepts datetime, str, or pd.Timestamp at the API boundary; the scope
+    # builder normalises to ISO 8601 string for storage in scope_spec.
+    prediction_timestamp: Optional[Any]
+
     # === INTERMEDIATE FIELDS ===
     # Problem classification
     inferred_problem_type: str  # Inferred ML problem type

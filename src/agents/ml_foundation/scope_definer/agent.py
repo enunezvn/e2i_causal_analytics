@@ -109,6 +109,11 @@ class ScopeDefinerAgent:
                 - brand (str): Brand context
                 - region (str): Region context
                 - use_case (str): Use case category
+                - prediction_timestamp (datetime | str | pd.Timestamp): Inference
+                  cutoff time the model is meant to predict from. Plumbed
+                  through ``scope_spec`` so downstream agents (Tier 1-5) can
+                  anchor lookback windows and post-prediction filters. Block
+                  1B threads it but does not yet consume it.
 
         Returns:
             Dictionary with:
@@ -146,6 +151,9 @@ class ScopeDefinerAgent:
             "brand": input_data.get("brand", "unknown"),
             "region": input_data.get("region", "all"),
             "use_case": input_data.get("use_case", "commercial_targeting"),
+            # Block 1B: surface prediction_timestamp into the state so the
+            # scope_builder node can copy it onto scope_spec verbatim.
+            "prediction_timestamp": input_data.get("prediction_timestamp"),
         }
 
         start_time = datetime.now()

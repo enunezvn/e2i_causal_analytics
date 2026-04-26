@@ -504,6 +504,101 @@ class TestEdgeCases:
 
 
 @pytest.mark.unit
+class TestPredictionTimestampPropagation:
+    """Block 1B: ``prediction_timestamp`` plumbing through the mapper.
+
+    The plan adds ``prediction_timestamp`` to the tier0 contract and asks
+    every mapping that may consume it later (drift_monitor, heterogeneous
+    optimizer) to surface it. These tests lock the propagation in place
+    so Block 4+ can rely on it.
+    """
+
+    def test_resolves_from_top_level_state(self, sample_tier0_state):
+        """Top-level ``prediction_timestamp`` wins over scope_spec."""
+        ts = pd.Timestamp("2026-04-01T12:00:00Z")
+        state = sample_tier0_state.copy()
+        state["prediction_timestamp"] = ts
+        # Even with a different value on scope_spec, top-level wins.
+        state["scope_spec"] = {**state.get("scope_spec", {}), "prediction_timestamp": "1999-01-01"}
+
+        mapper = Tier0OutputMapper(state)
+        resolved = mapper._get_prediction_timestamp()
+
+        assert resolved is not None
+        assert resolved == ts
+
+    def test_resolves_from_scope_spec_fallback(self, sample_tier0_state):
+        """Falls back to ``scope_spec.prediction_timestamp`` when top-level absent."""
+        state = sample_tier0_state.copy()
+        state["scope_spec"] = {
+            **state.get("scope_spec", {}),
+            "prediction_timestamp": "2026-04-26T00:00:00",
+        }
+        # Ensure no top-level override.
+        state.pop("prediction_timestamp", None)
+
+        mapper = Tier0OutputMapper(state)
+        resolved = mapper._get_prediction_timestamp()
+
+        assert resolved is not None
+        assert resolved == pd.Timestamp("2026-04-26T00:00:00")
+
+    def test_returns_none_when_unset(self, sample_tier0_state):
+        """No timestamp anywhere → None (not an error, not a default)."""
+        state = sample_tier0_state.copy()
+        state.pop("prediction_timestamp", None)
+        scope = state.get("scope_spec", {}).copy()
+        scope.pop("prediction_timestamp", None)
+        state["scope_spec"] = scope
+
+        mapper = Tier0OutputMapper(state)
+        assert mapper._get_prediction_timestamp() is None
+
+    def test_drift_monitor_carries_prediction_timestamp(self, sample_tier0_state):
+        """``map_to_drift_monitor`` must surface ``prediction_timestamp``."""
+        ts = pd.Timestamp("2026-04-26T00:00:00")
+        state = sample_tier0_state.copy()
+        state["prediction_timestamp"] = ts
+
+        mapper = Tier0OutputMapper(state)
+        result = mapper.map_to_drift_monitor()
+
+        assert "prediction_timestamp" in result
+        assert result["prediction_timestamp"] == ts
+
+    def test_drift_monitor_prediction_timestamp_none_when_unset(self, sample_tier0_state):
+        """When tier0 state has no timestamp, the mapping shows None."""
+        state = sample_tier0_state.copy()
+        state.pop("prediction_timestamp", None)
+        scope = state.get("scope_spec", {}).copy()
+        scope.pop("prediction_timestamp", None)
+        state["scope_spec"] = scope
+
+        mapper = Tier0OutputMapper(state)
+        result = mapper.map_to_drift_monitor()
+
+        assert "prediction_timestamp" in result
+        assert result["prediction_timestamp"] is None
+
+    def test_heterogeneous_optimizer_carries_prediction_timestamp(
+        self, sample_tier0_state
+    ):
+        """``map_to_heterogeneous_optimizer`` must surface ``prediction_timestamp``."""
+        ts = pd.Timestamp("2026-05-01")
+        state = sample_tier0_state.copy()
+        state["scope_spec"] = {
+            **state.get("scope_spec", {}),
+            "prediction_timestamp": ts.isoformat(),
+        }
+
+        mapper = Tier0OutputMapper(state)
+        result = mapper.map_to_heterogeneous_optimizer()
+
+        assert "prediction_timestamp" in result
+        assert result["prediction_timestamp"] == ts
+
+
+@pytest.mark.unit
 class TestDataFrameColumnHandling:
     """Test handling of different DataFrame column configurations."""
 

@@ -7,7 +7,45 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, cast
+from typing import Any, Dict, NotRequired, TypedDict, cast
+
+import pandas as pd
+
+
+class Tier0StateContract(TypedDict, total=False):
+    """Typed contract for the tier0 state dictionary.
+
+    This formalises the keys produced by ``scripts/run_tier0_test.py`` that the
+    mapper is allowed to rely on. ``total=False`` means every key is optional;
+    individual fields use ``NotRequired`` for explicitness.
+
+    The contract is advisory — ``Tier0OutputMapper`` accepts any dict — but it
+    is the source of truth for which fields downstream agents may consume.
+    """
+
+    # Experiment identification (required at runtime; see REQUIRED_KEYS).
+    experiment_id: NotRequired[str]
+    eligible_df: NotRequired[Any]  # pd.DataFrame; loosely typed to keep import light
+
+    # Model artefacts.
+    trained_model: NotRequired[Any]
+    model_uri: NotRequired[str]
+    validation_metrics: NotRequired[Dict[str, Any]]
+    feature_importance: NotRequired[list]
+
+    # Pipeline outputs.
+    qc_report: NotRequired[Dict[str, Any]]
+    cohort_result: NotRequired[Any]
+    scope_spec: NotRequired[Dict[str, Any]]
+    class_imbalance_info: NotRequired[Dict[str, Any]]
+
+    # Temporal scaffolding for downstream Tier 1-5 work (Block 4 onward will
+    # consume this; Block 1B only threads it through). When present, this is
+    # the inference cutoff time the model is meant to predict from — agents
+    # use it to clip lookback windows, filter post-prediction events, and
+    # avoid label leakage. Absent / None means "use current time" semantics
+    # that earlier blocks already follow.
+    prediction_timestamp: NotRequired[pd.Timestamp]
 
 
 class Tier0OutputMapper:
@@ -24,6 +62,8 @@ class Tier0OutputMapper:
     - cohort_result: CohortExecutionResult
     - scope_spec: dict (brand, indication, etc.)
     - class_imbalance_info: dict (ratio, strategy)
+    - prediction_timestamp: pd.Timestamp (optional inference cutoff time;
+      surfaced from scope_spec.prediction_timestamp when set, otherwise None)
 
     This class provides mapping methods for each Tier 1-5 agent.
     """
@@ -44,6 +84,7 @@ class Tier0OutputMapper:
         "cohort_result",
         "scope_spec",
         "class_imbalance_info",
+        "prediction_timestamp",
     ]
 
     def __init__(self, tier0_state: dict[str, Any]):
@@ -80,6 +121,26 @@ class Tier0OutputMapper:
         """Get top N features by importance."""
         features = self._get_feature_names()
         return features[:n] if features else []
+
+    def _get_prediction_timestamp(self) -> pd.Timestamp | None:
+        """Resolve the prediction timestamp from tier0 state.
+
+        Order of precedence:
+        1. Explicit ``state["prediction_timestamp"]`` (top level).
+        2. ``state["scope_spec"]["prediction_timestamp"]`` (set by
+           ``ScopeDefinerAgent`` when the business spec carries one).
+
+        Returns ``None`` when neither path provides a value. Block 4+ will
+        wire the resolved timestamp into temporal feature builders and
+        post-prediction event filters; for now it is plumbing only.
+        """
+        ts = self.state.get("prediction_timestamp")
+        if ts is None:
+            ts = (self.state.get("scope_spec") or {}).get("prediction_timestamp")
+        if ts is None:
+            return None
+        # Coerce to pd.Timestamp so downstream agents always see the same type.
+        return pd.Timestamp(ts) if not isinstance(ts, pd.Timestamp) else ts
 
     # =========================================================================
     # TIER 1: Orchestrator Agents
@@ -297,6 +358,7 @@ class Tier0OutputMapper:
             "data_source": "patient_journeys",
             "filters": None,
             "tier0_data": df,  # NEW: Pass actual DataFrame for direct use
+            "prediction_timestamp": self._get_prediction_timestamp(),
         }
 
     # =========================================================================
@@ -314,6 +376,9 @@ class Tier0OutputMapper:
         - brand: Optional[str]
         - significance_level: float (default 0.05)
         - tier0_data: Optional[DataFrame] (for testing with real synthetic data)
+        - prediction_timestamp: Optional[pd.Timestamp] (inference cutoff,
+          plumbed through from scope_spec for downstream temporal anchoring;
+          Block 1B threads it but doesn't yet consume it)
         """
         feature_cols = self._get_feature_names()
         eligible_df = self.state.get("eligible_df")
@@ -331,6 +396,7 @@ class Tier0OutputMapper:
             "significance_level": 0.05,
             # Pass tier0_data for drift detection with real synthetic data
             "tier0_data": eligible_df,
+            "prediction_timestamp": self._get_prediction_timestamp(),
         }
 
     def map_to_experiment_designer(self) -> dict[str, Any]:

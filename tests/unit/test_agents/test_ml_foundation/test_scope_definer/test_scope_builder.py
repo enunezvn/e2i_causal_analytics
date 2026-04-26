@@ -1,5 +1,8 @@
 """Tests for scope specification builder."""
 
+from datetime import datetime
+
+import pandas as pd
 import pytest
 
 from src.agents.ml_foundation.scope_definer.nodes.scope_builder import (
@@ -7,6 +10,7 @@ from src.agents.ml_foundation.scope_definer.nodes.scope_builder import (
     _define_excluded_features,
     _define_inclusion_criteria,
     _define_target_population,
+    _normalise_prediction_timestamp,
     build_scope_spec,
 )
 
@@ -274,3 +278,68 @@ async def test_build_scope_uses_candidate_features_if_provided():
 
     # Should use custom features
     assert required_features == custom_features
+
+
+# === Block 1B: prediction_timestamp scaffolding =============================
+
+
+def test_normalise_prediction_timestamp_handles_datetime():
+    """``datetime`` inputs are normalised to ISO 8601 strings."""
+    dt = datetime(2026, 4, 26, 12, 30, 45)
+    assert _normalise_prediction_timestamp(dt) == dt.isoformat()
+
+
+def test_normalise_prediction_timestamp_handles_pandas_timestamp():
+    """``pd.Timestamp`` inputs are normalised to ISO 8601 strings."""
+    ts = pd.Timestamp("2026-04-26T12:30:45")
+    assert _normalise_prediction_timestamp(ts) == ts.isoformat()
+
+
+def test_normalise_prediction_timestamp_passes_through_strings():
+    """ISO-format string inputs are preserved verbatim."""
+    s = "2026-04-26T12:30:45"
+    assert _normalise_prediction_timestamp(s) == s
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_normalise_prediction_timestamp_returns_none_for_empty(value):
+    """Missing / empty inputs map to ``None`` (not "" or current time)."""
+    assert _normalise_prediction_timestamp(value) is None
+
+
+@pytest.mark.asyncio
+async def test_build_scope_propagates_prediction_timestamp_when_provided():
+    """``prediction_timestamp`` from state lands on ``scope_spec``."""
+    ts = pd.Timestamp("2026-04-26T00:00:00")
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "prediction_timestamp": ts,
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+
+    assert "prediction_timestamp" in scope_spec
+    assert scope_spec["prediction_timestamp"] == ts.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_build_scope_prediction_timestamp_absent_when_unset():
+    """Without ``prediction_timestamp`` in state, ``scope_spec`` has None."""
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+
+    # Block 1B threading rule: the field is always present in the spec for a
+    # stable schema, but its value is None when no timestamp was provided.
+    assert "prediction_timestamp" in scope_spec
+    assert scope_spec["prediction_timestamp"] is None

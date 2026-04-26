@@ -173,3 +173,76 @@ verdict block via `state.get("test_metrics", {})`.
 - **Validation metrics at the frozen threshold are slightly different** from the baseline's "validation at the test-tuned threshold" line, as expected — the chosen threshold moved from 0.4982 → 0.5141, so the validation operating point shifted accordingly.
 - **MARGINAL verdict unchanged** (AUC remains the dominant signal in the verdict logic, so the verdict label is robust to this fix).
 - **Top features, SHAP rankings, calibration, CV results, permutation test all unchanged** — those don't depend on the chosen operating point.
+
+## Block 1B note
+
+After making lag/rolling feature generation entity-grouped pre-split and adding
+`prediction_timestamp` scaffolding to the contract. Source: single
+`python scripts/run_tier0_test.py` execution at experiment ID
+`tier0_e2e_25bc97bc`, run report `docs/results/tier0_pipeline_run_20260426_013502.md`.
+
+### Run metadata (post-Block-1B)
+
+| Field | Value |
+|-------|-------|
+| Run timestamp | 2026-04-26 01:35:02 UTC |
+| Experiment ID | `tier0_e2e_25bc97bc` |
+| Cohort size | 1500 patients (unchanged) |
+| Total duration | 216.3 s |
+| QC gate | PASSED |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — out of scope per plan) |
+| Selected best model | LogisticRegression (AUC ranking unchanged) |
+
+### Tier-0 metric delta vs Block 1A
+
+| Metric | Block 1A | Block 1B | Delta |
+|--------|----------|----------|-------|
+| roc_auc (val) | 0.6942 | 0.6942 | 0.0000 |
+| pr_auc (val) | 0.2848 | 0.2848 | 0.0000 |
+| accuracy (val) | 0.7300 | 0.7300 | 0.0000 |
+| precision (val) | 0.2921 | 0.2921 | 0.0000 |
+| recall (val) | 0.5909 | 0.5909 | 0.0000 |
+| f1_score (val) | 0.3910 | 0.3910 | 0.0000 |
+| mcc (val) | 0.2671 | 0.2671 | 0.0000 |
+| brier_score (val) | 0.2369 | 0.2369 | 0.0000 |
+| chosen_threshold | 0.5141 | 0.5141 | 0.0000 |
+| auc_roc (test) | 0.5740 | 0.5740 | 0.0000 |
+| precision (test) | 0.1719 | 0.1719 | 0.0000 |
+| recall (test) | 0.3333 | 0.3333 | 0.0000 |
+| f1_score (test) | 0.2268 | 0.2268 | 0.0000 |
+| positive_predictions (test) | 89 | 89 | 0 |
+
+### Why the metrics didn't move
+
+Synthetic patients in `sample_data.py:573` produce one row per `patient_id`. With
+one row per entity, every `groupby(patient_id).shift(N)` produces NaN, which is
+then median-filled by `_handle_generated_nans`. The temporal block thus carries
+no information for synthetic data — it is a structural fix that lights up only
+once multi-row entities (longitudinal patient panels) flow through the
+pipeline. Block 4+ is where this changes the numbers.
+
+Beyond the temporal node, the tier0 e2e path doesn't reach `generate_features`
+at all on this synthetic input: `step_6_feature_analyzer` calls
+`FeatureAnalyzerAgent` with only `X_sample`, which routes to the SHAP-only
+graph (`agent.py:163`). So the per-row interaction/domain/aggregate steps are
+also dormant on this run; observed parity is expected end-to-end.
+
+`prediction_timestamp` is plumbed through `scope_definer` → `scope_spec` →
+`Tier0OutputMapper` (drift_monitor + heterogeneous_optimizer mappings) but
+not yet consumed; expect this scaffolding to be exercised in Block 4 onward.
+
+### Other notable changes at the code level
+
+- `_generate_temporal_features` now requires `entity_id_column` and
+  `event_timestamp_column` (both `Optional`, default `None`); when set, lag
+  and rolling are computed via `df.groupby(entity_id).shift(N)` and
+  `df.groupby(entity_id).rolling(W)` respectively.
+- `generate_features` concatenates train+val+test once with internal split
+  markers, runs the temporal node on the combined frame, then re-splits via
+  marker reindex. Public return contract (`X_train_generated`,
+  `X_val_generated`, `X_test_generated`, `feature_metadata`) unchanged.
+- `data_transformer.py:173` misleading comment removed; new tests in
+  `tests/unit/test_agents/test_ml_foundation/test_data_preparer/test_data_transformer.py`
+  assert `LabelEncoder.classes_` matches train uniques exactly and that
+  unseen val/test categories collapse to the sentinel id
+  via `_safe_label_encode`.
