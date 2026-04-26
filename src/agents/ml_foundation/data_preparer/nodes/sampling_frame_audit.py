@@ -31,9 +31,14 @@ When present, ``deployment_reference`` must follow this shape:
 
 Drift methodology (one consistent approach, documented up-front):
 
-* **Numeric** — ``standardized_mean_diff`` (Cohen's d using a pooled std):
-  ``|mean_train - mean_ref| / pooled_std``. A column is flagged when this
-  exceeds ``numeric_drift_threshold`` (default ``0.5``).
+* **Numeric** — ``standardized_mean_diff``: an average-of-variances
+  standardized mean difference (a Cohen's d variant suitable when only
+  summary statistics are available, also called Glass's Δ' / equal-n
+  Cohen's d): ``|mean_train - mean_ref| / sqrt((s_train² + s_ref²) / 2)``.
+  A column is flagged when this exceeds ``numeric_drift_threshold``
+  (default ``0.5``). When both stds collapse to 0 the metric is undefined;
+  the audit reports a non-finite SMD as ``metric_value=None`` with
+  ``status="extreme_drift"`` and ``drift_flagged=True``.
 * **Categorical** — Jensen–Shannon divergence between the two frequency
   vectors. A column is flagged when this exceeds
   ``categorical_drift_threshold`` (default ``0.2``). The JS divergence is
@@ -259,7 +264,15 @@ def _audit_numeric(
     ref_stats: Mapping[str, Any],
     threshold: float,
 ) -> Dict[str, Any]:
-    """Compute numeric drift via pooled-std standardised mean difference."""
+    """Compute numeric drift via average-of-variances standardized mean diff.
+
+    The denominator is ``sqrt((s_train² + s_ref²) / 2)`` (a Cohen's d variant
+    suitable when only summary statistics are available — also known as
+    Glass's Δ' / equal-n Cohen's d). When both stds collapse to 0 the metric
+    is undefined; the result reports ``metric_value=None`` with
+    ``status="extreme_drift"`` and ``drift_flagged=True`` so the JSON
+    payload stays RFC 8259-compliant (no ``Infinity``/``NaN`` literals).
+    """
     train_values = pd.to_numeric(series, errors="coerce").dropna()
     n_train = int(train_values.shape[0])
 
@@ -286,23 +299,27 @@ def _audit_numeric(
             "drift_flagged": False,
         }
 
-    # Pooled std with a small epsilon to avoid div-by-zero when both stds
-    # collapse to 0 (happens when both train and reference are constants).
+    # Combined std (average-of-variances form). When both train and reference
+    # variances collapse to 0 (both constants) the metric is undefined: we
+    # surface that as a non-finite SMD below.
     train_var = train_std**2
     ref_var = ref_std**2 if ref_std is not None else 0.0
-    pooled_std = math.sqrt((train_var + ref_var) / 2.0) if (
+    combined_std = math.sqrt((train_var + ref_var) / 2.0) if (
         train_var + ref_var
     ) > 0 else 0.0
 
-    if pooled_std == 0.0:
+    if combined_std == 0.0:
         # Both are constants — drift is binary (means equal or not).
         smd = 0.0 if math.isclose(train_mean, ref_mean) else float("inf")
     else:
-        smd = abs(train_mean - ref_mean) / pooled_std
+        smd = abs(train_mean - ref_mean) / combined_std
 
-    drift_flagged = math.isfinite(smd) and smd > threshold or (
-        not math.isfinite(smd)
-    )
+    # Explicit if/else (no operator-precedence puzzle): a non-finite SMD is
+    # always treated as drift; otherwise compare against the threshold.
+    if not math.isfinite(smd):
+        drift_flagged = True
+    else:
+        drift_flagged = smd > threshold
 
     quantile_diffs: Dict[str, float] = {}
     ref_quantiles = ref_stats.get("quantiles")
@@ -318,13 +335,21 @@ def _audit_numeric(
             train_q = float(train_values.quantile(q))
             quantile_diffs[key] = float(train_q - ref_q)
 
+    # RFC 8259 strict-JSON safety: when SMD is non-finite (infinite or NaN),
+    # set metric_value=None and surface the condition via "extreme_drift".
+    # ``json.dumps(report, allow_nan=False)`` then succeeds.
+    if math.isfinite(smd):
+        metric_value: Optional[float] = float(smd)
+        entry_status = "checked"
+    else:
+        metric_value = None
+        entry_status = "extreme_drift"
+
     return {
-        "status": "checked",
+        "status": entry_status,
         "type": "numeric",
         "metric": "standardized_mean_diff",
-        "metric_value": (
-            float(smd) if math.isfinite(smd) else float("inf")
-        ),
+        "metric_value": metric_value,
         "threshold": float(threshold),
         "drift_flagged": bool(drift_flagged),
         "train_mean": train_mean,

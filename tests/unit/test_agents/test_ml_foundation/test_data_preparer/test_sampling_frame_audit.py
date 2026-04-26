@@ -291,3 +291,58 @@ async def test_audit_report_serializable(base_train_df):
     # Known-bad types should not appear anywhere in the serialised payload.
     assert "numpy" not in serialised
     assert "<class" not in serialised
+
+
+# ---------------------------------------------------------------------------
+# 7. Strict-JSON safety for non-finite SMD (constants-with-different-mean)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audit_report_strict_json_serializable():
+    """A constant train column vs. a constant ref with a different mean must
+    NOT produce non-RFC-8259 JSON.
+
+    Previously the audit wrote ``metric_value=float("inf")``; Python's default
+    ``json.dumps`` emits ``Infinity`` (rejected by browser ``JSON.parse``,
+    ``allow_nan=False``, Postgres ``jsonb``, Pydantic ``strict=True``). The
+    contract is now: non-finite SMD → ``metric_value=None`` with
+    ``status="extreme_drift"`` and ``drift_flagged=True``.
+    """
+    # Train column is a constant 5.0; reference describes a constant 7.0.
+    # combined_std collapses to 0, the means differ → SMD is +inf.
+    train_df = pd.DataFrame({"const_col": [5.0] * 50})
+    reference = {
+        "distributions": {
+            "const_col": {"mean": 7.0, "std": 0.0},
+        },
+    }
+    state: Dict[str, Any] = {
+        "experiment_id": "exp_audit_strict_json",
+        "scope_spec": {"deployment_reference": reference},
+        "train_df": train_df,
+        "blocking_issues": [],
+    }
+
+    result = await audit_sampling_frame(state)
+    report = result["sampling_frame_audit_report"]
+
+    # Drift detection must remain True for non-finite SMD.
+    assert report["drift_detected"] is True
+    assert "const_col" in report["columns_with_drift"]
+
+    entry = report["per_column"]["const_col"]
+    assert entry["status"] == "extreme_drift"
+    assert entry["metric_value"] is None
+    assert entry["drift_flagged"] is True
+
+    # The whole report must be strict-JSON serialisable. ``allow_nan=False``
+    # raises ValueError on Infinity/NaN literals — the call must NOT raise.
+    serialised = json.dumps(report, allow_nan=False)
+    decoded = json.loads(serialised)
+    assert decoded["per_column"]["const_col"]["metric_value"] is None
+    assert decoded["per_column"]["const_col"]["status"] == "extreme_drift"
+    assert decoded["per_column"]["const_col"]["drift_flagged"] is True
+    # Sanity: no Infinity/NaN tokens leaked into the payload.
+    assert "Infinity" not in serialised
+    assert "NaN" not in serialised
