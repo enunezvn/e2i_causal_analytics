@@ -254,8 +254,10 @@ async def test_check_feature_freshness_helper():
 
 
 @pytest.mark.asyncio
-async def test_check_feature_freshness_handles_exception():
-    """Test that freshness check handles exceptions gracefully."""
+async def test_check_feature_freshness_handles_exception(monkeypatch):
+    """On exception, freshness check returns stale dict (fresh=False) by default."""
+    monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
     adapter = MagicMock()
     adapter.check_feature_freshness = AsyncMock(side_effect=Exception("Feast not responding"))
 
@@ -266,8 +268,30 @@ async def test_check_feature_freshness_handles_exception():
         max_staleness_hours=24.0,
     )
 
-    # Should return None on failure (non-critical)
-    assert result is None
+    # Returns a stale dict — not None — so callers can react to the failure.
+    assert result is not None
+    assert result["fresh"] is False
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_check_feature_freshness_allow_stale_on_exception(monkeypatch):
+    """ALLOW_STALE_FEAST=1 makes _check_feature_freshness return fresh=True on exception."""
+    monkeypatch.setenv("ALLOW_STALE_FEAST", "1")
+
+    adapter = MagicMock()
+    adapter.check_feature_freshness = AsyncMock(side_effect=Exception("Feast not responding"))
+
+    result = await _check_feature_freshness(
+        adapter=adapter,
+        experiment_id="exp_test",
+        feature_names=["feature1"],
+        max_staleness_hours=24.0,
+    )
+
+    assert result is not None
+    assert result["fresh"] is True
+    assert "warning" in result
 
 
 @pytest.mark.asyncio
@@ -283,3 +307,69 @@ async def test_register_features_timestamp_format(mock_state_with_train_data, mo
     timestamp = result["feast_registered_at"]
     assert timestamp is not None
     datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
+# ============================================================================
+# Block 2 — QC gate tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_qc_gate_blocks_on_stale_feast(mock_state_with_train_data, monkeypatch):
+    """Stale features hard-block training unless ALLOW_STALE_FEAST=1."""
+    monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
+    adapter = MagicMock()
+    adapter.register_features_from_state = AsyncMock(
+        return_value={"features_registered": 2, "errors": []}
+    )
+    adapter.check_feature_freshness = AsyncMock(
+        return_value={
+            "fresh": False,
+            "error": "stale",
+            "recommendations": ["Run materialization for feature_analyzer_exp_feast_test_123"],
+        }
+    )
+    # Simulate adapter with no backing FeastClient so fallback flag stays False
+    adapter._feast_client = None
+
+    with patch(
+        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+        return_value=adapter,
+    ):
+        result = await register_features_in_feast(mock_state_with_train_data)
+
+    # Hard block must be set
+    assert result.get("feast_blocked") is True
+    assert result.get("feast_registration_status") == "blocked_stale_features"
+    # Freshness warning propagated
+    assert any("Freshness" in w for w in result["feast_warnings"])
+
+
+@pytest.mark.asyncio
+async def test_qc_gate_allows_with_allow_stale_env(mock_state_with_train_data, monkeypatch):
+    """ALLOW_STALE_FEAST=1 bypasses the hard block (warnings only)."""
+    monkeypatch.setenv("ALLOW_STALE_FEAST", "1")
+
+    adapter = MagicMock()
+    adapter.register_features_from_state = AsyncMock(
+        return_value={"features_registered": 2, "errors": []}
+    )
+    adapter.check_feature_freshness = AsyncMock(
+        return_value={
+            "fresh": False,
+            "error": "stale",
+            "recommendations": ["Run materialization for feature_analyzer_exp_feast_test_123"],
+        }
+    )
+    adapter._feast_client = None
+
+    with patch(
+        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+        return_value=adapter,
+    ):
+        result = await register_features_in_feast(mock_state_with_train_data)
+
+    # No hard block when ALLOW_STALE_FEAST is set
+    assert result.get("feast_blocked") is False
+    assert result.get("feast_registration_status") != "blocked_stale_features"

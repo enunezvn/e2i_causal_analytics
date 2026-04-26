@@ -17,6 +17,7 @@ import pytest
 from src.feature_store.feast_client import (
     FeastClient,
     FeastConfig,
+    FeastFallbackError,
     FeatureFreshness,
     FeatureStatistics,
     FreshnessStatus,
@@ -765,3 +766,95 @@ class TestMaterializationTimestampTracking:
         # Feature view should have timestamp recorded
         assert "hcp_features" in client._materialization_timestamps
         assert before <= client._materialization_timestamps["hcp_features"] <= after
+
+
+# ============================================================================
+# Block 2 — Feast fail-loud tests
+# ============================================================================
+
+
+class TestProductionFallbackRaises:
+    """Test that the historical-features fallback raises in production."""
+
+    @pytest.mark.asyncio
+    async def test_historical_fallback_raises_in_production(self, monkeypatch):
+        """FeastFallbackError is raised (not swallowed) when ENVIRONMENT=production."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        # Simulate: no Feast store, but custom store is present so fallback is attempted
+        client._store = None
+        client._custom_store = MagicMock()
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        with pytest.raises(FeastFallbackError):
+            await client.get_historical_features(
+                entity_df=entity_df,
+                feature_refs=["hcp_view:engagement_score"],
+            )
+
+        # _fallback_used must remain False — the raise fires before the side-effect.
+        assert client._fallback_used is False
+
+    @pytest.mark.asyncio
+    async def test_fallback_used_flag_set_in_non_production(self, monkeypatch):
+        """_fallback_used is set to True when the fallback succeeds (non-prod)."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        client._store = None
+        client._custom_store = MagicMock()
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        await client.get_historical_features(
+            entity_df=entity_df,
+            feature_refs=["hcp_view:engagement_score"],
+        )
+
+        assert client._fallback_used is True
+
+
+class TestFreshnessDefaultsToStaleOnException:
+    """Test that get_feature_freshness defaults to stale on exception."""
+
+    @pytest.mark.asyncio
+    async def test_freshness_default_false_on_exception(self, monkeypatch):
+        """When initialization raises, freshness is treated as stale (is_fresh=False)."""
+        monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
+        client = FeastClient()
+        # Patch initialize to raise so the inner body never executes
+        client.initialize = AsyncMock(side_effect=Exception("Feast service unreachable"))
+
+        result = await client.get_feature_freshness("some_feature_view")
+
+        assert result.is_fresh is False
+        assert result.freshness_status is FreshnessStatus.UNKNOWN
+        assert result.message is not None
+        assert "Freshness check failed" in result.message
+
+    @pytest.mark.asyncio
+    async def test_freshness_allow_stale_env_overrides_exception(self, monkeypatch):
+        """ALLOW_STALE_FEAST=1 causes is_fresh=True even when initialization raises."""
+        monkeypatch.setenv("ALLOW_STALE_FEAST", "1")
+
+        client = FeastClient()
+        client.initialize = AsyncMock(side_effect=Exception("Feast service unreachable"))
+
+        result = await client.get_feature_freshness("some_feature_view")
+
+        assert result.is_fresh is True

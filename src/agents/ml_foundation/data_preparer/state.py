@@ -86,11 +86,15 @@ class DataPreparerState(TypedDict, total=False):
     correlation_matrix: Dict[str, Dict[str, float]]
 
     # Feast registration
-    feast_registration_status: Literal["completed", "empty", "skipped", "error"]
+    feast_registration_status: Literal[
+        "completed", "empty", "skipped", "error", "blocked_stale_features"
+    ]
     feast_features_registered: int  # Count of features registered
     feast_freshness_check: Optional[Dict[str, Any]]  # Freshness check result
     feast_warnings: List[str]  # Non-blocking warnings
     feast_registered_at: Optional[str]  # ISO timestamp
+    feast_blocked: bool  # True when stale features hard-block training
+    feast_fallback_used: bool  # True when the historical-features fallback fired
 
     # Recommendations
     remediation_steps: List[str]

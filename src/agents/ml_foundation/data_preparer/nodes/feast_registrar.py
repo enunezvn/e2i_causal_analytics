@@ -8,6 +8,7 @@ It executes AFTER validation and BEFORE baseline computation to ensure:
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, cast
 
@@ -60,6 +61,13 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
         "feast_freshness_check": None,
         "feast_warnings": [],
         "feast_registered_at": None,
+        # Indicates whether the Feast historical-features fallback was used
+        # during this registration step.  Propagated to model_trainer so that
+        # MLflow runs can be tagged accordingly.
+        "feast_fallback_used": False,
+        # Set to True when features are stale and ALLOW_STALE_FEAST is unset,
+        # which hard-blocks downstream training via the QC gate.
+        "feast_blocked": False,
     }
 
     try:
@@ -131,10 +139,31 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
         freshness_result = await _check_feature_freshness(adapter, experiment_id, required_features)
         updates["feast_freshness_check"] = freshness_result
 
-        # Add freshness warnings to state
-        if freshness_result and not freshness_result.get("fresh", True):
+        # Add freshness warnings to state; default to "not fresh" when key absent.
+        if freshness_result and not freshness_result.get("fresh", False):
             for recommendation in freshness_result.get("recommendations", []):
                 updates["feast_warnings"].append(f"Freshness: {recommendation}")
+
+            # Hard block when features are stale unless the ops escape hatch is set.
+            if os.environ.get("ALLOW_STALE_FEAST") != "1":
+                updates["feast_blocked"] = True
+                updates["feast_registration_status"] = "blocked_stale_features"
+                logger.warning(
+                    "Feast QC gate: features are stale for experiment %s. "
+                    "Blocking training. Set ALLOW_STALE_FEAST=1 to bypass (ops emergency only).",
+                    experiment_id,
+                )
+            else:
+                logger.warning(
+                    "Feast QC gate: features are stale for experiment %s but "
+                    "ALLOW_STALE_FEAST=1 is set — proceeding with stale features.",
+                    experiment_id,
+                )
+
+        # Propagate fallback flag so model_trainer can tag the MLflow run.
+        feast_client = getattr(adapter, "_feast_client", None)
+        if feast_client is not None:
+            updates["feast_fallback_used"] = getattr(feast_client, "_fallback_used", False)
 
         updates["feast_registered_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -159,6 +188,10 @@ async def _check_feature_freshness(
 ) -> Optional[Dict[str, Any]]:
     """Check feature freshness in Feast.
 
+    On exception the function returns a dict with ``fresh=False`` (blocking the
+    QC gate) unless ``ALLOW_STALE_FEAST=1`` is set in the environment, which is
+    an ops-only escape hatch for known Feast outages.
+
     Args:
         adapter: FeatureAnalyzerAdapter instance
         experiment_id: Experiment identifier
@@ -166,7 +199,7 @@ async def _check_feature_freshness(
         max_staleness_hours: Maximum allowed staleness
 
     Returns:
-        Freshness check result or None if check fails
+        Freshness check result dict, or None if there are no features to check.
     """
     try:
         # Build feature refs for the experiment's feature view
@@ -184,5 +217,26 @@ async def _check_feature_freshness(
         return cast(Dict[str, Any], result) if result is not None else result
 
     except Exception as e:
-        logger.debug(f"Freshness check failed (non-critical): {e}")
-        return None
+        allow_stale = os.environ.get("ALLOW_STALE_FEAST") == "1"
+        logger.warning(
+            "Feast freshness check failed for experiment %s: %s. "
+            "Treating as %s.",
+            experiment_id,
+            e,
+            "fresh (ALLOW_STALE_FEAST=1)" if allow_stale else "stale",
+        )
+        if allow_stale:
+            return {
+                "fresh": True,
+                "warning": str(e),
+                "recommendations": [
+                    "Feast freshness check failed; verify Feast service is reachable."
+                ],
+            }
+        return {
+            "fresh": False,
+            "error": str(e),
+            "recommendations": [
+                "Feast freshness check failed; verify Feast service is reachable."
+            ],
+        }

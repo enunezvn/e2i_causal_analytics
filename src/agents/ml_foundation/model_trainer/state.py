@@ -25,6 +25,7 @@ class ModelTrainerState(TypedDict, total=False):
     # From data_preparer
     qc_report: Dict[str, Any]  # QC validation report
     experiment_id: str  # Experiment identifier
+    feast_fallback_used: bool  # True when data_preparer used the Feast historical-features fallback
 
     # From scope_definer
     success_criteria: Dict[str, float]  # Performance thresholds to meet

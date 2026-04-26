@@ -300,3 +300,63 @@ class TestGetPrimaryMetric:
         result = _get_primary_metric(metrics, "binary_classification")
 
         assert result == 0.80  # Falls back to f1
+
+
+# ============================================================================
+# Block 2 — MLflow feast_fallback tag tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+class TestFeastFallbackTag:
+    """Test that feast_fallback is emitted as an MLflow run tag."""
+
+    async def test_mlflow_tag_when_feast_fallback_used(
+        self, training_state, mock_mlflow_connector
+    ):
+        """MLflow start_run tags include feast_fallback=True when fallback was used."""
+        training_state["feast_fallback_used"] = True
+
+        with patch(
+            "src.mlops.mlflow_connector.get_mlflow_connector",
+            return_value=mock_mlflow_connector,
+        ):
+            result = await log_to_mlflow(training_state)
+
+        assert result["mlflow_status"] == "success"
+        # Inspect the kwargs passed to start_run
+        call_kwargs = mock_mlflow_connector.start_run.call_args[1]
+        assert call_kwargs["tags"]["feast_fallback"] == "True"
+
+    async def test_mlflow_tag_when_feast_fallback_not_used(
+        self, training_state, mock_mlflow_connector
+    ):
+        """MLflow start_run tags include feast_fallback=False when fallback was not used."""
+        training_state["feast_fallback_used"] = False
+
+        with patch(
+            "src.mlops.mlflow_connector.get_mlflow_connector",
+            return_value=mock_mlflow_connector,
+        ):
+            result = await log_to_mlflow(training_state)
+
+        assert result["mlflow_status"] == "success"
+        call_kwargs = mock_mlflow_connector.start_run.call_args[1]
+        assert call_kwargs["tags"]["feast_fallback"] == "False"
+
+    async def test_mlflow_tag_defaults_to_false_when_key_absent(
+        self, training_state, mock_mlflow_connector
+    ):
+        """MLflow feast_fallback tag defaults to 'False' when key absent from state."""
+        # Ensure key is absent
+        training_state.pop("feast_fallback_used", None)
+
+        with patch(
+            "src.mlops.mlflow_connector.get_mlflow_connector",
+            return_value=mock_mlflow_connector,
+        ):
+            result = await log_to_mlflow(training_state)
+
+        assert result["mlflow_status"] == "success"
+        call_kwargs = mock_mlflow_connector.start_run.call_args[1]
+        assert call_kwargs["tags"]["feast_fallback"] == "False"

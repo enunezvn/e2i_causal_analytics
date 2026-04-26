@@ -76,6 +76,10 @@ FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
 FEAST_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
 
 
+class FeastFallbackError(Exception):
+    """Raised when the Feast historical-features fallback fires in production."""
+
+
 class FreshnessStatus(str, Enum):
     """Feature freshness status levels."""
 
@@ -204,6 +208,10 @@ class FeastClient:
 
         # Track last materialization timestamps per feature view
         self._materialization_timestamps: Dict[str, datetime] = {}
+
+        # Track whether the historical-features fallback has been used during
+        # this client's lifetime so trainers can tag MLflow runs accordingly.
+        self._fallback_used: bool = False
 
     async def initialize(self) -> None:
         """Initialize Feast store connection.
@@ -438,6 +446,9 @@ class FeastClient:
             else:
                 raise RuntimeError("No feature store available")
 
+        except FeastFallbackError:
+            # Propagate production-mode fallback errors without re-routing.
+            raise
         except Exception as e:
             logger.error(f"Error getting historical features: {e}")
             if self.config.enable_fallback and self._custom_store:
@@ -456,10 +467,23 @@ class FeastClient:
 
         Note: This fallback does NOT support true point-in-time joins.
         It returns the latest feature values instead.
+
+        Raises:
+            FeastFallbackError: When ``ENVIRONMENT=production``. The fallback
+                is forbidden in production because it silently degrades
+                point-in-time correctness, which can leak future data into
+                training. Configure Feast properly or unset ``ENVIRONMENT``.
         """
+        if os.environ.get("ENVIRONMENT") == "production":
+            raise FeastFallbackError(
+                "Feast historical features unavailable; fallback is forbidden in production. "
+                "Configure Feast or unset ENVIRONMENT."
+            )
+
         logger.warning(
             "Using fallback for historical features. Point-in-time correctness NOT guaranteed."
         )
+        self._fallback_used = True
 
         if not self._custom_store:
             raise RuntimeError("Custom store not available for fallback")
@@ -1025,7 +1049,16 @@ class FeastClient:
         - WARNING: Between warning and max staleness
         - STALE: Beyond max staleness but within 2x
         - EXPIRED: Beyond 2x max staleness
-        - UNKNOWN: No materialization record
+        - UNKNOWN: No materialization record or check failure
+
+        On any unexpected exception the method defaults to treating features
+        as **stale** (``is_fresh=False``, ``freshness_status=UNKNOWN``) so
+        that callers block by default rather than silently proceeding with
+        potentially outdated data.
+
+        Emergency opt-out: set ``ALLOW_STALE_FEAST=1`` in the environment to
+        override this behaviour during a known Feast outage. This env-var is
+        an ops escape hatch — do NOT set it in normal config or tests.
 
         Args:
             feature_view: Name of the feature view.
@@ -1033,62 +1066,88 @@ class FeastClient:
         Returns:
             FeatureFreshness object with status and timing info.
         """
-        await self.initialize()
-        self._ensure_initialized()
+        try:
+            await self.initialize()
+            self._ensure_initialized()
 
-        # Get thresholds from config
-        max_staleness_hours, warning_threshold_hours = self._get_freshness_thresholds(feature_view)
+            # Get thresholds from config
+            max_staleness_hours, warning_threshold_hours = self._get_freshness_thresholds(
+                feature_view
+            )
 
-        # Get last materialization time
-        last_materialized = self._materialization_timestamps.get(feature_view)
+            # Get last materialization time
+            last_materialized = self._materialization_timestamps.get(feature_view)
 
-        # Calculate age and determine status
-        if last_materialized is None:
+            # Calculate age and determine status
+            if last_materialized is None:
+                return FeatureFreshness(
+                    feature_view=feature_view,
+                    last_materialized=None,
+                    freshness_status=FreshnessStatus.UNKNOWN,
+                    age_hours=None,
+                    max_staleness_hours=max_staleness_hours,
+                    warning_threshold_hours=warning_threshold_hours,
+                    is_fresh=False,
+                    message="No materialization record found",
+                )
+
+            # Calculate age in hours
+            age_seconds = (datetime.now(timezone.utc) - last_materialized).total_seconds()
+            age_hours = age_seconds / 3600.0
+
+            # Determine status
+            if age_hours <= warning_threshold_hours:
+                status = FreshnessStatus.FRESH
+                is_fresh = True
+                message = f"Features are fresh (age: {age_hours:.1f}h)"
+            elif age_hours <= max_staleness_hours:
+                status = FreshnessStatus.WARNING
+                is_fresh = True
+                message = (
+                    f"Features approaching staleness "
+                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                )
+            elif age_hours <= max_staleness_hours * 2:
+                status = FreshnessStatus.STALE
+                is_fresh = False
+                message = (
+                    f"Features are stale "
+                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                )
+            else:
+                status = FreshnessStatus.EXPIRED
+                is_fresh = False
+                message = (
+                    f"Features are expired "
+                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                )
+
             return FeatureFreshness(
                 feature_view=feature_view,
-                last_materialized=None,
-                freshness_status=FreshnessStatus.UNKNOWN,
-                age_hours=None,
+                last_materialized=last_materialized,
+                freshness_status=status,
+                age_hours=age_hours,
                 max_staleness_hours=max_staleness_hours,
                 warning_threshold_hours=warning_threshold_hours,
-                is_fresh=False,
-                message="No materialization record found",
+                is_fresh=is_fresh,
+                message=message,
             )
 
-        # Calculate age in hours
-        age_seconds = (datetime.now(timezone.utc) - last_materialized).total_seconds()
-        age_hours = age_seconds / 3600.0
-
-        # Determine status
-        if age_hours <= warning_threshold_hours:
-            status = FreshnessStatus.FRESH
-            is_fresh = True
-            message = f"Features are fresh (age: {age_hours:.1f}h)"
-        elif age_hours <= max_staleness_hours:
-            status = FreshnessStatus.WARNING
-            is_fresh = True
-            message = f"Features approaching staleness (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
-        elif age_hours <= max_staleness_hours * 2:
-            status = FreshnessStatus.STALE
-            is_fresh = False
-            message = f"Features are stale (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
-        else:
-            status = FreshnessStatus.EXPIRED
-            is_fresh = False
-            message = (
-                f"Features are expired (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+        except Exception as e:
+            allow_stale = os.environ.get("ALLOW_STALE_FEAST") == "1"
+            logger.warning(
+                "Freshness check failed for feature view '%s': %s. "
+                "Treating as %s. Set ALLOW_STALE_FEAST=1 to bypass (ops emergency only).",
+                feature_view,
+                e,
+                "fresh (ALLOW_STALE_FEAST=1)" if allow_stale else "stale",
             )
-
-        return FeatureFreshness(
-            feature_view=feature_view,
-            last_materialized=last_materialized,
-            freshness_status=status,
-            age_hours=age_hours,
-            max_staleness_hours=max_staleness_hours,
-            warning_threshold_hours=warning_threshold_hours,
-            is_fresh=is_fresh,
-            message=message,
-        )
+            return FeatureFreshness(
+                feature_view=feature_view,
+                freshness_status=FreshnessStatus.UNKNOWN,
+                is_fresh=allow_stale,
+                message=f"Freshness check failed: {e}",
+            )
 
     async def get_all_freshness(self) -> Dict[str, FeatureFreshness]:
         """Get freshness status for all tracked feature views.
