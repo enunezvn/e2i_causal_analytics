@@ -178,7 +178,6 @@ def _discover_model() -> tuple[Optional[Any], Optional[str], Optional[str]]:
     Returns:
         (model_object, model_tag_string, framework_name) or (None, None, None)
     """
-    import importlib
 
     # Strategy 1: Exact tag from env
     model_tag = os.environ.get("E2I_BENTOML_MODEL_TAG")
@@ -475,15 +474,40 @@ class E2IModelService:
 
         n_rows = len(entity_ids)
         matrix: List[List[float]] = []
+        # Track which features had any null/non-numeric values coerced to 0.0
+        # so we can emit ONE aggregate WARNING per request rather than spamming
+        # one log line per coerced value (3A-I-1).
+        coerced_features: Dict[str, int] = {}
         for row_idx in range(n_rows):
             row: List[float] = []
-            for col_values in feature_columns.values():
+            for col_name, col_values in feature_columns.items():
                 raw = col_values[row_idx] if row_idx < len(col_values) else None
+                if raw is None:
+                    row.append(0.0)
+                    coerced_features[col_name] = (
+                        coerced_features.get(col_name, 0) + 1
+                    )
+                    continue
                 try:
-                    row.append(float(raw) if raw is not None else 0.0)
+                    row.append(float(raw))
                 except (TypeError, ValueError):
                     row.append(0.0)
+                    coerced_features[col_name] = (
+                        coerced_features.get(col_name, 0) + 1
+                    )
             matrix.append(row)
+
+        if coerced_features:
+            total_coerced = sum(coerced_features.values())
+            logger.warning(
+                "Feast online-features call returned %d null/non-numeric "
+                "values across %d feature(s); coerced to 0.0. Feature names: "
+                "%s. Investigate Feast feature view configuration if this "
+                "persists across requests.",
+                total_coerced,
+                len(coerced_features),
+                sorted(coerced_features.keys()),
+            )
 
         return matrix
 

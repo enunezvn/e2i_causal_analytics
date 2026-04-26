@@ -25,6 +25,8 @@ from src.api.dependencies.auth import require_auth
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.feature_store.feast_client import FeastClient, get_feast_client
+from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS as _MODEL_FEATURE_REFS
+from src.feature_store.model_feature_refs import feature_refs_for_model as _feature_refs_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -170,52 +172,32 @@ FEATURE_SOURCE_FEAST_ONLINE = "feast_online"
 FEATURE_SOURCE_USER_PROVIDED = "user_provided"
 
 
-# Model-name → Feast feature-refs map. Mirrors the prior-art mapping in
-# src/api/routes/explain.py::_get_feature_refs_for_model. Keep this in sync;
-# a future refactor will extract a shared registry.
-_MODEL_FEATURE_REFS: Dict[str, List[str]] = {
-    "propensity": [
-        "patient_engagement_features:days_since_last_hcp_visit",
-        "patient_engagement_features:total_hcp_interactions_90d",
-        "patient_engagement_features:therapy_adherence_score",
-    ],
-    "risk_stratification": [
-        "patient_risk_features:comorbidity_count",
-        "patient_risk_features:lab_value_trend",
-        "patient_risk_features:prior_brand_experience",
-    ],
-    "churn_prediction": [
-        "patient_churn_features:days_since_last_visit",
-        "patient_churn_features:engagement_trend",
-        "patient_churn_features:satisfaction_score",
-    ],
-    "next_best_action": [
-        "patient_nba_features:channel_preference",
-        "patient_nba_features:response_history",
-        "patient_nba_features:timing_preference",
-    ],
-}
-
-
-def _feature_refs_for_model(model_name: str) -> List[str]:
-    """Resolve the Feast feature-refs to fetch for a given model name.
-
-    Falls back to the propensity refs for unknown models so that the Feast
-    code path always exercises real feature names rather than silently passing
-    an empty list (which Feast rejects).
-    """
-    return _MODEL_FEATURE_REFS.get(model_name) or _MODEL_FEATURE_REFS["propensity"]
+# Canonical model-name → Feast feature-refs registry imported from
+# ``src/feature_store/model_feature_refs.py`` (3A-M-1). Both names are
+# re-bound to underscore aliases to preserve the prior module-level API
+# (test fixtures monkey-patch ``predictions._MODEL_FEATURE_REFS``).
+__all__ = ["_MODEL_FEATURE_REFS", "_feature_refs_for_model"]
 
 
 async def _resolve_feast_client() -> FeastClient:
-    """Return the singleton FeastClient.
+    """Return the singleton FeastClient (test seam).
 
-    Indirection layer so tests can monkey-patch this symbol on the route
-    module (avoids declaring FeastClient as a FastAPI dependency, which
-    confuses FastAPI's body-vs-dependency disambiguation when the route
-    already has a Pydantic body parameter — see
-    https://fastapi.tiangolo.com/tutorial/dependencies/ for the standard
-    pattern, though here we deliberately keep the dep out of the signature).
+    Why this indirection layer exists:
+
+    1. ``get_feast_client(config: Optional[FeastConfig] = None)`` cannot
+       be wired as a FastAPI ``Depends(get_feast_client)`` directly —
+       FastAPI would walk the parameter list and attempt to inject
+       ``config`` as a query/body parameter, which would conflict with
+       the route's existing ``PredictionRequest`` body and produce a
+       422-level disambiguation error at request-parse time.
+    2. Wrapping it as a zero-argument coroutine here makes the symbol
+       monkey-patchable on the route module by tests — the standard
+       ``app.dependency_overrides[get_feast_client] = ...`` pattern
+       wouldn't help because the route never declares ``get_feast_client``
+       as a ``Depends(...)``.
+
+    Tests therefore monkey-patch ``predictions._resolve_feast_client``
+    directly; see ``tests/api/test_predictions_endpoints.py::mock_feast_client``.
     """
     return await get_feast_client()
 
@@ -321,6 +303,14 @@ async def predict(
         # Extract metadata
         metadata = result.get("_metadata", {})
 
+        # 3A-I-3: route is the source of truth for feature_source.
+        # If we invoked Feast (entity_id was set + lookup succeeded), the
+        # user request was Feast-driven regardless of what BentoML reports —
+        # BentoML may legitimately report a fallback path on its end, but
+        # from the route's perspective the *request* was a Feast lookup.
+        # Conversely, if no entity_id was supplied we used the caller's
+        # raw features and must not be overridden into 'feast_online' by
+        # a downstream value.
         return PredictionResponse(
             model_name=model_name,
             prediction=result.get("prediction") or result.get("predictions", [None])[0],
@@ -331,7 +321,7 @@ async def predict(
             latency_ms=metadata.get("latency_ms", 0),
             model_version=result.get("model_version"),
             timestamp=metadata.get("timestamp", datetime.now(timezone.utc).isoformat()),
-            feature_source=result.get("feature_source", feature_source),
+            feature_source=feature_source,
         )
 
     except HTTPException:

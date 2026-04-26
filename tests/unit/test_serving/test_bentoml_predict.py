@@ -284,3 +284,69 @@ async def test_feast_path_falls_back_to_zero_for_non_numeric_values(
         )
 
     assert matrix == [[0.0, 0.0]]
+
+
+@pytest.mark.asyncio
+async def test_feast_path_emits_aggregate_warning_on_coercion(
+    serving_module: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """3A-I-1: silent zero-fill masks Feast misconfiguration. The
+    serving service must emit a SINGLE aggregate WARNING per request
+    (not one per coerced value) listing how many values were coerced
+    and which feature names were affected."""
+    feast_body = {
+        "metadata": {
+            "feature_names": ["patient_id", "score", "label", "rate"],
+        },
+        "results": [
+            {"values": ["P001", "P002"], "statuses": ["PRESENT", "PRESENT"]},
+            # score: one valid, one None (coerced)
+            {"values": [1.5, None], "statuses": ["PRESENT", "NOT_FOUND"]},
+            # label: both non-numeric strings (both coerced)
+            {"values": ["bad-1", "bad-2"], "statuses": ["PRESENT", "PRESENT"]},
+            # rate: both clean
+            {"values": [0.5, 0.7], "statuses": ["PRESENT", "PRESENT"]},
+        ],
+    }
+    response_mock = MagicMock()
+    response_mock.raise_for_status = MagicMock(return_value=None)
+    response_mock.json = MagicMock(return_value=feast_body)
+
+    http_client_mock = MagicMock()
+    http_client_mock.post = AsyncMock(return_value=response_mock)
+
+    import logging
+    caplog.set_level(logging.WARNING, logger="e2i_serving_service")
+
+    with patch(
+        "httpx.AsyncClient",
+        return_value=_FakeAsyncContext(http_client_mock),
+    ):
+        service = serving_module.E2IModelService()
+        matrix = await service._fetch_features_from_feast(
+            entity_ids=["P001", "P002"],
+            feature_view="patient_engagement_features",
+            entity_key="patient_id",
+        )
+
+    # The matrix is still produced (zero-fill keeps model.predict happy).
+    assert len(matrix) == 2
+    assert len(matrix[0]) == 3  # score, label, rate (patient_id stripped)
+
+    # Exactly ONE aggregate WARNING was emitted (not 3 — one per coerced
+    # value would be noisy).
+    coercion_warnings = [
+        rec for rec in caplog.records
+        if rec.levelno == logging.WARNING and "coerced" in rec.getMessage()
+    ]
+    assert len(coercion_warnings) == 1, (
+        f"Expected exactly 1 aggregate coercion WARNING; got "
+        f"{len(coercion_warnings)}: {[r.getMessage() for r in coercion_warnings]}"
+    )
+    msg = coercion_warnings[0].getMessage()
+    # Total: 1 (score None) + 2 (label bad-1, bad-2) = 3
+    assert "3 null/non-numeric" in msg, msg
+    # Both affected feature names appear; rate (clean) does NOT.
+    assert "score" in msg and "label" in msg, msg
+    assert "rate" not in msg, msg
