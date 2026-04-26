@@ -39,11 +39,12 @@ services:
       - ../src:/app/src                    # Python source code
       - ../config:/app/config              # YAML configurations
       - ../tests:/app/tests                # Test files
-      
+      - ../feature_repo:/app/feature_repo:ro  # Feast feature_store.yaml.tmpl + defs (read-only) for parity test
+
       # Prevent bind mount from overwriting container's installed packages
       - /app/src/__pycache__
       - /app/.venv
-      
+
       # -----------------------------------------------------------------------
       # SHARED VOLUMES - Still needed for data exchange
       # -----------------------------------------------------------------------
@@ -57,7 +58,7 @@ services:
       - LOG_LEVEL=DEBUG
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
-      
+
       # Enable debugpy for VS Code remote debugging
       - DEBUGPY_ENABLE=true
       - DEBUGPY_PORT=5678

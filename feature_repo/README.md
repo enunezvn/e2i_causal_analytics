@@ -8,7 +8,8 @@ registry.
 
 ```
 feature_repo/
-├── feature_store.yaml      # Feast project config (offline + online stores)
+├── feature_store.yaml.tmpl # Tracked — Feast project config TEMPLATE (offline + online stores)
+├── feature_store.yaml      # GENERATED — rendered from the template at startup; gitignored
 ├── entities.py             # Entity definitions (hcp, patient, territory, …)
 ├── data_sources.py         # PostgreSQLSource / PushSource / RequestSource defs
 ├── features/               # FeatureView modules grouped by use case
@@ -19,6 +20,27 @@ feature_repo/
 └── data/
     └── registry.db         # GENERATED — see "Registry lifecycle" below
 ```
+
+## Configuration rendering
+
+`feature_store.yaml` is **rendered from `feature_store.yaml.tmpl`** at runtime —
+the rendered file contains real database/Redis passwords, so it's gitignored
+and never committed. The template uses `${VAR}` placeholders for
+`SUPABASE_POSTGRES_PASSWORD` and `REDIS_PASSWORD`.
+
+There are two rendering paths:
+
+1. **Container entrypoint (production / dev / CI)** —
+   `docker/feast/entrypoint.sh` renders the template into the writable
+   container layer at `/feast/feature_store.yaml` on every container start.
+   The `feature_repo/` host directory is bind-mounted as `/feast-src:ro`, so
+   the rendered yaml never touches the host bind mount and can never leak
+   into git.
+
+2. **Local dev (host venv)** —
+   `scripts/feast_render_config.sh` reads `.env`, validates the two required
+   secrets, and renders `feature_repo/feature_store.yaml` on the host (chmod
+   600). Use this when iterating on `data_sources.py` from outside Docker.
 
 ## Registry lifecycle
 
@@ -31,12 +53,12 @@ Treat the registry the same way you treat compiled artifacts:
 - **Source of truth**: the Python files in this directory (`entities.py`,
   `data_sources.py`, `features/*.py`).
 - **Build step**: `feast apply` reads those files and writes the registry.
-- **Deploy step**: an operator (or deploy script) runs `feast apply` against
-  the live registry store *before* the Feast container starts serving. The
-  container itself runs `feast serve` only — it does **not** re-apply on
-  startup. See `docker/Dockerfile.feast` (`CMD ["feast", "serve", …]` and the
-  in-line comment "_You'll need to apply feature definitions first with
-  'feast apply'_").
+- **Deploy step**: the Feast container's entrypoint
+  (`docker/feast/entrypoint.sh`) runs `feast apply --skip-source-validation`
+  on every container start, then `exec feast serve`. This is idempotent —
+  `feast apply` can be invoked any number of times against the same
+  registry without schema drift (see
+  `tests/integration/test_feast_apply_idempotent.py`).
 
 CI runs `feast apply --skip-source-validation` against this directory on every
 push (see `.github/workflows/backend-tests.yml` job `feast-apply`) so a broken
@@ -44,26 +66,74 @@ feature definition fails before merge.
 
 ### When to apply
 
-Run `feast apply` against this directory whenever any of the following change:
+The container auto-applies on every start, so a `docker compose restart feast`
+(or `docker rm -f e2i_feast && docker compose up -d feast`) is usually enough
+when any of the following change:
 
 - Entity definitions (`entities.py`)
 - Data sources (`data_sources.py`)
 - Feature view definitions (`features/*.py`)
 - The project name or any metadata in `feature_store.yaml`
 
-The Feast container does **not** auto-apply on startup; the registry that
-`feast serve` reads must already exist (or already be current) when the
-container boots. In production, an operator runs the apply against the live
-registry — the canonical command from a host that can reach the running
-container is:
+For an immediate apply against a running container without restarting:
 
 ```bash
-docker exec e2i_feast feast --chdir /feast apply
+docker exec e2i_feast feast --chdir /feast apply --skip-source-validation
 ```
 
-(`scripts/deploy.sh` does **not** currently invoke this — it pulls code and
-restarts workers; if you change feature definitions you must run the apply
-explicitly.)
+`scripts/deploy.sh` does not invoke this — relying on the entrypoint
+auto-apply on the next worker / container restart is the intended path.
+
+### Offline-store schema bridge (Block 3B / migrations 031, 032)
+
+`feature_repo/data_sources.py` reads from **bridging views** rather than the
+canonical Postgres tables, because the canonical schema doesn't currently
+expose the columns the feature views expect:
+
+| Source defined in `data_sources.py` | Reads from view                  | Underlying table   | Migration |
+| ----------------------------------- | -------------------------------- | ------------------ | --------- |
+| `hcp_profiles_source`               | `feast_hcp_profile_source`       | `hcp_profiles`     | 031       |
+| `triggers_source`                   | `feast_trigger_response_source`  | `triggers`         | 031       |
+| `patient_journey_source`            | `feast_patient_journey_source`   | `patient_journeys` | 032       |
+| `business_metrics_source`           | `feast_business_metrics_source`  | `feast_business_metrics_seed` (synthetic, seeded by 032) | 032 |
+
+Migration 031 maps canonical columns (e.g. `updated_at`, `years_experience`,
+`total_patient_volume`, `trigger_timestamp`, `delivery_channel`,
+`acceptance_status`) to the names Feast feature views expect. Migration 032
+extends the same pattern to `patient_journeys` and synthesizes a per-HCP
+`feast_business_metrics_seed` table (the canonical `business_metrics` table
+is brand/territory-level and has no `hcp_id`). Most of the views are
+SELECT-only; the seed table is a persisted base that the view selects from.
+
+`territory_metrics` does not exist in the canonical schema yet. Migration
+031 also creates that table and seeds one row per known territory at
+`CURRENT_DATE` so materialization can round-trip. The seed values are
+synthetic — see "Block 6B follow-up" below.
+
+### Block 6B follow-up
+
+The bridging views are bootstrap scaffolding. The plan is to:
+
+1. Drop the views and migrate the canonical `hcp_profiles` and `triggers`
+   tables to expose the Feast-expected column names directly. Tier
+   derivations (`patient_volume_tier`, etc.) move to application logic, not
+   SQL CASE statements in a view.
+2. Replace the synthetic `territory_metrics` seed with a real ETL from
+   `business_metrics` and patient/HCP rollups.
+3. Replace `feast_business_metrics_seed` with a real per-HCP business-metrics
+   ETL (currently a CROSS JOIN of `hcp_profiles` × `business_metrics.brand`
+   with `random()` values).
+4. Backfill real `adherence_rate` / `refill_count` / `gap_days` columns into
+   `feast_patient_journey_source` (currently NULL — the canonical
+   `patient_journeys` table doesn't track them).
+5. Workers' `supabase-network` membership — Celery beat tasks
+   (`feast-materialize-incremental`, `feast-materialize-full-weekly`) won't
+   reach Postgres until workers also join the supabase network.
+6. Add a hard runtime version-pin enforcement in the Feast container
+   (currently the entrypoint only logs `feast version` — it doesn't fail
+   if the running SDK drifts from the Dockerfile pin).
+7. Reconcile `postgres-exporter`'s stale `supabase_default` reference with
+   the actual `supabase-network`.
 
 ## Local workflow
 

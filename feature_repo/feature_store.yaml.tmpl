@@ -1,0 +1,19 @@
+project: e2i_causal_analytics
+provider: local
+registry: data/registry.db
+
+offline_store:
+  type: postgres
+  host: supabase-db
+  port: 5432
+  database: postgres
+  user: postgres
+  password: "${SUPABASE_POSTGRES_PASSWORD}"
+  sslmode: prefer
+  db_schema: public
+
+online_store:
+  type: redis
+  connection_string: "redis:6379,password=${REDIS_PASSWORD}"
+
+entity_key_serialization_version: 3

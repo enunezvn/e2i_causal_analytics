@@ -23,6 +23,11 @@ from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source i
 # =============================================================================
 
 # Business metrics table - contains aggregated KPIs per HCP/territory
+# Reads from feast_business_metrics_source view (migration 032) which selects
+# from feast_business_metrics_seed — a per-HCP/brand synthetic table seeded
+# on apply, since the canonical business_metrics table is brand/territory-level
+# and lacks an hcp_id column. Block 6B follow-up: replace the seed with a real
+# per-HCP business-metrics ETL.
 business_metrics_source = PostgreSQLSource(
     name="business_metrics_source",
     query="""
@@ -30,7 +35,7 @@ business_metrics_source = PostgreSQLSource(
             hcp_id::VARCHAR,
             territory_id::VARCHAR,
             brand_id::VARCHAR,
-            metric_date AS event_timestamp,
+            event_timestamp,
             trx_count,
             nrx_count,
             total_rx_count,
@@ -39,8 +44,8 @@ business_metrics_source = PostgreSQLSource(
             engagement_score,
             call_frequency,
             created_at
-        FROM business_metrics
-        WHERE metric_date >= NOW() - INTERVAL '365 days'
+        FROM feast_business_metrics_source
+        WHERE event_timestamp >= NOW() - INTERVAL '365 days'
     """,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_at",
@@ -48,6 +53,11 @@ business_metrics_source = PostgreSQLSource(
 )
 
 # Patient journey table - therapy adherence and outcomes
+# Reads from feast_patient_journey_source view (migration 032) which bridges
+# the canonical patient_journeys schema to Feast-expected columns
+# (journey_id, brand_id, event_date, therapy_start_date, days_on_therapy,
+# is_churned, churn_risk_score). Adherence/refill/gap are NULL pending the
+# real per-patient adherence ETL — Block 6B follow-up.
 patient_journey_source = PostgreSQLSource(
     name="patient_journey_source",
     query="""
@@ -63,7 +73,7 @@ patient_journey_source = PostgreSQLSource(
             is_churned,
             churn_risk_score,
             created_at
-        FROM patient_journeys
+        FROM feast_patient_journey_source
         WHERE event_date >= NOW() - INTERVAL '365 days'
     """,
     timestamp_field="event_timestamp",
@@ -72,6 +82,9 @@ patient_journey_source = PostgreSQLSource(
 )
 
 # Triggers table - marketing events and responses
+# Reads from feast_trigger_response_source view (migration 031) which bridges
+# the canonical triggers schema to Feast-expected columns. Block 6B follow-up:
+# replace the view with a proper schema migration on the canonical table.
 triggers_source = PostgreSQLSource(
     name="triggers_source",
     query="""
@@ -87,7 +100,7 @@ triggers_source = PostgreSQLSource(
             conversion_flag,
             roi_estimate,
             created_at
-        FROM triggers
+        FROM feast_trigger_response_source
         WHERE trigger_date >= NOW() - INTERVAL '365 days'
     """,
     timestamp_field="event_timestamp",
@@ -96,6 +109,10 @@ triggers_source = PostgreSQLSource(
 )
 
 # HCP profiles table - static and semi-static HCP attributes
+# Reads from feast_hcp_profile_source view (migration 031) which bridges
+# the canonical hcp_profiles schema to Feast-expected columns. Block 6B
+# follow-up: replace the view with a proper schema migration on the canonical
+# table.
 hcp_profiles_source = PostgreSQLSource(
     name="hcp_profiles_source",
     query="""
@@ -110,7 +127,7 @@ hcp_profiles_source = PostgreSQLSource(
             prescribing_tier,
             last_updated AS event_timestamp,
             created_at
-        FROM hcp_profiles
+        FROM feast_hcp_profile_source
     """,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_at",

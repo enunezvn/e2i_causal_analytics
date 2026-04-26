@@ -232,17 +232,23 @@ def test_offline_online_parity_per_feature_view(
         }
     )
 
+    # Build explicit feature refs (Feast 0.43.0 does not expand ":*" wildcards;
+    # the registry projection raises KeyError: 'Feature * not found'). Pull the
+    # full feature list from the FeatureView definition instead.
+    fv_obj = feature_store.get_feature_view(fv_name)
+    feature_refs = [f"{fv_name}:{f.name}" for f in fv_obj.features]
+
     # ---- Offline retrieval ------------------------------------------------
     offline_df = feature_store.get_historical_features(
         entity_df=entity_df,
-        features=[f"{fv_name}:*"],
+        features=feature_refs,
     ).to_df()
     assert not offline_df.empty, f"Offline retrieval returned no rows for {fv_name}"
 
     # ---- Online retrieval -------------------------------------------------
     entity_rows = [{join_key: eid} for eid in ids]
     online_dict = feature_store.get_online_features(
-        features=[f"{fv_name}:*"],
+        features=feature_refs,
         entity_rows=entity_rows,
     ).to_dict()
     online_df = pd.DataFrame(online_dict)
