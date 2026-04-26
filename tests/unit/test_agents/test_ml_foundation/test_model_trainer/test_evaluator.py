@@ -9,6 +9,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
     _check_success_criteria,
+    _compute_business_utility,
     _compute_classification_metrics,
     _compute_optimal_threshold,
     _compute_precision_at_k,
@@ -779,3 +780,202 @@ class TestThresholdRebinarisationGuard:
         assert result["optimal_threshold"] == 0.5
         # Same y_pred → identical metrics in both at-0.5 and at-optimal blocks.
         assert result["test_metrics_at_05"] == result["test_metrics_at_optimal"]
+
+
+# ============================================================================
+# Block 5 (#10): business_utility metric driven by cost_matrix
+# ============================================================================
+
+
+class TestBusinessUtilityFromCostMatrix:
+    """The evaluator must compute a cost-weighted business_utility metric
+    from a caller-supplied ``cost_matrix`` and surface it in
+    ``validation_metrics``, ``test_metrics``, and at the top-level result.
+
+    Test design: build deterministic predictions where we KNOW the
+    confusion matrix counts at the chosen threshold, supply a cost matrix
+    with distinctive per-outcome values, and assert the multiplication
+    matches the closed-form expectation.
+    """
+
+    @staticmethod
+    def _make_split(rng, n, positive_score_mean, negative_score_mean, spread=0.05):
+        """Reuse the same well-separated synthetic split builder as the
+        threshold-tuning test fixture so test fixtures stay consistent."""
+        n_pos = n // 2
+        n_neg = n - n_pos
+        pos_scores = np.clip(
+            rng.normal(loc=positive_score_mean, scale=spread, size=n_pos),
+            0.001,
+            0.999,
+        )
+        neg_scores = np.clip(
+            rng.normal(loc=negative_score_mean, scale=spread, size=n_neg),
+            0.001,
+            0.999,
+        )
+        y_true = np.concatenate([np.ones(n_pos, dtype=int), np.zeros(n_neg, dtype=int)])
+        y_proba_pos = np.concatenate([pos_scores, neg_scores])
+        order = rng.permutation(len(y_true))
+        y_true = y_true[order]
+        y_proba_pos = y_proba_pos[order]
+        y_proba = np.column_stack([1.0 - y_proba_pos, y_proba_pos])
+        y_pred = (y_proba_pos >= 0.5).astype(int)
+        return y_true, y_pred, y_proba
+
+    def test_compute_business_utility_helper(self):
+        """The standalone helper just multiplies counts by per-outcome dollars."""
+        cost_matrix = {"tp": 100.0, "fp": -10.0, "fn": -50.0, "tn": 0.0}
+        # 5 TP, 2 FP, 3 FN, 10 TN → 5*100 + 2*-10 + 3*-50 + 10*0 = 500 - 20 - 150 = 330
+        utility = _compute_business_utility(tp=5, fp=2, fn=3, tn=10, cost_matrix=cost_matrix)
+        assert utility == pytest.approx(330.0)
+
+    def test_business_utility_in_validation_and_test_metrics(self):
+        """When a cost_matrix is supplied, business_utility lands in BOTH
+        validation_metrics and test_metrics, plus the top-level result."""
+        rng = np.random.default_rng(20260427)
+        y_val, y_val_pred, y_val_proba = self._make_split(
+            rng, n=100, positive_score_mean=0.70, negative_score_mean=0.30
+        )
+        y_test, y_test_pred, y_test_proba = self._make_split(
+            rng, n=100, positive_score_mean=0.70, negative_score_mean=0.30
+        )
+
+        cost_matrix = {"tp": 100.0, "fp": -10.0, "fn": -50.0, "tn": 0.0}
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+            cost_matrix=cost_matrix,
+        )
+
+        # Validation_metrics carries it.
+        assert "business_utility" in result["validation_metrics"], (
+            "business_utility must appear in validation_metrics so deployment "
+            "tooling can rank candidates by business value at the chosen "
+            "operating point."
+        )
+        # Test_metrics carries it (at the same chosen threshold).
+        assert "business_utility" in result["test_metrics"]
+        # Top-level mirror exists.
+        assert "business_utility" in result
+
+        # Sanity: dollars must be a float, not None.
+        assert isinstance(result["test_metrics"]["business_utility"], float)
+        assert isinstance(result["validation_metrics"]["business_utility"], float)
+        assert isinstance(result["business_utility"], float)
+        # Top-level mirrors the test_metrics value.
+        assert result["business_utility"] == result["test_metrics"]["business_utility"]
+
+    def test_business_utility_absent_when_no_cost_matrix(self):
+        """When cost_matrix is not provided, the metric is NOT silently
+        defaulted — it stays absent from validation_metrics/test_metrics
+        and the top-level mirror is None. Callers can then distinguish
+        'not configured' from 'configured but zero'."""
+        rng = np.random.default_rng(20260427)
+        y_val, y_val_pred, y_val_proba = self._make_split(
+            rng, n=80, positive_score_mean=0.70, negative_score_mean=0.30
+        )
+        y_test, y_test_pred, y_test_proba = self._make_split(
+            rng, n=80, positive_score_mean=0.70, negative_score_mean=0.30
+        )
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+            cost_matrix=None,
+        )
+
+        # Top-level mirror is explicitly None when no cost_matrix.
+        assert result["business_utility"] is None
+        # Sub-metrics dicts must NOT have a stray placeholder.
+        assert "business_utility" not in result["validation_metrics"]
+        assert "business_utility" not in result["test_metrics"]
+
+    def test_business_utility_uses_chosen_threshold_not_raw_predictions(self):
+        """business_utility must be computed at the validation-tuned chosen
+        threshold, NOT at the model's default 0.5. We verify by
+        constructing a case where shifting the threshold flips the FN/TN
+        counts and changes the utility number."""
+        rng = np.random.default_rng(20260428)
+        # Validation: positives at 0.40, negatives at 0.20 → opt around 0.30
+        y_val, y_val_pred, y_val_proba = self._make_split(
+            rng, n=100, positive_score_mean=0.40, negative_score_mean=0.20
+        )
+        # Test: positives at 0.55, negatives at 0.45 → at 0.30 chosen
+        # threshold many rows are predicted positive; at 0.5 default,
+        # the prediction split is very different.
+        y_test, y_test_pred, y_test_proba = self._make_split(
+            rng, n=100, positive_score_mean=0.55, negative_score_mean=0.45
+        )
+        # Cost matrix that strongly differentiates predicted-positive from
+        # predicted-negative outcomes.
+        cost_matrix = {"tp": 1000.0, "fp": -1.0, "fn": -1000.0, "tn": 1.0}
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+            cost_matrix=cost_matrix,
+        )
+
+        chosen = result["optimal_threshold"]
+        # Recompute utility at the chosen threshold by reapplying it
+        # ourselves and confirm it matches the evaluator's number.
+        from sklearn.metrics import confusion_matrix as _cm
+
+        y_test_pred_at_chosen = (y_test_proba[:, 1] >= chosen).astype(int)
+        cm = _cm(y_test, y_test_pred_at_chosen)
+        tn, fp, fn, tp = cm.ravel()
+        expected = (
+            tp * cost_matrix["tp"]
+            + fp * cost_matrix["fp"]
+            + fn * cost_matrix["fn"]
+            + tn * cost_matrix["tn"]
+        )
+        assert result["test_metrics"]["business_utility"] == pytest.approx(expected)
+
+        # Negative assertion: the utility computed at default 0.5 must
+        # differ when chosen != 0.5 — proves the metric tracks the chosen
+        # threshold, not the raw y_test_pred.
+        if not np.isclose(chosen, 0.5):
+            y_test_pred_at_05 = (y_test_proba[:, 1] >= 0.5).astype(int)
+            cm_05 = _cm(y_test, y_test_pred_at_05)
+            tn5, fp5, fn5, tp5 = cm_05.ravel()
+            utility_at_05 = (
+                tp5 * cost_matrix["tp"]
+                + fp5 * cost_matrix["fp"]
+                + fn5 * cost_matrix["fn"]
+                + tn5 * cost_matrix["tn"]
+            )
+            assert utility_at_05 != pytest.approx(expected), (
+                "If business_utility regresses to using y_test_pred (model's "
+                "default 0.5), this assertion will trip — by construction the "
+                "0.5-utility differs from the chosen-threshold utility."
+            )

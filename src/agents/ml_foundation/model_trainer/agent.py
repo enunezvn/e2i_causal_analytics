@@ -168,6 +168,10 @@ class ModelTrainerAgent:
         early_stopping = input_data.get("early_stopping", False)
         early_stopping_patience = input_data.get("early_stopping_patience", 10)
         problem_type = input_data.get("problem_type", "binary_classification")
+        # Block 5 (#10): optional cost matrix for business_utility metric.
+        # Caller is responsible for validation; scope_definer typically does
+        # this via _validate_cost_matrix and forwards the dict here.
+        cost_matrix = input_data.get("cost_matrix")
 
         # Generate training run ID
         training_run_id = f"train_{uuid.uuid4().hex[:12]}"
@@ -185,6 +189,7 @@ class ModelTrainerAgent:
             "experiment_id": experiment_id,
             "success_criteria": success_criteria,
             "problem_type": problem_type,
+            "cost_matrix": cost_matrix,
             "enable_hpo": enable_hpo,
             "hpo_trials": hpo_trials,
             "hpo_timeout_hours": hpo_timeout_hours,

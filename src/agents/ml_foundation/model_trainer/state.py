@@ -30,6 +30,11 @@ class ModelTrainerState(TypedDict, total=False):
     # From scope_definer
     success_criteria: Dict[str, float]  # Performance thresholds to meet
     problem_type: str  # binary_classification, regression, etc.
+    # Block 5: optional business cost matrix (tp/fp/fn/tn dollar values).
+    # When set, the evaluator computes business_utility from the confusion
+    # matrix at the chosen (validation-tuned) threshold and adds it to
+    # validation_metrics + test_metrics (#10).
+    cost_matrix: Optional[Dict[str, float]]
 
     # Training configuration
     enable_hpo: bool  # Whether to run hyperparameter optimization

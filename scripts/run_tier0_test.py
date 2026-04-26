@@ -2443,6 +2443,7 @@ async def step_5_model_trainer(
     dates: pd.Series | None = None,
     split_mode: str = "auto",
     pre_assigned_splits: Dict[Any, str] | None = None,
+    cost_matrix: dict | None = None,
 ) -> dict[str, Any]:
     """Step 5: Train model.
 
@@ -2455,6 +2456,11 @@ async def step_5_model_trainer(
         y: Target vector.
         success_criteria: Optional success criteria dict propagated from
             scope_definer.
+        cost_matrix: Block 5 (#10) optional cost matrix for the
+            ``business_utility`` metric — see scope_definer's
+            ``_validate_cost_matrix`` for the expected shape. Threaded into
+            the model_trainer state so the evaluator can compute the
+            metric at the chosen threshold.
         entity_ids: Optional pandas Series of entity identifiers (e.g.
             ``patient_journey_id``) aligned with ``X``. Required when
             ``split_mode`` is ``combined`` or when ``split_mode`` is ``auto``
@@ -2813,6 +2819,10 @@ async def step_5_model_trainer(
         "feature_columns": feature_columns,
         "success_criteria": success_criteria or {},
         "min_samples_per_split": CONFIG.min_samples_per_split,
+        # Block 5 (#10): forward the cost matrix when scope_definer carried
+        # one onto the spec. None when not configured — evaluator skips
+        # business_utility silently.
+        "cost_matrix": cost_matrix,
     }
 
     processing_steps.append(("HPO optimization", True, f"{CONFIG.hpo_trials} trials"))
@@ -4429,6 +4439,7 @@ async def run_pipeline(
                     dates=_dates,
                     split_mode=split_mode,
                     pre_assigned_splits=pre_assigned_splits,
+                    cost_matrix=_scope_spec.get("cost_matrix"),
                 )
                 state["trained_model"] = result.get("trained_model")
                 state["train_metrics"] = result.get("train_metrics", {})
@@ -4646,6 +4657,7 @@ async def run_pipeline(
                             dates=_dates,
                             split_mode=split_mode,
                             pre_assigned_splits=_alt_pre_splits,
+                            cost_matrix=_scope_spec.get("cost_matrix"),
                         )
 
                         alt_auc = alt_result.get("auc_roc", 0) or 0

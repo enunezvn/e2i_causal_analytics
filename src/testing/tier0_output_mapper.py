@@ -47,6 +47,13 @@ class Tier0StateContract(TypedDict, total=False):
     # that earlier blocks already follow.
     prediction_timestamp: NotRequired[pd.Timestamp]
 
+    # Block 5 (#10): cost-weighted utility metric computed by the
+    # evaluator from ``scope_spec["cost_matrix"]`` at the chosen
+    # (validation-tuned) threshold. Absent when no cost_matrix was
+    # supplied. Surfaced here so deployment-decision tooling can rank
+    # candidate models by business value, not just AUC/F1.
+    business_utility: NotRequired[float]
+
 
 class Tier0OutputMapper:
     """Maps tier0 state dictionary to agent-specific inputs.

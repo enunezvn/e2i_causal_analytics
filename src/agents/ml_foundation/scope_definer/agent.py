@@ -114,6 +114,12 @@ class ScopeDefinerAgent:
                   through ``scope_spec`` so downstream agents (Tier 1-5) can
                   anchor lookback windows and post-prediction filters. Block
                   1B threads it but does not yet consume it.
+                - cost_matrix (Dict[str, float]): Optional business cost
+                  matrix mapping confusion-matrix outcomes (``tp``/``fp``/
+                  ``fn``/``tn``) to per-prediction monetary value. When
+                  provided, propagated onto ``scope_spec["cost_matrix"]`` so
+                  the evaluator can compute ``business_utility`` (Block 5,
+                  finding #10).
 
         Returns:
             Dictionary with:
@@ -154,6 +160,8 @@ class ScopeDefinerAgent:
             # Block 1B: surface prediction_timestamp into the state so the
             # scope_builder node can copy it onto scope_spec verbatim.
             "prediction_timestamp": input_data.get("prediction_timestamp"),
+            # Block 5: business cost matrix for utility-weighted evaluation.
+            "cost_matrix": input_data.get("cost_matrix"),
         }
 
         start_time = datetime.now()

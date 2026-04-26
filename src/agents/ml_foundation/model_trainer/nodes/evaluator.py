@@ -80,6 +80,9 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     trained_model = state.get("trained_model")
     problem_type = state.get("problem_type", "binary_classification")
     success_criteria = state.get("success_criteria", {})
+    # Block 5 (#10): optional dict mapping {tp,fp,fn,tn} → per-prediction
+    # dollar value. None = skip business_utility computation.
+    cost_matrix = state.get("cost_matrix")
 
     # Extract preprocessed data
     X_train_preprocessed = state.get("X_train_preprocessed")
@@ -164,6 +167,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 y_test_proba=predictions["y_test_proba"],
                 imbalance_detected=imbalance_detected,
                 minority_ratio=minority_ratio,
+                cost_matrix=cost_matrix,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -512,6 +516,7 @@ def _compute_classification_metrics(
     y_test_proba: Optional[np.ndarray],
     imbalance_detected: bool = False,
     minority_ratio: float = 0.5,
+    cost_matrix: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
@@ -547,6 +552,12 @@ def _compute_classification_metrics(
         minority_ratio: Ratio of minority class (0-1). When below 0.05,
             the precision-constrained threshold is also evaluated on
             validation and may override the Youden's J optimum.
+        cost_matrix: Optional Block-5 (#10) per-outcome dollar matrix —
+            keys ``tp``/``fp``/``fn``/``tn`` mapped to float per-prediction
+            value. When supplied, ``business_utility`` is computed at the
+            chosen threshold for both validation and test and exposed via
+            ``validation_metrics["business_utility"]`` /
+            ``test_metrics["business_utility"]`` plus a top-level mirror.
 
     Returns:
         Dictionary with the standard top-level metrics keys
@@ -694,6 +705,32 @@ def _compute_classification_metrics(
     else:
         confusion_dict = {"matrix": cm.tolist()}
 
+    # Block 5 (#10): business_utility from cost_matrix at the chosen
+    # (validation-tuned) threshold. We compute it on BOTH validation and
+    # test using the same frozen threshold so the metric reported in
+    # validation_metrics matches the operating point that produced the
+    # test number — a deployment decision tool needs both.
+    test_business_utility: Optional[float] = None
+    val_business_utility: Optional[float] = None
+    if cost_matrix is not None and cm.shape == (2, 2):
+        test_business_utility = _compute_business_utility(int(tp), int(fp), int(fn), int(tn), cost_matrix)
+        if y_validation is not None and y_validation_proba is not None:
+            y_val_proba_pos = _positive_class_proba(y_validation_proba)
+            y_val_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
+            val_cm = confusion_matrix(y_validation, y_val_pred_at_chosen)
+            if val_cm.shape == (2, 2):
+                v_tn, v_fp, v_fn, v_tp = val_cm.ravel()
+                val_business_utility = _compute_business_utility(
+                    int(v_tp), int(v_fp), int(v_fn), int(v_tn), cost_matrix
+                )
+        if val_business_utility is not None:
+            validation_metrics["business_utility"] = val_business_utility
+        test_metrics["business_utility"] = test_business_utility
+        logger.info(
+            f"business_utility (chosen_threshold={optimal_threshold:.4f}): "
+            f"validation={val_business_utility}, test={test_business_utility}"
+        )
+
     # Precision at k
     precision_at_k = _compute_precision_at_k(y_test, y_test_proba, k_values=[100, 500, 1000])
 
@@ -729,6 +766,11 @@ def _compute_classification_metrics(
         # Weighted metrics for imbalanced classification
         "f1_macro": test_metrics.get("f1_macro"),
         "f1_weighted": test_metrics.get("f1_weighted"),
+        # Block 5 (#10): top-level mirror of test-set business_utility for
+        # downstream consumers (Tier0OutputMapper, deployment decision
+        # tools) that read flat metrics off the result dict. None when no
+        # cost_matrix was provided.
+        "business_utility": test_business_utility,
     }
 
     # Add minority class metrics when imbalance is detected
@@ -985,6 +1027,44 @@ def _compute_regression_metrics(
         "precision_at_k": None,
         "calibration_error": None,
     }
+
+
+def _compute_business_utility(
+    tp: int,
+    fp: int,
+    fn: int,
+    tn: int,
+    cost_matrix: Dict[str, float],
+) -> float:
+    """Compute business_utility = sum(cost_matrix[outcome] * count[outcome]).
+
+    Each confusion-matrix outcome is multiplied by its per-prediction
+    monetary value from ``cost_matrix`` and summed. A "cost" matrix is
+    typically signed: revenue from true positives is positive; the cost
+    of a false positive is negative; the cost of a missed target (false
+    negative) is also negative. The caller decides the sign convention —
+    this helper just multiplies and sums.
+
+    Args:
+        tp/fp/fn/tn: Confusion-matrix counts at the chosen threshold.
+        cost_matrix: Dict with keys ``tp``/``fp``/``fn``/``tn`` mapped to
+            float dollar values per prediction.
+
+    Returns:
+        Total business utility (float).
+
+    Raises:
+        KeyError: If any of the four required keys is missing from
+            ``cost_matrix``. The scope_definer's ``_validate_cost_matrix``
+            normally guards against this, but the helper enforces it
+            again so callers cannot silently drop a value.
+    """
+    return float(
+        tp * cost_matrix["tp"]
+        + fp * cost_matrix["fp"]
+        + fn * cost_matrix["fn"]
+        + tn * cost_matrix["tn"]
+    )
 
 
 def _compute_optimal_threshold(

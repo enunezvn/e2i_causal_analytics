@@ -58,6 +58,14 @@ class ScopeDefinerState(TypedDict, total=False):
     # timestamp. Together they define the prediction window.
     prediction_timestamp: Optional[Any]
 
+    # Cost matrix for business-utility-driven evaluation (Block 5 — finding
+    # #10). Keys ``tp``/``fp``/``fn``/``tn`` map confusion-matrix outcomes to
+    # their per-prediction monetary value. Optional: when absent, the
+    # evaluator skips ``business_utility``. Forwarded verbatim onto
+    # ``scope_spec["cost_matrix"]`` so the model_trainer can read it without
+    # threading through a separate parameter.
+    cost_matrix: Optional[Dict[str, float]]
+
     # === INTERMEDIATE FIELDS ===
     # Problem classification
     inferred_problem_type: str  # Inferred ML problem type

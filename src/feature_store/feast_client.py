@@ -1009,6 +1009,147 @@ class FeastClient:
             logger.error(f"Error listing feature views: {e}")
             return []
 
+    async def register_feature_view(
+        self,
+        name: str,
+        entity_name: str,
+        feature_names: List[str],
+        batch_source_name: str,
+        ttl: Optional[timedelta] = None,
+        feature_dtypes: Optional[Dict[str, str]] = None,
+        tags: Optional[Dict[str, str]] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Auto-register a tier0-generated FeatureView in Feast (Block 5 #14).
+
+        Creates and applies a FeatureView programmatically so features that
+        survive feature selection in the FeatureAnalyzer can be reused by
+        downstream serving without requiring a hand-written Python file in
+        ``feature_repo/``. Uses an existing Feast ``DataSource`` (looked up
+        by ``batch_source_name``) as the underlying batch source for the
+        wrapping ``PushSource``.
+
+        Args:
+            name: FeatureView name (must be unique). Convention:
+                ``tier0_<experiment_id>_features``.
+            entity_name: Name of the Feast Entity this view joins on
+                (e.g., ``patient`` or ``hcp``). Must already be registered.
+            feature_names: List of feature column names to expose. The
+                method assumes ``Float64`` unless ``feature_dtypes`` says
+                otherwise.
+            batch_source_name: Name of an existing Feast DataSource to use
+                as the PushSource's batch_source. Must already be applied
+                via ``feature_repo/data_sources.py``. We don't synthesize
+                a new SQL/file source here — that's Block 6B scope (real
+                ETLs replacing the bootstrap bridging views).
+            ttl: Time-to-live for this FeatureView. Defaults to 7 days.
+            feature_dtypes: Optional override mapping ``{feature_name: feast_dtype_name}``
+                where the value is one of ``"Int64"``, ``"Float32"``,
+                ``"Float64"``, ``"String"``, ``"Bool"``.
+            tags: Optional tag dict — ``{"owner": "feature_analyzer", ...}``.
+            description: Optional human-readable description.
+
+        Returns:
+            Dict with ``registered`` (bool), ``feature_view_name`` (str),
+            ``features_count`` (int), ``error`` (str | None).
+
+        Notes on best-effort registration:
+            - Returns ``{registered: False, error: ...}`` and logs a
+              warning if Feast isn't initialised, the entity / batch
+              source isn't registered, or apply fails. Callers
+              (feature_analyzer/agent.py) treat registration as
+              best-effort — failing here MUST NOT break the tier0 run.
+        """
+        await self.initialize()
+
+        result: Dict[str, Any] = {
+            "registered": False,
+            "feature_view_name": name,
+            "features_count": 0,
+            "error": None,
+        }
+
+        if not feature_names:
+            result["error"] = "feature_names is empty; nothing to register"
+            return result
+
+        if not self._store:
+            result["error"] = "Feast store not initialised"
+            logger.warning("Cannot register feature view %s: Feast store not initialised", name)
+            return result
+
+        try:
+            from feast import Entity, FeatureView, Field, PushSource
+            from feast.types import Bool, Float32, Float64, Int64, String
+
+            dtype_map = {
+                "Int64": Int64,
+                "Float32": Float32,
+                "Float64": Float64,
+                "String": String,
+                "Bool": Bool,
+            }
+
+            try:
+                entity = self._store.get_entity(entity_name)
+            except Exception as e:
+                result["error"] = f"entity '{entity_name}' not registered in Feast: {e}"
+                logger.warning(
+                    "Cannot register feature view %s: %s", name, result["error"]
+                )
+                return result
+
+            try:
+                batch_source = self._store.get_data_source(batch_source_name)
+            except Exception as e:
+                result["error"] = (
+                    f"batch source '{batch_source_name}' not registered in Feast: {e}"
+                )
+                logger.warning(
+                    "Cannot register feature view %s: %s", name, result["error"]
+                )
+                return result
+
+            schema = []
+            feature_dtypes = feature_dtypes or {}
+            for feature_name in feature_names:
+                dtype_str = feature_dtypes.get(feature_name, "Float64")
+                dtype = dtype_map.get(dtype_str, Float64)
+                schema.append(Field(name=feature_name, dtype=dtype))
+
+            push_source_name = f"{name}_push_source"
+            push_source = PushSource(
+                name=push_source_name,
+                batch_source=batch_source,
+            )
+
+            feature_view = FeatureView(
+                name=name,
+                entities=[Entity(name=entity.name, join_keys=[entity.join_key])],
+                ttl=ttl or timedelta(days=7),
+                schema=schema,
+                source=push_source,
+                online=True,
+                tags=tags or {"owner": "feature_analyzer", "auto_registered": "true"},
+                description=description or f"Auto-registered tier0 features: {name}",
+            )
+
+            await asyncio.to_thread(self._store.apply, [feature_view])
+
+            result["registered"] = True
+            result["features_count"] = len(feature_names)
+            logger.info(
+                "Auto-registered FeatureView '%s' with %d features",
+                name,
+                len(feature_names),
+            )
+            return result
+
+        except Exception as e:
+            result["error"] = str(e)
+            logger.warning("Failed to auto-register FeatureView %s: %s", name, e)
+            return result
+
     async def list_entities(self) -> List[Dict[str, Any]]:
         """List all registered entities.
 

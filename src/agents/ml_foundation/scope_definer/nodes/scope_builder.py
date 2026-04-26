@@ -34,6 +34,46 @@ def _normalise_prediction_timestamp(value: Any) -> Optional[str]:
     return str(value)
 
 
+_COST_MATRIX_KEYS = ("tp", "fp", "fn", "tn")
+
+
+def _validate_cost_matrix(value: Any) -> Optional[Dict[str, float]]:
+    """Coerce and validate a cost_matrix input.
+
+    Accepts a dict with all four confusion-matrix keys (``tp``/``fp``/
+    ``fn``/``tn``) mapped to numeric values. Returns ``None`` when the
+    input is missing or empty so downstream code can treat "no cost
+    matrix configured" the same as "skip business_utility".
+
+    Raises ``ValueError`` on malformed input (missing keys or non-numeric
+    values) — fail-loud at the scope_definer boundary rather than
+    silently dropping a misconfigured matrix that would defeat the
+    purpose of the business_utility metric.
+    """
+    if value is None or value == {}:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"cost_matrix must be a dict with keys {_COST_MATRIX_KEYS}, got "
+            f"{type(value).__name__}"
+        )
+    missing = [k for k in _COST_MATRIX_KEYS if k not in value]
+    if missing:
+        raise ValueError(
+            f"cost_matrix missing required keys: {missing}. All four of "
+            f"{_COST_MATRIX_KEYS} are required."
+        )
+    coerced: Dict[str, float] = {}
+    for k in _COST_MATRIX_KEYS:
+        v = value[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(
+                f"cost_matrix['{k}'] must be int or float, got {type(v).__name__}"
+            )
+        coerced[k] = float(v)
+    return coerced
+
+
 async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
     """Build complete ScopeSpec from inferred problem details.
 
@@ -90,6 +130,12 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
     # business spec so downstream agents (Tier 1-5) share a single anchor.
     prediction_timestamp = _normalise_prediction_timestamp(state.get("prediction_timestamp"))
 
+    # Block 5 (finding #10): forward the optional cost matrix so the
+    # evaluator can compute a business_utility metric driven by the chosen
+    # decision threshold and the per-outcome dollar value the business
+    # assigns to each confusion-matrix cell. None means "skip the metric".
+    cost_matrix = _validate_cost_matrix(state.get("cost_matrix"))
+
     # Build complete ScopeSpec.
     # Naming guard (Block 1B-M6): the two ``prediction_*`` fields below are
     # NOT redundant — ``prediction_horizon_days`` is a *duration* (e.g. "30
@@ -104,6 +150,7 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
         "prediction_target": prediction_target,
         "prediction_horizon_days": prediction_horizon,
         "prediction_timestamp": prediction_timestamp,
+        "cost_matrix": cost_matrix,
         "target_population": target_population,
         "inclusion_criteria": inclusion_criteria,
         "exclusion_criteria": exclusion_criteria,

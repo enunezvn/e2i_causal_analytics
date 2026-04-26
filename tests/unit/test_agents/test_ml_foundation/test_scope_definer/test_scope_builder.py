@@ -11,6 +11,7 @@ from src.agents.ml_foundation.scope_definer.nodes.scope_builder import (
     _define_inclusion_criteria,
     _define_target_population,
     _normalise_prediction_timestamp,
+    _validate_cost_matrix,
     build_scope_spec,
 )
 
@@ -367,3 +368,77 @@ async def test_build_scope_prediction_timestamp_absent_when_unset():
     # stable schema, but its value is None when no timestamp was provided.
     assert "prediction_timestamp" in scope_spec
     assert scope_spec["prediction_timestamp"] is None
+
+
+# === Block 5 (#10): cost_matrix scaffolding ================================
+
+
+def test_validate_cost_matrix_accepts_full_dict():
+    """All four required keys with numeric values → coerced to float dict."""
+    cm = {"tp": 100, "fp": -10.5, "fn": -50, "tn": 0}
+    result = _validate_cost_matrix(cm)
+    assert result == {"tp": 100.0, "fp": -10.5, "fn": -50.0, "tn": 0.0}
+    assert all(isinstance(v, float) for v in result.values())
+
+
+@pytest.mark.parametrize("value", [None, {}])
+def test_validate_cost_matrix_returns_none_for_empty(value):
+    """None and {} both signal 'no cost matrix configured'."""
+    assert _validate_cost_matrix(value) is None
+
+
+def test_validate_cost_matrix_rejects_missing_keys():
+    """A partial cost matrix is misconfiguration — fail loud at the boundary."""
+    with pytest.raises(ValueError, match="missing required keys"):
+        _validate_cost_matrix({"tp": 1.0, "fp": 0.0})
+
+
+def test_validate_cost_matrix_rejects_non_numeric_values():
+    """Strings/None/bools as values are rejected before the evaluator multiplies."""
+    with pytest.raises(ValueError, match="must be int or float"):
+        _validate_cost_matrix({"tp": "100", "fp": -10.0, "fn": -50.0, "tn": 0.0})
+
+
+def test_validate_cost_matrix_rejects_non_dict():
+    """The matrix must be a dict — lists/tuples are rejected."""
+    with pytest.raises(ValueError, match="must be a dict"):
+        _validate_cost_matrix([100, -10, -50, 0])
+
+
+@pytest.mark.asyncio
+async def test_build_scope_propagates_cost_matrix_when_provided():
+    """A valid cost_matrix on state is forwarded onto scope_spec verbatim."""
+    cm = {"tp": 100.0, "fp": -10.0, "fn": -50.0, "tn": 0.0}
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "cost_matrix": cm,
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+
+    assert "cost_matrix" in scope_spec
+    assert scope_spec["cost_matrix"] == cm
+
+
+@pytest.mark.asyncio
+async def test_build_scope_cost_matrix_absent_when_unset():
+    """Without ``cost_matrix`` in state, ``scope_spec`` has None.
+
+    The field is always present so the schema is stable; downstream code
+    uses ``None`` as the "skip business_utility" signal.
+    """
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    assert "cost_matrix" in scope_spec
+    assert scope_spec["cost_matrix"] is None
