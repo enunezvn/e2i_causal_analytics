@@ -827,6 +827,30 @@ class TestProductionFallbackRaises:
 
         assert client._fallback_used is True
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("env_value", ["PRODUCTION", "Production", "production"])
+    async def test_historical_fallback_raises_case_insensitive(self, monkeypatch, env_value):
+        """ENVIRONMENT check is case-insensitive (uppercase must NOT silently disable the prod block)."""
+        monkeypatch.setenv("ENVIRONMENT", env_value)
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        client._store = None
+        client._custom_store = MagicMock()
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        with pytest.raises(FeastFallbackError):
+            await client.get_historical_features(
+                entity_df=entity_df,
+                feature_refs=["hcp_view:engagement_score"],
+            )
+
 
 class TestFreshnessDefaultsToStaleOnException:
     """Test that get_feature_freshness defaults to stale on exception."""

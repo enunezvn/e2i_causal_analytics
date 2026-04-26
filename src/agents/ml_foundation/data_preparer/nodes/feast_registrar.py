@@ -148,6 +148,15 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
             if os.environ.get("ALLOW_STALE_FEAST") != "1":
                 updates["feast_blocked"] = True
                 updates["feast_registration_status"] = "blocked_stale_features"
+                # Append to blocking_issues so _finalize_output forces gate_passed=False.
+                # We must merge against any existing blocking_issues already in state,
+                # because subsequent state updates from other nodes will overwrite this
+                # key only with the value we return here.
+                existing_blockers = list(state.get("blocking_issues", []) or [])
+                existing_blockers.append(
+                    "Feast features stale; ALLOW_STALE_FEAST not set"
+                )
+                updates["blocking_issues"] = existing_blockers
                 logger.warning(
                     "Feast QC gate: features are stale for experiment %s. "
                     "Blocking training. Set ALLOW_STALE_FEAST=1 to bypass (ops emergency only).",

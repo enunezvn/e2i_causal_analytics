@@ -469,12 +469,14 @@ class FeastClient:
         It returns the latest feature values instead.
 
         Raises:
-            FeastFallbackError: When ``ENVIRONMENT=production``. The fallback
-                is forbidden in production because it silently degrades
-                point-in-time correctness, which can leak future data into
-                training. Configure Feast properly or unset ``ENVIRONMENT``.
+            FeastFallbackError: When ``ENVIRONMENT`` is set to ``production``
+                (case-insensitive — ``PRODUCTION`` and ``Production`` also
+                trigger the raise). The fallback is forbidden in production
+                because it silently degrades point-in-time correctness, which
+                can leak future data into training. Configure Feast properly
+                or unset ``ENVIRONMENT``.
         """
-        if os.environ.get("ENVIRONMENT") == "production":
+        if os.environ.get("ENVIRONMENT", "").lower() == "production":
             raise FeastFallbackError(
                 "Feast historical features unavailable; fallback is forbidden in production. "
                 "Configure Feast or unset ENVIRONMENT."

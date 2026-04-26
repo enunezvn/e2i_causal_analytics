@@ -164,8 +164,15 @@ async def test_register_features_freshness_check(mock_state_with_train_data, moc
 
 
 @pytest.mark.asyncio
-async def test_register_features_stale_features_warning(mock_state_with_train_data):
-    """Test that stale features generate warnings."""
+async def test_register_features_stale_features_warning(mock_state_with_train_data, monkeypatch):
+    """Stale features generate warnings AND the new hard-block contract.
+
+    Defense-in-depth alongside ``test_qc_gate_blocks_on_stale_feast`` — this
+    test exercises the same path with slightly different fixture data so we
+    fail closed if either assertion regresses.
+    """
+    monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
     adapter = MagicMock()
     adapter.register_features_from_state = AsyncMock(
         return_value={
@@ -188,8 +195,16 @@ async def test_register_features_stale_features_warning(mock_state_with_train_da
     ):
         result = await register_features_in_feast(mock_state_with_train_data)
 
+    # Warning still surfaced
     assert result["feast_freshness_check"]["fresh"] is False
     assert any("Freshness" in w for w in result["feast_warnings"])
+    # Block 2 hard-block contract
+    assert result["feast_blocked"] is True
+    assert result["feast_registration_status"] == "blocked_stale_features"
+    # blocking_issues must be appended so the QC gate forces gate_passed=False
+    assert any(
+        "Feast features stale" in issue for issue in result.get("blocking_issues", [])
+    )
 
 
 @pytest.mark.asyncio
@@ -344,6 +359,11 @@ async def test_qc_gate_blocks_on_stale_feast(mock_state_with_train_data, monkeyp
     assert result.get("feast_registration_status") == "blocked_stale_features"
     # Freshness warning propagated
     assert any("Freshness" in w for w in result["feast_warnings"])
+    # blocking_issues appended so _finalize_output's gate logic forces gate_passed=False
+    assert "blocking_issues" in result
+    assert any(
+        "Feast features stale" in issue for issue in result["blocking_issues"]
+    )
 
 
 @pytest.mark.asyncio
@@ -373,3 +393,56 @@ async def test_qc_gate_allows_with_allow_stale_env(mock_state_with_train_data, m
     # No hard block when ALLOW_STALE_FEAST is set
     assert result.get("feast_blocked") is False
     assert result.get("feast_registration_status") != "blocked_stale_features"
+    # blocking_issues NOT appended in the bypass path
+    assert not any(
+        "Feast features stale" in issue
+        for issue in (result.get("blocking_issues", []) or [])
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_feast_blocks_finalize_output_gate(mock_state_with_train_data, monkeypatch):
+    """End-to-end: stale features → registrar appends blocking_issues → finalize_output flips gate_passed=False."""
+    from src.agents.ml_foundation.data_preparer.graph import finalize_output
+
+    monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
+    adapter = MagicMock()
+    adapter.register_features_from_state = AsyncMock(
+        return_value={"features_registered": 2, "errors": []}
+    )
+    adapter.check_feature_freshness = AsyncMock(
+        return_value={
+            "fresh": False,
+            "error": "stale",
+            "recommendations": ["Run materialization"],
+        }
+    )
+    adapter._feast_client = None
+
+    # Run the registrar
+    with patch(
+        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+        return_value=adapter,
+    ):
+        registrar_updates = await register_features_in_feast(mock_state_with_train_data)
+
+    # Build the post-registrar state (simulate LangGraph state merge)
+    post_state = {**mock_state_with_train_data, **registrar_updates}
+    # Simulate other QC checks having passed cleanly so the only blocker is Feast
+    post_state["qc_status"] = "passed"
+    post_state["overall_score"] = 0.95
+    post_state["train_df"] = pd.DataFrame({"feature1": [1.0]})
+    post_state["validation_df"] = pd.DataFrame({"feature1": [1.0]})
+    post_state["test_df"] = pd.DataFrame({"feature1": [1.0]})
+    post_state["holdout_df"] = pd.DataFrame({"feature1": [1.0]})
+
+    # Run finalize_output
+    final_updates = await finalize_output(post_state)
+
+    # Gate must be blocked because of the Feast blocking_issue
+    assert final_updates["gate_passed"] is False
+    assert final_updates["qc_passed"] is False
+    assert any(
+        "Feast features stale" in blocker for blocker in final_updates["blockers"]
+    )
