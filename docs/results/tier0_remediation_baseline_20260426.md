@@ -246,3 +246,107 @@ not yet consumed; expect this scaffolding to be exercised in Block 4 onward.
   assert `LabelEncoder.classes_` matches train uniques exactly and that
   unseen val/test categories collapse to the sentinel id
   via `_safe_label_encode`.
+
+## Block 2 note
+
+After making Feast fail-loud — `FeastFallbackError` raised in production, `get_feature_freshness`
+defaults to `is_fresh=False` on exception, `ALLOW_STALE_FEAST=1` opt-out, MLflow `feast_fallback`
+tag on training runs, QC gate that blocks downstream training when Feast is stale. Source:
+dev-mode `python scripts/run_tier0_test.py` execution at experiment ID `tier0_e2e_77e8a330`,
+run report `docs/results/tier0_pipeline_run_20260426_032552.md`. Commits: `789b521`
+(initial implementation), `61d81da` (gate wiring + case-insensitive ENVIRONMENT).
+
+### Run metadata (post-Block-2)
+
+| Field | Value |
+|-------|-------|
+| Run timestamp | 2026-04-26 03:22 UTC |
+| Experiment ID | `tier0_e2e_77e8a330` |
+| Cohort size | 1500 patients (unchanged) |
+| Total duration | ~233 s |
+| QC gate | PASSED (Feast freshness OK on synthetic; ALLOW_STALE_FEAST not needed) |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — out of scope per plan) |
+| Selected best model | LogisticRegression (AUC ranking unchanged) |
+| Push state | both commits pushed to `origin/feat/tier0-mlops-hardening` |
+
+### Tier-0 metric delta vs Block 1B
+
+All metrics identical to Block 1B baseline. Synthetic data does not exercise the
+Feast historical-features fallback path (single-row patients per `sample_data.py:573`;
+`_check_feature_freshness` finds no Feast feature views registered since registration
+is opportunistic on this synthetic input), so the new fail-loud gates remain dormant
+end-to-end. The synthetic e2e here is a no-regression smoke test — actual fail-loud
+behavior is verified by 11 new unit tests:
+
+- `tests/unit/test_feature_store/test_feast_client.py` (4 cases): production raise,
+  non-prod fallback flag, freshness default-stale on exception, ALLOW_STALE_FEAST
+  override, plus a parametrized case-insensitive ENVIRONMENT test (3 sub-cases).
+- `tests/unit/test_agents/test_ml_foundation/test_data_preparer/test_feast_registrar.py`
+  (4 cases): QC gate blocks on stale Feast, ALLOW_STALE_FEAST bypass, exception-path
+  freshness handling, plus an updated `test_register_features_stale_features_warning`
+  asserting the new contract.
+- `tests/unit/test_agents/test_ml_foundation/test_model_trainer/test_mlflow_logger.py`
+  (3 cases): tag set when fallback used, tag set to "False" when not used, defaults
+  to "False" when state key absent.
+- One in-process end-to-end test `test_stale_feast_blocks_finalize_output_gate` that
+  runs registrar → state merge → `finalize_output` and asserts `gate_passed=False`
+  with the new blocker visible in `result["blockers"]`. This is the test that proves
+  the gate actually blocks downstream training (the prior fail mode was a dead-end
+  signal — `feast_blocked=True` set but never consumed).
+
+### Code-level changes landed
+
+- `src/feature_store/feast_client.py`:
+  - New `FeastFallbackError(Exception)` near the module-level definitions.
+  - `_fallback_used: bool` instance attribute initialised in `FeastClient.__init__`.
+  - `_get_historical_features_fallback` raises `FeastFallbackError` at the top when
+    `os.environ.get("ENVIRONMENT", "").lower() == "production"` (case-insensitive).
+  - `get_feature_freshness` wrapped in `try/except Exception` defaulting to a
+    `FeatureFreshness(..., is_fresh=False, freshness_status=UNKNOWN, ...)` object;
+    `ALLOW_STALE_FEAST=1` opt-out flips `is_fresh=True` for ops emergencies.
+  - Outer `get_historical_features` exception handler special-cases `FeastFallbackError`
+    so the prod-mode raise propagates instead of being re-routed to the fallback.
+- `src/agents/ml_foundation/data_preparer/nodes/feast_registrar.py`:
+  - QC gate default inverted: `freshness_result.get("fresh", True)` → `get("fresh", False)`.
+  - On stale Feast without ALLOW_STALE_FEAST: appends `"Feast features stale; ALLOW_STALE_FEAST not set"`
+    into a merged copy of `state["blocking_issues"]`, sets `feast_blocked=True` and
+    `feast_registration_status="blocked_stale_features"`. The list-merge pattern
+    matches sibling nodes (`ge_validator`, `schema_validator`, `leakage_detector`,
+    `leakage_remediation`) — required because LangGraph's default state reducer is
+    dict-update, so list keys must be merged manually to avoid clobbering issues set
+    by earlier nodes.
+  - `_check_feature_freshness` exception path upgraded from `logger.debug + return None`
+    to `logger.warning + return {"fresh": False/True, "error": ..., "recommendations": [...]}`
+    so callers can react.
+  - Propagates `feast_fallback_used` from `adapter._feast_client._fallback_used` into
+    the data_preparer state for downstream MLflow tagging.
+- `src/agents/ml_foundation/data_preparer/state.py`: added `feast_blocked: bool`,
+  `feast_fallback_used: bool`; extended `feast_registration_status` Literal with
+  `"blocked_stale_features"`. All additions are `total=False` (backward-compatible).
+- `src/agents/ml_foundation/model_trainer/state.py`: added `feast_fallback_used: bool`
+  for cross-agent propagation from data_preparer to model_trainer.
+- `src/agents/ml_foundation/model_trainer/nodes/mlflow_logger.py`: reads
+  `state.get("feast_fallback_used", False)` and adds `"feast_fallback": str(...)`
+  to the MLflow `start_run` tags dict (lines 78–115 / 139–150).
+
+### Deferred until end-of-branch
+
+The plan's Step 7 prod-mode verification (`ENVIRONMENT=production` + Feast intentionally
+unreachable) is deferred until just before the PR is opened. Synthetic data doesn't
+exercise the Feast historical-features fallback path, so a synthetic prod-mode run
+cannot actually demonstrate `FeastFallbackError` raising end-to-end — the in-process
+e2e test (`test_stale_feast_blocks_finalize_output_gate`) is the strongest validation
+that's currently possible without a real entity panel. The end-of-branch demo will
+need either (a) a multi-row real-data tier0 input, or (b) a targeted integration test
+that forces `_store=None` and routes through the fallback path under prod ENV.
+
+### Verification snapshot
+
+| Check | Result |
+|-------|--------|
+| pytest test_feast_client.py | 47 passed, 8 failed (pre-existing tz-naive vs tz-aware fixture failures unrelated to Block 2; identical count before/after both commits) |
+| pytest test_feast_registrar.py | 15 passed, 0 failed |
+| pytest test_mlflow_logger.py | 26 passed, 0 failed |
+| ruff check (touched files) | clean of new issues; 2 pre-existing unused-import warnings unchanged |
+| mypy --config-file pyproject.toml (touched files) | 0 new errors; 11 pre-existing errors in 5 unrelated files unchanged |
+| tier0 e2e (dev mode) | identical to Block 1B baseline (no metric movement; Feast path dormant on synthetic) |
