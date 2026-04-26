@@ -31,13 +31,39 @@ Treat the registry the same way you treat compiled artifacts:
 - **Source of truth**: the Python files in this directory (`entities.py`,
   `data_sources.py`, `features/*.py`).
 - **Build step**: `feast apply` reads those files and writes the registry.
-- **Deploy step**: the Feast container (`feastdev/feature-server:0.43.0`)
-  re-runs `feast apply` at startup so the registry is always in sync with the
-  Python definitions, regardless of what was on disk.
+- **Deploy step**: an operator (or deploy script) runs `feast apply` against
+  the live registry store *before* the Feast container starts serving. The
+  container itself runs `feast serve` only — it does **not** re-apply on
+  startup. See `docker/Dockerfile.feast` (`CMD ["feast", "serve", …]` and the
+  in-line comment "_You'll need to apply feature definitions first with
+  'feast apply'_").
 
 CI runs `feast apply --skip-source-validation` against this directory on every
 push (see `.github/workflows/backend-tests.yml` job `feast-apply`) so a broken
 feature definition fails before merge.
+
+### When to apply
+
+Run `feast apply` against this directory whenever any of the following change:
+
+- Entity definitions (`entities.py`)
+- Data sources (`data_sources.py`)
+- Feature view definitions (`features/*.py`)
+- The project name or any metadata in `feature_store.yaml`
+
+The Feast container does **not** auto-apply on startup; the registry that
+`feast serve` reads must already exist (or already be current) when the
+container boots. In production, an operator runs the apply against the live
+registry — the canonical command from a host that can reach the running
+container is:
+
+```bash
+docker exec e2i_feast feast --chdir /feast apply
+```
+
+(`scripts/deploy.sh` does **not** currently invoke this — it pulls code and
+restarts workers; if you change feature definitions you must run the apply
+explicitly.)
 
 ## Local workflow
 

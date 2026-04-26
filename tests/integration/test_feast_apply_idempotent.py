@@ -12,7 +12,28 @@ compares the structural output. It skips cleanly when ``feast`` is not
 installed (e.g., the optional ``feast`` extras were not pulled in for a slim
 CI runner).
 
-Findings reference: Block 3B (#4 residual, gitignore + apply lifecycle).
+Scope of this gate (per Block 3B review item I-2)
+-------------------------------------------------
+This idempotency check verifies that a second ``feast apply`` does not add
+or remove entities or feature views — by NAME only.
+
+It does **not** detect intra-feature-view changes:
+
+* dtype flips (e.g., ``Int64`` -> ``Float32`` on an existing field),
+* TTL drift on an existing FeatureView,
+* source rename or re-pointing (FV keeps its name, swaps its source),
+* schema field add/remove inside an existing FV,
+* entity-to-FV wiring changes that preserve the name set.
+
+A schema-deep diff (registry-proto-aware comparison rather than name-set
+comparison) is planned for Block 6B's Feast integration suite. For now,
+treat this test as the **minimum-viable gate** against non-deterministic
+apply behaviour — it catches the worst class of bug (random
+appearance/disappearance of FVs across runs) cheaply without standing up
+Postgres or Redis.
+
+Findings reference: Block 3B (#4 residual, gitignore + apply lifecycle;
+I-2 scope-documentation).
 """
 
 from __future__ import annotations

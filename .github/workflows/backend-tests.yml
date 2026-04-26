@@ -62,21 +62,42 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      - name: Verify CI Feast version matches production container
+        # Production runs `feastdev/feature-server:0.43.0` (see
+        # `docker/Dockerfile.feast`). If CI installs a different Feast version,
+        # we risk: (a) green-lighting a definition that breaks 0.43 startup, or
+        # (b) failing on a deprecation that 0.43 still accepts. Fail loudly
+        # before installing anything if the Dockerfile pin drifts.
+        run: |
+          set -euo pipefail
+          DOCKERFILE_VERSION=$(grep -oP 'feastdev/feature-server:\K[0-9.]+' docker/Dockerfile.feast)
+          if [ "$DOCKERFILE_VERSION" != "0.43.0" ]; then
+            echo "ERROR: docker/Dockerfile.feast pins $DOCKERFILE_VERSION but CI expects 0.43.0"
+            echo "Update both this workflow's pip install pin and the version assertion to match."
+            exit 1
+          fi
+          echo "Production Feast version $DOCKERFILE_VERSION matches CI pin 0.43.0."
+
       - name: Install Feast (with PostgreSQL offline store)
         # Install just the Feast SDK + the postgres contrib offline store used
-        # by `feature_repo/data_sources.py`. We deliberately do NOT pull the
-        # full project requirements.txt — Feast runs in its own container in
-        # production and dragging in the rest of the stack inflates CI by a
-        # few minutes per run.
+        # by `feature_repo/data_sources.py`. The version pin matches the
+        # production container (`feastdev/feature-server:0.43.0`) so CI tests
+        # the exact runtime — drift would let CI green-light definitions that
+        # break the production server (or vice versa). We deliberately do NOT
+        # pull the full project requirements.txt — Feast runs in its own
+        # container in production and dragging in the rest of the stack
+        # inflates CI by a few minutes per run.
         run: |
           pip install --upgrade pip
-          pip install 'feast[postgres]==0.58.0'
+          pip install 'feast[postgres]==0.43.0'
 
       - name: Apply feature definitions
         # --skip-source-validation lets us regenerate the registry without a
-        # reachable Postgres/Redis backend. The Feast container re-applies on
-        # startup, so this CI step is purely a "do the Python definitions
-        # parse and produce a valid registry" gate.
+        # reachable Postgres/Redis backend. The Feast container does NOT
+        # re-apply on startup (it just runs `feast serve`), so this CI step is
+        # purely a "do the Python definitions parse and produce a valid
+        # registry" gate; deployment scripts apply against the live registry
+        # store separately.
         run: feast --chdir feature_repo apply --skip-source-validation
 
       - name: Verify registry is structurally idempotent
@@ -85,6 +106,12 @@ jobs:
         # embeds last_updated_timestamp), so we compare the structural
         # inventory instead. This catches non-deterministic feature defs and
         # accidental in-process state leaks.
+        #
+        # SCOPE LIMITATION: this gate compares entity + feature-view NAMES
+        # only. It does NOT detect intra-FV changes (dtype flips, TTL drift,
+        # source rename, schema-field add/remove). A schema-deep diff is
+        # planned for Block 6B's Feast integration suite. Treat this as the
+        # minimum-viable gate against non-deterministic apply behaviour.
         run: |
           set -euo pipefail
           cd feature_repo

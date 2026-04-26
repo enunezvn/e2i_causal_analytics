@@ -17,7 +17,23 @@ This test is intentionally hard to run in CI:
 * Sample sizes are kept small (5 entities per FV) so that — when the
   environment IS available — the test stays cheap.
 
-Findings reference: Block 3B (#4 residual, parity invariant).
+Fail-vs-skip discipline
+-----------------------
+Once a developer has opted in via ``FEAST_INTEGRATION=1``, this module
+distinguishes two failure modes when probing the offline store:
+
+* **Environment / connection problems** (missing credentials, host
+  unreachable, password rotated, no entities in source table) -> ``skip``.
+  These are caller-environment issues; opting in does not assert the DB is
+  up.
+* **Schema / permission problems** (table missing, column missing,
+  ``permission denied``, malformed SQL) -> ``fail``. We connected, the
+  wiring is wrong, and that is exactly what this parity test is supposed
+  to catch. A bare ``except Exception`` here would silently turn real
+  parity violations into green skips on the droplet — that bug is the
+  motivation for this discipline (see review item I-3).
+
+Findings reference: Block 3B (#4 residual, parity invariant; I-3 fix).
 """
 
 from __future__ import annotations
@@ -105,9 +121,21 @@ def _sample_entity_ids(store: Any, table: str, join_key: str) -> list[str]:
     LIMIT N`` probe. This avoids the chicken-and-egg of needing entity ids in
     order to call ``get_historical_features``.
 
-    Returns an empty list if the probe fails for any reason (unreachable DB,
-    missing table, permission denied, etc.); the caller decides whether to
-    skip or to fail.
+    Fail-vs-skip discipline (post-Block-3B I-3 fix):
+
+    * **Environment / connection problems** (missing credential field,
+      unreachable host, password rotated, URL build failure) -> return ``[]``
+      so the caller can ``pytest.skip``. These are caller-environment issues,
+      not parity-test failures, and ``FEAST_INTEGRATION=1`` only asserts that
+      the caller *opted in*, not that the DB is up.
+    * **Schema / permission problems** (table missing, column missing,
+      ``permission denied``, malformed SQL) -> propagate as
+      ``sqlalchemy.exc.ProgrammingError`` / ``DatabaseError`` so pytest
+      reports a real failure with full traceback. We connected, the wiring
+      is wrong: that is exactly what this test is supposed to catch.
+
+    Anything not in those two buckets is left unhandled and will surface as a
+    test error, which is the correct loud-failure path for unexpected states.
     """
     sqlalchemy = pytest.importorskip(
         "sqlalchemy",
@@ -116,8 +144,8 @@ def _sample_entity_ids(store: Any, table: str, join_key: str) -> list[str]:
 
     cfg = store.config.offline_store
     # PostgreSQL DSN. The offline-store config exposes host/port/database/
-    # user/password/sslmode; if any are missing we let the connection error
-    # surface and skip.
+    # user/password/sslmode; if any are missing we treat that as an env config
+    # problem (skip), not a parity-test failure.
     try:
         url = sqlalchemy.URL.create(
             drivername="postgresql+psycopg2",
@@ -127,9 +155,11 @@ def _sample_entity_ids(store: Any, table: str, join_key: str) -> list[str]:
             port=getattr(cfg, "port", None),
             database=getattr(cfg, "database", None),
         )
-    except Exception:
+    except (TypeError, ValueError, KeyError, AttributeError):
+        # Bad/missing offline-store config fields -> environment issue, skip.
         return []
 
+    engine = None
     try:
         engine = sqlalchemy.create_engine(
             url, pool_pre_ping=True, connect_args={"connect_timeout": 5}
@@ -139,13 +169,30 @@ def _sample_entity_ids(store: Any, table: str, join_key: str) -> list[str]:
                 sqlalchemy.text(f"SELECT DISTINCT {join_key} FROM {table} LIMIT :n"),
                 {"n": SAMPLE_SIZE},
             ).fetchall()
-    except Exception:
+    except sqlalchemy.exc.OperationalError:
+        # DB unreachable / connection refused / auth failed -> env issue, skip.
         return []
+    except sqlalchemy.exc.ProgrammingError as exc:
+        # Connected, but the table/column/permissions are wrong. This is a
+        # real parity-test failure: the caller opted in via FEAST_INTEGRATION
+        # but the offline store doesn't match the FeatureView definitions.
+        pytest.fail(
+            f"Parity test schema mismatch on {table}.{join_key} "
+            f"(SQL programming error from a reachable DB): {exc!s:.500}"
+        )
+    except sqlalchemy.exc.DatabaseError as exc:
+        # Reachable DB returned a non-programming database error (data error,
+        # internal error, etc.) -> still a real failure when opted in.
+        pytest.fail(
+            f"Parity test database error on {table}.{join_key} "
+            f"(reachable DB rejected the probe): {exc!s:.500}"
+        )
     finally:
-        try:
-            engine.dispose()
-        except Exception:
-            pass
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception:  # noqa: BLE001 — dispose() is best-effort cleanup
+                pass
 
     return [str(row[0]) for row in rows if row[0] is not None]
 
