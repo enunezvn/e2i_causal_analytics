@@ -525,30 +525,75 @@ def _compute_classification_metrics(
     if y_train is not None and y_train_pred is not None:
         train_metrics = _compute_split_classification_metrics(y_train, y_train_pred, y_train_proba)
 
-    # Validation metrics
-    validation_metrics = {}
-    if y_validation is not None and y_validation_pred is not None:
-        validation_metrics = _compute_split_classification_metrics(
-            y_validation, y_validation_pred, y_validation_proba
+    # =====================================================================
+    # THRESHOLD TUNING — VALIDATION SET ONLY (Block 1A — finding #6)
+    # =====================================================================
+    # The optimal classification threshold (and any precision-constrained
+    # alternative) MUST be selected on validation data, then frozen, then
+    # applied to test. Tuning on test leaks test info into the operating
+    # point and inflates apparent test performance.
+    #
+    # Fallback: if validation arrays are unavailable, fall back to the
+    # default 0.5 threshold rather than tuning on test. This trades
+    # off-by-default predictions for test-set integrity.
+    # =====================================================================
+    if y_validation is not None and y_validation_proba is not None:
+        threshold_source = "validation"
+        optimal_threshold = _compute_optimal_threshold(y_validation, y_validation_proba)
+
+        # For rare-event prediction, apply precision-constrained threshold
+        # tuned ON VALIDATION (not test).
+        precision_constrained = None
+        if minority_ratio < 0.05:
+            precision_constrained = _compute_precision_constrained_threshold(
+                y_validation, y_validation_proba
+            )
+            if precision_constrained and precision_constrained.get("target_achieved"):
+                optimal_threshold = precision_constrained["precision_constrained_threshold"]
+                logger.info(
+                    "Using precision-constrained threshold "
+                    f"{optimal_threshold:.4f} tuned on validation "
+                    f"(precision={precision_constrained['precision_at_threshold']:.4f}, "
+                    f"recall={precision_constrained['recall_at_threshold']:.4f})"
+                )
+    else:
+        threshold_source = "default"
+        optimal_threshold = 0.5
+        precision_constrained = None
+        logger.warning(
+            "Validation arrays unavailable for threshold tuning; "
+            "falling back to default 0.5 threshold (test integrity preserved)."
         )
 
-    # Compute optimal threshold FIRST (before test metrics)
-    optimal_threshold = _compute_optimal_threshold(y_test, y_test_proba)
-
-    # For rare-event prediction, apply precision-constrained threshold
-    precision_constrained = None
-    if minority_ratio < 0.05:
-        precision_constrained = _compute_precision_constrained_threshold(y_test, y_test_proba)
-        if precision_constrained and precision_constrained.get("target_achieved"):
-            optimal_threshold = precision_constrained["precision_constrained_threshold"]
-            logger.info(
-                f"Using precision-constrained threshold {optimal_threshold:.4f} "
-                f"(precision={precision_constrained['precision_at_threshold']:.4f}, "
-                f"recall={precision_constrained['recall_at_threshold']:.4f})"
+    # Validation metrics: recomputed AT THE CHOSEN THRESHOLD when probas
+    # are available so validation_metrics reflects performance at the same
+    # frozen operating point used for test. We also persist
+    # `chosen_threshold` and `chosen_threshold_source` here so downstream
+    # consumers can audit which split produced the threshold.
+    validation_metrics: Dict[str, Any] = {}
+    if y_validation is not None and y_validation_pred is not None:
+        if y_validation_proba is not None:
+            if y_validation_proba.ndim == 2:
+                y_val_proba_pos = y_validation_proba[:, 1]
+            else:
+                y_val_proba_pos = y_validation_proba
+            y_validation_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
+            validation_metrics = dict(
+                _compute_split_classification_metrics(
+                    y_validation, y_validation_pred_at_chosen, y_validation_proba
+                )
             )
+        else:
+            validation_metrics = dict(
+                _compute_split_classification_metrics(
+                    y_validation, y_validation_pred, y_validation_proba
+                )
+            )
+        validation_metrics["chosen_threshold"] = float(optimal_threshold)
+        validation_metrics["chosen_threshold_source"] = threshold_source
 
-    # CRITICAL: For imbalanced data, use optimal threshold for predictions
-    # This prevents all-negative predictions that occur with 0.5 threshold
+    # CRITICAL: For imbalanced data, apply the FROZEN threshold tuned on
+    # validation to test predictions. No re-tuning on test.
     y_test_pred_optimal = y_test_pred  # Default to model predictions
     if y_test_proba is not None and optimal_threshold != 0.5:
         # Get positive class probabilities
@@ -556,16 +601,17 @@ def _compute_classification_metrics(
             y_proba_pos = y_test_proba[:, 1]
         else:
             y_proba_pos = y_test_proba
-        # Apply optimal threshold
+        # Apply frozen threshold (tuned on validation) to test
         y_test_pred_optimal = (y_proba_pos >= optimal_threshold).astype(int)
         logger.info(
-            f"Using optimal threshold {optimal_threshold:.4f} for predictions (vs default 0.5)"
+            f"Applying frozen threshold {optimal_threshold:.4f} "
+            f"(tuned on {threshold_source}) to test predictions (vs default 0.5)"
         )
 
     # Test metrics at 0.5 threshold (standard)
     test_metrics_standard = _compute_split_classification_metrics(y_test, y_test_pred, y_test_proba)
 
-    # Test metrics at optimal threshold (for imbalanced data)
+    # Test metrics at the FROZEN chosen threshold (no re-tuning on test)
     test_metrics_optimal = _compute_split_classification_metrics(
         y_test, y_test_pred_optimal, y_test_proba
     )
@@ -621,6 +667,8 @@ def _compute_classification_metrics(
         "brier_score": brier,
         "confusion_matrix": confusion_dict,
         "optimal_threshold": optimal_threshold,
+        "chosen_threshold": float(optimal_threshold),
+        "chosen_threshold_source": threshold_source,
         "precision_at_k": precision_at_k,
         "confidence_interval": confidence_interval,
         "bootstrap_samples": bootstrap_samples,
@@ -921,7 +969,16 @@ def _compute_optimal_threshold(
         # Youden's J statistic
         j_scores = tpr - fpr
         optimal_idx = np.argmax(j_scores)
-        return float(thresholds[optimal_idx])
+        candidate = float(thresholds[optimal_idx])
+        # sklearn's roc_curve prepends a sentinel threshold of `np.inf`
+        # corresponding to the (FPR=0, TPR=0) trivial point. When no
+        # threshold yields a positive Youden's J (e.g., a model that is
+        # worse than chance on a small held-out set) argmax returns this
+        # sentinel. Treat any non-finite or out-of-range value as
+        # "no useful threshold found" and fall back to 0.5.
+        if not np.isfinite(candidate) or candidate < 0.0 or candidate > 1.0:
+            return 0.5
+        return candidate
     except Exception:
         return 0.5
 

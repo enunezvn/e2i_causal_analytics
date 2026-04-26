@@ -103,3 +103,73 @@ After the fix, the threshold is tuned on validation, frozen, then applied to tes
 - `validation_metrics["chosen_threshold"]` becomes the source-of-truth, and re-runs become reproducible w.r.t. threshold selection.
 
 Block 1A's commit will append a follow-up table comparing post-fix numbers against this baseline.
+
+## Block 1A delta
+
+After relocating threshold tuning from test → validation. Source: single
+`python scripts/run_tier0_test.py` execution at experiment ID
+`tier0_e2e_da5a561b`, run report `docs/results/tier0_pipeline_run_20260426_004002.md`.
+
+### Run metadata (post-fix)
+
+| Field | Value |
+|-------|-------|
+| Run timestamp | 2026-04-26 00:40:02 UTC |
+| Experiment ID | `tier0_e2e_da5a561b` |
+| Cohort size | 1500 patients (unchanged) |
+| Total duration | 238.4 s |
+| QC gate | PASSED |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — out of scope per plan) |
+| Selected best model | LogisticRegression (AUC ranking unchanged) |
+| Run report | `docs/results/tier0_pipeline_run_20260426_004002.md` |
+
+### Threshold (post-fix — tuned on validation)
+
+`chosen_threshold = 0.5141` selected by `_compute_optimal_threshold(y_validation, y_validation_proba)`.
+`chosen_threshold_source = "validation"` (persisted in `validation_metrics`
+and at the top-level evaluator output for downstream auditability).
+Same threshold is then frozen and applied to the test set without re-tuning.
+
+### Validation-set metric delta (n=300, evaluated at the chosen threshold)
+
+| Metric | Block 0 (test-tuned, leakage) | Block 1A (validation-tuned) | Delta |
+|--------|-------------------------------|------------------------------|-------|
+| roc_auc | 0.6942 | 0.6942 | 0.0000 |
+| pr_auc | 0.2848 | 0.2848 | 0.0000 |
+| accuracy | 0.6600 | 0.7300 | +0.0700 |
+| precision | 0.2456 | 0.2921 | +0.0465 |
+| recall | 0.6364 | 0.5909 | -0.0455 |
+| f1_score | 0.3544 | 0.3910 | +0.0366 |
+| f1_macro | 0.5618 | 0.6088 | +0.0470 |
+| f1_weighted | 0.7084 | 0.7627 | +0.0543 |
+| precision_class_1 | 0.2456 | 0.2921 | +0.0465 |
+| recall_class_1 | 0.6364 | 0.5909 | -0.0455 |
+| mcc | 0.2190 | 0.2671 | +0.0481 |
+| brier_score | 0.2369 | 0.2369 | 0.0000 |
+
+Validation confusion matrix at threshold 0.5141: TN=193, FP=63, FN=18, TP=26 → 89 predicted positives (down from 117 at the test-tuned 0.4982).
+
+### Test-set metric delta (n=225, evaluated at the frozen threshold 0.5141)
+
+| Metric | Block 0 (test-tuned, leakage) | Block 1A (frozen at val-tuned) | Delta |
+|--------|-------------------------------|---------------------------------|-------|
+| auc_roc | 0.5740 | 0.5740 | 0.0000 |
+| accuracy | 0.6600 | 0.7300\* | — |
+| precision | 0.2065 | 0.1719 | -0.0346 |
+| recall | 0.5758 | 0.3333 | -0.2425 |
+| f1_score | 0.3040 | 0.2268 | -0.0772 |
+| positive_predictions | 117 | 89\* | — |
+
+\* Both reports reuse the validation-set confusion matrix in the
+"FINAL MODEL PERFORMANCE" rendering, so accuracy/predicted-positive
+rows in this row-set track validation, not test. The test-only metrics
+shown here are the AUC/precision/recall/F1 values surfaced in the
+verdict block via `state.get("test_metrics", {})`.
+
+### Verdict — observations
+
+- **AUC unchanged** as predicted (threshold-free measure).
+- **Test precision/recall/F1 dropped substantially** (precision -3.5pp, recall -24.3pp, F1 -7.7pp). This is the expected unmasking: under the leakage bug the test-tuned threshold cherry-picked the test-optimal point, inflating reported test recall by ~24pp. Block 1A removes that flattering bias; the new test numbers are an honest read of the model at an operating point chosen pre-test.
+- **Validation metrics at the frozen threshold are slightly different** from the baseline's "validation at the test-tuned threshold" line, as expected — the chosen threshold moved from 0.4982 → 0.5141, so the validation operating point shifted accordingly.
+- **MARGINAL verdict unchanged** (AUC remains the dominant signal in the verdict logic, so the verdict label is robust to this fix).
+- **Top features, SHAP rankings, calibration, CV results, permutation test all unchanged** — those don't depend on the chosen operating point.
