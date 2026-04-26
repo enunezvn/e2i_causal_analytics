@@ -529,19 +529,28 @@ def test_get_online_features_round_trips_pushed_values(feast_client: Any) -> Non
             full_feature_names=False,
         ).to_dict()
 
-        # Same-order assertion: row-i in input -> index-i in output.
-        for i, eid in enumerate(push_df[ENTITY_JOIN_KEY]):
-            assert online_dict[ENTITY_JOIN_KEY][i] == eid, (
-                f"row {i}: entity id mismatch — sent {eid!r}, "
-                f"got {online_dict[ENTITY_JOIN_KEY][i]!r}"
+        # Order-independent assertion: build {entity_id -> value} dicts on both
+        # sides and compare. Feast 0.43 happens to preserve input order for
+        # online lookups, but this is not a documented contract and future
+        # versions may parallelize per-entity reads. Comparing by entity id
+        # decouples the test from that implicit ordering.
+        returned_ids = list(online_dict[ENTITY_JOIN_KEY])
+        expected_ids = list(push_df[ENTITY_JOIN_KEY])
+        assert sorted(returned_ids) == sorted(expected_ids), (
+            f"online entity id set mismatch — sent {expected_ids!r}, "
+            f"got {returned_ids!r}"
+        )
+        for col in SELECTED_FEATURES:
+            returned_by_id = dict(
+                zip(online_dict[ENTITY_JOIN_KEY], online_dict[col], strict=True)
             )
-            for col in SELECTED_FEATURES:
-                expected = push_df[col].iloc[i]
-                actual = online_dict[col][i]
-                assert actual == expected, (
-                    f"row {i}/{col}: value mismatch — sent {expected!r}, "
-                    f"got {actual!r}"
-                )
+            expected_by_id = dict(
+                zip(push_df[ENTITY_JOIN_KEY], push_df[col], strict=True)
+            )
+            assert returned_by_id == expected_by_id, (
+                f"{col} round-trip mismatch — sent {expected_by_id!r}, "
+                f"got {returned_by_id!r}"
+            )
 
     finally:
         _delete_feature_view(store, fv_name)
@@ -677,7 +686,7 @@ def _build_minimal_feature_view(
 
     batch_source = FileSource(
         name=f"{name}_batch_stub",
-        path="/tmp/{name}_stub.parquet".format(name=name),
+        path=f"/tmp/{name}_stub.parquet",
         timestamp_field="event_timestamp",
     )
     push_source = PushSource(name=push_source_name, batch_source=batch_source)
