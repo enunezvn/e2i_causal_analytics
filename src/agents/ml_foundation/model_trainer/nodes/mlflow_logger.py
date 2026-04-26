@@ -147,6 +147,15 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 "source": "model_trainer_agent",
                 "hpo_enabled": str(hpo_completed),
                 "feast_fallback": str(feast_fallback_used),
+                # Block 5B (#10): emit the validation-set business_utility
+                # number as a tag so the MLflow UI can display "what this
+                # run was worth" alongside accuracy/AUC. Mirrors the
+                # feast_fallback tag pattern. ``"N/A"`` when no
+                # cost_matrix was provided (validation_metrics omits the
+                # key in that case — see evaluator.py:715).
+                "business_utility": str(
+                    validation_metrics.get("business_utility", "N/A")
+                ),
             },
             description=f"Training run for {algorithm_name} on {problem_type}",
         ) as run:

@@ -350,3 +350,67 @@ that forces `_store=None` and routes through the fallback path under prod ENV.
 | ruff check (touched files) | clean of new issues; 2 pre-existing unused-import warnings unchanged |
 | mypy --config-file pyproject.toml (touched files) | 0 new errors; 11 pre-existing errors in 5 unrelated files unchanged |
 | tier0 e2e (dev mode) | identical to Block 1B baseline (no metric movement; Feast path dormant on synthetic) |
+
+## Block 5B note
+
+Block 5 (commit `ee34a51`) wired the `business_utility` metric end-to-end
+(scope_definer → scope_spec → model_trainer → evaluator) and added the
+`FeatureAnalyzerAgent._auto_register_in_feast` helper, but both code
+paths were opt-in via inputs that no current caller of
+`scripts/run_tier0_test.py` populated. The Block 5 verification line
+("`business_utility` is emitted on a default tier-0 run") therefore
+could not pass; the helper short-circuited with `skipped_reason` and
+the metric never reached the run report. Block 5B closes that gap by:
+
+1. Adding a `_default_demo_cost_matrix()` helper to the dev runner
+   (`scripts/run_tier0_test.py`) that returns a unit-shape matrix
+   `{tp:+1.0, fp:-0.05, fn:-1.0, tn:0.0}` and an auto-inject branch
+   in `run_pipeline` that writes it onto `state["scope_spec"]["cost_matrix"]`
+   immediately after step 1 unless the new `--no-demo-cost-matrix` flag
+   is passed.
+2. Plumbing the validation-set `business_utility` into MLflow
+   `start_run` tags alongside the existing `feast_fallback` tag so
+   model-registry tooling can rank runs by business value at a glance.
+3. Adding a FEAST_INTEGRATION-gated round-trip integration test
+   (`tests/integration/test_feast_tier0_auto_register.py`) that
+   exercises `_auto_register_in_feast` against a live Feast registry
+   and confirms the FeatureView applies, round-trips through
+   `get_feature_view`, and cleans up after itself.
+
+### Verification snapshot (post-Block-5B)
+
+A default `python scripts/run_tier0_test.py` run on synthetic data
+(default regime, 1500 patients, hpo_trials=10, MLflow off) emits:
+
+| metric | value |
+|--------|-------|
+| `validation_metrics["business_utility"]` | `-8.15` |
+| `test_metrics["business_utility"]` | `-9.65` |
+| top-level `result["business_utility"]` | `-9.65` (mirrors test) |
+
+> **Caveat — these are placeholder-cost-matrix sanity numbers, not a
+> regression target.** The unit-shape matrix `{tp:+1, fp:-0.05, fn:-1,
+> tn:0}` is structural, not dollar-denominated; it deliberately makes
+> a "true positive worth one unit" identical to "missing a target
+> costs one unit", with a 5 % rep-time penalty for false positives.
+> Production callers (LangGraph orchestrator wired by Celery / API)
+> MUST supply real per-brand dollar values via
+> `feast_registration_config["cost_matrix"]` (or an LLM-driven
+> scope_definer extension once that path lands). The auto-inject
+> lives ONLY at the dev-script CLI boundary; production tier-0 runs
+> never go through `scripts/run_tier0_test.py`. Negative numbers here
+> are an artefact of the model's marginal performance on this
+> synthetic regime (precision ≈ 0.24, recall ≈ 0.44 → many FNs and
+> FPs both costing units), not a defect of the metric.
+
+### Code-level changes landed
+
+| file | change |
+|------|--------|
+| `scripts/run_tier0_test.py` | added `_default_demo_cost_matrix()` helper, `--no-demo-cost-matrix` CLI flag, and auto-inject branch after step 1 |
+| `src/agents/ml_foundation/model_trainer/nodes/mlflow_logger.py` | added `business_utility` tag to MLflow `start_run` tags dict |
+| `feature_repo/README.md` | added "Tier-0 auto-registered FeatureViews" subsection + integration test entry |
+| `tests/unit/test_scripts/test_run_tier0_demo_cost_matrix.py` | new — argparse + auto-inject branch coverage |
+| `tests/synthetic/test_business_utility_emitted.py` | new — closed-form arithmetic check on the evaluator's emitted `business_utility` |
+| `tests/unit/test_agents/test_ml_foundation/test_model_trainer/test_mlflow_logger.py` | extended `feast_fallback` tag tests with parallel `business_utility` tag tests |
+| `tests/integration/test_feast_tier0_auto_register.py` | new — FEAST_INTEGRATION-gated round-trip for `_auto_register_in_feast` |

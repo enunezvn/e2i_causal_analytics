@@ -3636,6 +3636,34 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
 # MAIN RUNNER
 # =============================================================================
 
+
+def _default_demo_cost_matrix() -> Dict[str, float]:
+    """Return the unit-shape demo cost matrix used by the synthetic runner.
+
+    Block 5B (#10): close the verification gap left by Block 5. The evaluator
+    short-circuits ``business_utility`` whenever ``cost_matrix`` is ``None``
+    (see ``evaluator.py:715``), and no current caller of this script populates
+    one — so a default ``python scripts/run_tier0_test.py`` run produced no
+    business_utility number, which made Block 5's metric impossible to
+    verify end-to-end.
+
+    The shape here is deliberately **unit-scaled, not dollar-denominated**:
+
+      - tp = +1.0  : a true-positive prediction is worth one unit
+      - fn = -1.0  : a missed target costs the same one unit
+      - fp = -0.05 : a false-positive costs 5 % of a unit (rep-time penalty)
+      - tn =  0.0  : a true-negative is neutral
+
+    Per-prescription value is brand-specific and deeply commercial; we
+    refuse to embed a fake dollar number in the dev runner. Production
+    callers (LangGraph orchestrator wired by Celery / API) MUST supply a
+    real per-brand dollar matrix instead — this default never reaches a
+    production pipeline because the auto-inject lives at the dev-script
+    CLI boundary only.
+    """
+    return {"tp": 1.0, "fp": -0.05, "fn": -1.0, "tn": 0.0}
+
+
 async def run_pipeline(
     step: int | None = None,
     dry_run: bool = False,
@@ -3646,6 +3674,7 @@ async def run_pipeline(
     regime: str = "default",
     split_mode: str = "auto",
     pre_assigned_splits: Dict[Any, str] | None = None,
+    inject_demo_cost_matrix: bool = True,
 ) -> dict[str, Any]:
     """Run the full pipeline or a specific step.
 
@@ -3672,6 +3701,16 @@ async def run_pipeline(
         pre_assigned_splits: Optional cached entity → split-label mapping to
             replay (Block 4, Finding #12). When supplied, ``step_5`` will
             refuse to re-derive splits.
+        inject_demo_cost_matrix: When True (the default), a unit-shape
+            placeholder ``cost_matrix`` is auto-injected onto
+            ``state["scope_spec"]`` so the evaluator can emit
+            ``business_utility``. See ``_default_demo_cost_matrix`` for the
+            shape rationale. Set to False (CLI: ``--no-demo-cost-matrix``)
+            to reproduce the pre-Block-5B baseline where
+            ``business_utility`` is absent because no cost matrix flowed
+            through. The auto-inject lives ONLY at the dev-script
+            boundary — production tier0 runs through the LangGraph
+            orchestrator, never this script.
 
     Returns:
         State dictionary containing all pipeline outputs. When step 5 ran,
@@ -3747,6 +3786,23 @@ async def run_pipeline(
             result = await step_1_scope_definer(experiment_id)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
             state["scope_spec"]["experiment_id"] = experiment_id
+            # Block 5B (#10): auto-inject the unit-shape placeholder cost
+            # matrix when the caller has not explicitly opted out via
+            # ``--no-demo-cost-matrix``. This closes Block 5's verification
+            # gap: without a cost matrix the evaluator short-circuits
+            # business_utility, so a default ``python scripts/run_tier0_test.py``
+            # run produced no business_utility number to verify against.
+            #
+            # ScopeDefinerAgent always emits ``cost_matrix`` as a key on
+            # the spec but defaults the value to ``None`` (see
+            # ``scope_builder._validate_cost_matrix`` returning ``None`` on
+            # missing/empty input). So we treat both "key absent" and
+            # "key present with None" as the un-set state for inject
+            # purposes — only an already-populated dict is preserved.
+            if inject_demo_cost_matrix and not state["scope_spec"].get(
+                "cost_matrix"
+            ):
+                state["scope_spec"]["cost_matrix"] = _default_demo_cost_matrix()
             duration = time.time() - step_start
             scope_spec = state["scope_spec"]
             success_criteria = result.get("success_criteria", {})
@@ -5245,6 +5301,19 @@ def main():
             "absent."
         ),
     )
+    parser.add_argument(
+        "--no-demo-cost-matrix",
+        action="store_true",
+        help=(
+            "Suppress the Block 5B (#10) auto-injected placeholder cost "
+            "matrix. When this flag is absent (the default), a unit-shape "
+            "matrix {tp:+1, fp:-0.05, fn:-1, tn:0} is set on scope_spec "
+            "so the evaluator can emit business_utility for verification. "
+            "Pass this flag to reproduce the pre-Block-5B baseline where "
+            "business_utility is absent because no cost matrix flowed "
+            "through the pipeline."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -5299,6 +5368,7 @@ def main():
             data_dir=args.data_dir,
             regime=args.regime,
             split_mode=args.split,
+            inject_demo_cost_matrix=not args.no_demo_cost_matrix,
         ))
     finally:
         # Restore stdout

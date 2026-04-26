@@ -360,3 +360,62 @@ class TestFeastFallbackTag:
         assert result["mlflow_status"] == "success"
         call_kwargs = mock_mlflow_connector.start_run.call_args[1]
         assert call_kwargs["tags"]["feast_fallback"] == "False"
+
+
+# ============================================================================
+# Block 5B (#10) — MLflow business_utility tag tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+class TestBusinessUtilityTag:
+    """Mirror of TestFeastFallbackTag: business_utility flows into MLflow
+    tags so MLflow's UI can rank runs by business value at a glance.
+
+    The tag value is sourced from ``validation_metrics["business_utility"]``
+    (Block 1A operating-point policy: validation = chosen threshold). When
+    the evaluator did not emit the key (no cost_matrix configured), the
+    tag falls back to the literal string ``"N/A"``.
+    """
+
+    async def test_business_utility_tag_when_value_present(
+        self, training_state, mock_mlflow_connector
+    ):
+        """When validation_metrics carries a business_utility number, the
+        MLflow start_run tags include the stringified value."""
+        training_state["evaluation_metrics"]["validation_metrics"][
+            "business_utility"
+        ] = 1234.5
+
+        with patch(
+            "src.mlops.mlflow_connector.get_mlflow_connector",
+            return_value=mock_mlflow_connector,
+        ):
+            result = await log_to_mlflow(training_state)
+
+        assert result["mlflow_status"] == "success"
+        call_kwargs = mock_mlflow_connector.start_run.call_args[1]
+        assert call_kwargs["tags"]["business_utility"] == "1234.5"
+
+    async def test_business_utility_tag_defaults_to_na_when_absent(
+        self, training_state, mock_mlflow_connector
+    ):
+        """When the evaluator did not emit business_utility (no
+        cost_matrix configured), the tag falls back to the literal
+        string ``"N/A"`` so MLflow's tag column never goes blank."""
+        # Ensure validation_metrics has NO business_utility key. The
+        # default training_state fixture already omits it; explicit
+        # pop guards against future fixture drift.
+        training_state["evaluation_metrics"]["validation_metrics"].pop(
+            "business_utility", None
+        )
+
+        with patch(
+            "src.mlops.mlflow_connector.get_mlflow_connector",
+            return_value=mock_mlflow_connector,
+        ):
+            result = await log_to_mlflow(training_state)
+
+        assert result["mlflow_status"] == "success"
+        call_kwargs = mock_mlflow_connector.start_run.call_args[1]
+        assert call_kwargs["tags"]["business_utility"] == "N/A"

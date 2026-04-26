@@ -188,9 +188,34 @@ Block 3B the registered views are:
 - `trigger_effectiveness_features`, `trigger_response_features`
 - `market_dynamics_features`, `territory_performance_features`
 
+### Tier-0 auto-registered FeatureViews
+
+`FeatureAnalyzerAgent._auto_register_in_feast` (Block 5 #14) programmatically
+applies a FeatureView named `tier0_<experiment_id>_features` whenever the
+orchestrator passes `feast_registration_config` in the agent `input_data`.
+This lets the surviving features from a tier-0 selection round become an
+addressable Feast FeatureView for downstream serving, without requiring a
+hand-written Python file in this repo.
+
+- `entity_name` and `batch_source_name` are caller-supplied; the helper does
+  not fall back to a default. The values must be names of objects already
+  applied via `entities.py` / `data_sources.py`.
+- The applied FeatureView wraps a `PushSource` whose `batch_source` is the
+  named `DataSource`, so the FV is online-serveable without re-defining its
+  underlying data shape.
+- Feast 0.43.0 `apply()` is idempotent (upsert), so re-running tier-0 with
+  the same `experiment_id` is safe.
+- Block 6B's canonical-schema migration may rename batch sources; tier-0
+  callers must re-validate the names supplied in `feast_registration_config`
+  after that lands.
+
+The integration round-trip is exercised by
+`tests/integration/test_feast_tier0_auto_register.py` (gated by
+`FEAST_INTEGRATION=1`, so it runs on the droplet but is a no-op in CI).
+
 ## Tests
 
-Two integration test files cover the registry-and-serving lifecycle:
+Three integration test files cover the registry-and-serving lifecycle:
 
 - `tests/integration/test_feast_apply_idempotent.py` — runs `feast apply`
   twice and asserts no schema drift between runs (entity/feature-view inventory
@@ -198,9 +223,14 @@ Two integration test files cover the registry-and-serving lifecycle:
 - `tests/integration/test_feast_offline_online_parity.py` — for a sampled
   set of entities, asserts that `get_online_features()` returns values
   consistent with `get_historical_features()` from the offline store.
+- `tests/integration/test_feast_tier0_auto_register.py` — Block 5B (#14):
+  exercises `FeatureAnalyzerAgent._auto_register_in_feast` against a live
+  Feast registry to confirm a `tier0_<experiment_id>_features` FeatureView
+  applies cleanly, round-trips via `get_feature_view`, and cleans itself
+  up afterward.
 
-Both tests are gated by `pytest.importorskip("feast")` and skip cleanly when
-the optional `feast` dependency or a reachable Feast deployment is not
+All three tests are gated by `pytest.importorskip("feast")` and skip cleanly
+when the optional `feast` dependency or a reachable Feast deployment is not
 available. The parity test additionally requires offline+online stores
 (Postgres + Redis) and is intended primarily for the droplet, not CI.
 
