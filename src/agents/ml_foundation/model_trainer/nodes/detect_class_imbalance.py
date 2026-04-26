@@ -11,6 +11,19 @@ The strategy matrix is loaded from
 Tests can override the path by calling
 :func:`_load_imbalance_config(path=...)`.
 
+Configuration contract (asserted at load time)
+----------------------------------------------
+* ``severity_bands`` must define ``none``, ``moderate``, ``severe`` and the
+  values must be strictly descending and positive
+  (``none > moderate > severe > 0``).
+* Each non_tree branch in ``strategy_matrix`` may be a single
+  ``{strategy, rationale}`` dict, OR a list of
+  ``{min_minority_count, strategy, rationale}`` rules. List-form
+  branches MUST include a ``min_minority_count: 0`` rule as the
+  catch-all (otherwise low-count cases fall through silently). Every
+  list-form rule must provide all three keys.
+* Empty list-form branches are rejected.
+
 Version: 2.0.0
 """
 
@@ -24,6 +37,8 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import yaml
 
+from src.utils.project_root import find_project_root
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -33,25 +48,95 @@ logger = logging.getLogger(__name__)
 # Path to the canonical imbalance-strategy config relative to repo root.
 # Resolved lazily so unit tests can override via `_load_imbalance_config`.
 _DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parents[5] / "config" / "imbalance_strategy.yaml"
+    find_project_root() / "config" / "imbalance_strategy.yaml"
 )
 
 # Type alias for a single decision-matrix leaf.
 StrategyLeaf = Dict[str, Any]
 StrategyEntry = Union[StrategyLeaf, List[StrategyLeaf]]
 
-# Valid remediation strategies. Kept as a module-level list so downstream
-# consumers (e.g. apply_resampling) can validate against it without
-# loading the YAML.
-VALID_STRATEGIES = [
-    "smote",  # Synthetic minority oversampling
-    "random_oversample",  # Duplicate minority samples
-    "random_undersample",  # Remove majority samples
-    "smote_tomek",  # SMOTE + Tomek links cleaning
-    "class_weight",  # Use class weights only (no resampling)
-    "combined",  # Moderate resampling + class weights
-    "none",  # No action needed
-]
+# Required keys for every list-form non_tree rule. Missing any of these
+# raises ``ValueError`` at load time so misconfigurations surface before
+# the resolver hits a query path.
+_REQUIRED_RULE_KEYS: frozenset[str] = frozenset(
+    {"min_minority_count", "strategy", "rationale"}
+)
+
+# Valid remediation strategies. Kept as a module-level frozenset so
+# downstream consumers (e.g. apply_resampling) can validate against it
+# without loading the YAML and so the set is unmistakably immutable.
+VALID_STRATEGIES: frozenset[str] = frozenset(
+    {
+        "smote",  # Synthetic minority oversampling
+        "random_oversample",  # Duplicate minority samples
+        "random_undersample",  # Remove majority samples
+        "smote_tomek",  # SMOTE + Tomek links cleaning
+        "class_weight",  # Use class weights only (no resampling)
+        "combined",  # Moderate resampling + class weights
+        "none",  # No action needed
+    }
+)
+
+
+def _normalize_non_tree_rules(
+    entry: StrategyEntry, *, severity: str, branch_name: str
+) -> StrategyEntry:
+    """Sort and validate list-form rules.
+
+    First-match-wins lookup at query time depends on rules being ordered
+    from most-restrictive to least-restrictive. We sort defensively at
+    load time so the YAML can be authored in any order.
+
+    Validation enforced here (raised as ``ValueError``):
+
+    * empty lists — list-form branches must declare at least one rule
+      so the resolver does not blow up on ``entry[-1]``;
+    * per-rule structure — every rule must declare every key in
+      :data:`_REQUIRED_RULE_KEYS` so the resolver does not raise
+      ``KeyError`` deep in a query path;
+    * catch-all contract — at least one rule must declare
+      ``min_minority_count: 0`` so the resolver always lands on a
+      defined strategy regardless of the runtime minority count.
+    """
+    if not isinstance(entry, list):
+        return entry
+
+    location = f"strategy_matrix[{severity!r}][{branch_name!r}]"
+
+    if not entry:
+        raise ValueError(
+            f"{location} is an empty list; list-form branches must "
+            "declare at least one rule (and a min_minority_count: 0 "
+            "catch-all)."
+        )
+
+    for index, rule in enumerate(entry):
+        if not isinstance(rule, dict):
+            raise ValueError(
+                f"{location}[{index}] must be a mapping with keys "
+                f"{sorted(_REQUIRED_RULE_KEYS)!r}; got "
+                f"{type(rule).__name__}."
+            )
+        missing = _REQUIRED_RULE_KEYS - rule.keys()
+        if missing:
+            raise ValueError(
+                f"{location}[{index}] is missing required key(s): "
+                f"{sorted(missing)!r}. Every list-form rule must "
+                f"provide {sorted(_REQUIRED_RULE_KEYS)!r}."
+            )
+
+    if not any(int(rule["min_minority_count"]) == 0 for rule in entry):
+        raise ValueError(
+            f"{location} has no catch-all rule; one of its rules must "
+            "declare min_minority_count: 0 so low-count cases land on a "
+            "defined strategy."
+        )
+
+    return sorted(
+        entry,
+        key=lambda rule: int(rule["min_minority_count"]),
+        reverse=True,
+    )
 
 
 @lru_cache(maxsize=8)
@@ -62,6 +147,11 @@ def _read_yaml(path_str: str) -> Dict[str, Any]:
     callers normalize cleanly. ``functools.lru_cache`` does not accept
     unhashable defaults, so the public loader resolves paths before
     delegating here.
+
+    Normalisation (sorting list-form rules, validating per-rule
+    structure, enforcing the catch-all contract) is performed HERE so
+    the cached payload is already-normalised — the public loader does
+    not mutate the cached dict in place on subsequent calls.
     """
     with open(path_str, "r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
@@ -70,23 +160,18 @@ def _read_yaml(path_str: str) -> Dict[str, Any]:
             f"imbalance_strategy config at {path_str} must be a mapping, "
             f"got {type(data).__name__}"
         )
+
+    matrix = data.get("strategy_matrix")
+    if isinstance(matrix, dict):
+        for severity, branches in matrix.items():
+            if not isinstance(branches, dict):
+                continue
+            for branch_name, branch in branches.items():
+                branches[branch_name] = _normalize_non_tree_rules(
+                    branch, severity=severity, branch_name=branch_name
+                )
+
     return data
-
-
-def _normalize_non_tree_rules(entry: StrategyEntry) -> StrategyEntry:
-    """Sort list-form rules by `min_minority_count` descending.
-
-    First-match-wins lookup at query time depends on rules being ordered
-    from most-restrictive to least-restrictive. We sort defensively at
-    load time so the YAML can be authored in any order.
-    """
-    if isinstance(entry, list):
-        return sorted(
-            entry,
-            key=lambda rule: int(rule.get("min_minority_count", 0)),
-            reverse=True,
-        )
-    return entry
 
 
 def _load_imbalance_config(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -98,7 +183,10 @@ def _load_imbalance_config(path: Optional[Path] = None) -> Dict[str, Any]:
             is used.
 
     Returns:
-        Parsed config dict with normalized strategy_matrix entries.
+        Parsed config dict. Strategy-matrix list-form rules are
+        already sorted (descending by ``min_minority_count``) and
+        validated by ``_read_yaml``; this function adds top-level
+        structural checks on top.
 
     Raises:
         FileNotFoundError: if the config file is missing.
@@ -120,11 +208,15 @@ def _load_imbalance_config(path: Optional[Path] = None) -> Dict[str, Any]:
             "severity_bands must define 'none', 'moderate', and 'severe'"
         )
 
-    # Normalize list-form non_tree rules.
-    matrix = raw["strategy_matrix"]
-    for severity in matrix:
-        for branch_name, branch in matrix[severity].items():
-            matrix[severity][branch_name] = _normalize_non_tree_rules(branch)
+    none_band = float(bands["none"])
+    moderate_band = float(bands["moderate"])
+    severe_band = float(bands["severe"])
+    if not (none_band > moderate_band > severe_band > 0.0):
+        raise ValueError(
+            "severity_bands must satisfy none > moderate > severe > 0; "
+            f"got none={none_band!r}, moderate={moderate_band!r}, "
+            f"severe={severe_band!r}."
+        )
 
     return raw
 
@@ -255,9 +347,11 @@ def _lookup_strategy(
         metrics: Imbalance metrics from :func:`_calculate_imbalance_metrics`.
             Must include ``severity`` and ``minority_count``.
         algorithm_name: Algorithm being trained (e.g. "XGBoost").
-        problem_type: Problem type (kept for signature compatibility with
-            the legacy LLM helper; matrix is keyed only by severity x
-            tree/non-tree x minority_count today).
+        problem_type: Problem type. Today only ``"binary_classification"``
+            is supported; the public node :func:`detect_class_imbalance`
+            already short-circuits ``"regression"``/``"continuous"`` before
+            reaching this lookup, so the check here is a safety net rather
+            than a behaviour change.
         config: Optional pre-loaded config; defaults to the canonical
             file load. Tests pass an override here to exercise alternate
             matrices.
@@ -266,7 +360,13 @@ def _lookup_strategy(
         Tuple of (strategy, rationale). ``strategy`` is guaranteed to be
         in :data:`VALID_STRATEGIES`.
     """
-    del problem_type  # reserved for future expansion of the matrix
+    if problem_type != "binary_classification":
+        raise ValueError(
+            f"_lookup_strategy only supports problem_type='binary_classification'; "
+            f"got {problem_type!r}. The public detect_class_imbalance node "
+            "is responsible for short-circuiting other problem types before "
+            "reaching the matrix."
+        )
 
     if config is None:
         config = _load_imbalance_config()
@@ -309,8 +409,9 @@ def _lookup_strategy(
 
     if strategy not in VALID_STRATEGIES:
         raise ValueError(
-            f"strategy {strategy!r} from matrix is not in VALID_STRATEGIES; "
-            f"check config/imbalance_strategy.yaml"
+            f"strategy {strategy!r} from matrix is not in VALID_STRATEGIES "
+            f"(must be one of {sorted(VALID_STRATEGIES)!r}); check "
+            "config/imbalance_strategy.yaml."
         )
 
     return strategy, rationale

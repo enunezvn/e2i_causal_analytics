@@ -12,6 +12,16 @@
 # To change behavior, override severity bands or any matrix entry; the
 # loader (`_load_imbalance_config`) accepts an explicit path argument so
 # unit tests can swap in alternate configurations.
+#
+# Contract enforced by `_load_imbalance_config` at load time:
+#   * severity_bands["none"] > severity_bands["moderate"] >
+#     severity_bands["severe"] > 0;
+#   * every list-form non_tree branch declares all of
+#     {min_minority_count, strategy, rationale};
+#   * every list-form non_tree branch contains at least one
+#     `min_minority_count: 0` rule (the catch-all). Without it,
+#     low-count cases would silently fall through to "the last rule",
+#     which is not a contract anyone wants to depend on.
 
 # Severity bands keyed by minority_class_ratio (minority_count / total).
 # A row with severity=X is selected when minority_ratio >= bands[X] AND
