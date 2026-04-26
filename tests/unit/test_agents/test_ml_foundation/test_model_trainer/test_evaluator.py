@@ -581,9 +581,10 @@ class TestThresholdTunedOnValidationOnly:
         # 2) chosen_threshold_source flags validation provenance.
         assert validation_metrics.get("chosen_threshold_source") == "validation"
 
-        # 3) Top-level optimal_threshold mirrors the validation-tuned value.
+        # 3) Top-level optimal_threshold (the canonical key consumed
+        # cross-codebase) mirrors the validation-tuned value, and the
+        # top-level provenance flag also reports validation.
         assert result["optimal_threshold"] == pytest.approx(val_only_threshold)
-        assert result["chosen_threshold"] == pytest.approx(val_only_threshold)
         assert result["chosen_threshold_source"] == "validation"
 
         # 4) Negative assertion — the chosen threshold MUST NOT match
@@ -628,7 +629,7 @@ class TestThresholdTunedOnValidationOnly:
             minority_ratio=0.5,
         )
 
-        chosen = float(result["chosen_threshold"])
+        chosen = float(result["validation_metrics"]["chosen_threshold"])
         # Independently compute predicted positives at the validation-tuned
         # threshold applied to the test set.
         val_tuned_test_predictions = (y_test_proba[:, 1] >= chosen).astype(int)
@@ -680,8 +681,11 @@ class TestThresholdTunedOnValidationOnly:
             minority_ratio=0.5,
         )
 
-        assert result["chosen_threshold"] == 0.5
+        # In the fallback path validation_metrics is empty (no validation
+        # arrays), so the operating point lives only at the top level.
+        assert result["optimal_threshold"] == 0.5
         assert result["chosen_threshold_source"] == "default"
+        assert result["validation_metrics"] == {}
         # And it must NOT match the test-derived value
         test_only = _compute_optimal_threshold(y_test, y_test_proba)
-        assert result["chosen_threshold"] != pytest.approx(test_only, abs=0.05)
+        assert result["optimal_threshold"] != pytest.approx(test_only, abs=0.05)

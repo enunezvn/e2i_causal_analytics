@@ -7,7 +7,7 @@ Version: 2.0.0
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 from sklearn.metrics import (
@@ -501,24 +501,62 @@ def _compute_classification_metrics(
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
-    For imbalanced datasets, also computes metrics at the optimal threshold
-    to provide useful predictions instead of all-negative predictions.
+    Threshold-selection policy (Block 1A — finding #6):
+        The classification operating point (Youden's J optimum, and the
+        precision-constrained alternative when ``minority_ratio < 0.05``)
+        is selected on the VALIDATION arrays, frozen, and then applied to
+        the test set without re-tuning. This prevents test-set leakage
+        into the operating point. If validation arrays are not provided,
+        the function falls back to the default 0.5 threshold rather than
+        tuning on test — test-set integrity is preserved at the cost of
+        a possibly off-by-default operating point.
+
+        ``validation_metrics`` is recomputed AT the chosen threshold when
+        validation probabilities are available, so its precision/recall/F1
+        reflect performance at the same operating point used for test.
 
     Args:
         y_train: Training labels
-        y_train_pred: Training predictions
+        y_train_pred: Training predictions (at model's default threshold)
         y_train_proba: Training probabilities
-        y_validation: Validation labels
-        y_validation_pred: Validation predictions
-        y_validation_proba: Validation probabilities
+        y_validation: Validation labels — used for threshold selection
+        y_validation_pred: Validation predictions (at model's default)
+        y_validation_proba: Validation probabilities — used for threshold
+            selection. When None, threshold falls back to 0.5.
         y_test: Test labels
-        y_test_pred: Test predictions
-        y_test_proba: Test probabilities
-        imbalance_detected: Whether class imbalance was detected
-        minority_ratio: Ratio of minority class (0-1)
+        y_test_pred: Test predictions (at model's default threshold)
+        y_test_proba: Test probabilities. The chosen threshold is applied
+            to these to produce the final reported test metrics.
+        imbalance_detected: Whether class imbalance was detected. When
+            True, ``test_metrics`` reports values at the chosen threshold;
+            otherwise it reports values at the model's default 0.5.
+        minority_ratio: Ratio of minority class (0-1). When below 0.05,
+            the precision-constrained threshold is also evaluated on
+            validation and may override the Youden's J optimum.
 
     Returns:
-        Dictionary of metrics
+        Dictionary with the standard top-level metrics keys
+        (``train_metrics``, ``validation_metrics``, ``test_metrics``,
+        ``test_metrics_at_05``, ``test_metrics_at_optimal``, ``auc_roc``,
+        ``precision``, ``recall``, ``f1_score``, ``pr_auc``,
+        ``brier_score``, ``confusion_matrix``, ``optimal_threshold``,
+        ``precision_at_k``, ``confidence_interval``, ``bootstrap_samples``,
+        ``precision_constrained``, ``calibration_error``, ``f1_macro``,
+        ``f1_weighted``, plus minority metrics when imbalance is detected).
+
+        Block 1A-specific keys:
+            - ``optimal_threshold`` (top level): the canonical chosen
+              threshold (validation-tuned, or 0.5 fallback). Existing
+              cross-codebase consumers read this key.
+            - ``chosen_threshold_source`` (top level): provenance flag,
+              one of ``"validation"`` or ``"default"``.
+            - ``validation_metrics["chosen_threshold"]``: same numeric
+              value as ``optimal_threshold``, exposed at the validation
+              metric level so model-registry / monitoring consumers can
+              audit the operating point that produced the validation
+              numbers.
+            - ``validation_metrics["chosen_threshold_source"]``:
+              provenance flag mirrored at the validation level.
     """
     # Training metrics
     train_metrics = {}
@@ -578,16 +616,18 @@ def _compute_classification_metrics(
             else:
                 y_val_proba_pos = y_validation_proba
             y_validation_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
-            validation_metrics = dict(
+            validation_metrics = cast(
+                Dict[str, Any],
                 _compute_split_classification_metrics(
                     y_validation, y_validation_pred_at_chosen, y_validation_proba
-                )
+                ),
             )
         else:
-            validation_metrics = dict(
+            validation_metrics = cast(
+                Dict[str, Any],
                 _compute_split_classification_metrics(
                     y_validation, y_validation_pred, y_validation_proba
-                )
+                ),
             )
         validation_metrics["chosen_threshold"] = float(optimal_threshold)
         validation_metrics["chosen_threshold_source"] = threshold_source
@@ -667,7 +707,6 @@ def _compute_classification_metrics(
         "brier_score": brier,
         "confusion_matrix": confusion_dict,
         "optimal_threshold": optimal_threshold,
-        "chosen_threshold": float(optimal_threshold),
         "chosen_threshold_source": threshold_source,
         "precision_at_k": precision_at_k,
         "confidence_interval": confidence_interval,
