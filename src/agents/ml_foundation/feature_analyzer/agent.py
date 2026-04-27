@@ -230,9 +230,7 @@ class FeatureAnalyzerAgent:
             # FeatureView so downstream serving can read them via the same
             # store the trainer used. Best-effort — failures don't block
             # the tier0 run; they're surfaced in feast_registration.error.
-            feast_registration = await self._auto_register_in_feast(
-                final_state, input_data
-            )
+            feast_registration = await self._auto_register_in_feast(final_state, input_data)
 
             # Construct structured outputs
             shap_analysis = self._build_shap_analysis(final_state)
@@ -486,9 +484,9 @@ class FeatureAnalyzerAgent:
             result["skipped_reason"] = "feast_registration_config not provided"
             return result
 
-        selected_features = state.get("selected_features") or state.get(
-            "selected_features_all"
-        ) or []
+        selected_features = (
+            state.get("selected_features") or state.get("selected_features_all") or []
+        )
         if not selected_features:
             result["skipped_reason"] = "no surviving features in state"
             return result
@@ -514,9 +512,7 @@ class FeatureAnalyzerAgent:
                     "experiment_id": str(experiment_id),
                     "auto_registered": "true",
                 },
-                description=(
-                    f"Tier-0 features surviving selection for experiment {experiment_id}"
-                ),
+                description=(f"Tier-0 features surviving selection for experiment {experiment_id}"),
             )
 
             result["registered"] = registration.get("registered", False)

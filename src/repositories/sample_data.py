@@ -236,7 +236,9 @@ class SampleDataGenerator:
             # Actual outcome (with some noise vs prediction)
             actual: float
             if threshold:
-                actual = 1.0 if np.random.random() < predicted_value + np.random.normal(0, 0.1) else 0.0
+                actual = (
+                    1.0 if np.random.random() < predicted_value + np.random.normal(0, 0.1) else 0.0
+                )
             else:
                 actual = predicted_value * np.random.uniform(0.7, 1.3)
 
@@ -600,7 +602,8 @@ class SampleDataGenerator:
             scale = max(positive_rate / 0.30, 0.0)
             risk_score = (
                 positive_rate  # Base rate (regime-controlled)
-                + scale * (
+                + scale
+                * (
                     -0.01 * hcp_visits  # More visits = lower risk
                     + 0.05 * prior_treatments  # More prior treatments = higher risk
                     - 0.001 * days_on_therapy  # Longer therapy = lower risk

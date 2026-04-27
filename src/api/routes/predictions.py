@@ -264,9 +264,7 @@ async def predict(
                     full_feature_names=False,
                 )
                 # Collapse list-per-feature shape to single-row dict (one entity).
-                features_payload = {
-                    k: (v[0] if v else None) for k, v in feast_response.items()
-                }
+                features_payload = {k: (v[0] if v else None) for k, v in feast_response.items()}
                 feature_source = FEATURE_SOURCE_FEAST_ONLINE
                 logger.info(
                     "Fetched %d Feast features for entity_id=%s (model=%s)",

@@ -552,24 +552,27 @@ async def _execute_gap_analysis(
         from src.agents.gap_analyzer.state import GapAnalyzerState
 
         # Initialize state (cast partial state - remaining fields populated by graph nodes)
-        initial_state = cast(GapAnalyzerState, {
-            "query": request.query,
-            "metrics": request.metrics,
-            "segments": request.segments,
-            "brand": request.brand,
-            "time_period": request.time_period,
-            "gap_type": request.gap_type.value,
-            "min_gap_threshold": request.min_gap_threshold,
-            "max_opportunities": request.max_opportunities,
-            "filters": request.filters,
-            "status": "pending",
-            "errors": [],
-            "warnings": [],
-            "detection_latency_ms": 0,
-            "roi_latency_ms": 0,
-            "total_latency_ms": 0,
-            "segments_analyzed": 0,
-        })
+        initial_state = cast(
+            GapAnalyzerState,
+            {
+                "query": request.query,
+                "metrics": request.metrics,
+                "segments": request.segments,
+                "brand": request.brand,
+                "time_period": request.time_period,
+                "gap_type": request.gap_type.value,
+                "min_gap_threshold": request.min_gap_threshold,
+                "max_opportunities": request.max_opportunities,
+                "filters": request.filters,
+                "status": "pending",
+                "errors": [],
+                "warnings": [],
+                "detection_latency_ms": 0,
+                "roi_latency_ms": 0,
+                "total_latency_ms": 0,
+                "segments_analyzed": 0,
+            },
+        )
 
         # Create and run graph
         graph = create_gap_analyzer_graph()

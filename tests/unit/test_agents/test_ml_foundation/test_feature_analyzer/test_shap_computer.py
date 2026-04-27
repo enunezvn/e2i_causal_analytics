@@ -101,9 +101,7 @@ class TestComputeSHAP:
         }
 
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="legacy123"), data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="legacy123"), data=Mock(params={}))
 
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = [
@@ -122,9 +120,7 @@ class TestComputeSHAP:
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
-    async def test_linear_model_array_base_value(
-        self, mock_shap, mock_mlflow, mock_linear_model
-    ):
+    async def test_linear_model_array_base_value(self, mock_shap, mock_mlflow, mock_linear_model):
         """Should handle LinearExplainer returning 2-D values and length-1 base_value array."""
         state = {
             "model_uri": "runs:/lin_arr/model",
@@ -133,9 +129,7 @@ class TestComputeSHAP:
         }
 
         mock_mlflow.sklearn.load_model.return_value = mock_linear_model
-        mock_mlflow.get_run.return_value = Mock(
-            info=Mock(run_id="lin_arr"), data=Mock(params={})
-        )
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="lin_arr"), data=Mock(params={}))
 
         mock_explainer = Mock()
         mock_explainer.shap_values.return_value = np.random.rand(50, 3)

@@ -28,8 +28,7 @@ class Reader(Protocol):
 
     extensions: tuple[str, ...]
 
-    def read(self, path: Path) -> pd.DataFrame:
-        ...
+    def read(self, path: Path) -> pd.DataFrame: ...
 
 
 class ParquetReader:
@@ -46,9 +45,7 @@ class JsonReader:
         with open(path, encoding="utf-8") as f:
             records = json.load(f)
         if not isinstance(records, list):
-            raise IngestionError(
-                f"JSON file {path} must contain a top-level list of records"
-            )
+            raise IngestionError(f"JSON file {path} must contain a top-level list of records")
         return pd.DataFrame(records)
 
 
@@ -97,9 +94,7 @@ class FileIngestor:
         ext = path.suffix.lower()
         reader = self._by_ext.get(ext)
         if reader is None:
-            raise IngestionError(
-                f"No reader registered for extension '{ext}' (path: {path})"
-            )
+            raise IngestionError(f"No reader registered for extension '{ext}' (path: {path})")
         return reader
 
     def ingest_file(self, path: Path) -> pd.DataFrame:
@@ -137,9 +132,7 @@ class FileIngestor:
                 logger.debug("Optional file '%s.*' not found in %s", stem, directory)
         return result
 
-    def ingest_mapping(
-        self, paths: Mapping[str, Union[str, Path]]
-    ) -> Dict[str, pd.DataFrame]:
+    def ingest_mapping(self, paths: Mapping[str, Union[str, Path]]) -> Dict[str, pd.DataFrame]:
         """Read files from an explicit {logical_name: path} mapping."""
         result: Dict[str, pd.DataFrame] = {}
         for name, path in paths.items():

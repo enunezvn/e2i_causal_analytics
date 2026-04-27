@@ -222,14 +222,10 @@ def _load_from_files(
     elif data_source["type"] == "files":
         paths = data_source.get("paths")
         if not paths or not isinstance(paths, Mapping):
-            raise IngestionError(
-                "data_source.paths required for type='files' (got: %r)" % (paths,)
-            )
+            raise IngestionError("data_source.paths required for type='files' (got: %r)" % (paths,))
         frames = ingestor.ingest_mapping(paths)
     else:
-        raise IngestionError(
-            f"Unknown file data_source type: {data_source.get('type')!r}"
-        )
+        raise IngestionError(f"Unknown file data_source type: {data_source.get('type')!r}")
 
     if "patient_journeys" not in frames:
         raise IngestionError(

@@ -163,6 +163,7 @@ class MLFoundationPipeline:
         if self._audit_service is None:
             try:
                 from src.repositories import get_supabase_client
+
                 supabase = get_supabase_client()
                 if supabase:
                     self._audit_service = AuditChainService(supabase)

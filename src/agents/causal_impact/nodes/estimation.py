@@ -168,12 +168,17 @@ class EstimationNode:
 
         # Cast method to the expected Literal type
         MethodType = Literal[
-            "CausalForestDML", "LinearDML", "linear_regression",
-            "propensity_score_weighting", "causal_forest", "linear_dml", "drlearner", "ols"
+            "CausalForestDML",
+            "LinearDML",
+            "linear_regression",
+            "propensity_score_weighting",
+            "causal_forest",
+            "linear_dml",
+            "drlearner",
+            "ols",
         ]
         method_name = cast(
-            MethodType,
-            estimator_to_method.get(selected.estimator_type.value, "CausalForestDML")
+            MethodType, estimator_to_method.get(selected.estimator_type.value, "CausalForestDML")
         )
 
         result: EstimationResult = {
@@ -333,9 +338,7 @@ class EstimationNode:
             elif method == "LinearDML":
                 result = self._estimate_linear_dml(data, treatment, outcome, adjustment_set)
             elif method == "linear_regression":
-                result = self._estimate_linear_regression(
-                    data, treatment, outcome, adjustment_set
-                )
+                result = self._estimate_linear_regression(data, treatment, outcome, adjustment_set)
             elif method == "propensity_score_weighting":
                 result = self._estimate_propensity_weighting(
                     data, treatment, outcome, adjustment_set

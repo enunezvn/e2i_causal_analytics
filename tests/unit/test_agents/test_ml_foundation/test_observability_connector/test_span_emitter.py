@@ -347,7 +347,7 @@ class TestEmitSpansGracefulDegradation:
             ]
         }
 
-        with patch.object(module, 'get_span_repository', return_value=None):
+        with patch.object(module, "get_span_repository", return_value=None):
             result = await emit_spans(state)
 
         # Should still succeed with Opik-only

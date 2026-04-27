@@ -17,6 +17,7 @@ isolation. These tests cover three strands of the contract:
    ``split_assignments`` field through pickle and surfaces a notice on
    reload so downstream callers can react.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -163,9 +164,7 @@ def test_split_assignments_round_trip_through_pickle(tmp_path):
     assert loaded["split_strategy"] == state["split_strategy"]
 
 
-def test_load_tier0_state_surfaces_assignments(
-    tier1_5_module, tmp_path, capsys
-):
+def test_load_tier0_state_surfaces_assignments(tier1_5_module, tmp_path, capsys):
     """``load_tier0_state`` prints a notice when the cache contains
     ``split_assignments``, signalling that downstream consumers MUST NOT
     re-derive splits."""
@@ -186,9 +185,7 @@ def test_load_tier0_state_surfaces_assignments(
     assert "Block 4" in captured.out or "forbidden" in captured.out.lower()
 
 
-def test_load_tier0_state_warns_when_assignments_absent(
-    tier1_5_module, tmp_path, capsys
-):
+def test_load_tier0_state_warns_when_assignments_absent(tier1_5_module, tmp_path, capsys):
     """Older caches without ``split_assignments`` should still load but
     print a warning telling the operator to re-run tier0."""
     state = {"experiment_id": "tier0_e2e_test"}  # no split_assignments
@@ -198,10 +195,7 @@ def test_load_tier0_state_warns_when_assignments_absent(
     loaded = tier1_5_module.load_tier0_state(str(cache_file))
     captured = capsys.readouterr()
     assert loaded == state
-    assert (
-        "no split_assignments" in captured.out
-        or "older cache" in captured.out.lower()
-    )
+    assert "no split_assignments" in captured.out or "older cache" in captured.out.lower()
 
 
 @pytest.mark.asyncio

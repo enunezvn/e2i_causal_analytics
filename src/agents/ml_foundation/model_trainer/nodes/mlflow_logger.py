@@ -156,9 +156,7 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 # ``_compute_classification_metrics`` skips
                 # business_utility computation, so the metrics dict
                 # never picks up the key).
-                "business_utility": str(
-                    validation_metrics.get("business_utility", "N/A")
-                ),
+                "business_utility": str(validation_metrics.get("business_utility", "N/A")),
             },
             description=f"Training run for {algorithm_name} on {problem_type}",
         ) as run:

@@ -162,9 +162,7 @@ def _anonymize_feature_names(
     return anonymized, mapping
 
 
-def _normalize_shap_binary(
-    vals: Any, base: Any
-) -> Tuple[np.ndarray, float]:
+def _normalize_shap_binary(vals: Any, base: Any) -> Tuple[np.ndarray, float]:
     """Normalize SHAP output to 2-D values and scalar base value for binary classification.
 
     SHAP >=0.42 TreeExplainer returns a 3-D ndarray (n, f, n_classes) for binary;
@@ -314,17 +312,13 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             explainer = shap.TreeExplainer(loaded_model)
             shap_values_raw = explainer.shap_values(X_sample)
             base_value_raw = explainer.expected_value
-            shap_values, base_value = _normalize_shap_binary(
-                shap_values_raw, base_value_raw
-            )
+            shap_values, base_value = _normalize_shap_binary(shap_values_raw, base_value_raw)
 
         elif explainer_type == "LinearExplainer":
             explainer = shap.LinearExplainer(loaded_model, X_sample)
             shap_values_raw = explainer.shap_values(X_sample)
             base_value_raw = explainer.expected_value
-            shap_values, base_value = _normalize_shap_binary(
-                shap_values_raw, base_value_raw
-            )
+            shap_values, base_value = _normalize_shap_binary(shap_values_raw, base_value_raw)
 
         else:  # KernelExplainer (fallback)
             # Use a small background dataset for kernel explainer
@@ -333,9 +327,7 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             explainer = shap.KernelExplainer(loaded_model.predict, background)
             shap_values_raw = explainer.shap_values(X_sample[:100])  # Limit for speed
             base_value_raw = explainer.expected_value
-            shap_values, base_value = _normalize_shap_binary(
-                shap_values_raw, base_value_raw
-            )
+            shap_values, base_value = _normalize_shap_binary(shap_values_raw, base_value_raw)
             samples_analyzed = min(100, samples_analyzed)
 
         # Compute global importance (mean absolute SHAP values)

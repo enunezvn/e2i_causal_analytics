@@ -375,9 +375,7 @@ class TestDefaultCombinedWhenEntityAndDatePresent:
         import importlib.util
         from pathlib import Path
 
-        script_path = (
-            Path(__file__).resolve().parents[3] / "scripts" / "run_tier0_test.py"
-        )
+        script_path = Path(__file__).resolve().parents[3] / "scripts" / "run_tier0_test.py"
         spec = importlib.util.spec_from_file_location("run_tier0_test", script_path)
         if spec is None or spec.loader is None:
             pytest.skip("Could not build import spec for run_tier0_test")
@@ -394,12 +392,9 @@ class TestDefaultCombinedWhenEntityAndDatePresent:
         sig = inspect.signature(module.step_5_model_trainer)
         params = sig.parameters
         for required in ("entity_ids", "dates", "split_mode", "pre_assigned_splits"):
-            assert required in params, (
-                f"step_5_model_trainer must accept {required!r} for Block 4"
-            )
+            assert required in params, f"step_5_model_trainer must accept {required!r} for Block 4"
         assert params["split_mode"].default == "auto", (
-            "split_mode default must remain 'auto' so combined wins when "
-            "entity + date are present"
+            "split_mode default must remain 'auto' so combined wins when entity + date are present"
         )
         assert params["pre_assigned_splits"].default is None
 

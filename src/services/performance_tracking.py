@@ -270,9 +270,8 @@ class PerformanceTracker:
         # Check significance and thresholds
         threshold = float(self.config.degradation_threshold) * 100
         is_significant = abs(change_percent) > threshold
-        alert_threshold_breached = (
-            change_percent < -threshold
-            or float(current_value) < float(self.config.absolute_min_accuracy)
+        alert_threshold_breached = change_percent < -threshold or float(current_value) < float(
+            self.config.absolute_min_accuracy
         )
 
         return PerformanceTrend(

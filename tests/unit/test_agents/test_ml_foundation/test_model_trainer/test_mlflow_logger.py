@@ -311,9 +311,7 @@ class TestGetPrimaryMetric:
 class TestFeastFallbackTag:
     """Test that feast_fallback is emitted as an MLflow run tag."""
 
-    async def test_mlflow_tag_when_feast_fallback_used(
-        self, training_state, mock_mlflow_connector
-    ):
+    async def test_mlflow_tag_when_feast_fallback_used(self, training_state, mock_mlflow_connector):
         """MLflow start_run tags include feast_fallback=True when fallback was used."""
         training_state["feast_fallback_used"] = True
 
@@ -388,9 +386,7 @@ class TestBusinessUtilityTag:
     ):
         """When validation_metrics carries a business_utility number, the
         MLflow start_run tags include the stringified value."""
-        training_state["evaluation_metrics"]["validation_metrics"][
-            "business_utility"
-        ] = 1234.5
+        training_state["evaluation_metrics"]["validation_metrics"]["business_utility"] = 1234.5
 
         with patch(
             "src.mlops.mlflow_connector.get_mlflow_connector",
@@ -411,9 +407,7 @@ class TestBusinessUtilityTag:
         # Ensure validation_metrics has NO business_utility key. The
         # default training_state fixture already omits it; explicit
         # pop guards against future fixture drift.
-        training_state["evaluation_metrics"]["validation_metrics"].pop(
-            "business_utility", None
-        )
+        training_state["evaluation_metrics"]["validation_metrics"].pop("business_utility", None)
 
         with patch(
             "src.mlops.mlflow_connector.get_mlflow_connector",

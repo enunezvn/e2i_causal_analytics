@@ -59,8 +59,7 @@ def test_feature_refs_for_model_known_models():
     for model_name, expected_refs in MODEL_FEATURE_REFS.items():
         actual = feature_refs_for_model(model_name)
         assert actual == expected_refs, (
-            f"Mismatch for {model_name!r}: "
-            f"got {actual!r}, expected {expected_refs!r}"
+            f"Mismatch for {model_name!r}: got {actual!r}, expected {expected_refs!r}"
         )
 
 
@@ -78,8 +77,7 @@ def test_explain_route_uses_canonical_registry():
         refs = service._get_feature_refs_for_model(model_type)
         expected = MODEL_FEATURE_REFS[model_type.value]
         assert refs == expected, (
-            f"explain.py registry diverged for {model_type!r}: "
-            f"got {refs!r}, expected {expected!r}"
+            f"explain.py registry diverged for {model_type!r}: got {refs!r}, expected {expected!r}"
         )
 
 
@@ -94,16 +92,11 @@ def test_canonical_registry_no_src_imports():
     from pathlib import Path
 
     module_path = (
-        Path(__file__).resolve().parents[3]
-        / "src"
-        / "feature_store"
-        / "model_feature_refs.py"
+        Path(__file__).resolve().parents[3] / "src" / "feature_store" / "model_feature_refs.py"
     )
     source = module_path.read_text(encoding="utf-8")
     # Strip docstrings and comments for the purposes of the import check.
-    src_imports = re.findall(
-        r"^\s*(?:from|import)\s+src\.", source, flags=re.MULTILINE
-    )
+    src_imports = re.findall(r"^\s*(?:from|import)\s+src\.", source, flags=re.MULTILINE)
     assert not src_imports, (
         f"model_feature_refs.py must not import from src.*; found: "
         f"{src_imports}. This module is bundled into the BentoML "

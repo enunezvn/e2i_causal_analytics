@@ -177,12 +177,16 @@ class HeterogeneousOptimizerAgent:
                         query_id=session_id,
                     ):
                         # Execute workflow
-                        final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
+                        final_state = cast(
+                            "HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state)
+                        )
                         output = self._build_output(final_state)
                         await tracker.log_analysis_result(output, final_state)
                 else:
                     # Execute workflow without MLflow
-                    final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
+                    final_state = cast(
+                        "HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state)
+                    )
                     output = self._build_output(final_state)
 
                 # Log analysis results to Opik
@@ -215,14 +219,18 @@ class HeterogeneousOptimizerAgent:
                     outcome_var=input_data.get("outcome_var"),
                     query_id=session_id,
                 ):
-                    final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
+                    final_state = cast(
+                        "HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state)
+                    )
                     output = self._build_output(final_state)
                     await tracker.log_analysis_result(output, final_state)
                     await _contribute_to_memory(output, final_state)
                     return output
             else:
                 # Execute workflow without any tracking
-                final_state = cast("HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state))
+                final_state = cast(
+                    "HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state)
+                )
                 output = self._build_output(final_state)
                 await _contribute_to_memory(output, final_state)
                 return output
@@ -309,53 +317,56 @@ class HeterogeneousOptimizerAgent:
             episodic_context = memory_context.episodic_context
 
         # Cast partial state - remaining fields populated by graph nodes
-        return cast(HeterogeneousOptimizerState, {
-            # Input
-            "query": input_data["query"],
-            "treatment_var": input_data["treatment_var"],
-            "outcome_var": input_data["outcome_var"],
-            "segment_vars": input_data["segment_vars"],
-            "effect_modifiers": input_data["effect_modifiers"],
-            "data_source": input_data["data_source"],
-            "filters": input_data.get("filters"),
-            "tier0_data": input_data.get("tier0_data"),  # Passthrough for tier0 testing
-            # Configuration
-            "n_estimators": input_data.get("n_estimators", 100),
-            "min_samples_leaf": input_data.get("min_samples_leaf", 10),
-            "significance_level": input_data.get("significance_level", 0.05),
-            "top_segments_count": input_data.get("top_segments_count", 10),
-            # Outputs (initialized as None)
-            "cate_by_segment": None,
-            "overall_ate": None,
-            "heterogeneity_score": None,
-            "feature_importance": None,
-            "high_responders": None,
-            "low_responders": None,
-            "segment_comparison": None,
-            "policy_recommendations": None,
-            "expected_total_lift": 0.0,  # Contract requires non-optional float
-            "optimal_allocation_summary": None,
-            "cate_plot_data": None,
-            "segment_grid_data": None,
-            "executive_summary": None,
-            "key_insights": None,
-            # Metadata
-            "estimation_latency_ms": 0,
-            "analysis_latency_ms": 0,
-            "total_latency_ms": 0,
-            # Error handling
-            "errors": [],
-            "warnings": [],
-            "status": "pending",
-            # Contract-required fields
-            "confidence": None,
-            "requires_further_analysis": None,
-            "suggested_next_agent": None,
-            # Memory context
-            "session_id": session_id,
-            "working_memory_context": working_memory_context,
-            "episodic_context": episodic_context,
-        })
+        return cast(
+            HeterogeneousOptimizerState,
+            {
+                # Input
+                "query": input_data["query"],
+                "treatment_var": input_data["treatment_var"],
+                "outcome_var": input_data["outcome_var"],
+                "segment_vars": input_data["segment_vars"],
+                "effect_modifiers": input_data["effect_modifiers"],
+                "data_source": input_data["data_source"],
+                "filters": input_data.get("filters"),
+                "tier0_data": input_data.get("tier0_data"),  # Passthrough for tier0 testing
+                # Configuration
+                "n_estimators": input_data.get("n_estimators", 100),
+                "min_samples_leaf": input_data.get("min_samples_leaf", 10),
+                "significance_level": input_data.get("significance_level", 0.05),
+                "top_segments_count": input_data.get("top_segments_count", 10),
+                # Outputs (initialized as None)
+                "cate_by_segment": None,
+                "overall_ate": None,
+                "heterogeneity_score": None,
+                "feature_importance": None,
+                "high_responders": None,
+                "low_responders": None,
+                "segment_comparison": None,
+                "policy_recommendations": None,
+                "expected_total_lift": 0.0,  # Contract requires non-optional float
+                "optimal_allocation_summary": None,
+                "cate_plot_data": None,
+                "segment_grid_data": None,
+                "executive_summary": None,
+                "key_insights": None,
+                # Metadata
+                "estimation_latency_ms": 0,
+                "analysis_latency_ms": 0,
+                "total_latency_ms": 0,
+                # Error handling
+                "errors": [],
+                "warnings": [],
+                "status": "pending",
+                # Contract-required fields
+                "confidence": None,
+                "requires_further_analysis": None,
+                "suggested_next_agent": None,
+                # Memory context
+                "session_id": session_id,
+                "working_memory_context": working_memory_context,
+                "episodic_context": episodic_context,
+            },
+        )
 
     def _build_output(self, final_state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Build output from final state.

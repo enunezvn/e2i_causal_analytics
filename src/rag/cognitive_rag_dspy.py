@@ -371,9 +371,7 @@ class InvestigatorModule(dspy.Module):
             "sufficient_evidence": len(evidence_board) >= 2,
         }
 
-    async def _retrieve_from_memory(
-        self, memory_type: str, query: str
-    ) -> List[Dict[Any, Any]]:
+    async def _retrieve_from_memory(self, memory_type: str, query: str) -> List[Dict[Any, Any]]:
         """Execute retrieval against the appropriate memory backend."""
         backend = self.memory_backends.get(memory_type)
         if not backend:

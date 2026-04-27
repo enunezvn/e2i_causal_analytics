@@ -72,15 +72,18 @@ class ProfileGeneratorNode:
                 generation_time=generation_time,
             )
 
-            return cast(HeterogeneousOptimizerState, {
-                **state,
-                "cate_plot_data": cate_plot_data,
-                "segment_grid_data": segment_grid_data,
-                "executive_summary": executive_summary,
-                "key_insights": key_insights,
-                "strategic_interpretation": strategic_interpretation,
-                "status": "completed",
-            })
+            return cast(
+                HeterogeneousOptimizerState,
+                {
+                    **state,
+                    "cate_plot_data": cate_plot_data,
+                    "segment_grid_data": segment_grid_data,
+                    "executive_summary": executive_summary,
+                    "key_insights": key_insights,
+                    "strategic_interpretation": strategic_interpretation,
+                    "status": "completed",
+                },
+            )
 
         except Exception as e:
             logger.error(
@@ -88,11 +91,14 @@ class ProfileGeneratorNode:
                 extra={"node": "profile_generator", "error": str(e)},
                 exc_info=True,
             )
-            return cast(HeterogeneousOptimizerState, {
-                **state,
-                "errors": [{"node": "profile_generator", "error": str(e)}],
-                "status": "failed",
-            })
+            return cast(
+                HeterogeneousOptimizerState,
+                {
+                    **state,
+                    "errors": [{"node": "profile_generator", "error": str(e)}],
+                    "status": "failed",
+                },
+            )
 
     def _generate_cate_plot_data(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Generate data for CATE visualization plots.

@@ -264,18 +264,24 @@ class CausalForestWrapper(BaseEstimatorWrapper):
 
             params = {
                 "model_y": RandomForestRegressor(
-                    n_estimators=50, min_samples_leaf=5,
-                    min_impurity_decrease=1e-7, random_state=rs,
+                    n_estimators=50,
+                    min_samples_leaf=5,
+                    min_impurity_decrease=1e-7,
+                    random_state=rs,
                 ),
                 "model_t": (
                     RandomForestClassifier(
-                        n_estimators=50, min_samples_leaf=5,
-                        min_impurity_decrease=1e-7, random_state=rs,
+                        n_estimators=50,
+                        min_samples_leaf=5,
+                        min_impurity_decrease=1e-7,
+                        random_state=rs,
                     )
                     if is_binary
                     else RandomForestRegressor(
-                        n_estimators=50, min_samples_leaf=5,
-                        min_impurity_decrease=1e-7, random_state=rs,
+                        n_estimators=50,
+                        min_samples_leaf=5,
+                        min_impurity_decrease=1e-7,
+                        random_state=rs,
                     )
                 ),
                 "discrete_treatment": is_binary,
@@ -369,12 +375,16 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
             # Fit model
             model = LinearDML(
                 model_y=RandomForestRegressor(
-                    n_estimators=50, min_samples_leaf=5,
-                    min_impurity_decrease=1e-7, random_state=42,
+                    n_estimators=50,
+                    min_samples_leaf=5,
+                    min_impurity_decrease=1e-7,
+                    random_state=42,
                 ),
                 model_t=RandomForestClassifier(
-                    n_estimators=50, min_samples_leaf=5,
-                    min_impurity_decrease=1e-7, random_state=42,
+                    n_estimators=50,
+                    min_samples_leaf=5,
+                    min_impurity_decrease=1e-7,
+                    random_state=42,
                 ),
                 discrete_treatment=True,
                 random_state=42,

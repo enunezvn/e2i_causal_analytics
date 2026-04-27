@@ -44,14 +44,20 @@ async def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:
     # Feature characteristics for categorical-aware scoring
     feature_chars = state.get("feature_characteristics", {})
     categorical_ratio = feature_chars.get("categorical_ratio", 0.0) if feature_chars else 0.0
-    class_imbalance_severity = feature_chars.get("class_imbalance_severity") if feature_chars else None
+    class_imbalance_severity = (
+        feature_chars.get("class_imbalance_severity") if feature_chars else None
+    )
 
     selection_scores = {}
 
     for candidate in candidates:
         algo_name = candidate["name"]
         score = _compute_selection_score(
-            candidate, success_rates, algorithm_preferences, row_count, requires_causal,
+            candidate,
+            success_rates,
+            algorithm_preferences,
+            row_count,
+            requires_causal,
             categorical_ratio=categorical_ratio,
             class_imbalance_severity=class_imbalance_severity,
         )
@@ -185,9 +191,17 @@ def _compute_selection_score(
         _tree_families = {"gradient_boosting", "random_forest", "tree", "ensemble"}
         _linear_families = {"linear", "logistic", "ridge", "lasso", "elastic_net"}
         adjustment = min(0.10, 0.10 * categorical_ratio)
-        if algo_family.lower() in _tree_families or algo_name in ("XGBoost", "LightGBM", "RandomForest"):
+        if algo_family.lower() in _tree_families or algo_name in (
+            "XGBoost",
+            "LightGBM",
+            "RandomForest",
+        ):
             score += adjustment
-        elif algo_family.lower() in _linear_families or algo_name in ("LogisticRegression", "Ridge", "Lasso"):
+        elif algo_family.lower() in _linear_families or algo_name in (
+            "LogisticRegression",
+            "Ridge",
+            "Lasso",
+        ):
             score -= adjustment
 
     # Factor 7: Class imbalance adjustment for tree vs linear models
@@ -195,9 +209,17 @@ def _compute_selection_score(
         _tree_families_imb = {"gradient_boosting", "random_forest", "tree", "ensemble"}
         _linear_families_imb = {"linear", "logistic", "ridge", "lasso", "elastic_net"}
         imb_adj = 0.10 if class_imbalance_severity == "extreme" else 0.05
-        if algo_family.lower() in _tree_families_imb or algo_name in ("XGBoost", "LightGBM", "RandomForest"):
+        if algo_family.lower() in _tree_families_imb or algo_name in (
+            "XGBoost",
+            "LightGBM",
+            "RandomForest",
+        ):
             score += imb_adj
-        elif algo_family.lower() in _linear_families_imb or algo_name in ("LogisticRegression", "Ridge", "Lasso"):
+        elif algo_family.lower() in _linear_families_imb or algo_name in (
+            "LogisticRegression",
+            "Ridge",
+            "Lasso",
+        ):
             score -= imb_adj
 
     # Bonus: User preference (adds up to 0.1)

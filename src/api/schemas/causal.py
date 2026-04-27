@@ -178,7 +178,9 @@ class SegmentCATEResult(BaseModel):
     segment_id: int = Field(..., description="Segment identifier")
     segment_name: str = Field(..., description="Segment name (e.g., 'high_uplift')")
     n_samples: int = Field(..., description="Number of samples in segment")
-    uplift_range: List[float] = Field(..., min_length=2, max_length=2, description="Uplift score range [min, max]")
+    uplift_range: List[float] = Field(
+        ..., min_length=2, max_length=2, description="Uplift score range [min, max]"
+    )
     cate_mean: Optional[float] = Field(None, description="Mean CATE estimate")
     cate_std: Optional[float] = Field(None, description="CATE standard deviation")
     cate_ci_lower: Optional[float] = Field(None, description="CATE CI lower bound")
@@ -607,9 +609,13 @@ class CrossValidationResponse(BaseModel):
 
     # Results
     primary_effect: float = Field(..., description="Effect from primary library")
-    primary_ci: List[float] = Field(..., min_length=2, max_length=2, description="Primary confidence interval [lower, upper]")
+    primary_ci: List[float] = Field(
+        ..., min_length=2, max_length=2, description="Primary confidence interval [lower, upper]"
+    )
     validation_effect: float = Field(..., description="Effect from validation library")
-    validation_ci: List[float] = Field(..., min_length=2, max_length=2, description="Validation confidence interval [lower, upper]")
+    validation_ci: List[float] = Field(
+        ..., min_length=2, max_length=2, description="Validation confidence interval [lower, upper]"
+    )
 
     # Agreement metrics
     effect_difference: float = Field(..., description="Absolute difference in effects")

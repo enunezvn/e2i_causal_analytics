@@ -184,8 +184,12 @@ class ConceptDriftNode:
 
             # 1. Performance Degradation Detection
             perf_drift = None
-            if (baseline_preds.labels is not None and baseline_preds.actual_labels is not None
-                    and current_preds.labels is not None and current_preds.actual_labels is not None):
+            if (
+                baseline_preds.labels is not None
+                and baseline_preds.actual_labels is not None
+                and current_preds.labels is not None
+                and current_preds.actual_labels is not None
+            ):
                 perf_drift = self._detect_performance_degradation(
                     baseline_preds.labels,
                     baseline_preds.actual_labels,

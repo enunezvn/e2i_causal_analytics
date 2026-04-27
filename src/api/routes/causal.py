@@ -86,7 +86,12 @@ _validation_cache: Dict[str, CrossValidationResponse] = {}
 # =============================================================================
 
 
-@router.post("/hierarchical/analyze", response_model=HierarchicalAnalysisResponse, summary="Run hierarchical CATE analysis", operation_id="run_hierarchical_analysis")
+@router.post(
+    "/hierarchical/analyze",
+    response_model=HierarchicalAnalysisResponse,
+    summary="Run hierarchical CATE analysis",
+    operation_id="run_hierarchical_analysis",
+)
 async def run_hierarchical_analysis(
     request: HierarchicalAnalysisRequest,
     background_tasks: BackgroundTasks,
@@ -160,7 +165,12 @@ async def run_hierarchical_analysis(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/hierarchical/{analysis_id}", response_model=HierarchicalAnalysisResponse, summary="Get hierarchical analysis results", operation_id="get_hierarchical_analysis")
+@router.get(
+    "/hierarchical/{analysis_id}",
+    response_model=HierarchicalAnalysisResponse,
+    summary="Get hierarchical analysis results",
+    operation_id="get_hierarchical_analysis",
+)
 async def get_hierarchical_analysis(
     analysis_id: str,
 ) -> HierarchicalAnalysisResponse:
@@ -391,7 +401,12 @@ async def _execute_hierarchical_analysis(
 # =============================================================================
 
 
-@router.post("/route", response_model=RouteQueryResponse, summary="Route causal query to library", operation_id="route_causal_query")
+@router.post(
+    "/route",
+    response_model=RouteQueryResponse,
+    summary="Route causal query to library",
+    operation_id="route_causal_query",
+)
 async def route_causal_query(
     request: RouteQueryRequest,
     user: Dict[str, Any] = Depends(require_analyst),
@@ -509,7 +524,12 @@ def _create_routing_response(
 # =============================================================================
 
 
-@router.post("/pipeline/sequential", response_model=SequentialPipelineResponse, summary="Run sequential multi-library pipeline", operation_id="run_sequential_pipeline")
+@router.post(
+    "/pipeline/sequential",
+    response_model=SequentialPipelineResponse,
+    summary="Run sequential multi-library pipeline",
+    operation_id="run_sequential_pipeline",
+)
 async def run_sequential_pipeline(
     request: SequentialPipelineRequest,
     background_tasks: BackgroundTasks,
@@ -710,7 +730,12 @@ async def _execute_sequential_pipeline(
     )
 
 
-@router.post("/pipeline/parallel", response_model=ParallelPipelineResponse, summary="Run parallel multi-library analysis", operation_id="run_parallel_pipeline")
+@router.post(
+    "/pipeline/parallel",
+    response_model=ParallelPipelineResponse,
+    summary="Run parallel multi-library analysis",
+    operation_id="run_parallel_pipeline",
+)
 async def run_parallel_pipeline(
     request: ParallelPipelineRequest,
     user: Dict[str, Any] = Depends(require_analyst),
@@ -838,7 +863,9 @@ async def _run_library_analysis(
     }
 
 
-@router.get("/pipeline/{pipeline_id}", summary="Get pipeline status", operation_id="get_pipeline_status")
+@router.get(
+    "/pipeline/{pipeline_id}", summary="Get pipeline status", operation_id="get_pipeline_status"
+)
 async def get_pipeline_status(
     pipeline_id: str,
 ) -> Dict[str, Any]:
@@ -865,7 +892,12 @@ async def get_pipeline_status(
 # =============================================================================
 
 
-@router.post("/validate", response_model=CrossValidationResponse, summary="Run cross-library validation", operation_id="run_cross_validation")
+@router.post(
+    "/validate",
+    response_model=CrossValidationResponse,
+    summary="Run cross-library validation",
+    operation_id="run_cross_validation",
+)
 async def run_cross_validation(
     request: CrossValidationRequest,
     user: Dict[str, Any] = Depends(require_analyst),
@@ -972,7 +1004,12 @@ async def run_cross_validation(
 # =============================================================================
 
 
-@router.get("/estimators", response_model=EstimatorListResponse, summary="List available estimators", operation_id="list_estimators")
+@router.get(
+    "/estimators",
+    response_model=EstimatorListResponse,
+    summary="List available estimators",
+    operation_id="list_estimators",
+)
 async def list_estimators(
     library: Optional[CausalLibrary] = Query(None, description="Filter by library"),
 ) -> EstimatorListResponse:
@@ -1135,7 +1172,12 @@ async def list_estimators(
 # =============================================================================
 
 
-@router.get("/health", response_model=CausalHealthResponse, summary="Causal engine health check", operation_id="causal_health_check")
+@router.get(
+    "/health",
+    response_model=CausalHealthResponse,
+    summary="Causal engine health check",
+    operation_id="causal_health_check",
+)
 async def causal_health_check() -> CausalHealthResponse:
     """
     Health check for causal inference engine.

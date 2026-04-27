@@ -451,16 +451,18 @@ class ResourceOptimizerMemoryHooks:
             # Create procedural memory input
             memory_input = ProceduralMemoryInput(
                 procedure_name=f"optimization_pattern_{resource_type}_{objective}",
-                tool_sequence=[{
-                    "resource_type": resource_type,
-                    "objective": objective,
-                    "constraint_signature": constraint_signature,
-                    "solver_type": solver_type,
-                    "projected_roi": projected_roi,
-                    "solve_time_ms": result.get("solve_time_ms", 0),
-                    "common_adjustments": adjustments,
-                    "entities_optimized": len(allocations),
-                }],
+                tool_sequence=[
+                    {
+                        "resource_type": resource_type,
+                        "objective": objective,
+                        "constraint_signature": constraint_signature,
+                        "solver_type": solver_type,
+                        "projected_roi": projected_roi,
+                        "solve_time_ms": result.get("solve_time_ms", 0),
+                        "common_adjustments": adjustments,
+                        "entities_optimized": len(allocations),
+                    }
+                ],
                 procedure_type="optimization_pattern",
                 trigger_pattern=description,
             )

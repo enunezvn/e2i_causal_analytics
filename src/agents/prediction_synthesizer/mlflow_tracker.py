@@ -301,7 +301,11 @@ class PredictionSynthesizerMLflowTracker:
             # Log additional parameters
             ensemble_pred = state.get("ensemble_prediction")
             if ensemble_pred:
-                method = ensemble_pred.get("ensemble_method", "unknown") if isinstance(ensemble_pred, dict) else "unknown"
+                method = (
+                    ensemble_pred.get("ensemble_method", "unknown")
+                    if isinstance(ensemble_pred, dict)
+                    else "unknown"
+                )
                 mlflow.log_param("ensemble_method", method)
 
             # Log confidence and agreement tags

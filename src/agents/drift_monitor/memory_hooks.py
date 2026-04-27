@@ -720,7 +720,9 @@ class DriftMonitorMemoryHooks:
             elif drift_type == "concept":
                 drift_results = result.get("concept_drift_results", [])
 
-            feature_result: Dict[str, Any] = next((r for r in drift_results if r.get("feature") == feature), {})
+            feature_result: Dict[str, Any] = next(
+                (r for r in drift_results if r.get("feature") == feature), {}
+            )
 
             # Create/update Feature node
             feature_query = f"""

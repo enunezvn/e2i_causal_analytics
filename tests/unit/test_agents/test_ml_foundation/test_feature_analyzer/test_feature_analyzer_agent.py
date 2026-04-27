@@ -370,9 +370,7 @@ class TestAutoRegisterInFeast:
             "experiment_id": "exp_001",
             "selected_features": ["f1", "f2"],
         }
-        with patch.object(agent, "_get_full_graph"), patch.object(
-            agent, "_get_shap_graph"
-        ):
+        with patch.object(agent, "_get_full_graph"), patch.object(agent, "_get_shap_graph"):
             result = await agent._auto_register_in_feast(state, input_data={})
         assert result["registered"] is False
         assert result["skipped_reason"] == "feast_registration_config not provided"
@@ -456,9 +454,7 @@ class TestAutoRegisterInFeast:
         }
 
         fake_client = MagicMock()
-        fake_client.register_feature_view = AsyncMock(
-            side_effect=RuntimeError("Feast unreachable")
-        )
+        fake_client.register_feature_view = AsyncMock(side_effect=RuntimeError("Feast unreachable"))
         with patch(
             "src.agents.ml_foundation.feature_analyzer.agent._get_feast_client",
             new=AsyncMock(return_value=fake_client),
@@ -500,10 +496,10 @@ class TestAutoRegisterInFeast:
             result = await agent._auto_register_in_feast(state, input_data=input_data)
 
         fake_client.register_feature_view.assert_awaited_once()
-        assert (
-            fake_client.register_feature_view.await_args.kwargs["feature_names"]
-            == ["f_categorical", "f_numeric"]
-        )
+        assert fake_client.register_feature_view.await_args.kwargs["feature_names"] == [
+            "f_categorical",
+            "f_numeric",
+        ]
         assert result["registered"] is True
 
 

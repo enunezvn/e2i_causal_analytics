@@ -66,7 +66,11 @@ class TestRegisterModel:
         assert result["deployment_id"] != ""
         assert result["deployment_status"] == "healthy"
         assert result["deployment_status"] in {
-            "pending", "deploying", "healthy", "unhealthy", "failed"
+            "pending",
+            "deploying",
+            "healthy",
+            "unhealthy",
+            "failed",
         }
 
     @pytest.mark.asyncio

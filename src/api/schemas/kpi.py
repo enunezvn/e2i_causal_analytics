@@ -195,9 +195,7 @@ class KPIThresholdResponse(BaseModel):
     critical: float | None = Field(None, description="Critical threshold value")
 
     model_config = ConfigDict(
-        json_schema_extra={
-            "example": {"target": 0.90, "warning": 0.75, "critical": 0.60}
-        }
+        json_schema_extra={"example": {"target": 0.90, "warning": 0.75, "critical": 0.60}}
     )
 
 
@@ -310,11 +308,7 @@ class CacheInvalidationRequest(BaseModel):
     )
     invalidate_all: bool = Field(False, description="Invalidate all cached KPIs (use with caution)")
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {"kpi_id": "WS1-DQ-001"}
-        }
-    )
+    model_config = ConfigDict(json_schema_extra={"example": {"kpi_id": "WS1-DQ-001"}})
 
 
 class CacheInvalidationResponse(BaseModel):

@@ -582,25 +582,28 @@ async def _execute_segment_analysis(
         from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
         # Initialize state (cast partial state - remaining fields populated by graph nodes)
-        initial_state = cast(HeterogeneousOptimizerState, {
-            "query": request.query,
-            "treatment_var": request.treatment_var,
-            "outcome_var": request.outcome_var,
-            "segment_vars": request.segment_vars,
-            "effect_modifiers": request.effect_modifiers or [],
-            "data_source": request.data_source,
-            "filters": request.filters,
-            "n_estimators": request.n_estimators,
-            "min_samples_leaf": request.min_samples_leaf,
-            "significance_level": request.significance_level,
-            "top_segments_count": request.top_segments_count,
-            "status": "pending",
-            "errors": [],
-            "warnings": [],
-            "estimation_latency_ms": 0,
-            "analysis_latency_ms": 0,
-            "total_latency_ms": 0,
-        })
+        initial_state = cast(
+            HeterogeneousOptimizerState,
+            {
+                "query": request.query,
+                "treatment_var": request.treatment_var,
+                "outcome_var": request.outcome_var,
+                "segment_vars": request.segment_vars,
+                "effect_modifiers": request.effect_modifiers or [],
+                "data_source": request.data_source,
+                "filters": request.filters,
+                "n_estimators": request.n_estimators,
+                "min_samples_leaf": request.min_samples_leaf,
+                "significance_level": request.significance_level,
+                "top_segments_count": request.top_segments_count,
+                "status": "pending",
+                "errors": [],
+                "warnings": [],
+                "estimation_latency_ms": 0,
+                "analysis_latency_ms": 0,
+                "total_latency_ms": 0,
+            },
+        )
 
         # Create and run graph
         graph = create_heterogeneous_optimizer_graph()

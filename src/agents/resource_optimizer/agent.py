@@ -149,7 +149,9 @@ class ResourceOptimizerAgent:
         allocation_targets: List[AllocationTarget],
         constraints: List[Constraint],
         resource_type: str = "budget",
-        objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"] = "maximize_outcome",
+        objective: Literal[
+            "maximize_outcome", "maximize_roi", "minimize_cost", "balance"
+        ] = "maximize_outcome",
         solver_type: Literal["linear", "milp", "nonlinear"] = "linear",
         run_scenarios: bool = False,
         scenario_count: int = 3,
@@ -351,7 +353,9 @@ class ResourceOptimizerAgent:
         self,
         allocation_targets: List[AllocationTarget],
         constraints: List[Constraint],
-        objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"] = "maximize_outcome",
+        objective: Literal[
+            "maximize_outcome", "maximize_roi", "minimize_cost", "balance"
+        ] = "maximize_outcome",
     ) -> ResourceOptimizerOutput:
         """
         Quick optimization without scenario analysis.
@@ -426,7 +430,9 @@ class ResourceOptimizerAgent:
 async def optimize_allocation(
     allocation_targets: List[AllocationTarget],
     constraints: List[Constraint],
-    objective: Literal["maximize_outcome", "maximize_roi", "minimize_cost", "balance"] = "maximize_outcome",
+    objective: Literal[
+        "maximize_outcome", "maximize_roi", "minimize_cost", "balance"
+    ] = "maximize_outcome",
     run_scenarios: bool = False,
 ) -> ResourceOptimizerOutput:
     """

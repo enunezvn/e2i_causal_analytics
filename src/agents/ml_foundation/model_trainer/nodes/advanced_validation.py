@@ -112,7 +112,10 @@ def compute_stratified_cv(
     cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
 
     fold_metrics: Dict[str, List[float]] = {
-        "roc_auc": [], "pr_auc": [], "f1": [], "mcc": [],
+        "roc_auc": [],
+        "pr_auc": [],
+        "f1": [],
+        "mcc": [],
     }
 
     # DataFrame integer-position slicing requires .iloc; numpy uses []
@@ -134,19 +137,11 @@ def compute_stratified_cv(
             if hasattr(fold_model, "predict_proba"):
                 y_proba = fold_model.predict_proba(X_fold_val)[:, 1]
 
-            fold_metrics["f1"].append(
-                float(f1_score(y_fold_val, y_pred, zero_division=0))
-            )
-            fold_metrics["mcc"].append(
-                float(matthews_corrcoef(y_fold_val, y_pred))
-            )
+            fold_metrics["f1"].append(float(f1_score(y_fold_val, y_pred, zero_division=0)))
+            fold_metrics["mcc"].append(float(matthews_corrcoef(y_fold_val, y_pred)))
             if y_proba is not None:
-                fold_metrics["roc_auc"].append(
-                    float(roc_auc_score(y_fold_val, y_proba))
-                )
-                fold_metrics["pr_auc"].append(
-                    float(average_precision_score(y_fold_val, y_proba))
-                )
+                fold_metrics["roc_auc"].append(float(roc_auc_score(y_fold_val, y_proba)))
+                fold_metrics["pr_auc"].append(float(average_precision_score(y_fold_val, y_proba)))
         except Exception as e:
             logger.warning(f"CV fold {fold_idx} failed: {e}")
             continue
@@ -222,11 +217,16 @@ def compute_calibration_analysis(
         gap = abs(accuracy - confidence)
         ece += (n_bin / n_total) * gap
 
-        bin_details.append({
-            "bin_lo": float(lo), "bin_hi": float(hi),
-            "n_samples": n_bin, "accuracy": accuracy,
-            "confidence": confidence, "gap": gap,
-        })
+        bin_details.append(
+            {
+                "bin_lo": float(lo),
+                "bin_hi": float(hi),
+                "n_samples": n_bin,
+                "accuracy": accuracy,
+                "confidence": confidence,
+                "gap": gap,
+            }
+        )
 
     return {
         "calibration_ece": float(ece),
@@ -317,8 +317,7 @@ def check_imbalance_aware_suspicion(
                 f"(95% of achievable range above {minority_ratio:.4f} baseline)"
             )
             recommendations.append(
-                "PR-AUC reaching near theoretical maximum — "
-                "verify feature independence from target"
+                "PR-AUC reaching near theoretical maximum — verify feature independence from target"
             )
 
     # --- Perfect precision AND recall (always suspicious) ---
@@ -329,8 +328,7 @@ def check_imbalance_aware_suspicion(
                 f"indicates tautological model"
             )
             recommendations.append(
-                "Features likely encode the target directly — "
-                "audit feature derivation pipeline"
+                "Features likely encode the target directly — audit feature derivation pipeline"
             )
 
     # --- MCC check (balanced metric, ignores class ratio) ---
@@ -343,9 +341,7 @@ def check_imbalance_aware_suspicion(
     # --- Brier score near zero ---
     if brier is not None and brier < 1e-6:
         reasons.append(f"Brier={brier:.2e} effectively zero — implausible calibration")
-        recommendations.append(
-            "Zero calibration error means predicted probabilities are perfect"
-        )
+        recommendations.append("Zero calibration error means predicted probabilities are perfect")
 
     # --- All splits consistency check (imbalance-aware) ---
     # With severe imbalance, high ROC-AUC across splits is expected;
@@ -377,8 +373,7 @@ def check_imbalance_aware_suspicion(
             variance = float(np.var(split_aucs))
             if variance < 0.001:
                 reasons.append(
-                    f"All splits AUC > 0.98 (variance={variance:.6f}) — "
-                    "no generalization gap"
+                    f"All splits AUC > 0.98 (variance={variance:.6f}) — no generalization gap"
                 )
                 recommendations.append(
                     "Identical performance across splits suggests trivially recoverable signal"
@@ -424,9 +419,7 @@ def _check_regression_suspicion(metrics_result: Dict[str, Any]) -> Dict[str, Any
         recommendations.append("Check features for target leakage")
     if rmse is not None and rmse < 1e-6:
         reasons.append(f"RMSE={rmse:.2e} is effectively zero")
-        recommendations.append(
-            "Near-zero RMSE suggests features deterministically encode target"
-        )
+        recommendations.append("Near-zero RMSE suggests features deterministically encode target")
 
     if not reasons:
         return {
@@ -436,7 +429,7 @@ def _check_regression_suspicion(metrics_result: Dict[str, Any]) -> Dict[str, Any
             "investigation_recommendations": [],
         }
 
-    has_critical = (r2 is not None and r2 >= 0.999)
+    has_critical = r2 is not None and r2 >= 0.999
     return {
         "leakage_suspected": True,
         "suspicion_level": "critical" if has_critical else "high",
@@ -473,13 +466,10 @@ def apply_post_hoc_calibration(
         # Use FrozenEstimator if available (sklearn >= 1.6), else cv="prefit"
         try:
             from sklearn.frozen import FrozenEstimator
-            calibrated = CalibratedClassifierCV(
-                estimator=FrozenEstimator(model), method=method
-            )
+
+            calibrated = CalibratedClassifierCV(estimator=FrozenEstimator(model), method=method)
         except ImportError:
-            calibrated = CalibratedClassifierCV(
-                estimator=model, method=method, cv="prefit"
-            )
+            calibrated = CalibratedClassifierCV(estimator=model, method=method, cv="prefit")
         calibrated.fit(X_val, y_val)
         return calibrated, {
             "calibration_method": method,
@@ -538,12 +528,8 @@ def optimize_threshold_f1(
     return {
         "f1_optimal_threshold": best_threshold,
         "f1_at_optimal": float(best_f1),
-        "precision_at_f1_optimal": float(
-            precision_score(y_true, y_pred_opt, zero_division=0)
-        ),
-        "recall_at_f1_optimal": float(
-            recall_score(y_true, y_pred_opt, zero_division=0)
-        ),
+        "precision_at_f1_optimal": float(precision_score(y_true, y_pred_opt, zero_division=0)),
+        "recall_at_f1_optimal": float(recall_score(y_true, y_pred_opt, zero_division=0)),
         "mcc_at_f1_optimal": float(matthews_corrcoef(y_true, y_pred_opt)),
     }
 
@@ -570,6 +556,7 @@ def validate_stratified_splits(
     Returns:
         Dictionary with per-split ratios and stratification verdict
     """
+
     def _positive_ratio(y: np.ndarray) -> float:
         return float(np.mean(y))
 
@@ -590,7 +577,9 @@ def validate_stratified_splits(
         "val_drift": float(val_drift),
         "test_drift": float(test_drift),
         "is_stratified": is_stratified,
-        "stratification_warning": None if is_stratified else (
+        "stratification_warning": None
+        if is_stratified
+        else (
             f"Class ratio drift detected: "
             f"val={val_drift:.3f}, test={test_drift:.3f} (tolerance={tolerance}). "
             f"Consider using stratified splitting."

@@ -442,9 +442,7 @@ print("Results saved to analysis_results.json")
 
         # Build document based on formality level
         if formality == "light":
-            return self._generate_light_prereg(
-                state, power_analysis, treatment_name, outcome_str
-            )
+            return self._generate_light_prereg(state, power_analysis, treatment_name, outcome_str)
         elif formality == "heavy":
             return self._generate_heavy_prereg(
                 state,

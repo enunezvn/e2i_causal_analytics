@@ -307,6 +307,7 @@ class RealTimeSHAPService:
         # model" from "fallback to propensity" because explain.py's
         # legacy semantics return []. Look up directly instead.
         from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
+
         return list(MODEL_FEATURE_REFS.get(model_type.value, []))
 
     def _get_default_features(self) -> Dict[str, Any]:
@@ -789,7 +790,9 @@ async def list_explainable_models() -> Dict[str, Any]:
     }
 
 
-@router.get("/health", summary="Health check for interpretability service", operation_id="health_check")
+@router.get(
+    "/health", summary="Health check for interpretability service", operation_id="health_check"
+)
 async def health_check() -> Dict[str, Any]:
     """
     Health check endpoint for the interpretability service.

@@ -465,9 +465,7 @@ class CausalImpactMLflowTracker:
         if state:
             causal_graph = state.get("causal_graph", {})
             if causal_graph:
-                await self._log_json_artifact(
-                    dict(causal_graph), "causal_dag.json", "causal_graph"
-                )
+                await self._log_json_artifact(dict(causal_graph), "causal_dag.json", "causal_graph")
 
             # Log sensitivity analysis details
             sensitivity = state.get("sensitivity_analysis", {})

@@ -635,23 +635,35 @@ class OptunaOptimizer:
             elif metric == "accuracy":
                 return float(accuracy_score(y, y_pred))
             elif metric == "f1":
-                return float(f1_score(
-                    y,
-                    y_pred,
-                    average="weighted" if problem_type == "multiclass_classification" else "binary",
-                ))
+                return float(
+                    f1_score(
+                        y,
+                        y_pred,
+                        average="weighted"
+                        if problem_type == "multiclass_classification"
+                        else "binary",
+                    )
+                )
             elif metric == "precision":
-                return float(precision_score(
-                    y,
-                    y_pred,
-                    average="weighted" if problem_type == "multiclass_classification" else "binary",
-                ))
+                return float(
+                    precision_score(
+                        y,
+                        y_pred,
+                        average="weighted"
+                        if problem_type == "multiclass_classification"
+                        else "binary",
+                    )
+                )
             elif metric == "recall":
-                return float(recall_score(
-                    y,
-                    y_pred,
-                    average="weighted" if problem_type == "multiclass_classification" else "binary",
-                ))
+                return float(
+                    recall_score(
+                        y,
+                        y_pred,
+                        average="weighted"
+                        if problem_type == "multiclass_classification"
+                        else "binary",
+                    )
+                )
             elif metric == "average_precision":
                 return float(average_precision_score(y, y_proba))
             else:

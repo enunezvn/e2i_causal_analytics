@@ -86,23 +86,17 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
         is JSON-serialisable (no numpy types, no DataFrames).
     """
     experiment_id = state.get("experiment_id", "unknown")
-    logger.info(
-        "Running sampling-frame audit for experiment %s", experiment_id
-    )
+    logger.info("Running sampling-frame audit for experiment %s", experiment_id)
 
     scope_spec = state.get("scope_spec") or {}
     deployment_reference = scope_spec.get("deployment_reference")
     audit_config = scope_spec.get("sampling_frame_audit", {})
 
     numeric_threshold = float(
-        audit_config.get(
-            "numeric_drift_threshold", DEFAULT_NUMERIC_DRIFT_THRESHOLD
-        )
+        audit_config.get("numeric_drift_threshold", DEFAULT_NUMERIC_DRIFT_THRESHOLD)
     )
     categorical_threshold = float(
-        audit_config.get(
-            "categorical_drift_threshold", DEFAULT_CATEGORICAL_DRIFT_THRESHOLD
-        )
+        audit_config.get("categorical_drift_threshold", DEFAULT_CATEGORICAL_DRIFT_THRESHOLD)
     )
 
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -173,8 +167,7 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
             per_column[col] = {
                 "status": "skipped_missing_column",
                 "message": (
-                    f"Column '{col}' present in deployment_reference but "
-                    "missing from train_df."
+                    f"Column '{col}' present in deployment_reference but missing from train_df."
                 ),
                 "drift_flagged": False,
             }
@@ -192,11 +185,7 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
             continue
 
         is_categorical_ref = "categorical_freq" in ref_stats
-        is_numeric_ref = (
-            "mean" in ref_stats
-            or "std" in ref_stats
-            or "quantiles" in ref_stats
-        )
+        is_numeric_ref = "mean" in ref_stats or "std" in ref_stats or "quantiles" in ref_stats
 
         if is_categorical_ref:
             entry = _audit_categorical(
@@ -239,9 +228,7 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
             "numeric_drift_threshold": numeric_threshold,
             "categorical_drift_threshold": categorical_threshold,
         },
-        "n_reference_samples": _coerce_int(
-            deployment_reference.get("n_reference_samples")
-        ),
+        "n_reference_samples": _coerce_int(deployment_reference.get("n_reference_samples")),
         "n_train_samples": int(len(train_df)),
         "audited_at": timestamp,
     }
@@ -283,10 +270,7 @@ def _audit_numeric(
     if n_train == 0:
         return {
             "status": "skipped_empty_train",
-            "message": (
-                "No non-null numeric values available in train_df for "
-                "this column."
-            ),
+            "message": ("No non-null numeric values available in train_df for this column."),
             "drift_flagged": False,
         }
 
@@ -308,9 +292,7 @@ def _audit_numeric(
     # surface that as a non-finite SMD below.
     train_var = train_std**2
     ref_var = ref_std**2 if ref_std is not None else 0.0
-    combined_std = math.sqrt((train_var + ref_var) / 2.0) if (
-        train_var + ref_var
-    ) > 0 else 0.0
+    combined_std = math.sqrt((train_var + ref_var) / 2.0) if (train_var + ref_var) > 0 else 0.0
 
     if combined_std == 0.0:
         # Both are constants — drift is binary (means equal or not).
@@ -366,9 +348,7 @@ def _audit_numeric(
         "train_mean": train_mean,
         "train_std": train_std,
         "reference_mean": float(ref_mean),
-        "reference_std": (
-            float(ref_std) if ref_std is not None else None
-        ),
+        "reference_std": (float(ref_std) if ref_std is not None else None),
         "n_train_samples": n_train,
         "quantile_diffs": quantile_diffs,
     }
@@ -386,10 +366,7 @@ def _audit_categorical(
     if n_train == 0:
         return {
             "status": "skipped_empty_train",
-            "message": (
-                "No non-null categorical values available in train_df "
-                "for this column."
-            ),
+            "message": ("No non-null categorical values available in train_df for this column."),
             "drift_flagged": False,
         }
 
@@ -397,10 +374,7 @@ def _audit_categorical(
     if not isinstance(raw_ref_freq, Mapping) or not raw_ref_freq:
         return {
             "status": "skipped_invalid_reference",
-            "message": (
-                "Reference 'categorical_freq' missing, empty, or not a "
-                "mapping."
-            ),
+            "message": ("Reference 'categorical_freq' missing, empty, or not a mapping."),
             "drift_flagged": False,
         }
 
@@ -416,10 +390,7 @@ def _audit_categorical(
     if not ref_freq:
         return {
             "status": "skipped_invalid_reference",
-            "message": (
-                "Reference 'categorical_freq' has no non-negative "
-                "numeric entries."
-            ),
+            "message": ("Reference 'categorical_freq' has no non-negative numeric entries."),
             "drift_flagged": False,
         }
 
@@ -442,9 +413,7 @@ def _audit_categorical(
     }
 
 
-def _jensen_shannon_divergence(
-    p: Mapping[str, float], q: Mapping[str, float]
-) -> float:
+def _jensen_shannon_divergence(p: Mapping[str, float], q: Mapping[str, float]) -> float:
     """Symmetric JS divergence (in nats) between two discrete distributions.
 
     Both inputs are normalised to sum to 1 over the union of their support.
@@ -468,9 +437,7 @@ def _jensen_shannon_divergence(
 
     m_vec = 0.5 * (p_vec + q_vec)
 
-    return 0.5 * _kl_divergence(p_vec, m_vec) + 0.5 * _kl_divergence(
-        q_vec, m_vec
-    )
+    return 0.5 * _kl_divergence(p_vec, m_vec) + 0.5 * _kl_divergence(q_vec, m_vec)
 
 
 def _kl_divergence(p_vec: np.ndarray, q_vec: np.ndarray) -> float:

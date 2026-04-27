@@ -169,7 +169,9 @@ class ModelTrainerPreprocessor:
         for col in X.columns:
             if pd.api.types.is_numeric_dtype(X[col]):
                 self.numeric_features.append(col)
-            elif pd.api.types.is_object_dtype(X[col]) or isinstance(X[col].dtype, pd.CategoricalDtype):
+            elif pd.api.types.is_object_dtype(X[col]) or isinstance(
+                X[col].dtype, pd.CategoricalDtype
+            ):
                 # Only treat as categorical if cardinality is reasonable
                 n_unique = X[col].nunique()
                 if n_unique <= 50:

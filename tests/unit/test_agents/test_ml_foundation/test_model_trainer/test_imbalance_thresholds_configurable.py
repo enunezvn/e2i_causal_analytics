@@ -201,9 +201,7 @@ class TestStrategyMatrixConfigurable:
                 "severity_bands": {"none": 0.40, "moderate": 0.20, "severe": 0.05},
                 "tree_models": ["XGBoost", "RandomForest"],
                 "strategy_matrix": {
-                    "none": {
-                        "default": {"strategy": "none", "rationale": "balanced"}
-                    },
+                    "none": {"default": {"strategy": "none", "rationale": "balanced"}},
                     "moderate": {
                         "tree": {
                             "strategy": "class_weight",
@@ -263,9 +261,7 @@ class TestStrategyMatrixConfigurable:
                 "severity_bands": {"none": 0.40, "moderate": 0.20, "severe": 0.05},
                 "tree_models": ["XGBoost"],
                 "strategy_matrix": {
-                    "none": {
-                        "default": {"strategy": "none", "rationale": "x"}
-                    },
+                    "none": {"default": {"strategy": "none", "rationale": "x"}},
                     "moderate": {
                         "tree": {"strategy": "class_weight", "rationale": "x"},
                         "non_tree": {
@@ -390,9 +386,7 @@ class TestLoaderValidatesSeverityBandOrdering:
             },
         )
 
-        with pytest.raises(
-            ValueError, match="none > moderate > severe > 0"
-        ):
+        with pytest.raises(ValueError, match="none > moderate > severe > 0"):
             _load_imbalance_config(path=cfg_path)
 
     def test_rejects_zero_severe_band(self, tmp_path: Path):
@@ -417,9 +411,7 @@ class TestLoaderValidatesSeverityBandOrdering:
             },
         )
 
-        with pytest.raises(
-            ValueError, match="none > moderate > severe > 0"
-        ):
+        with pytest.raises(ValueError, match="none > moderate > severe > 0"):
             _load_imbalance_config(path=cfg_path)
 
 
@@ -602,9 +594,7 @@ class TestReadYamlCacheReturnsNormalised:
                 "severity_bands": {"none": 0.40, "moderate": 0.20, "severe": 0.05},
                 "tree_models": ["XGBoost"],
                 "strategy_matrix": {
-                    "none": {
-                        "default": {"strategy": "none", "rationale": "x"}
-                    },
+                    "none": {"default": {"strategy": "none", "rationale": "x"}},
                     "moderate": {
                         "tree": {"strategy": "class_weight", "rationale": "x"},
                         "non_tree": {

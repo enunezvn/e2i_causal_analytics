@@ -36,9 +36,7 @@ class TestResolveFeastEndpoint:
         self, serving_module: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("FEAST_URL", "http://feast-staging:6566")
-        assert (
-            serving_module._resolve_feast_endpoint() == "http://feast-staging:6566"
-        )
+        assert serving_module._resolve_feast_endpoint() == "http://feast-staging:6566"
 
     def test_prefers_http_endpoint_over_url(
         self, serving_module: Any, monkeypatch: pytest.MonkeyPatch
@@ -92,9 +90,7 @@ class TestDirectFeaturesPath:
     """The legacy ``features`` path must remain unchanged."""
 
     @pytest.mark.asyncio
-    async def test_predict_with_features_uses_user_provided_tag(
-        self, serving_module: Any
-    ) -> None:
+    async def test_predict_with_features_uses_user_provided_tag(self, serving_module: Any) -> None:
         service = serving_module.E2IModelService()
 
         # Stub the prediction kernel so we don't need a real model.
@@ -317,6 +313,7 @@ async def test_feast_path_emits_aggregate_warning_on_coercion(
     http_client_mock.post = AsyncMock(return_value=response_mock)
 
     import logging
+
     caplog.set_level(logging.WARNING, logger="e2i_serving_service")
 
     with patch(
@@ -337,7 +334,8 @@ async def test_feast_path_emits_aggregate_warning_on_coercion(
     # Exactly ONE aggregate WARNING was emitted (not 3 — one per coerced
     # value would be noisy).
     coercion_warnings = [
-        rec for rec in caplog.records
+        rec
+        for rec in caplog.records
         if rec.levelno == logging.WARNING and "coerced" in rec.getMessage()
     ]
     assert len(coercion_warnings) == 1, (

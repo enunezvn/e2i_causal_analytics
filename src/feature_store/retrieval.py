@@ -239,7 +239,9 @@ class FeatureRetriever:
             # Filter by feature names if specified
             if feature_names:
                 return [
-                    record for record in data_list if cast(str, record["feature_name"]) in feature_names
+                    record
+                    for record in data_list
+                    if cast(str, record["feature_name"]) in feature_names
                 ]
 
             return data_list

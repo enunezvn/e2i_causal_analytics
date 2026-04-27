@@ -332,11 +332,7 @@ class ContextEnricherNode:
                     warnings_list: list[Any] = result["warnings"]
                     warnings_list.append(
                         f"Stale features detected: {', '.join(stale_features[:5])}"
-                        + (
-                            f" (+{len(stale_features) - 5} more)"
-                            if len(stale_features) > 5
-                            else ""
-                        )
+                        + (f" (+{len(stale_features) - 5} more)" if len(stale_features) > 5 else "")
                     )
 
         except Exception as e:

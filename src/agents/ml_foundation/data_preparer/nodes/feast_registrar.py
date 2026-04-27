@@ -153,9 +153,7 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
                 # because subsequent state updates from other nodes will overwrite this
                 # key only with the value we return here.
                 existing_blockers = list(state.get("blocking_issues", []) or [])
-                existing_blockers.append(
-                    "Feast features stale; ALLOW_STALE_FEAST not set"
-                )
+                existing_blockers.append("Feast features stale; ALLOW_STALE_FEAST not set")
                 updates["blocking_issues"] = existing_blockers
                 logger.warning(
                     "Feast QC gate: features are stale for experiment %s. "
@@ -232,8 +230,7 @@ async def _check_feature_freshness(
     except Exception as e:
         allow_stale = os.environ.get("ALLOW_STALE_FEAST") == "1"
         logger.warning(
-            "Feast freshness check failed for experiment %s: %s. "
-            "Treating as %s.",
+            "Feast freshness check failed for experiment %s: %s. Treating as %s.",
             experiment_id,
             e,
             "fresh (ALLOW_STALE_FEAST=1)" if allow_stale else "stale",
@@ -249,7 +246,5 @@ async def _check_feature_freshness(
         return {
             "fresh": False,
             "error": str(e),
-            "recommendations": [
-                "Feast freshness check failed; verify Feast service is reachable."
-            ],
+            "recommendations": ["Feast freshness check failed; verify Feast service is reachable."],
         }

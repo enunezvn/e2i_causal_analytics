@@ -130,9 +130,7 @@ def mock_feast_client(monkeypatch):
     async def _fake_resolver():
         return feast_mock
 
-    monkeypatch.setattr(
-        "src.api.routes.predictions._resolve_feast_client", _fake_resolver
-    )
+    monkeypatch.setattr("src.api.routes.predictions._resolve_feast_client", _fake_resolver)
     return feast_mock
 
 
@@ -363,9 +361,7 @@ class TestSinglePrediction:
         # Route says feast_online — wins over BentoML's "user_provided".
         assert body["feature_source"] == "feast_online"
 
-    def test_predictions_feast_failure_returns_503(
-        self, mock_bentoml_client, mock_feast_client
-    ):
+    def test_predictions_feast_failure_returns_503(self, mock_bentoml_client, mock_feast_client):
         """Feast errors surface as 503 — the route does not silently swallow them.
 
         The exact error envelope shape comes from the project's custom

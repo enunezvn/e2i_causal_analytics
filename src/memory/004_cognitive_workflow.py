@@ -720,9 +720,7 @@ Triplets (one per line, or NONE if no new facts):"""
     # === Collect Learning Signals for DSPy ===
     state["feedback_signals"] = [
         {
-            "signal_type": (
-                "outcome_success" if confidence > 0.7 else "outcome_partial"
-            ),
+            "signal_type": ("outcome_success" if confidence > 0.7 else "outcome_partial"),
             "signal_value": confidence,
             "applies_to_type": "procedure",
             "is_training_example": confidence > 0.8,  # High-quality examples
@@ -898,7 +896,8 @@ async def run_cognitive_cycle(
     # Run the workflow
     config = {"configurable": {"thread_id": initial_state["session_id"]}}
     final_state = await app.ainvoke(
-        initial_state, config  # type: ignore[arg-type]
+        initial_state,
+        config,  # type: ignore[arg-type]
     )
 
     return final_state  # type: ignore[return-value]

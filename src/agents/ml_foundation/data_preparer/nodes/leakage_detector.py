@@ -141,13 +141,14 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             # on columns the pipeline is already committed to dropping.
             excluded_features = scope_spec.get("excluded_features", []) or []
             cols_to_drop = [
-                c for c in excluded_features
-                if c in combined_df.columns and c != target_variable
+                c for c in excluded_features if c in combined_df.columns and c != target_variable
             ]
             if cols_to_drop:
                 combined_df = combined_df.drop(columns=cols_to_drop)
 
-            numeric_features = _get_numeric_features(combined_df, target_variable, required_features)
+            numeric_features = _get_numeric_features(
+                combined_df, target_variable, required_features
+            )
 
             if len(numeric_features) > 0 and len(combined_df) >= 30:
                 # 4. Perfect class separation
@@ -204,8 +205,7 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         # Add to blocking issues if CRITICAL or HIGH findings
         blocking_updates: Dict[str, Any] = {}
         blocking_findings = [
-            f for f in findings
-            if f.severity in (LeakageSeverity.CRITICAL, LeakageSeverity.HIGH)
+            f for f in findings if f.severity in (LeakageSeverity.CRITICAL, LeakageSeverity.HIGH)
         ]
         if blocking_findings or (leakage_detected and not findings):
             # Legacy leakage issues (temporal, contamination) also block
@@ -213,8 +213,7 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             new_blocking = [f.to_issue_string() for f in blocking_findings]
             # Also add legacy string issues that aren't from findings
             legacy_issues = [
-                i for i in leakage_issues
-                if not any(i == f.to_issue_string() for f in findings)
+                i for i in leakage_issues if not any(i == f.to_issue_string() for f in findings)
             ]
             blocking_updates["blocking_issues"] = existing_blocking + new_blocking + legacy_issues
 
@@ -251,14 +250,12 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
 # =============================================================================
 
 
-def _get_numeric_features(
-    df: Any, target_variable: str, required_features: List[str]
-) -> List[str]:
+def _get_numeric_features(df: Any, target_variable: str, required_features: List[str]) -> List[str]:
     """Get numeric feature columns (excluding target)."""
     features = []
-    candidates = required_features if required_features else [
-        c for c in df.columns if c != target_variable
-    ]
+    candidates = (
+        required_features if required_features else [c for c in df.columns if c != target_variable]
+    )
     for col in candidates:
         if col == target_variable or col not in df.columns:
             continue
@@ -272,9 +269,9 @@ def _get_categorical_features(
 ) -> List[str]:
     """Get categorical/object feature columns (excluding target)."""
     features = []
-    candidates = required_features if required_features else [
-        c for c in df.columns if c != target_variable
-    ]
+    candidates = (
+        required_features if required_features else [c for c in df.columns if c != target_variable]
+    )
     for col in candidates:
         if col == target_variable or col not in df.columns:
             continue
@@ -287,7 +284,12 @@ def _aggregate_severity(findings: List[LeakageFinding]) -> str:
     """Get the highest severity from findings."""
     if not findings:
         return "none"
-    priority = [LeakageSeverity.CRITICAL, LeakageSeverity.HIGH, LeakageSeverity.MODERATE, LeakageSeverity.INFO]
+    priority = [
+        LeakageSeverity.CRITICAL,
+        LeakageSeverity.HIGH,
+        LeakageSeverity.MODERATE,
+        LeakageSeverity.INFO,
+    ]
     for level in priority:
         if any(f.severity == level for f in findings):
             return level.value
@@ -436,6 +438,7 @@ def check_target_leakage(
             if is_binary:
                 try:
                     from scipy.stats import pointbiserialr
+
                     corr, p_value = pointbiserialr(tgt_valid.values, feat_valid.values)
                 except Exception:
                     corr = feat_valid.corr(tgt_valid)
@@ -449,34 +452,42 @@ def check_target_leakage(
             # Flag at thresholds
             if abs_corr > 0.85:
                 severity = LeakageSeverity.CRITICAL if abs_corr > 0.95 else LeakageSeverity.HIGH
-                findings.append(LeakageFinding(
-                    check_name="target_correlation",
-                    severity=severity,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has correlation {corr:.3f} with target "
-                        f"(p={p_value:.2e})" if p_value is not None else
-                        f"Feature '{feature}' has correlation {corr:.3f} with target"
-                    ),
-                    evidence={"correlation": float(corr), "p_value": float(p_value) if p_value else None},
-                    recommendation=f"Investigate whether '{feature}' is derived from or encodes the target",
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="target_correlation",
+                        severity=severity,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has correlation {corr:.3f} with target "
+                            f"(p={p_value:.2e})"
+                            if p_value is not None
+                            else f"Feature '{feature}' has correlation {corr:.3f} with target"
+                        ),
+                        evidence={
+                            "correlation": float(corr),
+                            "p_value": float(p_value) if p_value else None,
+                        },
+                        recommendation=f"Investigate whether '{feature}' is derived from or encodes the target",
+                    )
+                )
                 issues.append(
                     f"Potential target leakage: feature '{feature}' has "
                     f"correlation {corr:.3f} with target (threshold: 0.85)"
                 )
             elif abs_corr > 0.70 and p_value is not None and p_value < 0.001:
-                findings.append(LeakageFinding(
-                    check_name="target_correlation",
-                    severity=LeakageSeverity.MODERATE,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has statistically significant correlation "
-                        f"{corr:.3f} with target (p={p_value:.2e})"
-                    ),
-                    evidence={"correlation": float(corr), "p_value": float(p_value)},
-                    recommendation=f"Review '{feature}' for potential target leakage",
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="target_correlation",
+                        severity=LeakageSeverity.MODERATE,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has statistically significant correlation "
+                            f"{corr:.3f} with target (p={p_value:.2e})"
+                        ),
+                        evidence={"correlation": float(corr), "p_value": float(p_value)},
+                        recommendation=f"Review '{feature}' for potential target leakage",
+                    )
+                )
 
     except Exception as e:
         logger.warning(f"Target leakage check failed: {e}")
@@ -624,26 +635,30 @@ def check_perfect_class_separation(
             class_1_all_zero = (class_1 == 0).all()
             class_0_all_nonzero = (class_0 != 0).all()
 
-            if (class_0_all_zero and class_1_all_nonzero) or (class_1_all_zero and class_0_all_nonzero):
-                findings.append(LeakageFinding(
-                    check_name="perfect_class_separation",
-                    severity=LeakageSeverity.CRITICAL,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has zero/nonzero split perfectly aligned with target: "
-                        f"class_0 all-zero={class_0_all_zero}, class_1 all-nonzero={class_1_all_nonzero}"
-                    ),
-                    evidence={
-                        "class_0_range": [min_0, max_0],
-                        "class_1_range": [min_1, max_1],
-                        "class_0_all_zero": bool(class_0_all_zero),
-                        "class_1_all_nonzero": bool(class_1_all_nonzero),
-                    },
-                    recommendation=(
-                        f"Feature '{feature}' is likely derived from the target. "
-                        f"Remove it or investigate its data source."
-                    ),
-                ))
+            if (class_0_all_zero and class_1_all_nonzero) or (
+                class_1_all_zero and class_0_all_nonzero
+            ):
+                findings.append(
+                    LeakageFinding(
+                        check_name="perfect_class_separation",
+                        severity=LeakageSeverity.CRITICAL,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has zero/nonzero split perfectly aligned with target: "
+                            f"class_0 all-zero={class_0_all_zero}, class_1 all-nonzero={class_1_all_nonzero}"
+                        ),
+                        evidence={
+                            "class_0_range": [min_0, max_0],
+                            "class_1_range": [min_1, max_1],
+                            "class_0_all_zero": bool(class_0_all_zero),
+                            "class_1_all_nonzero": bool(class_1_all_nonzero),
+                        },
+                        recommendation=(
+                            f"Feature '{feature}' is likely derived from the target. "
+                            f"Remove it or investigate its data source."
+                        ),
+                    )
+                )
                 continue
 
             # Compute overlap fraction
@@ -660,41 +675,45 @@ def check_perfect_class_separation(
             overlap_fraction = overlap / combined_range
 
             if overlap_fraction < 0.01:
-                findings.append(LeakageFinding(
-                    check_name="perfect_class_separation",
-                    severity=LeakageSeverity.CRITICAL,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' perfectly separates target classes "
-                        f"(overlap={overlap_fraction:.4f}, <1%): "
-                        f"class_0=[{min_0:.2f}, {max_0:.2f}], class_1=[{min_1:.2f}, {max_1:.2f}]"
-                    ),
-                    evidence={
-                        "class_0_range": [min_0, max_0],
-                        "class_1_range": [min_1, max_1],
-                        "overlap_fraction": overlap_fraction,
-                    },
-                    recommendation=(
-                        f"Feature '{feature}' has near-zero overlap between classes — "
-                        f"this strongly suggests data leakage. Remove or investigate."
-                    ),
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="perfect_class_separation",
+                        severity=LeakageSeverity.CRITICAL,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' perfectly separates target classes "
+                            f"(overlap={overlap_fraction:.4f}, <1%): "
+                            f"class_0=[{min_0:.2f}, {max_0:.2f}], class_1=[{min_1:.2f}, {max_1:.2f}]"
+                        ),
+                        evidence={
+                            "class_0_range": [min_0, max_0],
+                            "class_1_range": [min_1, max_1],
+                            "overlap_fraction": overlap_fraction,
+                        },
+                        recommendation=(
+                            f"Feature '{feature}' has near-zero overlap between classes — "
+                            f"this strongly suggests data leakage. Remove or investigate."
+                        ),
+                    )
+                )
             elif overlap_fraction < 0.05:
-                findings.append(LeakageFinding(
-                    check_name="perfect_class_separation",
-                    severity=LeakageSeverity.HIGH,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has very low class overlap "
-                        f"(overlap={overlap_fraction:.4f}, <5%)"
-                    ),
-                    evidence={
-                        "class_0_range": [min_0, max_0],
-                        "class_1_range": [min_1, max_1],
-                        "overlap_fraction": overlap_fraction,
-                    },
-                    recommendation=f"Investigate whether '{feature}' encodes the target",
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="perfect_class_separation",
+                        severity=LeakageSeverity.HIGH,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has very low class overlap "
+                            f"(overlap={overlap_fraction:.4f}, <5%)"
+                        ),
+                        evidence={
+                            "class_0_range": [min_0, max_0],
+                            "class_1_range": [min_1, max_1],
+                            "overlap_fraction": overlap_fraction,
+                        },
+                        recommendation=f"Investigate whether '{feature}' encodes the target",
+                    )
+                )
 
         except Exception as e:
             logger.warning(f"Perfect class separation check failed for '{feature}': {e}")
@@ -751,37 +770,45 @@ def check_zero_variance_within_class(
             std_1_is_zero = std_1 < _ZERO_STD or np.isnan(std_1)
 
             if std_0_is_zero and std_1_is_zero and abs(mean_0 - mean_1) > 1e-10:
-                findings.append(LeakageFinding(
-                    check_name="zero_variance_within_class",
-                    severity=LeakageSeverity.CRITICAL,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has zero variance in BOTH classes with different "
-                        f"constants (class_0={mean_0:.4f}, class_1={mean_1:.4f}) — "
-                        f"degenerate perfect separation"
-                    ),
-                    evidence={
-                        "class_0_std": std_0, "class_1_std": std_1,
-                        "class_0_mean": mean_0, "class_1_mean": mean_1,
-                    },
-                    recommendation=f"Feature '{feature}' is a deterministic function of the target. Remove it.",
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="zero_variance_within_class",
+                        severity=LeakageSeverity.CRITICAL,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has zero variance in BOTH classes with different "
+                            f"constants (class_0={mean_0:.4f}, class_1={mean_1:.4f}) — "
+                            f"degenerate perfect separation"
+                        ),
+                        evidence={
+                            "class_0_std": std_0,
+                            "class_1_std": std_1,
+                            "class_0_mean": mean_0,
+                            "class_1_mean": mean_1,
+                        },
+                        recommendation=f"Feature '{feature}' is a deterministic function of the target. Remove it.",
+                    )
+                )
             elif (std_0_is_zero or std_1_is_zero) and abs(mean_0 - mean_1) > 1e-10:
-                findings.append(LeakageFinding(
-                    check_name="zero_variance_within_class",
-                    severity=LeakageSeverity.HIGH,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has zero variance in one class "
-                        f"(std_0={std_0:.4f}, std_1={std_1:.4f}, "
-                        f"mean_0={mean_0:.4f}, mean_1={mean_1:.4f})"
-                    ),
-                    evidence={
-                        "class_0_std": std_0, "class_1_std": std_1,
-                        "class_0_mean": mean_0, "class_1_mean": mean_1,
-                    },
-                    recommendation=f"Investigate '{feature}' — constant value in one class suggests leakage",
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="zero_variance_within_class",
+                        severity=LeakageSeverity.HIGH,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has zero variance in one class "
+                            f"(std_0={std_0:.4f}, std_1={std_1:.4f}, "
+                            f"mean_0={mean_0:.4f}, mean_1={mean_1:.4f})"
+                        ),
+                        evidence={
+                            "class_0_std": std_0,
+                            "class_1_std": std_1,
+                            "class_0_mean": mean_0,
+                            "class_1_mean": mean_1,
+                        },
+                        recommendation=f"Investigate '{feature}' — constant value in one class suggests leakage",
+                    )
+                )
 
         except Exception as e:
             logger.warning(f"Zero variance check failed for '{feature}': {e}")
@@ -841,29 +868,33 @@ def check_mutual_information(
             mi_normalized = mi_raw / normalizer if normalizer > 0 else mi_raw
 
             if mi_normalized > 0.9:
-                findings.append(LeakageFinding(
-                    check_name="mutual_information",
-                    severity=LeakageSeverity.CRITICAL,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has implausibly high mutual information "
-                        f"with target (MI={mi_raw:.4f}, normalized={mi_normalized:.4f})"
-                    ),
-                    evidence={"mi_raw": mi_raw, "mi_normalized": mi_normalized},
-                    recommendation=f"MI > 0.9 indicates '{feature}' nearly determines the target. Investigate data source.",
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="mutual_information",
+                        severity=LeakageSeverity.CRITICAL,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has implausibly high mutual information "
+                            f"with target (MI={mi_raw:.4f}, normalized={mi_normalized:.4f})"
+                        ),
+                        evidence={"mi_raw": mi_raw, "mi_normalized": mi_normalized},
+                        recommendation=f"MI > 0.9 indicates '{feature}' nearly determines the target. Investigate data source.",
+                    )
+                )
             elif mi_normalized > 0.7:
-                findings.append(LeakageFinding(
-                    check_name="mutual_information",
-                    severity=LeakageSeverity.HIGH,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' has suspiciously high mutual information "
-                        f"with target (MI={mi_raw:.4f}, normalized={mi_normalized:.4f})"
-                    ),
-                    evidence={"mi_raw": mi_raw, "mi_normalized": mi_normalized},
-                    recommendation=f"Review '{feature}' — high MI may indicate target leakage",
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="mutual_information",
+                        severity=LeakageSeverity.HIGH,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has suspiciously high mutual information "
+                            f"with target (MI={mi_raw:.4f}, normalized={mi_normalized:.4f})"
+                        ),
+                        evidence={"mi_raw": mi_raw, "mi_normalized": mi_normalized},
+                        recommendation=f"Review '{feature}' — high MI may indicate target leakage",
+                    )
+                )
 
     except ImportError:
         logger.warning("sklearn not available for mutual information check")
@@ -923,29 +954,31 @@ def check_feature_target_logical_dependency(
 
             if n_nonzero_when_0 <= tolerance_0 and n_zero_when_1 <= tolerance_1:
                 # Also check the reverse: feature == 0 IFF target == 0
-                findings.append(LeakageFinding(
-                    check_name="logical_dependency",
-                    severity=LeakageSeverity.CRITICAL,
-                    feature=feature,
-                    description=(
-                        f"Feature '{feature}' is logically equivalent to target: "
-                        f"nonzero_when_target=0: {n_nonzero_when_0}/{n_class_0} "
-                        f"(<{tolerance_0}), zero_when_target=1: {n_zero_when_1}/{n_class_1} "
-                        f"(<{tolerance_1})"
-                    ),
-                    evidence={
-                        "n_nonzero_when_target_0": n_nonzero_when_0,
-                        "n_zero_when_target_1": n_zero_when_1,
-                        "n_class_0": n_class_0,
-                        "n_class_1": n_class_1,
-                        "tolerance_0": tolerance_0,
-                        "tolerance_1": tolerance_1,
-                    },
-                    recommendation=(
-                        f"Feature '{feature}' value is a tautological indicator of the target. "
-                        f"This creates a model that 'predicts' rather than learns. Remove it."
-                    ),
-                ))
+                findings.append(
+                    LeakageFinding(
+                        check_name="logical_dependency",
+                        severity=LeakageSeverity.CRITICAL,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' is logically equivalent to target: "
+                            f"nonzero_when_target=0: {n_nonzero_when_0}/{n_class_0} "
+                            f"(<{tolerance_0}), zero_when_target=1: {n_zero_when_1}/{n_class_1} "
+                            f"(<{tolerance_1})"
+                        ),
+                        evidence={
+                            "n_nonzero_when_target_0": n_nonzero_when_0,
+                            "n_zero_when_target_1": n_zero_when_1,
+                            "n_class_0": n_class_0,
+                            "n_class_1": n_class_1,
+                            "tolerance_0": tolerance_0,
+                            "tolerance_1": tolerance_1,
+                        },
+                        recommendation=(
+                            f"Feature '{feature}' value is a tautological indicator of the target. "
+                            f"This creates a model that 'predicts' rather than learns. Remove it."
+                        ),
+                    )
+                )
 
         except Exception as e:
             logger.warning(f"Logical dependency check failed for '{feature}': {e}")
@@ -978,7 +1011,9 @@ def check_single_feature_auc(
 
     findings = []
     target = df[target_variable].values
-    unique_classes = np.unique(target[~np.isnan(target)] if np.issubdtype(target.dtype, np.floating) else target)
+    unique_classes = np.unique(
+        target[~np.isnan(target)] if np.issubdtype(target.dtype, np.floating) else target
+    )
 
     if len(unique_classes) != 2:
         return findings  # AUC only defined for binary targets
@@ -1003,25 +1038,27 @@ def check_single_feature_auc(
             else:
                 continue
 
-            findings.append(LeakageFinding(
-                check_name="single_feature_auc",
-                severity=severity,
-                feature=feature,
-                description=(
-                    f"Feature '{feature}' alone achieves AUC={effective_auc:.3f} "
-                    f"against target '{target_variable}'. This indicates the feature "
-                    f"nearly perfectly predicts the target by itself."
-                ),
-                evidence={
-                    "auc": round(effective_auc, 4),
-                    "raw_auc": round(auc, 4),
-                    "n_samples": int(mask.sum()),
-                },
-                recommendation=(
-                    f"Feature '{feature}' is likely derived from or tautologically "
-                    f"related to the target. Remove it to prevent leakage."
-                ),
-            ))
+            findings.append(
+                LeakageFinding(
+                    check_name="single_feature_auc",
+                    severity=severity,
+                    feature=feature,
+                    description=(
+                        f"Feature '{feature}' alone achieves AUC={effective_auc:.3f} "
+                        f"against target '{target_variable}'. This indicates the feature "
+                        f"nearly perfectly predicts the target by itself."
+                    ),
+                    evidence={
+                        "auc": round(effective_auc, 4),
+                        "raw_auc": round(auc, 4),
+                        "n_samples": int(mask.sum()),
+                    },
+                    recommendation=(
+                        f"Feature '{feature}' is likely derived from or tautologically "
+                        f"related to the target. Remove it to prevent leakage."
+                    ),
+                )
+            )
 
         except Exception as e:
             logger.warning(f"Single-feature AUC check failed for '{feature}': {e}")
@@ -1078,27 +1115,29 @@ def check_categorical_class_separation(
             else:
                 continue
 
-            findings.append(LeakageFinding(
-                check_name="categorical_class_separation",
-                severity=severity,
-                feature=feature,
-                description=(
-                    f"Categorical feature '{feature}' has Cramér's V={cramers_v:.3f} "
-                    f"with target '{target_variable}' (p={p_value:.2e}). "
-                    f"This indicates very high association."
-                ),
-                evidence={
-                    "cramers_v": round(cramers_v, 4),
-                    "chi2": round(chi2, 2),
-                    "p_value": p_value,
-                    "n_categories": int(contingency.shape[0]),
-                    "n_samples": int(n),
-                },
-                recommendation=(
-                    f"Categorical feature '{feature}' is strongly associated with "
-                    f"the target. Investigate whether it is derived from or a proxy for the target."
-                ),
-            ))
+            findings.append(
+                LeakageFinding(
+                    check_name="categorical_class_separation",
+                    severity=severity,
+                    feature=feature,
+                    description=(
+                        f"Categorical feature '{feature}' has Cramér's V={cramers_v:.3f} "
+                        f"with target '{target_variable}' (p={p_value:.2e}). "
+                        f"This indicates very high association."
+                    ),
+                    evidence={
+                        "cramers_v": round(cramers_v, 4),
+                        "chi2": round(chi2, 2),
+                        "p_value": p_value,
+                        "n_categories": int(contingency.shape[0]),
+                        "n_samples": int(n),
+                    },
+                    recommendation=(
+                        f"Categorical feature '{feature}' is strongly associated with "
+                        f"the target. Investigate whether it is derived from or a proxy for the target."
+                    ),
+                )
+            )
 
         except Exception as e:
             logger.warning(f"Categorical class separation check failed for '{feature}': {e}")

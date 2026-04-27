@@ -18,9 +18,17 @@ logger = logging.getLogger(__name__)
 
 # Type alias for intent types
 IntentType = Literal[
-    "causal_effect", "performance_gap", "segment_analysis", "experiment_design",
-    "prediction", "resource_allocation", "explanation", "system_health",
-    "drift_check", "feedback", "general"
+    "causal_effect",
+    "performance_gap",
+    "segment_analysis",
+    "experiment_design",
+    "prediction",
+    "resource_allocation",
+    "explanation",
+    "system_health",
+    "drift_check",
+    "feedback",
+    "general",
 ]
 
 

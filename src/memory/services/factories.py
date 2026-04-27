@@ -681,7 +681,9 @@ async def get_async_supabase_client():
     logger.info(f"Creating async Supabase client for: {url}")
 
     try:
-        _async_supabase_client = await acreate_client(url, key, options=_build_async_supabase_options())
+        _async_supabase_client = await acreate_client(
+            url, key, options=_build_async_supabase_options()
+        )
         return _async_supabase_client
     except Exception as e:
         raise ServiceConnectionError("Supabase", f"Failed to create async client: {e}", e) from e

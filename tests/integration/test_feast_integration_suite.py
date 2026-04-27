@@ -532,19 +532,13 @@ def test_get_online_features_round_trips_pushed_values(feast_client: Any) -> Non
         returned_ids = list(online_dict[ENTITY_JOIN_KEY])
         expected_ids = list(push_df[ENTITY_JOIN_KEY])
         assert sorted(returned_ids) == sorted(expected_ids), (
-            f"online entity id set mismatch — sent {expected_ids!r}, "
-            f"got {returned_ids!r}"
+            f"online entity id set mismatch — sent {expected_ids!r}, got {returned_ids!r}"
         )
         for col in SELECTED_FEATURES:
-            returned_by_id = dict(
-                zip(online_dict[ENTITY_JOIN_KEY], online_dict[col], strict=True)
-            )
-            expected_by_id = dict(
-                zip(push_df[ENTITY_JOIN_KEY], push_df[col], strict=True)
-            )
+            returned_by_id = dict(zip(online_dict[ENTITY_JOIN_KEY], online_dict[col], strict=True))
+            expected_by_id = dict(zip(push_df[ENTITY_JOIN_KEY], push_df[col], strict=True))
             assert returned_by_id == expected_by_id, (
-                f"{col} round-trip mismatch — sent {expected_by_id!r}, "
-                f"got {returned_by_id!r}"
+                f"{col} round-trip mismatch — sent {expected_by_id!r}, got {returned_by_id!r}"
             )
 
     finally:
@@ -603,8 +597,7 @@ def test_re_registration_with_identical_spec_is_idempotent(
         )
         if not second.get("registered"):
             pytest.fail(
-                f"second register_feature_view failed (Feast apply was "
-                f"NOT idempotent): {second!r}"
+                f"second register_feature_view failed (Feast apply was NOT idempotent): {second!r}"
             )
 
         # Exactly one FV with this name in list_feature_views().
@@ -622,8 +615,7 @@ def test_re_registration_with_identical_spec_is_idempotent(
             f"second={second_features!r}"
         )
         assert second_fv.ttl == first_ttl, (
-            f"TTL drift across re-registration: first={first_ttl!r} "
-            f"second={second_fv.ttl!r}"
+            f"TTL drift across re-registration: first={first_ttl!r} second={second_fv.ttl!r}"
         )
 
     finally:
@@ -735,9 +727,7 @@ def test_schema_deep_diff_detects_ttl_change() -> None:
 def test_schema_deep_diff_detects_schema_field_add() -> None:
     """Drift case 2 — adding a field produces detectable proto-byte drift."""
     name = "test_6b_diff_schema_add"
-    base = _build_minimal_feature_view(
-        name, ttl=TEST_TTL, feature_names=["trx_count"]
-    )
+    base = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
     drifted = _build_minimal_feature_view(
         name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"]
     )
@@ -760,12 +750,8 @@ def test_schema_deep_diff_detects_schema_field_remove() -> None:
     asymmetric. This test catches the symmetric-detection regression.
     """
     name = "test_6b_diff_schema_remove"
-    base = _build_minimal_feature_view(
-        name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"]
-    )
-    drifted = _build_minimal_feature_view(
-        name, ttl=TEST_TTL, feature_names=["trx_count"]
-    )
+    base = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"])
+    drifted = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
 
     base_bytes = _proto_bytes(base)
     drifted_bytes = _proto_bytes(drifted)
@@ -817,12 +803,8 @@ def test_schema_deep_diff_treats_identical_specs_as_equal() -> None:
     proto-byte comparison is meaningful.
     """
     name = "test_6b_diff_identical"
-    a = _build_minimal_feature_view(
-        name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES)
-    )
-    b = _build_minimal_feature_view(
-        name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES)
-    )
+    a = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES))
+    b = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES))
 
     assert _proto_bytes(a) == _proto_bytes(b), (
         "Two FVs constructed with identical kwargs produced different "

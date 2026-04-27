@@ -640,9 +640,7 @@ class ResultsAnalysisService:
         if not ci_coverage:
             suggestions.append("Twin uncertainty estimates may need widening")
         if abs(prediction_error) > 0.1:
-            suggestions.append(
-                f"Twin {direction} effect by {prediction_error_percent:.0f}%"
-            )
+            suggestions.append(f"Twin {direction} effect by {prediction_error_percent:.0f}%")
 
         recommendations: Dict[str, Any] = {
             "needs_calibration": prediction_error_percent > 20,

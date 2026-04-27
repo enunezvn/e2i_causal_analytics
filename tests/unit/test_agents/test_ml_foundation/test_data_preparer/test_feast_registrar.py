@@ -208,9 +208,7 @@ async def test_register_features_stale_features_warning(mock_state_with_train_da
     assert result["feast_blocked"] is True
     assert result["feast_registration_status"] == "blocked_stale_features"
     # blocking_issues must be appended so the QC gate forces gate_passed=False
-    assert any(
-        "Feast features stale" in issue for issue in result.get("blocking_issues", [])
-    )
+    assert any("Feast features stale" in issue for issue in result.get("blocking_issues", []))
     # Explicit type check — adapter._feast_client=None means the
     # ``if feast_client is not None`` branch in the registrar is skipped,
     # so the key may be absent. When present (e.g. in fallback paths), it
@@ -373,9 +371,7 @@ async def test_qc_gate_blocks_on_stale_feast(mock_state_with_train_data, monkeyp
     assert any("Freshness" in w for w in result["feast_warnings"])
     # blocking_issues appended so _finalize_output's gate logic forces gate_passed=False
     assert "blocking_issues" in result
-    assert any(
-        "Feast features stale" in issue for issue in result["blocking_issues"]
-    )
+    assert any("Feast features stale" in issue for issue in result["blocking_issues"])
 
 
 @pytest.mark.asyncio
@@ -407,8 +403,7 @@ async def test_qc_gate_allows_with_allow_stale_env(mock_state_with_train_data, m
     assert result.get("feast_registration_status") != "blocked_stale_features"
     # blocking_issues NOT appended in the bypass path
     assert not any(
-        "Feast features stale" in issue
-        for issue in (result.get("blocking_issues", []) or [])
+        "Feast features stale" in issue for issue in (result.get("blocking_issues", []) or [])
     )
 
 
@@ -455,6 +450,4 @@ async def test_stale_feast_blocks_finalize_output_gate(mock_state_with_train_dat
     # Gate must be blocked because of the Feast blocking_issue
     assert final_updates["gate_passed"] is False
     assert final_updates["qc_passed"] is False
-    assert any(
-        "Feast features stale" in blocker for blocker in final_updates["blockers"]
-    )
+    assert any("Feast features stale" in blocker for blocker in final_updates["blockers"])

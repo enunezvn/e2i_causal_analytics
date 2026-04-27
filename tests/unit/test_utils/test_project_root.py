@@ -181,9 +181,7 @@ class TestMultiMarker:
             "Cargo.toml",  # any-other-marker the caller chooses
         ],
     )
-    def test_finds_root_by_custom_marker(
-        self, tmp_path: Path, marker_name: str
-    ) -> None:
+    def test_finds_root_by_custom_marker(self, tmp_path: Path, marker_name: str) -> None:
         """Any of the supplied markers — file or directory — must resolve
         the root. The skills loader uses ``(\"pyproject.toml\", \".claude\")``
         because some checkouts predate ``pyproject.toml`` adoption and
@@ -211,9 +209,7 @@ class TestMultiMarker:
         )
         assert resolved == root.resolve()
 
-    def test_default_markers_do_not_match_dot_claude(
-        self, tmp_path: Path
-    ) -> None:
+    def test_default_markers_do_not_match_dot_claude(self, tmp_path: Path) -> None:
         """Backward compat: with the default marker set, a tree anchored
         only on ``.claude`` must NOT resolve. Callers that need that
         anchor have to opt in via ``markers=...``.

@@ -426,7 +426,9 @@ class PredictionSynthesizerAgent:
         Returns:
             Handoff dictionary for other agents
         """
-        ensemble: Dict[str, Any] = dict(output.ensemble_prediction) if output.ensemble_prediction else {}
+        ensemble: Dict[str, Any] = (
+            dict(output.ensemble_prediction) if output.ensemble_prediction else {}
+        )
 
         recommendations: List[str] = []
         if output.status == "failed":
@@ -439,7 +441,9 @@ class PredictionSynthesizerAgent:
         elif ensemble.get("confidence", 0) < 0.5:
             recommendations.append("Low confidence - may need more data or model retraining")
 
-        context: Dict[str, Any] = dict(output.prediction_context) if output.prediction_context else {}
+        context: Dict[str, Any] = (
+            dict(output.prediction_context) if output.prediction_context else {}
+        )
 
         return {
             "agent": "prediction_synthesizer",

@@ -318,18 +318,24 @@ class SegmentCATECalculator:
 
         model = CausalForestDML(
             model_y=RandomForestRegressor(
-                n_estimators=50, min_samples_leaf=5,
-                min_impurity_decrease=1e-7, random_state=self.config.random_state,
+                n_estimators=50,
+                min_samples_leaf=5,
+                min_impurity_decrease=1e-7,
+                random_state=self.config.random_state,
             ),
             model_t=(
                 RandomForestClassifier(
-                    n_estimators=50, min_samples_leaf=5,
-                    min_impurity_decrease=1e-7, random_state=self.config.random_state,
+                    n_estimators=50,
+                    min_samples_leaf=5,
+                    min_impurity_decrease=1e-7,
+                    random_state=self.config.random_state,
                 )
                 if is_binary
                 else RandomForestRegressor(
-                    n_estimators=50, min_samples_leaf=5,
-                    min_impurity_decrease=1e-7, random_state=self.config.random_state,
+                    n_estimators=50,
+                    min_samples_leaf=5,
+                    min_impurity_decrease=1e-7,
+                    random_state=self.config.random_state,
                 )
             ),
             discrete_treatment=is_binary,
@@ -361,12 +367,16 @@ class SegmentCATECalculator:
 
         model = LinearDML(
             model_y=RandomForestRegressor(
-                n_estimators=50, min_samples_leaf=5,
-                min_impurity_decrease=1e-7, random_state=self.config.random_state,
+                n_estimators=50,
+                min_samples_leaf=5,
+                min_impurity_decrease=1e-7,
+                random_state=self.config.random_state,
             ),
             model_t=RandomForestClassifier(
-                n_estimators=50, min_samples_leaf=5,
-                min_impurity_decrease=1e-7, random_state=self.config.random_state,
+                n_estimators=50,
+                min_samples_leaf=5,
+                min_impurity_decrease=1e-7,
+                random_state=self.config.random_state,
             ),
             discrete_treatment=True,  # Required for binary treatment
             random_state=self.config.random_state,
