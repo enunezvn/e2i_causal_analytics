@@ -721,7 +721,7 @@ class TestSelectThreshold:
     1A-M-6 will move these into ``test_threshold_selection.py``.
     """
 
-    def test_select_threshold_clamps_non_finite_to_default(self):
+    def test_select_threshold_clamps_inf_sentinel_within_validation_branch(self):
         """When sklearn's roc_curve returns the inf sentinel, the helper
         must surface 0.5 (not inf, NaN, or out-of-range values).
 

@@ -1098,8 +1098,6 @@ def _select_threshold(
         arrays absent, threshold pinned to 0.5). Downstream consumers
         (mlflow_logger, audit code) rely on these exact literals.
     """
-    del cost_matrix  # reserved for future cost-aware selection (see docstring)
-
     if y_validation is not None and y_validation_proba is not None:
         return _compute_optimal_threshold(y_validation, y_validation_proba), "validation"
 
