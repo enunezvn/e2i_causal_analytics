@@ -48,6 +48,11 @@ from typing import Any
 
 import pytest
 
+# psycopg2 is a transitive dep of the Supabase client and the ETL itself,
+# but unit-only environments (e.g. minimal CI lanes) may install without it.
+# Skip the whole module rather than ImportError when the binary is absent.
+psycopg2 = pytest.importorskip("psycopg2")
+
 # Module-level skip: developers must opt in AND have a reachable Postgres URL
 # before the suite executes. This stops `pytest tests/integration/` from
 # trying to reach prod Supabase when the .env happens to ship a connection
@@ -75,8 +80,6 @@ TRIGGERS_PER_HCP_BRAND_DAY: int = 3
 @pytest.fixture(scope="module")
 def db_conn() -> Any:
     """Open a single psycopg2 connection for the module's tests."""
-    import psycopg2  # local import: optional in unit-only environments
-
     conn = psycopg2.connect(os.environ["SUPABASE_DB_URL"])
     yield conn
     conn.close()
@@ -213,11 +216,16 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     # Teardown: delete in reverse FK order. business_metrics first (its
     # hcp_id FK has ON DELETE SET NULL but we want the rows gone), then
     # triggers, patient_journeys, hcp_profiles.
+    #
+    # Since the metric_id is now md5-hashed (post fix-up for VARCHAR(50)
+    # overflow), we cannot pattern-match it; instead filter on the
+    # business_metrics.hcp_id column whose values still carry the
+    # test_run_id prefix.
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM business_metrics WHERE metric_id LIKE %s",
-                (f"hcp_rollup_hcp_{test_run_id}_%",),
+                "DELETE FROM business_metrics WHERE hcp_id LIKE %s",
+                (f"hcp_{test_run_id}_%",),
             )
             cur.execute(
                 "DELETE FROM triggers WHERE trigger_id LIKE %s",
@@ -253,12 +261,14 @@ def test_per_hcp_rollup_materialises_rows(
     assert result["rows_affected"] >= NUM_HCPS * len(BRANDS) * NUM_DAYS
 
     with db_conn.cursor() as cur:
+        # Filter by hcp_id (still has the test_run_id prefix) since
+        # metric_id is md5-hashed and no longer pattern-matchable.
         cur.execute(
             """
             SELECT COUNT(*) FROM business_metrics
-             WHERE metric_id LIKE %s
+             WHERE hcp_id LIKE %s
             """,
-            (f"hcp_rollup_hcp_{synthetic_dataset['test_run_id']}_%",),
+            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
         )
         row = cur.fetchone()
         count = row[0] if row else 0
@@ -286,10 +296,10 @@ def test_market_share_sums_to_one_per_territory(
                    SUM(bm.market_share)
               FROM business_metrics bm
               JOIN hcp_profiles      hp ON bm.hcp_id = hp.hcp_id
-             WHERE bm.metric_id LIKE %s
+             WHERE bm.hcp_id LIKE %s
              GROUP BY hp.territory_id, bm.brand, bm.metric_date
             """,
-            (f"hcp_rollup_hcp_{synthetic_dataset['test_run_id']}_%",),
+            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
         )
         groups = cur.fetchall()
 
@@ -312,8 +322,8 @@ def test_idempotent_rerun(db_conn: Any, synthetic_dataset: dict) -> None:
 
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM business_metrics WHERE metric_id LIKE %s",
-            (f"hcp_rollup_hcp_{synthetic_dataset['test_run_id']}_%",),
+            "SELECT COUNT(*) FROM business_metrics WHERE hcp_id LIKE %s",
+            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
         )
         row = cur.fetchone()
         first_count = row[0] if row else 0
@@ -326,8 +336,8 @@ def test_idempotent_rerun(db_conn: Any, synthetic_dataset: dict) -> None:
 
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM business_metrics WHERE metric_id LIKE %s",
-            (f"hcp_rollup_hcp_{synthetic_dataset['test_run_id']}_%",),
+            "SELECT COUNT(*) FROM business_metrics WHERE hcp_id LIKE %s",
+            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
         )
         row = cur.fetchone()
         second_count = row[0] if row else 0

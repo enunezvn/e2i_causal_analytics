@@ -21,9 +21,10 @@ data); see ``tests/integration/test_business_metrics_per_hcp_etl_integration.py`
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,12 +87,19 @@ def test_resolve_window_parses_iso_z_suffix() -> None:
 
 
 def test_resolve_window_parses_iso_date_only() -> None:
-    """Plain ISO dates (no time component) parse to naive datetimes."""
+    """Plain ISO dates (no time component) parse cleanly.
+
+    ``datetime.fromisoformat`` of a date string yields a tz-naive datetime
+    at 00:00:00; ``_resolve_window`` then normalises it to UTC-aware (see
+    ``test_resolve_window_normalises_naive_inputs_to_utc`` for the
+    tz-mixing case).
+    """
     start, end = etl._resolve_window("2024-01-01", "2024-01-02")
-    # `datetime.fromisoformat` of a date string yields a naive datetime at
-    # 00:00:00; we compare structurally rather than tz-aware-ly.
     assert start.year == 2024 and start.day == 1
     assert end.year == 2024 and end.day == 2
+    # Post-fix: both are tz-aware UTC.
+    assert start.tzinfo is not None
+    assert end.tzinfo is not None
 
 
 def test_resolve_window_rejects_inverted_range() -> None:
@@ -144,15 +152,24 @@ class TestSQLShape:
         assert "%(metric_id_prefix)s" in sql
         assert "%(metric_type)s" in sql
 
-    def test_metric_id_is_deterministic(self) -> None:
-        """metric_id is built from the prefix + hcp_id + brand + date."""
+    def test_sql_metric_id_uses_md5(self) -> None:
+        """metric_id is built from the prefix + md5(natural-key).
+
+        The SQL uses ``md5(hcp_id ':' brand ':' metric_date)`` so the
+        result fits ``business_metrics.metric_id VARCHAR(50)`` (constant 43
+        chars). The component order + separator MUST match
+        ``_build_metric_id`` in the source module — this test pins the
+        SQL side so the two cannot drift silently.
+        """
         sql = etl.INSERT_PER_HCP_ROLLUP_SQL
-        # The exact concat is what guarantees idempotent re-runs map to the
-        # same row.
+        assert "md5(" in sql, "metric_id must hash with md5 to fit VARCHAR(50)"
+        # Pin the natural-key component order: hcp_id : brand : metric_date.
+        # Whitespace in the SQL is normalised before matching so newlines
+        # / indentation don't break the assertion.
+        normalised = re.sub(r"\s+", " ", sql)
         assert (
-            "%(metric_id_prefix)s || '_' || hbd.hcp_id || '_' || "
-            "hbd.brand::TEXT || '_' || hbd.metric_date::TEXT"
-        ) in sql
+            "hbd.hcp_id || ':' || hbd.brand::TEXT || ':' || hbd.metric_date::TEXT"
+        ) in normalised, "natural-key component order must match _build_metric_id"
 
     def test_on_conflict_uses_pk(self) -> None:
         """ON CONFLICT targets metric_id (the PK), not a (hcp_id, brand,
@@ -223,6 +240,85 @@ class TestSQLShape:
         assert re.search(r"t\.trigger_timestamp\s*<\s*%\(end_date\)s", sql), (
             "missing end_date < filter"
         )
+
+
+# =============================================================================
+# _build_metric_id — pins VARCHAR(50) length property
+# =============================================================================
+
+
+def test_metric_id_fits_in_varchar_50() -> None:
+    """metric_id must fit ``business_metrics.metric_id VARCHAR(50)``.
+
+    Worst-case inputs: max-length ``hcp_id`` (VARCHAR(20)), longest
+    ``brand_type`` enum value ``Remibrutinib`` (12 chars), and an ISO
+    date string (10 chars). With md5 the result is a constant 43 chars.
+    """
+    long_hcp = "H" * 20  # max VARCHAR(20) per hcp_profiles.hcp_id
+    long_brand = "Remibrutinib"  # longest brand_type enum value
+    iso_date = date(2030, 12, 31)
+    result = etl._build_metric_id(long_hcp, long_brand, iso_date)
+    assert len(result) <= 50, (
+        f"metric_id length {len(result)} exceeds VARCHAR(50): {result}"
+    )
+    # Same inputs MUST yield the same id (idempotency contract).
+    assert etl._build_metric_id(long_hcp, long_brand, iso_date) == result
+    # Constant length 43 = len('hcp_rollup_') + 32-hex md5 digest.
+    assert len(result) == 43
+
+
+def test_metric_id_format_matches_sql_md5() -> None:
+    """The Python helper must produce the same byte string as the SQL md5.
+
+    Postgres' ``md5()`` returns the lowercase hex digest of the UTF-8 input
+    — ``hashlib.md5(...).hexdigest()`` matches that exactly. We re-implement
+    the natural-key concat here to assert the helper does not silently
+    diverge.
+    """
+    hcp_id = "hcp_test_42"
+    brand = "Fabhalta"
+    metric_date = date(2024, 6, 15)
+    natural_key = f"{hcp_id}:{brand}:{metric_date.isoformat()}"
+    expected_digest = hashlib.md5(natural_key.encode("utf-8")).hexdigest()
+    expected = f"{etl.METRIC_ID_PREFIX}_{expected_digest}"
+    assert etl._build_metric_id(hcp_id, brand, metric_date) == expected
+
+
+def test_metric_id_changes_when_natural_key_changes() -> None:
+    """Different natural keys must yield different ids (no collisions on
+    distinct inputs).
+
+    md5 is not collision-free in general but for these short, structured
+    inputs distinct triples are overwhelmingly distinct digests.
+    """
+    a = etl._build_metric_id("hcp_1", "Remibrutinib", date(2024, 1, 1))
+    b = etl._build_metric_id("hcp_2", "Remibrutinib", date(2024, 1, 1))
+    c = etl._build_metric_id("hcp_1", "Fabhalta", date(2024, 1, 1))
+    d = etl._build_metric_id("hcp_1", "Remibrutinib", date(2024, 1, 2))
+    assert len({a, b, c, d}) == 4
+
+
+# =============================================================================
+# _resolve_window — tz-mixing footgun
+# =============================================================================
+
+
+def test_resolve_window_normalises_naive_inputs_to_utc() -> None:
+    """Mixing ISO date (naive) + ISO datetime+tz (aware) must NOT TypeError.
+
+    Before the I3 fix, ``datetime.fromisoformat("2024-01-01")`` returned a
+    naive datetime which then collided with the aware ``end_dt`` in the
+    ``start_dt >= end_dt`` comparison, raising ``TypeError`` instead of
+    the friendlier ``ValueError``.
+    """
+    start, end = etl._resolve_window("2024-01-01", "2024-01-02T00:00:00+00:00")
+    # Both ends are now tz-aware (UTC).
+    assert start.tzinfo is not None
+    assert end.tzinfo is not None
+    assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert end == datetime(2024, 1, 2, tzinfo=timezone.utc)
+    # 24-hour window.
+    assert (end - start).total_seconds() == 86400
 
 
 # =============================================================================

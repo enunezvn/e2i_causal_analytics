@@ -20,10 +20,21 @@ The plan asks for ``ON CONFLICT (hcp_id, brand, metric_date) DO UPDATE`` but
 ``business_metrics`` PRIMARY KEY is ``metric_id VARCHAR(50)`` and migration
 033 did NOT add a UNIQUE constraint on the natural key. Adding such a
 constraint from inside an ETL would be poor hygiene (mixes schema migration
-with rollup logic). Instead we synthesise a deterministic ``metric_id`` of
-the shape ``hcp_rollup_<hcp_id>_<brand>_<YYYY-MM-DD>`` and rely on the
+with rollup logic). Instead we synthesise a deterministic ``metric_id`` by
+md5-hashing the natural key ``(hcp_id, brand, metric_date)`` and rely on the
 existing PK for ``ON CONFLICT (metric_id)``. This achieves the idempotency
 intent of the plan without DDL drift.
+
+The hash is required because the column is ``VARCHAR(50)`` and a naive
+concat of ``hcp_rollup_<hcp_id>_<brand>_<YYYY-MM-DD>`` can exceed 50
+characters in the worst case (max-length hcp_id + ``Remibrutinib`` + ISO
+date). The format is now ``hcp_rollup_<md5_hex_32>`` — a constant 43 chars
+that fits comfortably and is still deterministic (md5 of the same input
+always yields the same digest, so re-runs map to the same row).
+
+Both the SQL ``md5(...)`` call and the Python helper ``_build_metric_id``
+must produce byte-identical strings; see ``test_sql_metric_id_uses_md5``
+which pins the SQL component-order against drift.
 
 Why ``engagement_score`` and ``call_frequency`` are NULL
 --------------------------------------------------------
@@ -36,11 +47,13 @@ block lands the ``interactions`` table and this ETL evolves then.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+import psycopg2
 from tenacity import (
     before_log,
     retry,
@@ -168,8 +181,16 @@ INSERT INTO business_metrics (
     created_at
 )
 SELECT
-    %(metric_id_prefix)s || '_' || hbd.hcp_id || '_' || hbd.brand::TEXT || '_' || hbd.metric_date::TEXT
-                                                AS metric_id,
+    -- metric_id = '<prefix>_' || md5(hcp_id ':' brand ':' metric_date).
+    -- Hashed because business_metrics.metric_id is VARCHAR(50); the
+    -- natural-key concat could overflow it in the worst case (max
+    -- hcp_id + 'Remibrutinib' + ISO date). md5 is deterministic so
+    -- idempotency holds; ':' separators avoid ambiguity if any
+    -- component ever contains underscores. The Python helper
+    -- ``_build_metric_id`` mirrors this construction byte-for-byte.
+    %(metric_id_prefix)s || '_' || md5(
+        hbd.hcp_id || ':' || hbd.brand::TEXT || ':' || hbd.metric_date::TEXT
+    )                                           AS metric_id,
     hbd.metric_date,
     %(metric_type)s                             AS metric_type,
     hbd.brand,
@@ -203,6 +224,37 @@ ON CONFLICT (metric_id) DO UPDATE SET
 
 
 # -----------------------------------------------------------------------------
+# metric_id helpers
+# -----------------------------------------------------------------------------
+
+
+def _build_metric_id(hcp_id: str, brand: str, metric_date: date) -> str:
+    """Mirror the SQL ``metric_id`` construction in pure Python.
+
+    The SQL builds the same string with ``%(metric_id_prefix)s || '_' ||
+    md5(hbd.hcp_id || ':' || hbd.brand::TEXT || ':' || hbd.metric_date::TEXT)``;
+    this helper exists so unit tests can pin the length property against
+    ``business_metrics.metric_id VARCHAR(50)`` without a live DB. Any change
+    here must also change the SQL (and vice versa) — the SQL-shape test
+    pins the natural-key component order so the two cannot drift silently.
+
+    Args:
+        hcp_id: The HCP identifier as it appears in ``hcp_profiles.hcp_id``.
+        brand: A ``brand_type`` enum value (e.g. ``"Remibrutinib"``).
+        metric_date: The rollup day. Serialised via
+            :meth:`datetime.date.isoformat` to match Postgres' default
+            ``DATE::TEXT`` cast (``YYYY-MM-DD``).
+
+    Returns:
+        The deterministic ``metric_id`` value, always 43 characters long
+        (``"hcp_rollup_"`` is 11 chars + 32-hex md5 digest).
+    """
+    natural_key = f"{hcp_id}:{brand}:{metric_date.isoformat()}"
+    digest = hashlib.md5(natural_key.encode("utf-8")).hexdigest()
+    return f"{METRIC_ID_PREFIX}_{digest}"
+
+
+# -----------------------------------------------------------------------------
 # DB connection
 # -----------------------------------------------------------------------------
 
@@ -227,20 +279,25 @@ def _resolve_db_connection_string() -> str:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
+    # psycopg2.OperationalError covers connection-refused / server-starting /
+    # SSL-handshake failures; the rest covers raw socket failures. NB:
+    # psycopg2.OperationalError does NOT inherit from ConnectionError despite
+    # the name -- its MRO is OperationalError -> DatabaseError -> Error ->
+    # Exception. So adding it explicitly is what makes this retry actually
+    # cover the canonical Postgres connect-time failure modes.
+    retry=retry_if_exception_type(
+        (psycopg2.OperationalError, ConnectionError, TimeoutError, OSError)
+    ),
     before=before_log(logger, logging.WARNING),
     reraise=True,
 )
 def _connect_to_db() -> Any:
     """Open a psycopg2 connection with tenacity-backed retry.
 
-    Mirrors the retry shape used by ``src.api.dependencies.redis_client`` —
-    three attempts with 1-10 second exponential backoff. ``psycopg2`` is
-    imported inside the function so test environments that mock the DB do
-    not need the binary present at import time.
+    Three attempts with 1-10 second exponential backoff. ``psycopg2`` is
+    imported at module level since it is already a hard dependency via the
+    Supabase client.
     """
-    import psycopg2
-
     return psycopg2.connect(_resolve_db_connection_string())
 
 
@@ -259,6 +316,12 @@ def _resolve_window(
     ``end_date - DEFAULT_WINDOW_HOURS``. Strings can be ISO datetime
     (``2024-01-01T00:00:00Z``) or ISO date (``2024-01-01``) — both are
     accepted via ``datetime.fromisoformat``.
+
+    Naive results from ``datetime.fromisoformat`` (date-only inputs return
+    a tz-naive datetime at midnight) are normalised to UTC-aware. Without
+    this step a mixed call such as ``_resolve_window("2024-01-01",
+    "2024-01-02T00:00:00+00:00")`` would raise ``TypeError`` from the
+    aware/naive comparison and mask the friendlier ``ValueError`` below.
     """
     now_utc = datetime.now(timezone.utc)
 
@@ -272,6 +335,13 @@ def _resolve_window(
         if start_date
         else end_dt - timedelta(hours=DEFAULT_WINDOW_HOURS)
     )
+
+    # Normalise naive datetimes (date-only ISO strings) to UTC so
+    # downstream comparisons + the SQL bind params are consistently aware.
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
 
     if start_dt >= end_dt:
         raise ValueError(
