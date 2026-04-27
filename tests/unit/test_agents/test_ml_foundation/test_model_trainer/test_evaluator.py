@@ -14,6 +14,7 @@ from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
     _compute_optimal_threshold,
     _compute_precision_at_k,
     _positive_class_proba,
+    _select_threshold,
     evaluate_model,
 )
 
@@ -702,6 +703,91 @@ class TestThresholdTunedOnValidationOnly:
         # And it must NOT match the test-derived value
         test_only = _compute_optimal_threshold(y_test, y_test_proba)
         assert result["optimal_threshold"] != pytest.approx(test_only, abs=0.05)
+
+
+# ============================================================================
+# 1A-I-3: _select_threshold extraction — direct unit tests on the helper
+# ============================================================================
+
+
+class TestSelectThreshold:
+    """Unit tests for the extracted ``_select_threshold`` helper.
+
+    These tests target the helper directly (not via
+    ``_compute_classification_metrics``) so they pin the contract the
+    rest of the evaluator and downstream consumers (mlflow_logger,
+    audit code) rely on.
+
+    1A-M-6 will move these into ``test_threshold_selection.py``.
+    """
+
+    def test_select_threshold_clamps_non_finite_to_default(self):
+        """When sklearn's roc_curve returns the inf sentinel, the helper
+        must surface 0.5 (not inf, NaN, or out-of-range values).
+
+        sklearn's ``roc_curve`` prepends a sentinel threshold of ``np.inf``
+        for the trivial (FPR=0, TPR=0) point. On degenerate inputs (e.g.,
+        constant probabilities where every threshold is equivalent),
+        Youden's J argmax lands on that sentinel.
+        ``_compute_optimal_threshold`` clamps the non-finite/out-of-range
+        result back to 0.5 — this test verifies the clamp survives the
+        round-trip through ``_select_threshold``.
+
+        Source string remains ``"validation"`` because validation arrays
+        WERE provided; only the numeric value falls back.
+        """
+        # Constant 0.5 probabilities → degenerate ROC curve → argmax
+        # lands on sklearn's inf sentinel → clamp triggers.
+        n = 60
+        np.random.seed(RANDOM_STATE)
+        y_validation = np.random.randint(0, 2, n)
+        y_validation_proba = np.column_stack([np.full(n, 0.5), np.full(n, 0.5)])
+
+        threshold, source = _select_threshold(y_validation, y_validation_proba)
+
+        assert threshold == 0.5, (
+            f"Non-finite/out-of-range optimal threshold must clamp to 0.5; got {threshold!r}"
+        )
+        assert np.isfinite(threshold)
+        assert source == "validation", (
+            "Source must remain 'validation' when arrays are provided — "
+            "only the numeric threshold falls back, not the provenance."
+        )
+
+    def test_select_threshold_provenance_string_format(self):
+        """Provenance source must be exactly 'validation' or 'default'.
+
+        Downstream consumers (mlflow_logger, audit code, monitoring)
+        match on these literal string values. Anything else (e.g.
+        "VALIDATION", "val", " validation ") would silently break those
+        consumers — this test pins the exact format.
+        """
+        # 'validation' branch: arrays present.
+        rng = np.random.default_rng(20260426)
+        n = 40
+        y_proba_pos = rng.uniform(0.1, 0.9, n)
+        y_validation = (y_proba_pos > 0.5).astype(int)
+        y_validation_proba = np.column_stack([1.0 - y_proba_pos, y_proba_pos])
+        _, source_validation = _select_threshold(y_validation, y_validation_proba)
+        assert source_validation == "validation"
+        # Pin the literal type and exact characters — defensive against
+        # a regression to bytes / enum / capitalisation drift.
+        assert isinstance(source_validation, str)
+        assert source_validation == "validation" and len(source_validation) == 10
+
+        # 'default' branch: arrays absent.
+        _, source_none = _select_threshold(None, None)
+        assert source_none == "default"
+        assert isinstance(source_none, str)
+        assert source_none == "default" and len(source_none) == 7
+
+        # Mixed-absence variants must also fall back to default — the
+        # contract says BOTH arrays must be present for the validation
+        # branch.
+        _, source_no_proba = _select_threshold(y_validation, None)
+        assert source_no_proba == "default"
+        _, source_no_labels = _select_threshold(None, y_validation_proba)
+        assert source_no_labels == "default"
 
 
 # ============================================================================

@@ -596,37 +596,31 @@ def _compute_classification_metrics(
     # applied to test. Tuning on test leaks test info into the operating
     # point and inflates apparent test performance.
     #
-    # Fallback: if validation arrays are unavailable, fall back to the
-    # default 0.5 threshold rather than tuning on test. This trades
-    # off-by-default predictions for test-set integrity.
+    # Step 1 (1A-I-3): pick the canonical validation-vs-default threshold
+    # via `_select_threshold`. Step 2 (rare-event override) stays inline
+    # because it needs `minority_ratio` and produces a `precision_constrained`
+    # dict consumed by the result builder below.
     # =====================================================================
-    if y_validation is not None and y_validation_proba is not None:
-        threshold_source = "validation"
-        optimal_threshold = _compute_optimal_threshold(y_validation, y_validation_proba)
+    optimal_threshold, threshold_source = _select_threshold(
+        y_validation, y_validation_proba, cost_matrix=cost_matrix
+    )
 
-        # For rare-event prediction, apply precision-constrained threshold
-        # tuned ON VALIDATION (not test).
-        precision_constrained = None
-        if minority_ratio < 0.05:
-            precision_constrained = _compute_precision_constrained_threshold(
-                y_validation, y_validation_proba
-            )
-            if precision_constrained and precision_constrained.get("target_achieved"):
-                optimal_threshold = precision_constrained["precision_constrained_threshold"]
-                logger.info(
-                    "Using precision-constrained threshold "
-                    f"{optimal_threshold:.4f} tuned on validation "
-                    f"(precision={precision_constrained['precision_at_threshold']:.4f}, "
-                    f"recall={precision_constrained['recall_at_threshold']:.4f})"
-                )
-    else:
-        threshold_source = "default"
-        optimal_threshold = 0.5
-        precision_constrained = None
-        logger.warning(
-            "Validation arrays unavailable for threshold tuning; "
-            "falling back to default 0.5 threshold (test integrity preserved)."
+    # For rare-event prediction, apply precision-constrained threshold
+    # tuned ON VALIDATION (not test). This may override the Youden's J
+    # optimum returned by `_select_threshold` above.
+    precision_constrained: Optional[Dict[str, Any]] = None
+    if minority_ratio < 0.05 and y_validation is not None and y_validation_proba is not None:
+        precision_constrained = _compute_precision_constrained_threshold(
+            y_validation, y_validation_proba
         )
+        if precision_constrained and precision_constrained.get("target_achieved"):
+            optimal_threshold = precision_constrained["precision_constrained_threshold"]
+            logger.info(
+                "Using precision-constrained threshold "
+                f"{optimal_threshold:.4f} tuned on validation "
+                f"(precision={precision_constrained['precision_at_threshold']:.4f}, "
+                f"recall={precision_constrained['recall_at_threshold']:.4f})"
+            )
 
     # Validation metrics: recomputed AT THE CHOSEN THRESHOLD when probas
     # are available so validation_metrics reflects performance at the same
@@ -1065,6 +1059,55 @@ def _compute_business_utility(
         + fn * cost_matrix["fn"]
         + tn * cost_matrix["tn"]
     )
+
+
+def _select_threshold(
+    y_validation: Optional[np.ndarray],
+    y_validation_proba: Optional[np.ndarray],
+    *,
+    cost_matrix: Optional[Dict[str, float]] = None,
+) -> Tuple[float, str]:
+    """Pick the canonical classification threshold + provenance string.
+
+    Block 1A — finding #6: the operating point MUST be selected on
+    validation, then frozen for test. This helper encodes that policy:
+    when validation labels and probabilities are available, return the
+    Youden's J optimum from `_compute_optimal_threshold`; otherwise fall
+    back to the default 0.5 threshold and log a warning so test-set
+    integrity is preserved at the cost of an off-by-default operating
+    point.
+
+    Note: the precision-constrained override (rare-event minority class)
+    is NOT handled here — it requires additional caller context
+    (`minority_ratio`) and produces a `precision_constrained` dict
+    consumed elsewhere by the parent. The caller invokes this helper
+    first and may then override the returned threshold.
+
+    Args:
+        y_validation: Validation labels. When None, falls back to default.
+        y_validation_proba: Validation probabilities. When None, falls
+            back to default.
+        cost_matrix: Reserved for future cost-aware threshold selection
+            (Block 5 #10 follow-up). Currently unused — the helper always
+            picks a single threshold from validation Youden's J.
+
+    Returns:
+        Tuple of ``(chosen_threshold, chosen_threshold_source)``. The
+        source string is one of the literals ``"validation"`` (validation
+        arrays present, threshold tuned on them) or ``"default"`` (validation
+        arrays absent, threshold pinned to 0.5). Downstream consumers
+        (mlflow_logger, audit code) rely on these exact literals.
+    """
+    del cost_matrix  # reserved for future cost-aware selection (see docstring)
+
+    if y_validation is not None and y_validation_proba is not None:
+        return _compute_optimal_threshold(y_validation, y_validation_proba), "validation"
+
+    logger.warning(
+        "Validation arrays unavailable for threshold tuning; "
+        "falling back to default 0.5 threshold (test integrity preserved)."
+    )
+    return 0.5, "default"
 
 
 def _compute_optimal_threshold(
