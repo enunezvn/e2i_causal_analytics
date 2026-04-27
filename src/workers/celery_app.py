@@ -235,6 +235,15 @@ celery_app.conf.beat_schedule = {
         "schedule": 86400.0,  # 24 hours
         "options": {"queue": "analytics"},
     },
+    # Per-patient adherence/refill/gap derivation every 24 hours (block
+    # 6B-infra-2b). Routed to `analytics` (worker_medium). Updates
+    # patient_journeys.adherence_rate and gap_days; refill_count is left
+    # NULL until a refill source lands -- see module docstring.
+    "patient-adherence-rollup": {
+        "task": "src.etl.patient_adherence_etl.run_patient_adherence_rollup",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
     # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
     # -------------------------------------------------------------------------
