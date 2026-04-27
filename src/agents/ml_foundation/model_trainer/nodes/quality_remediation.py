@@ -66,7 +66,7 @@ async def diagnose_and_remediate_quality(state: Dict[str, Any]) -> Dict[str, Any
         pc_recall = precision_constrained.get("recall_at_threshold", 0)
         if pc_precision >= 0.05 and pc_recall >= 0.10:
             # Precision IS fixable by threshold alone — no retraining needed
-            print(f"\n  Quality remediation: THRESHOLD FIXABLE (no retraining needed)")
+            print("\n  Quality remediation: THRESHOLD FIXABLE (no retraining needed)")
             print(f"    Precision at default: {test_precision:.4f}")
             print(f"    Precision at constrained threshold: {pc_precision:.4f}")
             print(f"    Recall at constrained threshold: {pc_recall:.4f}")

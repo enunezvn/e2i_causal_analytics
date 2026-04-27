@@ -29,7 +29,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 if TYPE_CHECKING:
     from .state import PredictionSynthesizerState

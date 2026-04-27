@@ -4,7 +4,7 @@ Business Outcome Generator.
 Generates synthetic business outcomes linked to patient journeys.
 """
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Dict, List, Optional, cast
 
 import numpy as np
 import pandas as pd

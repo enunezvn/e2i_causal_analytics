@@ -411,7 +411,7 @@ def check_target_leakage(
 
     try:
         target_data = df[target_variable]
-        is_binary = set(target_data.dropna().unique()).issubset({0, 1, 0.0, 1.0})
+        is_binary = set(target_data.dropna().unique()).issubset({0, 1})
 
         for feature in features:
             if feature not in df.columns:

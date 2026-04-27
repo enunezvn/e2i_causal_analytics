@@ -56,10 +56,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 if TYPE_CHECKING:
-    import mlflow  # type: ignore[import-untyped]
     from mlflow.tracking import MlflowClient  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)

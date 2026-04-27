@@ -47,7 +47,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
 from uuid_utils import uuid7 as uuid7_func  # For Opik-compatible UUID v7
 

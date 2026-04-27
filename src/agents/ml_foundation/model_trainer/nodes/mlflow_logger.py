@@ -18,7 +18,6 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
-from uuid import UUID
 
 logger = logging.getLogger(__name__)
 

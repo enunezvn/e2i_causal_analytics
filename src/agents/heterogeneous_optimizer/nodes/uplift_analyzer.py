@@ -448,6 +448,8 @@ class UpliftAnalyzerNode:
         try:
             from src.causal_engine.uplift.metrics import (
                 auuc as calculate_auuc,
+            )
+            from src.causal_engine.uplift.metrics import (
                 qini_coefficient,
             )
 

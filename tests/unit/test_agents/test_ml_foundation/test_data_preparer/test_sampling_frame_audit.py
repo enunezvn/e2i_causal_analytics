@@ -24,7 +24,6 @@ from src.agents.ml_foundation.data_preparer.nodes.sampling_frame_audit import (
     audit_sampling_frame,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from collections import defaultdict
-from typing import Any, Callable, cast
+from typing import Callable, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request

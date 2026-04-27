@@ -10,7 +10,7 @@ tree-based ensemble methods optimized for uplift modeling.
 Author: E2I Causal Analytics Team
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import Any, Optional, Union, cast
 
 import numpy as np
 import pandas as pd

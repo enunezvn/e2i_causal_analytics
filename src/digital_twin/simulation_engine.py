@@ -17,8 +17,8 @@ The simulation follows these steps:
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, cast
-from uuid import UUID, uuid4
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 import numpy as np
 from scipy import stats

@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 
 from ..state import DataPreparerState
 
@@ -367,7 +366,6 @@ def _load_cached_analysis(key: str) -> Optional[Dict[str, Any]]:
         Cached analysis dict or None
     """
     import json
-    from pathlib import Path
 
     cache_file = _get_cache_dir() / f"{key}.json"
     if cache_file.exists():
@@ -663,15 +661,6 @@ def _rule_based_leakage_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Analysis dict matching the LLM output structure
     """
-    from .leakage_detector import (
-        _aggregate_severity,
-        check_categorical_class_separation,
-        check_feature_target_logical_dependency,
-        check_mutual_information,
-        check_perfect_class_separation,
-        check_single_feature_auc,
-        check_zero_variance_within_class,
-    )
 
     leaked = set(context.get("leaked_features", []))
     target = context["target_variable"]
@@ -940,7 +929,6 @@ def _apply_leakage_remediation(
                             # Compute individual CV AUC for each remaining feature
                             individual_aucs = {}
                             for feat in remaining:
-                                feat_idx = remaining.index(feat)
                                 X_single = combined_check[[feat]].values
                                 y_single = y_check
                                 try:

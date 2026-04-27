@@ -9,7 +9,7 @@ Additionally handles:
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, cast
 
 from ..state import HeterogeneousOptimizerState
 

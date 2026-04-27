@@ -321,7 +321,9 @@ class TwinRetrainingService:
 
         # Queue retraining task (if Celery is available)
         try:
-            from src.tasks.ab_testing_tasks import execute_twin_retraining  # type: ignore[attr-defined]
+            from src.tasks.ab_testing_tasks import (
+                execute_twin_retraining,  # type: ignore[attr-defined]
+            )
 
             task = execute_twin_retraining.delay(
                 retraining_job_id=job.job_id,

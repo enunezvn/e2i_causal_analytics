@@ -8,7 +8,7 @@ Fast intent classification optimized for <500ms:
 import logging
 import re
 import time
-from typing import Any, Dict, Literal, cast
+from typing import Literal, cast
 
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 
