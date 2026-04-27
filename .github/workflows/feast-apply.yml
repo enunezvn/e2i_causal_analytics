@@ -61,18 +61,22 @@ jobs:
           fi
           echo "Production Feast version $DOCKERFILE_VERSION matches CI pin 0.43.0."
 
-      - name: Install Feast (with PostgreSQL offline store)
-        # Install just the Feast SDK + the postgres contrib offline store used
-        # by `feature_repo/data_sources.py`. The version pin matches the
-        # production container (`feastdev/feature-server:0.43.0`) so CI tests
-        # the exact runtime — drift would let CI green-light definitions that
-        # break the production server (or vice versa). We deliberately do NOT
-        # pull the full project requirements.txt — Feast runs in its own
-        # container in production and dragging in the rest of the stack
-        # inflates CI by a few minutes per run.
+      - name: Install Feast (with PostgreSQL offline + Redis online stores)
+        # Install just the Feast SDK + the postgres offline store (used by
+        # `feature_repo/data_sources.py`) + the redis online store (referenced
+        # by feature_store.yaml.tmpl). Redis is required at config-load time
+        # — Feast imports RedisOnlineStoreConfig even with
+        # --skip-source-validation, so omitting the extras crashes apply.
+        # Version pinned to the production container
+        # (`feastdev/feature-server:0.43.0`) so CI tests the exact runtime;
+        # drift would let CI green-light definitions that break the
+        # production server (or vice versa). We deliberately do NOT pull the
+        # full project requirements.txt — Feast runs in its own container in
+        # production and dragging in the rest of the stack inflates CI by a
+        # few minutes per run.
         run: |
           pip install --upgrade pip
-          pip install 'feast[postgres]==0.43.0'
+          pip install 'feast[postgres,redis]==0.43.0'
 
       - name: Render feature_store.yaml from template
         # feature_store.yaml is gitignored (it embeds passwords). On the droplet
