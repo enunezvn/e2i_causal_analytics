@@ -197,11 +197,13 @@ ALTER TABLE patient_journeys
 -- -----------------------------------------------------------------------------
 -- hcp_id added as nullable FK so per-HCP rows (real ETL 6B-infra-2a output)
 -- can coexist with the existing per-(brand, region) aggregate rows
--- (which keep hcp_id IS NULL). FK references hcp_profiles(hcp_id) so an
--- HCP delete cascades to a NULL hcp_id (default ON DELETE NO ACTION is fine
--- because we are not enforcing strict per-HCP integrity yet).
+-- (which keep hcp_id IS NULL). ON DELETE SET NULL: removing an HCP detaches
+-- their per-HCP rollup rows back to the aggregate-row shape rather than
+-- blocking the delete (default NO ACTION) or destroying the metric history
+-- (CASCADE).
 ALTER TABLE business_metrics
-    ADD COLUMN IF NOT EXISTS hcp_id VARCHAR(20) REFERENCES hcp_profiles(hcp_id);
+    ADD COLUMN IF NOT EXISTS hcp_id VARCHAR(20)
+    REFERENCES hcp_profiles(hcp_id) ON DELETE SET NULL;
 
 -- event_timestamp: cast metric_date (DATE) -> TIMESTAMPTZ for Feast, which
 -- requires a TIMESTAMPTZ event-time column. Cast inside generated column is
