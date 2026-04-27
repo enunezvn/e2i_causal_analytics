@@ -82,22 +82,48 @@ class TestTier0OutputMapperInit:
         mapper = Tier0OutputMapper(sample_tier0_state)
         assert mapper.state == sample_tier0_state
 
-    def test_init_missing_required_keys(self):
-        """Test initialization with missing required keys."""
+    def test_init_rejects_missing_required_keys(self):
+        """Missing a required contract key raises ``TypeError``.
+
+        ``Tier0StateContract`` declares ``experiment_id`` and
+        ``eligible_df`` as ``Required``; omitting either must surface at
+        the boundary so downstream agents don't fail with cryptic
+        ``KeyError``s deep in their handlers.
+        """
         invalid_state = {"experiment_id": "exp_001"}  # Missing eligible_df
-        with pytest.raises(ValueError, match="Missing required tier0 state keys"):
+        with pytest.raises(TypeError, match="missing required state keys"):
             Tier0OutputMapper(invalid_state)
 
-    def test_required_keys_constant(self):
-        """Test REQUIRED_KEYS constant."""
-        assert "experiment_id" in Tier0OutputMapper.REQUIRED_KEYS
-        assert "eligible_df" in Tier0OutputMapper.REQUIRED_KEYS
+    def test_init_rejects_extra_keys(self, sample_tier0_state):
+        """Keys outside the contract raise ``TypeError`` naming them.
 
-    def test_optional_keys_constant(self):
-        """Test OPTIONAL_KEYS constant."""
-        assert "trained_model" in Tier0OutputMapper.OPTIONAL_KEYS
-        assert "model_uri" in Tier0OutputMapper.OPTIONAL_KEYS
-        assert "validation_metrics" in Tier0OutputMapper.OPTIONAL_KEYS
+        The contract is the single source of truth: any caller passing a
+        key not declared in ``Tier0StateContract`` is signaling either a
+        typo or a tier0 schema change that wasn't propagated. Both must
+        fail loudly here, not silently pass through to the agents.
+        """
+        state_with_extra = {**sample_tier0_state, "foo_bar": 42}
+        with pytest.raises(TypeError, match=r"unexpected state keys not in contract.*foo_bar"):
+            Tier0OutputMapper(state_with_extra)
+
+    def test_init_accepts_valid_contract(self, sample_tier0_state):
+        """All required + a subset of NotRequired keys is accepted.
+
+        Anti-regression test for the ``__required_keys__`` vs
+        ``__annotations__`` distinction in ``_validate_contract``: the
+        sample state intentionally omits several optional keys
+        (``business_utility``, ``prediction_timestamp``,
+        ``cohort_result``, etc.) — none of those omissions may trigger
+        the missing-required path.
+        """
+        # Confirm the fixture exercises the optional-omission case so
+        # this test is a meaningful regression guard, not vacuous.
+        assert "business_utility" not in sample_tier0_state
+        assert "prediction_timestamp" not in sample_tier0_state
+        assert "cohort_result" not in sample_tier0_state
+
+        mapper = Tier0OutputMapper(sample_tier0_state)
+        assert mapper.state is sample_tier0_state
 
 
 @pytest.mark.unit
@@ -580,9 +606,7 @@ class TestPredictionTimestampPropagation:
         assert "prediction_timestamp" in result
         assert result["prediction_timestamp"] is None
 
-    def test_heterogeneous_optimizer_carries_prediction_timestamp(
-        self, sample_tier0_state
-    ):
+    def test_heterogeneous_optimizer_carries_prediction_timestamp(self, sample_tier0_state):
         """``map_to_heterogeneous_optimizer`` must surface ``prediction_timestamp``."""
         ts = pd.Timestamp("2026-05-01")
         state = sample_tier0_state.copy()
