@@ -6,8 +6,10 @@ These tests do not touch a real database. They verify:
   the four expected aggregations (total_trx / total_nrx / active_hcp_count
   / covered_lives), the 30-day INTERVAL for active_hcp_count, the
   ``ON CONFLICT (territory_id, metric_date)`` clause, and that
-  ``market_potential`` / ``resource_allocation_score`` stay out of both the
-  INSERT column list and the SET clause.
+  ``market_potential`` / ``resource_allocation_score`` are written as
+  explicit NULL on INSERT (with migration 033 dropping the legacy
+  NOT NULL DEFAULT 0) but stay out of the ON CONFLICT SET clause so
+  pre-existing 031 random seeds survive re-runs untouched.
 * ``_run_territory_rollup_impl`` orchestrates the connect/execute/commit/
   close flow correctly with mocks, and surfaces ``status`` /
   ``rows_affected`` faithfully. The Celery wrapper ``run_territory_rollup``
@@ -152,16 +154,12 @@ class TestSQLShape:
         potential and resource_allocation_score are intentionally OMITTED
         so existing values (e.g. migration 031's random seed) survive."""
         sql = etl.INSERT_TERRITORY_ROLLUP_SQL
-        on_conflict_block = sql.split(
-            "ON CONFLICT (territory_id, metric_date) DO UPDATE SET", 1
-        )[1]
+        on_conflict_block = sql.split("ON CONFLICT (territory_id, metric_date) DO UPDATE SET", 1)[1]
 
         # Required: the four real aggregates.
         for col in ("total_trx", "total_nrx", "active_hcp_count", "covered_lives"):
             pattern = rf"{re.escape(col)}\s*=\s*EXCLUDED\.{re.escape(col)}"
-            assert re.search(pattern, on_conflict_block), (
-                f"missing UPDATE SET clause for {col}"
-            )
+            assert re.search(pattern, on_conflict_block), f"missing UPDATE SET clause for {col}"
 
         # Forbidden: the two columns that must remain untouched. Use the
         # narrower SET-clause-only block so we don't trip on the OMIT
@@ -173,46 +171,66 @@ class TestSQLShape:
                 "(real Reltio/Veeva source not yet integrated)"
             )
 
-    def test_market_potential_and_resource_allocation_score_excluded_from_insert(
+    def test_market_potential_and_resource_allocation_score_written_as_null(
         self,
     ) -> None:
-        """Plan: NULL otherwise (NOT random). With migration 031's NOT NULL
-        DEFAULT 0 constraint, omitting them from the INSERT column list
-        means new rows pick up the table default rather than a random
-        value. We document the omission inline so future readers see why.
+        """Plan: NULL otherwise (NOT random). Migration 033 drops the legacy
+        NOT NULL DEFAULT 0 that 031 had set, so writing NULL explicitly is
+        well-defined and matches the spec ("NULL otherwise, NOT random")
+        even on fresh databases that don't already carry 031's random
+        seed. The ON CONFLICT SET clause excluding them is asserted by
+        ``test_on_conflict_updates_only_real_aggregates``; this test
+        focuses on the INSERT side.
 
-        Strip line comments before checking, since the explanatory comment
-        in the column list naming both columns must NOT count as a column-
-        list match.
+        Strip line comments before checking, since the explanatory comments
+        in the column list and SELECT block naming both columns must NOT
+        count as column-list matches.
         """
         sql = etl.INSERT_TERRITORY_ROLLUP_SQL
         # Strip everything from `--` to end-of-line so comments don't
         # spuriously match column names.
         stripped = re.sub(r"--[^\n]*", "", sql)
         # Slice the INSERT INTO ... ( column-list ) block.
-        insert_clause = stripped.split("INSERT INTO territory_metrics", 1)[1].split(
-            "SELECT", 1
-        )[0]
-        assert "market_potential" not in insert_clause
-        assert "resource_allocation_score" not in insert_clause
-        # The original SQL still mentions both columns in the comment so
-        # future readers see the rationale.
-        assert "market_potential" in sql
-        assert "resource_allocation_score" in sql
-        assert "Reltio" in sql or "Veeva" in sql, (
-            "module SQL must name the missing real source"
+        insert_clause = stripped.split("INSERT INTO territory_metrics", 1)[1].split("SELECT", 1)[0]
+        assert "market_potential" in insert_clause, (
+            "market_potential must be in the INSERT column list "
+            "(migration 033 dropped the NOT NULL so NULL is well-defined)"
         )
+        assert "resource_allocation_score" in insert_clause, (
+            "resource_allocation_score must be in the INSERT column list "
+            "(migration 033 dropped the NOT NULL so NULL is well-defined)"
+        )
+
+        # The SELECT block following INSERT INTO must write
+        # CAST(NULL AS DOUBLE PRECISION) for both columns -- explicit NULL,
+        # not table default, not COALESCE'd zero. Anchor on the
+        # INSERT-INTO-... slice so we don't trip on the SELECT inside
+        # the upstream WITH ... metric_dates CTE.
+        post_insert = stripped.split("INSERT INTO territory_metrics", 1)[1]
+        normalised_post_insert = re.sub(r"\s+", " ", post_insert)
+        assert re.search(
+            r"CAST\(NULL AS DOUBLE PRECISION\)\s+AS\s+market_potential",
+            normalised_post_insert,
+        ), "market_potential must be SELECTed as CAST(NULL AS DOUBLE PRECISION)"
+        assert re.search(
+            r"CAST\(NULL AS DOUBLE PRECISION\)\s+AS\s+resource_allocation_score",
+            normalised_post_insert,
+        ), "resource_allocation_score must be SELECTed as CAST(NULL AS DOUBLE PRECISION)"
+
+        # The original SQL still names the missing real source so future
+        # readers see why these columns are NULL.
+        assert "Reltio" in sql or "Veeva" in sql, "module SQL must name the missing real source"
 
     def test_run_window_filters_metric_dates(self) -> None:
         """The metric_dates CTE filters on the [start_date, end_date)
         half-open run window."""
         sql = etl.INSERT_TERRITORY_ROLLUP_SQL
-        assert re.search(
-            r"bm\.metric_date\s*>=\s*%\(start_date\)s::DATE", sql
-        ), "missing metric_date >= start_date filter"
-        assert re.search(
-            r"bm\.metric_date\s*<\s*%\(end_date\)s::DATE", sql
-        ), "missing metric_date < end_date filter"
+        assert re.search(r"bm\.metric_date\s*>=\s*%\(start_date\)s::DATE", sql), (
+            "missing metric_date >= start_date filter"
+        )
+        assert re.search(r"bm\.metric_date\s*<\s*%\(end_date\)s::DATE", sql), (
+            "missing metric_date < end_date filter"
+        )
 
     def test_left_joins_anchor_at_territory_dates(self) -> None:
         """All three aggregate CTEs are LEFT JOINed onto territory_dates so
@@ -379,9 +397,7 @@ def test_impl_delegates_window_resolution_to_resolve_window() -> None:
             end_date="2024-01-02T00:00:00Z",
         )
 
-    resolve.assert_called_once_with(
-        "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z"
-    )
+    resolve.assert_called_once_with("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
 
 
 # =============================================================================
@@ -394,9 +410,7 @@ def test_celery_task_delegates_to_impl() -> None:
     ``_run_territory_rollup_impl`` — verify it forwards args + the
     request id."""
     sentinel_result = {"status": "completed", "rows_affected": 3}
-    with patch.object(
-        etl, "_run_territory_rollup_impl", return_value=sentinel_result
-    ) as impl:
+    with patch.object(etl, "_run_territory_rollup_impl", return_value=sentinel_result) as impl:
         async_result = etl.run_territory_rollup.apply(
             kwargs={
                 "start_date": "2024-01-01T00:00:00Z",
@@ -421,10 +435,7 @@ def test_celery_task_delegates_to_impl() -> None:
 
 def test_task_is_registered_with_expected_name() -> None:
     """The Celery task name string is what the beat schedule references."""
-    assert (
-        etl.run_territory_rollup.name
-        == "src.etl.territory_metrics_etl.run_territory_rollup"
-    )
+    assert etl.run_territory_rollup.name == "src.etl.territory_metrics_etl.run_territory_rollup"
 
 
 def test_beat_schedule_entry_present() -> None:
@@ -433,9 +444,6 @@ def test_beat_schedule_entry_present() -> None:
 
     entry = celery_app.conf.beat_schedule.get("territory-metrics-rollup")
     assert entry is not None, "beat schedule entry missing"
-    assert (
-        entry["task"]
-        == "src.etl.territory_metrics_etl.run_territory_rollup"
-    )
+    assert entry["task"] == "src.etl.territory_metrics_etl.run_territory_rollup"
     assert entry["schedule"] == 86400.0
     assert entry["options"]["queue"] == "analytics"

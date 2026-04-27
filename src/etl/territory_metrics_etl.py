@@ -34,6 +34,11 @@ block can:
 1. Add a Reltio / Veeva mirror table for these two metrics.
 2. Re-enable the corresponding SET clauses here.
 
+INSERT writes NULL explicitly because migration 033 dropped the NOT NULL
+constraint that 031 had set; ON CONFLICT DO UPDATE intentionally omits
+these so the random seed from 031 survives until real Reltio/Veeva
+integration.
+
 This mirrors how 6B-infra-2a left ``engagement_score`` and
 ``call_frequency`` NULL because the ``interactions`` table doesn't exist
 yet, and how 6B-infra-2b left ``refill_count`` NULL because the canonical
@@ -70,7 +75,10 @@ matching the natural rollup key exactly, so ``ON CONFLICT (territory_id,
 metric_date) DO UPDATE`` works directly — no md5-hashing trick like
 6B-infra-2a needed. ``market_potential`` and ``resource_allocation_score``
 are deliberately omitted from the SET clause so existing non-NULL values
-(from migration 031's random seed, if present) stay intact.
+(from migration 031's random seed, if present) stay intact. They are
+included in the INSERT column list with explicit NULL so new rows reflect
+the spec's "NULL when no real source" semantics rather than picking up
+the table default that migration 031 originally declared.
 """
 
 from __future__ import annotations
@@ -139,17 +147,15 @@ PER_HCP_METRIC_TYPE: str = "per_hcp_rollup"
 #   * market_potential: random seed from migration 031 if present, else
 #     NULL on new rows. Real Reltio source not yet integrated.
 #   * resource_allocation_score: same reasoning.
-#   These are also OMITTED from the INSERT column list so new rows pick
-#   up the table defaults (DEFAULT 0 per migration 031 -- see footnote
-#   below). The ON CONFLICT SET clause excludes them so existing values
-#   are preserved across re-runs.
+#   These are INCLUDED in the INSERT column list with explicit NULL on
+#   new rows (the spec calls for "NULL otherwise (NOT random)"). They are
+#   OMITTED from the ON CONFLICT SET clause so existing values (e.g.
+#   migration 031's random seed) survive re-runs unchanged.
 #
-# NOTE: migration 031 declared market_potential and resource_allocation_score
-#   as ``NOT NULL DEFAULT 0`` (not nullable). The plan asks for "NULL
-#   otherwise" -- with the schema as-is the closest faithful behaviour is
-#   "table default" (0) on INSERT and "preserved" on UPDATE. A schema
-#   relaxation to nullable is out of scope for this block; a follow-up can
-#   ALTER the columns to DROP NOT NULL when the real source lands.
+# NOTE: migration 033 (033.5) drops the NOT NULL + DEFAULT 0 that 031 had
+#   declared on these two columns, so writing NULL explicitly is now
+#   well-defined. Pre-existing 031 rows keep their random values until
+#   real Reltio/Veeva integration replaces this preservation behaviour.
 INSERT_TERRITORY_ROLLUP_SQL: str = """
 WITH metric_dates AS (
     SELECT DISTINCT bm.metric_date
@@ -229,14 +235,15 @@ INSERT INTO territory_metrics (
     total_nrx,
     active_hcp_count,
     covered_lives,
-    -- market_potential and resource_allocation_score intentionally OMITTED:
-    -- migration 031 declares both as NOT NULL DEFAULT 0; the plan calls for
-    -- NULL when a real Reltio/Veeva source isn't yet integrated. With the
-    -- column constraint as-is, INSERT picks up the table default (0). The
-    -- ON CONFLICT SET clause below also omits them so existing values
-    -- (e.g. migration 031's random seed) are preserved across re-runs.
-    -- A follow-up block can ALTER the columns to DROP NOT NULL when the
-    -- real source lands.
+    -- market_potential / resource_allocation_score: NULL on new rows;
+    -- existing seeds preserved on UPDATE. Migration 033 (033.5) dropped
+    -- the NOT NULL + DEFAULT 0 that 031 had declared, so writing NULL
+    -- explicitly is the spec-faithful "no real Reltio/Veeva source"
+    -- behaviour. The ON CONFLICT SET clause below intentionally omits
+    -- both columns so existing values (e.g. 031's random seed) survive
+    -- re-runs untouched until a real source ETL replaces this.
+    market_potential,
+    resource_allocation_score,
     created_at
 )
 SELECT
@@ -246,6 +253,8 @@ SELECT
     COALESCE(pht.total_nrx, 0)               AS total_nrx,
     COALESCE(ahd.active_hcp_count, 0)        AS active_hcp_count,
     COALESCE(thv.covered_lives, 0)           AS covered_lives,
+    CAST(NULL AS DOUBLE PRECISION)           AS market_potential,
+    CAST(NULL AS DOUBLE PRECISION)           AS resource_allocation_score,
     NOW()                                    AS created_at
 FROM territory_dates td
 LEFT JOIN per_hcp_in_territory          pht ON pht.territory_id = td.territory_id

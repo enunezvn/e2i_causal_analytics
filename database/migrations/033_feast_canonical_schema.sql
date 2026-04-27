@@ -25,7 +25,12 @@
 --                        total_rx_count, market_share, conversion_rate,
 --                        engagement_score, call_frequency).
 --   5. territory_metrics add event_timestamp generated column (so Feast can
---                        use a real timestamp column instead of metric_date).
+--                        use a real timestamp column instead of metric_date);
+--                        also drop the NOT NULL + DEFAULT 0 that 031 had set
+--                        on market_potential / resource_allocation_score so
+--                        the territory rollup ETL (6B-infra-2c) can write
+--                        NULL on new rows when no real Reltio/Veeva source
+--                        is integrated, per the canonical-schema design.
 --
 -- Sentinels (chosen because canonical lookup tables do not yet exist):
 --   * hcp_profiles.territory_id = 'UNASSIGNED'   (no sales_rep -> territory map)
@@ -237,6 +242,20 @@ ALTER TABLE business_metrics ADD COLUMN IF NOT EXISTS call_frequency   NUMERIC;
 ALTER TABLE territory_metrics
     ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ
     GENERATED ALWAYS AS (metric_date::TIMESTAMPTZ) STORED;
+
+-- market_potential and resource_allocation_score were declared NOT NULL DEFAULT 0
+-- by migration 031 (lines 82-83). Sub-block 6B-infra-2c (territory rollup ETL)
+-- treats these as "NULL when no real Reltio/Veeva source available" per the
+-- canonical-schema design -- random seeds are tech debt the territory ETL is
+-- replacing. Drop the NOT NULL and the DEFAULT so the ETL can write NULL
+-- explicitly. ALTER ... DROP NOT NULL is a metadata-only DDL (no table rewrite),
+-- so this is cheap. Existing rows seeded by 031 keep their random values until
+-- the territory ETL UPSERT updates only the four real aggregates (those rows
+-- are unchanged for market_potential / resource_allocation_score).
+ALTER TABLE territory_metrics ALTER COLUMN market_potential          DROP NOT NULL;
+ALTER TABLE territory_metrics ALTER COLUMN resource_allocation_score DROP NOT NULL;
+ALTER TABLE territory_metrics ALTER COLUMN market_potential          DROP DEFAULT;
+ALTER TABLE territory_metrics ALTER COLUMN resource_allocation_score DROP DEFAULT;
 
 -- -----------------------------------------------------------------------------
 -- 033.6  Drop bridging views + synthetic seed table
