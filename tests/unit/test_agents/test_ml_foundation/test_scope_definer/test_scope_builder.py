@@ -308,28 +308,43 @@ def test_normalise_prediction_timestamp_returns_none_for_empty(value):
     assert _normalise_prediction_timestamp(value) is None
 
 
-def test_normalise_prediction_timestamp_falls_back_to_str_for_unknown_types():
-    """Unknown types route through ``str(value)``.
+class _OpaqueObject:
+    """Custom class with no datetime semantics — used in strict-reject tests."""
 
-    The helper is permissive on purpose — anything not recognised as
-    ``datetime`` / ``pd.Timestamp`` / ``str`` / empty is round-tripped as
-    its string representation. Locking this in so future input shapes
-    (numpy datetimes, custom datetime-like objects) don't regress to
-    silently dropping the value.
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1714089600,  # int (epoch-ish, but caller must convert explicitly)
+        1714089600.5,  # float
+        ["2026-04-26"],  # list
+        {"date": "2026-04-26"},  # dict
+        _OpaqueObject(),  # custom class without datetime semantics
+    ],
+)
+def test_normalise_prediction_timestamp_rejects_unknown_types(value):
+    """Block 1B-M2: unknown types fail loud rather than silently str()-coerce.
+
+    Permissive ``str(value)`` coercion would mask upstream bugs — e.g. an
+    epoch int silently becoming ``"1714089600"`` and downstream feature
+    builders parsing that as the year 1714089600. The contract is now
+    strict: only ``datetime``, ``pd.Timestamp``, parseable ``str``, or
+    ``None``/``""``. Everything else raises ``TypeError`` at the
+    scope_definer boundary.
     """
+    with pytest.raises(TypeError, match="prediction_timestamp must be"):
+        _normalise_prediction_timestamp(value)
 
-    class _StringableTimestamp:
-        def __str__(self) -> str:
-            return "2026-04-26T00:00:00+00:00"
 
-    assert (
-        _normalise_prediction_timestamp(_StringableTimestamp())
-        == "2026-04-26T00:00:00+00:00"
-    )
-    # Numeric inputs are an obvious abuse — but the contract says coerce,
-    # not raise. Document the permissiveness so callers know to validate
-    # upstream when they care.
-    assert _normalise_prediction_timestamp(1714089600) == "1714089600"
+def test_normalise_prediction_timestamp_rejects_unparseable_string():
+    """Garbage strings that ``pd.Timestamp`` cannot parse are rejected.
+
+    Without this check, "not a date" would round-trip verbatim through the
+    helper and only blow up later inside a feature builder, with the failure
+    point disconnected from the offending input. Fail loud at the boundary.
+    """
+    with pytest.raises(TypeError, match="not parseable by pd.Timestamp"):
+        _normalise_prediction_timestamp("not a date")
 
 
 @pytest.mark.asyncio

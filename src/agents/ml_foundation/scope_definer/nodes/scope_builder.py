@@ -11,10 +11,18 @@ from typing import Any, Dict, List, Optional, cast
 def _normalise_prediction_timestamp(value: Any) -> Optional[str]:
     """Coerce a prediction_timestamp input to an ISO 8601 string.
 
-    Accepts ``datetime``, ``pd.Timestamp``, or ISO-format ``str`` and returns
-    the normalised string form for stable storage in ``scope_spec``. Returns
-    ``None`` when the input is missing or empty so downstream agents can
-    distinguish "not provided" from "explicit timestamp".
+    Accepts ``datetime``, ``pd.Timestamp``, or a string parseable by
+    ``pd.Timestamp`` (ISO-8601 and the broader set of forms pandas accepts)
+    and returns the normalised string form for stable storage in
+    ``scope_spec``. Returns ``None`` when the input is missing or empty so
+    downstream agents can distinguish "not provided" from "explicit
+    timestamp".
+
+    Block 1B-M2: this helper is strict-validating. Permissive ``str(value)``
+    coercion was a footgun in temporal pipelines — silent type drift would
+    corrupt lag windows / rolling means without surfacing a single warning.
+    Unknown types and unparseable strings now raise ``TypeError`` so the
+    drift fails loud at the scope_definer boundary.
     """
     if value is None or value == "":
         return None
@@ -23,15 +31,24 @@ def _normalise_prediction_timestamp(value: Any) -> Optional[str]:
     # Late import to keep scope_builder dependency-light.
     try:
         import pandas as pd
-
-        if isinstance(value, pd.Timestamp):
-            # pd.Timestamp.isoformat is typed as Any in pandas-stubs, so cast.
-            return cast(str, value.isoformat())
     except ImportError:  # pragma: no cover - pandas is a hard dep elsewhere
-        pass
+        pd = None  # type: ignore[assignment]
+    if pd is not None and isinstance(value, pd.Timestamp):
+        # pd.Timestamp.isoformat is typed as Any in pandas-stubs, so cast.
+        return cast(str, value.isoformat())
     if isinstance(value, str):
+        if pd is not None:
+            try:
+                pd.Timestamp(value)
+            except (ValueError, TypeError) as exc:
+                raise TypeError(
+                    f"prediction_timestamp string is not parseable by pd.Timestamp: {value!r}"
+                ) from exc
         return value
-    return str(value)
+    raise TypeError(
+        f"prediction_timestamp must be datetime, pd.Timestamp, ISO-8601 str, "
+        f"or None; got {type(value).__name__}: {value!r}"
+    )
 
 
 _COST_MATRIX_KEYS = ("tp", "fp", "fn", "tn")
@@ -54,8 +71,7 @@ def _validate_cost_matrix(value: Any) -> Optional[Dict[str, float]]:
         return None
     if not isinstance(value, dict):
         raise ValueError(
-            f"cost_matrix must be a dict with keys {_COST_MATRIX_KEYS}, got "
-            f"{type(value).__name__}"
+            f"cost_matrix must be a dict with keys {_COST_MATRIX_KEYS}, got {type(value).__name__}"
         )
     missing = [k for k in _COST_MATRIX_KEYS if k not in value]
     if missing:
@@ -67,9 +83,7 @@ def _validate_cost_matrix(value: Any) -> Optional[Dict[str, float]]:
     for k in _COST_MATRIX_KEYS:
         v = value[k]
         if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(
-                f"cost_matrix['{k}'] must be int or float, got {type(v).__name__}"
-            )
+            raise ValueError(f"cost_matrix['{k}'] must be int or float, got {type(v).__name__}")
         coerced[k] = float(v)
     return coerced
 
