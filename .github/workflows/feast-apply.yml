@@ -74,6 +74,28 @@ jobs:
           pip install --upgrade pip
           pip install 'feast[postgres]==0.43.0'
 
+      - name: Render feature_store.yaml from template
+        # feature_store.yaml is gitignored (it embeds passwords). On the droplet
+        # docker/feast/entrypoint.sh renders it at container start; CI must do
+        # the same before `feast apply`. --skip-source-validation below means we
+        # never connect to Postgres/Redis, so placeholder values are sufficient.
+        env:
+          SUPABASE_POSTGRES_PASSWORD: ci-placeholder
+          REDIS_PASSWORD: ci-placeholder
+        run: |
+          python3 - <<'PY'
+          import os
+          src = 'feature_repo/feature_store.yaml.tmpl'
+          dst = 'feature_repo/feature_store.yaml'
+          content = open(src).read()
+          for var in ('SUPABASE_POSTGRES_PASSWORD', 'REDIS_PASSWORD'):
+              placeholder = '${' + var + '}'
+              if placeholder in content:
+                  content = content.replace(placeholder, os.environ[var])
+          open(dst, 'w').write(content)
+          print(f'rendered {dst}')
+          PY
+
       - name: Apply feature definitions
         # --skip-source-validation lets us regenerate the registry without a
         # reachable Postgres/Redis backend. The Feast container does NOT
