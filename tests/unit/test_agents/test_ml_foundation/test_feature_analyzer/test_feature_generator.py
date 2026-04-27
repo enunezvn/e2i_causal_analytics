@@ -243,9 +243,7 @@ class TestEntityGroupedTemporalFeatures:
         # Sort by (patient_id, event_ts) so we can index the first row per
         # entity directly. _generate_temporal_features sorts in place; this
         # guarantees the assertions are deterministic.
-        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(
-            drop=True
-        )
+        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(drop=True)
 
         # First row of each entity must have lag_1 == NaN.
         for entity in ("A", "B", "C"):
@@ -333,9 +331,7 @@ class TestEntityGroupedTemporalFeatures:
             rolling_windows=[3],
         )
 
-        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(
-            drop=True
-        )
+        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(drop=True)
 
         # Patient B day-2 rolling mean(3) over [100, 101, 102] = 101.0.
         # If grouping leaked, the window would have absorbed patient A's tail.
@@ -455,6 +451,78 @@ class TestConcatWithSplitMarkersGuards:
 
         with pytest.raises(ValueError, match=re.escape(reserved)):
             _concat_with_split_markers(train, None, test)
+
+
+class TestConcatWithSplitMarkersMemoryContract:
+    """Block 1B-M5: the no-copy contract is observable and load-bearing.
+
+    Dropping the per-split ``piece.copy()`` matters for RWD-scale memory, but
+    only if it is actually preserved. These tests pin the two contracts the
+    docstring promises so that a future "let's add a defensive copy back"
+    refactor breaks loudly instead of silently regressing memory use.
+    """
+
+    def test_returned_frame_shares_memory_with_input(self):
+        """Single-split path must alias the caller's column buffers.
+
+        With only X_train present, the combined frame is constructed without
+        going through ``pd.concat`` block consolidation, so the no-copy
+        contract is directly observable via ``np.shares_memory``. If a future
+        edit reintroduces ``piece.copy()``, this assertion flips to False.
+
+        Note: the multi-split path also drops the per-split copies, but
+        ``pd.concat`` consolidates the row stack into a fresh contiguous
+        block, so ``shares_memory`` between the combined frame and any single
+        input split is False there even with ``copy=False``. The single-split
+        case is the most direct, version-stable witness to the contract.
+        """
+        train = pd.DataFrame(
+            {
+                "a": np.arange(5, dtype=np.float64),
+                "b": np.arange(5, dtype=np.float64) * 2,
+            }
+        )
+
+        combined, _ = _concat_with_split_markers(train, None, None)
+
+        # At least one numeric column on the combined frame must alias the
+        # corresponding column on the input. Both are asserted because either
+        # one regressing would re-introduce the copy.
+        assert np.shares_memory(combined["a"].values, train["a"].values), (
+            "Single-split combined frame must alias input column 'a'; a "
+            "False here means a defensive copy was reintroduced inside "
+            "_concat_with_split_markers and the 1B-M5 memory contract has "
+            "regressed."
+        )
+        assert np.shares_memory(combined["b"].values, train["b"].values)
+
+    def test_inputs_are_mutated_in_place_with_marker_columns(self):
+        """The no-copy contract has a caller-visible side effect: input frames
+        gain ``_SPLIT_MARKER_COL`` and ``_SPLIT_ROW_ID_COL`` in place.
+
+        This is documented in the function's Notes section. Pinning it here
+        guarantees that callers who later try to reuse X_train/X_val/X_test
+        as "untouched" will see the dunder columns; if a future refactor
+        adds a copy to hide this, the test fails and forces an explicit
+        decision rather than a silent memory regression.
+        """
+        train = pd.DataFrame({"value": [1.0, 2.0, 3.0]})
+        val = pd.DataFrame({"value": [4.0, 5.0]})
+        test = pd.DataFrame({"value": [6.0]})
+
+        train_cols_before = set(train.columns)
+        val_cols_before = set(val.columns)
+        test_cols_before = set(test.columns)
+
+        _concat_with_split_markers(train, val, test)
+
+        new_marker_cols = {_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL}
+        assert set(train.columns) - train_cols_before == new_marker_cols, (
+            "X_train must gain marker columns in place; the no-copy "
+            "contract (1B-M5) requires this side effect."
+        )
+        assert set(val.columns) - val_cols_before == new_marker_cols
+        assert set(test.columns) - test_cols_before == new_marker_cols
 
 
 class TestInteractionFeatures:

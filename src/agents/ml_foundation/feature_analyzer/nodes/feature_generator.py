@@ -107,13 +107,11 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
         # frame, then split back on the marker. The per-row interaction/domain/
         # aggregate steps below do NOT need this round-trip — they're row-local.
         if feature_config.get("generate_temporal", True) and temporal_columns:
-            entity_id_column = (
-                feature_config.get("entity_id_column")
-                or state.get("entity_id_column")
+            entity_id_column = feature_config.get("entity_id_column") or state.get(
+                "entity_id_column"
             )
-            event_timestamp_column = (
-                feature_config.get("event_timestamp_column")
-                or state.get("event_timestamp_column")
+            event_timestamp_column = feature_config.get("event_timestamp_column") or state.get(
+                "event_timestamp_column"
             )
             # Block 1B contract: temporal feature generation REQUIRES entity
             # and timestamp columns. Silently falling back to naive shift is
@@ -135,9 +133,7 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
                     "patient histories — see Block 1B (#2)."
                 )
 
-            combined_df, split_index = _concat_with_split_markers(
-                X_train, X_val, X_test
-            )
+            combined_df, split_index = _concat_with_split_markers(X_train, X_val, X_test)
             combined_df, temporal_meta = _generate_temporal_features(
                 combined_df,
                 temporal_columns,
@@ -372,9 +368,9 @@ def _generate_temporal_features(
 
     # Sort by (entity, event_timestamp) once, up front, so all subsequent
     # groupby().shift / rolling() calls see chronologically ordered groups.
-    df = df.sort_values(
-        [entity_id_column, event_timestamp_column], kind="mergesort"
-    ).reset_index(drop=True)
+    df = df.sort_values([entity_id_column, event_timestamp_column], kind="mergesort").reset_index(
+        drop=True
+    )
 
     for col in temporal_columns:
         if col not in df.columns:
@@ -437,9 +433,7 @@ def _generate_temporal_features(
             # doesn't re-introduce the entity id as a level.
             for lag in lag_periods:
                 new_col = f"{col}_lag_{lag}"
-                df[new_col] = df.groupby(entity_id_column, group_keys=False)[
-                    col
-                ].shift(lag)
+                df[new_col] = df.groupby(entity_id_column, group_keys=False)[col].shift(lag)
                 metadata.append(
                     {
                         "name": new_col,
@@ -538,6 +532,25 @@ def _concat_with_split_markers(
             are deliberately unlikely to collide with caller columns, but a
             collision would silently overwrite caller data and produce
             mis-routed splits in ``_split_by_markers``.
+
+    Notes:
+        Block 1B-M5 dropped the per-split defensive ``piece.copy()`` to avoid
+        a full materialise of every input split at RWD scale. Two contracts
+        are now caller-visible and MUST be respected:
+
+        1. **Inputs are mutated in place.** This function appends
+           ``_SPLIT_MARKER_COL`` and ``_SPLIT_ROW_ID_COL`` directly to
+           ``X_train`` / ``X_val`` / ``X_test``. Callers who later try to
+           reuse these frames as "untouched" will see the dunder columns. The
+           reserved-name guard above ensures we never overwrite real caller
+           columns, only add the markers.
+        2. **The returned combined frame is NOT defensively copied.** Its
+           pre-existing columns may share memory with the input splits.
+           Callers MUST NOT mutate returned columns in place; they should
+           reindex via ``_SPLIT_ROW_ID_COL`` (see ``_split_by_markers``) or
+           assign new columns rather than overwriting existing values. The
+           split-aware test harness (``TestConcatWithSplitMarkersMemoryContract``
+           and round-trip tests in this module) catches violations.
     """
     # Block 1B-M1: refuse to clobber caller columns even if their names
     # happen to match our internal markers. Cheaper to fail loud than to
@@ -564,8 +577,11 @@ def _concat_with_split_markers(
     next_row_id = 0
 
     def _tag(piece: pd.DataFrame, split_name: str) -> pd.DataFrame:
+        # Block 1B-M5: no defensive copy — see Notes in the docstring. We
+        # mutate ``piece`` in place by adding the dunder marker columns. The
+        # reserved-name guard above guarantees these names don't already
+        # exist on caller frames, so no real data is overwritten.
         nonlocal next_row_id
-        piece = piece.copy()
         n = len(piece)
         row_ids = np.arange(next_row_id, next_row_id + n, dtype=np.int64)
         next_row_id += n
@@ -581,7 +597,11 @@ def _concat_with_split_markers(
         pieces.append(_tag(X_test, "test"))
 
     # ignore_index=True is fine — we use _SPLIT_ROW_ID_COL for round-tripping.
-    combined = pd.concat(pieces, axis=0, ignore_index=True)
+    # copy=False keeps the memory-sharing contract documented in Notes; pandas
+    # may still copy when consolidating non-aligned dtypes, but for the common
+    # case of homogeneous numeric splits the combined frame's blocks alias the
+    # input blocks.
+    combined = pd.concat(pieces, axis=0, ignore_index=True, copy=False)
     return combined, split_meta
 
 
@@ -604,9 +624,7 @@ def _split_by_markers(
         Tuple of (X_train, X_val, X_test). val/test may be None when absent.
     """
     feature_cols = [
-        c
-        for c in combined_df.columns
-        if c not in (_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL)
+        c for c in combined_df.columns if c not in (_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL)
     ]
 
     def _restore(split_name: str) -> Optional[pd.DataFrame]:
