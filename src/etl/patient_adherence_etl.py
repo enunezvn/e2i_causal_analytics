@@ -60,19 +60,18 @@ Edge-case behaviour for ``gap_days``
 from __future__ import annotations
 
 import logging
-import os
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-import psycopg2
-from tenacity import (
-    before_log,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
+# Re-exported from _common so existing test imports
+# (`from src.etl.patient_adherence_etl import _resolve_window`, etc.)
+# stay valid post-extraction. The helpers themselves moved to ``_common.py``
+# in fix-up for 6B-infra-2b so a third ETL (6B-infra-2c) can import the same
+# code without creating a third duplicate copy.
+from src.etl._common import (  # noqa: F401 — re-exported for backward compatibility
+    _connect_to_db,
+    _resolve_db_connection_string,
+    _resolve_window,
 )
-
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -143,6 +142,15 @@ patient_gaps AS (
     -- LAG on the ordered timestamp series; the first row's lag is NULL, so a
     -- single-event patient yields MAX(NULL) = NULL, then COALESCE pins it to 0
     -- (plan: "single-event patients (gap_days=0)").
+    --
+    -- The patient_id IN (...) predicate sits INSIDE the LAG-bearing subquery
+    -- (alongside the trigger_timestamp window) rather than wrapping it on the
+    -- outside. PostgreSQL is not guaranteed to push an outer predicate
+    -- through a window function, and on a large `triggers` table the
+    -- difference matters: filtering BEFORE LAG runs lets the planner skip
+    -- whole patient partitions, whereas an outer filter forces LAG over
+    -- every patient first and then discards rows. Correctness is identical
+    -- either way; latency is not.
     SELECT
         patient_id,
         COALESCE(
@@ -160,14 +168,16 @@ patient_gaps AS (
         FROM triggers
         WHERE trigger_timestamp >= %(start_date)s
           AND trigger_timestamp <  %(end_date)s
+          -- Restrict to patients touched by the journey window so this CTE
+          -- doesn't balloon to all triggers in the DB. Lives inside the
+          -- inner subquery (not wrapped outside) so it filters rows BEFORE
+          -- LAG runs.
+          AND patient_id IN (
+              SELECT patient_id FROM patient_journeys
+               WHERE journey_start_date >= %(start_date)s
+                 AND journey_start_date <  %(end_date)s
+          )
     ) lag_view
-    -- Restrict to patients touched by the journey window so this CTE doesn't
-    -- balloon to all triggers in the DB.
-    WHERE patient_id IN (
-        SELECT patient_id FROM patient_journeys
-         WHERE journey_start_date >= %(start_date)s
-           AND journey_start_date <  %(end_date)s
-    )
     GROUP BY patient_id
 )
 UPDATE patient_journeys pj
@@ -216,100 +226,10 @@ def _compute_adherence_rate(
 
 
 # -----------------------------------------------------------------------------
-# DB connection
+# DB connection + window resolution: see ``src.etl._common``. The names
+# ``_resolve_db_connection_string``, ``_connect_to_db`` and ``_resolve_window``
+# are re-exported at the top of this module.
 # -----------------------------------------------------------------------------
-
-
-def _resolve_db_connection_string() -> str:
-    """Read the Supabase Postgres URL from env.
-
-    Raises:
-        RuntimeError: if ``SUPABASE_DB_URL`` is missing or empty. The Celery
-            task wraps this and routes to dead-letter via the existing
-            ``task_failure`` handler in ``celery_app``.
-    """
-    db_url = os.getenv("SUPABASE_DB_URL")
-    if not db_url:
-        raise RuntimeError(
-            "SUPABASE_DB_URL environment variable is required for the "
-            "per-patient adherence/refill/gap ETL"
-        )
-    return db_url
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    # psycopg2.OperationalError covers connection-refused / server-starting /
-    # SSL-handshake failures; the rest covers raw socket failures. NB:
-    # psycopg2.OperationalError does NOT inherit from ConnectionError despite
-    # the name -- its MRO is OperationalError -> DatabaseError -> Error ->
-    # Exception. So adding it explicitly is what makes this retry actually
-    # cover the canonical Postgres connect-time failure modes.
-    retry=retry_if_exception_type(
-        (psycopg2.OperationalError, ConnectionError, TimeoutError, OSError)
-    ),
-    before=before_log(logger, logging.WARNING),
-    reraise=True,
-)
-def _connect_to_db() -> Any:
-    """Open a psycopg2 connection with tenacity-backed retry.
-
-    Three attempts with 1-10 second exponential backoff. ``psycopg2`` is
-    imported at module level since it is already a hard dependency via the
-    Supabase client.
-    """
-    return psycopg2.connect(_resolve_db_connection_string())
-
-
-# -----------------------------------------------------------------------------
-# Window resolution
-# -----------------------------------------------------------------------------
-
-
-def _resolve_window(
-    start_date: Optional[str],
-    end_date: Optional[str],
-) -> tuple[datetime, datetime]:
-    """Resolve ISO date strings to a ``(start, end)`` UTC datetime tuple.
-
-    Identical semantics to ``business_metrics_per_hcp_etl._resolve_window``;
-    a follow-up may extract the shared helper into ``src/etl/_window.py``.
-
-    ``end_date`` defaults to ``now(UTC)``; ``start_date`` defaults to
-    ``end_date - DEFAULT_WINDOW_HOURS``. Strings can be ISO datetime
-    (``2024-01-01T00:00:00Z``) or ISO date (``2024-01-01``) — both are
-    accepted via ``datetime.fromisoformat``.
-
-    Naive results from ``datetime.fromisoformat`` (date-only inputs return a
-    tz-naive datetime at midnight) are normalised to UTC-aware so downstream
-    aware/naive comparisons cannot raise ``TypeError``.
-    """
-    now_utc = datetime.now(timezone.utc)
-
-    end_dt = (
-        datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        if end_date
-        else now_utc
-    )
-    start_dt = (
-        datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        if start_date
-        else end_dt - timedelta(hours=DEFAULT_WINDOW_HOURS)
-    )
-
-    if start_dt.tzinfo is None:
-        start_dt = start_dt.replace(tzinfo=timezone.utc)
-    if end_dt.tzinfo is None:
-        end_dt = end_dt.replace(tzinfo=timezone.utc)
-
-    if start_dt >= end_dt:
-        raise ValueError(
-            f"start_date ({start_dt.isoformat()}) must be strictly before "
-            f"end_date ({end_dt.isoformat()})"
-        )
-
-    return start_dt, end_dt
 
 
 # -----------------------------------------------------------------------------

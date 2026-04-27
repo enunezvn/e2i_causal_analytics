@@ -49,19 +49,19 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from typing import Any, Dict, Optional
 
-import psycopg2
-from tenacity import (
-    before_log,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
+# Re-exported from _common so existing test imports
+# (`from src.etl.business_metrics_per_hcp_etl import _resolve_window`, etc.)
+# stay valid post-extraction. The helpers themselves moved to ``_common.py``
+# in fix-up for 6B-infra-2b so a third ETL (6B-infra-2c) can import the same
+# code without creating a third duplicate copy.
+from src.etl._common import (  # noqa: F401 — re-exported for backward compatibility
+    _connect_to_db,
+    _resolve_db_connection_string,
+    _resolve_window,
 )
-
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -255,101 +255,10 @@ def _build_metric_id(hcp_id: str, brand: str, metric_date: date) -> str:
 
 
 # -----------------------------------------------------------------------------
-# DB connection
+# DB connection + window resolution: see ``src.etl._common``. The names
+# ``_resolve_db_connection_string``, ``_connect_to_db`` and ``_resolve_window``
+# are re-exported at the top of this module.
 # -----------------------------------------------------------------------------
-
-
-def _resolve_db_connection_string() -> str:
-    """Read the Supabase Postgres URL from env.
-
-    Raises:
-        RuntimeError: if ``SUPABASE_DB_URL`` is missing or empty. The Celery
-            task wraps this and routes to dead-letter via the existing
-            ``task_failure`` handler in ``celery_app``.
-    """
-    db_url = os.getenv("SUPABASE_DB_URL")
-    if not db_url:
-        raise RuntimeError(
-            "SUPABASE_DB_URL environment variable is required for the "
-            "per-HCP business_metrics rollup ETL"
-        )
-    return db_url
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    # psycopg2.OperationalError covers connection-refused / server-starting /
-    # SSL-handshake failures; the rest covers raw socket failures. NB:
-    # psycopg2.OperationalError does NOT inherit from ConnectionError despite
-    # the name -- its MRO is OperationalError -> DatabaseError -> Error ->
-    # Exception. So adding it explicitly is what makes this retry actually
-    # cover the canonical Postgres connect-time failure modes.
-    retry=retry_if_exception_type(
-        (psycopg2.OperationalError, ConnectionError, TimeoutError, OSError)
-    ),
-    before=before_log(logger, logging.WARNING),
-    reraise=True,
-)
-def _connect_to_db() -> Any:
-    """Open a psycopg2 connection with tenacity-backed retry.
-
-    Three attempts with 1-10 second exponential backoff. ``psycopg2`` is
-    imported at module level since it is already a hard dependency via the
-    Supabase client.
-    """
-    return psycopg2.connect(_resolve_db_connection_string())
-
-
-# -----------------------------------------------------------------------------
-# Window resolution
-# -----------------------------------------------------------------------------
-
-
-def _resolve_window(
-    start_date: Optional[str],
-    end_date: Optional[str],
-) -> tuple[datetime, datetime]:
-    """Resolve ISO date strings to a ``(start, end)`` UTC datetime tuple.
-
-    ``end_date`` defaults to ``now(UTC)``; ``start_date`` defaults to
-    ``end_date - DEFAULT_WINDOW_HOURS``. Strings can be ISO datetime
-    (``2024-01-01T00:00:00Z``) or ISO date (``2024-01-01``) — both are
-    accepted via ``datetime.fromisoformat``.
-
-    Naive results from ``datetime.fromisoformat`` (date-only inputs return
-    a tz-naive datetime at midnight) are normalised to UTC-aware. Without
-    this step a mixed call such as ``_resolve_window("2024-01-01",
-    "2024-01-02T00:00:00+00:00")`` would raise ``TypeError`` from the
-    aware/naive comparison and mask the friendlier ``ValueError`` below.
-    """
-    now_utc = datetime.now(timezone.utc)
-
-    end_dt = (
-        datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        if end_date
-        else now_utc
-    )
-    start_dt = (
-        datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        if start_date
-        else end_dt - timedelta(hours=DEFAULT_WINDOW_HOURS)
-    )
-
-    # Normalise naive datetimes (date-only ISO strings) to UTC so
-    # downstream comparisons + the SQL bind params are consistently aware.
-    if start_dt.tzinfo is None:
-        start_dt = start_dt.replace(tzinfo=timezone.utc)
-    if end_dt.tzinfo is None:
-        end_dt = end_dt.replace(tzinfo=timezone.utc)
-
-    if start_dt >= end_dt:
-        raise ValueError(
-            f"start_date ({start_dt.isoformat()}) must be strictly before "
-            f"end_date ({end_dt.isoformat()})"
-        )
-
-    return start_dt, end_dt
 
 
 # -----------------------------------------------------------------------------

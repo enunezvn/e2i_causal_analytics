@@ -2,10 +2,6 @@
 
 These tests do not touch a real database. They verify:
 
-* ``_resolve_window`` honours defaults, ISO parsing, and rejects inverted
-  windows.
-* ``_resolve_db_connection_string`` raises when ``SUPABASE_DB_URL`` is
-  missing.
 * The SQL string contains the load-bearing CTEs, parameter placeholders,
   the deterministic ``metric_id`` shape, the ``ON CONFLICT (metric_id)``
   clause, and the brand-via-LATERAL pattern.
@@ -13,6 +9,10 @@ These tests do not touch a real database. They verify:
   flow correctly with mocks, and surfaces ``status`` / ``rows_affected``
   faithfully. The Celery wrapper ``run_per_hcp_rollup`` is a thin
   one-liner over this and is exercised in the integration test.
+* The shared helpers ``_resolve_db_connection_string``, ``_connect_to_db``
+  and ``_resolve_window`` are re-exported here for backward compatibility
+  (the canonical tests live in ``test_common.py`` since extraction in
+  6B-infra-2b fix-up).
 
 Behaviour-level assertions about market_share summing to 1.0 within a
 territory live in the integration test (which spins up real synthetic
@@ -22,9 +22,8 @@ data); see ``tests/integration/test_business_metrics_per_hcp_etl_integration.py`
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,86 +31,24 @@ import pytest
 # Importing the module triggers `from src.workers.celery_app import celery_app`,
 # which only requires standard library + celery (already installed). No DB
 # connection happens at import time.
+from src.etl import _common
 from src.etl import business_metrics_per_hcp_etl as etl
 
 # =============================================================================
-# _resolve_db_connection_string
+# _common helper re-exports
 # =============================================================================
 
 
-def test_resolve_db_connection_string_returns_env_value() -> None:
-    """Returns the SUPABASE_DB_URL value verbatim when present."""
-    fake_url = "postgresql://u:p@h:5432/db"
-    with patch.dict(os.environ, {"SUPABASE_DB_URL": fake_url}, clear=False):
-        assert etl._resolve_db_connection_string() == fake_url
+def test_helpers_are_re_exported_from_common() -> None:
+    """The three shared helpers must be accessible as module attributes on
+    ``business_metrics_per_hcp_etl`` so existing test imports keep working.
 
-
-def test_resolve_db_connection_string_raises_when_missing() -> None:
-    """Raises RuntimeError when SUPABASE_DB_URL is unset/empty."""
-    env = {k: v for k, v in os.environ.items() if k != "SUPABASE_DB_URL"}
-    with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(RuntimeError, match="SUPABASE_DB_URL"):
-            etl._resolve_db_connection_string()
-
-
-def test_resolve_db_connection_string_raises_when_empty() -> None:
-    """Raises RuntimeError when SUPABASE_DB_URL is empty string."""
-    with patch.dict(os.environ, {"SUPABASE_DB_URL": ""}, clear=False):
-        with pytest.raises(RuntimeError, match="SUPABASE_DB_URL"):
-            etl._resolve_db_connection_string()
-
-
-# =============================================================================
-# _resolve_window
-# =============================================================================
-
-
-def test_resolve_window_defaults_to_24h_ending_now() -> None:
-    """When both ends are None, end=now(UTC), start=end - DEFAULT_WINDOW_HOURS."""
-    before = datetime.now(timezone.utc)
-    start, end = etl._resolve_window(None, None)
-    after = datetime.now(timezone.utc)
-
-    # end is roughly "now": between before and after the call.
-    assert before <= end <= after
-    # Window length matches DEFAULT_WINDOW_HOURS.
-    delta_hours = (end - start).total_seconds() / 3600.0
-    assert delta_hours == pytest.approx(etl.DEFAULT_WINDOW_HOURS, abs=1e-6)
-
-
-def test_resolve_window_parses_iso_z_suffix() -> None:
-    """Trailing 'Z' is normalised to +00:00 like the Feast tasks pattern."""
-    start, end = etl._resolve_window("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
-    assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
-    assert end == datetime(2024, 1, 2, tzinfo=timezone.utc)
-
-
-def test_resolve_window_parses_iso_date_only() -> None:
-    """Plain ISO dates (no time component) parse cleanly.
-
-    ``datetime.fromisoformat`` of a date string yields a tz-naive datetime
-    at 00:00:00; ``_resolve_window`` then normalises it to UTC-aware (see
-    ``test_resolve_window_normalises_naive_inputs_to_utc`` for the
-    tz-mixing case).
+    The detailed behaviour tests live in ``test_common.py``; this guards the
+    re-export wiring so a future cleanup that drops the shim breaks loudly.
     """
-    start, end = etl._resolve_window("2024-01-01", "2024-01-02")
-    assert start.year == 2024 and start.day == 1
-    assert end.year == 2024 and end.day == 2
-    # Post-fix: both are tz-aware UTC.
-    assert start.tzinfo is not None
-    assert end.tzinfo is not None
-
-
-def test_resolve_window_rejects_inverted_range() -> None:
-    """start_date >= end_date triggers ValueError."""
-    with pytest.raises(ValueError, match="must be strictly before"):
-        etl._resolve_window("2024-01-02T00:00:00Z", "2024-01-01T00:00:00Z")
-
-
-def test_resolve_window_rejects_zero_length_window() -> None:
-    """Equal start and end is also invalid (need at least one second)."""
-    with pytest.raises(ValueError, match="must be strictly before"):
-        etl._resolve_window("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+    assert etl._resolve_db_connection_string is _common._resolve_db_connection_string
+    assert etl._connect_to_db is _common._connect_to_db
+    assert etl._resolve_window is _common._resolve_window
 
 
 # =============================================================================
@@ -296,29 +233,6 @@ def test_metric_id_changes_when_natural_key_changes() -> None:
     c = etl._build_metric_id("hcp_1", "Fabhalta", date(2024, 1, 1))
     d = etl._build_metric_id("hcp_1", "Remibrutinib", date(2024, 1, 2))
     assert len({a, b, c, d}) == 4
-
-
-# =============================================================================
-# _resolve_window — tz-mixing footgun
-# =============================================================================
-
-
-def test_resolve_window_normalises_naive_inputs_to_utc() -> None:
-    """Mixing ISO date (naive) + ISO datetime+tz (aware) must NOT TypeError.
-
-    Before the I3 fix, ``datetime.fromisoformat("2024-01-01")`` returned a
-    naive datetime which then collided with the aware ``end_dt`` in the
-    ``start_dt >= end_dt`` comparison, raising ``TypeError`` instead of
-    the friendlier ``ValueError``.
-    """
-    start, end = etl._resolve_window("2024-01-01", "2024-01-02T00:00:00+00:00")
-    # Both ends are now tz-aware (UTC).
-    assert start.tzinfo is not None
-    assert end.tzinfo is not None
-    assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
-    assert end == datetime(2024, 1, 2, tzinfo=timezone.utc)
-    # 24-hour window.
-    assert (end - start).total_seconds() == 86400
 
 
 # =============================================================================

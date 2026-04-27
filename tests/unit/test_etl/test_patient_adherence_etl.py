@@ -4,18 +4,19 @@ These tests do not touch a real database. They verify:
 
 * ``_compute_adherence_rate`` mirrors the SQL clamp-and-divide for every
   edge case (zero span, NULL inputs, ratio overflow).
-* ``_resolve_window`` honours defaults, ISO parsing, and rejects inverted
-  windows. (Identical contract to 6B-infra-2a; we re-test it locally so
-  refactoring one ETL never silently changes the other.)
-* ``_resolve_db_connection_string`` raises when ``SUPABASE_DB_URL`` is
-  missing.
 * The SQL string contains the load-bearing CTEs, parameter placeholders,
   the ``LEAST/GREATEST`` clamp, the ``LAG``-based gap computation, the
-  ``UPDATE...FROM`` shape, and the explicit "refill_count NOT set" comment.
+  ``UPDATE...FROM`` shape, the in-subquery ``patient_id IN (...)`` predicate
+  (so the planner filters before LAG runs), and the explicit "refill_count
+  NOT set" comment.
 * ``_run_patient_adherence_impl`` orchestrates the connect/execute/commit/
   close flow correctly with mocks, and surfaces ``status`` / ``rows_affected``
   faithfully. The Celery wrapper ``run_patient_adherence_rollup`` is a thin
   one-liner over this and is exercised in the integration test.
+* The shared helpers ``_resolve_db_connection_string``, ``_connect_to_db``
+  and ``_resolve_window`` are re-exported here for backward compatibility
+  (the canonical tests live in ``test_common.py`` since extraction in
+  6B-infra-2b fix-up).
 
 Behaviour-level assertions about exact gap counts and adherence ratios on
 real synthetic data live in
@@ -24,9 +25,8 @@ real synthetic data live in
 
 from __future__ import annotations
 
-import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,7 +34,25 @@ import pytest
 # Importing the module triggers `from src.workers.celery_app import celery_app`,
 # which only requires standard library + celery (already installed). No DB
 # connection happens at import time.
+from src.etl import _common
 from src.etl import patient_adherence_etl as etl
+
+# =============================================================================
+# _common helper re-exports
+# =============================================================================
+
+
+def test_helpers_are_re_exported_from_common() -> None:
+    """The three shared helpers must be accessible as module attributes on
+    ``patient_adherence_etl`` so existing test imports keep working.
+
+    The detailed behaviour tests live in ``test_common.py``; this guards the
+    re-export wiring so a future cleanup that drops the shim breaks loudly.
+    """
+    assert etl._resolve_db_connection_string is _common._resolve_db_connection_string
+    assert etl._connect_to_db is _common._connect_to_db
+    assert etl._resolve_window is _common._resolve_window
+
 
 # =============================================================================
 # _compute_adherence_rate — mirrors SQL semantics exactly
@@ -83,86 +101,6 @@ def test_compute_adherence_rate_none_span_returns_none() -> None:
 def test_compute_adherence_rate_both_none_returns_none() -> None:
     """Both args None -> None (defensive)."""
     assert etl._compute_adherence_rate(None, None) is None
-
-
-# =============================================================================
-# _resolve_db_connection_string
-# =============================================================================
-
-
-def test_resolve_db_connection_string_returns_env_value() -> None:
-    """Returns the SUPABASE_DB_URL value verbatim when present."""
-    fake_url = "postgresql://u:p@h:5432/db"
-    with patch.dict(os.environ, {"SUPABASE_DB_URL": fake_url}, clear=False):
-        assert etl._resolve_db_connection_string() == fake_url
-
-
-def test_resolve_db_connection_string_raises_when_missing() -> None:
-    """Raises RuntimeError when SUPABASE_DB_URL is unset/empty."""
-    env = {k: v for k, v in os.environ.items() if k != "SUPABASE_DB_URL"}
-    with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(RuntimeError, match="SUPABASE_DB_URL"):
-            etl._resolve_db_connection_string()
-
-
-def test_resolve_db_connection_string_raises_when_empty() -> None:
-    """Raises RuntimeError when SUPABASE_DB_URL is empty string."""
-    with patch.dict(os.environ, {"SUPABASE_DB_URL": ""}, clear=False):
-        with pytest.raises(RuntimeError, match="SUPABASE_DB_URL"):
-            etl._resolve_db_connection_string()
-
-
-# =============================================================================
-# _resolve_window
-# =============================================================================
-
-
-def test_resolve_window_defaults_to_24h_ending_now() -> None:
-    """When both ends are None, end=now(UTC), start=end - DEFAULT_WINDOW_HOURS."""
-    before = datetime.now(timezone.utc)
-    start, end = etl._resolve_window(None, None)
-    after = datetime.now(timezone.utc)
-
-    assert before <= end <= after
-    delta_hours = (end - start).total_seconds() / 3600.0
-    assert delta_hours == pytest.approx(etl.DEFAULT_WINDOW_HOURS, abs=1e-6)
-
-
-def test_resolve_window_parses_iso_z_suffix() -> None:
-    """Trailing 'Z' is normalised to +00:00."""
-    start, end = etl._resolve_window("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
-    assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
-    assert end == datetime(2024, 1, 2, tzinfo=timezone.utc)
-
-
-def test_resolve_window_parses_iso_date_only() -> None:
-    """Plain ISO dates parse cleanly and are normalised to UTC-aware."""
-    start, end = etl._resolve_window("2024-01-01", "2024-01-02")
-    assert start.year == 2024 and start.day == 1
-    assert end.year == 2024 and end.day == 2
-    assert start.tzinfo is not None
-    assert end.tzinfo is not None
-
-
-def test_resolve_window_rejects_inverted_range() -> None:
-    """start_date >= end_date triggers ValueError."""
-    with pytest.raises(ValueError, match="must be strictly before"):
-        etl._resolve_window("2024-01-02T00:00:00Z", "2024-01-01T00:00:00Z")
-
-
-def test_resolve_window_rejects_zero_length_window() -> None:
-    """Equal start and end is also invalid (need at least one second)."""
-    with pytest.raises(ValueError, match="must be strictly before"):
-        etl._resolve_window("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
-
-
-def test_resolve_window_normalises_naive_inputs_to_utc() -> None:
-    """Mixing ISO date (naive) + ISO datetime+tz (aware) must NOT TypeError."""
-    start, end = etl._resolve_window("2024-01-01", "2024-01-02T00:00:00+00:00")
-    assert start.tzinfo is not None
-    assert end.tzinfo is not None
-    assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
-    assert end == datetime(2024, 1, 2, tzinfo=timezone.utc)
 
 
 # =============================================================================
@@ -266,6 +204,45 @@ class TestSQLShape:
         assert re.search(
             r"trigger_timestamp\s*<\s*%\(end_date\)s", sql
         ), "missing trigger_timestamp < end_date filter"
+
+    def test_patient_id_predicate_lives_inside_lag_subquery(self) -> None:
+        """The ``patient_id IN (SELECT patient_id FROM patient_journeys ...)``
+        predicate must sit INSIDE the inner LAG-bearing subquery, alongside
+        the trigger_timestamp window — not on the outer ``WHERE`` of the
+        ``patient_gaps`` CTE.
+
+        PostgreSQL is not guaranteed to push an outer predicate through a
+        window function; pinning the placement here keeps the planner free
+        to filter trigger rows BEFORE LAG runs (latency-safe on large
+        ``triggers`` tables).
+        """
+        sql = etl.UPDATE_PATIENT_ADHERENCE_SQL
+        normalised = re.sub(r"\s+", " ", sql)
+
+        # The predicate must appear once.
+        assert "patient_id IN ( SELECT patient_id FROM patient_journeys" in normalised, (
+            "missing patient_id IN (SELECT patient_id FROM patient_journeys ...) "
+            "predicate"
+        )
+
+        # And it must appear BEFORE the closing ``) lag_view`` of the inner
+        # subquery — i.e. inside it, not on the outer ``patient_gaps`` WHERE.
+        predicate_idx = normalised.index("patient_id IN ( SELECT patient_id FROM patient_journeys")
+        lag_view_close_idx = normalised.index(") lag_view")
+        assert predicate_idx < lag_view_close_idx, (
+            "patient_id IN (...) predicate must live inside the inner "
+            "LAG-bearing subquery (before the `) lag_view` closer), not on "
+            "the outer patient_gaps WHERE"
+        )
+
+        # Belt-and-braces: the segment between ``FROM triggers`` and
+        # ``) lag_view`` should contain both the trigger_timestamp window AND
+        # the patient_id IN predicate (proving they're co-located inside the
+        # inner subquery).
+        from_triggers_idx = normalised.index("FROM triggers")
+        inner_subquery = normalised[from_triggers_idx:lag_view_close_idx]
+        assert "trigger_timestamp >= %(start_date)s" in inner_subquery
+        assert "patient_id IN ( SELECT patient_id FROM patient_journeys" in inner_subquery
 
     def test_refill_count_left_null_with_documenting_comment(self) -> None:
         """refill_count is intentionally NOT in the SET list — and the SQL
