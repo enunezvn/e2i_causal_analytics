@@ -38,6 +38,7 @@ class Tier0StateContract(TypedDict, total=False):
     validation_metrics: NotRequired[Dict[str, Any]]
     test_metrics: NotRequired[Dict[str, Any]]
     test_metrics_at_optimal: NotRequired[Dict[str, Any]]
+    test_metrics_at_05: NotRequired[Dict[str, Any]]
     train_metrics: NotRequired[Dict[str, Any]]
     feature_importance: NotRequired[list]
     feature_names: NotRequired[list]
@@ -87,6 +88,7 @@ class Tier0StateContract(TypedDict, total=False):
     calibrated_ece: NotRequired[float]
     optimal_threshold: NotRequired[float]
     permutation_test: NotRequired[Dict[str, Any]]
+    f1_threshold_analysis: NotRequired[Dict[str, Any]]
     pr_auc: NotRequired[float]
     mcc: NotRequired[float]
     minority_precision: NotRequired[float]
@@ -121,23 +123,13 @@ class Tier0StateContract(TypedDict, total=False):
 
 
 class Tier0OutputMapper:
-    """Maps tier0 state dictionary to agent-specific inputs.
+    """Maps a tier0 state dictionary to agent-specific inputs.
 
-    The tier0 test script produces a state dictionary containing:
-    - trained_model: sklearn/xgboost/lightgbm model
-    - model_uri: str (MLflow URI)
-    - validation_metrics: dict (auc_roc, precision, recall, f1_score)
-    - feature_importance: list[{feature, importance}]
-    - eligible_df: DataFrame (patient cohort)
-    - qc_report: dict (data quality)
-    - experiment_id: str
-    - cohort_result: CohortExecutionResult
-    - scope_spec: dict (brand, indication, etc.)
-    - class_imbalance_info: dict (ratio, strategy)
-    - prediction_timestamp: pd.Timestamp (optional inference cutoff time;
-      surfaced from scope_spec.prediction_timestamp when set, otherwise None)
-
-    This class provides mapping methods for each Tier 1-5 agent.
+    See ``Tier0StateContract`` (above) for the authoritative list of state
+    keys this class accepts; that TypedDict is the single source of truth
+    and is enforced at construction time by ``_validate_contract``. Each
+    ``map_to_*`` method below produces the kwargs / state dict expected by
+    one Tier 1-5 agent.
     """
 
     def __init__(self, tier0_state: dict[str, Any]):
