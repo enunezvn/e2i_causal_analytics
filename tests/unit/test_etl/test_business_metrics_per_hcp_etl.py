@@ -1,0 +1,416 @@
+"""Unit tests for ``src.etl.business_metrics_per_hcp_etl``.
+
+These tests do not touch a real database. They verify:
+
+* ``_resolve_window`` honours defaults, ISO parsing, and rejects inverted
+  windows.
+* ``_resolve_db_connection_string`` raises when ``SUPABASE_DB_URL`` is
+  missing.
+* The SQL string contains the load-bearing CTEs, parameter placeholders,
+  the deterministic ``metric_id`` shape, the ``ON CONFLICT (metric_id)``
+  clause, and the brand-via-LATERAL pattern.
+* ``_run_per_hcp_rollup_impl`` orchestrates the connect/execute/commit/close
+  flow correctly with mocks, and surfaces ``status`` / ``rows_affected``
+  faithfully. The Celery wrapper ``run_per_hcp_rollup`` is a thin
+  one-liner over this and is exercised in the integration test.
+
+Behaviour-level assertions about market_share summing to 1.0 within a
+territory live in the integration test (which spins up real synthetic
+data); see ``tests/integration/test_business_metrics_per_hcp_etl_integration.py``.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# Importing the module triggers `from src.workers.celery_app import celery_app`,
+# which only requires standard library + celery (already installed). No DB
+# connection happens at import time.
+from src.etl import business_metrics_per_hcp_etl as etl
+
+# =============================================================================
+# _resolve_db_connection_string
+# =============================================================================
+
+
+def test_resolve_db_connection_string_returns_env_value() -> None:
+    """Returns the SUPABASE_DB_URL value verbatim when present."""
+    fake_url = "postgresql://u:p@h:5432/db"
+    with patch.dict(os.environ, {"SUPABASE_DB_URL": fake_url}, clear=False):
+        assert etl._resolve_db_connection_string() == fake_url
+
+
+def test_resolve_db_connection_string_raises_when_missing() -> None:
+    """Raises RuntimeError when SUPABASE_DB_URL is unset/empty."""
+    env = {k: v for k, v in os.environ.items() if k != "SUPABASE_DB_URL"}
+    with patch.dict(os.environ, env, clear=True):
+        with pytest.raises(RuntimeError, match="SUPABASE_DB_URL"):
+            etl._resolve_db_connection_string()
+
+
+def test_resolve_db_connection_string_raises_when_empty() -> None:
+    """Raises RuntimeError when SUPABASE_DB_URL is empty string."""
+    with patch.dict(os.environ, {"SUPABASE_DB_URL": ""}, clear=False):
+        with pytest.raises(RuntimeError, match="SUPABASE_DB_URL"):
+            etl._resolve_db_connection_string()
+
+
+# =============================================================================
+# _resolve_window
+# =============================================================================
+
+
+def test_resolve_window_defaults_to_24h_ending_now() -> None:
+    """When both ends are None, end=now(UTC), start=end - DEFAULT_WINDOW_HOURS."""
+    before = datetime.now(timezone.utc)
+    start, end = etl._resolve_window(None, None)
+    after = datetime.now(timezone.utc)
+
+    # end is roughly "now": between before and after the call.
+    assert before <= end <= after
+    # Window length matches DEFAULT_WINDOW_HOURS.
+    delta_hours = (end - start).total_seconds() / 3600.0
+    assert delta_hours == pytest.approx(etl.DEFAULT_WINDOW_HOURS, abs=1e-6)
+
+
+def test_resolve_window_parses_iso_z_suffix() -> None:
+    """Trailing 'Z' is normalised to +00:00 like the Feast tasks pattern."""
+    start, end = etl._resolve_window("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
+    assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert end == datetime(2024, 1, 2, tzinfo=timezone.utc)
+
+
+def test_resolve_window_parses_iso_date_only() -> None:
+    """Plain ISO dates (no time component) parse to naive datetimes."""
+    start, end = etl._resolve_window("2024-01-01", "2024-01-02")
+    # `datetime.fromisoformat` of a date string yields a naive datetime at
+    # 00:00:00; we compare structurally rather than tz-aware-ly.
+    assert start.year == 2024 and start.day == 1
+    assert end.year == 2024 and end.day == 2
+
+
+def test_resolve_window_rejects_inverted_range() -> None:
+    """start_date >= end_date triggers ValueError."""
+    with pytest.raises(ValueError, match="must be strictly before"):
+        etl._resolve_window("2024-01-02T00:00:00Z", "2024-01-01T00:00:00Z")
+
+
+def test_resolve_window_rejects_zero_length_window() -> None:
+    """Equal start and end is also invalid (need at least one second)."""
+    with pytest.raises(ValueError, match="must be strictly before"):
+        etl._resolve_window("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+
+# =============================================================================
+# SQL string structure
+# =============================================================================
+
+
+class TestSQLShape:
+    """Pin the load-bearing structure of INSERT_PER_HCP_ROLLUP_SQL.
+
+    These tests intentionally lean on substring presence rather than full
+    SQL parse — a parser would be overkill for the small set of guarantees
+    this query needs to keep across refactors.
+    """
+
+    def test_has_three_named_ctes(self) -> None:
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert "triggers_with_brand AS" in sql
+        assert "hcp_brand_daily AS" in sql
+        assert "territory_totals AS" in sql
+
+    def test_brand_derived_via_lateral_subquery(self) -> None:
+        """Brand comes from patient_journeys via LATERAL, not from
+        triggers.brand_id (which is sentinel 'UNKNOWN')."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert "JOIN LATERAL" in sql
+        assert "patient_journeys" in sql
+        # The most-recent-prior journey pattern.
+        assert "ORDER BY pj_inner.journey_start_date DESC" in sql
+        assert "LIMIT 1" in sql
+
+    def test_uses_named_parameters(self) -> None:
+        """psycopg2 named-param style %()s is required so the params dict
+        in run_per_hcp_rollup matches."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert "%(start_date)s" in sql
+        assert "%(end_date)s" in sql
+        assert "%(metric_id_prefix)s" in sql
+        assert "%(metric_type)s" in sql
+
+    def test_metric_id_is_deterministic(self) -> None:
+        """metric_id is built from the prefix + hcp_id + brand + date."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        # The exact concat is what guarantees idempotent re-runs map to the
+        # same row.
+        assert (
+            "%(metric_id_prefix)s || '_' || hbd.hcp_id || '_' || "
+            "hbd.brand::TEXT || '_' || hbd.metric_date::TEXT"
+        ) in sql
+
+    def test_on_conflict_uses_pk(self) -> None:
+        """ON CONFLICT targets metric_id (the PK), not a (hcp_id, brand,
+        metric_date) tuple — see module docstring for the reasoning."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert "ON CONFLICT (metric_id) DO UPDATE SET" in sql
+
+    def test_on_conflict_updates_volatile_metrics(self) -> None:
+        """Idempotent re-run with new counts must overwrite the metric
+        columns; static columns like metric_date stay put."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        # Slice from the ON CONFLICT clause forward so we only assert on
+        # the SET list (and don't trip on column names that also appear in
+        # the SELECT).
+        on_conflict_block = sql.split("ON CONFLICT (metric_id) DO UPDATE SET", 1)[1]
+        for col in (
+            "trx_count",
+            "nrx_count",
+            "total_rx_count",
+            "market_share",
+            "conversion_rate",
+        ):
+            # Allow any whitespace between the column name and "=".
+            pattern = rf"{re.escape(col)}\s*=\s*EXCLUDED\.{re.escape(col)}"
+            assert re.search(pattern, on_conflict_block), (
+                f"missing UPDATE SET clause for {col}"
+            )
+
+    def test_market_share_is_share_of_territory_total(self) -> None:
+        """market_share = total_rx_count / territory_total, with a >0 guard."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert "tt.territory_total > 0" in sql
+        assert "hbd.total_rx_count::NUMERIC / tt.territory_total" in sql
+
+    def test_conversion_rate_uses_nullif_guard(self) -> None:
+        """Division by zero is guarded via NULLIF; default to 0 via COALESCE."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert "NULLIF(COUNT(*) FILTER (WHERE delivery_status = 'delivered'), 0)" in sql
+        assert "COALESCE(" in sql
+
+    def test_engagement_score_and_call_frequency_left_null(self) -> None:
+        """Plan calls for these columns; canonical schema lacks the source
+        table. We document the omission inline so future readers see why.
+
+        We strip line comments before checking, since the explanatory
+        comment in the column list mentions both column names.
+        """
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        # Strip everything from `--` to end-of-line so comments don't
+        # spuriously match column names.
+        stripped = re.sub(r"--[^\n]*", "", sql)
+        # Now slice the INSERT INTO ... SELECT block.
+        insert_clause = stripped.split("INSERT INTO business_metrics", 1)[1].split(
+            "SELECT", 1
+        )[0]
+        assert "engagement_score" not in insert_clause
+        assert "call_frequency" not in insert_clause
+        # The original SQL still mentions `interactions` in the comment so
+        # future readers see the reasoning.
+        assert "interactions" in sql
+
+    def test_filters_to_window(self) -> None:
+        """The trigger window filter is the [start, end) half-open interval."""
+        sql = etl.INSERT_PER_HCP_ROLLUP_SQL
+        assert re.search(
+            r"t\.trigger_timestamp\s*>=\s*%\(start_date\)s", sql
+        ), "missing start_date >= filter"
+        assert re.search(r"t\.trigger_timestamp\s*<\s*%\(end_date\)s", sql), (
+            "missing end_date < filter"
+        )
+
+
+# =============================================================================
+# _run_per_hcp_rollup_impl — orchestration
+# =============================================================================
+
+
+def _make_mock_conn(rowcount: int = 7) -> MagicMock:
+    """Build a mock psycopg2 connection that exits its `with` block cleanly."""
+    cur = MagicMock()
+    cur.rowcount = rowcount
+    cur.execute = MagicMock()
+    cur.__enter__ = MagicMock(return_value=cur)
+    cur.__exit__ = MagicMock(return_value=False)
+
+    conn = MagicMock()
+    conn.cursor = MagicMock(return_value=cur)
+    conn.__enter__ = MagicMock(return_value=conn)
+    conn.__exit__ = MagicMock(return_value=False)
+    conn.close = MagicMock()
+    return conn
+
+
+def test_impl_completed_path() -> None:
+    """Happy path: connect, execute, commit, close; status=completed."""
+    conn = _make_mock_conn(rowcount=42)
+
+    with patch.object(etl, "_connect_to_db", return_value=conn) as connect:
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2024-01-01T00:00:00Z",
+            end_date="2024-01-02T00:00:00Z",
+        )
+
+    assert result["status"] == "completed"
+    assert result["rows_affected"] == 42
+    assert result["window_start"].startswith("2024-01-01T00:00:00")
+    assert result["window_end"].startswith("2024-01-02T00:00:00")
+
+    connect.assert_called_once()
+    # Cursor was used, query parameters bound by name include our prefix.
+    cur = conn.cursor.return_value
+    args, _ = cur.execute.call_args
+    assert args[0] is etl.INSERT_PER_HCP_ROLLUP_SQL
+    params = args[1]
+    assert params["metric_id_prefix"] == etl.METRIC_ID_PREFIX
+    assert params["metric_type"] == etl.METRIC_TYPE
+    assert isinstance(params["start_date"], datetime)
+    assert isinstance(params["end_date"], datetime)
+    conn.close.assert_called_once()
+
+
+def test_impl_no_data_path() -> None:
+    """rowcount==0 reports status=no_data with rows_affected=0."""
+    conn = _make_mock_conn(rowcount=0)
+
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2024-01-01T00:00:00Z",
+            end_date="2024-01-02T00:00:00Z",
+        )
+
+    assert result["status"] == "no_data"
+    assert result["rows_affected"] == 0
+
+
+def test_impl_db_failure_returns_failed() -> None:
+    """A connection / execute exception is caught and surfaced as failed."""
+    with patch.object(etl, "_connect_to_db", side_effect=RuntimeError("boom")):
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2024-01-01T00:00:00Z",
+            end_date="2024-01-02T00:00:00Z",
+        )
+
+    assert result["status"] == "failed"
+    assert result["error"] == "boom"
+    assert result["rows_affected"] == 0
+
+
+def test_impl_invalid_window_returns_failed() -> None:
+    """Inverted window short-circuits before any DB connect."""
+    with patch.object(etl, "_connect_to_db") as connect:
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2024-01-02T00:00:00Z",
+            end_date="2024-01-01T00:00:00Z",
+        )
+
+    assert result["status"] == "failed"
+    assert "must be strictly before" in result["error"]
+    connect.assert_not_called()
+
+
+def test_impl_default_window_is_24h() -> None:
+    """No dates supplied -> window defaults to 24 hours ending now(UTC)."""
+    conn = _make_mock_conn(rowcount=1)
+
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl()
+
+    assert result["status"] == "completed"
+    start = datetime.fromisoformat(result["window_start"])
+    end = datetime.fromisoformat(result["window_end"])
+    delta_hours = (end - start).total_seconds() / 3600.0
+    assert delta_hours == pytest.approx(etl.DEFAULT_WINDOW_HOURS, abs=1e-6)
+
+
+def test_impl_closes_conn_even_on_error() -> None:
+    """If execute() raises, the connection is still closed."""
+    conn = _make_mock_conn(rowcount=0)
+    cur = conn.cursor.return_value
+    cur.execute.side_effect = RuntimeError("query exploded")
+
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2024-01-01T00:00:00Z",
+            end_date="2024-01-02T00:00:00Z",
+        )
+
+    assert result["status"] == "failed"
+    conn.close.assert_called_once()
+
+
+def test_impl_passes_request_id_through() -> None:
+    """The request_id arg is forwarded but does not change behaviour."""
+    conn = _make_mock_conn(rowcount=1)
+
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2024-01-01T00:00:00Z",
+            end_date="2024-01-02T00:00:00Z",
+            request_id="celery-task-xyz",
+        )
+
+    # request_id is purely a logging hint; doesn't appear in result.
+    assert result["status"] == "completed"
+
+
+# =============================================================================
+# Celery task wrapper
+# =============================================================================
+
+
+def test_celery_task_delegates_to_impl() -> None:
+    """The Celery task ``run_per_hcp_rollup`` is a thin shim over
+    ``_run_per_hcp_rollup_impl`` — verify it forwards args + the
+    request id."""
+    sentinel_result = {"status": "completed", "rows_affected": 3}
+    with patch.object(
+        etl, "_run_per_hcp_rollup_impl", return_value=sentinel_result
+    ) as impl:
+        # ``apply`` runs the task synchronously in-process. Args/kwargs
+        # are forwarded to the underlying function.
+        async_result = etl.run_per_hcp_rollup.apply(
+            kwargs={
+                "start_date": "2024-01-01T00:00:00Z",
+                "end_date": "2024-01-02T00:00:00Z",
+            },
+        )
+
+    assert async_result.successful()
+    assert async_result.result == sentinel_result
+    impl.assert_called_once()
+    call_kwargs = impl.call_args.kwargs
+    assert call_kwargs["start_date"] == "2024-01-01T00:00:00Z"
+    assert call_kwargs["end_date"] == "2024-01-02T00:00:00Z"
+    # request_id is a non-empty string forwarded from the task.
+    assert isinstance(call_kwargs["request_id"], str)
+    assert call_kwargs["request_id"]
+
+
+# =============================================================================
+# Celery registration sanity
+# =============================================================================
+
+
+def test_task_is_registered_with_expected_name() -> None:
+    """The Celery task name string is what the beat schedule references."""
+    assert (
+        etl.run_per_hcp_rollup.name
+        == "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup"
+    )
+
+
+def test_beat_schedule_entry_present() -> None:
+    """The 24h beat entry routes the task to the analytics queue."""
+    from src.workers.celery_app import celery_app
+
+    entry = celery_app.conf.beat_schedule.get("business-metrics-per-hcp-rollup")
+    assert entry is not None, "beat schedule entry missing"
+    assert entry["task"] == "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup"
+    assert entry["schedule"] == 86400.0
+    assert entry["options"]["queue"] == "analytics"

@@ -226,6 +226,16 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "ml"},
     },
     # -------------------------------------------------------------------------
+    # ETL Tasks (block 6B-infra-2*)
+    # -------------------------------------------------------------------------
+    # Per-HCP business_metrics rollup every 24 hours (block 6B-infra-2a). Routed
+    # to `analytics`, which `task_routes` consumes via worker_medium.
+    "business-metrics-per-hcp-rollup": {
+        "task": "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
     # -------------------------------------------------------------------------
     # Daily interim analysis check at 2 AM
@@ -289,6 +299,7 @@ celery_app.conf.beat_schedule = {
 celery_app.autodiscover_tasks(
     [
         "src.tasks",
+        "src.etl",
         "src.mlops",
         "src.causal",
         "src.digital_twin",
