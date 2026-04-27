@@ -418,6 +418,65 @@ class TestGenerateFeaturesEntityGroupedPipeline:
         b_val = x_val[x_val["patient_id"] == "B"].iloc[0]
         assert b_val["value_lag_1"] == 103
 
+    async def test_original_feature_count_excludes_split_markers(self):
+        """Regression for 1B-M5 fix-up: ``original_feature_count`` must reflect
+        the caller's input columns, not the split-marker-augmented columns.
+
+        After 1B-M5 dropped ``piece.copy()`` in ``_concat_with_split_markers``,
+        the function mutates ``state["X_train"]`` in place by appending
+        ``__feature_gen_split__`` and ``__feature_gen_row_id__``. A late re-read
+        of ``state["X_train"].columns`` (the bug) inflated the original count
+        by 2 whenever the temporal block ran. We assert the expected invariants
+        directly so the metric stays correct end-to-end (MLflow logging,
+        visualization, "features removed" delta in the selector).
+        """
+        train_rows = []
+        for day in range(4):
+            ts = pd.Timestamp("2026-01-01") + pd.Timedelta(days=day)
+            train_rows.append({"patient_id": "A", "event_ts": ts, "value": 1 + day})
+            train_rows.append({"patient_id": "B", "event_ts": ts, "value": 100 + day})
+        train_df = pd.DataFrame(train_rows)
+        n_input_columns = len(train_df.columns)
+
+        state = {
+            "X_train": train_df,
+            "y_train": pd.Series([0, 1] * 4),
+            "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "event_ts",
+            "feature_config": {
+                "generate_temporal": True,
+                "generate_interactions": False,
+                "generate_domain": False,
+                "generate_aggregates": False,
+                "lag_periods": [1],
+                "rolling_windows": [],
+                "nan_fill_strategy": "zero",
+            },
+            "temporal_columns": ["value"],
+        }
+
+        result = await generate_features(state)
+        assert result.get("error") is None
+
+        # Hard equality: count must match the caller's input width exactly.
+        assert result["original_feature_count"] == n_input_columns, (
+            "original_feature_count must equal the caller's input column "
+            "count. A larger value means generate_features re-read "
+            "state['X_train'] AFTER _concat_with_split_markers mutated it "
+            "in place — this is the 1B-M5 fix-up regression."
+        )
+        # Invariant: new + original = total. Catches the same bug from a
+        # different angle (and any other count drift).
+        assert (
+            result["new_feature_count"]
+            == result["total_feature_count"] - result["original_feature_count"]
+        )
+        # Belt-and-braces: the generated frame must not leak the dunder
+        # marker columns to the caller.
+        assert _SPLIT_MARKER_COL not in result["X_train_generated"].columns
+        assert _SPLIT_ROW_ID_COL not in result["X_train_generated"].columns
+
 
 class TestConcatWithSplitMarkersGuards:
     """Block 1B-M1: refuse to clobber caller columns with internal markers.

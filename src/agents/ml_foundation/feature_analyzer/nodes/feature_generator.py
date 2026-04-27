@@ -90,6 +90,10 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
         categorical_columns = state.get("categorical_columns", _detect_categorical_columns(X_train))
         numeric_columns = state.get("numeric_columns", _detect_numeric_columns(X_train))
 
+        # Capture original feature names BEFORE _concat_with_split_markers may
+        # mutate state["X_train"] in place by adding dunder split markers (1B-M5).
+        original_features = list(X_train.columns)
+
         # Track generated features
         generated_features: List[Dict[str, Any]] = []
         feature_metadata: Dict[str, Any] = {
@@ -206,8 +210,7 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
 
         computation_time = time.time() - start_time
 
-        # Get feature names
-        original_features = list(state.get("X_train", pd.DataFrame()).columns)
+        # Get feature names (original_features captured pre-temporal block).
         all_features = list(X_train.columns)
         new_features = [f for f in all_features if f not in original_features]
 
