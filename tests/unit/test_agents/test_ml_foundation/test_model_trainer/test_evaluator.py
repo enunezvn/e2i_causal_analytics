@@ -1,6 +1,22 @@
-"""Tests for model evaluator node.
+"""Smoke + integration tests for ``evaluate_model``.
 
-Tests the evaluate_model function with various problem types and edge cases.
+End-to-end coverage of the evaluator node: invokes ``evaluate_model``
+with a populated state and asserts the high-level shape of the result
+(metric blocks present, error branches reachable, sklearn classifiers
+and regressors round-trip cleanly).
+
+The focused helper-level tests live in sibling files (split out in
+1A-M-6 to keep this file tractable):
+
+* ``test_threshold_selection.py`` - threshold tuning, freezing,
+  provenance, ``_select_threshold``.
+* ``test_metrics_computation.py`` - ``_compute_precision_at_k``,
+  ``_positive_class_proba``, business_utility from cost_matrix.
+* ``test_provenance.py`` - ``_check_success_criteria`` audit fields.
+
+Shared mocks and the minimal-state fixtures
+(``binary_classification_state`` / ``regression_state``) live in
+``conftest.py`` so all four files share a single source of truth.
 """
 
 import numpy as np
@@ -8,96 +24,31 @@ import pytest
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
-    _check_success_criteria,
-    _compute_optimal_threshold,
-    _compute_precision_at_k,
     evaluate_model,
 )
-
-# ============================================================================
-# Test fixtures
-# ============================================================================
-
-
-class MockBinaryClassifier:
-    """Mock trained binary classifier."""
-
-    def predict(self, X):
-        return np.random.randint(0, 2, len(X))
-
-    def predict_proba(self, X):
-        proba = np.random.rand(len(X))
-        return np.column_stack([1 - proba, proba])
-
-    def get_params(self, deep: bool = True) -> dict:
-        return {}
-
-    def fit(self, X, y):
-        return self
-
-
-class MockRegressor:
-    """Mock trained regressor."""
-
-    def predict(self, X):
-        return np.random.rand(len(X))
-
-
-class MockClassifierNoProba:
-    """Mock classifier without predict_proba."""
-
-    def predict(self, X):
-        return np.random.randint(0, 2, len(X))
-
-
-@pytest.fixture
-def binary_classification_state():
-    """Create state for binary classification evaluation."""
-    np.random.seed(42)
-    model = MockBinaryClassifier()
-    return {
-        "trained_model": model,
-        "problem_type": "binary_classification",
-        "X_train_preprocessed": np.random.rand(100, 5),
-        "X_validation_preprocessed": np.random.rand(30, 5),
-        "X_test_preprocessed": np.random.rand(20, 5),
-        "train_data": {"y": np.random.randint(0, 2, 100)},
-        "validation_data": {"y": np.random.randint(0, 2, 30)},
-        "test_data": {"y": np.random.randint(0, 2, 20)},
-        "success_criteria": {},
-    }
-
-
-@pytest.fixture
-def regression_state():
-    """Create state for regression evaluation."""
-    np.random.seed(42)
-    model = MockRegressor()
-    return {
-        "trained_model": model,
-        "problem_type": "regression",
-        "X_train_preprocessed": np.random.rand(100, 5),
-        "X_validation_preprocessed": np.random.rand(30, 5),
-        "X_test_preprocessed": np.random.rand(20, 5),
-        "train_data": {"y": np.random.rand(100)},
-        "validation_data": {"y": np.random.rand(30)},
-        "test_data": {"y": np.random.rand(20)},
-        "success_criteria": {},
-    }
+from tests.unit.test_agents.test_ml_foundation.test_model_trainer.conftest import (
+    N_FEATURES,
+    N_TEST_SAMPLES,
+    N_TRAIN_SAMPLES,
+    N_VAL_SAMPLES,
+    RANDOM_STATE,
+    RF_N_ESTIMATORS,
+    MockClassifierNoProba,
+)
 
 
 @pytest.fixture
 def real_classifier_state():
     """Create state with real trained classifier for accurate testing."""
-    np.random.seed(42)
-    X_train = np.random.rand(100, 5)
-    y_train = np.random.randint(0, 2, 100)
-    X_val = np.random.rand(30, 5)
-    y_val = np.random.randint(0, 2, 30)
-    X_test = np.random.rand(20, 5)
-    y_test = np.random.randint(0, 2, 20)
+    np.random.seed(RANDOM_STATE)
+    X_train = np.random.rand(N_TRAIN_SAMPLES, N_FEATURES)
+    y_train = np.random.randint(0, 2, N_TRAIN_SAMPLES)
+    X_val = np.random.rand(N_VAL_SAMPLES, N_FEATURES)
+    y_val = np.random.randint(0, 2, N_VAL_SAMPLES)
+    X_test = np.random.rand(N_TEST_SAMPLES, N_FEATURES)
+    y_test = np.random.randint(0, 2, N_TEST_SAMPLES)
 
-    model = RandomForestClassifier(n_estimators=10, random_state=42)
+    model = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE)
     model.fit(X_train, y_train)
 
     return {
@@ -116,15 +67,15 @@ def real_classifier_state():
 @pytest.fixture
 def real_regressor_state():
     """Create state with real trained regressor."""
-    np.random.seed(42)
-    X_train = np.random.rand(100, 5)
-    y_train = np.random.rand(100)
-    X_val = np.random.rand(30, 5)
-    y_val = np.random.rand(30)
-    X_test = np.random.rand(20, 5)
-    y_test = np.random.rand(20)
+    np.random.seed(RANDOM_STATE)
+    X_train = np.random.rand(N_TRAIN_SAMPLES, N_FEATURES)
+    y_train = np.random.rand(N_TRAIN_SAMPLES)
+    X_val = np.random.rand(N_VAL_SAMPLES, N_FEATURES)
+    y_val = np.random.rand(N_VAL_SAMPLES)
+    X_test = np.random.rand(N_TEST_SAMPLES, N_FEATURES)
+    y_test = np.random.rand(N_TEST_SAMPLES)
 
-    model = RandomForestRegressor(n_estimators=10, random_state=42)
+    model = RandomForestRegressor(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE)
     model.fit(X_train, y_train)
 
     return {
@@ -228,8 +179,8 @@ class TestEvaluateModel:
         """Should return error when trained_model is None."""
         state = {
             "problem_type": "binary_classification",
-            "X_test_preprocessed": np.random.rand(20, 5),
-            "test_data": {"y": np.random.randint(0, 2, 20)},
+            "X_test_preprocessed": np.random.rand(N_TEST_SAMPLES, N_FEATURES),
+            "test_data": {"y": np.random.randint(0, 2, N_TEST_SAMPLES)},
         }
 
         result = await evaluate_model(state)
@@ -258,12 +209,12 @@ class TestEvaluateModel:
 
     async def test_handles_model_without_predict_proba(self):
         """Should handle classifiers without predict_proba."""
-        np.random.seed(42)
+        np.random.seed(RANDOM_STATE)
         state = {
             "trained_model": MockClassifierNoProba(),
             "problem_type": "binary_classification",
-            "X_test_preprocessed": np.random.rand(20, 5),
-            "test_data": {"y": np.random.randint(0, 2, 20)},
+            "X_test_preprocessed": np.random.rand(N_TEST_SAMPLES, N_FEATURES),
+            "test_data": {"y": np.random.randint(0, 2, N_TEST_SAMPLES)},
             "success_criteria": {},
         }
 
@@ -310,123 +261,3 @@ class TestEvaluateModel:
 
         assert "error" not in result
         assert result["rmse"] is not None
-
-
-# ============================================================================
-# Test helper functions
-# ============================================================================
-
-
-class TestComputeOptimalThreshold:
-    """Test optimal threshold computation."""
-
-    def test_returns_threshold_with_proba(self):
-        """Should compute optimal threshold with probabilities."""
-        np.random.seed(42)
-        y_true = np.array([0, 0, 1, 1, 1, 0, 1, 0])
-        y_proba = np.column_stack(
-            [
-                1 - np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-                np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-            ]
-        )
-
-        threshold = _compute_optimal_threshold(y_true, y_proba)
-
-        assert 0.0 <= threshold <= 1.0
-
-    def test_returns_default_without_proba(self):
-        """Should return 0.5 when no probabilities provided."""
-        y_true = np.array([0, 0, 1, 1])
-
-        threshold = _compute_optimal_threshold(y_true, None)
-
-        assert threshold == 0.5
-
-
-class TestComputePrecisionAtK:
-    """Test precision@k computation."""
-
-    def test_computes_precision_at_k(self):
-        """Should compute precision at various k values."""
-        np.random.seed(42)
-        y_true = np.array([0, 0, 1, 1, 1, 0, 1, 0])
-        y_proba = np.column_stack(
-            [
-                1 - np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-                np.array([0.1, 0.2, 0.8, 0.9, 0.7, 0.3, 0.6, 0.4]),
-            ]
-        )
-
-        result = _compute_precision_at_k(y_true, y_proba, k_values=[2, 4])
-
-        assert 2 in result
-        assert 4 in result
-        assert 0.0 <= result[2] <= 1.0
-        assert 0.0 <= result[4] <= 1.0
-
-    def test_returns_empty_without_proba(self):
-        """Should return empty dict without probabilities."""
-        y_true = np.array([0, 0, 1, 1])
-
-        result = _compute_precision_at_k(y_true, None, k_values=[2])
-
-        assert result == {}
-
-    def test_skips_k_larger_than_samples(self):
-        """Should skip k values larger than sample size."""
-        y_true = np.array([0, 1, 1])
-        y_proba = np.array([[0.9, 0.1], [0.2, 0.8], [0.3, 0.7]])
-
-        result = _compute_precision_at_k(y_true, y_proba, k_values=[2, 100])
-
-        assert 2 in result
-        assert 100 not in result
-
-
-class TestCheckSuccessCriteria:
-    """Test success criteria checking."""
-
-    def test_all_criteria_met(self):
-        """Should return True when all criteria met."""
-        test_metrics = {"accuracy": 0.85, "roc_auc": 0.90}
-        success_criteria = {"accuracy": 0.80, "auc": 0.85}
-
-        result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
-
-        assert result["success_criteria_met"] is True
-
-    def test_criteria_not_met(self):
-        """Should return False when criteria not met."""
-        test_metrics = {"accuracy": 0.75, "roc_auc": 0.80}
-        success_criteria = {"accuracy": 0.90}
-
-        result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
-
-        assert result["success_criteria_met"] is False
-        assert result["success_criteria_results"]["accuracy"] is False
-
-    def test_lower_is_better_metrics(self):
-        """Should correctly handle metrics where lower is better."""
-        test_metrics = {"rmse": 0.1, "mae": 0.05}
-        success_criteria = {"rmse": 0.2, "mae": 0.1}
-
-        result = _check_success_criteria(test_metrics, success_criteria, "regression")
-
-        assert result["success_criteria_met"] is True
-
-    def test_empty_criteria_returns_true(self):
-        """Should return True when no criteria specified."""
-        result = _check_success_criteria({}, {}, "binary_classification")
-
-        assert result["success_criteria_met"] is True
-
-    def test_handles_missing_metrics(self):
-        """Should handle missing metrics gracefully."""
-        test_metrics = {"accuracy": 0.85}
-        success_criteria = {"accuracy": 0.80, "nonexistent_metric": 0.5}
-
-        result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
-
-        assert result["success_criteria_met"] is False
-        assert result["success_criteria_results"]["nonexistent_metric"] is False

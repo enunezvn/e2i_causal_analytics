@@ -1,10 +1,10 @@
 # =============================================================================
 # E2I Causal Analytics - Feast Feature Store Dockerfile
 # =============================================================================
-# Feast provides online and offline feature serving for ML pipelines
+# Feast provides online and offline feature serving for ML pipelines.
 #
-# Online Store: Redis (fast retrieval for inference)
-# Offline Store: File-based (for training data)
+# Online Store:  Redis (low-latency serving for inference)
+# Offline Store: Supabase PostgreSQL (historical retrieval for training)
 # =============================================================================
 
 FROM feastdev/feature-server:0.43.0
@@ -12,19 +12,27 @@ FROM feastdev/feature-server:0.43.0
 # Set working directory
 WORKDIR /feast
 
-# Install additional dependencies if needed
+# Install additional dependencies needed for the postgres+redis stores.
+# python3 is already on the base image and used by the entrypoint to render
+# feature_store.yaml from feature_store.yaml.tmpl.
 RUN pip install --no-cache-dir \
     redis \
     pyarrow \
     pandas
 
-# Create directories for feature store data
-RUN mkdir -p /feast/data \
-             /feast/registry \
-             /feast/feature_repo
+# /feast/data holds the registry + materialization output and is mounted as a
+# volume at runtime (see docker/docker-compose.yml `volumes: feature_cache:/feast/data`).
+RUN mkdir -p /feast/data
 
-# Copy feature store configuration (if you have one)
-# COPY feast/feature_store.yaml /feast/feature_repo/
+# Entrypoint: validates env, renders feature_store.yaml from the template,
+# then runs `feast apply --skip-source-validation` and `feast serve`. The
+# feature_repo source is bind-mounted at runtime as /feast-src:ro (see
+# docker/docker-compose.yml `volumes: ../feature_repo:/feast-src:ro`); the
+# entrypoint symlinks the source .py files into /feast and renders the yaml
+# inside /feast (writable container layer, never written back to the host).
+# --chmod=755 sets the executable bit at COPY time; the base image runs as a
+# non-root user that can't `chmod` files owned by root in /.
+COPY --chmod=755 feast/entrypoint.sh /entrypoint.sh
 
 # Set environment variables
 ENV FEAST_USAGE=false \
@@ -37,6 +45,7 @@ EXPOSE 6566
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:6566/health || exit 1
 
-# Start Feast feature server
-# Note: You'll need to apply feature definitions first with 'feast apply'
-CMD ["feast", "serve", "--host", "0.0.0.0", "--port", "6566"]
+# Bootstrap registry (feast apply --skip-source-validation) on every start, then
+# exec feast serve. Idempotent — see docker/feast/entrypoint.sh and
+# tests/integration/test_feast_apply_idempotent.py.
+ENTRYPOINT ["/entrypoint.sh"]

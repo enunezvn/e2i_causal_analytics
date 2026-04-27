@@ -9,10 +9,12 @@ from .leakage_detector import detect_leakage
 from .leakage_remediation import review_and_remediate_leakage
 from .qc_remediation import review_and_remediate_qc
 from .quality_checker import run_quality_checks
+from .sampling_frame_audit import audit_sampling_frame
 from .schema_validator import run_schema_validation
 
 __all__ = [
     "load_data",
+    "audit_sampling_frame",
     "run_schema_validation",
     "run_quality_checks",
     "run_ge_validation",

@@ -1,6 +1,6 @@
 """Integration tests for feature_analyzer agent."""
 
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import numpy as np
 import pytest
@@ -348,3 +348,198 @@ class TestFeatureAnalyzerAgent:
 
         # Assert
         assert result["top_interactions"] == []
+
+
+# ============================================================================
+# Block 5 (#14): auto-register surviving features in Feast
+# ============================================================================
+
+
+@pytest.mark.asyncio
+class TestAutoRegisterInFeast:
+    """The agent calls FeastClient.register_feature_view for surviving
+    features when ``feast_registration_config`` is supplied. Best-effort:
+    failures must NOT raise; they're captured in result["feast_registration"].
+    """
+
+    async def test_skipped_when_no_config(self):
+        """Without feast_registration_config, the call is skipped — the
+        existing tier0 path keeps working unchanged."""
+        agent = FeatureAnalyzerAgent()
+        state = {
+            "experiment_id": "exp_001",
+            "selected_features": ["f1", "f2"],
+        }
+        with patch.object(agent, "_get_full_graph"), patch.object(
+            agent, "_get_shap_graph"
+        ):
+            result = await agent._auto_register_in_feast(state, input_data={})
+        assert result["registered"] is False
+        assert result["skipped_reason"] == "feast_registration_config not provided"
+
+    async def test_skipped_when_no_surviving_features(self):
+        """When the selection step removed everything, registration is skipped."""
+        agent = FeatureAnalyzerAgent()
+        state = {
+            "experiment_id": "exp_002",
+            "selected_features": [],
+            "selected_features_all": [],
+        }
+        input_data = {
+            "feast_registration_config": {
+                "entity_name": "patient",
+                "batch_source_name": "patient_journeys_source",
+            }
+        }
+        result = await agent._auto_register_in_feast(state, input_data=input_data)
+        assert result["registered"] is False
+        assert result["skipped_reason"] == "no surviving features in state"
+
+    async def test_calls_register_feature_view_with_surviving_features(self):
+        """Survivors round-trip into FeastClient.register_feature_view with
+        the experiment-scoped name + the configured entity / batch source."""
+        agent = FeatureAnalyzerAgent()
+        state = {
+            "experiment_id": "exp_003",
+            "selected_features": ["lag_1_trx", "rolling_mean_engagement"],
+        }
+        input_data = {
+            "feast_registration_config": {
+                "entity_name": "hcp",
+                "batch_source_name": "business_metrics_source",
+            }
+        }
+
+        fake_client = MagicMock()
+        fake_client.register_feature_view = AsyncMock(
+            return_value={
+                "registered": True,
+                "feature_view_name": "tier0_exp_003_features",
+                "features_count": 2,
+                "error": None,
+            }
+        )
+
+        with patch(
+            "src.agents.ml_foundation.feature_analyzer.agent._get_feast_client",
+            new=AsyncMock(return_value=fake_client),
+        ):
+            result = await agent._auto_register_in_feast(state, input_data=input_data)
+
+        # The shape of the call into FeastClient.
+        fake_client.register_feature_view.assert_awaited_once()
+        call_kwargs = fake_client.register_feature_view.await_args.kwargs
+        assert call_kwargs["name"] == "tier0_exp_003_features"
+        assert call_kwargs["entity_name"] == "hcp"
+        assert call_kwargs["batch_source_name"] == "business_metrics_source"
+        assert call_kwargs["feature_names"] == [
+            "lag_1_trx",
+            "rolling_mean_engagement",
+        ]
+        # Round-trip metadata is propagated back to the agent caller.
+        assert result["registered"] is True
+        assert result["feature_view_name"] == "tier0_exp_003_features"
+        assert result["features_count"] == 2
+
+    async def test_failure_is_swallowed_not_raised(self):
+        """Any registration error is captured in the result dict, not raised."""
+        agent = FeatureAnalyzerAgent()
+        state = {
+            "experiment_id": "exp_004",
+            "selected_features": ["f1"],
+        }
+        input_data = {
+            "feast_registration_config": {
+                "entity_name": "hcp",
+                "batch_source_name": "business_metrics_source",
+            }
+        }
+
+        fake_client = MagicMock()
+        fake_client.register_feature_view = AsyncMock(
+            side_effect=RuntimeError("Feast unreachable")
+        )
+        with patch(
+            "src.agents.ml_foundation.feature_analyzer.agent._get_feast_client",
+            new=AsyncMock(return_value=fake_client),
+        ):
+            result = await agent._auto_register_in_feast(state, input_data=input_data)
+
+        # Helper must swallow the exception so tier0 keeps running.
+        assert result["registered"] is False
+        assert "Feast unreachable" in (result["error"] or "")
+
+    async def test_falls_back_to_selected_features_all(self):
+        """When ``selected_features`` is missing, the helper uses
+        ``selected_features_all`` (covers the SHAP-only / interpretation
+        paths where numeric-only selection isn't run)."""
+        agent = FeatureAnalyzerAgent()
+        state = {
+            "experiment_id": "exp_005",
+            "selected_features_all": ["f_categorical", "f_numeric"],
+        }
+        input_data = {
+            "feast_registration_config": {
+                "entity_name": "hcp",
+                "batch_source_name": "business_metrics_source",
+            }
+        }
+        fake_client = MagicMock()
+        fake_client.register_feature_view = AsyncMock(
+            return_value={
+                "registered": True,
+                "feature_view_name": "tier0_exp_005_features",
+                "features_count": 2,
+                "error": None,
+            }
+        )
+        with patch(
+            "src.agents.ml_foundation.feature_analyzer.agent._get_feast_client",
+            new=AsyncMock(return_value=fake_client),
+        ):
+            result = await agent._auto_register_in_feast(state, input_data=input_data)
+
+        fake_client.register_feature_view.assert_awaited_once()
+        assert (
+            fake_client.register_feature_view.await_args.kwargs["feature_names"]
+            == ["f_categorical", "f_numeric"]
+        )
+        assert result["registered"] is True
+
+
+@pytest.mark.asyncio
+class TestFeastClientRegisterFeatureView:
+    """The FeastClient.register_feature_view helper itself: gracefully
+    declines when the store isn't initialised, and returns clear errors
+    when entity / batch source aren't registered."""
+
+    async def test_returns_error_when_store_uninitialised(self):
+        from src.feature_store.feast_client import FeastClient
+
+        client = FeastClient()
+        # Force the no-store path without invoking real Feast init.
+        client._initialized = True
+        client._store = None
+        result = await client.register_feature_view(
+            name="tier0_test_features",
+            entity_name="patient",
+            feature_names=["f1"],
+            batch_source_name="source_x",
+        )
+        assert result["registered"] is False
+        assert "not initialised" in (result["error"] or "")
+
+    async def test_returns_error_for_empty_feature_list(self):
+        from src.feature_store.feast_client import FeastClient
+
+        client = FeastClient()
+        client._initialized = True
+        client._store = MagicMock()
+        result = await client.register_feature_view(
+            name="tier0_test_features",
+            entity_name="patient",
+            feature_names=[],
+            batch_source_name="source_x",
+        )
+        assert result["registered"] is False
+        assert result["error"] == "feature_names is empty; nothing to register"

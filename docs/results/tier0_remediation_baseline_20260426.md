@@ -1,0 +1,416 @@
+# Tier-0 Remediation — Baseline Metrics (Block 0)
+
+Captured before any code changes on `feat/tier0-mlops-hardening`. Source: single
+`python scripts/run_tier0_test.py` execution. These numbers are the
+**threshold-tuned-on-test** baseline (the bug Block 1A fixes).
+
+## Run metadata
+
+| Field | Value |
+|-------|-------|
+| Branch | `feat/tier0-mlops-hardening` |
+| Base SHA (off `main`) | `d9907bbaf20fd1ea7fdcc1cf9d21f1b317d77508` |
+| Run timestamp | 2026-04-26 00:18:20 UTC |
+| Experiment ID | `tier0_e2e_62ede312` |
+| Cohort size | 1500 patients |
+| Total duration | 226.4 s |
+| QC gate | PASSED |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — out of scope per plan) |
+| Run report | `docs/results/tier0_pipeline_run_20260426_001820.md` |
+
+## Selected best model
+
+LogisticRegression (chosen by algorithm comparison: LR=0.574 AUC > LightGBM=0.552 > RF=0.548 > XGB=0.530 on test).
+
+## Class distribution (severe imbalance, minority ratio 14.78 %)
+
+| Split | n | Class 0 | Class 1 |
+|-------|---|---------|---------|
+| Train | 900 | 767 (85.2 %) | 133 (14.8 %) |
+| Validation | 300 | 256 (85.3 %) | 44 (14.7 %) |
+| Test | 225 | 192 (85.3 %) | 33 (14.7 %) |
+
+Imbalance remediation: SMOTE (resampled 900 → 1534, minority 14.8 % → 50.0 %).
+
+## Threshold (current bug — tuned on test)
+
+`optimal_threshold = 0.4982` chosen by `_compute_optimal_threshold(y_test, y_test_proba)`
+at `src/agents/ml_foundation/model_trainer/nodes/evaluator.py:536`. Block 1A relocates this
+to validation; expect AUC unchanged, precision/recall to shift.
+
+## Validation-set metrics (n=300, evaluated at the test-tuned threshold)
+
+| Metric | Value |
+|--------|-------|
+| roc_auc | 0.6942 |
+| pr_auc | 0.2848 |
+| accuracy | 0.6600 |
+| precision | 0.2456 |
+| recall | 0.6364 |
+| f1_score | 0.3544 |
+| f1_macro | 0.5618 |
+| f1_weighted | 0.7084 |
+| precision_class_1 | 0.2456 |
+| recall_class_1 | 0.6364 |
+| mcc | 0.2190 |
+| brier_score | 0.2369 |
+
+Validation confusion matrix at threshold 0.4982: TN=169, FP=87, FN=14, TP=30 → 117 predicted positives.
+
+## Test-set metrics (n=225, evaluated at the test-tuned threshold)
+
+| Metric | Value |
+|--------|-------|
+| auc_roc | 0.5740 |
+| accuracy | 0.6600 |
+| precision | 0.2065 |
+| recall | 0.5758 |
+| f1_score | 0.3040 |
+| positive_predictions | 117 |
+
+## Verdict (from the script's usefulness checks)
+
+**MARGINAL** — model barely exceeds random chance.
+Permutation test: `signal=RANDOM` (p=0.0700, shuffled AUC=0.4944).
+Stratified 5-fold: AUC=0.6316 ± 0.0384, PR-AUC=0.2419 ± 0.0386, MCC=0.1668 ± 0.0518.
+F1-optimal threshold (cross-validated): 0.4600.
+ECE: 0.3398 → 0.0691 after isotonic calibration.
+
+## Top features by SHAP
+
+1. `prior_treatments` 0.1165
+2. `hcp_visits` 0.0603
+3. `data_quality_score` 0.0202
+4. `geographic_region` 0.0183
+5. `brand` 0.0176
+6. `age_group` 0.0013
+
+## Preamble spot-check (closes plan §preamble)
+
+| Plan claim | Verified location | Status |
+|------------|-------------------|--------|
+| #6: threshold tuned on test | `evaluator.py:536` — `_compute_optimal_threshold(y_test, y_test_proba)` | ✓ matches |
+| #11: leakage detection runs pre-transform | `data_preparer/graph.py:90` — `add_edge("run_ge_validation", "detect_leakage")`, `detect_leakage` routes to `transform_data` | ✓ matches |
+| #4: feast schedules in beat | `workers/celery_app.py:209-225` — incremental (6h), freshness (4h), full-weekly (7d) | ✓ matches |
+
+## What Block 1A is expected to move
+
+After the fix, the threshold is tuned on validation, frozen, then applied to test. Predicted:
+
+- Validation AUC unchanged (AUC is threshold-free).
+- Validation precision/recall/F1 may shift (validation now used to pick threshold; metrics at that threshold land on validation itself).
+- Test precision/recall will change because the test threshold is no longer fitted on test.
+- `validation_metrics["chosen_threshold"]` becomes the source-of-truth, and re-runs become reproducible w.r.t. threshold selection.
+
+Block 1A's commit will append a follow-up table comparing post-fix numbers against this baseline.
+
+## Block 1A delta
+
+After relocating threshold tuning from test → validation. Source: single
+`python scripts/run_tier0_test.py` execution at experiment ID
+`tier0_e2e_da5a561b`, run report `docs/results/tier0_pipeline_run_20260426_004002.md`.
+
+### Run metadata (post-fix)
+
+| Field | Value |
+|-------|-------|
+| Run timestamp | 2026-04-26 00:40:02 UTC |
+| Experiment ID | `tier0_e2e_da5a561b` |
+| Cohort size | 1500 patients (unchanged) |
+| Total duration | 238.4 s |
+| QC gate | PASSED |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — out of scope per plan) |
+| Selected best model | LogisticRegression (AUC ranking unchanged) |
+| Run report | `docs/results/tier0_pipeline_run_20260426_004002.md` |
+
+### Threshold (post-fix — tuned on validation)
+
+`chosen_threshold = 0.5141` selected by `_compute_optimal_threshold(y_validation, y_validation_proba)`.
+`chosen_threshold_source = "validation"` (persisted in `validation_metrics`
+and at the top-level evaluator output for downstream auditability).
+Same threshold is then frozen and applied to the test set without re-tuning.
+
+### Validation-set metric delta (n=300, evaluated at the chosen threshold)
+
+| Metric | Block 0 (test-tuned, leakage) | Block 1A (validation-tuned) | Delta |
+|--------|-------------------------------|------------------------------|-------|
+| roc_auc | 0.6942 | 0.6942 | 0.0000 |
+| pr_auc | 0.2848 | 0.2848 | 0.0000 |
+| accuracy | 0.6600 | 0.7300 | +0.0700 |
+| precision | 0.2456 | 0.2921 | +0.0465 |
+| recall | 0.6364 | 0.5909 | -0.0455 |
+| f1_score | 0.3544 | 0.3910 | +0.0366 |
+| f1_macro | 0.5618 | 0.6088 | +0.0470 |
+| f1_weighted | 0.7084 | 0.7627 | +0.0543 |
+| precision_class_1 | 0.2456 | 0.2921 | +0.0465 |
+| recall_class_1 | 0.6364 | 0.5909 | -0.0455 |
+| mcc | 0.2190 | 0.2671 | +0.0481 |
+| brier_score | 0.2369 | 0.2369 | 0.0000 |
+
+Validation confusion matrix at threshold 0.5141: TN=193, FP=63, FN=18, TP=26 → 89 predicted positives (down from 117 at the test-tuned 0.4982).
+
+### Test-set metric delta (n=225, evaluated at the frozen threshold 0.5141)
+
+| Metric | Block 0 (test-tuned, leakage) | Block 1A (frozen at val-tuned) | Delta |
+|--------|-------------------------------|---------------------------------|-------|
+| auc_roc | 0.5740 | 0.5740 | 0.0000 |
+| accuracy | 0.6600 | 0.7300\* | — |
+| precision | 0.2065 | 0.1719 | -0.0346 |
+| recall | 0.5758 | 0.3333 | -0.2425 |
+| f1_score | 0.3040 | 0.2268 | -0.0772 |
+| positive_predictions | 117 | 89\* | — |
+
+\* Both reports reuse the validation-set confusion matrix in the
+"FINAL MODEL PERFORMANCE" rendering, so accuracy/predicted-positive
+rows in this row-set track validation, not test. The test-only metrics
+shown here are the AUC/precision/recall/F1 values surfaced in the
+verdict block via `state.get("test_metrics", {})`.
+
+### Verdict — observations
+
+- **AUC unchanged** as predicted (threshold-free measure).
+- **Test precision/recall/F1 dropped substantially** (precision -3.5pp, recall -24.3pp, F1 -7.7pp). This is the expected unmasking: under the leakage bug the test-tuned threshold cherry-picked the test-optimal point, inflating reported test recall by ~24pp. Block 1A removes that flattering bias; the new test numbers are an honest read of the model at an operating point chosen pre-test.
+- **Validation metrics at the frozen threshold are slightly different** from the baseline's "validation at the test-tuned threshold" line, as expected — the chosen threshold moved from 0.4982 → 0.5141, so the validation operating point shifted accordingly.
+- **MARGINAL verdict unchanged** (AUC remains the dominant signal in the verdict logic, so the verdict label is robust to this fix).
+- **Top features, SHAP rankings, calibration, CV results, permutation test all unchanged** — those don't depend on the chosen operating point.
+
+## Block 1B note
+
+After making lag/rolling feature generation entity-grouped pre-split and adding
+`prediction_timestamp` scaffolding to the contract. Source: single
+`python scripts/run_tier0_test.py` execution at experiment ID
+`tier0_e2e_25bc97bc`, run report `docs/results/tier0_pipeline_run_20260426_013502.md`.
+
+### Run metadata (post-Block-1B)
+
+| Field | Value |
+|-------|-------|
+| Run timestamp | 2026-04-26 01:35:02 UTC |
+| Experiment ID | `tier0_e2e_25bc97bc` |
+| Cohort size | 1500 patients (unchanged) |
+| Total duration | 216.3 s |
+| QC gate | PASSED |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — out of scope per plan) |
+| Selected best model | LogisticRegression (AUC ranking unchanged) |
+
+### Tier-0 metric delta vs Block 1A
+
+| Metric | Block 1A | Block 1B | Delta |
+|--------|----------|----------|-------|
+| roc_auc (val) | 0.6942 | 0.6942 | 0.0000 |
+| pr_auc (val) | 0.2848 | 0.2848 | 0.0000 |
+| accuracy (val) | 0.7300 | 0.7300 | 0.0000 |
+| precision (val) | 0.2921 | 0.2921 | 0.0000 |
+| recall (val) | 0.5909 | 0.5909 | 0.0000 |
+| f1_score (val) | 0.3910 | 0.3910 | 0.0000 |
+| mcc (val) | 0.2671 | 0.2671 | 0.0000 |
+| brier_score (val) | 0.2369 | 0.2369 | 0.0000 |
+| chosen_threshold | 0.5141 | 0.5141 | 0.0000 |
+| auc_roc (test) | 0.5740 | 0.5740 | 0.0000 |
+| precision (test) | 0.1719 | 0.1719 | 0.0000 |
+| recall (test) | 0.3333 | 0.3333 | 0.0000 |
+| f1_score (test) | 0.2268 | 0.2268 | 0.0000 |
+| positive_predictions (test) | 89 | 89 | 0 |
+
+### Why the metrics didn't move
+
+Synthetic patients in `sample_data.py:573` produce one row per `patient_id`. With
+one row per entity, every `groupby(patient_id).shift(N)` produces NaN, which is
+then median-filled by `_handle_generated_nans`. The temporal block thus carries
+no information for synthetic data — it is a structural fix that lights up only
+once multi-row entities (longitudinal patient panels) flow through the
+pipeline. Block 4+ is where this changes the numbers.
+
+Beyond the temporal node, the tier0 e2e path doesn't reach `generate_features`
+at all on this synthetic input: `step_6_feature_analyzer` calls
+`FeatureAnalyzerAgent` with only `X_sample`, which routes to the SHAP-only
+graph (`agent.py:163`). So the per-row interaction/domain/aggregate steps are
+also dormant on this run; observed parity is expected end-to-end.
+
+`prediction_timestamp` is plumbed through `scope_definer` → `scope_spec` →
+`Tier0OutputMapper` (drift_monitor + heterogeneous_optimizer mappings) but
+not yet consumed; expect this scaffolding to be exercised in Block 4 onward.
+
+### Other notable changes at the code level
+
+- `_generate_temporal_features` now requires `entity_id_column` and
+  `event_timestamp_column` (both `Optional`, default `None`); when set, lag
+  and rolling are computed via `df.groupby(entity_id).shift(N)` and
+  `df.groupby(entity_id).rolling(W)` respectively.
+- `generate_features` concatenates train+val+test once with internal split
+  markers, runs the temporal node on the combined frame, then re-splits via
+  marker reindex. Public return contract (`X_train_generated`,
+  `X_val_generated`, `X_test_generated`, `feature_metadata`) unchanged.
+- `data_transformer.py:173` misleading comment removed; new tests in
+  `tests/unit/test_agents/test_ml_foundation/test_data_preparer/test_data_transformer.py`
+  assert `LabelEncoder.classes_` matches train uniques exactly and that
+  unseen val/test categories collapse to the sentinel id
+  via `_safe_label_encode`.
+
+## Block 2 note
+
+After making Feast fail-loud — `FeastFallbackError` raised in production, `get_feature_freshness`
+defaults to `is_fresh=False` on exception, `ALLOW_STALE_FEAST=1` opt-out, MLflow `feast_fallback`
+tag on training runs, QC gate that blocks downstream training when Feast is stale. Source:
+dev-mode `python scripts/run_tier0_test.py` execution at experiment ID `tier0_e2e_77e8a330`,
+run report `docs/results/tier0_pipeline_run_20260426_032552.md`. Commits: `789b521`
+(initial implementation), `61d81da` (gate wiring + case-insensitive ENVIRONMENT).
+
+### Run metadata (post-Block-2)
+
+| Field | Value |
+|-------|-------|
+| Run timestamp | 2026-04-26 03:22 UTC |
+| Experiment ID | `tier0_e2e_77e8a330` |
+| Cohort size | 1500 patients (unchanged) |
+| Total duration | ~233 s |
+| QC gate | PASSED (Feast freshness OK on synthetic; ALLOW_STALE_FEAST not needed) |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — out of scope per plan) |
+| Selected best model | LogisticRegression (AUC ranking unchanged) |
+| Push state | both commits pushed to `origin/feat/tier0-mlops-hardening` |
+
+### Tier-0 metric delta vs Block 1B
+
+All metrics identical to Block 1B baseline. Synthetic data does not exercise the
+Feast historical-features fallback path (single-row patients per `sample_data.py:573`;
+`_check_feature_freshness` finds no Feast feature views registered since registration
+is opportunistic on this synthetic input), so the new fail-loud gates remain dormant
+end-to-end. The synthetic e2e here is a no-regression smoke test — actual fail-loud
+behavior is verified by 11 new unit tests:
+
+- `tests/unit/test_feature_store/test_feast_client.py` (4 cases): production raise,
+  non-prod fallback flag, freshness default-stale on exception, ALLOW_STALE_FEAST
+  override, plus a parametrized case-insensitive ENVIRONMENT test (3 sub-cases).
+- `tests/unit/test_agents/test_ml_foundation/test_data_preparer/test_feast_registrar.py`
+  (4 cases): QC gate blocks on stale Feast, ALLOW_STALE_FEAST bypass, exception-path
+  freshness handling, plus an updated `test_register_features_stale_features_warning`
+  asserting the new contract.
+- `tests/unit/test_agents/test_ml_foundation/test_model_trainer/test_mlflow_logger.py`
+  (3 cases): tag set when fallback used, tag set to "False" when not used, defaults
+  to "False" when state key absent.
+- One in-process end-to-end test `test_stale_feast_blocks_finalize_output_gate` that
+  runs registrar → state merge → `finalize_output` and asserts `gate_passed=False`
+  with the new blocker visible in `result["blockers"]`. This is the test that proves
+  the gate actually blocks downstream training (the prior fail mode was a dead-end
+  signal — `feast_blocked=True` set but never consumed).
+
+### Code-level changes landed
+
+- `src/feature_store/feast_client.py`:
+  - New `FeastFallbackError(Exception)` near the module-level definitions.
+  - `_fallback_used: bool` instance attribute initialised in `FeastClient.__init__`.
+  - `_get_historical_features_fallback` raises `FeastFallbackError` at the top when
+    `os.environ.get("ENVIRONMENT", "").lower() == "production"` (case-insensitive).
+  - `get_feature_freshness` wrapped in `try/except Exception` defaulting to a
+    `FeatureFreshness(..., is_fresh=False, freshness_status=UNKNOWN, ...)` object;
+    `ALLOW_STALE_FEAST=1` opt-out flips `is_fresh=True` for ops emergencies.
+  - Outer `get_historical_features` exception handler special-cases `FeastFallbackError`
+    so the prod-mode raise propagates instead of being re-routed to the fallback.
+- `src/agents/ml_foundation/data_preparer/nodes/feast_registrar.py`:
+  - QC gate default inverted: `freshness_result.get("fresh", True)` → `get("fresh", False)`.
+  - On stale Feast without ALLOW_STALE_FEAST: appends `"Feast features stale; ALLOW_STALE_FEAST not set"`
+    into a merged copy of `state["blocking_issues"]`, sets `feast_blocked=True` and
+    `feast_registration_status="blocked_stale_features"`. The list-merge pattern
+    matches sibling nodes (`ge_validator`, `schema_validator`, `leakage_detector`,
+    `leakage_remediation`) — required because LangGraph's default state reducer is
+    dict-update, so list keys must be merged manually to avoid clobbering issues set
+    by earlier nodes.
+  - `_check_feature_freshness` exception path upgraded from `logger.debug + return None`
+    to `logger.warning + return {"fresh": False/True, "error": ..., "recommendations": [...]}`
+    so callers can react.
+  - Propagates `feast_fallback_used` from `adapter._feast_client._fallback_used` into
+    the data_preparer state for downstream MLflow tagging.
+- `src/agents/ml_foundation/data_preparer/state.py`: added `feast_blocked: bool`,
+  `feast_fallback_used: bool`; extended `feast_registration_status` Literal with
+  `"blocked_stale_features"`. All additions are `total=False` (backward-compatible).
+- `src/agents/ml_foundation/model_trainer/state.py`: added `feast_fallback_used: bool`
+  for cross-agent propagation from data_preparer to model_trainer.
+- `src/agents/ml_foundation/model_trainer/nodes/mlflow_logger.py`: reads
+  `state.get("feast_fallback_used", False)` and adds `"feast_fallback": str(...)`
+  to the MLflow `start_run` tags dict (lines 78–115 / 139–150).
+
+### Deferred until end-of-branch
+
+The plan's Step 7 prod-mode verification (`ENVIRONMENT=production` + Feast intentionally
+unreachable) is deferred until just before the PR is opened. Synthetic data doesn't
+exercise the Feast historical-features fallback path, so a synthetic prod-mode run
+cannot actually demonstrate `FeastFallbackError` raising end-to-end — the in-process
+e2e test (`test_stale_feast_blocks_finalize_output_gate`) is the strongest validation
+that's currently possible without a real entity panel. The end-of-branch demo will
+need either (a) a multi-row real-data tier0 input, or (b) a targeted integration test
+that forces `_store=None` and routes through the fallback path under prod ENV.
+
+### Verification snapshot
+
+| Check | Result |
+|-------|--------|
+| pytest test_feast_client.py | 47 passed, 8 failed (pre-existing tz-naive vs tz-aware fixture failures unrelated to Block 2; identical count before/after both commits) |
+| pytest test_feast_registrar.py | 15 passed, 0 failed |
+| pytest test_mlflow_logger.py | 26 passed, 0 failed |
+| ruff check (touched files) | clean of new issues; 2 pre-existing unused-import warnings unchanged |
+| mypy --config-file pyproject.toml (touched files) | 0 new errors; 11 pre-existing errors in 5 unrelated files unchanged |
+| tier0 e2e (dev mode) | identical to Block 1B baseline (no metric movement; Feast path dormant on synthetic) |
+
+## Block 5B note
+
+Block 5 (commit `ee34a51`) wired the `business_utility` metric end-to-end
+(scope_definer → scope_spec → model_trainer → evaluator) and added the
+`FeatureAnalyzerAgent._auto_register_in_feast` helper, but both code
+paths were opt-in via inputs that no current caller of
+`scripts/run_tier0_test.py` populated. The Block 5 verification line
+("`business_utility` is emitted on a default tier-0 run") therefore
+could not pass; the helper short-circuited with `skipped_reason` and
+the metric never reached the run report. Block 5B closes that gap by:
+
+1. Adding a `_default_demo_cost_matrix()` helper to the dev runner
+   (`scripts/run_tier0_test.py`) that returns a unit-shape matrix
+   `{tp:+1.0, fp:-0.05, fn:-1.0, tn:0.0}` and an auto-inject branch
+   in `run_pipeline` that writes it onto `state["scope_spec"]["cost_matrix"]`
+   immediately after step 1 unless the new `--no-demo-cost-matrix` flag
+   is passed.
+2. Plumbing the validation-set `business_utility` into MLflow
+   `start_run` tags alongside the existing `feast_fallback` tag so
+   model-registry tooling can rank runs by business value at a glance.
+3. Adding a FEAST_INTEGRATION-gated round-trip integration test
+   (`tests/integration/test_feast_tier0_auto_register.py`) that
+   exercises `_auto_register_in_feast` against a live Feast registry
+   and confirms the FeatureView applies, round-trips through
+   `get_feature_view`, and cleans up after itself.
+
+### Verification snapshot (post-Block-5B)
+
+A default `python scripts/run_tier0_test.py` run on synthetic data
+(default regime, 1500 patients, hpo_trials=10, MLflow off) emits:
+
+| metric | value |
+|--------|-------|
+| `validation_metrics["business_utility"]` | `-8.15` |
+| `test_metrics["business_utility"]` | `-9.65` |
+| top-level `result["business_utility"]` | `-9.65` (mirrors test) |
+
+> **Caveat — these are placeholder-cost-matrix sanity numbers, not a
+> regression target.** The unit-shape matrix `{tp:+1, fp:-0.05, fn:-1,
+> tn:0}` is structural, not dollar-denominated; it deliberately makes
+> a "true positive worth one unit" identical to "missing a target
+> costs one unit", with a 5 % rep-time penalty for false positives.
+> Production callers (LangGraph orchestrator wired by Celery / API)
+> MUST supply real per-brand dollar values via
+> `feast_registration_config["cost_matrix"]` (or an LLM-driven
+> scope_definer extension once that path lands). The auto-inject
+> lives ONLY at the dev-script CLI boundary; production tier-0 runs
+> never go through `scripts/run_tier0_test.py`. Negative numbers here
+> are an artefact of the model's marginal performance on this
+> synthetic regime (precision ≈ 0.24, recall ≈ 0.44 → many FNs and
+> FPs both costing units), not a defect of the metric.
+
+### Code-level changes landed
+
+| file | change |
+|------|--------|
+| `scripts/run_tier0_test.py` | added `_default_demo_cost_matrix()` helper, `--no-demo-cost-matrix` CLI flag, and auto-inject branch after step 1 |
+| `src/agents/ml_foundation/model_trainer/nodes/mlflow_logger.py` | added `business_utility` tag to MLflow `start_run` tags dict |
+| `feature_repo/README.md` | added "Tier-0 auto-registered FeatureViews" subsection + integration test entry |
+| `tests/unit/test_scripts/test_run_tier0_demo_cost_matrix.py` | new — argparse + auto-inject branch coverage |
+| `tests/synthetic/test_business_utility_emitted.py` | new — closed-form arithmetic check on the evaluator's emitted `business_utility` |
+| `tests/unit/test_agents/test_ml_foundation/test_model_trainer/test_mlflow_logger.py` | extended `feast_fallback` tag tests with parallel `business_utility` tag tests |
+| `tests/integration/test_feast_tier0_auto_register.py` | new — FEAST_INTEGRATION-gated round-trip for `_auto_register_in_feast` |

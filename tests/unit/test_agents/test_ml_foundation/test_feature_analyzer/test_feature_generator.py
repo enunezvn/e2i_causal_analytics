@@ -7,11 +7,16 @@ Tests feature generation capabilities:
 - Aggregate features (row-wise statistics)
 """
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.agents.ml_foundation.feature_analyzer.nodes.feature_generator import (
+    _SPLIT_MARKER_COL,
+    _SPLIT_ROW_ID_COL,
+    _concat_with_split_markers,
     _detect_categorical_columns,
     _detect_numeric_columns,
     _detect_temporal_columns,
@@ -92,16 +97,29 @@ class TestDetectionFunctions:
 
 
 class TestTemporalFeatures:
-    """Tests for temporal feature generation."""
+    """Tests for temporal feature generation.
+
+    Block 1B tightens the contract so ``entity_id_column`` and
+    ``event_timestamp_column`` are required. Tests in this class always
+    pass them; the single-entity panel guarantees lag/rolling behaviour
+    is identical to the (deleted) cross-entity path.
+    """
 
     def test_generate_date_parts_from_datetime(self):
         """Should generate date part features from datetime column."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 10,
+                "event_ts": pd.date_range("2024-01-01", periods=10, freq="D"),
                 "date": pd.date_range("2024-01-01", periods=10, freq="D"),
             }
         )
-        result_df, metadata = _generate_temporal_features(df, temporal_columns=["date"])
+        result_df, metadata = _generate_temporal_features(
+            df,
+            temporal_columns=["date"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+        )
         assert "date_dayofweek" in result_df.columns
         assert "date_month" in result_df.columns
         assert "date_quarter" in result_df.columns
@@ -112,15 +130,21 @@ class TestTemporalFeatures:
         """Should generate lag features from numeric columns."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 20,
+                "event_ts": pd.date_range("2024-01-01", periods=20, freq="D"),
                 "value": range(20),
             }
         )
         result_df, metadata = _generate_temporal_features(
-            df, temporal_columns=["value"], lag_periods=[1, 2]
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            lag_periods=[1, 2],
         )
         assert "value_lag_1" in result_df.columns
         assert "value_lag_2" in result_df.columns
-        # Check lag values
+        # Check lag values (single entity ⇒ lag chain is the value sequence).
         assert pd.isna(result_df["value_lag_1"].iloc[0])
         assert result_df["value_lag_1"].iloc[1] == 0
 
@@ -128,11 +152,18 @@ class TestTemporalFeatures:
         """Should generate rolling statistics from numeric columns."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 20,
+                "event_ts": pd.date_range("2024-01-01", periods=20, freq="D"),
                 "value": range(20),
             }
         )
         result_df, metadata = _generate_temporal_features(
-            df, temporal_columns=["value"], rolling_windows=[3], lag_periods=[]
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            rolling_windows=[3],
+            lag_periods=[],
         )
         assert "value_rolling_mean_3" in result_df.columns
         assert "value_rolling_std_3" in result_df.columns
@@ -141,10 +172,17 @@ class TestTemporalFeatures:
         """Should return proper metadata structure."""
         df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 5,
+                "event_ts": pd.date_range("2024-01-01", periods=5, freq="D"),
                 "date": pd.date_range("2024-01-01", periods=5, freq="D"),
             }
         )
-        _, metadata = _generate_temporal_features(df, temporal_columns=["date"])
+        _, metadata = _generate_temporal_features(
+            df,
+            temporal_columns=["date"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+        )
 
         assert len(metadata) > 0
         for meta in metadata:
@@ -152,6 +190,398 @@ class TestTemporalFeatures:
             assert "source" in meta
             assert "type" in meta
             assert "transformation" in meta
+
+
+class TestEntityGroupedTemporalFeatures:
+    """Tests for entity-grouped lag/rolling feature generation (Block 1B).
+
+    These tests cover finding #2 in the tier0 remediation plan: lag and
+    rolling-window features must be computed per entity, not on the raw row
+    order, otherwise the first row of one entity sees the previous entity's
+    tail value and leaks across patients.
+    """
+
+    def _three_patient_panel(self) -> pd.DataFrame:
+        """Build a synthetic 3 patients × 5 rows panel.
+
+        Each patient's ``value`` series increases monotonically so we can
+        assert per-entity lag/rolling output without ambiguity.
+        """
+        rows = []
+        # Patient A: values 1..5 across 5 days.
+        # Patient B: values 100..104.
+        # Patient C: values 1000..1004.
+        # Interleaving rows by date forces the implementation to use
+        # (entity_id, event_timestamp) sorting; row order alone is wrong.
+        for day in range(5):
+            ts = pd.Timestamp("2026-01-01") + pd.Timedelta(days=day)
+            rows.append({"patient_id": "A", "event_ts": ts, "value": 1 + day})
+            rows.append({"patient_id": "B", "event_ts": ts, "value": 100 + day})
+            rows.append({"patient_id": "C", "event_ts": ts, "value": 1000 + day})
+        # Shuffle so the input is intentionally not pre-sorted.
+        df = pd.DataFrame(rows).sample(frac=1.0, random_state=0).reset_index(drop=True)
+        return df
+
+    def test_lag_groupby_entity(self):
+        """``lag_1`` MUST start NaN at the first row of each entity.
+
+        If the implementation forgot the per-entity groupby, patient B's
+        first row would erroneously see patient A's last value as ``lag_1``.
+        We assert NaN to catch that regression.
+        """
+        df = self._three_patient_panel()
+
+        result_df, _ = _generate_temporal_features(
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            lag_periods=[1],
+            rolling_windows=[],
+        )
+
+        # Sort by (patient_id, event_ts) so we can index the first row per
+        # entity directly. _generate_temporal_features sorts in place; this
+        # guarantees the assertions are deterministic.
+        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(drop=True)
+
+        # First row of each entity must have lag_1 == NaN.
+        for entity in ("A", "B", "C"):
+            first = sorted_result[sorted_result["patient_id"] == entity].iloc[0]
+            assert pd.isna(first["value_lag_1"]), (
+                f"lag_1 at first row of patient {entity} must be NaN; "
+                f"got {first['value_lag_1']!r}. Without entity grouping the "
+                "function would leak patient A's value here."
+            )
+
+        # Subsequent rows in each entity must lag the entity's own series.
+        for entity, base in (("A", 1), ("B", 100), ("C", 1000)):
+            entity_rows = sorted_result[sorted_result["patient_id"] == entity]
+            # Row index 1 within the entity (second day) must equal day-0 value.
+            assert entity_rows.iloc[1]["value_lag_1"] == base
+            # Row index 4 must equal day-3 value (base + 3).
+            assert entity_rows.iloc[4]["value_lag_1"] == base + 3
+
+    def test_missing_entity_or_timestamp_raises(self):
+        """Contract sentinel: omitting either grouping key MUST raise.
+
+        Block 1B tightens the previously-graceful fallback so a future
+        caller cannot silently re-introduce naive cross-entity shift —
+        which is exactly the leakage finding #2 documents. Both
+        ``entity_id_column`` and ``event_timestamp_column`` are now
+        required, and a missing or absent column fails fast with a
+        message pointing back to Block 1B.
+        """
+        df = self._three_patient_panel()
+
+        # Empty entity_id_column.
+        with pytest.raises(ValueError, match="entity_id_column"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="",
+                event_timestamp_column="event_ts",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
+
+        # Empty event_timestamp_column.
+        with pytest.raises(ValueError, match="event_timestamp_column"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="patient_id",
+                event_timestamp_column="",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
+
+        # Entity column name not present in the DataFrame.
+        with pytest.raises(ValueError, match="not found in DataFrame"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="bogus_entity",
+                event_timestamp_column="event_ts",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
+
+        # Timestamp column name not present in the DataFrame.
+        with pytest.raises(ValueError, match="not found in DataFrame"):
+            _generate_temporal_features(
+                df,
+                temporal_columns=["value"],
+                entity_id_column="patient_id",
+                event_timestamp_column="bogus_ts",
+                lag_periods=[1],
+                rolling_windows=[],
+            )
+
+    def test_rolling_groupby_entity(self):
+        """Rolling mean must be entity-scoped, not cross-entity."""
+        df = self._three_patient_panel()
+
+        result_df, _ = _generate_temporal_features(
+            df,
+            temporal_columns=["value"],
+            entity_id_column="patient_id",
+            event_timestamp_column="event_ts",
+            lag_periods=[],
+            rolling_windows=[3],
+        )
+
+        sorted_result = result_df.sort_values(["patient_id", "event_ts"]).reset_index(drop=True)
+
+        # Patient B day-2 rolling mean(3) over [100, 101, 102] = 101.0.
+        # If grouping leaked, the window would have absorbed patient A's tail.
+        b_day2 = sorted_result[sorted_result["patient_id"] == "B"].iloc[2]
+        assert b_day2["value_rolling_mean_3"] == pytest.approx(101.0)
+
+        # Patient C day-2 rolling mean(3) over [1000, 1001, 1002] = 1001.0.
+        c_day2 = sorted_result[sorted_result["patient_id"] == "C"].iloc[2]
+        assert c_day2["value_rolling_mean_3"] == pytest.approx(1001.0)
+
+
+@pytest.mark.asyncio
+class TestGenerateFeaturesEntityGroupedPipeline:
+    """Integration: ``generate_features`` must apply grouping across splits.
+
+    The full pipeline runs ``_generate_temporal_features`` ONCE on the
+    concatenated train+val+test, then re-splits via internal markers. This
+    ensures lag chains span split boundaries within an entity.
+    """
+
+    async def test_lag_chain_spans_train_val_within_entity(self):
+        """Validation row 0 (patient with train history) must see train tail.
+
+        If ``generate_features`` ran ``_generate_temporal_features``
+        per-split (the pre-Block-1B behaviour), patient B's first
+        validation row would have ``lag_1 == NaN``. With the Block 1B
+        refactor it should pull the last train value for the same entity.
+        """
+        # Build a 2 patients × 4 rows train + 2 patients × 1 row val panel.
+        train_rows = []
+        for day in range(4):
+            ts = pd.Timestamp("2026-01-01") + pd.Timedelta(days=day)
+            train_rows.append({"patient_id": "A", "event_ts": ts, "value": 1 + day})
+            train_rows.append({"patient_id": "B", "event_ts": ts, "value": 100 + day})
+        train_df = pd.DataFrame(train_rows)
+
+        val_rows = [
+            {
+                "patient_id": "A",
+                "event_ts": pd.Timestamp("2026-01-05"),
+                "value": 5.0,
+            },
+            {
+                "patient_id": "B",
+                "event_ts": pd.Timestamp("2026-01-05"),
+                "value": 104.0,
+            },
+        ]
+        val_df = pd.DataFrame(val_rows)
+
+        state = {
+            "X_train": train_df,
+            "X_val": val_df,
+            "y_train": pd.Series([0, 1] * 4),
+            "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "event_ts",
+            "feature_config": {
+                "generate_temporal": True,
+                "generate_interactions": False,
+                "generate_domain": False,
+                "generate_aggregates": False,
+                "lag_periods": [1],
+                "rolling_windows": [],
+                # Skip nan-fill so we can assert raw lag values.
+                "nan_fill_strategy": "zero",
+            },
+            "temporal_columns": ["value"],
+        }
+
+        result = await generate_features(state)
+        assert "X_val_generated" in result
+        assert result.get("error") is None
+
+        x_val = result["X_val_generated"]
+        # Patient A's val row must see train day-3 value (4) as its lag_1,
+        # not 0 (which would mean nan-fill swallowed a per-split NaN).
+        a_val = x_val[x_val["patient_id"] == "A"].iloc[0]
+        assert a_val["value_lag_1"] == 4, (
+            "Validation lag_1 must reach back into the training tail for the "
+            "same entity. A NaN/zero here means the splits were processed "
+            "independently and the lag chain is broken."
+        )
+        b_val = x_val[x_val["patient_id"] == "B"].iloc[0]
+        assert b_val["value_lag_1"] == 103
+
+    async def test_original_feature_count_excludes_split_markers(self):
+        """Regression for 1B-M5 fix-up: ``original_feature_count`` must reflect
+        the caller's input columns, not the split-marker-augmented columns.
+
+        After 1B-M5 dropped ``piece.copy()`` in ``_concat_with_split_markers``,
+        the function mutates ``state["X_train"]`` in place by appending
+        ``__feature_gen_split__`` and ``__feature_gen_row_id__``. A late re-read
+        of ``state["X_train"].columns`` (the bug) inflated the original count
+        by 2 whenever the temporal block ran. We assert the expected invariants
+        directly so the metric stays correct end-to-end (MLflow logging,
+        visualization, "features removed" delta in the selector).
+        """
+        train_rows = []
+        for day in range(4):
+            ts = pd.Timestamp("2026-01-01") + pd.Timedelta(days=day)
+            train_rows.append({"patient_id": "A", "event_ts": ts, "value": 1 + day})
+            train_rows.append({"patient_id": "B", "event_ts": ts, "value": 100 + day})
+        train_df = pd.DataFrame(train_rows)
+        n_input_columns = len(train_df.columns)
+
+        state = {
+            "X_train": train_df,
+            "y_train": pd.Series([0, 1] * 4),
+            "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "event_ts",
+            "feature_config": {
+                "generate_temporal": True,
+                "generate_interactions": False,
+                "generate_domain": False,
+                "generate_aggregates": False,
+                "lag_periods": [1],
+                "rolling_windows": [],
+                "nan_fill_strategy": "zero",
+            },
+            "temporal_columns": ["value"],
+        }
+
+        result = await generate_features(state)
+        assert result.get("error") is None
+
+        # Hard equality: count must match the caller's input width exactly.
+        assert result["original_feature_count"] == n_input_columns, (
+            "original_feature_count must equal the caller's input column "
+            "count. A larger value means generate_features re-read "
+            "state['X_train'] AFTER _concat_with_split_markers mutated it "
+            "in place — this is the 1B-M5 fix-up regression."
+        )
+        # Invariant: new + original = total. Catches the same bug from a
+        # different angle (and any other count drift).
+        assert (
+            result["new_feature_count"]
+            == result["total_feature_count"] - result["original_feature_count"]
+        )
+        # Belt-and-braces: the generated frame must not leak the dunder
+        # marker columns to the caller.
+        assert _SPLIT_MARKER_COL not in result["X_train_generated"].columns
+        assert _SPLIT_ROW_ID_COL not in result["X_train_generated"].columns
+
+
+class TestConcatWithSplitMarkersGuards:
+    """Block 1B-M1: refuse to clobber caller columns with internal markers.
+
+    The marker columns use dunder names so the chance of a real collision is
+    near zero, but a silent overwrite would scramble the round-trip back to
+    per-split frames in ``_split_by_markers``. The guard makes the failure
+    loud so callers see it instantly.
+    """
+
+    @pytest.mark.parametrize("reserved", [_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL])
+    def test_raises_when_reserved_column_already_present_on_train(self, reserved):
+        train = pd.DataFrame({"value": [1, 2], reserved: ["x", "y"]})
+        val = pd.DataFrame({"value": [3]})
+
+        with pytest.raises(ValueError, match=re.escape(reserved)):
+            _concat_with_split_markers(train, val, None)
+
+    @pytest.mark.parametrize("reserved", [_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL])
+    def test_raises_when_reserved_column_already_present_on_val(self, reserved):
+        train = pd.DataFrame({"value": [1]})
+        val = pd.DataFrame({"value": [2], reserved: ["x"]})
+
+        with pytest.raises(ValueError, match=re.escape(reserved)):
+            _concat_with_split_markers(train, val, None)
+
+    @pytest.mark.parametrize("reserved", [_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL])
+    def test_raises_when_reserved_column_already_present_on_test(self, reserved):
+        train = pd.DataFrame({"value": [1]})
+        test = pd.DataFrame({"value": [2], reserved: ["x"]})
+
+        with pytest.raises(ValueError, match=re.escape(reserved)):
+            _concat_with_split_markers(train, None, test)
+
+
+class TestConcatWithSplitMarkersMemoryContract:
+    """Block 1B-M5: the no-copy contract is observable and load-bearing.
+
+    Dropping the per-split ``piece.copy()`` matters for RWD-scale memory, but
+    only if it is actually preserved. These tests pin the two contracts the
+    docstring promises so that a future "let's add a defensive copy back"
+    refactor breaks loudly instead of silently regressing memory use.
+    """
+
+    def test_returned_frame_shares_memory_with_input(self):
+        """Single-split path must alias the caller's column buffers.
+
+        With only X_train present, the combined frame is constructed without
+        going through ``pd.concat`` block consolidation, so the no-copy
+        contract is directly observable via ``np.shares_memory``. If a future
+        edit reintroduces ``piece.copy()``, this assertion flips to False.
+
+        Note: the multi-split path also drops the per-split copies, but
+        ``pd.concat`` consolidates the row stack into a fresh contiguous
+        block, so ``shares_memory`` between the combined frame and any single
+        input split is False there even with ``copy=False``. The single-split
+        case is the most direct, version-stable witness to the contract.
+        """
+        train = pd.DataFrame(
+            {
+                "a": np.arange(5, dtype=np.float64),
+                "b": np.arange(5, dtype=np.float64) * 2,
+            }
+        )
+
+        combined, _ = _concat_with_split_markers(train, None, None)
+
+        # At least one numeric column on the combined frame must alias the
+        # corresponding column on the input. Both are asserted because either
+        # one regressing would re-introduce the copy.
+        assert np.shares_memory(combined["a"].values, train["a"].values), (
+            "Single-split combined frame must alias input column 'a'; a "
+            "False here means a defensive copy was reintroduced inside "
+            "_concat_with_split_markers and the 1B-M5 memory contract has "
+            "regressed."
+        )
+        assert np.shares_memory(combined["b"].values, train["b"].values)
+
+    def test_inputs_are_mutated_in_place_with_marker_columns(self):
+        """The no-copy contract has a caller-visible side effect: input frames
+        gain ``_SPLIT_MARKER_COL`` and ``_SPLIT_ROW_ID_COL`` in place.
+
+        This is documented in the function's Notes section. Pinning it here
+        guarantees that callers who later try to reuse X_train/X_val/X_test
+        as "untouched" will see the dunder columns; if a future refactor
+        adds a copy to hide this, the test fails and forces an explicit
+        decision rather than a silent memory regression.
+        """
+        train = pd.DataFrame({"value": [1.0, 2.0, 3.0]})
+        val = pd.DataFrame({"value": [4.0, 5.0]})
+        test = pd.DataFrame({"value": [6.0]})
+
+        train_cols_before = set(train.columns)
+        val_cols_before = set(val.columns)
+        test_cols_before = set(test.columns)
+
+        _concat_with_split_markers(train, val, test)
+
+        new_marker_cols = {_SPLIT_MARKER_COL, _SPLIT_ROW_ID_COL}
+        assert set(train.columns) - train_cols_before == new_marker_cols, (
+            "X_train must gain marker columns in place; the no-copy "
+            "contract (1B-M5) requires this side effect."
+        )
+        assert set(val.columns) - val_cols_before == new_marker_cols
+        assert set(test.columns) - test_cols_before == new_marker_cols
 
 
 class TestInteractionFeatures:
@@ -348,6 +778,7 @@ class TestGenerateFeaturesNode:
         state = {
             "X_train": pd.DataFrame(
                 {
+                    "patient_id": [f"p_{i % 10}" for i in range(100)],
                     "date": pd.date_range("2024-01-01", periods=100, freq="D"),
                     "region": ["East", "West"] * 50,
                     "value1": np.random.rand(100),
@@ -358,6 +789,8 @@ class TestGenerateFeaturesNode:
             ),
             "y_train": pd.Series(np.random.randint(0, 2, 100)),
             "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "date",
             "feature_config": {
                 "generate_temporal": True,
                 "generate_interactions": True,
@@ -380,11 +813,15 @@ class TestGenerateFeaturesNode:
         """Should apply same transformations to validation data."""
         train_df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 50,
+                "event_ts": pd.date_range("2024-01-01", periods=50, freq="D"),
                 "value": range(50),
             }
         )
         val_df = pd.DataFrame(
             {
+                "patient_id": ["A"] * 20,
+                "event_ts": pd.date_range("2024-02-20", periods=20, freq="D"),
                 "value": range(50, 70),
             }
         )
@@ -394,6 +831,8 @@ class TestGenerateFeaturesNode:
             "X_val": val_df,
             "y_train": pd.Series([0, 1] * 25),
             "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "event_ts",
             "feature_config": {
                 "generate_temporal": True,
                 "rolling_windows": [3],
@@ -411,12 +850,15 @@ class TestGenerateFeaturesNode:
         state = {
             "X_train": pd.DataFrame(
                 {
+                    "patient_id": ["A"] * 20,
                     "date": pd.date_range("2024-01-01", periods=20, freq="D"),
                     "value": range(20),
                 }
             ),
             "y_train": pd.Series([0, 1] * 10),
             "problem_type": "classification",
+            "entity_id_column": "patient_id",
+            "event_timestamp_column": "date",
             "feature_config": {"generate_temporal": True, "lag_periods": [1]},
         }
 
@@ -428,6 +870,33 @@ class TestGenerateFeaturesNode:
         for feat in result["generated_features"]:
             assert "name" in feat
             assert "type" in feat
+
+    async def test_missing_entity_columns_returns_error_when_temporal_enabled(self):
+        """Caller-side strict check: missing keys → error dict, not silent no-op.
+
+        ``generate_features`` raises a ``ValueError`` when temporal
+        generation is requested without entity/timestamp columns; the
+        node's outer ``try/except`` converts it to the standard error
+        envelope so the LangGraph still flows.
+        """
+        state = {
+            "X_train": pd.DataFrame(
+                {
+                    "date": pd.date_range("2024-01-01", periods=10, freq="D"),
+                    "value": range(10),
+                }
+            ),
+            "y_train": pd.Series([0, 1] * 5),
+            "problem_type": "classification",
+            # No entity_id_column / event_timestamp_column on state OR config.
+            "feature_config": {"generate_temporal": True, "lag_periods": [1]},
+        }
+
+        result = await generate_features(state)
+
+        assert result.get("error") is not None
+        assert "entity_id_column" in result["error"]
+        assert "event_timestamp_column" in result["error"]
 
     async def test_handles_empty_config(self):
         """Should handle empty or missing feature config."""

@@ -69,7 +69,7 @@ FalkorDB==1.2.2
 fastapi==0.125.0
 fasttext==0.9.3
 fastuuid==0.14.0
-feast==0.58.0
+feast[postgres]==0.43.0
 filelock==3.20.1
 Flask==3.1.2
 flask-cors==6.0.2

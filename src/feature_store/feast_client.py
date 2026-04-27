@@ -76,6 +76,20 @@ FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
 FEAST_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
 
 
+class FeastError(Exception):
+    """Base class for Feast-specific errors raised by this module.
+
+    Subclassed by :class:`FeastFallbackError` and any future
+    Feast-domain exception. Catchers that want "anything from this
+    module" can ``except FeastError:`` without enumerating every
+    subclass.
+    """
+
+
+class FeastFallbackError(FeastError):
+    """Raised when the Feast historical-features fallback fires in production."""
+
+
 class FreshnessStatus(str, Enum):
     """Feature freshness status levels."""
 
@@ -204,6 +218,10 @@ class FeastClient:
 
         # Track last materialization timestamps per feature view
         self._materialization_timestamps: Dict[str, datetime] = {}
+
+        # Track whether the historical-features fallback has been used during
+        # this client's lifetime so trainers can tag MLflow runs accordingly.
+        self._fallback_used: bool = False
 
     async def initialize(self) -> None:
         """Initialize Feast store connection.
@@ -438,6 +456,9 @@ class FeastClient:
             else:
                 raise RuntimeError("No feature store available")
 
+        except FeastFallbackError:
+            # Propagate production-mode fallback errors without re-routing.
+            raise
         except Exception as e:
             logger.error(f"Error getting historical features: {e}")
             if self.config.enable_fallback and self._custom_store:
@@ -456,10 +477,25 @@ class FeastClient:
 
         Note: This fallback does NOT support true point-in-time joins.
         It returns the latest feature values instead.
+
+        Raises:
+            FeastFallbackError: When ``ENVIRONMENT`` is set to ``production``
+                (case-insensitive — ``PRODUCTION`` and ``Production`` also
+                trigger the raise). The fallback is forbidden in production
+                because it silently degrades point-in-time correctness, which
+                can leak future data into training. Configure Feast properly
+                or unset ``ENVIRONMENT``.
         """
+        if os.environ.get("ENVIRONMENT", "").lower() == "production":
+            raise FeastFallbackError(
+                "Feast historical features unavailable; fallback is forbidden in production. "
+                "Configure Feast or unset ENVIRONMENT."
+            )
+
         logger.warning(
             "Using fallback for historical features. Point-in-time correctness NOT guaranteed."
         )
+        self._fallback_used = True
 
         if not self._custom_store:
             raise RuntimeError("Custom store not available for fallback")
@@ -983,6 +1019,147 @@ class FeastClient:
             logger.error(f"Error listing feature views: {e}")
             return []
 
+    async def register_feature_view(
+        self,
+        name: str,
+        entity_name: str,
+        feature_names: List[str],
+        batch_source_name: str,
+        ttl: Optional[timedelta] = None,
+        feature_dtypes: Optional[Dict[str, str]] = None,
+        tags: Optional[Dict[str, str]] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Auto-register a tier0-generated FeatureView in Feast (Block 5 #14).
+
+        Creates and applies a FeatureView programmatically so features that
+        survive feature selection in the FeatureAnalyzer can be reused by
+        downstream serving without requiring a hand-written Python file in
+        ``feature_repo/``. Uses an existing Feast ``DataSource`` (looked up
+        by ``batch_source_name``) as the underlying batch source for the
+        wrapping ``PushSource``.
+
+        Args:
+            name: FeatureView name (must be unique). Convention:
+                ``tier0_<experiment_id>_features``.
+            entity_name: Name of the Feast Entity this view joins on
+                (e.g., ``patient`` or ``hcp``). Must already be registered.
+            feature_names: List of feature column names to expose. The
+                method assumes ``Float64`` unless ``feature_dtypes`` says
+                otherwise.
+            batch_source_name: Name of an existing Feast DataSource to use
+                as the PushSource's batch_source. Must already be applied
+                via ``feature_repo/data_sources.py``. We don't synthesize
+                a new SQL/file source here — that's Block 6B scope (real
+                ETLs replacing the bootstrap bridging views).
+            ttl: Time-to-live for this FeatureView. Defaults to 7 days.
+            feature_dtypes: Optional override mapping ``{feature_name: feast_dtype_name}``
+                where the value is one of ``"Int64"``, ``"Float32"``,
+                ``"Float64"``, ``"String"``, ``"Bool"``.
+            tags: Optional tag dict — ``{"owner": "feature_analyzer", ...}``.
+            description: Optional human-readable description.
+
+        Returns:
+            Dict with ``registered`` (bool), ``feature_view_name`` (str),
+            ``features_count`` (int), ``error`` (str | None).
+
+        Notes on best-effort registration:
+            - Returns ``{registered: False, error: ...}`` and logs a
+              warning if Feast isn't initialised, the entity / batch
+              source isn't registered, or apply fails. Callers
+              (feature_analyzer/agent.py) treat registration as
+              best-effort — failing here MUST NOT break the tier0 run.
+        """
+        await self.initialize()
+
+        result: Dict[str, Any] = {
+            "registered": False,
+            "feature_view_name": name,
+            "features_count": 0,
+            "error": None,
+        }
+
+        if not feature_names:
+            result["error"] = "feature_names is empty; nothing to register"
+            return result
+
+        if not self._store:
+            result["error"] = "Feast store not initialised"
+            logger.warning("Cannot register feature view %s: Feast store not initialised", name)
+            return result
+
+        try:
+            from feast import Entity, FeatureView, Field, PushSource
+            from feast.types import Bool, Float32, Float64, Int64, String
+
+            dtype_map = {
+                "Int64": Int64,
+                "Float32": Float32,
+                "Float64": Float64,
+                "String": String,
+                "Bool": Bool,
+            }
+
+            try:
+                entity = self._store.get_entity(entity_name)
+            except Exception as e:
+                result["error"] = f"entity '{entity_name}' not registered in Feast: {e}"
+                logger.warning(
+                    "Cannot register feature view %s: %s", name, result["error"]
+                )
+                return result
+
+            try:
+                batch_source = self._store.get_data_source(batch_source_name)
+            except Exception as e:
+                result["error"] = (
+                    f"batch source '{batch_source_name}' not registered in Feast: {e}"
+                )
+                logger.warning(
+                    "Cannot register feature view %s: %s", name, result["error"]
+                )
+                return result
+
+            schema = []
+            feature_dtypes = feature_dtypes or {}
+            for feature_name in feature_names:
+                dtype_str = feature_dtypes.get(feature_name, "Float64")
+                dtype = dtype_map.get(dtype_str, Float64)
+                schema.append(Field(name=feature_name, dtype=dtype))
+
+            push_source_name = f"{name}_push_source"
+            push_source = PushSource(
+                name=push_source_name,
+                batch_source=batch_source,
+            )
+
+            feature_view = FeatureView(
+                name=name,
+                entities=[Entity(name=entity.name, join_keys=[entity.join_key])],
+                ttl=ttl or timedelta(days=7),
+                schema=schema,
+                source=push_source,
+                online=True,
+                tags=tags or {"owner": "feature_analyzer", "auto_registered": "true"},
+                description=description or f"Auto-registered tier0 features: {name}",
+            )
+
+            await asyncio.to_thread(self._store.apply, [feature_view])
+
+            result["registered"] = True
+            result["features_count"] = len(feature_names)
+            logger.info(
+                "Auto-registered FeatureView '%s' with %d features",
+                name,
+                len(feature_names),
+            )
+            return result
+
+        except Exception as e:
+            result["error"] = str(e)
+            logger.warning("Failed to auto-register FeatureView %s: %s", name, e)
+            return result
+
     async def list_entities(self) -> List[Dict[str, Any]]:
         """List all registered entities.
 
@@ -1021,11 +1198,25 @@ class FeastClient:
         2. Configured staleness thresholds
 
         Status levels:
-        - FRESH: Within warning threshold
-        - WARNING: Between warning and max staleness
-        - STALE: Beyond max staleness but within 2x
-        - EXPIRED: Beyond 2x max staleness
-        - UNKNOWN: No materialization record
+        - FRESH: Within warning threshold.
+        - WARNING: Between warning and max staleness.
+        - STALE: Beyond max staleness but within 2x.
+        - EXPIRED: Beyond 2x max staleness.
+        - UNKNOWN: Either (a) no materialization record exists for this
+          feature view, or (b) the freshness check itself raised an
+          unexpected exception. The two are conflated into UNKNOWN
+          because the *consequence* — block-by-default unless
+          ``ALLOW_STALE_FEAST=1`` overrides it — is the same. The
+          warning log line distinguishes the two for ops.
+
+        On any unexpected exception the method defaults to treating features
+        as **stale** (``is_fresh=False``, ``freshness_status=UNKNOWN``) so
+        that callers block by default rather than silently proceeding with
+        potentially outdated data.
+
+        Emergency opt-out: set ``ALLOW_STALE_FEAST=1`` in the environment to
+        override this behaviour during a known Feast outage. This env-var is
+        an ops escape hatch — do NOT set it in normal config or tests.
 
         Args:
             feature_view: Name of the feature view.
@@ -1033,62 +1224,99 @@ class FeastClient:
         Returns:
             FeatureFreshness object with status and timing info.
         """
-        await self.initialize()
-        self._ensure_initialized()
+        try:
+            await self.initialize()
+            self._ensure_initialized()
 
-        # Get thresholds from config
-        max_staleness_hours, warning_threshold_hours = self._get_freshness_thresholds(feature_view)
+            # Get thresholds from config
+            max_staleness_hours, warning_threshold_hours = self._get_freshness_thresholds(
+                feature_view
+            )
 
-        # Get last materialization time
-        last_materialized = self._materialization_timestamps.get(feature_view)
+            # Get last materialization time
+            last_materialized = self._materialization_timestamps.get(feature_view)
 
-        # Calculate age and determine status
-        if last_materialized is None:
+            # Calculate age and determine status
+            if last_materialized is None:
+                return FeatureFreshness(
+                    feature_view=feature_view,
+                    last_materialized=None,
+                    freshness_status=FreshnessStatus.UNKNOWN,
+                    age_hours=None,
+                    max_staleness_hours=max_staleness_hours,
+                    warning_threshold_hours=warning_threshold_hours,
+                    is_fresh=False,
+                    message="No materialization record found",
+                )
+
+            # Calculate age in hours
+            age_seconds = (datetime.now(timezone.utc) - last_materialized).total_seconds()
+            age_hours = age_seconds / 3600.0
+
+            # Determine status
+            if age_hours <= warning_threshold_hours:
+                status = FreshnessStatus.FRESH
+                is_fresh = True
+                message = f"Features are fresh (age: {age_hours:.1f}h)"
+            elif age_hours <= max_staleness_hours:
+                status = FreshnessStatus.WARNING
+                is_fresh = True
+                message = (
+                    f"Features approaching staleness "
+                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                )
+            elif age_hours <= max_staleness_hours * 2:
+                status = FreshnessStatus.STALE
+                is_fresh = False
+                message = (
+                    f"Features are stale "
+                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                )
+            else:
+                status = FreshnessStatus.EXPIRED
+                is_fresh = False
+                message = (
+                    f"Features are expired "
+                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                )
+
             return FeatureFreshness(
                 feature_view=feature_view,
-                last_materialized=None,
-                freshness_status=FreshnessStatus.UNKNOWN,
-                age_hours=None,
+                last_materialized=last_materialized,
+                freshness_status=status,
+                age_hours=age_hours,
                 max_staleness_hours=max_staleness_hours,
                 warning_threshold_hours=warning_threshold_hours,
-                is_fresh=False,
-                message="No materialization record found",
+                is_fresh=is_fresh,
+                message=message,
             )
 
-        # Calculate age in hours
-        age_seconds = (datetime.now(timezone.utc) - last_materialized).total_seconds()
-        age_hours = age_seconds / 3600.0
-
-        # Determine status
-        if age_hours <= warning_threshold_hours:
-            status = FreshnessStatus.FRESH
-            is_fresh = True
-            message = f"Features are fresh (age: {age_hours:.1f}h)"
-        elif age_hours <= max_staleness_hours:
-            status = FreshnessStatus.WARNING
-            is_fresh = True
-            message = f"Features approaching staleness (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
-        elif age_hours <= max_staleness_hours * 2:
-            status = FreshnessStatus.STALE
-            is_fresh = False
-            message = f"Features are stale (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
-        else:
-            status = FreshnessStatus.EXPIRED
-            is_fresh = False
-            message = (
-                f"Features are expired (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+        except FeastFallbackError:
+            # Pre-emptive guard: if a future refactor of
+            # ``_ensure_initialized`` (or any helper above) starts
+            # raising FeastFallbackError, the broad ``except Exception``
+            # below would swallow it into an UNKNOWN status — masking a
+            # production-policy violation. Mirror the
+            # ``get_historical_features`` pattern so the contract holds
+            # under future refactors. Latent today (no current path
+            # raises FeastFallbackError here), defensive against
+            # tomorrow. (Block 2 polish)
+            raise
+        except Exception as e:
+            allow_stale = os.environ.get("ALLOW_STALE_FEAST") == "1"
+            logger.warning(
+                "Freshness check failed for feature view '%s': %s. "
+                "Treating as %s. Set ALLOW_STALE_FEAST=1 to bypass (ops emergency only).",
+                feature_view,
+                e,
+                "fresh (ALLOW_STALE_FEAST=1)" if allow_stale else "stale",
             )
-
-        return FeatureFreshness(
-            feature_view=feature_view,
-            last_materialized=last_materialized,
-            freshness_status=status,
-            age_hours=age_hours,
-            max_staleness_hours=max_staleness_hours,
-            warning_threshold_hours=warning_threshold_hours,
-            is_fresh=is_fresh,
-            message=message,
-        )
+            return FeatureFreshness(
+                feature_view=feature_view,
+                freshness_status=FreshnessStatus.UNKNOWN,
+                is_fresh=allow_stale,
+                message=f"Freshness check failed: {e}",
+            )
 
     async def get_all_freshness(self) -> Dict[str, FeatureFreshness]:
         """Get freshness status for all tracked feature views.

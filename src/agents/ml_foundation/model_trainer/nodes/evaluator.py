@@ -7,7 +7,8 @@ Version: 2.0.0
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import math
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 from sklearn.metrics import (
@@ -40,6 +41,19 @@ from .advanced_validation import (
 logger = logging.getLogger(__name__)
 
 
+def _positive_class_proba(y_proba: np.ndarray) -> np.ndarray:
+    """Return the positive-class probability column from a 1D or 2D proba array.
+
+    sklearn's ``predict_proba`` returns a 2D ``(n_samples, n_classes)`` array
+    where column 1 is P(class=1) for binary classifiers. Some callers
+    (calibrators, custom wrappers) may already pass the 1D positive-class
+    column. This helper accepts either shape and returns the 1D array.
+    """
+    if y_proba.ndim == 2:
+        return y_proba[:, 1]
+    return y_proba
+
+
 async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate trained model on train/validation/test sets.
 
@@ -66,6 +80,9 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     trained_model = state.get("trained_model")
     problem_type = state.get("problem_type", "binary_classification")
     success_criteria = state.get("success_criteria", {})
+    # Block 5 (#10): optional dict mapping {tp,fp,fn,tn} → per-prediction
+    # dollar value. None = skip business_utility computation.
+    cost_matrix = state.get("cost_matrix")
 
     # Extract preprocessed data
     X_train_preprocessed = state.get("X_train_preprocessed")
@@ -150,6 +167,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 y_test_proba=predictions["y_test_proba"],
                 imbalance_detected=imbalance_detected,
                 minority_ratio=minority_ratio,
+                cost_matrix=cost_matrix,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -254,7 +272,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             metrics_result["post_hoc_calibration"] = cal_info
             if cal_info.get("calibration_applied") and X_test_np is not None:
                 cal_proba = calibrated_model.predict_proba(X_test_np)
-                cal_proba_pos = cal_proba[:, 1] if cal_proba.ndim == 2 else cal_proba
+                cal_proba_pos = _positive_class_proba(cal_proba)
                 opt_thresh = metrics_result.get("optimal_threshold", 0.5)
                 cal_pred = (cal_proba_pos >= opt_thresh).astype(int)
                 cal_test_metrics = _compute_split_classification_metrics(
@@ -498,74 +516,157 @@ def _compute_classification_metrics(
     y_test_proba: Optional[np.ndarray],
     imbalance_detected: bool = False,
     minority_ratio: float = 0.5,
+    cost_matrix: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
-    For imbalanced datasets, also computes metrics at the optimal threshold
-    to provide useful predictions instead of all-negative predictions.
+    Threshold-selection policy (Block 1A — finding #6):
+        The classification operating point (Youden's J optimum, and the
+        precision-constrained alternative when ``minority_ratio < 0.05``)
+        is selected on the VALIDATION arrays, frozen, and then applied to
+        the test set without re-tuning. This prevents test-set leakage
+        into the operating point. If validation arrays are not provided,
+        the function falls back to the default 0.5 threshold rather than
+        tuning on test — test-set integrity is preserved at the cost of
+        a possibly off-by-default operating point.
+
+        ``validation_metrics`` is recomputed AT the chosen threshold when
+        validation probabilities are available, so its precision/recall/F1
+        reflect performance at the same operating point used for test.
 
     Args:
         y_train: Training labels
-        y_train_pred: Training predictions
+        y_train_pred: Training predictions (at model's default threshold)
         y_train_proba: Training probabilities
-        y_validation: Validation labels
-        y_validation_pred: Validation predictions
-        y_validation_proba: Validation probabilities
+        y_validation: Validation labels — used for threshold selection
+        y_validation_pred: Validation predictions (at model's default)
+        y_validation_proba: Validation probabilities — used for threshold
+            selection. When None, threshold falls back to 0.5.
         y_test: Test labels
-        y_test_pred: Test predictions
-        y_test_proba: Test probabilities
-        imbalance_detected: Whether class imbalance was detected
-        minority_ratio: Ratio of minority class (0-1)
+        y_test_pred: Test predictions (at model's default threshold)
+        y_test_proba: Test probabilities. The chosen threshold is applied
+            to these to produce the final reported test metrics.
+        imbalance_detected: Whether class imbalance was detected. When
+            True, ``test_metrics`` reports values at the chosen threshold;
+            otherwise it reports values at the model's default 0.5.
+        minority_ratio: Ratio of minority class (0-1). When below 0.05,
+            the precision-constrained threshold is also evaluated on
+            validation and may override the Youden's J optimum.
+        cost_matrix: Optional Block-5 (#10) per-outcome dollar matrix —
+            keys ``tp``/``fp``/``fn``/``tn`` mapped to float per-prediction
+            value. When supplied, ``business_utility`` is computed at the
+            chosen threshold for both validation and test and exposed via
+            ``validation_metrics["business_utility"]`` /
+            ``test_metrics["business_utility"]`` plus a top-level mirror.
 
     Returns:
-        Dictionary of metrics
+        Dictionary with the standard top-level metrics keys
+        (``train_metrics``, ``validation_metrics``, ``test_metrics``,
+        ``test_metrics_at_05``, ``test_metrics_at_optimal``, ``auc_roc``,
+        ``precision``, ``recall``, ``f1_score``, ``pr_auc``,
+        ``brier_score``, ``confusion_matrix``, ``optimal_threshold``,
+        ``precision_at_k``, ``confidence_interval``, ``bootstrap_samples``,
+        ``precision_constrained``, ``calibration_error``, ``f1_macro``,
+        ``f1_weighted``, plus minority metrics when imbalance is detected).
+
+        Block 1A-specific keys:
+            - ``optimal_threshold`` (top level): the canonical chosen
+              threshold (validation-tuned, or 0.5 fallback). Existing
+              cross-codebase consumers read this key.
+            - ``chosen_threshold_source`` (top level): provenance flag,
+              one of ``"validation"`` or ``"default"``.
+            - ``validation_metrics["chosen_threshold"]``: same numeric
+              value as ``optimal_threshold``, exposed at the validation
+              metric level so model-registry / monitoring consumers can
+              audit the operating point that produced the validation
+              numbers.
+            - ``validation_metrics["chosen_threshold_source"]``:
+              provenance flag mirrored at the validation level.
     """
     # Training metrics
     train_metrics = {}
     if y_train is not None and y_train_pred is not None:
         train_metrics = _compute_split_classification_metrics(y_train, y_train_pred, y_train_proba)
 
-    # Validation metrics
-    validation_metrics = {}
-    if y_validation is not None and y_validation_pred is not None:
-        validation_metrics = _compute_split_classification_metrics(
-            y_validation, y_validation_pred, y_validation_proba
-        )
-
-    # Compute optimal threshold FIRST (before test metrics)
-    optimal_threshold = _compute_optimal_threshold(y_test, y_test_proba)
+    # =====================================================================
+    # THRESHOLD TUNING — VALIDATION SET ONLY (Block 1A — finding #6)
+    # =====================================================================
+    # The optimal classification threshold (and any precision-constrained
+    # alternative) MUST be selected on validation data, then frozen, then
+    # applied to test. Tuning on test leaks test info into the operating
+    # point and inflates apparent test performance.
+    #
+    # Step 1 (1A-I-3): pick the canonical validation-vs-default threshold
+    # via `_select_threshold`. Step 2 (rare-event override) stays inline
+    # because it needs `minority_ratio` and produces a `precision_constrained`
+    # dict consumed by the result builder below.
+    # =====================================================================
+    optimal_threshold, threshold_source = _select_threshold(
+        y_validation, y_validation_proba, cost_matrix=cost_matrix
+    )
 
     # For rare-event prediction, apply precision-constrained threshold
-    precision_constrained = None
-    if minority_ratio < 0.05:
-        precision_constrained = _compute_precision_constrained_threshold(y_test, y_test_proba)
+    # tuned ON VALIDATION (not test). This may override the Youden's J
+    # optimum returned by `_select_threshold` above.
+    precision_constrained: Optional[Dict[str, Any]] = None
+    if minority_ratio < 0.05 and y_validation is not None and y_validation_proba is not None:
+        precision_constrained = _compute_precision_constrained_threshold(
+            y_validation, y_validation_proba
+        )
         if precision_constrained and precision_constrained.get("target_achieved"):
             optimal_threshold = precision_constrained["precision_constrained_threshold"]
             logger.info(
-                f"Using precision-constrained threshold {optimal_threshold:.4f} "
+                "Using precision-constrained threshold "
+                f"{optimal_threshold:.4f} tuned on validation "
                 f"(precision={precision_constrained['precision_at_threshold']:.4f}, "
                 f"recall={precision_constrained['recall_at_threshold']:.4f})"
             )
 
-    # CRITICAL: For imbalanced data, use optimal threshold for predictions
-    # This prevents all-negative predictions that occur with 0.5 threshold
-    y_test_pred_optimal = y_test_pred  # Default to model predictions
-    if y_test_proba is not None and optimal_threshold != 0.5:
-        # Get positive class probabilities
-        if y_test_proba.ndim == 2:
-            y_proba_pos = y_test_proba[:, 1]
+    # Validation metrics: recomputed AT THE CHOSEN THRESHOLD when probas
+    # are available so validation_metrics reflects performance at the same
+    # frozen operating point used for test. We also persist
+    # `chosen_threshold` and `chosen_threshold_source` here so downstream
+    # consumers can audit which split produced the threshold.
+    validation_metrics: Dict[str, Any] = {}
+    if y_validation is not None and y_validation_pred is not None:
+        if y_validation_proba is not None:
+            y_val_proba_pos = _positive_class_proba(y_validation_proba)
+            y_validation_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
+            validation_metrics = cast(
+                Dict[str, Any],
+                _compute_split_classification_metrics(
+                    y_validation, y_validation_pred_at_chosen, y_validation_proba
+                ),
+            )
         else:
-            y_proba_pos = y_test_proba
-        # Apply optimal threshold
+            validation_metrics = cast(
+                Dict[str, Any],
+                _compute_split_classification_metrics(
+                    y_validation, y_validation_pred, y_validation_proba
+                ),
+            )
+        validation_metrics["chosen_threshold"] = float(optimal_threshold)
+        validation_metrics["chosen_threshold_source"] = threshold_source
+
+    # CRITICAL: For imbalanced data, apply the FROZEN threshold tuned on
+    # validation to test predictions. No re-tuning on test.
+    # math.isclose tolerates the tiny float drift _compute_optimal_threshold
+    # can return when its sklearn input lands exactly on the default — we
+    # only want the rebinarisation pass when the chosen threshold is
+    # meaningfully different from 0.5.
+    y_test_pred_optimal = y_test_pred  # Default to model predictions
+    if y_test_proba is not None and not math.isclose(optimal_threshold, 0.5):
+        y_proba_pos = _positive_class_proba(y_test_proba)
         y_test_pred_optimal = (y_proba_pos >= optimal_threshold).astype(int)
         logger.info(
-            f"Using optimal threshold {optimal_threshold:.4f} for predictions (vs default 0.5)"
+            f"Applying frozen threshold {optimal_threshold:.4f} "
+            f"(tuned on {threshold_source}) to test predictions (vs default 0.5)"
         )
 
     # Test metrics at 0.5 threshold (standard)
     test_metrics_standard = _compute_split_classification_metrics(y_test, y_test_pred, y_test_proba)
 
-    # Test metrics at optimal threshold (for imbalanced data)
+    # Test metrics at the FROZEN chosen threshold (no re-tuning on test)
     test_metrics_optimal = _compute_split_classification_metrics(
         y_test, y_test_pred_optimal, y_test_proba
     )
@@ -598,6 +699,32 @@ def _compute_classification_metrics(
     else:
         confusion_dict = {"matrix": cm.tolist()}
 
+    # Block 5 (#10): business_utility from cost_matrix at the chosen
+    # (validation-tuned) threshold. We compute it on BOTH validation and
+    # test using the same frozen threshold so the metric reported in
+    # validation_metrics matches the operating point that produced the
+    # test number — a deployment decision tool needs both.
+    test_business_utility: Optional[float] = None
+    val_business_utility: Optional[float] = None
+    if cost_matrix is not None and cm.shape == (2, 2):
+        test_business_utility = _compute_business_utility(int(tp), int(fp), int(fn), int(tn), cost_matrix)
+        if y_validation is not None and y_validation_proba is not None:
+            y_val_proba_pos = _positive_class_proba(y_validation_proba)
+            y_val_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
+            val_cm = confusion_matrix(y_validation, y_val_pred_at_chosen)
+            if val_cm.shape == (2, 2):
+                v_tn, v_fp, v_fn, v_tp = val_cm.ravel()
+                val_business_utility = _compute_business_utility(
+                    int(v_tp), int(v_fp), int(v_fn), int(v_tn), cost_matrix
+                )
+        if val_business_utility is not None:
+            validation_metrics["business_utility"] = val_business_utility
+        test_metrics["business_utility"] = test_business_utility
+        logger.info(
+            f"business_utility (chosen_threshold={optimal_threshold:.4f}): "
+            f"validation={val_business_utility}, test={test_business_utility}"
+        )
+
     # Precision at k
     precision_at_k = _compute_precision_at_k(y_test, y_test_proba, k_values=[100, 500, 1000])
 
@@ -621,6 +748,7 @@ def _compute_classification_metrics(
         "brier_score": brier,
         "confusion_matrix": confusion_dict,
         "optimal_threshold": optimal_threshold,
+        "chosen_threshold_source": threshold_source,
         "precision_at_k": precision_at_k,
         "confidence_interval": confidence_interval,
         "bootstrap_samples": bootstrap_samples,
@@ -632,6 +760,11 @@ def _compute_classification_metrics(
         # Weighted metrics for imbalanced classification
         "f1_macro": test_metrics.get("f1_macro"),
         "f1_weighted": test_metrics.get("f1_weighted"),
+        # Block 5 (#10): top-level mirror of test-set business_utility for
+        # downstream consumers (Tier0OutputMapper, deployment decision
+        # tools) that read flat metrics off the result dict. None when no
+        # cost_matrix was provided.
+        "business_utility": test_business_utility,
     }
 
     # Add minority class metrics when imbalance is detected
@@ -689,11 +822,7 @@ def _compute_split_classification_metrics(
 
     # Probability-based metrics
     if y_proba is not None:
-        # Get positive class probabilities
-        if y_proba.ndim == 2:
-            y_proba_pos = y_proba[:, 1]
-        else:
-            y_proba_pos = y_proba
+        y_proba_pos = _positive_class_proba(y_proba)
 
         try:
             metrics["roc_auc"] = float(roc_auc_score(y_true, y_proba_pos))
@@ -894,6 +1023,91 @@ def _compute_regression_metrics(
     }
 
 
+def _compute_business_utility(
+    tp: int,
+    fp: int,
+    fn: int,
+    tn: int,
+    cost_matrix: Dict[str, float],
+) -> float:
+    """Compute business_utility = sum(cost_matrix[outcome] * count[outcome]).
+
+    Each confusion-matrix outcome is multiplied by its per-prediction
+    monetary value from ``cost_matrix`` and summed. A "cost" matrix is
+    typically signed: revenue from true positives is positive; the cost
+    of a false positive is negative; the cost of a missed target (false
+    negative) is also negative. The caller decides the sign convention —
+    this helper just multiplies and sums.
+
+    Args:
+        tp/fp/fn/tn: Confusion-matrix counts at the chosen threshold.
+        cost_matrix: Dict with keys ``tp``/``fp``/``fn``/``tn`` mapped to
+            float dollar values per prediction.
+
+    Returns:
+        Total business utility (float).
+
+    Raises:
+        KeyError: If any of the four required keys is missing from
+            ``cost_matrix``. The scope_definer's ``_validate_cost_matrix``
+            normally guards against this, but the helper enforces it
+            again so callers cannot silently drop a value.
+    """
+    return float(
+        tp * cost_matrix["tp"]
+        + fp * cost_matrix["fp"]
+        + fn * cost_matrix["fn"]
+        + tn * cost_matrix["tn"]
+    )
+
+
+def _select_threshold(
+    y_validation: Optional[np.ndarray],
+    y_validation_proba: Optional[np.ndarray],
+    *,
+    cost_matrix: Optional[Dict[str, float]] = None,
+) -> Tuple[float, str]:
+    """Pick the canonical classification threshold + provenance string.
+
+    Block 1A — finding #6: the operating point MUST be selected on
+    validation, then frozen for test. This helper encodes that policy:
+    when validation labels and probabilities are available, return the
+    Youden's J optimum from `_compute_optimal_threshold`; otherwise fall
+    back to the default 0.5 threshold and log a warning so test-set
+    integrity is preserved at the cost of an off-by-default operating
+    point.
+
+    Note: the precision-constrained override (rare-event minority class)
+    is NOT handled here — it requires additional caller context
+    (`minority_ratio`) and produces a `precision_constrained` dict
+    consumed elsewhere by the parent. The caller invokes this helper
+    first and may then override the returned threshold.
+
+    Args:
+        y_validation: Validation labels. When None, falls back to default.
+        y_validation_proba: Validation probabilities. When None, falls
+            back to default.
+        cost_matrix: Reserved for future cost-aware threshold selection
+            (Block 5 #10 follow-up). Currently unused — the helper always
+            picks a single threshold from validation Youden's J.
+
+    Returns:
+        Tuple of ``(chosen_threshold, chosen_threshold_source)``. The
+        source string is one of the literals ``"validation"`` (validation
+        arrays present, threshold tuned on them) or ``"default"`` (validation
+        arrays absent, threshold pinned to 0.5). Downstream consumers
+        (mlflow_logger, audit code) rely on these exact literals.
+    """
+    if y_validation is not None and y_validation_proba is not None:
+        return _compute_optimal_threshold(y_validation, y_validation_proba), "validation"
+
+    logger.warning(
+        "Validation arrays unavailable for threshold tuning; "
+        "falling back to default 0.5 threshold (test integrity preserved)."
+    )
+    return 0.5, "default"
+
+
 def _compute_optimal_threshold(
     y_true: np.ndarray,
     y_proba: Optional[np.ndarray],
@@ -910,18 +1124,23 @@ def _compute_optimal_threshold(
     if y_proba is None:
         return 0.5
 
-    # Get positive class probabilities
-    if y_proba.ndim == 2:
-        y_proba_pos = y_proba[:, 1]
-    else:
-        y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba)
 
     try:
         fpr, tpr, thresholds = roc_curve(y_true, y_proba_pos)
         # Youden's J statistic
         j_scores = tpr - fpr
         optimal_idx = np.argmax(j_scores)
-        return float(thresholds[optimal_idx])
+        candidate = float(thresholds[optimal_idx])
+        # sklearn's roc_curve prepends a sentinel threshold of `np.inf`
+        # corresponding to the (FPR=0, TPR=0) trivial point. When no
+        # threshold yields a positive Youden's J (e.g., a model that is
+        # worse than chance on a small held-out set) argmax returns this
+        # sentinel. Treat any non-finite or out-of-range value as
+        # "no useful threshold found" and fall back to 0.5.
+        if not np.isfinite(candidate) or candidate < 0.0 or candidate > 1.0:
+            return 0.5
+        return candidate
     except Exception:
         return 0.5
 
@@ -947,11 +1166,7 @@ def _compute_precision_constrained_threshold(
     if y_proba is None:
         return None
 
-    # Get positive class probabilities
-    if y_proba.ndim == 2:
-        y_proba_pos = y_proba[:, 1]
-    else:
-        y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba)
 
     try:
         precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba_pos)
@@ -1021,11 +1236,7 @@ def _compute_precision_at_k(
     if y_proba is None:
         return {}
 
-    # Get positive class probabilities
-    if y_proba.ndim == 2:
-        y_proba_pos = y_proba[:, 1]
-    else:
-        y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba)
 
     n_samples = len(y_true)
     result = {}
@@ -1069,12 +1280,7 @@ def _compute_bootstrap_ci(
     alpha = (1 - confidence) / 2
 
     # Get positive class probabilities if available
-    y_proba_pos = None
-    if y_proba is not None:
-        if y_proba.ndim == 2:
-            y_proba_pos = y_proba[:, 1]
-        else:
-            y_proba_pos = y_proba
+    y_proba_pos = _positive_class_proba(y_proba) if y_proba is not None else None
 
     # Store bootstrap metrics
     bootstrap_metrics: Dict[str, List[float]] = {}

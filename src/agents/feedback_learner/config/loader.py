@@ -14,6 +14,8 @@ from typing import Dict, List, Literal, Optional
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, field_validator
 
+from src.utils.project_root import find_project_root
+
 logger = logging.getLogger(__name__)
 
 
@@ -325,7 +327,7 @@ def load_self_improvement_config(
 
     if config_path is None:
         # Default to config/self_improvement.yaml relative to project root
-        project_root = Path(__file__).parent.parent.parent.parent.parent
+        project_root = find_project_root()
         config_path = project_root / "config" / "self_improvement.yaml"
 
     _cached_config = SelfImprovementConfig.from_yaml(config_path)

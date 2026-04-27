@@ -3,63 +3,178 @@
 Maps tier0 synthetic data outputs to each agent's required inputs.
 """
 
-from __future__ import annotations
-
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, cast
+from typing import Any, Dict, NotRequired, Required, TypedDict, cast
+
+import pandas as pd
+
+
+class Tier0StateContract(TypedDict, total=False):
+    """Typed contract for the tier0 state dictionary.
+
+    Source of truth for which fields ``Tier0OutputMapper`` accepts from a
+    tier0 run. Two required keys (``experiment_id`` and ``eligible_df``) gate
+    construction of the mapper; everything else is optional. Validation in
+    ``Tier0OutputMapper.__init__`` rejects state dicts that omit the required
+    keys OR carry keys outside this contract — the mapper is the boundary
+    between tier0 and tier1+ agents and schema drift here is the most common
+    way downstream nodes fail with cryptic ``KeyError``s.
+
+    All keys present in the cached state produced by
+    ``scripts/run_tier0_test.py`` MUST appear here (as ``Required`` or
+    ``NotRequired``). When the script learns to emit a new key, widen this
+    contract in the same change — that is the design intent: this contract
+    moves with the tier0 pipeline, not behind it.
+    """
+
+    # Experiment identification — gate keys, always present in tier0 state.
+    experiment_id: Required[str]
+    eligible_df: Required[Any]  # pd.DataFrame; loosely typed to keep import light
+
+    # Model artefacts.
+    trained_model: NotRequired[Any]
+    model_uri: NotRequired[str]
+    validation_metrics: NotRequired[Dict[str, Any]]
+    test_metrics: NotRequired[Dict[str, Any]]
+    test_metrics_at_optimal: NotRequired[Dict[str, Any]]
+    test_metrics_at_05: NotRequired[Dict[str, Any]]
+    train_metrics: NotRequired[Dict[str, Any]]
+    feature_importance: NotRequired[list]
+    feature_names: NotRequired[list]
+    fitted_preprocessor: NotRequired[Any]
+    categorical_encoding: NotRequired[Dict[str, Any]]
+    model_candidate: NotRequired[Any]
+    alternative_candidates: NotRequired[list]
+    deployment_manifest: NotRequired[Dict[str, Any]]
+
+    # Pipeline outputs.
+    qc_report: NotRequired[Dict[str, Any]]
+    cohort_result: NotRequired[Any]
+    scope_spec: NotRequired[Dict[str, Any]]
+    class_imbalance_info: NotRequired[Dict[str, Any]]
+    success_criteria: NotRequired[Dict[str, Any]]
+    success_criteria_met: NotRequired[bool]
+    gate_passed: NotRequired[bool]
+    pipeline_halted: NotRequired[bool]
+    halt_reason: NotRequired[str]
+    patient_df: NotRequired[Any]  # pd.DataFrame; pre-cohort patient pool
+    train_df: NotRequired[Any]
+    validation_df: NotRequired[Any]
+
+    # Splits and resampling (Block 4 contract: tier1+ MUST reuse).
+    split_assignments: NotRequired[Dict[str, Any]]
+    split_strategy: NotRequired[str]
+    split_validation: NotRequired[Dict[str, Any]]
+    resampling_info: NotRequired[Dict[str, Any]]
+    cv_results: NotRequired[Dict[str, Any]]
+
+    # Leakage detection / remediation (Block 6A).
+    leakage_severity: NotRequired[str]
+    leaked_features: NotRequired[list]
+    leakage_findings: NotRequired[list]
+    leakage_suspected: NotRequired[bool]
+    leakage_remediation_status: NotRequired[str]
+    leakage_remediated_features: NotRequired[list]
+    leakage_dropped_features: NotRequired[list]
+    leakage_added_features: NotRequired[list]
+    leakage_remediation_reasoning: NotRequired[Any]
+    leakage_remediation_viable: NotRequired[bool]
+
+    # Evaluator outputs (Block 5/6).
+    accuracy_analysis: NotRequired[Dict[str, Any]]
+    calibration_analysis: NotRequired[Dict[str, Any]]
+    calibration_error: NotRequired[float]
+    calibrated_ece: NotRequired[float]
+    optimal_threshold: NotRequired[float]
+    permutation_test: NotRequired[Dict[str, Any]]
+    f1_threshold_analysis: NotRequired[Dict[str, Any]]
+    pr_auc: NotRequired[float]
+    mcc: NotRequired[float]
+    minority_precision: NotRequired[float]
+    minority_recall: NotRequired[float]
+    precision_constrained: NotRequired[bool]
+    model_usefulness: NotRequired[Dict[str, Any]]
+    suspicion_level: NotRequired[str]
+    suspicion_reasons: NotRequired[list]
+    investigation_recommendations: NotRequired[list]
+    feature_characteristics: NotRequired[Dict[str, Any]]
+    selected_features: NotRequired[list]
+    generated_features: NotRequired[list]
+
+    # Serving artefacts (BentoML).
+    bentoml_persistent: NotRequired[bool]
+    bentoml_pid: NotRequired[int]
+
+    # Temporal scaffolding for downstream Tier 1-5 work (Block 4 onward will
+    # consume this; Block 1B only threads it through). When present, this is
+    # the inference cutoff time the model is meant to predict from — agents
+    # use it to clip lookback windows, filter post-prediction events, and
+    # avoid label leakage. Absent / None means "use current time" semantics
+    # that earlier blocks already follow.
+    prediction_timestamp: NotRequired[pd.Timestamp]
+
+    # Block 5 (#10): cost-weighted utility metric computed by the
+    # evaluator from ``scope_spec["cost_matrix"]`` at the chosen
+    # (validation-tuned) threshold. Absent when no cost_matrix was
+    # supplied. Surfaced here so deployment-decision tooling can rank
+    # candidate models by business value, not just AUC/F1.
+    business_utility: NotRequired[float]
 
 
 class Tier0OutputMapper:
-    """Maps tier0 state dictionary to agent-specific inputs.
+    """Maps a tier0 state dictionary to agent-specific inputs.
 
-    The tier0 test script produces a state dictionary containing:
-    - trained_model: sklearn/xgboost/lightgbm model
-    - model_uri: str (MLflow URI)
-    - validation_metrics: dict (auc_roc, precision, recall, f1_score)
-    - feature_importance: list[{feature, importance}]
-    - eligible_df: DataFrame (patient cohort)
-    - qc_report: dict (data quality)
-    - experiment_id: str
-    - cohort_result: CohortExecutionResult
-    - scope_spec: dict (brand, indication, etc.)
-    - class_imbalance_info: dict (ratio, strategy)
-
-    This class provides mapping methods for each Tier 1-5 agent.
+    See ``Tier0StateContract`` (above) for the authoritative list of state
+    keys this class accepts; that TypedDict is the single source of truth
+    and is enforced at construction time by ``_validate_contract``. Each
+    ``map_to_*`` method below produces the kwargs / state dict expected by
+    one Tier 1-5 agent.
     """
-
-    # Required keys from tier0 state
-    REQUIRED_KEYS = [
-        "experiment_id",
-        "eligible_df",
-    ]
-
-    # Optional but useful keys
-    OPTIONAL_KEYS = [
-        "trained_model",
-        "model_uri",
-        "validation_metrics",
-        "feature_importance",
-        "qc_report",
-        "cohort_result",
-        "scope_spec",
-        "class_imbalance_info",
-    ]
 
     def __init__(self, tier0_state: dict[str, Any]):
         """Initialize with tier0 state dictionary.
 
         Args:
-            tier0_state: State dictionary from tier0 test run
+            tier0_state: State dictionary from a tier0 run. Must conform to
+                ``Tier0StateContract`` — i.e. carry every required key and
+                no key outside the contract. ``NotRequired`` keys may be
+                absent without failing validation.
+
+        Raises:
+            TypeError: When ``tier0_state`` is missing required contract
+                keys, OR carries keys not declared in the contract. This
+                is the boundary between tier0 and tier1+ — fail-loud here
+                catches schema drift before downstream nodes hit cryptic
+                ``KeyError``s deep in their handlers. Missing-required is
+                reported first when both conditions apply, so the more
+                actionable error surfaces immediately.
         """
         self.state = tier0_state
-        self._validate_required_keys()
+        self._validate_contract()
 
-    def _validate_required_keys(self) -> None:
-        """Validate that required keys exist in state."""
-        missing = [k for k in self.REQUIRED_KEYS if k not in self.state]
+    def _validate_contract(self) -> None:
+        """Validate ``self.state`` against ``Tier0StateContract``.
+
+        Drives validation off ``Tier0StateContract.__required_keys__`` and
+        ``__optional_keys__`` — the TypedDict is the single source of
+        truth. ``__annotations__`` is intentionally NOT used: it would
+        treat ``NotRequired`` keys (e.g. ``business_utility``,
+        ``prediction_timestamp``) as required and produce false positives.
+        """
+        required = Tier0StateContract.__required_keys__
+        optional = Tier0StateContract.__optional_keys__
+        allowed = required | optional
+
+        missing = required - self.state.keys()
         if missing:
-            raise ValueError(f"Missing required tier0 state keys: {missing}")
+            raise TypeError(f"Tier0OutputMapper: missing required state keys: {sorted(missing)}")
+
+        extras = self.state.keys() - allowed
+        if extras:
+            raise TypeError(
+                f"Tier0OutputMapper: unexpected state keys not in contract: {sorted(extras)}"
+            )
 
     def _get_feature_names(self) -> list[str]:
         """Extract feature names from feature_importance or eligible_df."""
@@ -80,6 +195,35 @@ class Tier0OutputMapper:
         """Get top N features by importance."""
         features = self._get_feature_names()
         return features[:n] if features else []
+
+    def _get_prediction_timestamp(self) -> pd.Timestamp | None:
+        """Resolve the prediction timestamp from tier0 state.
+
+        Order of precedence:
+        1. Explicit ``state["prediction_timestamp"]`` (top level).
+        2. ``state["scope_spec"]["prediction_timestamp"]`` (set by
+           ``ScopeDefinerAgent`` when the business spec carries one).
+
+        Returns ``None`` when neither path provides a value. Block 4+ will
+        wire the resolved timestamp into temporal feature builders and
+        post-prediction event filters; for now it is plumbing only.
+
+        Storage round-trip (Block 1B-M8): ``scope_definer.scope_builder``
+        normalises any ``datetime``/``pd.Timestamp``/``str`` input into an
+        ISO 8601 string for stable storage in ``scope_spec``. This method
+        coerces back to ``pd.Timestamp`` at consumption so every Tier 1-5
+        agent sees the same type regardless of how the value entered the
+        pipeline. Top-level ``state["prediction_timestamp"]`` overrides
+        ``scope_spec`` and may itself be any of those input types — it is
+        coerced the same way.
+        """
+        ts = self.state.get("prediction_timestamp")
+        if ts is None:
+            ts = (self.state.get("scope_spec") or {}).get("prediction_timestamp")
+        if ts is None:
+            return None
+        # Coerce to pd.Timestamp so downstream agents always see the same type.
+        return pd.Timestamp(ts) if not isinstance(ts, pd.Timestamp) else ts
 
     # =========================================================================
     # TIER 1: Orchestrator Agents
@@ -297,6 +441,7 @@ class Tier0OutputMapper:
             "data_source": "patient_journeys",
             "filters": None,
             "tier0_data": df,  # NEW: Pass actual DataFrame for direct use
+            "prediction_timestamp": self._get_prediction_timestamp(),
         }
 
     # =========================================================================
@@ -314,6 +459,9 @@ class Tier0OutputMapper:
         - brand: Optional[str]
         - significance_level: float (default 0.05)
         - tier0_data: Optional[DataFrame] (for testing with real synthetic data)
+        - prediction_timestamp: Optional[pd.Timestamp] (inference cutoff,
+          plumbed through from scope_spec for downstream temporal anchoring;
+          Block 1B threads it but doesn't yet consume it)
         """
         feature_cols = self._get_feature_names()
         eligible_df = self.state.get("eligible_df")
@@ -331,6 +479,7 @@ class Tier0OutputMapper:
             "significance_level": 0.05,
             # Pass tier0_data for drift detection with real synthetic data
             "tier0_data": eligible_df,
+            "prediction_timestamp": self._get_prediction_timestamp(),
         }
 
     def map_to_experiment_designer(self) -> dict[str, Any]:

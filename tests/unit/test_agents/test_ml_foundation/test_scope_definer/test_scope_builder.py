@@ -1,5 +1,8 @@
 """Tests for scope specification builder."""
 
+from datetime import datetime
+
+import pandas as pd
 import pytest
 
 from src.agents.ml_foundation.scope_definer.nodes.scope_builder import (
@@ -7,6 +10,8 @@ from src.agents.ml_foundation.scope_definer.nodes.scope_builder import (
     _define_excluded_features,
     _define_inclusion_criteria,
     _define_target_population,
+    _normalise_prediction_timestamp,
+    _validate_cost_matrix,
     build_scope_spec,
 )
 
@@ -274,3 +279,181 @@ async def test_build_scope_uses_candidate_features_if_provided():
 
     # Should use custom features
     assert required_features == custom_features
+
+
+# === Block 1B: prediction_timestamp scaffolding =============================
+
+
+def test_normalise_prediction_timestamp_handles_datetime():
+    """``datetime`` inputs are normalised to ISO 8601 strings."""
+    dt = datetime(2026, 4, 26, 12, 30, 45)
+    assert _normalise_prediction_timestamp(dt) == dt.isoformat()
+
+
+def test_normalise_prediction_timestamp_handles_pandas_timestamp():
+    """``pd.Timestamp`` inputs are normalised to ISO 8601 strings."""
+    ts = pd.Timestamp("2026-04-26T12:30:45")
+    assert _normalise_prediction_timestamp(ts) == ts.isoformat()
+
+
+def test_normalise_prediction_timestamp_passes_through_strings():
+    """ISO-format string inputs are preserved verbatim."""
+    s = "2026-04-26T12:30:45"
+    assert _normalise_prediction_timestamp(s) == s
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_normalise_prediction_timestamp_returns_none_for_empty(value):
+    """Missing / empty inputs map to ``None`` (not "" or current time)."""
+    assert _normalise_prediction_timestamp(value) is None
+
+
+class _OpaqueObject:
+    """Custom class with no datetime semantics — used in strict-reject tests."""
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1714089600,  # int (epoch-ish, but caller must convert explicitly)
+        1714089600.5,  # float
+        ["2026-04-26"],  # list
+        {"date": "2026-04-26"},  # dict
+        _OpaqueObject(),  # custom class without datetime semantics
+    ],
+)
+def test_normalise_prediction_timestamp_rejects_unknown_types(value):
+    """Block 1B-M2: unknown types fail loud rather than silently str()-coerce.
+
+    Permissive ``str(value)`` coercion would mask upstream bugs — e.g. an
+    epoch int silently becoming ``"1714089600"`` and downstream feature
+    builders parsing that as the year 1714089600. The contract is now
+    strict: only ``datetime``, ``pd.Timestamp``, parseable ``str``, or
+    ``None``/``""``. Everything else raises ``TypeError`` at the
+    scope_definer boundary.
+    """
+    with pytest.raises(TypeError, match="prediction_timestamp must be"):
+        _normalise_prediction_timestamp(value)
+
+
+def test_normalise_prediction_timestamp_rejects_unparseable_string():
+    """Garbage strings that ``pd.Timestamp`` cannot parse are rejected.
+
+    Without this check, "not a date" would round-trip verbatim through the
+    helper and only blow up later inside a feature builder, with the failure
+    point disconnected from the offending input. Fail loud at the boundary.
+    """
+    with pytest.raises(TypeError, match="not parseable by pd.Timestamp"):
+        _normalise_prediction_timestamp("not a date")
+
+
+@pytest.mark.asyncio
+async def test_build_scope_propagates_prediction_timestamp_when_provided():
+    """``prediction_timestamp`` from state lands on ``scope_spec``."""
+    ts = pd.Timestamp("2026-04-26T00:00:00")
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "prediction_timestamp": ts,
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+
+    assert "prediction_timestamp" in scope_spec
+    assert scope_spec["prediction_timestamp"] == ts.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_build_scope_prediction_timestamp_absent_when_unset():
+    """Without ``prediction_timestamp`` in state, ``scope_spec`` has None."""
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+
+    # Block 1B threading rule: the field is always present in the spec for a
+    # stable schema, but its value is None when no timestamp was provided.
+    assert "prediction_timestamp" in scope_spec
+    assert scope_spec["prediction_timestamp"] is None
+
+
+# === Block 5 (#10): cost_matrix scaffolding ================================
+
+
+def test_validate_cost_matrix_accepts_full_dict():
+    """All four required keys with numeric values → coerced to float dict."""
+    cm = {"tp": 100, "fp": -10.5, "fn": -50, "tn": 0}
+    result = _validate_cost_matrix(cm)
+    assert result == {"tp": 100.0, "fp": -10.5, "fn": -50.0, "tn": 0.0}
+    assert all(isinstance(v, float) for v in result.values())
+
+
+@pytest.mark.parametrize("value", [None, {}])
+def test_validate_cost_matrix_returns_none_for_empty(value):
+    """None and {} both signal 'no cost matrix configured'."""
+    assert _validate_cost_matrix(value) is None
+
+
+def test_validate_cost_matrix_rejects_missing_keys():
+    """A partial cost matrix is misconfiguration — fail loud at the boundary."""
+    with pytest.raises(ValueError, match="missing required keys"):
+        _validate_cost_matrix({"tp": 1.0, "fp": 0.0})
+
+
+def test_validate_cost_matrix_rejects_non_numeric_values():
+    """Strings/None/bools as values are rejected before the evaluator multiplies."""
+    with pytest.raises(ValueError, match="must be int or float"):
+        _validate_cost_matrix({"tp": "100", "fp": -10.0, "fn": -50.0, "tn": 0.0})
+
+
+def test_validate_cost_matrix_rejects_non_dict():
+    """The matrix must be a dict — lists/tuples are rejected."""
+    with pytest.raises(ValueError, match="must be a dict"):
+        _validate_cost_matrix([100, -10, -50, 0])
+
+
+@pytest.mark.asyncio
+async def test_build_scope_propagates_cost_matrix_when_provided():
+    """A valid cost_matrix on state is forwarded onto scope_spec verbatim."""
+    cm = {"tp": 100.0, "fp": -10.0, "fn": -50.0, "tn": 0.0}
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "cost_matrix": cm,
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+
+    assert "cost_matrix" in scope_spec
+    assert scope_spec["cost_matrix"] == cm
+
+
+@pytest.mark.asyncio
+async def test_build_scope_cost_matrix_absent_when_unset():
+    """Without ``cost_matrix`` in state, ``scope_spec`` has None.
+
+    The field is always present so the schema is stable; downstream code
+    uses ``None`` as the "skip business_utility" signal.
+    """
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "will_prescribe",
+        "target_outcome": "Test",
+        "brand": "Test",
+    }
+
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    assert "cost_matrix" in scope_spec
+    assert scope_spec["cost_matrix"] is None

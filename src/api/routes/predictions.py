@@ -24,6 +24,9 @@ from pydantic import BaseModel, Field
 from src.api.dependencies.auth import require_auth
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.feature_store.feast_client import FeastClient, get_feast_client
+from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS as _MODEL_FEATURE_REFS
+from src.feature_store.model_feature_refs import feature_refs_for_model as _feature_refs_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +100,16 @@ class PredictionResponse(BaseModel):
     latency_ms: float = Field(..., description="Prediction latency in milliseconds")
     model_version: Optional[str] = Field(default=None, description="Model version used")
     timestamp: str = Field(..., description="Prediction timestamp (ISO format)")
+    feature_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Telemetry tag describing where the prediction's features came from: "
+            "'feast_online' when the route fetched features from the Feast online "
+            "store using request.entity_id, or 'user_provided' when the caller "
+            "supplied them directly in request.features. None for paths that "
+            "predate this contract."
+        ),
+    )
 
 
 class BatchPredictionRequest(BaseModel):
@@ -146,6 +159,50 @@ class ModelsStatusResponse(BaseModel):
 
 
 # =============================================================================
+# FEATURE SOURCE TELEMETRY TAGS
+# =============================================================================
+#
+# Feature-source tag values returned in PredictionResponse.feature_source and
+# forwarded to BentoML via input_data["feature_source"]:
+#   - "feast_online":  features were fetched server-side from the Feast online
+#                      store using PredictionRequest.entity_id.
+#   - "user_provided": features came directly from PredictionRequest.features.
+
+FEATURE_SOURCE_FEAST_ONLINE = "feast_online"
+FEATURE_SOURCE_USER_PROVIDED = "user_provided"
+
+
+# Canonical model-name → Feast feature-refs registry imported from
+# ``src/feature_store/model_feature_refs.py`` (3A-M-1). Both names are
+# re-bound to underscore aliases to preserve the prior module-level API
+# (test fixtures monkey-patch ``predictions._MODEL_FEATURE_REFS``).
+__all__ = ["_MODEL_FEATURE_REFS", "_feature_refs_for_model"]
+
+
+async def _resolve_feast_client() -> FeastClient:
+    """Return the singleton FeastClient (test seam).
+
+    Why this indirection layer exists:
+
+    1. ``get_feast_client(config: Optional[FeastConfig] = None)`` cannot
+       be wired as a FastAPI ``Depends(get_feast_client)`` directly —
+       FastAPI would walk the parameter list and attempt to inject
+       ``config`` as a query/body parameter, which would conflict with
+       the route's existing ``PredictionRequest`` body and produce a
+       422-level disambiguation error at request-parse time.
+    2. Wrapping it as a zero-argument coroutine here makes the symbol
+       monkey-patchable on the route module by tests — the standard
+       ``app.dependency_overrides[get_feast_client] = ...`` pattern
+       wouldn't help because the route never declares ``get_feast_client``
+       as a ``Depends(...)``.
+
+    Tests therefore monkey-patch ``predictions._resolve_feast_client``
+    directly; see ``tests/api/test_predictions_endpoints.py::mock_feast_client``.
+    """
+    return await get_feast_client()
+
+
+# =============================================================================
 # PREDICTION ENDPOINTS
 # =============================================================================
 
@@ -155,7 +212,14 @@ class ModelsStatusResponse(BaseModel):
     response_model=PredictionResponse,
     summary="Make a single prediction",
     operation_id="predict_single",
-    description="Call a BentoML model endpoint for prediction",
+    description=(
+        "Call a BentoML model endpoint for prediction. When ``entity_id`` is "
+        "supplied on the request, this route fetches features from the Feast "
+        "online store server-side and passes the resulting feature row to "
+        "BentoML; the response is tagged ``feature_source='feast_online'``. "
+        "When only ``features`` is supplied, the dict is forwarded as-is and "
+        "tagged ``feature_source='user_provided'``."
+    ),
 )
 async def predict(
     model_name: str,
@@ -165,23 +229,69 @@ async def predict(
 ) -> PredictionResponse:
     """Make a prediction using the specified model.
 
+    Behavior matrix:
+      - ``request.entity_id`` set                  → Feast online lookup;
+        feature_source = 'feast_online'.
+      - Only ``request.features`` set              → forward as-is;
+        feature_source = 'user_provided'.
+      - Both set                                   → Feast wins (matches the
+        documented intent of the entity_id field).
+      - Neither set                                → Pydantic 422 (features is
+        required on PredictionRequest).
+
     Args:
         model_name: Name of the model to use
         request: Prediction request data
         client: BentoML client (injected)
 
     Returns:
-        Prediction result with metadata
+        Prediction result with metadata, including ``feature_source``.
 
     Raises:
         HTTPException: If model not found or service unavailable
     """
     try:
+        feature_source = FEATURE_SOURCE_USER_PROVIDED
+        features_payload: Dict[str, Any] = request.features
+
+        if request.entity_id:
+            feature_refs = _feature_refs_for_model(model_name)
+            try:
+                feast_client = await _resolve_feast_client()
+                feast_response = await feast_client.get_online_features(
+                    entity_rows=[{"patient_id": request.entity_id}],
+                    feature_refs=feature_refs,
+                    full_feature_names=False,
+                )
+                # Collapse list-per-feature shape to single-row dict (one entity).
+                features_payload = {
+                    k: (v[0] if v else None) for k, v in feast_response.items()
+                }
+                feature_source = FEATURE_SOURCE_FEAST_ONLINE
+                logger.info(
+                    "Fetched %d Feast features for entity_id=%s (model=%s)",
+                    len(features_payload),
+                    request.entity_id,
+                    model_name,
+                )
+            except Exception as e:
+                logger.error(
+                    "Feast online lookup failed for entity_id=%s, model=%s: %s",
+                    request.entity_id,
+                    model_name,
+                    e,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Feature store lookup failed: {e}",
+                )
+
         # Build input data for BentoML
-        input_data = {
-            "features": request.features,
+        input_data: Dict[str, Any] = {
+            "features": features_payload,
             "return_proba": request.return_probabilities,
             "return_intervals": request.return_intervals,
+            "feature_source": feature_source,
         }
 
         if request.entity_id:
@@ -193,6 +303,14 @@ async def predict(
         # Extract metadata
         metadata = result.get("_metadata", {})
 
+        # 3A-I-3: route is the source of truth for feature_source.
+        # If we invoked Feast (entity_id was set + lookup succeeded), the
+        # user request was Feast-driven regardless of what BentoML reports —
+        # BentoML may legitimately report a fallback path on its end, but
+        # from the route's perspective the *request* was a Feast lookup.
+        # Conversely, if no entity_id was supplied we used the caller's
+        # raw features and must not be overridden into 'feast_online' by
+        # a downstream value.
         return PredictionResponse(
             model_name=model_name,
             prediction=result.get("prediction") or result.get("predictions", [None])[0],
@@ -203,8 +321,12 @@ async def predict(
             latency_ms=metadata.get("latency_ms", 0),
             model_version=result.get("model_version"),
             timestamp=metadata.get("timestamp", datetime.now(timezone.utc).isoformat()),
+            feature_source=feature_source,
         )
 
+    except HTTPException:
+        # Already-shaped HTTP errors (e.g. Feast 503) pass through unchanged.
+        raise
     except RuntimeError as e:
         # Circuit breaker open
         logger.warning(f"Model service unavailable: {model_name} - {e}")

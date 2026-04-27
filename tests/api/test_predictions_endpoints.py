@@ -103,6 +103,39 @@ def mock_bentoml_client(
     return client_mock
 
 
+@pytest.fixture
+def mock_feast_client(monkeypatch):
+    """Mock FeastClient and patch the route's resolver to return it.
+
+    The default ``get_online_features`` return mirrors Feast's column-oriented
+    output for a single entity (one value per feature). Tests override
+    ``side_effect`` / ``return_value`` when they need different shapes or
+    failure modes.
+
+    Patches ``src.api.routes.predictions._resolve_feast_client`` directly
+    rather than going through ``app.dependency_overrides`` because the route
+    intentionally fetches Feast lazily inside the function body (to avoid a
+    FastAPI body-vs-dependency disambiguation issue with multiple Pydantic
+    parameters). See the ``_resolve_feast_client`` docstring for context.
+    """
+    feast_mock = MagicMock()
+    feast_mock.get_online_features = AsyncMock(
+        return_value={
+            "days_since_last_hcp_visit": [12.0],
+            "total_hcp_interactions_90d": [5.0],
+            "therapy_adherence_score": [0.83],
+        }
+    )
+
+    async def _fake_resolver():
+        return feast_mock
+
+    monkeypatch.setattr(
+        "src.api.routes.predictions._resolve_feast_client", _fake_resolver
+    )
+    return feast_mock
+
+
 @pytest.fixture(autouse=True)
 def cleanup_overrides():
     """Clean up dependency overrides after each test."""
@@ -170,7 +203,7 @@ class TestSinglePrediction:
         assert "lower" in data["prediction_interval"]
         assert "upper" in data["prediction_interval"]
 
-    def test_predict_with_entity_id(self, mock_bentoml_client):
+    def test_predict_with_entity_id(self, mock_bentoml_client, mock_feast_client):
         """Should accept entity_id for feature store lookup."""
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
@@ -182,9 +215,177 @@ class TestSinglePrediction:
         )
 
         assert response.status_code == 200
-        # Verify entity_id was passed
+        # Verify entity_id was passed through to BentoML for downstream telemetry
         call_args = mock_bentoml_client.predict.call_args
         assert "entity_id" in call_args[0][1]
+
+    def test_predictions_uses_online_features_when_entity_id_present(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """When entity_id is present, the route fetches features from Feast.
+
+        Asserts:
+          - FeastClient.get_online_features is called once with the request's
+            entity_id (mapped under 'patient_id') and a non-empty feature_refs
+            list.
+          - The fetched features replace the request body's ``features`` dict
+            in the BentoML payload (the dict sent to BentoML carries the Feast
+            values, not the original empty dict).
+          - The response carries ``feature_source='feast_online'`` and the
+            BentoML input also carries that telemetry tag.
+        """
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["feature_source"] == "feast_online"
+
+        # Feast was called with the patient_id mapping + a real feature_refs list.
+        mock_feast_client.get_online_features.assert_awaited_once()
+        feast_kwargs = mock_feast_client.get_online_features.await_args.kwargs
+        assert feast_kwargs["entity_rows"] == [{"patient_id": "PAT-2024-0001"}]
+        assert isinstance(feast_kwargs["feature_refs"], list)
+        assert len(feast_kwargs["feature_refs"]) > 0
+        assert feast_kwargs["full_feature_names"] is False
+
+        # BentoML received the resolved Feast features, not the empty dict.
+        bento_payload = mock_bentoml_client.predict.call_args[0][1]
+        assert bento_payload["feature_source"] == "feast_online"
+        assert bento_payload["features"] == {
+            "days_since_last_hcp_visit": 12.0,
+            "total_hcp_interactions_90d": 5.0,
+            "therapy_adherence_score": 0.83,
+        }
+
+    def test_predictions_user_provided_when_no_entity_id(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """Without entity_id, Feast is NOT called and tag is 'user_provided'."""
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/churn_model",
+            json={"features": {"hcp_id": "HCP001"}},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["feature_source"] == "user_provided"
+
+        # Feast must not be invoked when entity_id is absent.
+        mock_feast_client.get_online_features.assert_not_called()
+
+        bento_payload = mock_bentoml_client.predict.call_args[0][1]
+        assert bento_payload["features"] == {"hcp_id": "HCP001"}
+        assert bento_payload["feature_source"] == "user_provided"
+
+    def test_predictions_feast_wins_when_both_features_and_entity_id_provided(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """3A-M-5: route docstring says ``Both set -> Feast wins``.
+
+        When the caller supplies BOTH ``features`` (a non-empty dict) AND
+        ``entity_id``, the route MUST honour the documented precedence:
+        Feast lookup happens, the supplied features dict is OVERWRITTEN
+        with the Feast values, and the response is tagged
+        ``feature_source='feast_online'``. This test pins that contract.
+        """
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={
+                # Caller-supplied features that should be ignored in favour
+                # of Feast lookup.
+                "features": {
+                    "days_since_last_hcp_visit": 99999.0,
+                    "stale_value": "ignored",
+                },
+                "entity_id": "PAT-2024-0042",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        # Feast wins — response telemetry tag reflects Feast invocation.
+        assert body["feature_source"] == "feast_online"
+
+        # Feast.get_online_features was actually invoked.
+        mock_feast_client.get_online_features.assert_awaited_once()
+
+        # The payload sent to BentoML carries the Feast-resolved features,
+        # NOT the caller-supplied ones — proving the override happened.
+        bento_payload = mock_bentoml_client.predict.call_args[0][1]
+        assert bento_payload["feature_source"] == "feast_online"
+        assert bento_payload["features"] == {
+            "days_since_last_hcp_visit": 12.0,
+            "total_hcp_interactions_90d": 5.0,
+            "therapy_adherence_score": 0.83,
+        }
+        # Defensive: ensure the stale caller key is gone.
+        assert "stale_value" not in bento_payload["features"]
+
+    def test_predictions_feature_source_route_is_source_of_truth(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """3A-I-3: route, not BentoML, owns ``feature_source``.
+
+        Even if BentoML returns a value for ``feature_source`` in its
+        response (e.g. the BentoML container falls back to a different
+        path for any reason), the route's response MUST report what the
+        route did — which here is ``'feast_online'`` because the request
+        carried an ``entity_id`` and Feast was invoked.
+        """
+        # Mock BentoML returning a CONTRADICTORY feature_source in its
+        # response — the route must ignore it.
+        mock_bentoml_client.predict = AsyncMock(
+            return_value={
+                "prediction": 0.5,
+                "model_version": "v1.0",
+                "feature_source": "user_provided",  # contradicts the route
+                "_metadata": {"latency_ms": 5.0, "timestamp": "2026-04-26T00:00:00+00:00"},
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        # Route says feast_online — wins over BentoML's "user_provided".
+        assert body["feature_source"] == "feast_online"
+
+    def test_predictions_feast_failure_returns_503(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """Feast errors surface as 503 — the route does not silently swallow them.
+
+        The exact error envelope shape comes from the project's custom
+        exception handlers; we assert the status code and that BentoML was
+        never invoked (the truly load-bearing behavior — no silent fallback
+        to 'user_provided' on Feast failure).
+        """
+        mock_feast_client.get_online_features = AsyncMock(
+            side_effect=Exception("Feast connection refused")
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 503
+        # BentoML must not have been called when Feast fails.
+        mock_bentoml_client.predict.assert_not_called()
 
     def test_predict_circuit_breaker_open(self, mock_bentoml_client):
         """Should return 503 when circuit breaker is open."""

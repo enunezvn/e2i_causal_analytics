@@ -913,11 +913,35 @@ def load_tier0_state(cache_path: str | None = None) -> dict[str, Any]:
 
     Returns:
         Tier0 state dictionary
+
+    Notes:
+        Block 4 / Finding #12: when the cached state contains a
+        ``split_assignments`` mapping, downstream tier1-5 consumers MUST
+        reuse those assignments instead of re-deriving splits — otherwise
+        cache reloads would invalidate the train/val/test isolation that
+        was established at tier0 time. We surface this as a non-fatal
+        notice here so callers can pass ``pre_assigned_splits`` back into
+        ``run_pipeline`` if they re-run tier0 against the same data.
     """
     if cache_path and Path(cache_path).exists():
         print(f"  Loading tier0 state from cache: {cache_path}")
         with open(cache_path, "rb") as f:
-            return pickle.load(f)
+            state = pickle.load(f)
+        if isinstance(state, dict):
+            assignments = state.get("split_assignments")
+            if assignments:
+                print(
+                    f"  Tier0 cache contains {len(assignments)} pre-assigned "
+                    f"split labels (strategy={state.get('split_strategy', 'unknown')}). "
+                    "Downstream consumers will REUSE these assignments — "
+                    "re-derivation is forbidden by Block 4 contract."
+                )
+            else:
+                print(
+                    "  ⚠️  Tier0 cache has no split_assignments; running on "
+                    "an older cache. Re-run tier0 to populate them."
+                )
+        return state
 
     raise FileNotFoundError(
         f"Tier0 cache not found at {cache_path}. "

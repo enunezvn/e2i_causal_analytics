@@ -532,7 +532,7 @@ class SampleDataGenerator:
     def ml_patients(
         self,
         n_patients: int = 1500,
-        target_rate: float = 0.3,
+        positive_rate: float = 0.30,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> pd.DataFrame:
@@ -545,7 +545,14 @@ class SampleDataGenerator:
 
         Args:
             n_patients: Number of patients
-            target_rate: Approximate rate of positive class (discontinuation)
+            positive_rate: Base rate of the positive class (discontinuation).
+                Drives the constant term of the risk_score generator. Use
+                ``0.30`` for the default balanced regime; pass ``0.02`` for
+                an adverse / extreme-imbalance regime that exercises the
+                pipeline's class-imbalance remediation paths. The realised
+                positive rate will diverge slightly from this value because
+                it is combined with feature-driven adjustments and clipped
+                to ``[0.05, 0.95]`` before Bernoulli sampling.
             start_date: Start date
             end_date: End date
 
@@ -585,13 +592,23 @@ class SampleDataGenerator:
 
             # Generate discontinuation flag with correlation to features
             # Higher risk with: fewer hcp_visits, more prior treatments, shorter therapy
+            #
+            # The feature-driven adjustments and the noise floor are scaled by
+            # `positive_rate / 0.30` so that when callers pass a low base rate
+            # (e.g. 0.02 for the adverse regime) the clipping floor and noise do
+            # NOT dominate the final positive class share.
+            scale = max(positive_rate / 0.30, 0.0)
             risk_score = (
-                0.3  # Base rate
-                - 0.01 * hcp_visits  # More visits = lower risk
-                + 0.05 * prior_treatments  # More prior treatments = higher risk
-                - 0.001 * days_on_therapy  # Longer therapy = lower risk
+                positive_rate  # Base rate (regime-controlled)
+                + scale * (
+                    -0.01 * hcp_visits  # More visits = lower risk
+                    + 0.05 * prior_treatments  # More prior treatments = higher risk
+                    - 0.001 * days_on_therapy  # Longer therapy = lower risk
+                )
             )
-            risk_score = max(0.05, min(0.95, risk_score + np.random.normal(0, 0.1)))
+            noise = np.random.normal(0, 0.1 * max(scale, 0.05))
+            min_floor = min(0.05, max(positive_rate * 0.5, 0.001))
+            risk_score = max(min_floor, min(0.95, risk_score + noise))
             discontinuation_flag = 1 if np.random.random() < risk_score else 0
 
             # Map discontinuation to valid journey status

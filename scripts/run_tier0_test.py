@@ -48,7 +48,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -1296,6 +1296,7 @@ def generate_sample_data(
     n_samples: int = 100,
     seed: int = 42,
     imbalance_ratio: float | None = None,
+    positive_rate: float = 0.30,
 ) -> pd.DataFrame:
     """Generate sample patient journey data using the ML-ready generator.
 
@@ -1303,7 +1304,13 @@ def generate_sample_data(
         n_samples: Number of samples to generate
         seed: Random seed for reproducibility
         imbalance_ratio: If provided, force minority class to this ratio (e.g., 0.1 for 10%)
-                        None means balanced data (~50/50)
+                        via post-hoc relabelling. None means leave the
+                        generator-driven labels intact.
+        positive_rate: Base positive-class rate passed into ``ml_patients``.
+            Drives generator-time class balance (Block 4, Finding #8). Use
+            ``0.30`` for the historical default and ``0.02`` for the adverse
+            regime. Distinct from ``imbalance_ratio`` which relabels AFTER
+            generation, breaking feature ↔ target correlations.
     """
     # Use the same generator as the data_preparer agent for consistency
     from src.repositories.sample_data import SampleDataGenerator
@@ -1320,6 +1327,7 @@ def generate_sample_data(
         n_patients=n_samples,
         start_date=start_date,
         end_date=end_date,
+        positive_rate=positive_rate,
     )
 
     # Apply class imbalance if requested
@@ -2430,8 +2438,56 @@ async def step_5_model_trainer(
     X: pd.DataFrame,
     y: pd.Series,
     success_criteria: dict | None = None,
+    *,
+    entity_ids: pd.Series | None = None,
+    dates: pd.Series | None = None,
+    split_mode: str = "auto",
+    pre_assigned_splits: Dict[Any, str] | None = None,
+    cost_matrix: dict | None = None,
 ) -> dict[str, Any]:
-    """Step 5: Train model."""
+    """Step 5: Train model.
+
+    Args:
+        experiment_id: Experiment identifier.
+        model_candidate: Model selection dict (algorithm_name, hyperparams).
+        qc_report: Quality control report from data_preparer.
+        X: Feature matrix, aligned row-for-row with ``y`` / ``entity_ids`` /
+            ``dates``.
+        y: Target vector.
+        success_criteria: Optional success criteria dict propagated from
+            scope_definer.
+        cost_matrix: Block 5 (#10) optional cost matrix for the
+            ``business_utility`` metric — see scope_definer's
+            ``_validate_cost_matrix`` for the expected shape. Threaded into
+            the model_trainer state so the evaluator can compute the
+            metric at the chosen threshold.
+        entity_ids: Optional pandas Series of entity identifiers (e.g.
+            ``patient_journey_id``) aligned with ``X``. Required when
+            ``split_mode`` is ``combined`` or when ``split_mode`` is ``auto``
+            and ``dates`` is also supplied.
+        dates: Optional pandas Series of dates aligned with ``X``. Used together
+            with ``entity_ids`` to drive the combined temporal+entity split.
+        split_mode: Split strategy selector.
+
+            - ``"auto"`` (default): use ``combined`` when both ``entity_ids``
+              and ``dates`` are provided; otherwise fall back to the legacy
+              stratified random split.
+            - ``"random"``: explicit opt-out — always run the legacy
+              stratified random split.
+            - ``"combined"``: explicit opt-in — error out if entity/date
+              series are missing.
+        pre_assigned_splits: Optional mapping of entity_id → split label
+            (``"train"``/``"val"``/``"test"``/``"holdout"``). Set this when
+            replaying from a cached tier0 run to **forbid re-splitting** —
+            the function will reuse the cached assignments verbatim.
+
+    Returns:
+        State dict including the standard model_trainer outputs plus
+        ``split_assignments`` (``Dict[entity_id, str]``) when entity_ids are
+        available. ``split_assignments`` is the contract that downstream
+        consumers (and the tier0 cache) must persist so re-runs do not
+        re-derive splits.
+    """
     import time as time_mod
     step_start = time_mod.time()
 
@@ -2462,24 +2518,278 @@ async def step_5_model_trainer(
     if "qc_passed" not in normalized_qc_report:
         normalized_qc_report["qc_passed"] = normalized_qc_report.get("gate_passed", True)
 
-    # Split data using E2I required ratios: 60%/20%/15%/5%, stratified on y to
-    # preserve minority-class proportions across train/val/test/holdout.
+    # ------------------------------------------------------------------
+    # Resolve split strategy
+    # ------------------------------------------------------------------
+    # Three branches — in priority order:
+    #   1. pre_assigned_splits provided     -> reuse verbatim (cache reload)
+    #   2. split_mode allows "combined"     -> combined_split (entity+temporal)
+    #   3. fall back to legacy random+stratified 4-way
+    # ------------------------------------------------------------------
     from sklearn.model_selection import train_test_split
 
-    # Stage 1: peel off 5% holdout, stratified on y -> trainval_test (95%) + holdout (5%)
-    trainval_test_X, holdout_X, trainval_test_y, holdout_y = train_test_split(
-        X, y, test_size=0.05, stratify=y, random_state=42,
+    have_entity_and_date = entity_ids is not None and dates is not None
+    if split_mode not in {"auto", "random", "combined"}:
+        raise ValueError(
+            f"split_mode must be one of 'auto'|'random'|'combined', got {split_mode!r}"
+        )
+    if split_mode == "combined" and not have_entity_and_date:
+        raise ValueError(
+            "split_mode='combined' requires both entity_ids and dates to be passed"
+        )
+
+    use_combined = split_mode == "combined" or (
+        split_mode == "auto" and have_entity_and_date
     )
-    # Stage 2: from trainval_test (95%), peel off test -> trainval (80%) + test (15% of total)
-    trainval_X, test_X, trainval_y, test_y = train_test_split(
-        trainval_test_X, trainval_test_y,
-        test_size=0.15 / 0.95, stratify=trainval_test_y, random_state=42,
-    )
-    # Stage 3: from trainval (80%), split into train (60%) + val (20%)
-    train_X, val_X, train_y, val_y = train_test_split(
-        trainval_X, trainval_y,
-        test_size=0.25, stratify=trainval_y, random_state=42,
-    )
+
+    split_assignments: Dict[Any, str] = {}
+    split_strategy = "random_stratified_4way"
+
+    if pre_assigned_splits is not None:
+        # ----- branch 1: cache-replay path ---------------------------------
+        # Refuse to re-split. Reuse the cached entity → label mapping.
+        if entity_ids is None:
+            raise ValueError(
+                "pre_assigned_splits supplied without entity_ids — cannot "
+                "reapply cached splits without an entity column"
+            )
+        # Validate label vocabulary BEFORE building masks: a typo like
+        # "trian" would otherwise produce silently-empty splits and a
+        # nonsensical training run (4-IMP-1).
+        valid_labels = {"train", "val", "test", "holdout"}
+        unique_supplied_labels = set(pre_assigned_splits.values())
+        invalid_labels = unique_supplied_labels - valid_labels
+        if invalid_labels:
+            raise ValueError(
+                f"pre_assigned_splits contains unknown split labels: "
+                f"{sorted(invalid_labels)}; expected only {sorted(valid_labels)}"
+            )
+        # Realign labels to X.index so the row-mask comparisons line up
+        # with X / y exactly (4-IMP-2: mirror branch 2's index alignment).
+        labels = pd.Series(entity_ids.values, index=X.index).map(
+            pre_assigned_splits
+        )
+        if labels.isna().any():
+            missing = int(labels.isna().sum())
+            raise ValueError(
+                f"pre_assigned_splits is missing {missing} entity_ids present "
+                "in the current data — refusing to silently re-split"
+            )
+        train_mask = labels == "train"
+        val_mask = labels == "val"
+        test_mask = labels == "test"
+        holdout_mask = labels == "holdout"
+        # Preserve original X indices so the model trainer's split validator
+        # sees disjoint row index sets (resetting them all to [0..N-1] would
+        # trigger a false-positive duplicate-indices alarm).
+        train_X, train_y = X[train_mask], y[train_mask]
+        val_X, val_y = X[val_mask], y[val_mask]
+        test_X, test_y = X[test_mask], y[test_mask]
+        holdout_X, holdout_y = X[holdout_mask], y[holdout_mask]
+        split_assignments = dict(pre_assigned_splits)
+        split_strategy = "cached_replay"
+        print(
+            f"  Reusing cached split assignments "
+            f"(train={train_mask.sum()}, val={val_mask.sum()}, "
+            f"test={test_mask.sum()}, holdout={holdout_mask.sum()})"
+        )
+
+    elif use_combined:
+        # ----- branch 2: combined entity+temporal split --------------------
+        # Step A: peel off 5% holdout (entity-isolated) via deterministic
+        #   permutation, so the same entities always land in holdout across
+        #   reruns.
+        # Step B: try combined_split on the remaining 95% to produce
+        #   train/val/test using temporal + entity-level boundaries.  If the
+        #   date span is too compressed for the desired ratios, fall back
+        #   to an entity-aware stratified split that still preserves entity
+        #   isolation (this is what the synthetic generator typically
+        #   produces — 30-day span, 1500 patients).
+        # ------------------------------------------------------------------
+        from src.repositories.data_splitter import DataSplitter
+
+        # Align entity_ids and dates to X's index (caller passes them as
+        # Series; we want the values keyed by X's row index so the split
+        # masks can be applied directly to X / y without losing the
+        # globally-unique indices that downstream split-validation needs.)
+        if entity_ids is not None:
+            eids_aligned = pd.Series(
+                entity_ids.values, index=X.index, dtype=entity_ids.dtype
+            )
+        else:  # pragma: no cover - defensive
+            eids_aligned = pd.Series([None] * len(X), index=X.index)
+        if dates is not None:
+            dates_aligned = pd.Series(
+                pd.to_datetime(dates.values), index=X.index
+            )
+        else:  # pragma: no cover - defensive
+            dates_aligned = pd.Series(pd.NaT, index=X.index)
+
+        # Step A — entity-level holdout via deterministic permutation
+        unique_entities = list(eids_aligned.unique())
+        rng = np.random.default_rng(42)
+        permuted = list(rng.permutation(len(unique_entities)))
+        holdout_n = max(1, int(round(len(unique_entities) * 0.05)))
+        holdout_entities = {unique_entities[i] for i in permuted[:holdout_n]}
+        holdout_mask = eids_aligned.isin(holdout_entities)
+        holdout_X = X[holdout_mask].copy()
+        holdout_y = y[holdout_mask].copy()
+
+        # Working subset (95%) — keeps original X-indices so the model
+        # trainer's split-validation sees disjoint row indices.
+        rest_X = X[~holdout_mask].copy()
+        rest_y = y[~holdout_mask].copy()
+        rest_eids = eids_aligned[~holdout_mask].copy()
+        rest_dates = dates_aligned[~holdout_mask].copy()
+
+        # Step B — try combined_split on the 95% remainder.  Construct a
+        # frame keyed by X's original row index so we can pull row labels
+        # back out and mask X/y directly.
+        work_df = pd.DataFrame(
+            {
+                "__entity_id__": rest_eids,
+                "__date__": rest_dates,
+            },
+            index=rest_X.index,
+        )
+        try:
+            date_min = work_df["__date__"].min()
+            date_max = work_df["__date__"].max()
+            span_days = max((date_max - date_min).days, 1)
+        except (TypeError, ValueError):
+            # Narrow catch: ``.min()`` on a non-datetime column raises
+            # TypeError; ``.days`` on NaT raises ValueError. Anything else
+            # is a real bug and should propagate. (4-MIN-5)
+            span_days = 30
+        val_days = max(1, int(round(span_days * 0.20)))
+        test_days = max(1, int(round(span_days * 0.15)))
+
+        splitter = DataSplitter(random_seed=42)
+        # combined_split resets indices internally — we therefore need to
+        # carry the original X-index through a sentinel column so we can
+        # rebuild masks after the split.
+        work_df_for_split = work_df.copy()
+        work_df_for_split["__row_id__"] = rest_X.index
+        rest_split = splitter.combined_split(
+            work_df_for_split,
+            date_column="__date__",
+            entity_column="__entity_id__",
+            val_days=val_days,
+            test_days=test_days,
+        )
+
+        train_ids = list(rest_split.train["__row_id__"]) if len(rest_split.train) else []
+        val_ids = list(rest_split.val["__row_id__"]) if len(rest_split.val) else []
+        test_ids = list(rest_split.test["__row_id__"]) if len(rest_split.test) else []
+        # combined_split is "usable" when its output lands inside the
+        # E2I split policy gates (60/20/15 over the 95% remainder of the
+        # data, evaluated with the same ±2% tolerance the model trainer's
+        # split_enforcer uses on the global ratios).  A skewed split
+        # (e.g. 67/19/14 because the date span is too narrow for the
+        # configured val_days/test_days) gets demoted to the stratified
+        # fallback so the model trainer's strict ratio gates pass.
+        # ----------------------------------------------------------------
+        # Map global ratios → 95%-remainder ratios:
+        #   train: 0.60 / 0.95 ≈ 0.6316
+        #   val:   0.20 / 0.95 ≈ 0.2105
+        #   test:  0.15 / 0.95 ≈ 0.1579
+        # Tolerance on the remainder: 0.02 / 0.95 ≈ 0.0211
+        rest_size = len(rest_X)
+        target_train = 0.60 / 0.95
+        target_val = 0.20 / 0.95
+        target_test = 0.15 / 0.95
+        ratio_tol = 0.02 / 0.95
+        usable = (
+            bool(train_ids)
+            and bool(val_ids)
+            and bool(test_ids)
+            and rest_size > 0
+            and abs(len(train_ids) / rest_size - target_train) <= ratio_tol
+            and abs(len(val_ids) / rest_size - target_val) <= ratio_tol
+            and abs(len(test_ids) / rest_size - target_test) <= ratio_tol
+        )
+        if usable:
+            train_X = rest_X.loc[train_ids].copy()
+            val_X = rest_X.loc[val_ids].copy()
+            test_X = rest_X.loc[test_ids].copy()
+            train_y = rest_y.loc[train_ids].copy()
+            val_y = rest_y.loc[val_ids].copy()
+            test_y = rest_y.loc[test_ids].copy()
+            for row_id in train_ids:
+                split_assignments[eids_aligned.loc[row_id]] = "train"
+            for row_id in val_ids:
+                split_assignments[eids_aligned.loc[row_id]] = "val"
+            for row_id in test_ids:
+                split_assignments[eids_aligned.loc[row_id]] = "test"
+            split_strategy = "combined_temporal_entity_with_holdout"
+        else:
+            print(
+                "  ⚠️  combined_split produced empty or unbalanced bucket(s) "
+                "on the available date range — falling back to entity-aware "
+                "stratified random split for train/val/test (holdout already "
+                "entity-isolated)"
+            )
+            # Stratified random over rest_X (preserves original indices).
+            stage1_X, test_X, stage1_y, test_y, stage1_eids, test_eids = train_test_split(
+                rest_X, rest_y, rest_eids,
+                test_size=0.15 / 0.95, stratify=rest_y, random_state=42,
+            )
+            train_X, val_X, train_y, val_y, train_eids, val_eids = train_test_split(
+                stage1_X, stage1_y, stage1_eids,
+                test_size=0.25, stratify=stage1_y, random_state=42,
+            )
+            for eid in train_eids:
+                split_assignments[eid] = "train"
+            for eid in val_eids:
+                split_assignments[eid] = "val"
+            for eid in test_eids:
+                split_assignments[eid] = "test"
+            split_strategy = "combined_fallback_stratified_with_holdout"
+        for eid in holdout_entities:
+            split_assignments[eid] = "holdout"
+        print(
+            f"  Combined entity+temporal split (strategy={split_strategy}): "
+            f"train={len(train_X)}, val={len(val_X)}, "
+            f"test={len(test_X)}, holdout={len(holdout_X)}"
+        )
+
+    else:
+        # ----- branch 3: legacy stratified random 4-way --------------------
+        # Stage 1: peel off 5% holdout, stratified on y -> trainval_test (95%) + holdout (5%)
+        trainval_test_X, holdout_X, trainval_test_y, holdout_y = train_test_split(
+            X, y, test_size=0.05, stratify=y, random_state=42,
+        )
+        # Stage 2: from trainval_test (95%), peel off test -> trainval (80%) + test (15% of total)
+        trainval_X, test_X, trainval_y, test_y = train_test_split(
+            trainval_test_X, trainval_test_y,
+            test_size=0.15 / 0.95, stratify=trainval_test_y, random_state=42,
+        )
+        # Stage 3: from trainval (80%), split into train (60%) + val (20%)
+        train_X, val_X, train_y, val_y = train_test_split(
+            trainval_X, trainval_y,
+            test_size=0.25, stratify=trainval_y, random_state=42,
+        )
+        if entity_ids is not None:
+            # Even on the random path, record entity → split mapping so the
+            # cache can persist split_assignments for re-runs.
+            # Note: entity_ids is keyed by X's original index, which the
+            # train_test_split splits preserve.
+            eids_aligned = pd.Series(
+                entity_ids.values, index=X.index, dtype=entity_ids.dtype
+            )
+            for idx in train_X.index:
+                split_assignments[eids_aligned.loc[idx]] = "train"
+            for idx in val_X.index:
+                split_assignments[eids_aligned.loc[idx]] = "val"
+            for idx in test_X.index:
+                split_assignments[eids_aligned.loc[idx]] = "test"
+            for idx in holdout_X.index:
+                split_assignments[eids_aligned.loc[idx]] = "holdout"
+        # Intentionally do NOT reset_index: the model trainer's split
+        # validator detects "duplicate indices between splits" by
+        # comparing row index sets — resetting all four to [0..N-1] would
+        # produce false-positive leakage detections. Keeping the original
+        # global indices guarantees disjoint sets across splits.
 
     train_size = len(train_X)
     val_size = len(val_X)
@@ -2528,6 +2838,10 @@ async def step_5_model_trainer(
         "feature_columns": feature_columns,
         "success_criteria": success_criteria or {},
         "min_samples_per_split": CONFIG.min_samples_per_split,
+        # Block 5 (#10): forward the cost matrix when scope_definer carried
+        # one onto the spec. None when not configured — evaluator skips
+        # business_utility silently.
+        "cost_matrix": cost_matrix,
     }
 
     processing_steps.append(("HPO optimization", True, f"{CONFIG.hpo_trials} trials"))
@@ -2807,6 +3121,12 @@ async def step_5_model_trainer(
         print_step_result("success", f"Model trained successfully - usefulness validated ({duration:.1f}s)")
     else:
         print_step_result("warning", f"Model training completed with unknown status ({duration:.1f}s)")
+
+    # Persist the entity → split mapping so the tier0 cache can refuse to
+    # re-split on reload (Block 4, Finding #12). Empty when caller provided
+    # no entity_ids.
+    result["split_assignments"] = split_assignments
+    result["split_strategy"] = split_strategy
 
     return result
 
@@ -3335,12 +3655,71 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
 # MAIN RUNNER
 # =============================================================================
 
+
+def _default_demo_cost_matrix() -> Dict[str, float]:
+    """Return the unit-shape demo cost matrix used by the synthetic runner.
+
+    Block 5B (#10): close the verification gap left by Block 5. The evaluator
+    short-circuits ``business_utility`` whenever ``cost_matrix`` is ``None``
+    (see ``evaluator.py:715``), and no current caller of this script populates
+    one — so a default ``python scripts/run_tier0_test.py`` run produced no
+    business_utility number, which made Block 5's metric impossible to
+    verify end-to-end.
+
+    The shape here is deliberately **unit-scaled, not dollar-denominated**:
+
+      - tp = +1.0  : a true-positive prediction is worth one unit
+      - fn = -1.0  : a missed target costs the same one unit
+      - fp = -0.05 : a false-positive costs 5 % of a unit (rep-time penalty)
+      - tn =  0.0  : a true-negative is neutral
+
+    Per-prescription value is brand-specific and deeply commercial; we
+    refuse to embed a fake dollar number in the dev runner. Production
+    callers (LangGraph orchestrator wired by Celery / API) MUST supply a
+    real per-brand dollar matrix instead — this default never reaches a
+    production pipeline because the auto-inject lives at the dev-script
+    CLI boundary only.
+    """
+    return {"tp": 1.0, "fp": -0.05, "fn": -1.0, "tn": 0.0}
+
+
+def _should_inject_demo_cost_matrix(
+    scope_spec: Dict[str, Any],
+    inject: bool,
+) -> bool:
+    """Decide whether the run_pipeline branch should auto-inject the
+    placeholder cost matrix.
+
+    Block 5B (#10) decision rule:
+      - If the caller passed ``--no-demo-cost-matrix`` (``inject=False``),
+        always skip injection — even when ``scope_spec`` has no matrix.
+        That is the explicit "reproduce the pre-Block-5B baseline" path.
+      - If the caller did not opt out (``inject=True``), inject only
+        when ``scope_spec.cost_matrix`` is falsy. ``scope_definer``
+        always emits the key with a default of ``None`` (see
+        ``scope_builder._validate_cost_matrix``), so ``"cost_matrix"
+        not in scope_spec`` would miss that case — we treat both
+        "missing" and "present-but-None" as un-set.
+
+    Pulled out into a helper so the in-process unit test can exercise
+    the real decision branch (5B-I-2).
+    """
+    if not inject:
+        return False
+    return not scope_spec.get("cost_matrix")
+
+
 async def run_pipeline(
     step: int | None = None,
     dry_run: bool = False,
     imbalance_ratio: float | None = None,
     include_bentoml: bool = True,
     data_dir: str | None = None,
+    *,
+    regime: str = "default",
+    split_mode: str = "auto",
+    pre_assigned_splits: Dict[Any, str] | None = None,
+    inject_demo_cost_matrix: bool = True,
 ) -> dict[str, Any]:
     """Run the full pipeline or a specific step.
 
@@ -3351,14 +3730,51 @@ async def run_pipeline(
         include_bentoml: If True, deploy real model to BentoML and verify predictions
         data_dir: If provided, load real-world data from this directory instead of
                   generating synthetic data
+        regime: Synthetic data generator regime.
+
+            - ``"default"``: balanced base rate (positive_rate=0.30) — the
+              regime that has been the historical default for tier0 runs.
+            - ``"adverse"``: extreme-imbalance regime (positive_rate=0.02)
+              that exercises the imbalance remediation paths
+              (``recommended_strategy=combined``).
+
+            Ignored when ``data_dir`` is set (RWD overrides synthetic).
+        split_mode: Split strategy to pass through to ``step_5_model_trainer``.
+            ``"auto"`` (default) lets the function decide based on whether
+            entity + date columns are available; ``"random"`` is the explicit
+            opt-out for the legacy stratified random 4-way split.
+        pre_assigned_splits: Optional cached entity → split-label mapping to
+            replay (Block 4, Finding #12). When supplied, ``step_5`` will
+            refuse to re-derive splits.
+        inject_demo_cost_matrix: When True (the default), a unit-shape
+            placeholder ``cost_matrix`` is auto-injected onto
+            ``state["scope_spec"]`` so the evaluator can emit
+            ``business_utility``. See ``_default_demo_cost_matrix`` for the
+            shape rationale. Set to False (CLI: ``--no-demo-cost-matrix``)
+            to reproduce the pre-Block-5B baseline where
+            ``business_utility`` is absent because no cost matrix flowed
+            through. The auto-inject lives ONLY at the dev-script
+            boundary — production tier0 runs through the LangGraph
+            orchestrator, never this script.
 
     Returns:
-        State dictionary containing all pipeline outputs
+        State dictionary containing all pipeline outputs. When step 5 ran,
+        the returned dict also carries ``split_assignments`` so callers can
+        persist them in the tier0 cache and refuse to re-split on reload.
     """
     import time
 
     experiment_id = f"tier0_e2e_{uuid.uuid4().hex[:8]}"
     pipeline_start_time = time.time()
+
+    if regime not in {"default", "adverse"}:
+        raise ValueError(
+            f"regime must be 'default' or 'adverse', got {regime!r}"
+        )
+    if split_mode not in {"auto", "random", "combined"}:
+        raise ValueError(
+            f"split_mode must be 'auto'|'random'|'combined', got {split_mode!r}"
+        )
 
     print(f"\n{'='*70}")
     print(f"TIER 0 MLOPS WORKFLOW TEST")
@@ -3370,6 +3786,8 @@ async def run_pipeline(
     print(f"  MLflow Enabled: {CONFIG.enable_mlflow}")
     print(f"  MLflow Tracking URI: {os.environ.get('MLFLOW_TRACKING_URI', 'not set')}")
     print(f"  BentoML Serving: {'Enabled' if include_bentoml else 'Disabled'}")
+    print(f"  Regime: {regime} (positive_rate={'0.02' if regime == 'adverse' else '0.30'})")
+    print(f"  Split mode: {split_mode}")
     if imbalance_ratio:
         print(f"  Class Imbalance: {imbalance_ratio:.1%} minority ratio (INJECTED)")
     print(f"  Started: {datetime.now().isoformat()}")
@@ -3386,8 +3804,13 @@ async def run_pipeline(
         print(f"\n  Loading real-world data from {data_dir}...")
         patient_df = load_rwd_data(data_dir, target=CONFIG.target_outcome)
     else:
+        positive_rate = 0.02 if regime == "adverse" else 0.30
         print("\n  Generating sample patient data...")
-        patient_df = generate_sample_data(n_samples=1500, imbalance_ratio=imbalance_ratio)
+        patient_df = generate_sample_data(
+            n_samples=1500,
+            imbalance_ratio=imbalance_ratio,
+            positive_rate=positive_rate,
+        )
         print(f"  Generated {len(patient_df)} patient records")
 
     # Pipeline state
@@ -3408,6 +3831,18 @@ async def run_pipeline(
             result = await step_1_scope_definer(experiment_id)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
             state["scope_spec"]["experiment_id"] = experiment_id
+            # Block 5B (#10): auto-inject the unit-shape placeholder cost
+            # matrix when the caller has not explicitly opted out via
+            # ``--no-demo-cost-matrix``. This closes Block 5's verification
+            # gap: without a cost matrix the evaluator short-circuits
+            # business_utility, so a default ``python scripts/run_tier0_test.py``
+            # run produced no business_utility number to verify against.
+            # Decision logic extracted to ``_should_inject_demo_cost_matrix``
+            # so unit tests exercise the real branch (5B-I-2).
+            if _should_inject_demo_cost_matrix(
+                state["scope_spec"], inject_demo_cost_matrix
+            ):
+                state["scope_spec"]["cost_matrix"] = _default_demo_cost_matrix()
             duration = time.time() - step_start
             scope_spec = state["scope_spec"]
             success_criteria = result.get("success_criteria", {})
@@ -4067,15 +4502,50 @@ async def run_pipeline(
                 })
                 qc_report = state.get("qc_report", {"gate_passed": True})
 
+                # Resolve entity + date columns for the combined split.
+                # Prefer scope_spec hints (canonical source); fall back to
+                # standard synthetic schema columns (patient_journey_id /
+                # journey_start_date) when present.
+                _scope_spec = state.get("scope_spec", {}) or {}
+                entity_col = _scope_spec.get("entity_column")
+                date_col = _scope_spec.get("date_column")
+                if not entity_col and "patient_journey_id" in eligible_df.columns:
+                    entity_col = "patient_journey_id"
+                if not date_col:
+                    for _candidate in ("journey_start_date", "created_at", "index_date"):
+                        if _candidate in eligible_df.columns:
+                            date_col = _candidate
+                            break
+
+                _entity_ids = (
+                    eligible_df.loc[X.index, entity_col]
+                    if entity_col and entity_col in eligible_df.columns
+                    else None
+                )
+                _dates = (
+                    eligible_df.loc[X.index, date_col]
+                    if date_col and date_col in eligible_df.columns
+                    else None
+                )
+
                 result = await step_5_model_trainer(
                     experiment_id, model_candidate, qc_report, X, y,
                     success_criteria=state.get("success_criteria", {}),
+                    entity_ids=_entity_ids,
+                    dates=_dates,
+                    split_mode=split_mode,
+                    pre_assigned_splits=pre_assigned_splits,
+                    cost_matrix=_scope_spec.get("cost_matrix"),
                 )
                 state["trained_model"] = result.get("trained_model")
                 state["train_metrics"] = result.get("train_metrics", {})
                 state["validation_metrics"] = result.get("validation_metrics", {})
                 state["test_metrics"] = result.get("test_metrics", {})
                 state["optimal_threshold"] = result.get("optimal_threshold", 0.5)
+                # Persist split bookkeeping so the tier0 cache can refuse to
+                # re-split on reload (Block 4, Finding #12).
+                state["split_assignments"] = result.get("split_assignments", {})
+                state["split_strategy"] = result.get("split_strategy")
                 # Imbalance-aware evaluation fields from evaluator
                 state["precision_constrained"] = result.get("precision_constrained")
                 state["minority_recall"] = result.get("minority_recall")
@@ -4273,9 +4743,17 @@ async def run_pipeline(
                         print(f"  Step 5b: Algorithm comparison: training {alt['name']}")
                         print(f"  {'='*60}")
 
+                        # Reuse the same split mapping from the primary run so
+                        # comparison candidates train on identical data partitions.
+                        _alt_pre_splits = state.get("split_assignments") or pre_assigned_splits
                         alt_result = await step_5_model_trainer(
                             experiment_id, new_candidate, qc_report, X, y,
                             success_criteria=state.get("success_criteria", {}),
+                            entity_ids=_entity_ids,
+                            dates=_dates,
+                            split_mode=split_mode,
+                            pre_assigned_splits=_alt_pre_splits,
+                            cost_matrix=_scope_spec.get("cost_matrix"),
                         )
 
                         alt_auc = alt_result.get("auc_roc", 0) or 0
@@ -4744,12 +5222,14 @@ async def run_pipeline(
     return state
 
 
-def main():
-    """Main entry point."""
-    import sys
-    import io
-    from pathlib import Path
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the run_tier0_test CLI argparse parser.
 
+    Extracted from ``main()`` so unit tests can exercise the real
+    parser (5B-I-3) without spawning a subprocess just to read
+    ``--help`` output. The previous subprocess-based test was
+    needlessly slow and brittle to PATH / venv differences.
+    """
     parser = argparse.ArgumentParser(
         description="Run Tier 0 MLOps workflow test"
     )
@@ -4836,7 +5316,56 @@ def main():
         default=None,
         help="Override CONFIG.indication (e.g. 'Chronic Spontaneous Urticaria (CSU)')"
     )
+    parser.add_argument(
+        "--regime",
+        type=str,
+        choices=("default", "adverse"),
+        default="default",
+        help=(
+            "Synthetic data regime (Block 4, Finding #8). "
+            "'default' uses positive_rate=0.30; "
+            "'adverse' uses positive_rate=0.02 to exercise extreme-imbalance "
+            "remediation. Ignored when --data-dir is set."
+        ),
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        choices=("auto", "random", "combined"),
+        default="auto",
+        help=(
+            "Data split strategy for step_5 (Block 4, Finding #7). "
+            "'auto' picks combined entity+temporal split when entity and "
+            "date columns are detected, falling back to random+stratified "
+            "otherwise. 'random' is the explicit opt-out — always run the "
+            "legacy stratified random 4-way split. 'combined' forces the "
+            "combined split and errors out if entity/date columns are "
+            "absent."
+        ),
+    )
+    parser.add_argument(
+        "--no-demo-cost-matrix",
+        action="store_true",
+        help=(
+            "Suppress the Block 5B (#10) auto-injected placeholder cost "
+            "matrix. When this flag is absent (the default), a unit-shape "
+            "matrix {tp:+1, fp:-0.05, fn:-1, tn:0} is set on scope_spec "
+            "so the evaluator can emit business_utility for verification. "
+            "Pass this flag to reproduce the pre-Block-5B baseline where "
+            "business_utility is absent because no cost matrix flowed "
+            "through the pipeline."
+        ),
+    )
+    return parser
 
+
+def main():
+    """Main entry point."""
+    import sys
+    import io
+    from pathlib import Path
+
+    parser = _build_parser()
     args = parser.parse_args()
 
     # Update config
@@ -4888,6 +5417,9 @@ def main():
             imbalance_ratio=args.imbalanced,
             include_bentoml=not args.no_bentoml,
             data_dir=args.data_dir,
+            regime=args.regime,
+            split_mode=args.split,
+            inject_demo_cost_matrix=not args.no_demo_cost_matrix,
         ))
     finally:
         # Restore stdout

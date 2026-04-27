@@ -100,6 +100,16 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Feast feature_store.yaml is rendered from feature_store.yaml.tmpl at runtime
+# (see docker/feast/entrypoint.sh and scripts/feast_render_config.sh).
+# It contains real secrets when rendered; never commit.
+feature_repo/feature_store.yaml
+
+# Feast registry blobs — `*.db` covers SQLite today, but Feast supports
+# other registry backends (json, file-based) too. Glob at the path level
+# so we're robust to future filename changes. (3B-M-1)
+feature_repo/data/registry.*
+
 # Temporary
 tmp/
 temp/

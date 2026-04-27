@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 import yaml  # type: ignore[import-untyped]
 
+from src.utils.project_root import find_project_root
+
 logger = logging.getLogger(__name__)
 
 
@@ -337,7 +339,7 @@ class ObservabilityConfig:
         """
         # Default path
         if config_path is None:
-            project_root = Path(__file__).parent.parent.parent.parent.parent
+            project_root = find_project_root()
             config_path = str(project_root / "config" / "observability.yaml")
 
         # Check if file exists

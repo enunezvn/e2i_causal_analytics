@@ -40,6 +40,13 @@ class DataPreparerState(TypedDict, total=False):
     test_df: Any  # pandas DataFrame (test split)
     holdout_df: Any  # pandas DataFrame (holdout split)
 
+    # Sampling-frame audit (advisory; emitted by audit_sampling_frame node)
+    # Compares train_df distribution to scope_spec["deployment_reference"].
+    # Failures are non-blocking: status surfaces in the report, never in
+    # blocking_issues. See nodes/sampling_frame_audit.py for the report
+    # schema.
+    sampling_frame_audit_report: Optional[Dict[str, Any]]
+
     # Schema validation (Pandera)
     schema_validation_status: Literal["passed", "failed", "skipped", "error"]
     schema_validation_errors: List[Dict[str, Any]]
@@ -86,11 +93,15 @@ class DataPreparerState(TypedDict, total=False):
     correlation_matrix: Dict[str, Dict[str, float]]
 
     # Feast registration
-    feast_registration_status: Literal["completed", "empty", "skipped", "error"]
+    feast_registration_status: Literal[
+        "completed", "empty", "skipped", "error", "blocked_stale_features"
+    ]
     feast_features_registered: int  # Count of features registered
     feast_freshness_check: Optional[Dict[str, Any]]  # Freshness check result
     feast_warnings: List[str]  # Non-blocking warnings
     feast_registered_at: Optional[str]  # ISO timestamp
+    feast_blocked: bool  # True when stale features hard-block training
+    feast_fallback_used: bool  # True when the historical-features fallback fired
 
     # Recommendations
     remediation_steps: List[str]

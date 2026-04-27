@@ -15,11 +15,26 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
+# 1B-M-4: temporal helpers (constants, detector, generator, split-marker
+# round-trip) live in ``_temporal.py``. Re-export here so the existing public
+# import path ``feature_generator._SPLIT_MARKER_COL`` etc. keeps working for
+# tests and callers. The two split-marker constants are not referenced inside
+# this module after the move (only the round-trip helpers consume them) so
+# they use the explicit ``X as X`` re-export form to satisfy ruff F401.
+from ._temporal import _SPLIT_MARKER_COL as _SPLIT_MARKER_COL  # noqa: F401
+from ._temporal import _SPLIT_ROW_ID_COL as _SPLIT_ROW_ID_COL  # noqa: F401
+from ._temporal import (
+    _concat_with_split_markers,
+    _detect_temporal_columns,
+    _generate_temporal_features,
+    _split_by_markers,
+)
+
 logger = logging.getLogger(__name__)
 
 
-# Feature type constants
-TEMPORAL_FEATURES = "temporal"
+# Feature type constants. ``TEMPORAL_FEATURES`` moved to ``_temporal.py`` in
+# 1B-M-4 — it is consumed only by ``_generate_temporal_features``.
 INTERACTION_FEATURES = "interaction"
 DOMAIN_FEATURES = "domain"
 AGGREGATE_FEATURES = "aggregate"
@@ -44,6 +59,11 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
             - temporal_columns: List of columns for temporal features
             - categorical_columns: List of columns for interactions
             - numeric_columns: List of numeric columns
+            - entity_id_column: Column identifying the entity for groupby-aware
+              lag/rolling (e.g. ``patient_id``). May also be set on
+              ``feature_config["entity_id_column"]``.
+            - event_timestamp_column: Column for chronological ordering inside
+              each entity. May also live on ``feature_config``.
             - feature_config: Custom feature generation config
 
     Returns:
@@ -80,6 +100,10 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
         categorical_columns = state.get("categorical_columns", _detect_categorical_columns(X_train))
         numeric_columns = state.get("numeric_columns", _detect_numeric_columns(X_train))
 
+        # Capture original feature names BEFORE _concat_with_split_markers may
+        # mutate state["X_train"] in place by adding dunder split markers (1B-M5).
+        original_features = list(X_train.columns)
+
         # Track generated features
         generated_features: List[Dict[str, Any]] = []
         feature_metadata: Dict[str, Any] = {
@@ -90,31 +114,51 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
         # 1. Generate temporal features
+        # Lag and rolling windows are entity-grouped and chronologically ordered,
+        # so we MUST compute them on the concatenated train+val+test before each
+        # split would otherwise truncate the per-entity history. We tag each row
+        # with a split marker, run _generate_temporal_features ONCE on the full
+        # frame, then split back on the marker. The per-row interaction/domain/
+        # aggregate steps below do NOT need this round-trip — they're row-local.
         if feature_config.get("generate_temporal", True) and temporal_columns:
-            X_train, temporal_meta = _generate_temporal_features(
-                X_train,
+            entity_id_column = feature_config.get("entity_id_column") or state.get(
+                "entity_id_column"
+            )
+            event_timestamp_column = feature_config.get("event_timestamp_column") or state.get(
+                "event_timestamp_column"
+            )
+            # Block 1B contract: temporal feature generation REQUIRES entity
+            # and timestamp columns. Silently falling back to naive shift is
+            # exactly the regression Block 1B fixes, so we fail fast with a
+            # message that points to the missing config rather than no-op.
+            if not entity_id_column or not event_timestamp_column:
+                missing = []
+                if not entity_id_column:
+                    missing.append("entity_id_column")
+                if not event_timestamp_column:
+                    missing.append("event_timestamp_column")
+                raise ValueError(
+                    "Temporal feature generation requires "
+                    f"{', '.join(missing)}. Set on feature_config "
+                    "(or directly on state) when temporal_columns is "
+                    "non-empty, or disable temporal features via "
+                    "feature_config['generate_temporal']=False. Lag/rolling "
+                    "computed without per-entity grouping leaks across "
+                    "patient histories — see Block 1B (#2)."
+                )
+
+            combined_df, split_index = _concat_with_split_markers(X_train, X_val, X_test)
+            combined_df, temporal_meta = _generate_temporal_features(
+                combined_df,
                 temporal_columns,
+                entity_id_column=entity_id_column,
+                event_timestamp_column=event_timestamp_column,
                 lag_periods=feature_config.get("lag_periods", [1, 7, 30]),
                 rolling_windows=feature_config.get("rolling_windows", [7, 30]),
             )
+            X_train, X_val, X_test = _split_by_markers(combined_df, split_index)
             feature_metadata["temporal"] = temporal_meta
             generated_features.extend(temporal_meta)
-
-            # Apply same transformations to val/test
-            if X_val is not None:
-                X_val, _ = _generate_temporal_features(
-                    X_val,
-                    temporal_columns,
-                    lag_periods=feature_config.get("lag_periods", [1, 7, 30]),
-                    rolling_windows=feature_config.get("rolling_windows", [7, 30]),
-                )
-            if X_test is not None:
-                X_test, _ = _generate_temporal_features(
-                    X_test,
-                    temporal_columns,
-                    lag_periods=feature_config.get("lag_periods", [1, 7, 30]),
-                    rolling_windows=feature_config.get("rolling_windows", [7, 30]),
-                )
 
         # 2. Generate interaction features
         if feature_config.get("generate_interactions", True) and categorical_columns:
@@ -176,8 +220,7 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
 
         computation_time = time.time() - start_time
 
-        # Get feature names
-        original_features = list(state.get("X_train", pd.DataFrame()).columns)
+        # Get feature names (original_features captured pre-temporal block).
         all_features = list(X_train.columns)
         new_features = [f for f in all_features if f not in original_features]
 
@@ -209,35 +252,6 @@ async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-def _detect_temporal_columns(df: pd.DataFrame) -> List[str]:
-    """Detect columns suitable for temporal feature generation."""
-    temporal_keywords = [
-        "date",
-        "time",
-        "timestamp",
-        "day",
-        "month",
-        "year",
-        "week",
-        "quarter",
-        "period",
-        "created",
-        "updated",
-    ]
-    temporal_cols = []
-
-    for col in df.columns:
-        col_lower = col.lower()
-        # Check if datetime type
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            temporal_cols.append(col)
-        # Check if name suggests temporal
-        elif any(keyword in col_lower for keyword in temporal_keywords):
-            temporal_cols.append(col)
-
-    return temporal_cols
-
-
 def _detect_categorical_columns(df: pd.DataFrame) -> List[str]:
     """Detect categorical columns."""
     categorical_cols = []
@@ -257,136 +271,6 @@ def _detect_categorical_columns(df: pd.DataFrame) -> List[str]:
 def _detect_numeric_columns(df: pd.DataFrame) -> List[str]:
     """Detect numeric columns suitable for aggregations."""
     return list(df.select_dtypes(include=[np.number]).columns)
-
-
-def _generate_temporal_features(
-    df: pd.DataFrame,
-    temporal_columns: List[str],
-    lag_periods: List[int] | None = None,
-    rolling_windows: List[int] | None = None,
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
-    """Generate temporal features from time-series columns.
-
-    Creates:
-    - Lag features (shift by N periods)
-    - Rolling statistics (mean, std over window)
-    - Date part extraction (if datetime)
-
-    Args:
-        df: Input DataFrame
-        temporal_columns: Columns to generate temporal features for
-        lag_periods: List of lag periods to create
-        rolling_windows: List of rolling window sizes
-
-    Returns:
-        Tuple of (transformed DataFrame, feature metadata list)
-    """
-    if rolling_windows is None:
-        rolling_windows = [7, 30]
-    if lag_periods is None:
-        lag_periods = [1, 7, 30]
-    df = df.copy()
-    metadata: List[Dict[str, Any]] = []
-
-    for col in temporal_columns:
-        if col not in df.columns:
-            continue
-
-        # Handle datetime columns - extract date parts
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            # Day of week (0=Monday, 6=Sunday)
-            new_col = f"{col}_dayofweek"
-            df[new_col] = df[col].dt.dayofweek
-            metadata.append(
-                {
-                    "name": new_col,
-                    "source": col,
-                    "type": TEMPORAL_FEATURES,
-                    "transformation": "dayofweek",
-                }
-            )
-
-            # Month
-            new_col = f"{col}_month"
-            df[new_col] = df[col].dt.month
-            metadata.append(
-                {
-                    "name": new_col,
-                    "source": col,
-                    "type": TEMPORAL_FEATURES,
-                    "transformation": "month",
-                }
-            )
-
-            # Quarter
-            new_col = f"{col}_quarter"
-            df[new_col] = df[col].dt.quarter
-            metadata.append(
-                {
-                    "name": new_col,
-                    "source": col,
-                    "type": TEMPORAL_FEATURES,
-                    "transformation": "quarter",
-                }
-            )
-
-            # Is weekend
-            new_col = f"{col}_is_weekend"
-            df[new_col] = (df[col].dt.dayofweek >= 5).astype(int)
-            metadata.append(
-                {
-                    "name": new_col,
-                    "source": col,
-                    "type": TEMPORAL_FEATURES,
-                    "transformation": "is_weekend",
-                }
-            )
-
-        # Handle numeric columns - create lags and rolling stats
-        elif pd.api.types.is_numeric_dtype(df[col]):
-            # Lag features
-            for lag in lag_periods:
-                new_col = f"{col}_lag_{lag}"
-                df[new_col] = df[col].shift(lag)
-                metadata.append(
-                    {
-                        "name": new_col,
-                        "source": col,
-                        "type": TEMPORAL_FEATURES,
-                        "transformation": f"lag_{lag}",
-                        "lag_period": lag,
-                    }
-                )
-
-            # Rolling statistics
-            for window in rolling_windows:
-                # Rolling mean
-                new_col = f"{col}_rolling_mean_{window}"
-                df[new_col] = df[col].rolling(window=window, min_periods=1).mean()
-                metadata.append(
-                    {
-                        "name": new_col,
-                        "source": col,
-                        "type": TEMPORAL_FEATURES,
-                        "transformation": f"rolling_mean_{window}",
-                        "window_size": window,
-                    }
-                )
-
-                # Rolling std
-                new_col = f"{col}_rolling_std_{window}"
-                df[new_col] = df[col].rolling(window=window, min_periods=1).std()
-                metadata.append(
-                    {
-                        "name": new_col,
-                        "source": col,
-                        "type": TEMPORAL_FEATURES,
-                        "transformation": f"rolling_std_{window}",
-                        "window_size": window,
-                    }
-                )
-
-    return df, metadata
 
 
 def _generate_interaction_features(

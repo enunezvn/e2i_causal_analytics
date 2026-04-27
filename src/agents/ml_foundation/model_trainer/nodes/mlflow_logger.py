@@ -94,6 +94,7 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
     hpo_trials_run = state.get("hpo_trials_run", 0)
     hpo_study_name = state.get("hpo_study_name")  # Optuna study name for linkage
     hpo_best_trial = state.get("hpo_best_trial")  # Best trial number
+    feast_fallback_used = state.get("feast_fallback_used", False)
 
     # Evaluation metrics
     evaluation_metrics = state.get("evaluation_metrics", {})
@@ -145,6 +146,20 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
                 "framework": framework,
                 "source": "model_trainer_agent",
                 "hpo_enabled": str(hpo_completed),
+                "feast_fallback": str(feast_fallback_used),
+                # Block 5B (#10): emit the validation-set business_utility
+                # number as a tag so the MLflow UI can display "what this
+                # run was worth" alongside accuracy/AUC. Mirrors the
+                # feast_fallback tag pattern. ``"N/A"`` when no
+                # cost_matrix was provided (validation_metrics omits
+                # the key in that case — see evaluator.py: the
+                # ``if cost_matrix is not None`` short-circuit in
+                # ``_compute_classification_metrics`` skips
+                # business_utility computation, so the metrics dict
+                # never picks up the key).
+                "business_utility": str(
+                    validation_metrics.get("business_utility", "N/A")
+                ),
             },
             description=f"Training run for {algorithm_name} on {problem_type}",
         ) as run:

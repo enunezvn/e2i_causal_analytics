@@ -17,6 +17,8 @@ import pytest
 from src.feature_store.feast_client import (
     FeastClient,
     FeastConfig,
+    FeastError,
+    FeastFallbackError,
     FeatureFreshness,
     FeatureStatistics,
     FreshnessStatus,
@@ -765,3 +767,289 @@ class TestMaterializationTimestampTracking:
         # Feature view should have timestamp recorded
         assert "hcp_features" in client._materialization_timestamps
         assert before <= client._materialization_timestamps["hcp_features"] <= after
+
+
+# ============================================================================
+# Block 2 — Feast fail-loud tests
+# ============================================================================
+
+
+class TestProductionFallbackRaises:
+    """Test that the historical-features fallback raises in production."""
+
+    @pytest.mark.asyncio
+    async def test_historical_fallback_raises_in_production(self, monkeypatch):
+        """FeastFallbackError is raised (not swallowed) when ENVIRONMENT=production."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        # Simulate: no Feast store, but custom store is present so fallback is attempted
+        client._store = None
+        client._custom_store = MagicMock()
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        with pytest.raises(FeastFallbackError):
+            await client.get_historical_features(
+                entity_df=entity_df,
+                feature_refs=["hcp_view:engagement_score"],
+            )
+
+        # _fallback_used must remain False — the raise fires before the side-effect.
+        assert client._fallback_used is False
+
+    @pytest.mark.asyncio
+    async def test_fallback_used_flag_set_in_non_production(self, monkeypatch):
+        """_fallback_used is set to True when the fallback succeeds (non-prod)."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        client._store = None
+        client._custom_store = MagicMock()
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        await client.get_historical_features(
+            entity_df=entity_df,
+            feature_refs=["hcp_view:engagement_score"],
+        )
+
+        assert client._fallback_used is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("env_value", ["PRODUCTION", "Production", "production"])
+    async def test_historical_fallback_raises_case_insensitive(self, monkeypatch, env_value):
+        """ENVIRONMENT check is case-insensitive (uppercase must NOT silently disable the prod block)."""
+        monkeypatch.setenv("ENVIRONMENT", env_value)
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        client._store = None
+        client._custom_store = MagicMock()
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        with pytest.raises(FeastFallbackError):
+            await client.get_historical_features(
+                entity_df=entity_df,
+                feature_refs=["hcp_view:engagement_score"],
+            )
+
+
+class TestFreshnessDefaultsToStaleOnException:
+    """Test that get_feature_freshness defaults to stale on exception."""
+
+    @pytest.mark.asyncio
+    async def test_freshness_default_false_on_exception(self, monkeypatch):
+        """When initialization raises, freshness is treated as stale (is_fresh=False)."""
+        monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
+        client = FeastClient()
+        # Patch initialize to raise so the inner body never executes
+        client.initialize = AsyncMock(side_effect=Exception("Feast service unreachable"))
+
+        result = await client.get_feature_freshness("some_feature_view")
+
+        assert result.is_fresh is False
+        assert result.freshness_status is FreshnessStatus.UNKNOWN
+        assert result.message is not None
+        assert "Freshness check failed" in result.message
+
+    @pytest.mark.asyncio
+    async def test_freshness_allow_stale_env_overrides_exception(self, monkeypatch):
+        """ALLOW_STALE_FEAST=1 causes is_fresh=True even when initialization raises."""
+        monkeypatch.setenv("ALLOW_STALE_FEAST", "1")
+
+        client = FeastClient()
+        client.initialize = AsyncMock(side_effect=Exception("Feast service unreachable"))
+
+        result = await client.get_feature_freshness("some_feature_view")
+
+        assert result.is_fresh is True
+
+
+# ============================================================================
+# Block 2 polish — FeastError base class + defensive-chain narrowing tests
+# ============================================================================
+
+
+class TestFeastErrorBaseClass:
+    """Tests for the FeastError base class introduced in Block 2 polish.
+
+    Catchers that want "any Feast-domain error" should be able to write
+    ``except FeastError`` rather than enumerating every subclass. This
+    keeps the contract stable when new Feast-domain exceptions are added.
+    """
+
+    def test_feast_fallback_error_is_feast_error(self):
+        """FeastFallbackError is a subclass of FeastError (isinstance check)."""
+        assert isinstance(FeastFallbackError(), FeastError)
+        assert issubclass(FeastFallbackError, FeastError)
+
+    def test_feast_error_catches_feast_fallback_error(self):
+        """Catching FeastError catches FeastFallbackError too."""
+        caught = False
+        try:
+            raise FeastFallbackError("test")
+        except FeastError:
+            caught = True
+        assert caught is True
+
+
+class TestFreshnessDefensiveExceptionChain:
+    """Test that the pre-emptive ``except FeastFallbackError: raise`` in
+    ``get_feature_freshness`` mirrors the ``get_historical_features`` pattern.
+
+    This is the "latent today, defensive against tomorrow" guard from
+    Block 2 polish: if a future refactor of ``_ensure_initialized`` (or
+    any helper above) starts raising ``FeastFallbackError``, the broad
+    ``except Exception`` below would otherwise swallow it into an UNKNOWN
+    status — masking a production-policy violation.
+    """
+
+    @pytest.mark.asyncio
+    async def test_freshness_propagates_feast_fallback_error_through_outer_except(
+        self, monkeypatch
+    ):
+        """FeastFallbackError raised inside get_feature_freshness MUST propagate.
+
+        Patch the initialize() helper to raise FeastFallbackError. The
+        outer ``except FeastFallbackError: raise`` must re-raise it
+        rather than letting the broad ``except Exception`` convert it
+        to an UNKNOWN-status FeatureFreshness. ALLOW_STALE_FEAST is
+        unset to make sure the bypass path doesn't muddy the test.
+        """
+        monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
+        client = FeastClient()
+        client.initialize = AsyncMock(
+            side_effect=FeastFallbackError("simulated future refactor"),
+        )
+
+        with pytest.raises(FeastFallbackError, match="simulated future refactor"):
+            await client.get_feature_freshness("some_feature_view")
+
+    @pytest.mark.asyncio
+    async def test_freshness_propagates_feast_fallback_error_even_with_allow_stale(
+        self, monkeypatch
+    ):
+        """ALLOW_STALE_FEAST=1 must NOT mask FeastFallbackError propagation.
+
+        The bypass env-var is for ops emergencies during a stale Feast,
+        not for swallowing production-policy violations. The pre-emptive
+        ``except FeastFallbackError: raise`` fires *before* ALLOW_STALE_FEAST
+        is consulted in the broad except-Exception block, so the policy
+        violation is surfaced regardless of the bypass.
+        """
+        monkeypatch.setenv("ALLOW_STALE_FEAST", "1")
+
+        client = FeastClient()
+        client.initialize = AsyncMock(
+            side_effect=FeastFallbackError("simulated future refactor"),
+        )
+
+        with pytest.raises(FeastFallbackError, match="simulated future refactor"):
+            await client.get_feature_freshness("some_feature_view")
+
+
+class TestHistoricalFeaturesOuterExceptionPath:
+    """Test that ``get_historical_features`` re-raises non-FeastFallbackError
+    exceptions through the outer ``except Exception`` block when no fallback
+    is configured.
+
+    Covers the path where the inner Feast call raises something *other*
+    than FeastFallbackError (e.g., a generic RuntimeError), and there is
+    no ``_custom_store`` to fall back to. The function should re-raise
+    the original exception (NOT swallow it into FeastFallbackError).
+    """
+
+    @pytest.mark.asyncio
+    async def test_outer_except_reraises_non_fallback_exception_without_custom_store(
+        self, monkeypatch
+    ):
+        """Generic Feast-store exception with no custom_store re-raises original."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+
+        # Configure Feast store to raise a generic RuntimeError (NOT FeastFallbackError)
+        mock_store = MagicMock()
+        mock_store.get_historical_features.side_effect = RuntimeError(
+            "Feast offline store unavailable"
+        )
+        client._store = mock_store
+        # No custom store → outer except has nothing to fall back to → must re-raise
+        client._custom_store = None
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        with pytest.raises(RuntimeError, match="Feast offline store unavailable"):
+            await client.get_historical_features(
+                entity_df=entity_df,
+                feature_refs=["hcp_view:engagement_score"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_outer_except_routes_to_fallback_when_custom_store_present(
+        self, monkeypatch
+    ):
+        """Generic Feast-store exception WITH custom_store routes to fallback (non-prod).
+
+        Confirms the outer ``except Exception`` block invokes the
+        fallback path when both ``enable_fallback=True`` and
+        ``_custom_store`` are present, AND ENVIRONMENT is not production.
+        This is the complementary path to the
+        FeastFallbackError-passthrough test above.
+        """
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+
+        # Feast store raises generic exception
+        mock_store = MagicMock()
+        mock_store.get_historical_features.side_effect = RuntimeError(
+            "Feast offline store unavailable"
+        )
+        client._store = mock_store
+        client._custom_store = MagicMock()
+
+        entity_df = pd.DataFrame(
+            {
+                "hcp_id": ["123"],
+                "event_timestamp": [datetime(2024, 1, 1)],
+            }
+        )
+
+        # Should not raise — fallback path returns a DataFrame
+        result = await client.get_historical_features(
+            entity_df=entity_df,
+            feature_refs=["hcp_view:engagement_score"],
+        )
+
+        assert isinstance(result, pd.DataFrame)
+        # _fallback_used flag set in the fallback path
+        assert client._fallback_used is True

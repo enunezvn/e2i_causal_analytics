@@ -119,10 +119,18 @@ networks:
   mlops_network:
     driver: bridge
     name: e2i_mlops_network
-  # External Supabase network (for postgres-exporter to reach supabase-db)
+  # External Supabase network (for postgres-exporter to reach supabase-db).
+  # NOTE: this declaration is currently stale — the actual Supabase network is
+  # `supabase-network`, not `supabase_default`. Kept here for backwards-compat
+  # with postgres-exporter; reconciliation is a Block 6B follow-up.
   supabase_default:
     external: true
     name: supabase_default
+  # External Supabase network — feast (offline store) and api (parity test
+  # invocation) need to reach supabase-db on this network.
+  supabase-network:
+    external: true
+    name: supabase-network
 
 # =============================================================================
 # SERVICES
@@ -383,13 +391,18 @@ services:
     ports:
       - "127.0.0.1:6567:6566"
     volumes:
-      - ../feature_repo:/feast  # Feature store config + definitions
-      - feature_cache:/feast/data  # Shared: feature materialization
+      - ../feature_repo:/feast-src:ro  # Source: entities.py, data_sources.py, features/, feature_store.yaml.tmpl
+      - feature_cache:/feast/data       # Registry + materialization output (writable, persistent)
     environment:
       - FEAST_OFFLINE_STORE_TYPE=file
       - FEAST_ONLINE_STORE_TYPE=redis
       - FEAST_REDIS_HOST=redis
       - FEAST_REDIS_PORT=6379
+      # Required by docker/feast/entrypoint.sh to render feature_store.yaml from
+      # feature_store.yaml.tmpl. The rendered file is written into the writable
+      # container layer at /feast/feature_store.yaml — never the host bind mount.
+      - SUPABASE_POSTGRES_PASSWORD=${SUPABASE_POSTGRES_PASSWORD:?SUPABASE_POSTGRES_PASSWORD must be set}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6566/health"]
       interval: 30s
@@ -399,6 +412,7 @@ services:
     networks:
       - e2i_network
       - mlops_network
+      - supabase-network  # Reach supabase-db (Postgres offline store)
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -468,6 +482,7 @@ services:
     networks:
       - e2i_network
       - mlops_network
+      - supabase-network  # Reach supabase-db for Feast offline-online parity test
     security_opt:
       - no-new-privileges:true
     read_only: true

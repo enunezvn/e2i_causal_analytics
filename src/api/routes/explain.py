@@ -293,30 +293,21 @@ class RealTimeSHAPService:
         return self._get_default_features()
 
     def _get_feature_refs_for_model(self, model_type: ModelType) -> List[str]:
-        """Get feature references for a model type."""
-        feature_ref_map = {
-            ModelType.PROPENSITY: [
-                "patient_engagement_features:days_since_last_hcp_visit",
-                "patient_engagement_features:total_hcp_interactions_90d",
-                "patient_engagement_features:therapy_adherence_score",
-            ],
-            ModelType.RISK_STRATIFICATION: [
-                "patient_risk_features:comorbidity_count",
-                "patient_risk_features:lab_value_trend",
-                "patient_risk_features:prior_brand_experience",
-            ],
-            ModelType.CHURN_PREDICTION: [
-                "patient_churn_features:days_since_last_visit",
-                "patient_churn_features:engagement_trend",
-                "patient_churn_features:satisfaction_score",
-            ],
-            ModelType.NEXT_BEST_ACTION: [
-                "patient_nba_features:channel_preference",
-                "patient_nba_features:response_history",
-                "patient_nba_features:timing_preference",
-            ],
-        }
-        return feature_ref_map.get(model_type, [])
+        """Get feature references for a model type.
+
+        Delegates to the canonical registry in
+        ``src/feature_store/model_feature_refs.py`` (3A-M-1). Note: the
+        legacy contract here returned ``[]`` for unknown ``model_type``
+        rather than the propensity fallback used by the predictions
+        route — preserve that to avoid regressing existing call sites
+        that explicitly check for empty list.
+        """
+        # Use raw value; ``feature_refs_for_model`` defaults to propensity
+        # when the key is missing — we have to distinguish "unknown
+        # model" from "fallback to propensity" because explain.py's
+        # legacy semantics return []. Look up directly instead.
+        from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
+        return list(MODEL_FEATURE_REFS.get(model_type.value, []))
 
     def _get_default_features(self) -> Dict[str, Any]:
         """Default features for fallback/testing."""

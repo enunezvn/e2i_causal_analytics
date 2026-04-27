@@ -46,6 +46,26 @@ class ScopeDefinerState(TypedDict, total=False):
     region: Optional[str]  # Region context
     use_case: Optional[str]  # Use case category
 
+    # Temporal anchoring (Block 1B scaffolding; consumed in Block 4+).
+    # Inference cutoff time the model predicts from — feeds scope_spec so
+    # downstream agents can clip lookback windows and post-prediction filters.
+    # Accepts datetime, str, or pd.Timestamp at the API boundary; the scope
+    # builder normalises to ISO 8601 string for storage in scope_spec.
+    #
+    # Distinguish from ``prediction_horizon_days`` (read from state via
+    # ``state.get("prediction_horizon_days", 30)`` in scope_builder): the
+    # horizon is a *duration* in days, while this field is the *anchor*
+    # timestamp. Together they define the prediction window.
+    prediction_timestamp: Optional[Any]
+
+    # Cost matrix for business-utility-driven evaluation (Block 5 — finding
+    # #10). Keys ``tp``/``fp``/``fn``/``tn`` map confusion-matrix outcomes to
+    # their per-prediction monetary value. Optional: when absent, the
+    # evaluator skips ``business_utility``. Forwarded verbatim onto
+    # ``scope_spec["cost_matrix"]`` so the model_trainer can read it without
+    # threading through a separate parameter.
+    cost_matrix: Optional[Dict[str, float]]
+
     # === INTERMEDIATE FIELDS ===
     # Problem classification
     inferred_problem_type: str  # Inferred ML problem type

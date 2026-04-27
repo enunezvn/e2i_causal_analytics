@@ -62,6 +62,22 @@ def _get_semantic_memory():
         return None
 
 
+async def _get_feast_client():
+    """Get FeastClient instance (lazy import with graceful degradation).
+
+    Block 5 (#14): used to auto-register surviving tier0 features as
+    Feast FeatureViews so downstream serving can retrieve them via the
+    same store the trainer used.
+    """
+    try:
+        from src.feature_store.feast_client import get_feast_client
+
+        return await get_feast_client()
+    except Exception as e:
+        logger.debug(f"Feast client not available: {e}")
+        return None
+
+
 class FeatureAnalyzerAgent:
     """Feature Analyzer: SHAP-based model interpretability.
 
@@ -210,6 +226,14 @@ class FeatureAnalyzerAgent:
                     semantic_memory_entries,
                 ) = await self._update_semantic_memory(final_state)
 
+            # Block 5 (#14): auto-register surviving features in Feast as a
+            # FeatureView so downstream serving can read them via the same
+            # store the trainer used. Best-effort — failures don't block
+            # the tier0 run; they're surfaced in feast_registration.error.
+            feast_registration = await self._auto_register_in_feast(
+                final_state, input_data
+            )
+
             # Construct structured outputs
             shap_analysis = self._build_shap_analysis(final_state)
             feature_importance_list = self._build_feature_importance_list(final_state)
@@ -243,6 +267,8 @@ class FeatureAnalyzerAgent:
                 # Semantic memory
                 "semantic_memory_updated": semantic_memory_updated,
                 "semantic_memory_entries": semantic_memory_entries,
+                # Block 5 (#14): Feast FeatureView round-trip metadata.
+                "feast_registration": feast_registration,
                 # Metadata
                 "shap_analysis_id": final_state.get("shap_analysis_id"),
                 "experiment_id": final_state["experiment_id"],
@@ -418,6 +444,91 @@ class FeatureAnalyzerAgent:
         except Exception as e:
             logger.warning(f"Failed to update semantic memory: {e}")
             return False, 0
+
+    async def _auto_register_in_feast(
+        self, state: Dict[str, Any], input_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Auto-register surviving features as a Feast FeatureView (Block 5 #14).
+
+        Reads ``selected_features`` (or ``selected_features_all``) from
+        the final agent state and asks ``FeastClient.register_feature_view``
+        to apply a new FeatureView for them. Best-effort: any failure is
+        captured in the returned dict and logged, never raised.
+
+        The required Feast inputs (entity name, batch source name) are
+        sourced from ``input_data["feast_registration_config"]`` so the
+        caller (run_tier0_test.py / orchestrator) can declare which
+        Feast Entity and existing batch source to bind tier0 features
+        to. When the config is absent, registration is skipped — this
+        keeps unit tests that don't talk to Feast unaffected.
+
+        Args:
+            state: Final agent state from the LangGraph run.
+            input_data: Original input_data passed to ``run`` (carries
+                ``feast_registration_config`` when the caller wants
+                round-trip registration).
+
+        Returns:
+            Dict with ``registered`` (bool), ``feature_view_name`` (str
+            or None), ``features_count`` (int), ``error`` (str | None),
+            ``skipped_reason`` (str | None). Never raises.
+        """
+        result: Dict[str, Any] = {
+            "registered": False,
+            "feature_view_name": None,
+            "features_count": 0,
+            "error": None,
+            "skipped_reason": None,
+        }
+
+        config = input_data.get("feast_registration_config")
+        if not config:
+            result["skipped_reason"] = "feast_registration_config not provided"
+            return result
+
+        selected_features = state.get("selected_features") or state.get(
+            "selected_features_all"
+        ) or []
+        if not selected_features:
+            result["skipped_reason"] = "no surviving features in state"
+            return result
+
+        try:
+            feast_client = await _get_feast_client()
+            if feast_client is None:
+                result["skipped_reason"] = "feast client unavailable"
+                return result
+
+            experiment_id = state.get("experiment_id", "unknown")
+            fv_name = config.get("feature_view_name") or f"tier0_{experiment_id}_features"
+
+            registration = await feast_client.register_feature_view(
+                name=fv_name,
+                entity_name=config["entity_name"],
+                feature_names=list(selected_features),
+                batch_source_name=config["batch_source_name"],
+                ttl=config.get("ttl"),
+                feature_dtypes=config.get("feature_dtypes"),
+                tags={
+                    "owner": "feature_analyzer",
+                    "experiment_id": str(experiment_id),
+                    "auto_registered": "true",
+                },
+                description=(
+                    f"Tier-0 features surviving selection for experiment {experiment_id}"
+                ),
+            )
+
+            result["registered"] = registration.get("registered", False)
+            result["feature_view_name"] = registration.get("feature_view_name")
+            result["features_count"] = registration.get("features_count", 0)
+            result["error"] = registration.get("error")
+            return result
+
+        except Exception as e:
+            result["error"] = str(e)
+            logger.warning(f"Feast auto-registration failed: {e}")
+            return result
 
     async def _store_to_database(self, output: Dict[str, Any]) -> None:
         """Store SHAP analysis to ml_shap_analyses table.

@@ -4,6 +4,10 @@ on:
   push:
     branches: [main, develop]
     paths:
+      # Note: `feature_repo/**` is intentionally excluded — Feast apply
+      # has its own dedicated workflow (`feast-apply.yml`) so changes
+      # under `feature_repo/` do not trigger the heavy backend test
+      # matrix unnecessarily. (3B-M-3)
       - 'src/**'
       - 'tests/**'
       - 'pyproject.toml'
@@ -45,6 +49,10 @@ jobs:
 
       - name: Run Ruff formatter check
         run: ruff format --check src/ tests/
+
+  # NOTE: feast-apply moved to .github/workflows/feast-apply.yml so
+  # changes under feature_repo/** do not trigger the full backend test
+  # matrix. See "Feast Apply & Idempotency" workflow. (3B-M-3, 3B-M-7)
 
   type-check:
     name: Type Check (MyPy)
