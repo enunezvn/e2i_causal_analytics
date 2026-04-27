@@ -244,6 +244,17 @@ celery_app.conf.beat_schedule = {
         "schedule": 86400.0,  # 24 hours
         "options": {"queue": "analytics"},
     },
+    # Territory_metrics rollup every 24 hours (block 6B-infra-2c). Routed
+    # to `analytics` (worker_medium). Aggregates per-HCP business_metrics
+    # rows produced by 6B-infra-2a -- in production the per-HCP rollup must
+    # run first; see module docstring for the order dependency note.
+    # market_potential / resource_allocation_score remain NULL until a real
+    # Reltio/Veeva source lands.
+    "territory-metrics-rollup": {
+        "task": "src.etl.territory_metrics_etl.run_territory_rollup",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
     # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
     # -------------------------------------------------------------------------
