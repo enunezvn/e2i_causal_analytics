@@ -10,7 +10,7 @@ Tests cover end-to-end integration of:
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
