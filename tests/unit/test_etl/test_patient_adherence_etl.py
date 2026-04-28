@@ -188,22 +188,22 @@ class TestSQLShape:
         """Window scope on patient_journeys is journey_start_date — avoids
         rewriting old static journeys on every daily run."""
         sql = etl.UPDATE_PATIENT_ADHERENCE_SQL
-        assert re.search(
-            r"pj\.journey_start_date\s*>=\s*%\(start_date\)s", sql
-        ), "missing pj.journey_start_date >= start_date filter"
-        assert re.search(
-            r"pj\.journey_start_date\s*<\s*%\(end_date\)s", sql
-        ), "missing pj.journey_start_date < end_date filter"
+        assert re.search(r"pj\.journey_start_date\s*>=\s*%\(start_date\)s", sql), (
+            "missing pj.journey_start_date >= start_date filter"
+        )
+        assert re.search(r"pj\.journey_start_date\s*<\s*%\(end_date\)s", sql), (
+            "missing pj.journey_start_date < end_date filter"
+        )
 
     def test_filters_trigger_window_on_trigger_timestamp(self) -> None:
         """Window scope on triggers is trigger_timestamp [start, end)."""
         sql = etl.UPDATE_PATIENT_ADHERENCE_SQL
-        assert re.search(
-            r"trigger_timestamp\s*>=\s*%\(start_date\)s", sql
-        ), "missing trigger_timestamp >= start_date filter"
-        assert re.search(
-            r"trigger_timestamp\s*<\s*%\(end_date\)s", sql
-        ), "missing trigger_timestamp < end_date filter"
+        assert re.search(r"trigger_timestamp\s*>=\s*%\(start_date\)s", sql), (
+            "missing trigger_timestamp >= start_date filter"
+        )
+        assert re.search(r"trigger_timestamp\s*<\s*%\(end_date\)s", sql), (
+            "missing trigger_timestamp < end_date filter"
+        )
 
     def test_patient_id_predicate_lives_inside_lag_subquery(self) -> None:
         """The ``patient_id IN (SELECT patient_id FROM patient_journeys ...)``
@@ -221,8 +221,7 @@ class TestSQLShape:
 
         # The predicate must appear once.
         assert "patient_id IN ( SELECT patient_id FROM patient_journeys" in normalised, (
-            "missing patient_id IN (SELECT patient_id FROM patient_journeys ...) "
-            "predicate"
+            "missing patient_id IN (SELECT patient_id FROM patient_journeys ...) predicate"
         )
 
         # And it must appear BEFORE the closing ``) lag_view`` of the inner
@@ -255,23 +254,20 @@ class TestSQLShape:
         # Slice from the SET keyword to the end of the UPDATE statement.
         set_block = stripped.split("SET", 1)[1]
         assert "refill_count" not in set_block, (
-            "refill_count must not be in the UPDATE SET list "
-            "(no refill source in canonical schema)"
+            "refill_count must not be in the UPDATE SET list (no refill source in canonical schema)"
         )
         # The original SQL still mentions it in a comment so the omission
         # is self-documenting.
         assert "refill_count" in sql
-        assert "refill_reminder" in sql, (
-            "module docs the missing trigger_type by name"
-        )
+        assert "refill_reminder" in sql, "module docs the missing trigger_type by name"
 
     def test_set_clause_updates_adherence_rate_and_gap_days(self) -> None:
         """The two columns this ETL owns are present in SET; both come from
         the joined CTE columns."""
         normalised = re.sub(r"\s+", " ", etl.UPDATE_PATIENT_ADHERENCE_SQL)
-        assert re.search(
-            r"adherence_rate\s*=\s*ja\.adherence_rate", normalised
-        ), "missing adherence_rate = ja.adherence_rate in SET"
+        assert re.search(r"adherence_rate\s*=\s*ja\.adherence_rate", normalised), (
+            "missing adherence_rate = ja.adherence_rate in SET"
+        )
         assert re.search(r"gap_days\s*=\s*pg\.gap_days", normalised), (
             "missing gap_days = pg.gap_days in SET"
         )
@@ -420,9 +416,7 @@ def test_celery_task_delegates_to_impl() -> None:
     ``_run_patient_adherence_impl`` — verify it forwards args + the
     request id."""
     sentinel_result = {"status": "completed", "rows_affected": 3}
-    with patch.object(
-        etl, "_run_patient_adherence_impl", return_value=sentinel_result
-    ) as impl:
+    with patch.object(etl, "_run_patient_adherence_impl", return_value=sentinel_result) as impl:
         async_result = etl.run_patient_adherence_rollup.apply(
             kwargs={
                 "start_date": "2024-01-01T00:00:00Z",
@@ -459,9 +453,6 @@ def test_beat_schedule_entry_present() -> None:
 
     entry = celery_app.conf.beat_schedule.get("patient-adherence-rollup")
     assert entry is not None, "beat schedule entry missing"
-    assert (
-        entry["task"]
-        == "src.etl.patient_adherence_etl.run_patient_adherence_rollup"
-    )
+    assert entry["task"] == "src.etl.patient_adherence_etl.run_patient_adherence_rollup"
     assert entry["schedule"] == 86400.0
     assert entry["options"]["queue"] == "analytics"

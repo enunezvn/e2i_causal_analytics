@@ -168,9 +168,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             # are nonzero.
             counter = 0
             for day_offset in range(NUM_DAYS):
-                ts = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc) + timedelta(
-                    days=day_offset
-                )
+                ts = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc) + timedelta(days=day_offset)
                 for hcp in hcps:
                     for brand in BRANDS:
                         patient_id = f"pat_{test_run_id}_{hcp['hcp_id']}_{brand}"
@@ -241,9 +239,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             )
 
 
-def test_per_hcp_rollup_materialises_rows(
-    db_conn: Any, synthetic_dataset: dict
-) -> None:
+def test_per_hcp_rollup_materialises_rows(db_conn: Any, synthetic_dataset: dict) -> None:
     """ETL runs cleanly and produces at least one row per (HCP, brand, day)."""
     from src.etl.business_metrics_per_hcp_etl import _run_per_hcp_rollup_impl
 
@@ -276,9 +272,7 @@ def test_per_hcp_rollup_materialises_rows(
     assert count == NUM_HCPS * len(BRANDS) * NUM_DAYS
 
 
-def test_market_share_sums_to_one_per_territory(
-    db_conn: Any, synthetic_dataset: dict
-) -> None:
+def test_market_share_sums_to_one_per_territory(db_conn: Any, synthetic_dataset: dict) -> None:
     """Within each (territory_id, brand, metric_date) the rollup
     market_shares add up to 1.0 (modulo float epsilon)."""
     from src.etl.business_metrics_per_hcp_etl import _run_per_hcp_rollup_impl
@@ -305,9 +299,9 @@ def test_market_share_sums_to_one_per_territory(
 
     assert groups, "no groups found"
     for territory_id, brand, metric_date, total in groups:
-        assert total == pytest.approx(
-            1.0, abs=1e-6
-        ), f"share sum != 1.0 for ({territory_id}, {brand}, {metric_date}): {total}"
+        assert total == pytest.approx(1.0, abs=1e-6), (
+            f"share sum != 1.0 for ({territory_id}, {brand}, {metric_date}): {total}"
+        )
 
 
 def test_idempotent_rerun(db_conn: Any, synthetic_dataset: dict) -> None:

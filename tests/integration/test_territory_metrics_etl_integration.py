@@ -204,9 +204,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 # That trigger is within the 30-day backward-window of every
                 # metric_date in the run.
                 trigger_counter = 0
-                trigger_ts = datetime(
-                    2024, 6, 1, 12, 0, tzinfo=timezone.utc
-                )
+                trigger_ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
                 for hcp in hcps:
                     trigger_counter += 1
                     trigger_id = f"tr_{test_run_id}_{trigger_counter:06d}"
@@ -261,9 +259,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 )
 
 
-def _fetch_territory_rollup(
-    db_conn: Any, test_run_id: str
-) -> list[tuple[Any, ...]]:
+def _fetch_territory_rollup(db_conn: Any, test_run_id: str) -> list[tuple[Any, ...]]:
     """Read back territory_metrics rows for the test run, ordered by date."""
     with db_conn.cursor() as cur:
         cur.execute(
@@ -280,9 +276,7 @@ def _fetch_territory_rollup(
         return cur.fetchall()
 
 
-def test_territorial_sums_match_per_hcp_sums(
-    db_conn: Any, synthetic_dataset: dict
-) -> None:
+def test_territorial_sums_match_per_hcp_sums(db_conn: Any, synthetic_dataset: dict) -> None:
     """Per the plan: assert territorial sums match per-HCP sums.
 
     For each (territory, metric_date) cell, total_trx must equal SUM(per-HCP
@@ -361,9 +355,7 @@ def test_covered_lives_matches_total_patient_volume_sum(
         )
 
 
-def test_active_hcp_count_uses_30_day_window(
-    db_conn: Any, synthetic_dataset: dict
-) -> None:
+def test_active_hcp_count_uses_30_day_window(db_conn: Any, synthetic_dataset: dict) -> None:
     """active_hcp_count = DISTINCT hcp_id with >= 1 trigger in the 30-day
     window ending on metric_date.
 
@@ -462,8 +454,7 @@ def test_market_potential_and_resource_score_preserved_across_etl(
         resource_allocation_score,
     ) in rows:
         assert float(market_potential) == pytest.approx(0.123, abs=1e-9), (
-            "ON CONFLICT SET clause must NOT touch market_potential -- "
-            f"got {market_potential}"
+            f"ON CONFLICT SET clause must NOT touch market_potential -- got {market_potential}"
         )
         assert float(resource_allocation_score) == pytest.approx(0.456, abs=1e-9), (
             "ON CONFLICT SET clause must NOT touch resource_allocation_score "
@@ -490,9 +481,7 @@ def test_idempotent_rerun_preserves_market_potential_seed(
         request_id="idempotency-1",
     )
 
-    first_snapshot = _fetch_territory_rollup(
-        db_conn, synthetic_dataset["test_run_id"]
-    )
+    first_snapshot = _fetch_territory_rollup(db_conn, synthetic_dataset["test_run_id"])
     assert first_snapshot, "first run produced no rows"
 
     # Stamp non-default market_potential / resource_allocation_score on the
@@ -515,9 +504,7 @@ def test_idempotent_rerun_preserves_market_potential_seed(
         request_id="idempotency-2",
     )
 
-    second_snapshot = _fetch_territory_rollup(
-        db_conn, synthetic_dataset["test_run_id"]
-    )
+    second_snapshot = _fetch_territory_rollup(db_conn, synthetic_dataset["test_run_id"])
 
     # Same number of rows, same per-row real-aggregate values.
     assert len(first_snapshot) == len(second_snapshot)
@@ -541,8 +528,7 @@ def test_idempotent_rerun_preserves_market_potential_seed(
         resource_allocation_score,
     ) in second_snapshot:
         assert float(market_potential) == pytest.approx(0.42, abs=1e-9), (
-            "ON CONFLICT SET clause must NOT touch market_potential -- "
-            f"got {market_potential}"
+            f"ON CONFLICT SET clause must NOT touch market_potential -- got {market_potential}"
         )
         assert float(resource_allocation_score) == pytest.approx(0.84, abs=1e-9), (
             "ON CONFLICT SET clause must NOT touch resource_allocation_score "

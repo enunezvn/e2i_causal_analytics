@@ -159,9 +159,9 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                     for day_offset in offsets:
                         counter += 1
                         trigger_id = f"tr_{test_run_id}_{counter:06d}"
-                        ts = datetime(
-                            2024, 1, 1, 12, 0, tzinfo=timezone.utc
-                        ) + timedelta(days=day_offset)
+                        ts = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc) + timedelta(
+                            days=day_offset
+                        )
                         cur.execute(
                             """
                             INSERT INTO triggers (
@@ -179,13 +179,15 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 "a_normal": {
                     "patient_id": pat_a,
                     "journey_id": journey_a,
-                    "expected_adherence_rate": a_duration_days / a_span_days,  # > 1 -> clamps to 1.0
+                    "expected_adherence_rate": a_duration_days
+                    / a_span_days,  # > 1 -> clamps to 1.0
                     "expected_gap_days": 14,  # 19 - 5
                 },
                 "b_single": {
                     "patient_id": pat_b,
                     "journey_id": journey_b,
-                    "expected_adherence_rate": b_duration_days / b_span_days,  # > 1 -> clamps to 1.0
+                    "expected_adherence_rate": b_duration_days
+                    / b_span_days,  # > 1 -> clamps to 1.0
                     "expected_gap_days": 0,  # single-event
                 },
                 "c_zero": {
@@ -214,9 +216,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 )
 
 
-def _fetch_journey_metrics(
-    db_conn: Any, journey_id: str
-) -> tuple[Any, Any, Any]:
+def _fetch_journey_metrics(db_conn: Any, journey_id: str) -> tuple[Any, Any, Any]:
     """Read back the three columns this ETL writes for a given journey."""
     with db_conn.cursor() as cur:
         cur.execute(
@@ -253,8 +253,7 @@ def test_adherence_rate_clamps_to_one_for_normal_patient(
     # refill_count is intentionally left NULL (see module docstring).
     assert refill is None
     assert gap == a["expected_gap_days"], (
-        f"gap_days mismatch for normal patient: "
-        f"expected {a['expected_gap_days']}, got {gap}"
+        f"gap_days mismatch for normal patient: expected {a['expected_gap_days']}, got {gap}"
     )
 
 
@@ -279,14 +278,11 @@ def test_adherence_rate_null_for_zero_duration_journey(
     )
     assert refill is None
     assert gap == c["expected_gap_days"], (
-        f"gap_days mismatch for zero-duration patient: "
-        f"expected {c['expected_gap_days']}, got {gap}"
+        f"gap_days mismatch for zero-duration patient: expected {c['expected_gap_days']}, got {gap}"
     )
 
 
-def test_gap_days_zero_for_single_event_patient(
-    db_conn: Any, synthetic_dataset: dict
-) -> None:
+def test_gap_days_zero_for_single_event_patient(db_conn: Any, synthetic_dataset: dict) -> None:
     """Patient B: exactly one trigger -> LAG returns NULL -> COALESCE -> 0.
     The plan's "single-event patients (gap_days=0)" requirement."""
     from src.etl.patient_adherence_etl import _run_patient_adherence_impl
@@ -305,9 +301,7 @@ def test_gap_days_zero_for_single_event_patient(
     assert gap == 0, f"single-event gap_days must be 0; got {gap}"
 
 
-def test_idempotent_rerun_yields_identical_values(
-    db_conn: Any, synthetic_dataset: dict
-) -> None:
+def test_idempotent_rerun_yields_identical_values(db_conn: Any, synthetic_dataset: dict) -> None:
     """Running the ETL twice produces the same per-row values for every
     journey in the window. The UPDATE is naturally idempotent on the
     journey PK."""
@@ -335,6 +329,4 @@ def test_idempotent_rerun_yields_identical_values(
         for name, payload in synthetic_dataset["patients"].items()
     }
 
-    assert first_snapshot == second_snapshot, (
-        "second run produced different per-row values"
-    )
+    assert first_snapshot == second_snapshot, "second run produced different per-row values"

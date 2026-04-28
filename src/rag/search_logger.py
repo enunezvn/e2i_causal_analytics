@@ -184,12 +184,14 @@ class SearchLogger:
         """
         try:
             response = await asyncio.to_thread(
-                lambda: self.client.from_("rag_search_logs")
-                .select("*")
-                .gt("total_latency_ms", threshold_ms)
-                .order("total_latency_ms", desc=True)
-                .limit(limit)
-                .execute()
+                lambda: (
+                    self.client.from_("rag_search_logs")
+                    .select("*")
+                    .gt("total_latency_ms", threshold_ms)
+                    .order("total_latency_ms", desc=True)
+                    .limit(limit)
+                    .execute()
+                )
             )
 
             return response.data or []
@@ -211,11 +213,13 @@ class SearchLogger:
         try:
             # Use the rag_search_stats view
             response = await asyncio.to_thread(
-                lambda: self.client.from_("rag_search_stats")
-                .select("*")
-                .order("hour", desc=True)
-                .limit(hours)
-                .execute()
+                lambda: (
+                    self.client.from_("rag_search_stats")
+                    .select("*")
+                    .order("hour", desc=True)
+                    .limit(hours)
+                    .execute()
+                )
             )
 
             if not response.data:

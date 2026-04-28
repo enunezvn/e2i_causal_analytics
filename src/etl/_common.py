@@ -79,9 +79,7 @@ def _resolve_db_connection_string() -> str:
     """
     db_url = os.getenv("SUPABASE_DB_URL")
     if not db_url:
-        raise RuntimeError(
-            "SUPABASE_DB_URL environment variable is required for ETL jobs"
-        )
+        raise RuntimeError("SUPABASE_DB_URL environment variable is required for ETL jobs")
     return db_url
 
 
@@ -114,11 +112,7 @@ def _connect_to_db(connection_string: Optional[str] = None) -> Any:
     Returns:
         A live ``psycopg2.connection``.
     """
-    dsn = (
-        connection_string
-        if connection_string is not None
-        else _resolve_db_connection_string()
-    )
+    dsn = connection_string if connection_string is not None else _resolve_db_connection_string()
     return psycopg2.connect(dsn)
 
 
@@ -163,11 +157,7 @@ def _resolve_window(
     """
     now_utc = datetime.now(timezone.utc)
 
-    end_dt = (
-        datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        if end_date
-        else now_utc
-    )
+    end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00")) if end_date else now_utc
     start_dt = (
         datetime.fromisoformat(start_date.replace("Z", "+00:00"))
         if start_date

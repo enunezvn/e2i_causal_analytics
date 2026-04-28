@@ -131,9 +131,7 @@ class TestSQLShape:
         ):
             # Allow any whitespace between the column name and "=".
             pattern = rf"{re.escape(col)}\s*=\s*EXCLUDED\.{re.escape(col)}"
-            assert re.search(pattern, on_conflict_block), (
-                f"missing UPDATE SET clause for {col}"
-            )
+            assert re.search(pattern, on_conflict_block), f"missing UPDATE SET clause for {col}"
 
     def test_market_share_is_share_of_territory_total(self) -> None:
         """market_share = total_rx_count / territory_total, with a >0 guard."""
@@ -159,9 +157,7 @@ class TestSQLShape:
         # spuriously match column names.
         stripped = re.sub(r"--[^\n]*", "", sql)
         # Now slice the INSERT INTO ... SELECT block.
-        insert_clause = stripped.split("INSERT INTO business_metrics", 1)[1].split(
-            "SELECT", 1
-        )[0]
+        insert_clause = stripped.split("INSERT INTO business_metrics", 1)[1].split("SELECT", 1)[0]
         assert "engagement_score" not in insert_clause
         assert "call_frequency" not in insert_clause
         # The original SQL still mentions `interactions` in the comment so
@@ -171,9 +167,9 @@ class TestSQLShape:
     def test_filters_to_window(self) -> None:
         """The trigger window filter is the [start, end) half-open interval."""
         sql = etl.INSERT_PER_HCP_ROLLUP_SQL
-        assert re.search(
-            r"t\.trigger_timestamp\s*>=\s*%\(start_date\)s", sql
-        ), "missing start_date >= filter"
+        assert re.search(r"t\.trigger_timestamp\s*>=\s*%\(start_date\)s", sql), (
+            "missing start_date >= filter"
+        )
         assert re.search(r"t\.trigger_timestamp\s*<\s*%\(end_date\)s", sql), (
             "missing end_date < filter"
         )
@@ -195,9 +191,7 @@ def test_metric_id_fits_in_varchar_50() -> None:
     long_brand = "Remibrutinib"  # longest brand_type enum value
     iso_date = date(2030, 12, 31)
     result = etl._build_metric_id(long_hcp, long_brand, iso_date)
-    assert len(result) <= 50, (
-        f"metric_id length {len(result)} exceeds VARCHAR(50): {result}"
-    )
+    assert len(result) <= 50, f"metric_id length {len(result)} exceeds VARCHAR(50): {result}"
     # Same inputs MUST yield the same id (idempotency contract).
     assert etl._build_metric_id(long_hcp, long_brand, iso_date) == result
     # Constant length 43 = len('hcp_rollup_') + 32-hex md5 digest.
@@ -379,9 +373,7 @@ def test_celery_task_delegates_to_impl() -> None:
     ``_run_per_hcp_rollup_impl`` — verify it forwards args + the
     request id."""
     sentinel_result = {"status": "completed", "rows_affected": 3}
-    with patch.object(
-        etl, "_run_per_hcp_rollup_impl", return_value=sentinel_result
-    ) as impl:
+    with patch.object(etl, "_run_per_hcp_rollup_impl", return_value=sentinel_result) as impl:
         # ``apply`` runs the task synchronously in-process. Args/kwargs
         # are forwarded to the underlying function.
         async_result = etl.run_per_hcp_rollup.apply(
@@ -409,10 +401,7 @@ def test_celery_task_delegates_to_impl() -> None:
 
 def test_task_is_registered_with_expected_name() -> None:
     """The Celery task name string is what the beat schedule references."""
-    assert (
-        etl.run_per_hcp_rollup.name
-        == "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup"
-    )
+    assert etl.run_per_hcp_rollup.name == "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup"
 
 
 def test_beat_schedule_entry_present() -> None:

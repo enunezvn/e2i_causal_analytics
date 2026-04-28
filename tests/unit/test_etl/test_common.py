@@ -73,9 +73,7 @@ def test_connect_to_db_uses_env_dsn_by_default() -> None:
     fake_url = "postgresql://u:p@h:5432/db"
     sentinel_conn = object()
     with patch.dict(os.environ, {"SUPABASE_DB_URL": fake_url}, clear=False):
-        with patch.object(
-            _common.psycopg2, "connect", return_value=sentinel_conn
-        ) as connect:
+        with patch.object(_common.psycopg2, "connect", return_value=sentinel_conn) as connect:
             result = _common._connect_to_db()
 
     assert result is sentinel_conn
@@ -86,9 +84,7 @@ def test_connect_to_db_uses_explicit_dsn_when_supplied() -> None:
     """An explicit ``connection_string`` skips the env lookup entirely."""
     sentinel_conn = object()
     explicit = "postgresql://explicit:dsn@host:5432/db"
-    with patch.object(
-        _common.psycopg2, "connect", return_value=sentinel_conn
-    ) as connect:
+    with patch.object(_common.psycopg2, "connect", return_value=sentinel_conn) as connect:
         result = _common._connect_to_db(connection_string=explicit)
 
     assert result is sentinel_conn
@@ -120,9 +116,7 @@ def test_resolve_window_honours_custom_lookback_seconds() -> None:
 
 def test_resolve_window_parses_iso_z_suffix() -> None:
     """Trailing 'Z' is normalised to +00:00 before parsing."""
-    start, end = _common._resolve_window(
-        "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z"
-    )
+    start, end = _common._resolve_window("2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
     assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
     assert end == datetime(2024, 1, 2, tzinfo=timezone.utc)
 
