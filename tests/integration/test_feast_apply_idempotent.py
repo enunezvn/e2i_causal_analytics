@@ -21,15 +21,25 @@ two applies and missed an entire class of intra-FV drift:
 * TTL drift on an existing FeatureView,
 * source rename or re-pointing (FV keeps its name, swaps its source),
 * schema field add/remove inside an existing FV,
-* entity-to-FV wiring changes that preserve the name set.
+* entity-to-FV wiring changes that preserve the name set (FV proto
+  embeds the entity *name*, so a rename is caught — but a join_key /
+  value_type / description flip on an existing entity is NOT, which is
+  why we walk the Entity registry separately below).
 
 Block 6B-infra-5 upgraded the comparison to a schema-deep proto-byte
 diff: for every FV in the registry we serialise
 ``store.get_feature_view(name).to_proto().SerializeToString()`` before
 the second ``feast apply`` and again after, and assert byte equality.
 The serialised FV proto embeds TTL, schema, source name, and entity
-references — so all five drift cases listed above are covered by the
-single byte-diff.
+references — so the FV-side drift cases above are covered by the FV
+byte-diff.
+
+To close the entity-wiring gap (a join_key flip on an existing entity
+slips past the FV byte-diff because the FV proto only embeds the entity
+*name*), we additionally walk the Entity registry and snapshot every
+entity's ``to_proto().SerializeToString()`` bytes alongside the FV
+snapshot. The two walkers run in parallel before/after the second
+apply and any drift in either fails the assertion.
 
 The proto-byte serialisation helper (``proto_bytes``) and the in-memory
 FV builder (``build_minimal_feature_view``) used by the deliberate-
@@ -119,6 +129,18 @@ def _snapshot_fv_proto_bytes(store: Any) -> dict[str, bytes]:
     return {fv.name: proto_bytes(fv) for fv in store.list_feature_views()}
 
 
+def _snapshot_entity_proto_bytes(store: Any) -> dict[str, bytes]:
+    """Snapshot Entity proto bytes for drift detection.
+
+    Plan-driven: ``test_feast_apply_idempotent_no_schema_drift`` must catch
+    "entity-to-FV wiring changes" per Block 6B-infra-5. The FV proto only
+    embeds the entity *name* — a join_key flip on an existing entity slips
+    through unless we serialise entities themselves. Mirrors
+    ``_snapshot_fv_proto_bytes``.
+    """
+    return {e.name: bytes(e.to_proto().SerializeToString()) for e in store.list_entities()}
+
+
 @pytest.fixture(scope="module")
 def feast_cli() -> str:
     """Skip the module if the ``feast`` CLI is not on PATH."""
@@ -154,29 +176,49 @@ def test_feast_apply_idempotent_no_schema_drift(
     applied_once: subprocess.CompletedProcess[str],  # noqa: ARG001 — fixture orders runs
     feast_cli: str,  # noqa: ARG001 — fixture is the gate
 ) -> None:
-    """Second apply must produce byte-identical FeatureView protos.
+    """Second apply must produce byte-identical FeatureView and Entity protos.
 
     We cannot byte-compare ``registry.db`` because Feast embeds
     ``last_updated_timestamp`` in the registry on every write. Instead we
-    walk the registry through an in-process ``FeatureStore``, serialise
-    each FV's ``to_proto().SerializeToString()`` bytes before the second
-    ``feast apply``, and re-serialise after. Any byte diff -- whether
-    from a TTL flip, a schema field add/remove, a source rename, a
-    dtype change, or an entity-wiring change -- fails the assertion.
+    walk the registry through an in-process ``FeatureStore`` and snapshot
+    proto bytes from TWO walkers in parallel:
 
-    This is the schema-deep upgrade promised by Block 3B's I-2
-    documentation: the previous name-set comparison missed every form of
-    intra-FV drift (TTL, schema, source identity, dtype) and only flagged
-    FVs appearing or disappearing wholesale.
+    1. **FV walker** — for every FeatureView, serialise
+       ``to_proto().SerializeToString()`` before the second ``feast apply``
+       and again after. Catches TTL flips, schema field add/remove, source
+       rename, dtype changes, and entity *name* references (the FV proto
+       embeds the referenced entity's name).
+    2. **Entity walker** — for every Entity, serialise its proto bytes
+       similarly. Catches join_key, value_type, and description drift on an
+       existing entity. The FV walker alone does NOT catch these because
+       the FV proto only references entities by *name* — a join_key flip
+       on an existing entity (``hcp.join_keys = ["hcp_id"] -> ["hcp"]``)
+       would slip past the FV diff entirely.
+
+    Any byte drift in either walker fails the assertion. This is the
+    schema-deep upgrade promised by Block 3B's I-2 documentation extended
+    by Block 6B-infra-5's entity walker: the original name-set comparison
+    missed every form of intra-FV drift (TTL, schema, source identity,
+    dtype) AND every form of in-place entity drift (join_key,
+    value_type, description) — only flagging FVs or entities appearing /
+    disappearing wholesale.
     """
     store_before = _open_feature_store()
     fv_bytes_before = _snapshot_fv_proto_bytes(store_before)
+    entity_bytes_before = _snapshot_entity_proto_bytes(store_before)
 
     # Sanity: we should have observed *some* feature views — otherwise the
     # registry walk found nothing and the byte-diff is vacuous.
     assert fv_bytes_before, (
         "Expected at least one feature view registered after first apply; "
         "registry walk returned an empty FV map."
+    )
+    # Entity registry: at least one (the FVs we just verified must hang off
+    # at least one entity, otherwise their wiring is malformed).
+    assert entity_bytes_before, (
+        "Expected at least one entity registered after first apply; "
+        "registry walk returned an empty entity map. FVs without entities "
+        "would be malformed wiring — investigate the registry."
     )
 
     # Run apply a second time.
@@ -190,27 +232,55 @@ def test_feast_apply_idempotent_no_schema_drift(
     # (Feast 0.43's FeatureStore caches some registry state).
     store_after = _open_feature_store()
     fv_bytes_after = _snapshot_fv_proto_bytes(store_after)
+    entity_bytes_after = _snapshot_entity_proto_bytes(store_after)
 
+    # ---- FeatureView checks --------------------------------------------------
     # Name-set check first so the diff message is friendly when an FV
     # appears or disappears wholesale (the byte diff would still catch
     # this, but the message would point at "byte mismatch" rather than
     # "FV vanished").
-    names_before = set(fv_bytes_before)
-    names_after = set(fv_bytes_after)
-    assert names_after == names_before, (
+    fv_names_before = set(fv_bytes_before)
+    fv_names_after = set(fv_bytes_after)
+    assert fv_names_after == fv_names_before, (
         "Feature-view name drift between consecutive `feast apply` runs:\n"
-        f"  added:   {names_after - names_before}\n"
-        f"  removed: {names_before - names_after}"
+        f"  added:   {fv_names_after - fv_names_before}\n"
+        f"  removed: {fv_names_before - fv_names_after}"
     )
 
     # Schema-deep proto-byte diff: for every FV name that exists in both
     # snapshots, the serialised FV proto must be byte-identical.
-    drifted = [name for name in names_before if fv_bytes_before[name] != fv_bytes_after[name]]
-    assert not drifted, (
+    fv_drifted = [name for name in fv_names_before if fv_bytes_before[name] != fv_bytes_after[name]]
+    assert not fv_drifted, (
         "FeatureView proto bytes drifted between consecutive `feast apply` "
-        f"runs for: {sorted(drifted)!r}. This is exactly the intra-FV drift "
-        "(TTL, schema, source name, entity wiring, dtype) that the Block "
-        "6B-infra-5 schema-deep idempotency check is designed to catch."
+        f"runs for: {sorted(fv_drifted)!r}. This is exactly the intra-FV drift "
+        "(TTL, schema, source name, entity-name reference, dtype) that the "
+        "Block 6B-infra-5 schema-deep idempotency check is designed to catch."
+    )
+
+    # ---- Entity checks -------------------------------------------------------
+    # Mirrors the FV checks: friendly name-set message first, then per-entity
+    # proto byte diff. Catches join_key / value_type / description drift on an
+    # existing entity that the FV walker alone cannot see.
+    entity_names_before = set(entity_bytes_before)
+    entity_names_after = set(entity_bytes_after)
+    assert entity_names_after == entity_names_before, (
+        "Entity name drift between consecutive `feast apply` runs:\n"
+        f"  added:   {entity_names_after - entity_names_before}\n"
+        f"  removed: {entity_names_before - entity_names_after}"
+    )
+    entity_drifted = [
+        name
+        for name in entity_names_before
+        if entity_bytes_before[name] != entity_bytes_after[name]
+    ]
+    assert not entity_drifted, (
+        "Entity proto bytes drifted between consecutive `feast apply` runs "
+        f"for: {sorted(entity_drifted)!r}. This is the in-place entity drift "
+        "(join_key flip, value_type change, description edit) that the FV "
+        "byte-diff alone does NOT catch — the FV proto only references "
+        "entities by name, so a join_key flip on an existing entity slips "
+        "through unless we walk entities themselves. Block 6B-infra-5 "
+        "added this entity walker to close that gap."
     )
 
 
@@ -265,6 +335,72 @@ def test_proto_byte_diff_catches_deliberate_ttl_change() -> None:
         "a no-op apply. Either Feast injects a non-deterministic field "
         "(timestamp, uuid) into to_proto(), or the helper has hidden "
         "state."
+    )
+
+
+def test_proto_byte_diff_catches_deliberate_entity_join_key_flip() -> None:
+    """Deliberate-failure verification — entity proto-byte diff catches a join_key flip.
+
+    Mirrors ``test_proto_byte_diff_catches_deliberate_ttl_change`` but for
+    the entity walker added in Block 6B-infra-5: builds two in-memory
+    Entities with the SAME name but DIFFERENT join_keys
+    (``hcp_id`` -> ``different_join_key``) and asserts the serialised
+    proto bytes differ. If this test passes, the
+    ``_snapshot_entity_proto_bytes`` walker in
+    ``test_feast_apply_idempotent_no_schema_drift`` is provably
+    non-vacuous: a real in-place entity drift would be caught.
+
+    This is the drift case the FV walker alone CANNOT see — the FV proto
+    embeds only the entity *name* reference, not its join_key. Verified
+    empirically on Feast 0.43:
+
+        | mutation                    | FV proto byte diff? |
+        |-----------------------------|---------------------|
+        | rename entity hcp->territory | YES                 |
+        | flip hcp.join_keys          | NO                  |
+
+    Runs unconditionally (no ``FEAST_INTEGRATION`` gate, no ``feast`` CLI
+    needed) — it builds entities in memory and never touches a live
+    registry. The Feast SDK is still required, which the module-level
+    ``importorskip`` enforces.
+    """
+    from feast import Entity, ValueType
+
+    base = Entity(name="hcp", join_keys=["hcp_id"], value_type=ValueType.STRING)
+    drifted = Entity(
+        name="hcp",
+        join_keys=["different_join_key"],
+        value_type=ValueType.STRING,
+    )
+
+    base_bytes = bytes(base.to_proto().SerializeToString())
+    drifted_bytes = bytes(drifted.to_proto().SerializeToString())
+
+    # Negative control: a join_key flip on an existing entity must produce
+    # differing bytes. If this assertion fails, the entity walker in
+    # _snapshot_entity_proto_bytes does NOT detect the drift mode it was
+    # added to catch — investigate Feast 0.43's Entity.to_proto behaviour.
+    assert base_bytes != drifted_bytes, (
+        "Deliberate entity join_key flip (hcp_id -> different_join_key) "
+        "produced byte-identical Entity protos. The entity walker in "
+        "_snapshot_entity_proto_bytes would NOT detect this drift, leaving "
+        "join_key drift on an existing entity invisible to the schema-deep "
+        "idempotency check. Investigate Feast 0.43's Entity.to_proto "
+        "implementation."
+    )
+
+    # Positive control: re-serialising the SAME entity must be deterministic
+    # within a single process. If this fails, the byte-diff above is
+    # tautological (any two serialisations would differ regardless of
+    # join_key).
+    same = Entity(name="hcp", join_keys=["hcp_id"], value_type=ValueType.STRING)
+    assert bytes(same.to_proto().SerializeToString()) == base_bytes, (
+        "Re-constructing an Entity with identical kwargs produced different "
+        "proto bytes. Either Feast injects a non-deterministic field "
+        "(timestamp, uuid) into Entity.to_proto(), or the construction has "
+        "hidden state, which would make the entity walker in "
+        "test_feast_apply_idempotent_no_schema_drift fail even on a no-op "
+        "apply."
     )
 
 

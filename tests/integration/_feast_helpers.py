@@ -104,7 +104,7 @@ def build_minimal_feature_view(
     the live registry so callers usually omit them; tests that need to
     perturb entity wiring can override them explicitly.
     """
-    from feast import Entity, FeatureView, Field, FileSource, PushSource
+    from feast import Entity, FeatureView, Field, FileSource, PushSource, ValueType
     from feast.types import Float64
 
     schema = [Field(name=fn, dtype=Float64) for fn in feature_names]
@@ -121,7 +121,17 @@ def build_minimal_feature_view(
     )
     push_source = PushSource(name=push_src, batch_source=batch_source)
 
-    entity = Entity(name=entity_name, join_keys=[entity_join_key])
+    # ``value_type=ValueType.STRING`` matches the live registry's hcp /
+    # territory entities (string-typed join keys). Passing it explicitly
+    # silences Feast 0.43's "value_type will be mandatory in the next
+    # release" DeprecationWarning that would otherwise fire on every
+    # build_minimal_feature_view call (six tests x 2-3 FVs each = ~12 fires
+    # per pytest run via this centralised helper).
+    entity = Entity(
+        name=entity_name,
+        join_keys=[entity_join_key],
+        value_type=ValueType.STRING,
+    )
 
     return FeatureView(
         name=name,
