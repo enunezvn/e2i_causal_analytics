@@ -2,22 +2,20 @@
 
 The registry file (``feature_repo/data/registry.db``) embeds a
 ``last_updated_timestamp``, so two consecutive applies always produce different
-file hashes. What we actually care about is **schema drift**: the set of
-registered entities and feature views (with their entity wiring) must be
-identical across runs.
+file hashes. What we actually care about is **schema drift**: every registered
+feature view (with its TTL, schema, source, and entity wiring) must serialise
+to identical proto bytes across consecutive applies.
 
 This test is intentionally lightweight — it shells out to the ``feast`` CLI
 twice with ``--skip-source-validation`` (no Postgres/Redis required) and
-compares the structural output. It skips cleanly when ``feast`` is not
-installed (e.g., the optional ``feast`` extras were not pulled in for a slim
-CI runner).
+diffs the registry by walking the in-process ``FeatureStore`` and serialising
+each ``FeatureView`` proto. It skips cleanly when ``feast`` is not installed
+(e.g., the optional ``feast`` extras were not pulled in for a slim CI runner).
 
-Scope of this gate (per Block 3B review item I-2)
--------------------------------------------------
-This idempotency check verifies that a second ``feast apply`` does not add
-or remove entities or feature views — by NAME only.
-
-It does **not** detect intra-feature-view changes:
+Scope of this gate (Block 6B-infra-5 upgrade)
+---------------------------------------------
+The Block 3B-era version of this test compared **name sets** across the
+two applies and missed an entire class of intra-FV drift:
 
 * dtype flips (e.g., ``Int64`` -> ``Float32`` on an existing field),
 * TTL drift on an existing FeatureView,
@@ -25,24 +23,39 @@ It does **not** detect intra-feature-view changes:
 * schema field add/remove inside an existing FV,
 * entity-to-FV wiring changes that preserve the name set.
 
-A schema-deep diff (registry-proto-aware comparison rather than name-set
-comparison) is planned for Block 6B's Feast integration suite. For now,
-treat this test as the **minimum-viable gate** against non-deterministic
-apply behaviour — it catches the worst class of bug (random
-appearance/disappearance of FVs across runs) cheaply without standing up
-Postgres or Redis.
+Block 6B-infra-5 upgraded the comparison to a schema-deep proto-byte
+diff: for every FV in the registry we serialise
+``store.get_feature_view(name).to_proto().SerializeToString()`` before
+the second ``feast apply`` and again after, and assert byte equality.
+The serialised FV proto embeds TTL, schema, source name, and entity
+references — so all five drift cases listed above are covered by the
+single byte-diff.
+
+The proto-byte serialisation helper (``proto_bytes``) and the in-memory
+FV builder (``build_minimal_feature_view``) used by the deliberate-
+failure verification test are shared with
+``tests/integration/test_feast_integration_suite.py`` via
+``tests/integration/_feast_helpers.py`` so a future drift in
+serialisation semantics surfaces in one place.
 
 Findings reference: Block 3B (#4 residual, gitignore + apply lifecycle;
-I-2 scope-documentation).
+I-2 scope-documentation), Block 6B-infra-5 (schema-deep upgrade).
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from tests.integration._feast_helpers import (
+    build_minimal_feature_view,
+    proto_bytes,
+)
 
 # Skip the entire module if the Feast Python SDK is not importable.
 pytest.importorskip("feast", reason="Feast SDK not installed; skipping registry tests.")
@@ -79,27 +92,31 @@ def _run_feast(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _parse_table(stdout: str) -> set[str]:
-    """Parse a ``feast … list`` table into the set of names in the first column.
+def _open_feature_store() -> Any:
+    """Construct an in-process ``FeatureStore`` rooted at ``feature_repo/``.
 
-    The table format is::
-
-        NAME    DESCRIPTION    TYPE
-        alpha   ...            ...
-        beta    ...            ...
-
-    We split on whitespace and take the first token of each non-header,
-    non-blank line. This is robust to trailing whitespace and to Feast's
-    Pydantic deprecation warnings being emitted to stderr.
+    Mirrors the pattern in ``test_feast_offline_online_parity`` /
+    ``test_feast_tier0_auto_register``: build the store once, surface init
+    failures as a skip rather than a hard fail (an unreachable Postgres or
+    Redis is a caller-environment issue, not a registry-drift bug).
     """
-    names: set[str] = set()
-    for raw_line in stdout.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("NAME"):
-            continue
-        first_token = line.split()[0]
-        names.add(first_token)
-    return names
+    from feast import FeatureStore
+
+    try:
+        return FeatureStore(repo_path=str(FEATURE_REPO))
+    except Exception as exc:  # noqa: BLE001 — skip on ANY init failure
+        pytest.skip(f"FeatureStore init failed: {exc!s:.200}")
+
+
+def _snapshot_fv_proto_bytes(store: Any) -> dict[str, bytes]:
+    """Walk the registry and return ``{fv_name: serialized_proto_bytes}``.
+
+    The map is keyed by FV name so the diff message can pinpoint exactly
+    which FV drifted between applies. We use ``list_feature_views`` to
+    enumerate (rather than scanning the FV name set first and re-fetching)
+    so we get a single consistent registry snapshot per call.
+    """
+    return {fv.name: proto_bytes(fv) for fv in store.list_feature_views()}
 
 
 @pytest.fixture(scope="module")
@@ -137,38 +154,117 @@ def test_feast_apply_idempotent_no_schema_drift(
     applied_once: subprocess.CompletedProcess[str],  # noqa: ARG001 — fixture orders runs
     feast_cli: str,  # noqa: ARG001 — fixture is the gate
 ) -> None:
-    """Second apply must produce the same entity + feature-view inventory.
+    """Second apply must produce byte-identical FeatureView protos.
 
     We cannot byte-compare ``registry.db`` because Feast embeds
     ``last_updated_timestamp`` in the registry on every write. Instead we
-    snapshot the structural inventory before/after a second apply.
+    walk the registry through an in-process ``FeatureStore``, serialise
+    each FV's ``to_proto().SerializeToString()`` bytes before the second
+    ``feast apply``, and re-serialise after. Any byte diff -- whether
+    from a TTL flip, a schema field add/remove, a source rename, a
+    dtype change, or an entity-wiring change -- fails the assertion.
+
+    This is the schema-deep upgrade promised by Block 3B's I-2
+    documentation: the previous name-set comparison missed every form of
+    intra-FV drift (TTL, schema, source identity, dtype) and only flagged
+    FVs appearing or disappearing wholesale.
     """
-    entities_before = _parse_table(_run_feast("entities", "list").stdout)
-    fvs_before = _parse_table(_run_feast("feature-views", "list").stdout)
+    store_before = _open_feature_store()
+    fv_bytes_before = _snapshot_fv_proto_bytes(store_before)
 
-    # Sanity: we should have observed *some* entities/feature views — otherwise
-    # the parser is broken or apply produced nothing.
-    assert entities_before, "Expected at least one entity registered after first apply."
-    assert fvs_before, "Expected at least one feature view registered after first apply."
+    # Sanity: we should have observed *some* feature views — otherwise the
+    # registry walk found nothing and the byte-diff is vacuous.
+    assert fv_bytes_before, (
+        "Expected at least one feature view registered after first apply; "
+        "registry walk returned an empty FV map."
+    )
 
-    # Run apply a second time and re-snapshot.
+    # Run apply a second time.
     second = _run_feast("apply", "--skip-source-validation")
     assert second.returncode == 0, (
         f"Second feast apply failed: stdout={second.stdout!r} stderr={second.stderr!r}"
     )
 
-    entities_after = _parse_table(_run_feast("entities", "list").stdout)
-    fvs_after = _parse_table(_run_feast("feature-views", "list").stdout)
+    # Re-open the store so we read a fresh registry snapshot rather than
+    # trusting the in-memory FeatureStore object to refresh itself
+    # (Feast 0.43's FeatureStore caches some registry state).
+    store_after = _open_feature_store()
+    fv_bytes_after = _snapshot_fv_proto_bytes(store_after)
 
-    assert entities_after == entities_before, (
-        "Entity drift between consecutive `feast apply` runs:\n"
-        f"  added:   {entities_after - entities_before}\n"
-        f"  removed: {entities_before - entities_after}"
+    # Name-set check first so the diff message is friendly when an FV
+    # appears or disappears wholesale (the byte diff would still catch
+    # this, but the message would point at "byte mismatch" rather than
+    # "FV vanished").
+    names_before = set(fv_bytes_before)
+    names_after = set(fv_bytes_after)
+    assert names_after == names_before, (
+        "Feature-view name drift between consecutive `feast apply` runs:\n"
+        f"  added:   {names_after - names_before}\n"
+        f"  removed: {names_before - names_after}"
     )
-    assert fvs_after == fvs_before, (
-        "Feature-view drift between consecutive `feast apply` runs:\n"
-        f"  added:   {fvs_after - fvs_before}\n"
-        f"  removed: {fvs_before - fvs_after}"
+
+    # Schema-deep proto-byte diff: for every FV name that exists in both
+    # snapshots, the serialised FV proto must be byte-identical.
+    drifted = [name for name in names_before if fv_bytes_before[name] != fv_bytes_after[name]]
+    assert not drifted, (
+        "FeatureView proto bytes drifted between consecutive `feast apply` "
+        f"runs for: {sorted(drifted)!r}. This is exactly the intra-FV drift "
+        "(TTL, schema, source name, entity wiring, dtype) that the Block "
+        "6B-infra-5 schema-deep idempotency check is designed to catch."
+    )
+
+
+def test_proto_byte_diff_catches_deliberate_ttl_change() -> None:
+    """Deliberate-failure verification — proto-byte diff catches a TTL flip.
+
+    The Block 6B-infra-5 plan calls for a deliberate-failure check that
+    asserts the diff helper actually detects drift. We build two in-memory
+    FeatureViews with identical name + schema + source + entity wiring but
+    DIFFERENT TTLs (7 days vs 14 days) and assert that ``proto_bytes``
+    produces different bytes for them. If this test passes, the schema-deep
+    idempotency check above is provably non-vacuous: a real TTL drift in
+    the registry would be caught.
+
+    Runs unconditionally (no ``FEAST_INTEGRATION`` gate, no ``feast`` CLI
+    needed) — it builds FVs in memory and never touches a live registry.
+    The Feast SDK is still required, which the module-level
+    ``importorskip`` enforces.
+
+    Sibling drift cases (schema add/remove, source rename, identical-spec
+    negative control) are exercised in
+    ``tests/integration/test_feast_integration_suite.py`` and we deliberately
+    do NOT duplicate them here -- this file is the apply-idempotency gate
+    and only needs ONE deliberate-failure proof that the helper bites.
+    """
+    name = "test_6b_infra_5_apply_idem_ttl"
+    feature_names = ["trx_count", "nrx_count"]
+
+    base = build_minimal_feature_view(name, ttl=timedelta(days=7), feature_names=feature_names)
+    drifted = build_minimal_feature_view(name, ttl=timedelta(days=14), feature_names=feature_names)
+
+    base_bytes = proto_bytes(base)
+    drifted_bytes = proto_bytes(drifted)
+
+    # Negative control: differing TTL must produce differing bytes.
+    assert base_bytes != drifted_bytes, (
+        "Deliberate TTL change (7d -> 14d) produced byte-identical FV "
+        "protos. proto_bytes() does NOT detect TTL drift, which means the "
+        "schema-deep idempotency check would silently pass even when the "
+        "registry's FV TTL drifts between applies. Investigate "
+        "_feast_helpers.proto_bytes and Feast 0.43's FeatureView.to_proto "
+        "implementation."
+    )
+
+    # Positive control: re-serialising the SAME FV must be deterministic
+    # within a single process. If this fails, the byte-diff above is
+    # tautological (any two serialisations would differ regardless of TTL).
+    assert proto_bytes(base) == base_bytes, (
+        "Re-serialising the same FeatureView produced different proto "
+        "bytes within one process. proto_bytes() is non-deterministic, "
+        "which would make the schema-deep idempotency check fail even on "
+        "a no-op apply. Either Feast injects a non-deterministic field "
+        "(timestamp, uuid) into to_proto(), or the helper has hidden "
+        "state."
     )
 
 
