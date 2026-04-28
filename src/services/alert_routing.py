@@ -111,7 +111,7 @@ class AlertPayload:
         """Generate deduplication key for the alert."""
         key_parts = [self.model_id, self.alert_type, self.severity]
         key_string = "|".join(key_parts)
-        return hashlib.md5(key_string.encode()).hexdigest()
+        return hashlib.md5(key_string.encode(), usedforsecurity=False).hexdigest()
 
 
 # =============================================================================

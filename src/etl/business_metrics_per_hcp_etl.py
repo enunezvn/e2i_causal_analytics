@@ -250,7 +250,7 @@ def _build_metric_id(hcp_id: str, brand: str, metric_date: date) -> str:
         (``"hcp_rollup_"`` is 11 chars + 32-hex md5 digest).
     """
     natural_key = f"{hcp_id}:{brand}:{metric_date.isoformat()}"
-    digest = hashlib.md5(natural_key.encode("utf-8")).hexdigest()
+    digest = hashlib.md5(natural_key.encode("utf-8"), usedforsecurity=False).hexdigest()
     return f"{METRIC_ID_PREFIX}_{digest}"
 
 

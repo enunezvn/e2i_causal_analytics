@@ -265,7 +265,7 @@ class TypoHandler:
 
     def _get_cache_key(self, term: str) -> str:
         """Generate cache key for a term."""
-        return hashlib.md5(term.lower().encode()).hexdigest()
+        return hashlib.md5(term.lower().encode(), usedforsecurity=False).hexdigest()
 
     def _get_cached(self, term: str) -> Optional[CorrectionResult]:
         """Get cached correction if valid."""
