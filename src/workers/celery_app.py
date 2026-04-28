@@ -171,6 +171,15 @@ celery_app.conf.task_routes = {
     "src.tasks.run_feedback_loop_*": {"queue": "analytics"},
     "src.tasks.analyze_concept_drift_*": {"queue": "analytics"},
     "src.tasks.run_full_feedback_loop": {"queue": "analytics"},
+    # -------------------------------------------------------------------------
+    # ETL Tasks (Block 6B-infra-2*: per-HCP business_metrics, per-patient
+    # adherence, territory rollup). Beat schedules already pin these to
+    # 'analytics' via options.queue; the wildcard here also routes any
+    # CLI-dispatched (`celery call src.etl.*`) call to the same queue so
+    # worker_medium picks them up. Without this entry the CLI path lands
+    # the task in the default queue, which worker_medium does not consume.
+    # -------------------------------------------------------------------------
+    "src.etl.*": {"queue": "analytics"},
 }
 
 # =============================================================================
