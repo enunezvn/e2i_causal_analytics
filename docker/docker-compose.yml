@@ -29,6 +29,15 @@ x-common-env: &common-env
   SUPABASE_KEY: ${SUPABASE_KEY}
   SUPABASE_ANON_KEY: ${SUPABASE_KEY}
   SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+  # Direct PostgreSQL connection for inside-network DB clients (the
+  # Block 6B-infra-2* ETLs in src/etl/*, plus any ad-hoc psycopg2 caller).
+  # The host-side .env file's SUPABASE_DB_URL points at the Supavisor pooler
+  # on 127.0.0.1:5432 which only accepts the `postgres.<project-ref>` user
+  # format; inside the docker network we connect directly to the supabase-db
+  # container as the vanilla `postgres` user. SUPABASE_POSTGRES_PASSWORD must
+  # be set in the host .env (it mirrors /opt/supabase/docker/.env's
+  # POSTGRES_PASSWORD value).
+  SUPABASE_DB_URL: postgresql://postgres:${SUPABASE_POSTGRES_PASSWORD:?SUPABASE_POSTGRES_PASSWORD must be set}@supabase-db:5432/postgres
   REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
   FALKORDB_URL: redis://:${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}@falkordb:6379/0
   MLFLOW_TRACKING_URI: http://mlflow:5000
