@@ -161,6 +161,8 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         causal_chain = self._generate_causal_chain(trigger_type, engagement_score)
         supporting_evidence = self._generate_supporting_evidence(trigger_type)
 
+        brand_value = patient.get("brand", Brand.REMIBRUTINIB.value)
+
         return {
             "patient_id": patient.get("patient_id", ""),
             "hcp_id": patient.get("hcp_id", ""),
@@ -179,7 +181,8 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             "causal_chain": causal_chain,
             "supporting_evidence": supporting_evidence,
             "recommended_action": self._generate_recommended_action(trigger_type),
-            "brand": patient.get("brand", Brand.REMIBRUTINIB.value),
+            "brand": brand_value,
+            "brand_id": brand_value,
         }
 
     def _select_trigger_type(
@@ -424,5 +427,6 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
                     self._generate_recommended_action(tt) for tt in trigger_types
                 ],
                 "brand": brands_list,
+                "brand_id": brands_list,
             }
         )
