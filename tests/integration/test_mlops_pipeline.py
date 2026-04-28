@@ -9,7 +9,7 @@ Tests cover end-to-end integration of:
 - HPO pruning efficiency
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pandas as pd
@@ -147,12 +147,17 @@ class TestDataFlowIntegration:
         # Store is None (simulating Feast unavailable)
         client._store = None
 
-        # Mock custom fallback store
-        mock_custom = AsyncMock()
-        mock_custom.get_features.return_value = {
+        # Mock custom fallback store. get_entity_features is sync (see
+        # src/feature_store/retrieval.py:50) and returns an EntityFeatures
+        # with a `.features` dict, so a plain MagicMock chain is correct;
+        # AsyncMock would return a coroutine and break .features access.
+        mock_response = MagicMock()
+        mock_response.features = {
             "engagement_score": 0.5,
             "conversion_probability": 0.3,
         }
+        mock_custom = MagicMock()
+        mock_custom.get_entity_features.return_value = mock_response
         client._custom_store = mock_custom
 
         # Training should still get features via fallback
@@ -162,7 +167,7 @@ class TestDataFlowIntegration:
         )
 
         # Fallback should provide data
-        assert features is not None or mock_custom.get_features.called
+        assert features is not None or mock_custom.get_entity_features.called
 
 
 class TestHPOFlowIntegration:
@@ -311,7 +316,12 @@ class TestPipelineOrchestration:
         }
 
         # Record very old materialization
-        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(hours=48)
+        # Must be timezone-aware: feast_client.get_feature_freshness subtracts
+        # a tz-aware datetime.now(timezone.utc), so a naive timestamp triggers
+        # a TypeError and the freshness check returns UNKNOWN.
+        client._materialization_timestamps["hcp_features"] = datetime.now(timezone.utc) - timedelta(
+            hours=48
+        )
 
         # Check freshness
         freshness = await client.get_feature_freshness("hcp_features")
