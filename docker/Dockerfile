@@ -95,6 +95,14 @@ RUN mkdir -p /app/data/ml_artifacts \
              /app/data/feature_cache \
              /app/tmp
 
+# Create non-root user for security (mirrors production stage UID/GID).
+# Bind-mounts in dev compose are owned by host UID 1000, so this aligns.
+RUN groupadd --gid 1000 e2i && \
+    useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home e2i && \
+    chown -R e2i:e2i /app
+
+USER e2i
+
 # Expose ports
 EXPOSE 8000 5678
 

@@ -15,6 +15,7 @@ Environment variables:
 
 import logging
 import os
+import re
 import subprocess
 import sys
 
@@ -24,8 +25,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger("falkordb-init")
 
-FALKORDB_HOST = os.getenv("FALKORDB_HOST", "falkordb")
-FALKORDB_PORT = int(os.getenv("FALKORDB_PORT", "6379"))
+
+def _validate_host(value: str) -> str:
+    """Reject anything that's not a plausible DNS hostname or IP literal.
+
+    Locks the host string down to characters legal in DNS labels
+    (letters, digits, dot, hyphen) plus square brackets and colons for
+    IPv6 literals. This neutralizes the taint-flow concern even though
+    subprocess is invoked with a list (no shell), making OS command
+    injection structurally impossible.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", value):
+        raise ValueError(f"Refusing to use suspicious FALKORDB_HOST: {value!r}")
+    return value
+
+
+def _validate_port(value: str) -> int:
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise ValueError(f"FALKORDB_PORT out of range: {port}")
+    return port
+
+
+FALKORDB_HOST = _validate_host(os.getenv("FALKORDB_HOST", "falkordb"))
+FALKORDB_PORT = _validate_port(os.getenv("FALKORDB_PORT", "6379"))
 FALKORDB_PASSWORD = os.getenv("FALKORDB_PASSWORD", "")
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -54,12 +77,16 @@ def seed_causal_graph() -> bool:
         return True
 
     logger.info("e2i_causal: empty -- seeding...")
-    result = subprocess.run(
+    # FALKORDB_HOST/PORT come from docker-compose internal env, not user input;
+    # invocation uses list args (no shell=True) so injection is not possible.
+    result = subprocess.run(  # nosemgrep
         [
             sys.executable,
             os.path.join(SCRIPTS_DIR, "seed_falkordb.py"),
-            "--host", FALKORDB_HOST,
-            "--port", str(FALKORDB_PORT),
+            "--host",
+            FALKORDB_HOST,
+            "--port",
+            str(FALKORDB_PORT),
             "--clear-first",
         ],
         cwd=PROJECT_DIR,

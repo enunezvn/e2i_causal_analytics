@@ -1,0 +1,30 @@
+# Semgrep rule-id-based overrides — local-dev noise reduction.
+#
+# This file lives next to .semgrepignore; both serve to reduce WARNING-level
+# noise for developers running `semgrep scan` interactively. CI uses
+# --severity ERROR via .github/workflows/security.yml so WARNING-level rules
+# do not block merges; this file is purely a quality-of-life baseline.
+#
+# Each entry below documents WHY the rule is ignored. If a finding turns out
+# to be a real issue at any of these sites, remove the override and refactor.
+
+rules:
+  # Disable Semgrep's pickle-load rule for known-internal serialization sites.
+  # All callsites identified deserialize files we wrote ourselves: DSPy
+  # compiled programs, ML model checkpoints, simulation cache, deterministic
+  # data caches keyed by hash. None of these touch user-supplied bytes.
+  - id: python.lang.security.deserialization.pickle.avoid-pickle
+    severity: INFO
+    message: |
+      Suppressed at the local-dev layer: pickle is used only for
+      internal trusted serialization (DSPy programs, model checkpoints,
+      data caches). Never deserializes user-supplied input.
+    paths:
+      include:
+        - "scripts/bentoml/**"
+        - "scripts/deploy_model.py"
+        - "src/agents/ml_foundation/model_trainer/nodes/checkpointer.py"
+        - "src/digital_twin/simulation_cache.py"
+        - "src/repositories/data_cache.py"
+    languages: [python]
+    pattern: pickle.$FUNC(...)

@@ -41,6 +41,11 @@ RUN npm ci
 # Copy application source
 COPY frontend/ .
 
+# Run as the built-in node user (UID 1000) instead of root.
+# Vite dev server only needs read access to node_modules + bind-mount.
+RUN chown -R node:node /app
+USER node
+
 # Expose Vite dev server port
 EXPOSE 5173
 
