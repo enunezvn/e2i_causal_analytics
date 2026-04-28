@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir \
     pandas
 
 # /feast/data holds the registry + materialization output and is mounted as a
-# volume at runtime (see docker/docker-compose.yml `volumes: feature_cache:/feast/data`).
+# volume at runtime (see docker/docker-compose.yml `volumes: feast_registry:/feast/data`).
 RUN mkdir -p /feast/data
 
 # Entrypoint: validates env, renders feature_store.yaml from the template,

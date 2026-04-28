@@ -39,10 +39,11 @@ services:
       - ../src:/app/src                    # Python source code
       - ../config:/app/config              # YAML configurations
       - ../tests:/app/tests                # Test files
-      # Feast feature_store.yaml.tmpl + defs (writable). The parity test imports
-      # ``feature_repo`` Python modules and may need to render
-      # ``feature_store.yaml`` against the dev-side environment, so the bind
-      # mount is no longer read-only (Block 6B-infra-4 dropped the `:ro`).
+      # tests/integration/test_feast_apply_idempotent.py runs 'feast apply' from
+      # inside the api container, which writes feature_repo/data/registry.db
+      # (Block 3B's offline registry path). RW mount required so the test can
+      # write its registry artifacts; src/feature_store/feast_client.py renders
+      # feature_store.yaml to a tempdir, NOT to this bind mount.
       - ../feature_repo:/app/feature_repo
 
       # Prevent bind mount from overwriting container's installed packages
@@ -57,9 +58,14 @@ services:
       - agent_outputs:/app/data/agent_outputs
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
-      # Read the registry the feast container just wrote — required for the
-      # offline/online parity test to resolve FeatureViews against the same
-      # registry feast wrote (Block 6B-infra-4).
+      # INFRASTRUCTURE-ONLY (Block 6B-infra-4): feast_registry is mounted ready
+      # for the registry to migrate off the feature_repo/data/ bind mount in a
+      # follow-up sub-block. Today the parity test still resolves the registry
+      # via the feature_repo bind mount (Block 3B pattern). The volume is in
+      # place so the consumer migration is one yaml-config change away. See:
+      # tests/integration/test_feast_offline_online_parity.py:160
+      # (FeatureStore(repo_path=FEATURE_REPO)) — needs registry path override
+      # or feature_store.yaml.tmpl edit to flip to /app/feast_registry.
       - feast_registry:/app/feast_registry:ro
     environment:
       - ENVIRONMENT=development

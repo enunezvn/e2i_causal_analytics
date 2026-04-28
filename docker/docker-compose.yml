@@ -90,15 +90,22 @@ volumes:
   feature_cache:
     driver: local
     name: e2i_feature_cache
-  # Shared Feast registry (data/registry.db lives inside this volume).
-  # Mounted at /feast/data in the feast container (where `feast apply` writes
-  # the registry per feature_store.yaml.tmpl `registry: data/registry.db`) and
-  # at /app/feast_registry (read-only) in the api dev container so the parity
-  # test can resolve feature views from the same registry feast just wrote.
-  # Using a separate named volume (rather than reusing feature_cache) makes
-  # the sharing relationship explicit and avoids accidentally overwriting the
-  # registry with materialization output downstream consumers may stage in
-  # feature_cache. Block 6B-infra-4.
+  # Shared Feast registry (data/registry.db will live inside this volume once
+  # the api-side consumer is migrated off the feature_repo bind mount).
+  #
+  # INFRASTRUCTURE-ONLY (Block 6B-infra-4): feast_registry is plumbed as a
+  # named volume ready to host the canonical registry, but the api-side
+  # consumer migration is staged for a follow-up sub-block. Today the parity
+  # test (tests/integration/test_feast_offline_online_parity.py:160) still
+  # resolves the registry via the feature_repo bind mount — both the feast
+  # container and the api container bind-mount feature_repo, and `feast apply`
+  # writes feature_repo/data/registry.db (Block 3B pattern).
+  #
+  # The volume is in place so the consumer migration is one yaml-config edit
+  # away: flip feature_store.yaml.tmpl `registry: data/registry.db` to a path
+  # under /app/feast_registry, run `feast apply` to populate, and update the
+  # parity test fixture to override repo_path. Until then, the volume is
+  # mounted but not consumed by the api container.
   feast_registry:
     driver: local
     name: e2i_feast_registry
@@ -134,15 +141,9 @@ networks:
   mlops_network:
     driver: bridge
     name: e2i_mlops_network
-  # External Supabase network (for postgres-exporter to reach supabase-db).
-  # NOTE: this declaration is currently stale — the actual Supabase network is
-  # `supabase-network`, not `supabase_default`. Kept here for backwards-compat
-  # with postgres-exporter; reconciliation is a Block 6B follow-up.
-  supabase_default:
-    external: true
-    name: supabase_default
-  # External Supabase network — feast (offline store) and api (parity test
-  # invocation) need to reach supabase-db on this network.
+  # External Supabase network — feast (offline store), api (parity test
+  # invocation), and postgres-exporter (Supabase DB metrics scrape) need to
+  # reach supabase-db on this network.
   supabase-network:
     external: true
     name: supabase-network
@@ -407,9 +408,11 @@ services:
       - "127.0.0.1:6567:6566"
     volumes:
       - ../feature_repo:/feast-src:ro  # Source: entities.py, data_sources.py, features/, feature_store.yaml.tmpl
-      # Registry + materialization output (writable, persistent). Shared with
-      # the api container so the parity test can read the same registry the
-      # feast container writes (Block 6B-infra-4 — was `feature_cache` before).
+      # Registry + materialization output (writable, persistent). Block 6B-infra-4
+      # carved this out of feature_cache into its own named volume so the
+      # registry has explicit ownership; the api-side consumer migration off
+      # the feature_repo bind mount is staged for a follow-up (see the
+      # feast_registry volume comment in the volumes: block).
       - feast_registry:/feast/data
     environment:
       - FEAST_OFFLINE_STORE_TYPE=file
@@ -894,9 +897,9 @@ services:
   # Postgres Exporter - Supabase Database Metrics
   # Connects directly to supabase-db via the external supabase-network
   # (bypasses the pooler, which is important for system catalog queries).
-  # NOTE: moved off the stale `supabase_default` network onto `supabase-network`
-  # in Block 6B-infra-4 — `supabase_default` was a holdover from an older
-  # Supabase deploy and is no longer the canonical Supabase network.
+  # Block 6B-infra-4 moved this off the legacy `supabase_default` network
+  # (used by docker/docker-compose.monitoring.yml's standalone deploy) onto
+  # `supabase-network`, the canonical Supabase Docker network.
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.16.0
     container_name: e2i_postgres_exporter
