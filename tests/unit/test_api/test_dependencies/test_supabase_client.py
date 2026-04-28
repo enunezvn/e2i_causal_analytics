@@ -16,7 +16,7 @@ Version: 2.0.0
 """
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -56,8 +56,11 @@ class TestSupabaseClient:
                         client = init_supabase()
 
                         assert client is not None
+                        # init_supabase passes options=ClientOptions(...) to silence
+                        # supabase-py / httpx 0.27+ DeprecationWarnings; accept any
+                        # options object here.
                         mock_create.assert_called_once_with(
-                            "https://test.supabase.co", "test-anon-key"
+                            "https://test.supabase.co", "test-anon-key", options=ANY
                         )
 
     def test_init_supabase_uses_service_key_if_available(self):
@@ -79,7 +82,7 @@ class TestSupabaseClient:
 
                         # Should use service key, not anon key
                         mock_create.assert_called_once_with(
-                            "https://test.supabase.co", "test-service-key"
+                            "https://test.supabase.co", "test-service-key", options=ANY
                         )
 
     def test_init_supabase_missing_credentials(self):
@@ -400,7 +403,7 @@ class TestSupabaseClient:
                         assert client is not None
                         # Should use SUPABASE_KEY (which contains the fallback anon key value)
                         mock_create.assert_called_once_with(
-                            "https://test.supabase.co", "test-anon-key"
+                            "https://test.supabase.co", "test-anon-key", options=ANY
                         )
 
     # =========================================================================
