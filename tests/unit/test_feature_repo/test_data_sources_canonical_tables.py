@@ -154,14 +154,17 @@ class TestCompositeKeysAreGeneratedColumns:
     expression.
     """
 
-    def test_no_synthetic_composite_keys_in_queries(self, sources):
-        for name in ("business_metrics", "patient_journey", "triggers"):
-            query = sources[name].query
-            assert "||" not in query, (
-                f"{name}_source must not synthesise a composite key with "
-                f"'||'; the canonical table now exposes the generated column "
-                f"directly. Found in:\n{query}"
-            )
+    @pytest.mark.parametrize("name", ["business_metrics", "patient_journey", "triggers"])
+    def test_no_synthetic_composite_keys_in_query(self, sources, name):
+        """Parametrised so a failure in one source doesn't mask failures in
+        the others (a single ``for``-loop with ``assert`` would short-circuit
+        at the first failing source)."""
+        query = sources[name].query
+        assert "||" not in query, (
+            f"{name}_source must not synthesise a composite key with "
+            f"'||'; the canonical table now exposes the generated column "
+            f"directly. Found in:\n{query}"
+        )
 
 
 class TestEventTimestampWiring:

@@ -10,13 +10,12 @@ Tables are organized by domain:
 - hcp_engagements: HCP interaction data
 """
 
-from datetime import timedelta
-from feast import FileSource, PushSource, Field
+from feast import Field, PushSource
 from feast.data_source import RequestSource
-from feast.types import String, UnixTimestamp
 from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source import (
     PostgreSQLSource,
 )
+from feast.types import String, UnixTimestamp
 
 # =============================================================================
 # PostgreSQL Data Sources (Supabase)
