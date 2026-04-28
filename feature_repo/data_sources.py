@@ -22,12 +22,11 @@ from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source i
 # PostgreSQL Data Sources (Supabase)
 # =============================================================================
 
-# Business metrics table - contains aggregated KPIs per HCP/territory
-# Reads from feast_business_metrics_source view (migration 032) which selects
-# from feast_business_metrics_seed — a per-HCP/brand synthetic table seeded
-# on apply, since the canonical business_metrics table is brand/territory-level
-# and lacks an hcp_id column. Block 6B follow-up: replace the seed with a real
-# per-HCP business-metrics ETL.
+# Business metrics table - contains aggregated KPIs per HCP/territory.
+# Reads from canonical business_metrics table; hcp_brand_id is a generated
+# column (migration 033). Filter excludes the legacy per-brand+region
+# aggregate rows (hcp_id IS NULL), so only the per-HCP rollup rows produced
+# by the per-HCP business-metrics ETL (6B-infra-2a) flow into Feast.
 business_metrics_source = PostgreSQLSource(
     name="business_metrics_source",
     query="""
@@ -35,7 +34,7 @@ business_metrics_source = PostgreSQLSource(
             hcp_id::VARCHAR,
             territory_id::VARCHAR,
             brand_id::VARCHAR,
-            (hcp_id::TEXT || '_' || brand_id::TEXT) AS hcp_brand_id,
+            hcp_brand_id::VARCHAR,
             event_timestamp,
             trx_count,
             nrx_count,
@@ -45,7 +44,7 @@ business_metrics_source = PostgreSQLSource(
             engagement_score,
             call_frequency,
             created_at
-        FROM feast_business_metrics_source
+        FROM business_metrics
         WHERE event_timestamp >= NOW() - INTERVAL '365 days'
           AND hcp_id IS NOT NULL AND hcp_id <> ''
           AND brand_id IS NOT NULL AND brand_id <> ''
@@ -56,19 +55,18 @@ business_metrics_source = PostgreSQLSource(
     description="Business metrics from Supabase - TRx, NRx, market share, etc.",
 )
 
-# Patient journey table - therapy adherence and outcomes
-# Reads from feast_patient_journey_source view (migration 032) which bridges
-# the canonical patient_journeys schema to Feast-expected columns
-# (journey_id, brand_id, event_date, therapy_start_date, days_on_therapy,
-# is_churned, churn_risk_score). Adherence/refill/gap are NULL pending the
-# real per-patient adherence ETL — Block 6B follow-up.
+# Patient journey table - therapy adherence and outcomes.
+# Reads from canonical patient_journeys table; patient_brand_id, event_date,
+# is_churned and brand_id are generated columns (migration 033).
+# adherence_rate / refill_count / gap_days are populated by the per-patient
+# adherence ETL (6B-infra-2b).
 patient_journey_source = PostgreSQLSource(
     name="patient_journey_source",
     query="""
         SELECT
             patient_id::VARCHAR,
             brand_id::VARCHAR,
-            (patient_id::TEXT || '_' || brand_id::TEXT) AS patient_brand_id,
+            patient_brand_id::VARCHAR,
             event_date AS event_timestamp,
             therapy_start_date,
             days_on_therapy,
@@ -78,7 +76,7 @@ patient_journey_source = PostgreSQLSource(
             is_churned,
             churn_risk_score,
             created_at
-        FROM feast_patient_journey_source
+        FROM patient_journeys
         WHERE event_date >= NOW() - INTERVAL '365 days'
     """,
     timestamp_field="event_timestamp",
@@ -86,10 +84,12 @@ patient_journey_source = PostgreSQLSource(
     description="Patient journey data for adherence and churn analysis.",
 )
 
-# Triggers table - marketing events and responses
-# Reads from feast_trigger_response_source view (migration 031) which bridges
-# the canonical triggers schema to Feast-expected columns. Block 6B follow-up:
-# replace the view with a proper schema migration on the canonical table.
+# Triggers table - marketing events and responses.
+# Reads from canonical triggers table; hcp_brand_id, channel, is_responded,
+# response_time_hours, conversion_flag and trigger_date are generated columns
+# (migration 033). brand_id is NOT NULL after the migration 033 backfill, so
+# the COALESCE-on-brand_id fallback the bridging view used is no longer
+# needed.
 triggers_source = PostgreSQLSource(
     name="triggers_source",
     query="""
@@ -97,7 +97,7 @@ triggers_source = PostgreSQLSource(
             trigger_id::VARCHAR,
             hcp_id::VARCHAR,
             brand_id::VARCHAR,
-            (hcp_id::TEXT || '_' || COALESCE(brand_id::TEXT, 'UNKNOWN')) AS hcp_brand_id,
+            hcp_brand_id::VARCHAR,
             trigger_date AS event_timestamp,
             trigger_type,
             channel,
@@ -106,7 +106,7 @@ triggers_source = PostgreSQLSource(
             conversion_flag,
             roi_estimate,
             created_at
-        FROM feast_trigger_response_source
+        FROM triggers
         WHERE trigger_date >= NOW() - INTERVAL '365 days'
     """,
     timestamp_field="event_timestamp",
@@ -114,11 +114,11 @@ triggers_source = PostgreSQLSource(
     description="Marketing trigger data for effectiveness analysis.",
 )
 
-# HCP profiles table - static and semi-static HCP attributes
-# Reads from feast_hcp_profile_source view (migration 031) which bridges
-# the canonical hcp_profiles schema to Feast-expected columns. Block 6B
-# follow-up: replace the view with a proper schema migration on the canonical
-# table.
+# HCP profiles table - static and semi-static HCP attributes.
+# Reads from canonical hcp_profiles table; uses real updated_at as
+# event_timestamp (no 1h-backdate hack the bridging view applied).
+# territory_id is backfilled to non-NULL ('UNASSIGNED' sentinel for any
+# previously unmapped rows) by migration 033.
 hcp_profiles_source = PostgreSQLSource(
     name="hcp_profiles_source",
     query="""
@@ -131,9 +131,9 @@ hcp_profiles_source = PostgreSQLSource(
             digital_engagement_tier,
             years_of_practice,
             prescribing_tier,
-            last_updated AS event_timestamp,
+            updated_at AS event_timestamp,
             created_at
-        FROM feast_hcp_profile_source
+        FROM hcp_profiles
     """,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_at",
