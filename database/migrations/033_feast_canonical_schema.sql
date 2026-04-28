@@ -62,6 +62,37 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
+-- 033.0  Helpers: IMMUTABLE wrapper for enum -> TEXT inside STORED columns
+-- -----------------------------------------------------------------------------
+-- PostgreSQL marks the cast `<enum>::TEXT` as STABLE because the underlying
+-- enum_out is STABLE (the pg_enum catalog could in principle change at any
+-- time). STABLE expressions are not allowed in STORED generated columns;
+-- only IMMUTABLE expressions are. The plan's design (033.3 / 033.4) needs
+-- TEXT-typed generated columns derived from enums (`brand_type`,
+-- `journey_status_type`).
+--
+-- Standard PG idiom: a small SQL function declared IMMUTABLE that performs
+-- the cast. We assert immutability on the basis that the enums in this
+-- codebase are append-only via ALTER TYPE ... ADD VALUE; values are never
+-- RENAMEd, so the text representation of any specific value never changes.
+-- If that contract is ever broken, this function and any STORED columns
+-- relying on it must be recomputed.
+--
+-- CREATE OR REPLACE keeps the migration safely re-runnable.
+CREATE OR REPLACE FUNCTION public.enum_text(anyenum)
+RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+RETURNS NULL ON NULL INPUT
+AS $$ SELECT $1::TEXT $$;
+
+COMMENT ON FUNCTION public.enum_text(anyenum) IS
+    'IMMUTABLE wrapper for enum::TEXT, used by STORED generated columns in '
+    'migration 033 (and any later migrations needing the same idiom). Safe '
+    'while the project never RENAMEs enum values; ADD VALUE is fine.';
+
+-- -----------------------------------------------------------------------------
 -- 033.1  hcp_profiles: tier columns, years_of_practice alias, territory_id backfill
 -- -----------------------------------------------------------------------------
 -- Tier columns are PLAIN TEXT (not GENERATED) per plan 6B-infra-1: they are
@@ -117,13 +148,22 @@ $$;
 ALTER TABLE triggers ADD COLUMN IF NOT EXISTS brand_id TEXT NOT NULL DEFAULT 'UNKNOWN';
 ALTER TABLE triggers ALTER COLUMN brand_id DROP DEFAULT;
 
--- trigger_date: DATE(trigger_timestamp) -- canonical timestamp, no 1h-backdate
--- hack like the bridging view used. This does mean parity tests that rely on
--- "recent" timestamps must be driven by ETL writing fresh trigger_timestamp
--- values; that is 6B-infra-2*'s responsibility, not this migration's.
+-- trigger_date: derived from trigger_timestamp -- canonical timestamp, no
+-- 1h-backdate hack like the bridging view used. This does mean parity tests
+-- that rely on "recent" timestamps must be driven by ETL writing fresh
+-- trigger_timestamp values; that is 6B-infra-2*'s responsibility, not this
+-- migration's.
+--
+-- IMMUTABILITY: trigger_timestamp is TIMESTAMPTZ. PostgreSQL rejects
+-- DATE(timestamptz) and timestamptz::DATE in STORED generated columns
+-- because both are STABLE (their result depends on the session TimeZone).
+-- (timestamptz AT TIME ZONE 'UTC')::DATE is IMMUTABLE because the
+-- AT TIME ZONE form with a literal zone is documented as immutable, and
+-- TIMESTAMP::DATE is immutable. Anchoring on UTC also matches the Feast
+-- convention of UTC-everywhere event times.
 ALTER TABLE triggers
     ADD COLUMN IF NOT EXISTS trigger_date DATE
-    GENERATED ALWAYS AS (DATE(trigger_timestamp)) STORED;
+    GENERATED ALWAYS AS ((trigger_timestamp AT TIME ZONE 'UTC')::DATE) STORED;
 
 -- is_responded: surfaces the same flag the bridging view exposed.
 ALTER TABLE triggers
@@ -179,23 +219,25 @@ ALTER TABLE patient_journeys
     ADD COLUMN IF NOT EXISTS event_date DATE
     GENERATED ALWAYS AS (DATE(journey_start_date)) STORED;
 
--- journey_status is journey_status_type (an enum). Cast to TEXT before IN
--- comparison so the generated expression matches migration 032's view shape
--- and avoids any future enum-equality surprises.
+-- journey_status is journey_status_type (an enum). Use enum_text() (defined in
+-- 033.0) to obtain an IMMUTABLE TEXT representation; required because STORED
+-- generated columns reject STABLE expressions, which the bare `::TEXT` cast
+-- counts as. Comparing the TEXT result with literal strings is also IMMUTABLE.
 ALTER TABLE patient_journeys
     ADD COLUMN IF NOT EXISTS is_churned BOOLEAN
-    GENERATED ALWAYS AS (journey_status::TEXT IN ('churned','discontinued')) STORED;
+    GENERATED ALWAYS AS (enum_text(journey_status) IN ('churned','discontinued')) STORED;
 
--- brand is brand_type (an enum); cast to TEXT for the generated alias so
--- Feast feature views consume a plain string column. Same applies to the
--- composite patient_brand_id below.
+-- brand is brand_type (an enum); use enum_text() so the generated alias is
+-- TEXT-typed and IMMUTABLE-safe under STORED. Feast feature views consume the
+-- plain string column directly. Same applies to the composite patient_brand_id
+-- below.
 ALTER TABLE patient_journeys
     ADD COLUMN IF NOT EXISTS brand_id TEXT
-    GENERATED ALWAYS AS (brand::TEXT) STORED;
+    GENERATED ALWAYS AS (enum_text(brand)) STORED;
 
 ALTER TABLE patient_journeys
     ADD COLUMN IF NOT EXISTS patient_brand_id TEXT
-    GENERATED ALWAYS AS (patient_id || '_' || brand::TEXT) STORED;
+    GENERATED ALWAYS AS (patient_id || '_' || enum_text(brand)) STORED;
 
 -- -----------------------------------------------------------------------------
 -- 033.4  business_metrics: per-HCP semantics + generated event_timestamp / hcp_brand_id
@@ -210,19 +252,24 @@ ALTER TABLE business_metrics
     ADD COLUMN IF NOT EXISTS hcp_id VARCHAR(20)
     REFERENCES hcp_profiles(hcp_id) ON DELETE SET NULL;
 
--- event_timestamp: cast metric_date (DATE) -> TIMESTAMPTZ for Feast, which
--- requires a TIMESTAMPTZ event-time column. Cast inside generated column is
--- IMMUTABLE.
+-- event_timestamp: derive a TIMESTAMPTZ from metric_date (DATE) for Feast,
+-- which requires a TIMESTAMPTZ event-time column.
+--
+-- IMMUTABILITY: DATE::TIMESTAMPTZ is STABLE (depends on session TimeZone).
+-- DATE::TIMESTAMP is IMMUTABLE (no TZ involved); TIMESTAMP AT TIME ZONE
+-- 'UTC' is IMMUTABLE and yields TIMESTAMPTZ. Anchoring on UTC also matches
+-- the Feast convention of UTC-everywhere event times.
 ALTER TABLE business_metrics
     ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ
-    GENERATED ALWAYS AS (metric_date::TIMESTAMPTZ) STORED;
+    GENERATED ALWAYS AS ((metric_date::TIMESTAMP AT TIME ZONE 'UTC')) STORED;
 
 -- hcp_brand_id: COALESCE(hcp_id, '_AGG') so existing aggregate rows (hcp_id
 -- IS NULL) get a stable composite key '_AGG_<brand>' rather than NULL. brand
--- is brand_type enum -> cast to TEXT for the string concat.
+-- is brand_type enum -> use enum_text() (defined in 033.0) for an
+-- IMMUTABLE TEXT representation suitable for a STORED generated column.
 ALTER TABLE business_metrics
     ADD COLUMN IF NOT EXISTS hcp_brand_id TEXT
-    GENERATED ALWAYS AS (COALESCE(hcp_id, '_AGG') || '_' || brand::TEXT) STORED;
+    GENERATED ALWAYS AS (COALESCE(hcp_id, '_AGG') || '_' || enum_text(brand)) STORED;
 
 -- Per-HCP semantics columns (nullable for pre-existing aggregate rows; ETL
 -- populates per-HCP rows with real values).
@@ -239,9 +286,13 @@ ALTER TABLE business_metrics ADD COLUMN IF NOT EXISTS call_frequency   NUMERIC;
 -- -----------------------------------------------------------------------------
 -- territory_metrics was created in migration 031.A1.3 (lines 75-86). Wrap with
 -- IF NOT EXISTS so the migration is safe to re-run.
+--
+-- IMMUTABILITY: same DATE -> TIMESTAMPTZ idiom as business_metrics above.
+-- (metric_date::TIMESTAMP AT TIME ZONE 'UTC') is IMMUTABLE; the direct
+-- DATE::TIMESTAMPTZ cast is STABLE and would be rejected here.
 ALTER TABLE territory_metrics
     ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ
-    GENERATED ALWAYS AS (metric_date::TIMESTAMPTZ) STORED;
+    GENERATED ALWAYS AS ((metric_date::TIMESTAMP AT TIME ZONE 'UTC')) STORED;
 
 -- market_potential and resource_allocation_score were declared NOT NULL DEFAULT 0
 -- by migration 031 (lines 82-83). Sub-block 6B-infra-2c (territory rollup ETL)
