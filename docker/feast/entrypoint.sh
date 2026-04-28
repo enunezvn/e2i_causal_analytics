@@ -62,6 +62,11 @@ print('[entrypoint] rendered /feast/feature_store.yaml from template')
 PY
 
 echo "[entrypoint] feast version: $(feast version)"
+# Hard-fail on Feast SDK drift — the registry-proto layout, parse_repo
+# semantics, and Pydantic warnings are all version-coupled. Use a brace block
+# (NOT a subshell) so `exit 1` exits the entrypoint, not just the subshell.
+# Block 6B-infra-4.
+feast version | grep -q "0.43.0" || { echo "[entrypoint] FATAL: Feast SDK version drift (expected 0.43.0)"; exit 1; }
 echo "[entrypoint] feast apply (skip source validation)..."
 feast --chdir /feast apply --skip-source-validation
 

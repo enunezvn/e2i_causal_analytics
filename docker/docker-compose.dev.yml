@@ -39,7 +39,11 @@ services:
       - ../src:/app/src                    # Python source code
       - ../config:/app/config              # YAML configurations
       - ../tests:/app/tests                # Test files
-      - ../feature_repo:/app/feature_repo:ro  # Feast feature_store.yaml.tmpl + defs (read-only) for parity test
+      # Feast feature_store.yaml.tmpl + defs (writable). The parity test imports
+      # ``feature_repo`` Python modules and may need to render
+      # ``feature_store.yaml`` against the dev-side environment, so the bind
+      # mount is no longer read-only (Block 6B-infra-4 dropped the `:ro`).
+      - ../feature_repo:/app/feature_repo
 
       # Prevent bind mount from overwriting container's installed packages
       - /app/src/__pycache__
@@ -53,6 +57,10 @@ services:
       - agent_outputs:/app/data/agent_outputs
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
+      # Read the registry the feast container just wrote — required for the
+      # offline/online parity test to resolve FeatureViews against the same
+      # registry feast wrote (Block 6B-infra-4).
+      - feast_registry:/app/feast_registry:ro
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
