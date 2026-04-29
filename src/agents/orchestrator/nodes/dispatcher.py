@@ -72,9 +72,7 @@ class DispatcherNode:
                     # Try fallback if available
                     fallback_agent = dispatch.get("fallback_agent")
                     if fallback_agent:
-                        fallback_result = await self._dispatch_fallback(
-                            str(fallback_agent), state
-                        )
+                        fallback_result = await self._dispatch_fallback(str(fallback_agent), state)
                         all_results.append(fallback_result)
                 elif isinstance(result, dict) and not result.get("success", True):
                     # AgentResult returned with success=False
@@ -83,9 +81,7 @@ class DispatcherNode:
                     # Try fallback if available
                     fallback_agent2 = dispatch.get("fallback_agent")
                     if fallback_agent2:
-                        fallback_result = await self._dispatch_fallback(
-                            str(fallback_agent2), state
-                        )
+                        fallback_result = await self._dispatch_fallback(str(fallback_agent2), state)
                         all_results.append(fallback_result)
                 else:
                     # Result is AgentResult (TypedDict cannot use isinstance, check dict)

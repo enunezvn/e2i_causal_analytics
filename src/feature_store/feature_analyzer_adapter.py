@@ -532,7 +532,9 @@ class FeatureAnalyzerAdapter:
                     entity_values={},  # Empty - get latest
                 )
                 if entity_features and feature_name in entity_features.features:
-                    result_df[f"{feature_view}__{feature_name}"] = entity_features.features[feature_name]
+                    result_df[f"{feature_view}__{feature_name}"] = entity_features.features[
+                        feature_name
+                    ]
 
             except Exception as e:
                 logger.warning(f"Failed to get feature {feature_ref} from custom store: {e}")

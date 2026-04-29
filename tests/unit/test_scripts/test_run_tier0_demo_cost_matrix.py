@@ -124,9 +124,7 @@ class TestArgparseFlag:
         test from the previous iteration; we now query the parser
         directly for the action."""
         parser = _build_parser()
-        flag_actions = [
-            a for a in parser._actions if "--no-demo-cost-matrix" in a.option_strings
-        ]
+        flag_actions = [a for a in parser._actions if "--no-demo-cost-matrix" in a.option_strings]
         assert len(flag_actions) == 1, (
             "Expected exactly one --no-demo-cost-matrix action; "
             f"found {len(flag_actions)}: {[a.option_strings for a in flag_actions]}"

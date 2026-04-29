@@ -10,7 +10,7 @@ Performance Target: <1s per experiment
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from src.agents.experiment_monitor.state import (
     ErrorDetails,

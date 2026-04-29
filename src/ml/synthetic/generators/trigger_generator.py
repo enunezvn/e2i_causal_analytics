@@ -4,7 +4,7 @@ Trigger Generator.
 Generates synthetic triggers for patient/HCP targeting actions.
 """
 
-from typing import Any, Dict, Optional, cast
+from typing import Dict, Optional, cast
 
 import numpy as np
 import pandas as pd

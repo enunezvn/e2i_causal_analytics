@@ -178,9 +178,7 @@ def test_auto_register_round_trip(feature_store: Any) -> None:
 
     try:
         # ---- Auto-register call -----------------------------------------
-        result = asyncio.run(
-            agent._auto_register_in_feast(final_state, input_data=input_data)
-        )
+        result = asyncio.run(agent._auto_register_in_feast(final_state, input_data=input_data))
 
         # `registered=False` here means we connected to Feast but the
         # auto-register wiring is wrong — fail-loud, that's exactly
@@ -215,10 +213,7 @@ def test_auto_register_round_trip(feature_store: Any) -> None:
         # the FV; the join_key is the canonical identity.
         feature_view_entity_names = list(getattr(fv_obj, "entities", []) or [])
         feature_view_join_keys = list(getattr(fv_obj, "join_keys", []) or [])
-        assert (
-            ENTITY_NAME in feature_view_entity_names
-            or "hcp_id" in feature_view_join_keys
-        ), (
+        assert ENTITY_NAME in feature_view_entity_names or "hcp_id" in feature_view_join_keys, (
             f"FeatureView {fv_name!r} did not bind to entity {ENTITY_NAME!r}; "
             f"got entities={feature_view_entity_names!r} "
             f"join_keys={feature_view_join_keys!r}"
@@ -248,9 +243,7 @@ def test_auto_register_round_trip(feature_store: Any) -> None:
         # low-severity: Feast 0.43.0 ``apply()`` is idempotent (upsert),
         # so a missed cleanup just gets re-applied on the next run.
         try:
-            asyncio.run(
-                _delete_feature_view_async(feature_store, fv_name)
-            )
+            asyncio.run(_delete_feature_view_async(feature_store, fv_name))
         except Exception as cleanup_exc:  # noqa: BLE001
             warnings.warn(
                 f"Failed to clean up auto-registered FeatureView {fv_name!r}: "
@@ -271,6 +264,4 @@ async def _delete_feature_view_async(store: Any, fv_name: str) -> None:
     ``FeatureStore.apply`` is a blocking call.
     """
     fv = store.get_feature_view(fv_name)
-    await asyncio.to_thread(
-        store.apply, [], objects_to_delete=[fv], partial=True
-    )
+    await asyncio.to_thread(store.apply, [], objects_to_delete=[fv], partial=True)

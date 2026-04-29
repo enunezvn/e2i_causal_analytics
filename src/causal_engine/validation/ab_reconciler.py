@@ -265,7 +265,12 @@ class ABReconciler:
         Returns:
             Overlap ratio (0-1)
         """
-        if est_ci_lower is None or est_ci_upper is None or obs_ci_lower is None or obs_ci_upper is None:
+        if (
+            est_ci_lower is None
+            or est_ci_upper is None
+            or obs_ci_lower is None
+            or obs_ci_upper is None
+        ):
             return 0.0
 
         overlap_lower = max(est_ci_lower, obs_ci_lower)

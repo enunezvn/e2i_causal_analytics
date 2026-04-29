@@ -37,13 +37,13 @@ from src.api.dependencies.falkordb_client import (
     get_graph,
     init_falkordb,
 )
+from src.api.dependencies.rag import get_rag_dependencies
 from src.api.dependencies.redis_client import (
     close_redis,
     get_redis,
     init_redis,
     redis_health_check,
 )
-from src.api.dependencies.rag import get_rag_dependencies
 from src.api.dependencies.supabase_client import (
     close_supabase,
     get_supabase,

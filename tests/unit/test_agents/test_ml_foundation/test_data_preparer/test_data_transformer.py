@@ -270,9 +270,7 @@ def _encoded_column_names(transformations_applied: list[dict]) -> set[str]:
 @pytest.mark.asyncio
 async def test_exclude_columns_deprecation_warning():
     """Populating ``exclude_columns`` emits a ``DeprecationWarning``."""
-    state = _exclude_columns_state(
-        {"exclude_columns": ["patient_id"]}
-    )
+    state = _exclude_columns_state({"exclude_columns": ["patient_id"]})
 
     with pytest.warns(DeprecationWarning, match="exclude_columns"):
         result = await transform_data(state)
@@ -289,9 +287,7 @@ async def test_exclude_columns_deprecation_warning():
 @pytest.mark.asyncio
 async def test_excluded_features_alone_no_warning():
     """Using only the canonical key must NOT trigger the warning."""
-    state = _exclude_columns_state(
-        {"excluded_features": ["patient_id"]}
-    )
+    state = _exclude_columns_state({"excluded_features": ["patient_id"]})
 
     with warnings.catch_warnings():
         # Treat any DeprecationWarning as an error — if the canonical path

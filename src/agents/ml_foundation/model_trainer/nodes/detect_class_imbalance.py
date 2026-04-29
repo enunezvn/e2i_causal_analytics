@@ -47,9 +47,7 @@ logger = logging.getLogger(__name__)
 
 # Path to the canonical imbalance-strategy config relative to repo root.
 # Resolved lazily so unit tests can override via `_load_imbalance_config`.
-_DEFAULT_CONFIG_PATH = (
-    find_project_root() / "config" / "imbalance_strategy.yaml"
-)
+_DEFAULT_CONFIG_PATH = find_project_root() / "config" / "imbalance_strategy.yaml"
 
 # Type alias for a single decision-matrix leaf.
 StrategyLeaf = Dict[str, Any]
@@ -58,9 +56,7 @@ StrategyEntry = Union[StrategyLeaf, List[StrategyLeaf]]
 # Required keys for every list-form non_tree rule. Missing any of these
 # raises ``ValueError`` at load time so misconfigurations surface before
 # the resolver hits a query path.
-_REQUIRED_RULE_KEYS: frozenset[str] = frozenset(
-    {"min_minority_count", "strategy", "rationale"}
-)
+_REQUIRED_RULE_KEYS: frozenset[str] = frozenset({"min_minority_count", "strategy", "rationale"})
 
 # Valid remediation strategies. Kept as a module-level frozenset so
 # downstream consumers (e.g. apply_resampling) can validate against it
@@ -157,8 +153,7 @@ def _read_yaml(path_str: str) -> Dict[str, Any]:
         data = yaml.safe_load(fh)
     if not isinstance(data, dict):
         raise ValueError(
-            f"imbalance_strategy config at {path_str} must be a mapping, "
-            f"got {type(data).__name__}"
+            f"imbalance_strategy config at {path_str} must be a mapping, got {type(data).__name__}"
         )
 
     matrix = data.get("strategy_matrix")
@@ -198,15 +193,11 @@ def _load_imbalance_config(path: Optional[Path] = None) -> Dict[str, Any]:
     # Validate top-level structure
     for required in ("severity_bands", "tree_models", "strategy_matrix"):
         if required not in raw:
-            raise ValueError(
-                f"imbalance_strategy config missing required key: {required!r}"
-            )
+            raise ValueError(f"imbalance_strategy config missing required key: {required!r}")
 
     bands = raw["severity_bands"]
     if not all(k in bands for k in ("none", "moderate", "severe")):
-        raise ValueError(
-            "severity_bands must define 'none', 'moderate', and 'severe'"
-        )
+        raise ValueError("severity_bands must define 'none', 'moderate', and 'severe'")
 
     none_band = float(bands["none"])
     moderate_band = float(bands["moderate"])
@@ -241,9 +232,7 @@ def _resolve_strategy_leaf(
         # Fallback: last rule (lowest threshold). Should be unreachable
         # when YAML includes a `min_minority_count: 0` rule.
         return entry[-1]
-    raise ValueError(
-        f"strategy_matrix entry must be dict or list, got {type(entry).__name__}"
-    )
+    raise ValueError(f"strategy_matrix entry must be dict or list, got {type(entry).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +262,7 @@ def _calculate_imbalance_metrics(
     bands = config["severity_bands"]
 
     unique, counts = np.unique(y, return_counts=True)
-    class_distribution = dict(
-        zip(unique.astype(int).tolist(), counts.tolist(), strict=False)
-    )
+    class_distribution = dict(zip(unique.astype(int).tolist(), counts.tolist(), strict=False))
 
     total = len(y)
     minority_count = min(counts)

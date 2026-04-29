@@ -47,7 +47,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
 from uuid_utils import uuid7 as uuid7_func  # For Opik-compatible UUID v7
 
@@ -98,7 +98,9 @@ class OpikConfig:
             api_key=os.getenv("OPIK_API_KEY"),
             workspace=os.getenv("OPIK_WORKSPACE", "default"),
             project_name=os.getenv("OPIK_PROJECT_NAME", "e2i-causal-analytics"),
-            url=os.getenv("OPIK_URL_OVERRIDE") or os.getenv("OPIK_URL") or os.getenv("OPIK_ENDPOINT"),
+            url=os.getenv("OPIK_URL_OVERRIDE")
+            or os.getenv("OPIK_URL")
+            or os.getenv("OPIK_ENDPOINT"),
             use_local=os.getenv("OPIK_USE_LOCAL", "false").lower() == "true",
             enabled=os.getenv("OPIK_ENABLED", "true").lower() == "true",
             sample_rate=float(os.getenv("OPIK_SAMPLE_RATE", "1.0")),

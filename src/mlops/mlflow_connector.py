@@ -56,10 +56,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 if TYPE_CHECKING:
-    import mlflow  # type: ignore[import-untyped]
     from mlflow.tracking import MlflowClient  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
@@ -345,9 +344,7 @@ class MLflowRun:
         Returns:
             Model URI if successful
         """
-        model_uri = await self.connector._log_model(
-            self.run_id, model, name, flavor, **kwargs
-        )
+        model_uri = await self.connector._log_model(self.run_id, model, name, flavor, **kwargs)
         if model_uri and registered_model_name:
             await self.connector.register_model(
                 run_id=self.run_id,
@@ -552,11 +549,14 @@ class MLflowConnector:
 
             if experiment is None:
                 # Create new experiment
-                experiment_id = cast(str, self._mlflow.create_experiment(
-                    name=full_name,
-                    artifact_location=artifact_location or self.artifact_uri,
-                    tags=tags or {},
-                ))
+                experiment_id = cast(
+                    str,
+                    self._mlflow.create_experiment(
+                        name=full_name,
+                        artifact_location=artifact_location or self.artifact_uri,
+                        tags=tags or {},
+                    ),
+                )
                 logger.info(f"Created experiment '{full_name}' with ID: {experiment_id}")
             else:
                 experiment_id = experiment.experiment_id

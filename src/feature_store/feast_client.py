@@ -27,7 +27,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -713,7 +713,8 @@ class FeastClient:
             cache_time = self._stats_cache_time.get(cache_key)
             if (
                 cache_time
-                and (datetime.now(timezone.utc) - cache_time).total_seconds() < self.config.cache_ttl_seconds
+                and (datetime.now(timezone.utc) - cache_time).total_seconds()
+                < self.config.cache_ttl_seconds
             ):
                 return self._stats_cache[cache_key]
 
@@ -1104,20 +1105,14 @@ class FeastClient:
                 entity = self._store.get_entity(entity_name)
             except Exception as e:
                 result["error"] = f"entity '{entity_name}' not registered in Feast: {e}"
-                logger.warning(
-                    "Cannot register feature view %s: %s", name, result["error"]
-                )
+                logger.warning("Cannot register feature view %s: %s", name, result["error"])
                 return result
 
             try:
                 batch_source = self._store.get_data_source(batch_source_name)
             except Exception as e:
-                result["error"] = (
-                    f"batch source '{batch_source_name}' not registered in Feast: {e}"
-                )
-                logger.warning(
-                    "Cannot register feature view %s: %s", name, result["error"]
-                )
+                result["error"] = f"batch source '{batch_source_name}' not registered in Feast: {e}"
+                logger.warning("Cannot register feature view %s: %s", name, result["error"])
                 return result
 
             schema = []
@@ -1269,15 +1264,13 @@ class FeastClient:
                 status = FreshnessStatus.STALE
                 is_fresh = False
                 message = (
-                    f"Features are stale "
-                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                    f"Features are stale (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
                 )
             else:
                 status = FreshnessStatus.EXPIRED
                 is_fresh = False
                 message = (
-                    f"Features are expired "
-                    f"(age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
+                    f"Features are expired (age: {age_hours:.1f}h, max: {max_staleness_hours:.1f}h)"
                 )
 
             return FeatureFreshness(

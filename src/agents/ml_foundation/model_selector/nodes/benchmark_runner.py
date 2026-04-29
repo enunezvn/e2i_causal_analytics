@@ -258,7 +258,7 @@ def _run_cross_validation(
 
         return list(cv_scores), metrics
 
-    except Exception as e:
+    except Exception:
         # Return default scores on failure
         return [0.5] * cv_folds, {}  # Return empty metrics on error
 

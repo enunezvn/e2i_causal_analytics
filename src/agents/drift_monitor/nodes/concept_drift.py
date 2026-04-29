@@ -19,7 +19,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, cast
+from typing import Any, List, Literal, cast
 
 import numpy as np
 from scipy import stats
@@ -184,8 +184,12 @@ class ConceptDriftNode:
 
             # 1. Performance Degradation Detection
             perf_drift = None
-            if (baseline_preds.labels is not None and baseline_preds.actual_labels is not None
-                    and current_preds.labels is not None and current_preds.actual_labels is not None):
+            if (
+                baseline_preds.labels is not None
+                and baseline_preds.actual_labels is not None
+                and current_preds.labels is not None
+                and current_preds.actual_labels is not None
+            ):
                 perf_drift = self._detect_performance_degradation(
                     baseline_preds.labels,
                     baseline_preds.actual_labels,

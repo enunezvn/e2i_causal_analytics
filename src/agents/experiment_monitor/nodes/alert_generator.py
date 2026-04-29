@@ -144,13 +144,16 @@ class AlertGeneratorNode:
         """
         if self.dspy_integration:
             try:
-                return cast(str, self.dspy_integration.get_srm_prompt(
-                    experiment_name=exp_name,
-                    chi_squared=chi_squared,
-                    p_value=p_value,
-                    expected_ratio=expected_ratio,
-                    actual_counts=actual_counts,
-                ))
+                return cast(
+                    str,
+                    self.dspy_integration.get_srm_prompt(
+                        experiment_name=exp_name,
+                        chi_squared=chi_squared,
+                        p_value=p_value,
+                        expected_ratio=expected_ratio,
+                        actual_counts=actual_counts,
+                    ),
+                )
             except Exception as e:
                 logger.debug(f"DSPy prompt failed, using fallback: {e}")
 
@@ -229,12 +232,15 @@ class AlertGeneratorNode:
         """
         if self.dspy_integration:
             try:
-                return cast(str, self.dspy_integration.get_enrollment_prompt(
-                    experiment_name=exp_name,
-                    current_rate=current_rate,
-                    expected_rate=expected_rate,
-                    days_below_threshold=days_below_threshold,
-                ))
+                return cast(
+                    str,
+                    self.dspy_integration.get_enrollment_prompt(
+                        experiment_name=exp_name,
+                        current_rate=current_rate,
+                        expected_rate=expected_rate,
+                        days_below_threshold=days_below_threshold,
+                    ),
+                )
             except Exception as e:
                 logger.debug(f"DSPy prompt failed, using fallback: {e}")
 
@@ -402,13 +408,16 @@ class AlertGeneratorNode:
         """
         if self.dspy_integration:
             try:
-                return cast(str, self.dspy_integration.get_fidelity_prompt(
-                    experiment_name=exp_name,
-                    predicted_effect=predicted_effect,
-                    actual_effect=actual_effect,
-                    prediction_error=prediction_error,
-                    calibration_needed=calibration_needed,
-                ))
+                return cast(
+                    str,
+                    self.dspy_integration.get_fidelity_prompt(
+                        experiment_name=exp_name,
+                        predicted_effect=predicted_effect,
+                        actual_effect=actual_effect,
+                        prediction_error=prediction_error,
+                        calibration_needed=calibration_needed,
+                    ),
+                )
             except Exception as e:
                 logger.debug(f"DSPy prompt failed, using fallback: {e}")
 

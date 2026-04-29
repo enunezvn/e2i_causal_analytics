@@ -18,6 +18,7 @@ This module verifies two contracts:
 The pipeline run is gated behind ``@pytest.mark.slow`` because the full
 tier0 invocation takes ~3-5 minutes; CI selects it via ``-m slow``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -72,14 +73,11 @@ class TestAdverseRegimeGenerator:
         # Must be well into the "extreme" band (< 5% per
         # detect_class_imbalance.SEVERITY_THRESHOLDS) but not degenerate.
         assert positive_share < 0.05, (
-            f"Adverse regime did not produce extreme imbalance: "
-            f"positive share={positive_share:.3f}"
+            f"Adverse regime did not produce extreme imbalance: positive share={positive_share:.3f}"
         )
         n_positive = int(df["discontinuation_flag"].sum())
         # Need at least 10 minority samples for SMOTE/combined remediation.
-        assert n_positive >= 10, (
-            f"Adverse regime degenerated: only {n_positive} positive samples"
-        )
+        assert n_positive >= 10, f"Adverse regime degenerated: only {n_positive} positive samples"
         # Both classes must be present; pipeline halts otherwise.
         assert df["discontinuation_flag"].nunique() == 2
 
@@ -98,9 +96,7 @@ class TestAdverseRegimeGenerator:
         # observable correlation shrinks but should still be in the right
         # direction or near zero. We just guard against an *inverted*
         # signal (corr > +0.10) which would indicate the wiring broke.
-        assert corr < 0.10, (
-            f"hcp_visits correlation flipped under adverse regime: {corr:.4f}"
-        )
+        assert corr < 0.10, f"hcp_visits correlation flipped under adverse regime: {corr:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +147,7 @@ class TestAdverseRegimeE2E:
         # cascade — that would mean the new positive_rate plumbing
         # accidentally created a target proxy.
         assert not pipeline_state.get("pipeline_halted"), (
-            f"pipeline_halted unexpectedly: "
-            f"{pipeline_state.get('halt_reason', 'unknown')}"
+            f"pipeline_halted unexpectedly: {pipeline_state.get('halt_reason', 'unknown')}"
         )
 
     def test_imbalance_severity_extreme(self, pipeline_state):
@@ -160,8 +155,7 @@ class TestAdverseRegimeE2E:
         info = pipeline_state.get("class_imbalance_info", {})
         assert info.get("imbalance_detected") is True
         assert info.get("imbalance_severity") == "extreme", (
-            f"Expected severity=extreme; got {info.get('imbalance_severity')}; "
-            f"full info={info}"
+            f"Expected severity=extreme; got {info.get('imbalance_severity')}; full info={info}"
         )
 
     def test_resampling_strategy_upgrades_to_combined(self, pipeline_state):
@@ -203,9 +197,12 @@ class TestAdverseRegimeE2E:
         # agent gracefully handled extreme imbalance. What we forbid is the
         # metrics dict being missing entirely, which would indicate a hard
         # pipeline failure.
-        assert "auc_roc" in validation_metrics or pipeline_state.get(
-            "model_usefulness"
-        ) in {"useless", "poor", "acceptable", "unknown"}
+        assert "auc_roc" in validation_metrics or pipeline_state.get("model_usefulness") in {
+            "useless",
+            "poor",
+            "acceptable",
+            "unknown",
+        }
         # Trained model object should exist.
         assert pipeline_state.get("trained_model") is not None, (
             "trained_model is None — pipeline degenerated on adverse data"

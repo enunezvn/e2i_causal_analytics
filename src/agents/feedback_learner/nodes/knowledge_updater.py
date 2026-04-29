@@ -43,9 +43,7 @@ class KnowledgeUpdaterNode:
             recommendations = state.get("learning_recommendations") or []
 
             # Generate proposed updates
-            proposed_updates = self._generate_updates(
-                cast(List[Dict[str, Any]], recommendations)
-            )
+            proposed_updates = self._generate_updates(cast(List[Dict[str, Any]], recommendations))
 
             # Apply updates (with validation)
             applied = []

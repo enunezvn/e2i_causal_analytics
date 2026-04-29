@@ -211,9 +211,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # 1. Permutation test — confirm signal is genuine
         logger.info("Running permutation test (100 shuffles)...")
-        permutation_result = compute_permutation_test(
-            y_test_np, y_test_proba, n_permutations=100
-        )
+        permutation_result = compute_permutation_test(y_test_np, y_test_proba, n_permutations=100)
         metrics_result["permutation_test"] = permutation_result
         if permutation_result.get("signal_genuine") is not None:
             logger.info(
@@ -250,9 +248,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             if pd is not None and all(isinstance(x, pd.DataFrame) for x in xs):
                 X_all = pd.concat(xs, axis=0, ignore_index=True)
             else:
-                X_all = np.vstack(
-                    [x.to_numpy() if hasattr(x, "to_numpy") else x for x in xs]
-                )
+                X_all = np.vstack([x.to_numpy() if hasattr(x, "to_numpy") else x for x in xs])
             y_all = np.concatenate(arrays_y)
             cv_result = compute_stratified_cv(trained_model, X_all, y_all, n_folds=5)
             metrics_result["cv_results"] = cv_result
@@ -707,7 +703,9 @@ def _compute_classification_metrics(
     test_business_utility: Optional[float] = None
     val_business_utility: Optional[float] = None
     if cost_matrix is not None and cm.shape == (2, 2):
-        test_business_utility = _compute_business_utility(int(tp), int(fp), int(fn), int(tn), cost_matrix)
+        test_business_utility = _compute_business_utility(
+            int(tp), int(fp), int(fn), int(tn), cost_matrix
+        )
         if y_validation is not None and y_validation_proba is not None:
             y_val_proba_pos = _positive_class_proba(y_validation_proba)
             y_val_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
@@ -1387,9 +1385,7 @@ def _check_metric_suspicion(
 
         # Check 1: AUC >= 0.99
         if auc is not None and auc >= 0.99:
-            reasons.append(
-                f"AUC={auc:.4f} >= 0.99 is implausible on real-world data"
-            )
+            reasons.append(f"AUC={auc:.4f} >= 0.99 is implausible on real-world data")
             recommendations.append(
                 "Check features for target leakage — no real-world clinical model achieves AUC >= 0.99"
             )
@@ -1424,9 +1420,7 @@ def _check_metric_suspicion(
 
         # Check 4: Brier score == 0
         if brier is not None and brier < 1e-6:
-            reasons.append(
-                f"Brier score={brier:.2e} is effectively zero — implausible calibration"
-            )
+            reasons.append(f"Brier score={brier:.2e} is effectively zero — implausible calibration")
             recommendations.append(
                 "Zero calibration error means predicted probabilities are perfect — "
                 "this only happens with deterministic features"
@@ -1442,7 +1436,9 @@ def _check_metric_suspicion(
 
         if rmse is not None and rmse < 1e-6:
             reasons.append(f"RMSE={rmse:.2e} is effectively zero")
-            recommendations.append("Near-zero RMSE suggests features deterministically encode target")
+            recommendations.append(
+                "Near-zero RMSE suggests features deterministically encode target"
+            )
 
     # Determine suspicion level
     if not reasons:

@@ -73,9 +73,7 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                 DeprecationWarning,
                 stacklevel=2,
             )
-        exclude_columns = legacy_exclude_columns + list(
-            scope_spec.get("excluded_features", [])
-        )
+        exclude_columns = legacy_exclude_columns + list(scope_spec.get("excluded_features", []))
         scaling_method = scope_spec.get("scaling_method", "standard")
         encoding_method = scope_spec.get("encoding_method", "label")
         imputation_strategy = scope_spec.get("imputation_strategy", "mean")

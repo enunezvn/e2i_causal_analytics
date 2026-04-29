@@ -609,7 +609,11 @@ async def evaluate_and_trigger_retraining(
     }
 
     # Trigger if appropriate
-    if decision.should_retrain and (not decision.requires_approval or auto_approve) and decision.reason:
+    if (
+        decision.should_retrain
+        and (not decision.requires_approval or auto_approve)
+        and decision.reason
+    ):
         job = await service.trigger_retraining(
             model_version=model_version,
             reason=decision.reason,

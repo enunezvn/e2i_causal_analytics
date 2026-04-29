@@ -356,7 +356,9 @@ class DriftMonitorAgent:
         """
         # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
         raw_errors = state.get("errors", [])
-        errors: list[dict] = [dict(e) if hasattr(e, "keys") else {"error": str(e)} for e in raw_errors]
+        errors: list[dict] = [
+            dict(e) if hasattr(e, "keys") else {"error": str(e)} for e in raw_errors
+        ]
 
         return DriftMonitorOutput(
             # Detection results (convert TypedDicts to plain dicts)

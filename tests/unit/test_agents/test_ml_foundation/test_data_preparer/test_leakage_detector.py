@@ -182,9 +182,9 @@ def test_check_target_leakage_direct():
     target = np.arange(n)
     df = pd.DataFrame(
         {
-            "leaky": target.copy(),            # perfect correlation -> CRITICAL
+            "leaky": target.copy(),  # perfect correlation -> CRITICAL
             "target": target,
-            "clean": rng.permutation(n),       # uncorrelated -> no finding
+            "clean": rng.permutation(n),  # uncorrelated -> no finding
         }
     )
 

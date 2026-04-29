@@ -157,12 +157,7 @@ async def _get_semantic_memory():
 def _convert_to_graph_node(data: Dict[str, Any]) -> GraphNode:
     """Convert raw node data to GraphNode model."""
     # Try e2i_entity_type first (set by causal agents), then type/entity_type
-    type_str = (
-        data.get("e2i_entity_type")
-        or data.get("type")
-        or data.get("entity_type")
-        or "Agent"
-    )
+    type_str = data.get("e2i_entity_type") or data.get("type") or data.get("entity_type") or "Agent"
     try:
         entity_type = EntityType(type_str)
     except ValueError:
@@ -180,12 +175,7 @@ def _convert_to_graph_node(data: Dict[str, Any]) -> GraphNode:
     name = data.get("name") or data.get("label") or ""
     if not name:
         # Try common property fields that make good display names
-        name = (
-            data.get("segment_id")
-            or data.get("entity_name")
-            or data.get("title")
-            or ""
-        )
+        name = data.get("segment_id") or data.get("entity_name") or data.get("title") or ""
     if not name:
         # Fall back to a human-readable version of the node ID
         node_id = data.get("id", data.get("node_id", ""))
@@ -264,7 +254,12 @@ def _convert_to_graph_relationship(data: Dict[str, Any]) -> GraphRelationship:
 # =============================================================================
 
 
-@router.get("/nodes", response_model=ListNodesResponse, summary="List graph nodes", operation_id="list_graph_nodes")
+@router.get(
+    "/nodes",
+    response_model=ListNodesResponse,
+    summary="List graph nodes",
+    operation_id="list_graph_nodes",
+)
 async def list_nodes(
     entity_types: Optional[str] = Query(None, description="Comma-separated entity types"),
     search: Optional[str] = Query(None, max_length=500, description="Text search"),
@@ -327,7 +322,12 @@ async def list_nodes(
         raise HTTPException(status_code=500, detail=f"Failed to list nodes: {str(e)}") from e
 
 
-@router.get("/nodes/{node_id}", response_model=GraphNode, summary="Get node by ID", operation_id="get_graph_node")
+@router.get(
+    "/nodes/{node_id}",
+    response_model=GraphNode,
+    summary="Get node by ID",
+    operation_id="get_graph_node",
+)
 async def get_node(node_id: str) -> GraphNode:
     """
     Get a specific node by ID.
@@ -352,7 +352,12 @@ async def get_node(node_id: str) -> GraphNode:
         raise HTTPException(status_code=500, detail=f"Failed to get node: {str(e)}") from e
 
 
-@router.get("/nodes/{node_id}/network", response_model=NodeNetworkResponse, summary="Get node relationship network", operation_id="get_node_network")
+@router.get(
+    "/nodes/{node_id}/network",
+    response_model=NodeNetworkResponse,
+    summary="Get node relationship network",
+    operation_id="get_node_network",
+)
 async def get_node_network(
     node_id: str, max_depth: int = Query(2, ge=1, le=5, description="Maximum traversal depth")
 ) -> NodeNetworkResponse:
@@ -443,7 +448,12 @@ async def get_node_network(
 # =============================================================================
 
 
-@router.get("/relationships", response_model=ListRelationshipsResponse, summary="List graph relationships", operation_id="list_graph_relationships")
+@router.get(
+    "/relationships",
+    response_model=ListRelationshipsResponse,
+    summary="List graph relationships",
+    operation_id="list_graph_relationships",
+)
 async def list_relationships(
     relationship_types: Optional[str] = Query(
         None, description="Comma-separated relationship types"
@@ -519,7 +529,12 @@ async def list_relationships(
 # =============================================================================
 
 
-@router.post("/traverse", response_model=TraverseResponse, summary="Traverse graph from node", operation_id="traverse_graph")
+@router.post(
+    "/traverse",
+    response_model=TraverseResponse,
+    summary="Traverse graph from node",
+    operation_id="traverse_graph",
+)
 async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
     """
     Traverse the graph from a starting node.
@@ -603,7 +618,12 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
 # =============================================================================
 
 
-@router.post("/causal-chains", response_model=CausalChainResponse, summary="Query causal chains", operation_id="query_causal_chains")
+@router.post(
+    "/causal-chains",
+    response_model=CausalChainResponse,
+    summary="Query causal chains",
+    operation_id="query_causal_chains",
+)
 async def query_causal_chains(request: CausalChainRequest) -> CausalChainResponse:
     """
     Query causal chains in the knowledge graph.
@@ -706,7 +726,12 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
 # =============================================================================
 
 
-@router.post("/query", response_model=CypherQueryResponse, summary="Execute openCypher query", operation_id="execute_cypher_query")
+@router.post(
+    "/query",
+    response_model=CypherQueryResponse,
+    summary="Execute openCypher query",
+    operation_id="execute_cypher_query",
+)
 async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryResponse:
     """
     Execute an openCypher query against the graph.
@@ -766,7 +791,12 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
 # =============================================================================
 
 
-@router.post("/episodes", response_model=AddEpisodeResponse, summary="Add knowledge episode", operation_id="add_graph_episode")
+@router.post(
+    "/episodes",
+    response_model=AddEpisodeResponse,
+    summary="Add knowledge episode",
+    operation_id="add_graph_episode",
+)
 async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
     """
     Add a knowledge episode to the graph.
@@ -852,7 +882,12 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
 # =============================================================================
 
 
-@router.post("/search", response_model=SearchGraphResponse, summary="Search knowledge graph", operation_id="search_graph")
+@router.post(
+    "/search",
+    response_model=SearchGraphResponse,
+    summary="Search knowledge graph",
+    operation_id="search_graph",
+)
 async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
     """
     Natural language search across the knowledge graph.
@@ -929,7 +964,12 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
 # =============================================================================
 
 
-@router.get("/stats", response_model=GraphStatsResponse, summary="Get graph statistics", operation_id="get_graph_stats")
+@router.get(
+    "/stats",
+    response_model=GraphStatsResponse,
+    summary="Get graph statistics",
+    operation_id="get_graph_stats",
+)
 async def get_graph_stats() -> GraphStatsResponse:
     """
     Get knowledge graph statistics.

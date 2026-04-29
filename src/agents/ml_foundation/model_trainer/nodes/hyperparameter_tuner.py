@@ -361,8 +361,7 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         # Filter search space to exclude params already pinned in fixed_params —
         # otherwise Optuna wastes trial budget sampling values that get overridden
         effective_search_space = {
-            k: v for k, v in hyperparameter_search_space.items()
-            if k not in fixed_params
+            k: v for k, v in hyperparameter_search_space.items() if k not in fixed_params
         }
 
         # Create validation-based objective function

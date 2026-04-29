@@ -1013,9 +1013,7 @@ class TestHistoricalFeaturesOuterExceptionPath:
             )
 
     @pytest.mark.asyncio
-    async def test_outer_except_routes_to_fallback_when_custom_store_present(
-        self, monkeypatch
-    ):
+    async def test_outer_except_routes_to_fallback_when_custom_store_present(self, monkeypatch):
         """Generic Feast-store exception WITH custom_store routes to fallback (non-prod).
 
         Confirms the outer ``except Exception`` block invokes the

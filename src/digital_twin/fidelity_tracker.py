@@ -363,7 +363,9 @@ class FidelityTracker:
 
         # Try repository if available
         if self.repository:
-            return cast(Optional[FidelityRecord], self.repository.get_fidelity_by_simulation(simulation_id))
+            return cast(
+                Optional[FidelityRecord], self.repository.get_fidelity_by_simulation(simulation_id)
+            )
 
         return None
 

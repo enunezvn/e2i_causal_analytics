@@ -124,10 +124,7 @@ def _build_feature_view_probes() -> list[tuple[str, str, str]]:
         # join_key is unset (Feast 0.43 defaults join_key to entity name
         # when explicit join_key is omitted).
         entity = fv.entities[0]
-        join_key = (
-            getattr(entity, "join_key", None)
-            or getattr(entity, "name", None)
-        )
+        join_key = getattr(entity, "join_key", None) or getattr(entity, "name", None)
         source_table = getattr(fv.source, "name", None)
         if not join_key or not source_table:
             continue

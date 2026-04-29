@@ -63,9 +63,7 @@ def test_registry_glob_not_tracked_in_git() -> None:
     if result.returncode != 0:
         pytest.skip(f"`git ls-files` not usable here: {result.stderr.strip()[:200]}")
     tracked_registry_files = [
-        line
-        for line in result.stdout.strip().splitlines()
-        if "/registry." in line
+        line for line in result.stdout.strip().splitlines() if "/registry." in line
     ]
     assert not tracked_registry_files, (
         "Found tracked feature_repo/data/registry.* files: "

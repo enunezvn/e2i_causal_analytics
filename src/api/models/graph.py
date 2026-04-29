@@ -350,7 +350,14 @@ class ListNodesResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "nodes": [{"id": "hcp_001", "type": "HCP", "name": "Dr. Smith", "properties": {"specialty": "Oncology"}}],
+                "nodes": [
+                    {
+                        "id": "hcp_001",
+                        "type": "HCP",
+                        "name": "Dr. Smith",
+                        "properties": {"specialty": "Oncology"},
+                    }
+                ],
                 "total_count": 142,
                 "limit": 50,
                 "offset": 0,
@@ -375,7 +382,14 @@ class ListRelationshipsResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "relationships": [{"id": "rel_001", "type": "PRESCRIBES", "source_id": "hcp_001", "target_id": "brand_001"}],
+                "relationships": [
+                    {
+                        "id": "rel_001",
+                        "type": "PRESCRIBES",
+                        "source_id": "hcp_001",
+                        "target_id": "brand_001",
+                    }
+                ],
                 "total_count": 87,
                 "limit": 50,
                 "offset": 0,

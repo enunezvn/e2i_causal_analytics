@@ -24,7 +24,6 @@ from src.agents.ml_foundation.data_preparer.nodes.sampling_frame_audit import (
     audit_sampling_frame,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -63,9 +62,7 @@ def _identical_reference(train_df: pd.DataFrame) -> Dict[str, Any]:
             "region": {
                 "categorical_freq": {
                     str(k): float(v)
-                    for k, v in (
-                        train_df["region"].value_counts(normalize=True).items()
-                    )
+                    for k, v in (train_df["region"].value_counts(normalize=True).items())
                 }
             },
         },

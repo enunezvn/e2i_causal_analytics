@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 
 from ..state import DataPreparerState
 
@@ -111,8 +110,7 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 f for f in context["leaked_features"] if f not in auto_dropped
             ]
             context["leakage_findings"] = [
-                f for f in context["leakage_findings"]
-                if f.get("feature", "") not in auto_dropped
+                f for f in context["leakage_findings"] if f.get("feature", "") not in auto_dropped
             ]
 
         # Step 2: Check cache, then analyze with LLM (with rule-based fallback)
@@ -128,7 +126,8 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                     "features_to_drop": [],
                     "replacement_candidates": [],
                     "recommended_feature_set": [
-                        p["name"] for p in context["column_profiles"]
+                        p["name"]
+                        for p in context["column_profiles"]
                         if p["name"] != context["target_variable"]
                         and p["name"] not in auto_dropped
                         and p["null_pct"] <= 50
@@ -148,8 +147,7 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                     analysis["features_to_drop"].append(feat)
             # Remove auto-dropped features from recommended set
             analysis["recommended_feature_set"] = [
-                f for f in analysis["recommended_feature_set"]
-                if f not in auto_dropped
+                f for f in analysis["recommended_feature_set"] if f not in auto_dropped
             ]
 
         # Step 3: Apply remediation to DataFrames
@@ -182,7 +180,8 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 "leaked_features": [],
                 # Update blocking_issues: remove leakage-related entries
                 "blocking_issues": [
-                    issue for issue in (state.get("blocking_issues") or [])
+                    issue
+                    for issue in (state.get("blocking_issues") or [])
                     if not any(lf in issue for lf in leaked)
                 ],
             }
@@ -304,7 +303,9 @@ def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[st
         if check == "logical_dependency" and severity == "critical":
             if feat not in auto_drop:
                 auto_drop.append(feat)
-                classifications[feat] = "tautological — logically equivalent to target (auto-dropped)"
+                classifications[feat] = (
+                    "tautological — logically equivalent to target (auto-dropped)"
+                )
                 logger.info(f"Auto-dropping '{feat}': logical_dependency CRITICAL")
 
         # Case 2: perfect_class_separation with zero overlap
@@ -313,7 +314,9 @@ def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[st
             if overlap is not None and float(overlap) == 0.0:
                 if feat not in auto_drop:
                     auto_drop.append(feat)
-                    classifications[feat] = "tautological — perfect class separation with zero overlap (auto-dropped)"
+                    classifications[feat] = (
+                        "tautological — perfect class separation with zero overlap (auto-dropped)"
+                    )
                     logger.info(f"Auto-dropping '{feat}': perfect_class_separation overlap=0.0")
 
     return auto_drop, classifications
@@ -340,10 +343,12 @@ def _compute_cache_key(context: Dict[str, Any]) -> str:
         "leaked_features": sorted(context.get("leaked_features", [])),
         "target_variable": context.get("target_variable", ""),
         "column_names": sorted([p["name"] for p in context.get("column_profiles", [])]),
-        "finding_signatures": sorted([
-            f"{f.get('check_name', '')}:{f.get('feature', '')}:{f.get('severity', '')}"
-            for f in context.get("leakage_findings", [])
-        ]),
+        "finding_signatures": sorted(
+            [
+                f"{f.get('check_name', '')}:{f.get('feature', '')}:{f.get('severity', '')}"
+                for f in context.get("leakage_findings", [])
+            ]
+        ),
     }
     key_str = json.dumps(key_data, sort_keys=True)
     return hashlib.sha256(key_str.encode()).hexdigest()
@@ -352,6 +357,7 @@ def _compute_cache_key(context: Dict[str, Any]) -> str:
 def _get_cache_dir() -> Path:
     """Get the cache directory for leakage remediation."""
     from pathlib import Path
+
     cache_dir = Path(".cache") / "leakage_remediation"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
@@ -367,7 +373,6 @@ def _load_cached_analysis(key: str) -> Optional[Dict[str, Any]]:
         Cached analysis dict or None
     """
     import json
-    from pathlib import Path
 
     cache_file = _get_cache_dir() / f"{key}.json"
     if cache_file.exists():
@@ -495,11 +500,13 @@ def _build_leakage_analysis_prompt(context: Dict[str, Any]) -> str:
         elif "top_values" in p:
             top = list(p["top_values"].items())[:3]
             stats = f" | top values: {top}"
-        available_text += f"  - {name} (dtype={dtype}, null={null_pct}%, nunique={nunique}{stats})\n"
+        available_text += (
+            f"  - {name} (dtype={dtype}, null={null_pct}%, nunique={nunique}{stats})\n"
+        )
 
     return f"""You are a data leakage expert analyzing an ML pipeline that has detected critical data leakage.
 
-## Detected Leakage (overall severity: {context['leakage_severity']})
+## Detected Leakage (overall severity: {context["leakage_severity"]})
 
 Leaked features: {leaked}
 
@@ -620,10 +627,12 @@ def _parse_leakage_analysis(text: str, context: Dict[str, Any]) -> Dict[str, Any
             item = stripped[2:]
             if ":" in item:
                 col, rest = item.split(":", 1)
-                analysis["replacement_candidates"].append({
-                    "column": col.strip(),
-                    "assessment": rest.strip(),
-                })
+                analysis["replacement_candidates"].append(
+                    {
+                        "column": col.strip(),
+                        "assessment": rest.strip(),
+                    }
+                )
         elif current_section == "recommended" and stripped.startswith("- "):
             feat = stripped[2:].strip()
             if feat:
@@ -663,15 +672,6 @@ def _rule_based_leakage_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Analysis dict matching the LLM output structure
     """
-    from .leakage_detector import (
-        _aggregate_severity,
-        check_categorical_class_separation,
-        check_feature_target_logical_dependency,
-        check_mutual_information,
-        check_perfect_class_separation,
-        check_single_feature_auc,
-        check_zero_variance_within_class,
-    )
 
     leaked = set(context.get("leaked_features", []))
     target = context["target_variable"]
@@ -698,7 +698,9 @@ def _rule_based_leakage_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
             elif check == "single_feature_auc":
                 classifications[feat] = "proxy — single feature achieves high AUC against target"
             elif check == "categorical_class_separation":
-                classifications[feat] = "proxy — categorical feature strongly associated with target"
+                classifications[feat] = (
+                    "proxy — categorical feature strongly associated with target"
+                )
             else:
                 classifications[feat] = f"{check} — {sev} severity"
 
@@ -840,12 +842,12 @@ def _apply_leakage_remediation(
         if combined[feat].dtype.kind not in "iufb":
             # Non-numeric: run categorical class separation check
             try:
-                cat_findings = check_categorical_class_separation(
-                    combined, target_variable, [feat]
-                )
+                cat_findings = check_categorical_class_separation(combined, target_variable, [feat])
                 cat_severity = _aggregate_severity(cat_findings)
                 if cat_severity in ("critical", "high"):
-                    logger.info(f"Categorical candidate '{feat}' has {cat_severity} association with target — rejecting")
+                    logger.info(
+                        f"Categorical candidate '{feat}' has {cat_severity} association with target — rejecting"
+                    )
                     rejected_features.append(feat)
                 else:
                     verified_features.append(feat)
@@ -906,7 +908,8 @@ def _apply_leakage_remediation(
             from sklearn.preprocessing import StandardScaler
 
             numeric_verified = [
-                f for f in verified_features
+                f
+                for f in verified_features
                 if f in train_df.columns and train_df[f].dtype.kind in "iufb"
             ]
             if len(numeric_verified) >= 2:
@@ -923,7 +926,9 @@ def _apply_leakage_remediation(
                         X_scaled = scaler.fit_transform(X)
                         lr = LogisticRegression(max_iter=200, solver="lbfgs", random_state=42)
                         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-                        y_prob = cross_val_predict(lr, X_scaled, y, cv=cv, method="predict_proba")[:, 1]
+                        y_prob = cross_val_predict(lr, X_scaled, y, cv=cv, method="predict_proba")[
+                            :, 1
+                        ]
                         return roc_auc_score(y, y_prob)
 
                     combined_auc = _cv_auc(X_check, y_check)
@@ -940,7 +945,6 @@ def _apply_leakage_remediation(
                             # Compute individual CV AUC for each remaining feature
                             individual_aucs = {}
                             for feat in remaining:
-                                feat_idx = remaining.index(feat)
                                 X_single = combined_check[[feat]].values
                                 y_single = y_check
                                 try:
@@ -987,7 +991,9 @@ def _apply_leakage_remediation(
                             f"with {len(verified_features)} features: {verified_features}"
                         )
                     else:
-                        logger.info(f"Combined-feature CV AUC sanity check passed: AUC={combined_auc:.3f}")
+                        logger.info(
+                            f"Combined-feature CV AUC sanity check passed: AUC={combined_auc:.3f}"
+                        )
         except Exception as e:
             logger.warning(f"Combined AUC sanity check failed (non-fatal): {e}")
 
@@ -1001,9 +1007,17 @@ def _apply_leakage_remediation(
 
     # Apply drops to all splits
     updated_train = train_df.drop(columns=cols_to_drop, errors="ignore")
-    updated_val = validation_df.drop(columns=cols_to_drop, errors="ignore") if validation_df is not None else None
-    updated_test = test_df.drop(columns=cols_to_drop, errors="ignore") if test_df is not None else None
-    updated_holdout = holdout_df.drop(columns=cols_to_drop, errors="ignore") if holdout_df is not None else None
+    updated_val = (
+        validation_df.drop(columns=cols_to_drop, errors="ignore")
+        if validation_df is not None
+        else None
+    )
+    updated_test = (
+        test_df.drop(columns=cols_to_drop, errors="ignore") if test_df is not None else None
+    )
+    updated_holdout = (
+        holdout_df.drop(columns=cols_to_drop, errors="ignore") if holdout_df is not None else None
+    )
 
     # Determine which features were added (not in original leaked set)
     original_leaked = set(state.get("leaked_features", []))

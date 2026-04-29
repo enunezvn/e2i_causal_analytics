@@ -271,7 +271,11 @@ class OpikEvaluationTracer:
         try:
             # Create Opik trace if enabled and circuit breaker allows
             connector = self._opik_connector
-            if self.is_enabled and connector is not None and connector.circuit_breaker.allow_request():
+            if (
+                self.is_enabled
+                and connector is not None
+                and connector.circuit_breaker.allow_request()
+            ):
                 try:
                     async with connector.trace_agent(
                         agent_name="rag_evaluator",
@@ -348,7 +352,11 @@ class OpikEvaluationTracer:
 
         try:
             connector = self._opik_connector
-            if self.is_enabled and connector is not None and connector.circuit_breaker.allow_request():
+            if (
+                self.is_enabled
+                and connector is not None
+                and connector.circuit_breaker.allow_request()
+            ):
                 try:
                     async with connector.trace_agent(
                         agent_name="rag_evaluator",

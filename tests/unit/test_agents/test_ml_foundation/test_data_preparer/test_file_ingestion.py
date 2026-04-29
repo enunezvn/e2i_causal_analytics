@@ -38,9 +38,7 @@ def journey_records() -> list[dict]:
             "patient_id": f"PAT_{i:06d}",
             "journey_start_date": f"2022-0{(i % 9) + 1}-15",
             "treatment_initiated": i % 2,
-            "data_split": ["train", "train", "train", "validation", "test", "holdout"][
-                i % 6
-            ],
+            "data_split": ["train", "train", "train", "validation", "test", "holdout"][i % 6],
         }
         for i in range(12)
     ]
@@ -48,9 +46,7 @@ def journey_records() -> list[dict]:
 
 @pytest.fixture
 def hcp_records() -> list[dict]:
-    return [
-        {"hcp_id": f"HCP_{i:06d}", "specialty": "Allergy/Immunology"} for i in range(3)
-    ]
+    return [{"hcp_id": f"HCP_{i:06d}", "specialty": "Allergy/Immunology"} for i in range(3)]
 
 
 @pytest.fixture
@@ -58,9 +54,7 @@ def directory_with_all_formats(
     tmp_path: Path, journey_records: list[dict], hcp_records: list[dict]
 ) -> Path:
     """Canonical directory with parquet + json + csv files."""
-    pd.DataFrame(journey_records).to_parquet(
-        tmp_path / "e2i_ml_v3_patient_journeys.parquet"
-    )
+    pd.DataFrame(journey_records).to_parquet(tmp_path / "e2i_ml_v3_patient_journeys.parquet")
     with open(tmp_path / "e2i_ml_v3_hcp_profiles.json", "w") as f:
         json.dump(hcp_records, f)
     pd.DataFrame([{"treatment_event_id": "TE_000000", "patient_id": "PAT_000000"}]).to_csv(
@@ -129,9 +123,7 @@ class TestFileIngestorDispatch:
 
 
 class TestFileIngestorDirectory:
-    def test_reads_canonical_files(
-        self, directory_with_all_formats: Path
-    ) -> None:
+    def test_reads_canonical_files(self, directory_with_all_formats: Path) -> None:
         frames = FileIngestor().ingest_directory(directory_with_all_formats)
         assert set(frames.keys()) == {
             "patient_journeys",
@@ -149,12 +141,8 @@ class TestFileIngestorDirectory:
         with pytest.raises(IngestionError, match="patient_journeys"):
             FileIngestor().ingest_directory(tmp_path)
 
-    def test_optional_files_missing_ok(
-        self, tmp_path: Path, journey_records: list[dict]
-    ) -> None:
-        pd.DataFrame(journey_records).to_parquet(
-            tmp_path / "e2i_ml_v3_patient_journeys.parquet"
-        )
+    def test_optional_files_missing_ok(self, tmp_path: Path, journey_records: list[dict]) -> None:
+        pd.DataFrame(journey_records).to_parquet(tmp_path / "e2i_ml_v3_patient_journeys.parquet")
         frames = FileIngestor().ingest_directory(tmp_path)
         assert "patient_journeys" in frames
         assert "hcp_profiles" not in frames
@@ -192,9 +180,7 @@ class TestFileIngestorMapping:
 
 
 class TestLoadFromFiles:
-    def test_file_dir_with_precomputed_split(
-        self, directory_with_all_formats: Path
-    ) -> None:
+    def test_file_dir_with_precomputed_split(self, directory_with_all_formats: Path) -> None:
         result = _load_from_files(
             {"type": "file_dir", "path": str(directory_with_all_formats)},
             entity_column="patient_id",
@@ -221,9 +207,7 @@ class TestLoadFromFiles:
         assert len(result["train"]) == 6
         assert len(result["val"]) == 2
 
-    def test_fallback_to_splitter_without_data_split_column(
-        self, tmp_path: Path
-    ) -> None:
+    def test_fallback_to_splitter_without_data_split_column(self, tmp_path: Path) -> None:
         # No data_split column — must fall through to get_data_splitter().
         df = pd.DataFrame(
             {
@@ -240,11 +224,7 @@ class TestLoadFromFiles:
             entity_column="patient_id",
             date_column="journey_start_date",
         )
-        total = sum(
-            len(result[k])
-            for k in ("train", "val", "test")
-            if result[k] is not None
-        )
+        total = sum(len(result[k]) for k in ("train", "val", "test") if result[k] is not None)
         total += len(result["holdout"]) if result["holdout"] is not None else 0
         assert total == len(df)
 
@@ -300,9 +280,7 @@ class TestSplitFromColumn:
         assert len(result["holdout"]) == 1
 
     def test_val_alias_accepted(self) -> None:
-        df = pd.DataFrame(
-            {"x": [1, 2], "data_split": ["val", "train"]}
-        )
+        df = pd.DataFrame({"x": [1, 2], "data_split": ["val", "train"]})
         result = _split_from_column(df)
         assert len(result["val"]) == 1
         assert len(result["train"]) == 1

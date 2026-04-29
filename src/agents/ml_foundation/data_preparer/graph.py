@@ -7,7 +7,6 @@ import logging
 from typing import Any, Dict, Literal
 
 from langgraph.graph import END, StateGraph
-from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     audit_sampling_frame,

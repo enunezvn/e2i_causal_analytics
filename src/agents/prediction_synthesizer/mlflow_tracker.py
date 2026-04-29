@@ -29,7 +29,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 if TYPE_CHECKING:
     from .state import PredictionSynthesizerState
@@ -301,7 +301,11 @@ class PredictionSynthesizerMLflowTracker:
             # Log additional parameters
             ensemble_pred = state.get("ensemble_prediction")
             if ensemble_pred:
-                method = ensemble_pred.get("ensemble_method", "unknown") if isinstance(ensemble_pred, dict) else "unknown"
+                method = (
+                    ensemble_pred.get("ensemble_method", "unknown")
+                    if isinstance(ensemble_pred, dict)
+                    else "unknown"
+                )
                 mlflow.log_param("ensemble_method", method)
 
             # Log confidence and agreement tags

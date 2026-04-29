@@ -793,8 +793,7 @@ class RAGASEvaluator:
                 else None,
                 rubric_decision=rubric_evaluation.get("decision") if rubric_evaluation else None,
                 rubric_criterion_scores=cast(
-                    Dict[str, float],
-                    rubric_evaluation.get("criterion_scores", {})
+                    Dict[str, float], rubric_evaluation.get("criterion_scores", {})
                 )
                 if rubric_evaluation
                 else {},
@@ -819,7 +818,7 @@ class RAGASEvaluator:
                     "ragas_result": ragas_result,
                     "rubric_evaluation": rubric_evaluation,
                     "passed_thresholds": ragas_result.passed_thresholds,
-                }
+                },
             )
 
 
@@ -937,9 +936,15 @@ class RAGEvaluationPipeline:
         if valid_results:
             # Cast to handle Optional[float] types - we've filtered for non-None
             avg_faith = sum(cast(float, r.faithfulness) for r in valid_results) / len(valid_results)
-            avg_relevancy = sum(cast(float, r.answer_relevancy) for r in valid_results) / len(valid_results)
-            avg_precision = sum(cast(float, r.context_precision) for r in valid_results) / len(valid_results)
-            avg_recall = sum(cast(float, r.context_recall) for r in valid_results) / len(valid_results)
+            avg_relevancy = sum(cast(float, r.answer_relevancy) for r in valid_results) / len(
+                valid_results
+            )
+            avg_precision = sum(cast(float, r.context_precision) for r in valid_results) / len(
+                valid_results
+            )
+            avg_recall = sum(cast(float, r.context_recall) for r in valid_results) / len(
+                valid_results
+            )
             overall = sum(cast(float, r.overall_score) for r in valid_results) / len(valid_results)
         else:
             avg_faith = avg_relevancy = avg_precision = avg_recall = overall = None

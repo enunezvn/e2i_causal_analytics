@@ -43,13 +43,13 @@ class ScenarioAnalyzerNode:
                 allocations,  # type: ignore[arg-type]
                 targets,  # type: ignore[arg-type]
                 constraints,  # type: ignore[arg-type]
-                scenario_count
+                scenario_count,
             )
 
             # Perform sensitivity analysis
             sensitivity = self._analyze_sensitivity(
                 allocations,  # type: ignore[arg-type]
-                targets  # type: ignore[arg-type]
+                targets,  # type: ignore[arg-type]
             )
 
             logger.info(f"Scenario analysis complete: {len(scenarios)} scenarios analyzed")

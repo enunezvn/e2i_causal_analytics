@@ -1197,15 +1197,18 @@ async def _execute_learning_cycle(
         time_range_end = request.time_range_end or now.isoformat()
 
         # Initialize state (cast partial state - remaining fields populated by graph nodes)
-        initial_state = cast(FeedbackLearnerState, {
-            "batch_id": "",
-            "time_range_start": time_range_start,
-            "time_range_end": time_range_end,
-            "focus_agents": request.focus_agents or [],
-            "status": "pending",
-            "errors": [],
-            "warnings": [],
-        })
+        initial_state = cast(
+            FeedbackLearnerState,
+            {
+                "batch_id": "",
+                "time_range_start": time_range_start,
+                "time_range_end": time_range_end,
+                "focus_agents": request.focus_agents or [],
+                "status": "pending",
+                "errors": [],
+                "warnings": [],
+            },
+        )
 
         # Create and run graph
         graph = build_feedback_learner_graph()

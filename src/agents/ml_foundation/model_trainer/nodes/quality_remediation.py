@@ -66,27 +66,30 @@ async def diagnose_and_remediate_quality(state: Dict[str, Any]) -> Dict[str, Any
         pc_recall = precision_constrained.get("recall_at_threshold", 0)
         if pc_precision >= 0.05 and pc_recall >= 0.10:
             # Precision IS fixable by threshold alone — no retraining needed
-            print(f"\n  Quality remediation: THRESHOLD FIXABLE (no retraining needed)")
+            print("\n  Quality remediation: THRESHOLD FIXABLE (no retraining needed)")
             print(f"    Precision at default: {test_precision:.4f}")
             print(f"    Precision at constrained threshold: {pc_precision:.4f}")
             print(f"    Recall at constrained threshold: {pc_recall:.4f}")
             return {
                 "quality_remediation_status": "threshold_fixable",
                 "quality_remediation_attempts": attempts + 1,
-                "quality_remediation_history": history + [{
-                    "attempt": attempts + 1,
-                    "strategy": "threshold_optimization",
-                    "reason": "Precision fixable by threshold alone, no retraining needed",
-                    "pre_remediation_metrics": {
-                        "test_auc": test_auc,
-                        "test_precision": test_precision,
-                    },
-                    "post_threshold_metrics": {
-                        "precision": pc_precision,
-                        "recall": pc_recall,
-                    },
-                    "improved": True,
-                }],
+                "quality_remediation_history": history
+                + [
+                    {
+                        "attempt": attempts + 1,
+                        "strategy": "threshold_optimization",
+                        "reason": "Precision fixable by threshold alone, no retraining needed",
+                        "pre_remediation_metrics": {
+                            "test_auc": test_auc,
+                            "test_precision": test_precision,
+                        },
+                        "post_threshold_metrics": {
+                            "precision": pc_precision,
+                            "recall": pc_recall,
+                        },
+                        "improved": True,
+                    }
+                ],
                 "optimal_threshold": precision_constrained.get("precision_constrained_threshold"),
             }
 
@@ -105,11 +108,15 @@ async def diagnose_and_remediate_quality(state: Dict[str, Any]) -> Dict[str, Any
     if imbalance_severity in ("severe", "extreme"):
         if algo_name == "RandomForest":
             default_hyperparameters["class_weight"] = "balanced"
-            strategy = f"{strategy}+force_class_weight" if strategy != "none" else "force_class_weight"
+            strategy = (
+                f"{strategy}+force_class_weight" if strategy != "none" else "force_class_weight"
+            )
             changes_made = True
         elif algo_name == "LogisticRegression":
             default_hyperparameters["class_weight"] = "balanced"
-            strategy = f"{strategy}+force_class_weight" if strategy != "none" else "force_class_weight"
+            strategy = (
+                f"{strategy}+force_class_weight" if strategy != "none" else "force_class_weight"
+            )
             changes_made = True
 
     # Strategy 3: If no overfitting but poor metrics, still try regularization
@@ -125,33 +132,41 @@ async def diagnose_and_remediate_quality(state: Dict[str, Any]) -> Dict[str, Any
         return {
             "quality_remediation_status": "failed",
             "quality_remediation_attempts": attempts + 1,
-            "quality_remediation_history": history + [{
-                "attempt": attempts + 1,
-                "strategy": "none",
-                "reason": f"No regularization params available for {algo_name}",
-                "improved": False,
-            }],
+            "quality_remediation_history": history
+            + [
+                {
+                    "attempt": attempts + 1,
+                    "strategy": "none",
+                    "reason": f"No regularization params available for {algo_name}",
+                    "improved": False,
+                }
+            ],
         }
 
     # Record this attempt
-    history.append({
-        "attempt": attempts + 1,
-        "strategy": strategy,
-        "overfitting_delta": overfitting_delta,
-        "pre_remediation_metrics": {
-            "train_auc": train_auc,
-            "val_auc": val_auc,
-            "test_auc": test_auc,
-            "test_precision": test_precision,
-        },
-        "params_added": list(
-            set(current_search_space.keys()) - set(state.get("hyperparameter_search_space", {}).keys())
-        ),
-    })
+    history.append(
+        {
+            "attempt": attempts + 1,
+            "strategy": strategy,
+            "overfitting_delta": overfitting_delta,
+            "pre_remediation_metrics": {
+                "train_auc": train_auc,
+                "val_auc": val_auc,
+                "test_auc": test_auc,
+                "test_precision": test_precision,
+            },
+            "params_added": list(
+                set(current_search_space.keys())
+                - set(state.get("hyperparameter_search_space", {}).keys())
+            ),
+        }
+    )
 
     print(f"\n  Quality remediation (attempt {attempts + 1}/{max_attempts}): {strategy}")
     print(f"    Overfitting delta: {overfitting_delta:.3f}")
-    print(f"    Search space expanded: {len(state.get('hyperparameter_search_space', {}))} -> {len(current_search_space)} params")
+    print(
+        f"    Search space expanded: {len(state.get('hyperparameter_search_space', {}))} -> {len(current_search_space)} params"
+    )
 
     return {
         "quality_remediation_status": "enhancing",

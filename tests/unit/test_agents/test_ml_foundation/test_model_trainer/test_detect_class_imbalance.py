@@ -158,49 +158,37 @@ class TestLookupStrategy:
     def test_moderate_non_tree_returns_oversample(self):
         """Should return 'random_oversample' for moderate imbalance with non-tree model."""
         metrics = {"severity": "moderate", "minority_count": 25, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "random_oversample"
 
     def test_severe_enough_minority_returns_smote(self):
         """Should return 'smote' for severe imbalance with enough minority samples."""
         metrics = {"severity": "severe", "minority_count": 10, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "smote"
 
     def test_severe_few_minority_returns_oversample(self):
         """Should return 'random_oversample' for severe imbalance with few minority samples."""
         metrics = {"severity": "severe", "minority_count": 5, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "random_oversample"
 
     def test_extreme_large_minority_returns_combined(self):
         """Should return 'combined' for extreme imbalance with enough samples."""
         metrics = {"severity": "extreme", "minority_count": 15, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "combined"
 
     def test_extreme_medium_minority_returns_oversample(self):
         """Should return 'random_oversample' for extreme imbalance with medium minority."""
         metrics = {"severity": "extreme", "minority_count": 7, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "random_oversample"
 
     def test_extreme_tiny_minority_returns_class_weight(self):
         """Should return 'class_weight' for extreme imbalance with very few samples."""
         metrics = {"severity": "extreme", "minority_count": 3, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "class_weight"
 
     @pytest.mark.parametrize(
@@ -232,9 +220,7 @@ class TestLookupStrategy:
     def test_severe_tree_returns_class_weight(self, model_name):
         """Tree models should get class_weight instead of SMOTE at severe imbalance."""
         metrics = {"severity": "severe", "minority_count": 15, "total_samples": 100}
-        strategy, rationale = _lookup_strategy(
-            metrics, model_name, "binary_classification"
-        )
+        strategy, rationale = _lookup_strategy(metrics, model_name, "binary_classification")
         assert strategy == "class_weight"
         assert "memorization" in rationale.lower() or "synthetic" in rationale.lower()
 
@@ -251,26 +237,20 @@ class TestLookupStrategy:
     def test_extreme_tree_returns_class_weight(self, model_name):
         """Tree models should get class_weight instead of combined at extreme imbalance."""
         metrics = {"severity": "extreme", "minority_count": 15, "total_samples": 1000}
-        strategy, rationale = _lookup_strategy(
-            metrics, model_name, "binary_classification"
-        )
+        strategy, rationale = _lookup_strategy(metrics, model_name, "binary_classification")
         assert strategy == "class_weight"
         assert "memorization" in rationale.lower() or "synthetic" in rationale.lower()
 
     def test_severe_non_tree_still_returns_smote(self):
         """Non-tree models should still get SMOTE at severe imbalance."""
         metrics = {"severity": "severe", "minority_count": 15, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "smote"
 
     def test_extreme_non_tree_still_returns_combined(self):
         """Non-tree models should still get combined at extreme imbalance."""
         metrics = {"severity": "extreme", "minority_count": 15, "total_samples": 100}
-        strategy, _ = _lookup_strategy(
-            metrics, "LogisticRegression", "binary_classification"
-        )
+        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "combined"
 
     def test_strategy_in_valid_strategies(self):
@@ -283,12 +263,9 @@ class TestLookupStrategy:
                         "minority_count": mc,
                         "total_samples": 100,
                     }
-                    strategy, _ = _lookup_strategy(
-                        metrics, alg, "binary_classification"
-                    )
+                    strategy, _ = _lookup_strategy(metrics, alg, "binary_classification")
                     assert strategy in VALID_STRATEGIES, (
-                        f"strategy={strategy!r} for "
-                        f"severity={severity}, mc={mc}, alg={alg}"
+                        f"strategy={strategy!r} for severity={severity}, mc={mc}, alg={alg}"
                     )
 
 
@@ -330,10 +307,7 @@ class TestDeterministicStrategyMatrix:
             "minority_count": minority_count,
             "total_samples": 100,
         }
-        results = [
-            _lookup_strategy(metrics, algorithm, "binary_classification")
-            for _ in range(5)
-        ]
+        results = [_lookup_strategy(metrics, algorithm, "binary_classification") for _ in range(5)]
         # All five tuples must compare equal.
         assert all(r == results[0] for r in results), (
             f"non-deterministic output for ({severity}, mc={minority_count}, {algorithm}): "

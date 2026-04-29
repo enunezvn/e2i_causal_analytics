@@ -64,8 +64,7 @@ async def _register_model_mlflow(
 
                 result = mlflow.register_model(model_uri, deployment_name)
                 logger.info(
-                    f"Registered model from models:/ URI: "
-                    f"{deployment_name} v{result.version}"
+                    f"Registered model from models:/ URI: {deployment_name} v{result.version}"
                 )
                 return deployment_name, int(result.version), "None"
             except Exception as e:

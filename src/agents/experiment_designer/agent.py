@@ -358,9 +358,7 @@ class ExperimentDesignerAgent(SkillsMixin):
                 design_type=None,  # Will be determined during execution
             ):
                 # Execute graph asynchronously
-                final_state = cast(
-                    ExperimentDesignState, await self.graph.ainvoke(initial_state)
-                )
+                final_state = cast(ExperimentDesignState, await self.graph.ainvoke(initial_state))
 
                 # Convert to output model
                 output = self._create_output(final_state)
@@ -378,9 +376,7 @@ class ExperimentDesignerAgent(SkillsMixin):
                 return output
         else:
             # Execute graph asynchronously without MLflow
-            final_state = cast(
-                ExperimentDesignState, await self.graph.ainvoke(initial_state)
-            )
+            final_state = cast(ExperimentDesignState, await self.graph.ainvoke(initial_state))
 
             # Convert to output model
             output = self._create_output(final_state)
@@ -528,7 +524,8 @@ class ExperimentDesignerAgent(SkillsMixin):
         # Extract errors as list of dicts (convert ErrorDetails TypedDicts)
         raw_errors = state.get("errors", [])
         errors: list[dict[Any, Any]] = [
-            dict(e) for e in raw_errors  # type: ignore[arg-type]
+            dict(e)
+            for e in raw_errors  # type: ignore[arg-type]
         ]
 
         return ExperimentDesignerOutput(

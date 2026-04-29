@@ -74,15 +74,9 @@ def _make_two_class_split(
     """
     n_pos = max(1, int(round(n * pos_share)))
     n_neg = n - n_pos
-    pos_scores = np.clip(
-        rng.normal(loc=pos_mean, scale=spread, size=n_pos), 0.001, 0.999
-    )
-    neg_scores = np.clip(
-        rng.normal(loc=neg_mean, scale=spread, size=n_neg), 0.001, 0.999
-    )
-    y_true = np.concatenate(
-        [np.ones(n_pos, dtype=int), np.zeros(n_neg, dtype=int)]
-    )
+    pos_scores = np.clip(rng.normal(loc=pos_mean, scale=spread, size=n_pos), 0.001, 0.999)
+    neg_scores = np.clip(rng.normal(loc=neg_mean, scale=spread, size=n_neg), 0.001, 0.999)
+    y_true = np.concatenate([np.ones(n_pos, dtype=int), np.zeros(n_neg, dtype=int)])
     y_proba_pos = np.concatenate([pos_scores, neg_scores])
     order = rng.permutation(len(y_true))
     y_true = y_true[order]
@@ -102,12 +96,8 @@ def evaluator_result() -> dict:
     """
     rng = np.random.default_rng(20260426)
     # Mirror the tier-0 synthetic generator's default regime (positive_rate=0.30).
-    y_val, y_val_pred, y_val_proba = _make_two_class_split(
-        rng, n=300, pos_share=0.30
-    )
-    y_test, y_test_pred, y_test_proba = _make_two_class_split(
-        rng, n=225, pos_share=0.30
-    )
+    y_val, y_val_pred, y_val_proba = _make_two_class_split(rng, n=300, pos_share=0.30)
+    y_test, y_test_pred, y_test_proba = _make_two_class_split(rng, n=225, pos_share=0.30)
     cost_matrix = _default_demo_cost_matrix()
 
     result = _compute_classification_metrics(
@@ -133,9 +123,7 @@ class TestBusinessUtilityEmitted:
     the math must be the closed-form expectation, not an approximation.
     """
 
-    def test_validation_business_utility_is_finite_float(
-        self, evaluator_result: dict
-    ) -> None:
+    def test_validation_business_utility_is_finite_float(self, evaluator_result: dict) -> None:
         bu = evaluator_result["validation_metrics"].get("business_utility")
         assert bu is not None, (
             "validation_metrics.business_utility was None — the placeholder "
@@ -145,9 +133,7 @@ class TestBusinessUtilityEmitted:
         assert isinstance(bu, float)
         assert np.isfinite(bu), f"validation business_utility is not finite: {bu!r}"
 
-    def test_test_business_utility_is_finite_float(
-        self, evaluator_result: dict
-    ) -> None:
+    def test_test_business_utility_is_finite_float(self, evaluator_result: dict) -> None:
         bu = evaluator_result["test_metrics"].get("business_utility")
         assert bu is not None, (
             "test_metrics.business_utility was None — the placeholder "
@@ -156,9 +142,7 @@ class TestBusinessUtilityEmitted:
         assert isinstance(bu, float)
         assert np.isfinite(bu), f"test business_utility is not finite: {bu!r}"
 
-    def test_top_level_mirror_matches_test_metric(
-        self, evaluator_result: dict
-    ) -> None:
+    def test_top_level_mirror_matches_test_metric(self, evaluator_result: dict) -> None:
         """Top-level ``business_utility`` is a mirror of test_metrics's
         — Tier0OutputMapper and the deployment decision tools both read
         the flat key. They must agree."""
@@ -166,9 +150,7 @@ class TestBusinessUtilityEmitted:
         nested = evaluator_result["test_metrics"]["business_utility"]
         assert top == nested
 
-    def test_business_utility_matches_closed_form_arithmetic(
-        self, evaluator_result: dict
-    ) -> None:
+    def test_business_utility_matches_closed_form_arithmetic(self, evaluator_result: dict) -> None:
         """Recompute from the confusion matrix the report exposes and
         assert byte-exact equality. No ``pytest.approx`` here — the
         helper just multiplies and sums, no float drift is acceptable.
@@ -194,9 +176,7 @@ class TestBusinessUtilityEmitted:
             f"cost_matrix={cost_matrix!r}"
         )
 
-    def test_placeholder_shape_is_unit_scaled(
-        self, evaluator_result: dict
-    ) -> None:
+    def test_placeholder_shape_is_unit_scaled(self, evaluator_result: dict) -> None:
         """Belt-and-braces: independently confirm the placeholder dict
         exposes the unit-shape contract the synthetic test relies on. If
         someone widens the helper to dollar-denominated values without

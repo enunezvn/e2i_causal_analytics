@@ -359,7 +359,9 @@ class CausalImpactAgent(SkillsMixin):
             "model_used": estimation_result.get("method", "unknown"),  # Contract REQUIRED
             "key_insights": interpretation.get("key_findings", []),  # Contract REQUIRED
             "assumption_warnings": self._extract_assumption_warnings(
-                interpretation, estimation_result, refutation_results  # type: ignore[arg-type]
+                interpretation,
+                estimation_result,
+                refutation_results,  # type: ignore[arg-type]
             ),  # Contract REQUIRED
             "actionable_recommendations": interpretation.get(
                 "recommendations", []
@@ -367,7 +369,9 @@ class CausalImpactAgent(SkillsMixin):
             "requires_further_analysis": overall_confidence < 0.7,  # Contract REQUIRED
             "refutation_passed": refutation_passed,  # Contract REQUIRED
             "executive_summary": self._generate_executive_summary(
-                interpretation, estimation_result, overall_confidence  # type: ignore[arg-type]
+                interpretation,
+                estimation_result,
+                overall_confidence,  # type: ignore[arg-type]
             ),  # Contract REQUIRED
             # Rich metadata
             "mechanism_explanation": interpretation.get("mechanism_explanation"),  # type: ignore[typeddict-item]

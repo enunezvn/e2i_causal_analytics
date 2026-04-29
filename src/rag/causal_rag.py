@@ -94,7 +94,9 @@ class CausalRAG:
 
         # 4. Rerank and deduplicate
         if self.reranker and all_results:
-            return cast(List[RetrievalResult], self.reranker.rerank(all_results, query, top_k=top_k))
+            return cast(
+                List[RetrievalResult], self.reranker.rerank(all_results, query, top_k=top_k)
+            )
 
         return all_results[:top_k]
 

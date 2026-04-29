@@ -157,7 +157,9 @@ class ConfidenceScorer:
 
         # CI overlap from pairwise (average of available)
         ci_overlaps: List[float] = [
-            p.get("ci_overlap") for p in pairwise if p.get("ci_overlap") is not None  # type: ignore[misc]
+            p.get("ci_overlap")
+            for p in pairwise
+            if p.get("ci_overlap") is not None  # type: ignore[misc]
         ]
         ci_overlap = sum(ci_overlaps) / len(ci_overlaps) if ci_overlaps else 0.5
 
