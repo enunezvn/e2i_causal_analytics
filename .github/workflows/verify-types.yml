@@ -3,12 +3,18 @@ name: Verify OpenAPI Types
 on:
   pull_request:
     paths:
-      - "src/api/**/*.py"
+      # Any Python source can affect the OpenAPI schema — API routes import
+      # Pydantic models from src/kpi/, src/memory/, src/feature_store/,
+      # src/mlops/, src/rag/, src/agents/, etc. Narrowing to src/api/** misses
+      # those schema-affecting changes.
+      - "src/**/*.py"
       - "frontend/src/types/generated/**"
+      - ".spectral.yml"
   push:
     branches: [main]
     paths:
-      - "src/api/**/*.py"
+      - "src/**/*.py"
+      - ".spectral.yml"
 
 jobs:
   verify-types:
@@ -62,3 +68,22 @@ jobs:
             fi
             rm src/types/generated/api.ts.new
           fi
+
+      - name: Install Spectral
+        run: npm install -g @stoplight/spectral-cli
+
+      - name: Lint OpenAPI spec
+        run: spectral lint openapi.json --ruleset .spectral.yml
+
+      - name: Generate Redoc HTML
+        run: |
+          npx --yes @redocly/cli build-docs openapi.json \
+            --output redoc.html \
+            --title "E2I Causal Analytics API"
+
+      - name: Upload Redoc HTML artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: redoc-html
+          path: redoc.html
+          retention-days: 30

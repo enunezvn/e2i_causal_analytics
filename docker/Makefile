@@ -123,7 +123,6 @@ build-frontend: ## Build Frontend image only
 push: ## Push images to registry (requires REGISTRY env var)
 	@echo "$(YELLOW)Pushing images to $(REGISTRY)...$(RESET)"
 	docker push $(REGISTRY)/e2i-api:latest
-	docker push $(REGISTRY)/e2i-frontend:latest
 	docker push $(REGISTRY)/e2i-worker:latest
 
 # -----------------------------------------------------------------------------

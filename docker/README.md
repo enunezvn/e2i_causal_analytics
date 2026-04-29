@@ -149,4 +149,3 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml res
 | `frontend/Dockerfile` | Multi-stage build for React app |
 | `Dockerfile.feast` | Feast feature server |
 | `nginx/nginx.conf` | Docker nginx (for full-Docker deployments) |
-| `frontend/nginx.conf` | Frontend nginx (production build serving) |
