@@ -72,15 +72,14 @@ COPY patches/ ./patches/
 
 RUN python -m venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir pytest pytest-cov pytest-asyncio
+    pip install --no-cache-dir -r requirements.txt
 
 # Add venv to PATH
 ENV PATH="/app/.venv/bin:$PATH"
 ENV VIRTUAL_ENV="/app/.venv"
 
-# Install debugpy for VS Code remote debugging
-RUN pip install debugpy
+# Install debugpy for VS Code remote debugging (pinned for reproducible dev images)
+RUN pip install --no-cache-dir debugpy==1.8.20
 
 # Copy source code (will be overridden by bind mount in dev)
 COPY src/ ./src/
@@ -94,6 +93,14 @@ RUN mkdir -p /app/data/ml_artifacts \
              /app/data/experiment_designs \
              /app/data/feature_cache \
              /app/tmp
+
+# Create non-root user for security (mirrors production stage UID/GID).
+# Bind-mounts in dev compose are owned by host UID 1000, so this aligns.
+RUN groupadd --gid 1000 e2i && \
+    useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home e2i && \
+    chown -R e2i:e2i /app
+
+USER e2i
 
 # Expose ports
 EXPOSE 8000 5678

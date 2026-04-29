@@ -338,7 +338,7 @@ class DataSplitter:
         entity_splits = {}
         for entity in entities:
             # Use hash for deterministic assignment
-            hash_val = int(hashlib.md5(str(entity).encode()).hexdigest(), 16)
+            hash_val = int(hashlib.md5(str(entity).encode(), usedforsecurity=False).hexdigest(), 16)
             normalized = hash_val / (2**128)
 
             train_end = config.train_ratio

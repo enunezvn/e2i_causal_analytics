@@ -144,8 +144,9 @@ class HTTPModelClientConfig:
 
     # Enable Opik tracing
     enable_tracing: bool = field(
-        default_factory=lambda: os.environ.get("MODEL_CLIENT_ENABLE_TRACING", "true").lower()
-        == "true"
+        default_factory=lambda: (
+            os.environ.get("MODEL_CLIENT_ENABLE_TRACING", "true").lower() == "true"
+        )
     )
 
 

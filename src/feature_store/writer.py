@@ -233,7 +233,7 @@ class FeatureWriter:
             sorted_entity = json.dumps(entity_values, sort_keys=True)
             import hashlib
 
-            entity_hash = hashlib.md5(sorted_entity.encode()).hexdigest()
+            entity_hash = hashlib.md5(sorted_entity.encode(), usedforsecurity=False).hexdigest()
 
             if feature_group:
                 pattern = f"fs:{entity_hash}:fg:{feature_group}*"

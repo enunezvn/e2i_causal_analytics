@@ -1,0 +1,13 @@
+# Hadolint configuration for E2I Causal Analytics Dockerfiles.
+# https://github.com/hadolint/hadolint
+ignored:
+  # DL3008 — Pin apt-get install versions.
+  # Pinning Debian package versions to point releases is operationally
+  # fragile: the Debian repos rotate package versions on every minor
+  # security release, so a pinned version drifts off the official mirror
+  # within weeks. The base image (`python:3.12-slim-bookworm`) is itself
+  # rebuilt regularly and brings the latest patched packages, which is
+  # the right granularity for reproducibility here. Industry consensus
+  # (see hadolint/hadolint#1166) is to accept this warning when the
+  # base image is itself versioned.
+  - DL3008

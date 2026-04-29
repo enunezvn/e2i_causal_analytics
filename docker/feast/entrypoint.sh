@@ -62,6 +62,14 @@ print('[entrypoint] rendered /feast/feature_store.yaml from template')
 PY
 
 echo "[entrypoint] feast version: $(feast version)"
+# Hard-fail on Feast SDK drift — the registry-proto layout, parse_repo
+# semantics, and Pydantic warnings are all version-coupled.
+# Brace block (NOT subshell): keeps everything in the current shell — clearer
+# intent, no subshell overhead. With 'set -e' active a subshell 'exit 1'
+# would still abort the script via the failed pipeline, but the brace form
+# is more direct and avoids the subshell footgun.
+# Block 6B-infra-4.
+feast version | grep -q "0.43.0" || { echo "[entrypoint] FATAL: Feast SDK version drift (expected 0.43.0)"; exit 1; }
 echo "[entrypoint] feast apply (skip source validation)..."
 feast --chdir /feast apply --skip-source-validation
 

@@ -374,7 +374,7 @@ class FeatureAnalyzerAdapter:
         features_str = ",".join(sorted(selected_features))
         combined = f"{config_str}:{features_str}"
 
-        return hashlib.md5(combined.encode()).hexdigest()[:8]
+        return hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8]
 
     # =========================================================================
     # Feast Integration Methods

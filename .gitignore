@@ -120,7 +120,12 @@ archive/
 
 # Documentation - ignore generated/local-only subdirectories
 docs/Archive/
-docs/results/
+# Use the wildcard form (NOT a bare dir path) so per-file negations below
+# can take effect: gitignore can't re-include files inside an ignored dir.
+docs/results/*
+# Block 0 + PR #2 baseline + verification docs are tracked exceptions
+!docs/results/tier0_remediation_baseline_*.md
+!docs/results/feast_infra_*.md
 
 # OS
 Thumbs.db
@@ -186,3 +191,4 @@ docker/e2i_docker_volume_strategy.html
 
 # Stale deploy artifacts (BentoML now runs in Docker)
 deploy/
+backups/

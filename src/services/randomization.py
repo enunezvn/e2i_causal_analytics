@@ -393,7 +393,12 @@ class RandomizationService:
                 block.extend([variant] * count)
 
             # Shuffle block deterministically
-            seed = int(hashlib.md5(f"{experiment_id}:block_{block_num}".encode()).hexdigest(), 16)
+            seed = int(
+                hashlib.md5(
+                    f"{experiment_id}:block_{block_num}".encode(), usedforsecurity=False
+                ).hexdigest(),
+                16,
+            )
             rng = random.Random(seed)
             rng.shuffle(block)
 

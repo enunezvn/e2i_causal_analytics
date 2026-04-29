@@ -86,7 +86,7 @@ async def repository(monkeypatch):
     monkeypatch.setattr(factories, "_supabase_client", None)
     monkeypatch.setattr(module, "_shap_analysis_repository", None)
 
-    repo = get_shap_analysis_repository()
+    repo = await get_shap_analysis_repository()
     yield repo
     # Note: We don't clean up test data here as it may be useful for debugging
     # In production, you might want to delete test records after tests
@@ -349,20 +349,22 @@ class TestEndToEndFlow:
 class TestRepositoryInitialization:
     """Tests for repository initialization and singleton behavior."""
 
-    def test_singleton_returns_same_instance(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_singleton_returns_same_instance(self, monkeypatch):
         """Test that singleton pattern works correctly."""
         import src.repositories.shap_analysis as module
 
         # Reset singleton
         monkeypatch.setattr(module, "_shap_analysis_repository", None)
 
-        repo1 = get_shap_analysis_repository()
-        repo2 = get_shap_analysis_repository()
+        repo1 = await get_shap_analysis_repository()
+        repo2 = await get_shap_analysis_repository()
 
         assert repo1 is repo2
 
-    def test_repository_has_correct_table_name(self):
+    @pytest.mark.asyncio
+    async def test_repository_has_correct_table_name(self):
         """Test that repository uses correct table name."""
-        repo = get_shap_analysis_repository()
+        repo = await get_shap_analysis_repository()
 
         assert repo.table_name == "ml_shap_analyses"

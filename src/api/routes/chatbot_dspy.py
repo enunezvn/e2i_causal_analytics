@@ -3574,7 +3574,10 @@ class ChatbotOptimizer:
         # Consistent hash assignment
         import hashlib
 
-        hash_val = int(hashlib.md5(f"{session_id}:{module_name}".encode()).hexdigest(), 16)
+        hash_val = int(
+            hashlib.md5(f"{session_id}:{module_name}".encode(), usedforsecurity=False).hexdigest(),
+            16,
+        )
 
         # 50% control, 50% split among variants
         if hash_val % 2 == 0:

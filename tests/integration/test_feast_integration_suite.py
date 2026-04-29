@@ -90,7 +90,9 @@ from typing import Any
 import pytest
 
 from tests.integration._feast_helpers import (
+    build_minimal_feature_view,
     feast_integration_available,
+    proto_bytes,
     push_source_name,
 )
 
@@ -631,73 +633,12 @@ def test_re_registration_with_identical_spec_is_idempotent(
 # comparison) catches the three drift cases (TTL change, schema add/remove,
 # source rename). They are NOT assertions about whether Feast itself
 # rejects drifted specs — Feast 0.43 upserts them happily.
-
-
-def _build_minimal_feature_view(
-    name: str,
-    *,
-    ttl: timedelta,
-    feature_names: list[str],
-    source_name: str | None = None,
-) -> Any:
-    """Build a FeatureView in memory (no apply) for proto-byte comparison.
-
-    Mirrors the construction in ``FeastClient.register_feature_view`` but
-    skips the apply call so we can compute ``to_proto().SerializeToString()``
-    on a hypothetical-but-not-yet-applied FV.
-
-    The ``source_name`` argument perturbs the **outer** ``PushSource``
-    name (the source the FV directly attaches to), NOT the inner
-    ``FileSource`` (the throwaway stub backing the PushSource). This is
-    the layer that matters for the source-rename drift test because Feast
-    serialises the PushSource name into the FV proto; the FileSource
-    identity rides along but isn't the perturbation surface here. When
-    ``source_name`` is ``None`` the PushSource follows the canonical
-    ``{name}_push_source`` convention shared with
-    ``FeastClient.register_feature_view`` (and the
-    ``push_source_name`` helper in ``_feast_helpers``).
-    """
-    from feast import Entity, FeatureView, Field, PushSource
-    from feast.types import Float64
-
-    schema = [Field(name=fn, dtype=Float64) for fn in feature_names]
-    push_src = source_name if source_name is not None else push_source_name(name)
-
-    # We build a stub batch source ref — we do NOT apply this FV, so the
-    # batch source identity doesn't have to round-trip through Feast. The
-    # proto bytes will differ if and only if the configured stub source name
-    # differs, which is the contract we want for the source-rename test.
-    from feast import FileSource
-
-    batch_source = FileSource(
-        name=f"{name}_batch_stub",
-        path=f"/tmp/{name}_stub.parquet",
-        timestamp_field="event_timestamp",
-    )
-    push_source = PushSource(name=push_src, batch_source=batch_source)
-
-    entity = Entity(name=ENTITY_NAME, join_keys=[ENTITY_JOIN_KEY])
-
-    return FeatureView(
-        name=name,
-        entities=[entity],
-        ttl=ttl,
-        schema=schema,
-        source=push_source,
-        online=True,
-    )
-
-
-def _proto_bytes(fv: Any) -> bytes:
-    """Return a stable byte-string for a FeatureView proto.
-
-    Direct ``SerializeToString()`` is sufficient for our drift-detection
-    contract: Feast's proto definition is deterministic for the fields we
-    perturb (ttl, schema, source name). We do NOT use ``SerializeToString(
-    deterministic=True)`` because Feast 0.43's wrapper chain doesn't expose
-    that kwarg uniformly across proto versions.
-    """
-    return bytes(fv.to_proto().SerializeToString())
+#
+# The two helpers these tests rely on (``proto_bytes`` for serialisation,
+# ``build_minimal_feature_view`` for in-memory FV construction) live in
+# ``tests/integration/_feast_helpers.py`` so the apply-idempotency gate
+# (``test_feast_apply_idempotent``) can share the same drift-detection
+# semantics without cross-test imports.
 
 
 def test_schema_deep_diff_detects_ttl_change() -> None:
@@ -708,15 +649,15 @@ def test_schema_deep_diff_detects_ttl_change() -> None:
     is still required, which the module-level ``importorskip`` enforces.)
     """
     name = "test_6b_diff_ttl"
-    base = _build_minimal_feature_view(
+    base = build_minimal_feature_view(
         name, ttl=timedelta(days=7), feature_names=list(SELECTED_FEATURES)
     )
-    drifted = _build_minimal_feature_view(
+    drifted = build_minimal_feature_view(
         name, ttl=timedelta(days=14), feature_names=list(SELECTED_FEATURES)
     )
 
-    base_bytes = _proto_bytes(base)
-    drifted_bytes = _proto_bytes(drifted)
+    base_bytes = proto_bytes(base)
+    drifted_bytes = proto_bytes(drifted)
 
     assert base_bytes != drifted_bytes, (
         "TTL change (7d -> 14d) produced byte-identical FV protos. "
@@ -727,13 +668,13 @@ def test_schema_deep_diff_detects_ttl_change() -> None:
 def test_schema_deep_diff_detects_schema_field_add() -> None:
     """Drift case 2 — adding a field produces detectable proto-byte drift."""
     name = "test_6b_diff_schema_add"
-    base = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
-    drifted = _build_minimal_feature_view(
+    base = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
+    drifted = build_minimal_feature_view(
         name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"]
     )
 
-    base_bytes = _proto_bytes(base)
-    drifted_bytes = _proto_bytes(drifted)
+    base_bytes = proto_bytes(base)
+    drifted_bytes = proto_bytes(drifted)
 
     assert base_bytes != drifted_bytes, (
         "Adding a schema field (trx_count + nrx_count) produced byte-"
@@ -750,11 +691,11 @@ def test_schema_deep_diff_detects_schema_field_remove() -> None:
     asymmetric. This test catches the symmetric-detection regression.
     """
     name = "test_6b_diff_schema_remove"
-    base = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"])
-    drifted = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
+    base = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"])
+    drifted = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
 
-    base_bytes = _proto_bytes(base)
-    drifted_bytes = _proto_bytes(drifted)
+    base_bytes = proto_bytes(base)
+    drifted_bytes = proto_bytes(drifted)
 
     assert base_bytes != drifted_bytes, (
         "Removing a schema field (nrx_count dropped) produced byte-"
@@ -772,21 +713,21 @@ def test_schema_deep_diff_detects_source_rename() -> None:
     serialisation embeds the source's name, so a byte diff catches it.
     """
     name = "test_6b_diff_source_rename"
-    base = _build_minimal_feature_view(
+    base = build_minimal_feature_view(
         name,
         ttl=TEST_TTL,
         feature_names=list(SELECTED_FEATURES),
         source_name=push_source_name(name),
     )
-    drifted = _build_minimal_feature_view(
+    drifted = build_minimal_feature_view(
         name,
         ttl=TEST_TTL,
         feature_names=list(SELECTED_FEATURES),
         source_name=f"{push_source_name(name)}_renamed",
     )
 
-    base_bytes = _proto_bytes(base)
-    drifted_bytes = _proto_bytes(drifted)
+    base_bytes = proto_bytes(base)
+    drifted_bytes = proto_bytes(drifted)
 
     assert base_bytes != drifted_bytes, (
         "Source rename (push_source -> push_source_renamed) produced byte-"
@@ -803,13 +744,13 @@ def test_schema_deep_diff_treats_identical_specs_as_equal() -> None:
     proto-byte comparison is meaningful.
     """
     name = "test_6b_diff_identical"
-    a = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES))
-    b = _build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES))
+    a = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES))
+    b = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=list(SELECTED_FEATURES))
 
-    assert _proto_bytes(a) == _proto_bytes(b), (
+    assert proto_bytes(a) == proto_bytes(b), (
         "Two FVs constructed with identical kwargs produced different "
         "proto bytes. Either Feast injects a non-deterministic field "
-        "(timestamp, uuid) into to_proto(), or _build_minimal_feature_view "
+        "(timestamp, uuid) into to_proto(), or build_minimal_feature_view "
         "has a hidden source of variance. The drift tests above would be "
         "false-positive-prone until this is fixed."
     )

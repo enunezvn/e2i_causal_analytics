@@ -11,3 +11,7 @@ pytest-xdist>=3.5.0
 numpy>=1.26.0
 pandas>=2.0.0
 scikit-learn>=1.5.0
+
+# tests/conftest.py imports `from dotenv import load_dotenv` at module top,
+# so even the synthetic-only test path needs python-dotenv to import.
+python-dotenv>=1.0.0

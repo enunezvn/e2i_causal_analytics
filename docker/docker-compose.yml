@@ -29,6 +29,15 @@ x-common-env: &common-env
   SUPABASE_KEY: ${SUPABASE_KEY}
   SUPABASE_ANON_KEY: ${SUPABASE_KEY}
   SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+  # Direct PostgreSQL connection for inside-network DB clients (the
+  # Block 6B-infra-2* ETLs in src/etl/*, plus any ad-hoc psycopg2 caller).
+  # The host-side .env file's SUPABASE_DB_URL points at the Supavisor pooler
+  # on 127.0.0.1:5432 which only accepts the `postgres.<project-ref>` user
+  # format; inside the docker network we connect directly to the supabase-db
+  # container as the vanilla `postgres` user. SUPABASE_POSTGRES_PASSWORD must
+  # be set in the host .env (it mirrors /opt/supabase/docker/.env's
+  # POSTGRES_PASSWORD value).
+  SUPABASE_DB_URL: postgresql://postgres:${SUPABASE_POSTGRES_PASSWORD:?SUPABASE_POSTGRES_PASSWORD must be set}@supabase-db:5432/postgres
   REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
   FALKORDB_URL: redis://:${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}@falkordb:6379/0
   MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -52,6 +61,9 @@ x-common-worker: &common-worker
   networks:
     - e2i_network
     - mlops_network
+    # Reach supabase-db for materialize jobs (Feast offline pull) and ETL tasks
+    # that hit the canonical Feast tables (Block 6B-infra-4).
+    - supabase-network
 
 # =============================================================================
 # VOLUMES
@@ -87,6 +99,25 @@ volumes:
   feature_cache:
     driver: local
     name: e2i_feature_cache
+  # Shared Feast registry (data/registry.db will live inside this volume once
+  # the api-side consumer is migrated off the feature_repo bind mount).
+  #
+  # INFRASTRUCTURE-ONLY (Block 6B-infra-4): feast_registry is plumbed as a
+  # named volume ready to host the canonical registry, but the api-side
+  # consumer migration is staged for a follow-up sub-block. Today the parity
+  # test (tests/integration/test_feast_offline_online_parity.py:160) still
+  # resolves the registry via the feature_repo bind mount — both the feast
+  # container and the api container bind-mount feature_repo, and `feast apply`
+  # writes feature_repo/data/registry.db (Block 3B pattern).
+  #
+  # The volume is in place so the consumer migration is one yaml-config edit
+  # away: flip feature_store.yaml.tmpl `registry: data/registry.db` to a path
+  # under /app/feast_registry, run `feast apply` to populate, and update the
+  # parity test fixture to override repo_path. Until then, the volume is
+  # mounted but not consumed by the api container.
+  feast_registry:
+    driver: local
+    name: e2i_feast_registry
   agent_outputs:
     driver: local
     name: e2i_agent_outputs
@@ -119,15 +150,9 @@ networks:
   mlops_network:
     driver: bridge
     name: e2i_mlops_network
-  # External Supabase network (for postgres-exporter to reach supabase-db).
-  # NOTE: this declaration is currently stale — the actual Supabase network is
-  # `supabase-network`, not `supabase_default`. Kept here for backwards-compat
-  # with postgres-exporter; reconciliation is a Block 6B follow-up.
-  supabase_default:
-    external: true
-    name: supabase_default
-  # External Supabase network — feast (offline store) and api (parity test
-  # invocation) need to reach supabase-db on this network.
+  # External Supabase network — feast (offline store), api (parity test
+  # invocation), and postgres-exporter (Supabase DB metrics scrape) need to
+  # reach supabase-db on this network.
   supabase-network:
     external: true
     name: supabase-network
@@ -392,7 +417,12 @@ services:
       - "127.0.0.1:6567:6566"
     volumes:
       - ../feature_repo:/feast-src:ro  # Source: entities.py, data_sources.py, features/, feature_store.yaml.tmpl
-      - feature_cache:/feast/data       # Registry + materialization output (writable, persistent)
+      # Registry + materialization output (writable, persistent). Block 6B-infra-4
+      # carved this out of feature_cache into its own named volume so the
+      # registry has explicit ownership; the api-side consumer migration off
+      # the feature_repo bind mount is staged for a follow-up (see the
+      # feast_registry volume comment in the volumes: block).
+      - feast_registry:/feast/data
     environment:
       - FEAST_OFFLINE_STORE_TYPE=file
       - FEAST_ONLINE_STORE_TYPE=redis
@@ -692,6 +722,9 @@ services:
       start_period: 30s
     networks:
       - e2i_network
+      # Reach supabase-db for scheduled Feast materialize-incremental beats
+      # and ETL drift checks that hit the canonical tables (Block 6B-infra-4).
+      - supabase-network
     security_opt:
       - no-new-privileges:true
     read_only: true
@@ -871,8 +904,11 @@ services:
       - "e2i.component=node-exporter"
 
   # Postgres Exporter - Supabase Database Metrics
-  # Connects directly to supabase-db via the external supabase_default network
-  # (bypasses the pooler, which is important for system catalog queries)
+  # Connects directly to supabase-db via the external supabase-network
+  # (bypasses the pooler, which is important for system catalog queries).
+  # Block 6B-infra-4 moved this off the legacy `supabase_default` network
+  # (used by docker/docker-compose.monitoring.yml's standalone deploy) onto
+  # `supabase-network`, the canonical Supabase Docker network.
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.16.0
     container_name: e2i_postgres_exporter
@@ -882,7 +918,7 @@ services:
       DATA_SOURCE_NAME: "postgresql://supabase_admin:${SUPABASE_POSTGRES_PASSWORD:?SUPABASE_POSTGRES_PASSWORD must be set}@supabase-db:5432/postgres?sslmode=disable"
     networks:
       - e2i_network
-      - supabase_default
+      - supabase-network
     security_opt:
       - no-new-privileges:true
     deploy:

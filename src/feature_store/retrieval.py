@@ -284,7 +284,7 @@ class FeatureRetriever:
         # Build key components
         key_parts = [
             "fs",  # feature store prefix
-            hashlib.md5(sorted_entity.encode()).hexdigest(),
+            hashlib.md5(sorted_entity.encode(), usedforsecurity=False).hexdigest(),
         ]
 
         if feature_group:
@@ -292,7 +292,9 @@ class FeatureRetriever:
 
         if feature_names:
             sorted_features = "|".join(sorted(feature_names))
-            key_parts.append(f"fn:{hashlib.md5(sorted_features.encode()).hexdigest()}")
+            key_parts.append(
+                f"fn:{hashlib.md5(sorted_features.encode(), usedforsecurity=False).hexdigest()}"
+            )
 
         return ":".join(key_parts)
 
@@ -345,7 +347,7 @@ class FeatureRetriever:
 
             # Generate pattern to match all cache keys for this entity
             sorted_entity = json.dumps(entity_values, sort_keys=True)
-            entity_hash = hashlib.md5(sorted_entity.encode()).hexdigest()
+            entity_hash = hashlib.md5(sorted_entity.encode(), usedforsecurity=False).hexdigest()
 
             if feature_group:
                 pattern = f"fs:{entity_hash}:fg:{feature_group}*"

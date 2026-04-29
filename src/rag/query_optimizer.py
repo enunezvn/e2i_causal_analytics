@@ -290,7 +290,7 @@ class QueryOptimizer:
     def _build_cache_key(self, query: str, expansion_type: str) -> str:
         """Build cache key for query expansion."""
         content = f"{expansion_type}:{query}"
-        return hashlib.md5(content.encode()).hexdigest()
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
 
     def _get_cached(self, cache_key: str) -> Optional[str]:
         """Get cached expansion if valid."""

@@ -219,7 +219,7 @@ class SplitAwareRepository(BaseRepository[T]):
         Returns:
             Split name: train, validation, test, or holdout
         """
-        hash_val = int(hashlib.md5(patient_id.encode()).hexdigest(), 16)
+        hash_val = int(hashlib.md5(patient_id.encode(), usedforsecurity=False).hexdigest(), 16)
         normalized = hash_val / (2**128)
 
         if normalized < 0.60:

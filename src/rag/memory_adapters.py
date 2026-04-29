@@ -775,9 +775,9 @@ class SignalCollectorAdapter:
             if self._client is not None:
                 await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: self._client.table("dspy_agent_training_signals")
-                    .insert(records)
-                    .execute(),  # type: ignore[union-attr]
+                    lambda: (
+                        self._client.table("dspy_agent_training_signals").insert(records).execute()
+                    ),  # type: ignore[union-attr]
                 )
 
             logger.info(f"Flushed {count} training signals to database")

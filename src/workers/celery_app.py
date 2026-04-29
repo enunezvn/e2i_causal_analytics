@@ -171,6 +171,15 @@ celery_app.conf.task_routes = {
     "src.tasks.run_feedback_loop_*": {"queue": "analytics"},
     "src.tasks.analyze_concept_drift_*": {"queue": "analytics"},
     "src.tasks.run_full_feedback_loop": {"queue": "analytics"},
+    # -------------------------------------------------------------------------
+    # ETL Tasks (Block 6B-infra-2*: per-HCP business_metrics, per-patient
+    # adherence, territory rollup). Beat schedules already pin these to
+    # 'analytics' via options.queue; the wildcard here also routes any
+    # CLI-dispatched (`celery call src.etl.*`) call to the same queue so
+    # worker_medium picks them up. Without this entry the CLI path lands
+    # the task in the default queue, which worker_medium does not consume.
+    # -------------------------------------------------------------------------
+    "src.etl.*": {"queue": "analytics"},
 }
 
 # =============================================================================
@@ -224,6 +233,36 @@ celery_app.conf.beat_schedule = {
         "schedule": 604800.0,  # 7 days
         "kwargs": {"feature_views": None},  # All feature views
         "options": {"queue": "ml"},
+    },
+    # -------------------------------------------------------------------------
+    # ETL Tasks (block 6B-infra-2*)
+    # -------------------------------------------------------------------------
+    # Per-HCP business_metrics rollup every 24 hours (block 6B-infra-2a). Routed
+    # to `analytics`, which `task_routes` consumes via worker_medium.
+    "business-metrics-per-hcp-rollup": {
+        "task": "src.etl.business_metrics_per_hcp_etl.run_per_hcp_rollup",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # Per-patient adherence/refill/gap derivation every 24 hours (block
+    # 6B-infra-2b). Routed to `analytics` (worker_medium). Updates
+    # patient_journeys.adherence_rate and gap_days; refill_count is left
+    # NULL until a refill source lands -- see module docstring.
+    "patient-adherence-rollup": {
+        "task": "src.etl.patient_adherence_etl.run_patient_adherence_rollup",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # Territory_metrics rollup every 24 hours (block 6B-infra-2c). Routed
+    # to `analytics` (worker_medium). Aggregates per-HCP business_metrics
+    # rows produced by 6B-infra-2a -- in production the per-HCP rollup must
+    # run first; see module docstring for the order dependency note.
+    # market_potential / resource_allocation_score remain NULL until a real
+    # Reltio/Veeva source lands.
+    "territory-metrics-rollup": {
+        "task": "src.etl.territory_metrics_etl.run_territory_rollup",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
@@ -289,6 +328,7 @@ celery_app.conf.beat_schedule = {
 celery_app.autodiscover_tasks(
     [
         "src.tasks",
+        "src.etl",
         "src.mlops",
         "src.causal",
         "src.digital_twin",
