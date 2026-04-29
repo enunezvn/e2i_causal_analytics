@@ -61,8 +61,16 @@ PREV_SHA=$(git rev-parse HEAD)
 echo "=== Current SHA: $(git rev-parse --short HEAD) ==="
 
 echo ""
-echo "=== Pulling latest code ==="
-git pull
+echo "=== Fetching latest code ==="
+# Hard-sync to origin/main — droplet is a deploy target, not a dev box.
+# Abort if there are uncommitted changes (someone is hot-patching live).
+if [ -n "$(git status --porcelain)" ]; then
+    echo "ERROR: working tree has uncommitted changes; refusing to reset --hard"
+    git status --short
+    exit 1
+fi
+git fetch origin main
+git reset --hard origin/main
 
 NEW_SHA=$(git rev-parse HEAD)
 if [ "$PREV_SHA" = "$NEW_SHA" ]; then
