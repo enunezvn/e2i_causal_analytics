@@ -301,6 +301,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Free disk space on runner
+        # The full image (Python 3.12 base + ML stack: torch, transformers,
+        # scikit-learn, statsmodels, dowhy, econml, etc.) plus the build
+        # context exhausts the runner's default ~14 GB free. Without this
+        # cleanup the build crashes with `No space left on device` mid-way,
+        # which the runner host surfaces as an unhandled IOException.
+        # `jlumbroso/free-disk-space` reclaims ~30 GB by pruning preinstalled
+        # caches we don't need (Android SDK, .NET, Haskell, large Docker
+        # images, swap).
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false  # keep Python toolcache used by other jobs
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
