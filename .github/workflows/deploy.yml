@@ -91,7 +91,15 @@ jobs:
             PREV_SHA=$(git rev-parse HEAD)
             echo "==> Pre-deploy SHA: ${PREV_SHA:0:7}"
 
-            git pull origin main
+            # Hard-sync to origin/main — droplet is a deploy target, not a dev box.
+            # Abort if there are uncommitted changes (someone is hot-patching live).
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "ERROR: droplet has uncommitted changes; refusing to reset --hard"
+              git status --short
+              exit 1
+            fi
+            git fetch origin main
+            git reset --hard origin/main
             NEW_SHA=$(git rev-parse HEAD)
             echo "==> Deploying ${NEW_SHA:0:7}"
 
