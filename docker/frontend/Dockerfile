@@ -62,20 +62,18 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
 # -----------------------------------------------------------------------------
 FROM base AS builder
 
-# Set production environment
-ENV NODE_ENV=production
-
-# Install only production dependencies first (better caching)
-RUN npm ci --only=production && \
+# Install all dependencies including dev (typescript, vite, etc. live in
+# devDependencies and are needed by `npm run build` -> `tsc -b && vite build`).
+# NOTE: we deliberately do NOT set NODE_ENV=production here — npm 7+ honors
+# NODE_ENV=production by skipping devDependencies even when --include=dev is
+# absent, so combining the two would silently break tsc availability.
+RUN npm ci --include=dev && \
     npm cache clean --force
-
-# Install dev dependencies needed for build
-RUN npm ci
 
 # Copy application source
 COPY frontend/ .
 
-# Build the application
+# Build the application (tsc emits to dist/, vite bundles)
 RUN npm run build
 
 # -----------------------------------------------------------------------------
