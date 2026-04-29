@@ -2,8 +2,20 @@
 # All allowlists below scope to specific paths, commits, or content
 # verified non-secret. Anything outside these allowlists still trips.
 #
-# Uses the multi-allowlist syntax ([[allowlists]]) introduced in
-# gitleaks v8.21.0 — each block applies independently to the default rules.
+# Two v8 gotchas pinned here so future edits don't repeat them:
+#
+#   Gotcha 1 — commits = [...] needs FULL 40-char SHAs. v8.30.1 silently
+#     ignores 10-char prefixes — no warning, allowlist becomes inert.
+#     Use `git rev-parse <prefix>` before pasting.
+#
+#   Gotcha 2 — multi-scope allowlists go in top-level [[allowlists]] blocks
+#     (gitleaks >= v8.21), NOT under [[rules]] / [rules.allowlist].
+#     The latter requires the rule itself to define `regex` or `path`
+#     and fails with: "<rule-id>: both |regex| and |path| are empty".
+#
+# Validate locally before pushing:
+#   docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+#     detect --source /repo --config /repo/.gitleaks.toml --no-banner --log-level info
 
 [extend]
 useDefault = true
