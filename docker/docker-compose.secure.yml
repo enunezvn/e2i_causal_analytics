@@ -202,8 +202,9 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      frontend:
-        condition: service_healthy
+      # frontend service is commented out below (production image deprecated);
+      # re-add `frontend: { condition: service_healthy }` if the secure
+      # variant is revived with target: development.
     labels:
       - "e2i.tier=0"
       - "e2i.component=proxy"
@@ -498,44 +499,52 @@ services:
       - "e2i.component=api"
       - "e2i.network.access=app,data,monitoring,celery"
 
-  frontend:
-    build:
-      context: ..
-      dockerfile: docker/frontend/Dockerfile
-      target: production
-    container_name: e2i-frontend
-    restart: unless-stopped
-    expose:
-      - "80"
-    networks:
-      - app-network
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /var/cache/nginx:size=10M
-      - /var/run:size=5M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    depends_on:
-      api:
-        condition: service_healthy
-    labels:
-      - "e2i.tier=3"
-      - "e2i.component=frontend"
-      - "e2i.network.access=app"
+  # TODO: revive when secure compose has a working test environment.
+  # The frontend service was removed from the production image set — production
+  # runs Vite-dev via bind mount on the single droplet (dev = prod, see
+  # MEMORY.md). This block targeted the now-deleted `production` stage of
+  # docker/frontend/Dockerfile (nginx + static build). To re-enable a hardened
+  # variant, switch to `target: development`, drop `read_only`/tmpfs (Vite
+  # needs a writable cache), expose 5173, and use a wget healthcheck against
+  # http://127.0.0.1:5173/.
+  # frontend:
+  #   build:
+  #     context: ..
+  #     dockerfile: docker/frontend/Dockerfile
+  #     target: production
+  #   container_name: e2i-frontend
+  #   restart: unless-stopped
+  #   expose:
+  #     - "80"
+  #   networks:
+  #     - app-network
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   read_only: true
+  #   tmpfs:
+  #     - /var/cache/nginx:size=10M
+  #     - /var/run:size=5M
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 15s
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 512M
+  #       reservations:
+  #         cpus: '0.25'
+  #         memory: 256M
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy
+  #   labels:
+  #     - "e2i.tier=3"
+  #     - "e2i.component=frontend"
+  #     - "e2i.network.access=app"
 
   # ===========================================================================
   # TIER 4: CELERY WORKERS (Celery + Data + Monitoring Networks)

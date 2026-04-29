@@ -272,7 +272,6 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml res
 | `docker/frontend/Dockerfile` | Multi-stage build for React app |
 | `docker/Dockerfile.feast` | Feast feature server |
 | `docker/nginx/nginx.conf` | Docker nginx reverse proxy |
-| `docker/frontend/nginx.conf` | Frontend nginx (production build serving) |
 
 ---
 
