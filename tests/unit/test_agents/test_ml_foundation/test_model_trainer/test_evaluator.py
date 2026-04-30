@@ -283,3 +283,33 @@ class TestEvaluateModel:
 
         assert "error" not in result
         assert result["rmse"] is not None
+
+
+def test_check_success_criteria_skips_criteria_source_field() -> None:
+    """The new ``criteria_source`` audit field must not be treated as a metric.
+
+    Regression guard for the ADAPTIVE_CRITERIA flag plumbing in task 02 of
+    .claude/plans/adaptive_success_criteria/. The validator now tags every
+    ``success_criteria`` dict with a string ``criteria_source`` value;
+    ``_check_success_criteria`` must route it through the existing
+    skip-non-numeric branch (alongside ``experiment_id`` /
+    ``baseline_model``) without recording a False result.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _check_success_criteria,
+    )
+
+    test_metrics = {"roc_auc": 0.80}
+    success_criteria = {
+        "minimum_auc": 0.75,
+        "criteria_source": "fixed",  # str, not numeric — must be skipped
+        "experiment_id": "abc",  # existing precedent for skip-non-numeric
+        "baseline_model": "stratified_dummy",
+    }
+    result = _check_success_criteria(
+        test_metrics, success_criteria, "binary_classification"
+    )
+    assert result["success_criteria_met"] is True
+    assert "criteria_source" not in result["success_criteria_results"]
+    assert "experiment_id" not in result["success_criteria_results"]
+    assert result["success_criteria_results"]["minimum_auc"] is True

@@ -1,5 +1,8 @@
 """Tests for success criteria validation."""
 
+import os
+from unittest.mock import patch
+
 import pytest
 
 from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
@@ -322,3 +325,65 @@ async def test_validation_errors_populated_on_failure():
     # Should fail validation
     assert result["validation_passed"] is False
     assert len(result["validation_errors"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# ADAPTIVE_CRITERIA flag + criteria_source audit field (task 02 of
+# .claude/plans/adaptive_success_criteria/)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_criteria_source_defaults_to_fixed_when_flag_unset() -> None:
+    """When ADAPTIVE_CRITERIA is unset, success_criteria is tagged 'fixed'."""
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("ADAPTIVE_CRITERIA", None)
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-fixed",
+        }
+        result = await define_success_criteria(state)
+    assert result["success_criteria"]["criteria_source"] == "fixed"
+
+
+@pytest.mark.asyncio
+async def test_criteria_source_is_adaptive_when_flag_true() -> None:
+    """ADAPTIVE_CRITERIA=true + complete pre-eval state ⇒ tagged 'adaptive'.
+
+    The fixture includes the pre-eval inputs (n_samples / prevalence /
+    feature_count / regime) so this test stays green after task 03 lands
+    its three-valued criteria_source logic — task 03 emits
+    'adaptive_fallback_to_fixed' when the flag is on but state is
+    incomplete.
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-adapt",
+            "n_samples": 900,
+            "prevalence": 0.30,
+            "feature_count": 14,
+            "regime": "default",
+        }
+        result = await define_success_criteria(state)
+    assert result["success_criteria"]["criteria_source"] == "adaptive"
+
+
+@pytest.mark.parametrize("falsy", ["false", "0", "no", "", "FALSE"])
+@pytest.mark.asyncio
+async def test_criteria_source_falsy_values_keep_fixed(falsy: str) -> None:
+    """Conventional falsy strings keep the flag off ⇒ criteria_source=='fixed'."""
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": falsy}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-fixed-falsy",
+            "n_samples": 900,
+            "prevalence": 0.30,
+            "feature_count": 14,
+            "regime": "default",
+        }
+        result = await define_success_criteria(state)
+    assert result["success_criteria"]["criteria_source"] == "fixed"

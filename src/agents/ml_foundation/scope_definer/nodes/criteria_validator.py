@@ -3,7 +3,21 @@
 This module defines measurable success criteria and validates constraints.
 """
 
+import os
 from typing import Any, Dict, List
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _adaptive_criteria_enabled() -> bool:
+    """Whether the ``ADAPTIVE_CRITERIA`` feature flag is on.
+
+    Reads the env var fresh per call so test patches via ``patch.dict`` are
+    observed (importing into a module-level constant would freeze the value
+    at import time). The truthy-string set matches the project convention
+    used in ``security_middleware.py`` for ``ENABLE_HSTS`` and similar flags.
+    """
+    return os.getenv("ADAPTIVE_CRITERIA", "false").strip().lower() in _TRUTHY
 
 
 async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,6 +53,15 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
     success_criteria["minimum_lift_over_baseline"] = performance_reqs.get(
         "min_lift", 0.10
     )  # 10% improvement over baseline
+
+    # Audit tag — surfaces in pipeline reports so operators can tell
+    # at-a-glance whether a deployer outcome reflects the fixed or adaptive
+    # criteria scheme. The actual adaptive computation lands in task 03;
+    # this commit only tags the output so downstream readers see a stable
+    # field name from day one.
+    success_criteria["criteria_source"] = (
+        "adaptive" if _adaptive_criteria_enabled() else "fixed"
+    )
 
     # Validate criteria
     validation_result = _validate_criteria(success_criteria, state)
