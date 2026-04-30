@@ -132,14 +132,36 @@ class TestEvaluateModel:
         assert result["precision"] is None
 
     async def test_checks_success_criteria(self, binary_classification_state):
-        """Should check if model meets success criteria."""
-        binary_classification_state["success_criteria"] = {"accuracy": 0.90}
+        """Should check if model meets success criteria.
+
+        Section B (pre_phase2_unblockers): the lift criterion participates
+        in the aggregation alongside the other thresholds — when both
+        train and test have enough samples (binary_classification_state
+        uses N_TRAIN=100, N_TEST=20 — both ≥ 10), the baseline AUC is
+        produced and the criterion is evaluated rather than soft-skipped.
+        """
+        binary_classification_state["success_criteria"] = {
+            "accuracy": 0.90,
+            "minimum_lift_over_baseline": 0.10,
+        }
 
         result = await evaluate_model(binary_classification_state)
 
         assert "success_criteria_met" in result
         assert "success_criteria_results" in result
         assert "accuracy" in result["success_criteria_results"]
+        # Lift criterion must be present in the results dict — the
+        # MockBinaryClassifier's noisy predictions may or may not pass the
+        # 0.10 threshold (deterministic since random_state is pinned), but
+        # the criterion must have actually been checked (not soft-skipped).
+        assert "minimum_lift_over_baseline" in result["success_criteria_results"]
+        assert result["success_criteria_results"]["minimum_lift_over_baseline"] in (
+            True,
+            False,
+        )
+        # And the underlying metrics must be in test_metrics.
+        assert "baseline_test_auc" in result["test_metrics"]
+        assert "minimum_lift_over_baseline" in result["test_metrics"]
 
     async def test_success_criteria_met_when_threshold_passed(self, real_classifier_state):
         """Should set success_criteria_met=True when threshold is passed."""

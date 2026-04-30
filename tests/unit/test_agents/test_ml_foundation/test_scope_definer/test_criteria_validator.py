@@ -33,8 +33,14 @@ async def test_define_classification_criteria():
     assert criteria["minimum_rmse"] is None
     assert criteria["minimum_r2"] is None
 
-    # Should have baseline
-    assert criteria["baseline_model"] == "random_forest_baseline"
+    # Should have baseline. Section B (pre_phase2_unblockers) corrected the
+    # metadata label to match what evaluator._compute_baseline_test_metrics
+    # actually computes (a stratified DummyClassifier).
+    assert criteria["baseline_model"] == "stratified_dummy"
+
+    # Section B: minimum_lift_over_baseline must be injected by default so
+    # the evaluator gets a chance to compute and compare the metric.
+    assert criteria["minimum_lift_over_baseline"] == pytest.approx(0.10)
 
 
 @pytest.mark.asyncio
@@ -164,8 +170,11 @@ def test_regression_criteria_defaults():
 def test_baseline_model_selection():
     """Test baseline model selection for different problem types."""
     # Classification
-    assert _define_baseline_model("binary_classification") == "random_forest_baseline"
-    assert _define_baseline_model("multiclass_classification") == "random_forest_baseline"
+    # Section B (pre_phase2_unblockers): aligned the binary/multiclass
+    # baseline label with the stratified-dummy actually used by the
+    # evaluator's _compute_baseline_test_metrics helper.
+    assert _define_baseline_model("binary_classification") == "stratified_dummy"
+    assert _define_baseline_model("multiclass_classification") == "stratified_dummy"
 
     # Regression
     assert _define_baseline_model("regression") == "linear_regression_baseline"

@@ -157,6 +157,10 @@ class FeatureAnalyzerAgent:
             "model_uri": model_uri,  # type: ignore[typeddict-item]
             "experiment_id": experiment_id,
             "training_run_id": input_data.get("training_run_id", "unknown"),
+            # In-memory model passthrough (avoids round-trip through MLflow loaders).
+            # Accept either "trained_model" (canonical caller key, e.g.
+            # scripts/run_tier0_test.py) or "loaded_model" (state-key form).
+            "loaded_model": input_data.get("trained_model") or input_data.get("loaded_model"),
             # Configuration
             "max_samples": input_data.get("max_samples", 1000),
             "compute_interactions": input_data.get("compute_interactions", True),

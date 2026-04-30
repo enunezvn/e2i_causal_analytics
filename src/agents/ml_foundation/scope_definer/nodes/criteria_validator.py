@@ -104,10 +104,19 @@ def _define_timeseries_criteria(performance_reqs: Dict[str, float]) -> Dict[str,
 
 
 def _define_baseline_model(problem_type: str) -> str:
-    """Define baseline model to beat."""
+    """Define baseline model used by ``minimum_lift_over_baseline``.
+
+    For binary classification, ``minimum_lift_over_baseline`` is computed
+    against a stratified-dummy baseline (see
+    ``model_trainer.nodes.evaluator._compute_baseline_test_metrics`` —
+    Section B of pre_phase2_unblockers plan). The ``"stratified_dummy"``
+    label here is metadata; actual computation is wired in the evaluator.
+    Other problem types still return a placeholder name pending an actual
+    baseline implementation in those evaluators.
+    """
     baselines = {
-        "binary_classification": "random_forest_baseline",
-        "multiclass_classification": "random_forest_baseline",
+        "binary_classification": "stratified_dummy",
+        "multiclass_classification": "stratified_dummy",
         "regression": "linear_regression_baseline",
         "causal_inference": "ols_baseline",
         "time_series": "arima_baseline",

@@ -47,14 +47,16 @@ class TestComputeSHAP:
         Uses SHAP >=0.42 return contract: 3-D ndarray (n, f, n_classes) for binary
         classifiers and length-2 expected_value array.
         """
-        # Setup
+        # Setup. With the C1 wiring, callers pre-populate ``loaded_model`` to
+        # bypass the MLflow loader; we exercise that path here so the test
+        # is independent of the MLflow flavor resolution code.
         state = {
             "model_uri": "runs:/abc123/model",
             "experiment_id": "exp_001",
             "max_samples": 100,
+            "loaded_model": mock_random_forest_model,
         }
 
-        mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
         mock_mlflow.get_run.return_value = Mock(
             info=Mock(run_id="abc123"), data=Mock(params={"model_version": "v1"})
         )
@@ -98,9 +100,9 @@ class TestComputeSHAP:
             "model_uri": "runs:/legacy123/model",
             "experiment_id": "exp_legacy",
             "max_samples": 100,
+            "loaded_model": mock_random_forest_model,
         }
 
-        mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
         mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="legacy123"), data=Mock(params={}))
 
         mock_explainer = Mock()
@@ -126,9 +128,9 @@ class TestComputeSHAP:
             "model_uri": "runs:/lin_arr/model",
             "experiment_id": "exp_lin_arr",
             "max_samples": 50,
+            "loaded_model": mock_linear_model,
         }
 
-        mock_mlflow.sklearn.load_model.return_value = mock_linear_model
         mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="lin_arr"), data=Mock(params={}))
 
         mock_explainer = Mock()
@@ -154,9 +156,9 @@ class TestComputeSHAP:
             "model_uri": "runs:/def456/model",
             "experiment_id": "exp_002",
             "max_samples": 50,
+            "loaded_model": mock_linear_model,
         }
 
-        mock_mlflow.sklearn.load_model.return_value = mock_linear_model
         mock_mlflow.get_run.return_value = Mock(
             info=Mock(run_id="def456"), data=Mock(params={"model_version": "v2"})
         )
@@ -197,9 +199,9 @@ class TestComputeSHAP:
             "experiment_id": "exp_004",
             "max_samples": 50,
             "X_sample": np.random.rand(1000, 5),  # 1000 samples
+            "loaded_model": mock_random_forest_model,
         }
 
-        mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
         mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="ghi789"), data=Mock(params={}))
 
         # Mock TreeExplainer
@@ -225,9 +227,9 @@ class TestComputeSHAP:
             "model_uri": "runs:/jkl012/model",
             "experiment_id": "exp_005",
             "max_samples": 100,
+            "loaded_model": mock_random_forest_model,
         }
 
-        mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
         mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="jkl012"), data=Mock(params={}))
 
         # Mock TreeExplainer with controlled SHAP values

@@ -48,7 +48,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -1297,6 +1297,10 @@ def generate_sample_data(
     seed: int = 42,
     imbalance_ratio: float | None = None,
     positive_rate: float = 0.30,
+    *,
+    signal_strength: float = 1.0,
+    noise_sd: float = 0.10,
+    signalize_extra_features: bool = False,
 ) -> pd.DataFrame:
     """Generate sample patient journey data using the ML-ready generator.
 
@@ -1311,6 +1315,12 @@ def generate_sample_data(
             ``0.30`` for the historical default and ``0.02`` for the adverse
             regime. Distinct from ``imbalance_ratio`` which relabels AFTER
             generation, breaking feature ↔ target correlations.
+        signal_strength: Multiplier on the deterministic feature
+            contributions (Section A of pre_phase2_unblockers).
+        noise_sd: Standard deviation of the per-patient Gaussian noise.
+        signalize_extra_features: When True, four additional features
+            (age_group, geographic_region, brand, data_quality_score)
+            also contribute to the risk score.
     """
     # Use the same generator as the data_preparer agent for consistency
     from src.repositories.sample_data import SampleDataGenerator
@@ -1328,6 +1338,9 @@ def generate_sample_data(
         start_date=start_date,
         end_date=end_date,
         positive_rate=positive_rate,
+        signal_strength=signal_strength,
+        noise_sd=noise_sd,
+        signalize_extra_features=signalize_extra_features,
     )
 
     # Apply class imbalance if requested
@@ -3656,6 +3669,100 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
 # =============================================================================
 
 
+_VALID_REGIMES: Tuple[str, ...] = ("default", "adverse", "clean")
+
+
+def _regime_kwargs(regime: str) -> Dict[str, Any]:
+    """Translate a regime name into kwargs for ``ml_patients()``.
+
+    Section A of pre_phase2_unblockers — single source of truth for the
+    regime → generator-knob mapping. Replaces the inline
+    ``positive_rate = 0.02 if regime == "adverse" else 0.30`` ternary so
+    a future regime addition only needs one edit.
+
+    Regimes:
+      - ``default``: positive_rate=0.30, signal_strength=1.0, noise_sd=0.10,
+        signalize_extra_features=False — the historical balanced regime.
+      - ``adverse``: positive_rate=0.02, signal_strength=1.0, noise_sd=0.10,
+        signalize_extra_features=False — extreme imbalance, exercises
+        remediation paths. Keeps signal config identical to ``default`` so
+        the existing ``TestAdverseRegimeE2E`` contracts remain stable.
+      - ``clean``: positive_rate=0.70, signal_strength=1.4, noise_sd=0.03,
+        signalize_extra_features=True — Phase 2 baseline regime
+        (path-D values, post-Codex review 2026-04-30). Two empirical
+        adjustments diverge from the plan text:
+          * positive_rate=0.70 (plan said 0.30 nominal, then 0.50 in the
+            first revision). At 0.50 the realised positive share landed
+            ~25%, making `precision >= 0.70` infeasible at any AUC; 0.70
+            pushes realised share toward ~35% so the precision gate has
+            headroom.
+          * noise_sd=0.03 (plan said 0.05). Compensates for the
+            scale * noise_sd interaction at ``sample_data.py:660`` —
+            ``scale = positive_rate / 0.30 = 2.33`` here, so effective
+            noise SD = 0.03 * 2.33 ≈ 0.07, close to the plan's intended
+            ±0.05 envelope after correcting for the rescaling. At the
+            old combo (positive_rate=0.50, noise_sd=0.05) the effective
+            noise was 0.083 — 67% above plan, suppressing val AUC by
+            ~6pp.
+        See ``.claude/plans/pre_phase2_unblockers/03-section-a-synthetic.md``
+        §4 (post-Codex revision) and ``08-risks.md`` #9.
+
+    Raises:
+        ValueError: when ``regime`` is unknown. Centralizing the lookup
+            here means callers don't need to repeat the membership check.
+    """
+    if regime == "default":
+        kwargs: Dict[str, Any] = {
+            "positive_rate": 0.30,
+            "signal_strength": 1.0,
+            "noise_sd": 0.10,
+            "signalize_extra_features": False,
+        }
+    elif regime == "adverse":
+        kwargs = {
+            "positive_rate": 0.02,
+            "signal_strength": 1.0,
+            "noise_sd": 0.10,
+            "signalize_extra_features": False,
+        }
+    elif regime == "clean":
+        # positive_rate=0.70 pushes realised positive share to ~35% (eases the
+        # precision/F1 ceiling that 25% prevalence imposed at positive_rate=0.50);
+        # noise_sd=0.03 compensates for the scale*noise_sd interaction at
+        # sample_data.py:660 — `scale=positive_rate/0.30=2.33` here, so effective
+        # noise SD = 0.03 * 2.33 ≈ 0.07. See 03-section-a-synthetic.md §4
+        # (post-Codex correction) for the empirical-claim revision and
+        # 08-risks.md #9 for the scale*noise_sd risk write-up.
+        kwargs = {
+            "positive_rate": 0.70,
+            "signal_strength": 1.4,
+            "noise_sd": 0.03,
+            "signalize_extra_features": True,
+        }
+    else:
+        raise ValueError(
+            f"regime must be one of {_VALID_REGIMES}, got {regime!r}"
+        )
+
+    # Internal invariants — guard against a misroute that would silently
+    # suppress signal (e.g. clean signal_strength accidentally combined
+    # with a near-zero positive_rate, where the scale=positive_rate/0.30
+    # rescaling at sample_data.py:602 squashes the deterministic component
+    # by ~15x). These are belt-and-braces; the regime → kwargs map above
+    # is correct as written.
+    if regime == "clean":
+        assert kwargs["positive_rate"] >= 0.20, (
+            "clean regime requires positive_rate ≥ 0.20; rescaling at "
+            "sample_data.py:602 suppresses signal at low rates"
+        )
+    if regime == "adverse":
+        assert (
+            kwargs["signal_strength"] == 1.0
+            and not kwargs["signalize_extra_features"]
+        ), "adverse regime must preserve historical generator behavior"
+    return kwargs
+
+
 def _default_demo_cost_matrix() -> Dict[str, float]:
     """Return the unit-shape demo cost matrix used by the synthetic runner.
 
@@ -3767,9 +3874,9 @@ async def run_pipeline(
     experiment_id = f"tier0_e2e_{uuid.uuid4().hex[:8]}"
     pipeline_start_time = time.time()
 
-    if regime not in {"default", "adverse"}:
+    if regime not in _VALID_REGIMES:
         raise ValueError(
-            f"regime must be 'default' or 'adverse', got {regime!r}"
+            f"regime must be one of {_VALID_REGIMES}, got {regime!r}"
         )
     if split_mode not in {"auto", "random", "combined"}:
         raise ValueError(
@@ -3786,7 +3893,14 @@ async def run_pipeline(
     print(f"  MLflow Enabled: {CONFIG.enable_mlflow}")
     print(f"  MLflow Tracking URI: {os.environ.get('MLFLOW_TRACKING_URI', 'not set')}")
     print(f"  BentoML Serving: {'Enabled' if include_bentoml else 'Disabled'}")
-    print(f"  Regime: {regime} (positive_rate={'0.02' if regime == 'adverse' else '0.30'})")
+    _regime_summary = _regime_kwargs(regime)
+    print(
+        f"  Regime: {regime} "
+        f"(positive_rate={_regime_summary['positive_rate']:.2f}, "
+        f"signal_strength={_regime_summary['signal_strength']:.2f}, "
+        f"noise_sd={_regime_summary['noise_sd']:.2f}, "
+        f"signalize_extras={_regime_summary['signalize_extra_features']})"
+    )
     print(f"  Split mode: {split_mode}")
     if imbalance_ratio:
         print(f"  Class Imbalance: {imbalance_ratio:.1%} minority ratio (INJECTED)")
@@ -3804,12 +3918,12 @@ async def run_pipeline(
         print(f"\n  Loading real-world data from {data_dir}...")
         patient_df = load_rwd_data(data_dir, target=CONFIG.target_outcome)
     else:
-        positive_rate = 0.02 if regime == "adverse" else 0.30
+        regime_kwargs = _regime_kwargs(regime)
         print("\n  Generating sample patient data...")
         patient_df = generate_sample_data(
             n_samples=1500,
             imbalance_ratio=imbalance_ratio,
-            positive_rate=positive_rate,
+            **regime_kwargs,
         )
         print(f"  Generated {len(patient_df)} patient records")
 
@@ -5319,13 +5433,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--regime",
         type=str,
-        choices=("default", "adverse"),
+        choices=_VALID_REGIMES,
         default="default",
         help=(
-            "Synthetic data regime (Block 4, Finding #8). "
-            "'default' uses positive_rate=0.30; "
-            "'adverse' uses positive_rate=0.02 to exercise extreme-imbalance "
-            "remediation. Ignored when --data-dir is set."
+            "Synthetic data regime (Block 4 + Section A of pre_phase2_unblockers). "
+            "'default': positive_rate=0.30, baseline 13-18% positive share. "
+            "'adverse': positive_rate=0.02 → extreme imbalance, exercises "
+            "remediation paths (recommended_strategy=combined). "
+            "'clean': positive_rate=0.50 + signal_strength=1.4 + noise_sd=0.05 "
+            "+ signalized extra features → strong-signal regime intended as "
+            "the Phase 2 baseline (val AUC ~0.78-0.82, deployer succeeds). "
+            "Ignored when --data-dir is set."
         ),
     )
     parser.add_argument(
