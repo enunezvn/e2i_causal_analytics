@@ -239,36 +239,59 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
     criteria_source: str = "fixed"
 
     if flag_on and problem_type == "binary_classification":
-        n_samples = state.get("n_samples")
-        prevalence = state.get("prevalence")
-        baseline_auc = state.get("baseline_auc")
-        feature_count = state.get("feature_count")
+        n_samples_raw = state.get("n_samples")
+        prevalence_raw = state.get("prevalence")
+        baseline_auc_raw = state.get("baseline_auc")
+        feature_count_raw = state.get("feature_count")
         regime_raw = state.get("regime")
 
+        # The four PRE-EVAL inputs are derivable at scope-definition time
+        # (the runner reads them off the synthetic / RWD dataframe). The
+        # fifth input ``baseline_auc`` requires a trained dummy classifier
+        # and is computed inside the evaluator. The validator therefore
+        # supports two modes:
+        #   - eager (4 inputs incl. baseline_auc): rare; primarily unit
+        #     tests that inject baseline_auc directly. Computes thresholds
+        #     here and applies the v3 invariant.
+        #   - stashed (3 pre-eval inputs, no baseline_auc): production
+        #     path. Validator records ``_adaptive_inputs`` and tags
+        #     ``criteria_source="adaptive"``; the evaluator overlay
+        #     ``_apply_adaptive_criteria_overlay`` computes thresholds at
+        #     eval time using the live ``baseline_test_auc``.
+        pre_eval_complete = (
+            isinstance(n_samples_raw, int)
+            and not isinstance(n_samples_raw, bool)
+            and isinstance(prevalence_raw, (int, float))
+            and not isinstance(prevalence_raw, bool)
+            and isinstance(feature_count_raw, int)
+            and not isinstance(feature_count_raw, bool)
+        )
+        regime: Optional[Literal["default", "clean", "adverse"]] = (
+            regime_raw
+            if regime_raw in ("default", "clean", "adverse")
+            else None
+        )
+
         if (
-            isinstance(n_samples, int)
-            and not isinstance(n_samples, bool)
-            and isinstance(prevalence, (int, float))
-            and not isinstance(prevalence, bool)
-            and isinstance(baseline_auc, (int, float))
-            and not isinstance(baseline_auc, bool)
-            and isinstance(feature_count, int)
-            and not isinstance(feature_count, bool)
+            pre_eval_complete
+            and isinstance(baseline_auc_raw, (int, float))
+            and not isinstance(baseline_auc_raw, bool)
         ):
+            # Eager call (rare — only happens in unit tests that inject
+            # baseline_auc directly). The pre_eval_complete guard above
+            # narrows the *_raw types but mypy can't track the multi-
+            # condition narrowing, so cast the validated values.
+            assert isinstance(n_samples_raw, int)
+            assert isinstance(prevalence_raw, (int, float))
+            assert isinstance(feature_count_raw, int)
             try:
-                regime: Optional[Literal["default", "clean", "adverse"]] = (
-                    regime_raw
-                    if regime_raw in ("default", "clean", "adverse")
-                    else None
-                )
                 thresholds, skipped = adaptive_success_criteria(
-                    n_samples=n_samples,
-                    prevalence=float(prevalence),
-                    baseline_auc=float(baseline_auc),
-                    feature_count=feature_count,
+                    n_samples=n_samples_raw,
+                    prevalence=float(prevalence_raw),
+                    baseline_auc=float(baseline_auc_raw),
+                    feature_count=feature_count_raw,
                     regime=regime,
                 )
-                # Remove any fixed-default key that adaptive skipped.
                 # v3 invariant: skipped criteria are ABSENT from
                 # success_criteria, never None-valued.
                 for key in skipped:
@@ -280,15 +303,10 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
                 # Apr-26-baseline reproducibility.
                 for key in _V3_DEPRECATED_FIXED_KEYS:
                     success_criteria.pop(key, None)
-                # Apply firing thresholds (and v3 new-keys: NB / MCC /
+                # Apply firing thresholds (and v3 new keys: NB / MCC /
                 # calibration / train_val / ECE).
                 success_criteria.update(thresholds)
-                # Audit: explicit list of skipped names (sorted for
-                # deterministic serialization).
                 success_criteria["_adaptive_skipped"] = sorted(skipped)
-                # Audit: regime-keyed threshold probability used for the
-                # NB gate. Downstream consumers (evaluator, MLflow) read
-                # this to compute and serialize ``net_benefit_at_p_t``.
                 effective_regime = (
                     regime if regime in _V3_REGIME_P_T else "clean"
                 )
@@ -303,16 +321,32 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
                     exc,
                 )
                 criteria_source = "adaptive_fallback_to_fixed"
+        elif pre_eval_complete:
+            # Production stash path: defer the adaptive computation to the
+            # evaluator overlay (which has live baseline_test_auc). The
+            # leading underscore on ``_adaptive_inputs`` marks it as an
+            # audit field — the evaluator's underscore-prefix skip in
+            # ``_check_success_criteria`` filters it from the per-criterion
+            # loop.
+            assert isinstance(n_samples_raw, int)
+            assert isinstance(prevalence_raw, (int, float))
+            assert isinstance(feature_count_raw, int)
+            success_criteria["_adaptive_inputs"] = {
+                "n_samples": n_samples_raw,
+                "prevalence": float(prevalence_raw),
+                "feature_count": feature_count_raw,
+                "regime": regime,
+            }
+            criteria_source = "adaptive"
         else:
             logger.warning(
-                "ADAPTIVE_CRITERIA on but state missing dataset characteristics "
-                "(n_samples=%r, prevalence=%r, baseline_auc=%r, "
-                "feature_count=%r); falling back to fixed thresholds. Task "
-                "05 will plumb these from upstream pipeline state.",
-                n_samples,
-                prevalence,
-                baseline_auc,
-                feature_count,
+                "ADAPTIVE_CRITERIA on but state missing pre-eval inputs "
+                "(n_samples=%r, prevalence=%r, feature_count=%r); falling "
+                "back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) "
+                "must inject these.",
+                n_samples_raw,
+                prevalence_raw,
+                feature_count_raw,
             )
             criteria_source = "adaptive_fallback_to_fixed"
 

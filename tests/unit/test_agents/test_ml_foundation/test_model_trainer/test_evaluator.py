@@ -19,6 +19,7 @@ Shared mocks and the minimal-state fixtures
 ``conftest.py`` so all four files share a single source of truth.
 """
 
+import math
 from typing import Any, Dict
 
 import numpy as np
@@ -713,3 +714,387 @@ def test_check_success_criteria_nb_at_p_t_soft_skips_when_grid_missing() -> None
         "binary_classification",
     )
     assert result2["success_criteria_results"]["minimum_net_benefit_at_p_t"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 05 — calibration helpers, NB grid, overlay, end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_compute_calibration_slope_intercept_perfect_calibration() -> None:
+    """Calibrated logits (slope=1, intercept=0) recover perfectly."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_calibration_slope_intercept,
+    )
+
+    rng = np.random.default_rng(42)
+    n = 1000
+    # Generate logits, sigmoid them, then sample y from the resulting
+    # probabilities. The recovered slope/intercept will sit near 1.0/0.0
+    # with sample-size-bound jitter.
+    z = rng.normal(0.0, 1.5, n)
+    p = 1.0 / (1.0 + np.exp(-z))
+    y_true = (rng.uniform(0.0, 1.0, n) < p).astype(int)
+
+    slope, intercept = _compute_calibration_slope_intercept(y_true, p)
+
+    assert not math.isnan(slope)
+    assert not math.isnan(intercept)
+    # Generous tolerance — n=1000 with stochastic sampling.
+    assert abs(slope - 1.0) < 0.20, f"slope={slope}"
+    assert abs(intercept) < 0.20, f"intercept={intercept}"
+
+
+def test_compute_calibration_slope_intercept_overconfident() -> None:
+    """Over-confident probabilities (squished toward 0/1) → slope < 1."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_calibration_slope_intercept,
+    )
+
+    rng = np.random.default_rng(7)
+    n = 1000
+    z = rng.normal(0.0, 1.5, n)
+    p_true = 1.0 / (1.0 + np.exp(-z))
+    y_true = (rng.uniform(0.0, 1.0, n) < p_true).astype(int)
+    # Sharpen the probabilities (multiply logits by 2) to simulate
+    # over-confidence. The recovered slope should be < 1.
+    p_overconfident = 1.0 / (1.0 + np.exp(-2.0 * z))
+
+    slope, _ = _compute_calibration_slope_intercept(y_true, p_overconfident)
+
+    assert not math.isnan(slope)
+    assert slope < 0.85, f"expected over-confident slope < 0.85, got {slope}"
+
+
+def test_compute_calibration_slope_intercept_skips_at_low_n_pos() -> None:
+    """n_pos < 30 ⇒ returns (nan, nan); LR fit is unstable below that."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_calibration_slope_intercept,
+    )
+
+    rng = np.random.default_rng(0)
+    # Adverse-regime synthetic: 900 rows, 18 positives.
+    y_true = np.concatenate([np.ones(18), np.zeros(882)]).astype(int)
+    rng.shuffle(y_true)
+    p = rng.uniform(0.01, 0.10, 900)
+
+    slope, intercept = _compute_calibration_slope_intercept(y_true, p)
+    assert math.isnan(slope)
+    assert math.isnan(intercept)
+
+
+def test_compute_net_benefit_at_p_t_known_counts() -> None:
+    """Known TP/FP counts → matches Vickers 2006 formula."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_net_benefit_at_p_t,
+    )
+
+    # 100 rows; predict positive when p >= p_t. Construct so that exactly
+    # TP=20, FP=10 at p_t=0.30, FN=20, TN=50.
+    n = 100
+    y_true = np.concatenate([np.ones(40), np.zeros(60)]).astype(int)
+    # Place the first 20 positives + 10 negatives above 0.30, the rest
+    # below.
+    p = np.concatenate(
+        [
+            np.full(20, 0.50),  # TP=20
+            np.full(20, 0.10),  # FN=20
+            np.full(10, 0.50),  # FP=10
+            np.full(50, 0.10),  # TN=50
+        ]
+    )
+    p_t = 0.30
+    # NB = TP/n - (FP/n) * p_t / (1 - p_t)
+    #    = 20/100 - 10/100 * 0.30/0.70
+    #    = 0.20 - 0.0428...
+    expected = 20 / n - (10 / n) * p_t / (1.0 - p_t)
+
+    nb = _compute_net_benefit_at_p_t(y_true, p, p_t)
+    assert nb == pytest.approx(expected, abs=1e-9)
+
+
+def test_compute_net_benefit_at_p_t_invalid_inputs() -> None:
+    """``p_t`` out of (0, 1) ⇒ NaN; empty y_true ⇒ NaN."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_net_benefit_at_p_t,
+    )
+
+    y = np.array([1, 0, 1])
+    p = np.array([0.5, 0.2, 0.8])
+    assert math.isnan(_compute_net_benefit_at_p_t(y, p, 0.0))
+    assert math.isnan(_compute_net_benefit_at_p_t(y, p, 1.0))
+    assert math.isnan(_compute_net_benefit_at_p_t(y, p, -0.1))
+    assert math.isnan(_compute_net_benefit_at_p_t(np.array([]), np.array([]), 0.3))
+
+
+def test_compute_classification_metrics_emits_v3_keys() -> None:
+    """``_compute_classification_metrics`` emits all v3 metrics on the inner
+    ``test_metrics`` dict so downstream ``_check_success_criteria`` can
+    resolve the v3 active gates."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_classification_metrics,
+    )
+
+    rng = np.random.default_rng(0)
+    n_train, n_val, n_test = 600, 150, 150
+
+    def _gen_split(n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        z = rng.normal(0.0, 1.5, n)
+        p = 1.0 / (1.0 + np.exp(-z))
+        y = (rng.uniform(0.0, 1.0, n) < p).astype(int)
+        proba = np.column_stack([1.0 - p, p])
+        pred = (p >= 0.5).astype(int)
+        return y, pred, proba
+
+    y_train, y_train_pred, y_train_proba = _gen_split(n_train)
+    y_val, y_val_pred, y_val_proba = _gen_split(n_val)
+    y_test, y_test_pred, y_test_proba = _gen_split(n_test)
+
+    result = _compute_classification_metrics(
+        y_train,
+        y_train_pred,
+        y_train_proba,
+        y_val,
+        y_val_pred,
+        y_val_proba,
+        y_test,
+        y_test_pred,
+        y_test_proba,
+    )
+
+    test_metrics = result["test_metrics"]
+    # B2: train_val_auc_delta surfaced.
+    assert "train_val_auc_delta" in test_metrics
+    assert test_metrics["train_val_auc_delta"] >= 0.0  # absolute value
+    # MCC already present from _compute_split_classification_metrics.
+    assert "mcc" in test_metrics
+    # v3 calibration emits.
+    assert "calibration_slope" in test_metrics
+    assert "calibration_intercept" in test_metrics
+    assert "calibration_slope_deviation" in test_metrics
+    assert "calibration_intercept_magnitude" in test_metrics
+    # v3 NB grid: 6 entries keyed by canonical p_t strings.
+    assert "net_benefit_grid" in test_metrics
+    grid = test_metrics["net_benefit_grid"]
+    assert isinstance(grid, dict)
+    assert len(grid) == 6
+    expected_keys = {
+        "p_t=0.05", "p_t=0.10", "p_t=0.20",
+        "p_t=0.30", "p_t=0.40", "p_t=0.50",
+    }
+    assert set(grid.keys()) == expected_keys
+    # B2 sanity: gap matches train and val AUC.
+    expected_gap = abs(
+        result["train_metrics"]["roc_auc"] - result["validation_metrics"]["roc_auc"]
+    )
+    assert test_metrics["train_val_auc_delta"] == pytest.approx(
+        expected_gap, abs=1e-9
+    )
+
+
+def test_apply_adaptive_overlay_applies_v3_tuple() -> None:
+    """Overlay reads ``_adaptive_inputs`` + ``baseline_test_auc``, computes
+    v3 thresholds, and applies the (thresholds, skipped) tuple. v3 invariant:
+    skipped criteria are REMOVED, deprecated precision/F1 are popped, and
+    ``_adaptive_p_t`` is set from the regime."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _apply_adaptive_criteria_overlay,
+    )
+
+    success_criteria = {
+        "minimum_auc": 0.75,
+        "minimum_precision": 0.70,  # popped (v3-deprecated)
+        "minimum_recall": 0.65,
+        "minimum_f1": 0.70,           # popped (v3-deprecated)
+        "minimum_lift_over_baseline": 0.10,
+        "_adaptive_inputs": {
+            "n_samples": 900,
+            "prevalence": 0.02,
+            "feature_count": 14,
+            "regime": "adverse",
+        },
+        "criteria_source": "adaptive",
+        "experiment_id": "exp-overlay",
+    }
+    test_metrics = {"roc_auc": 0.78, "baseline_test_auc": 0.50}
+
+    overlaid = _apply_adaptive_criteria_overlay(success_criteria, test_metrics)
+
+    # Adverse regime, prev=0.02:
+    #   thresholds = {auc=0.70, recall=0.50, NB=0.0, MCC=0.20, csd=0.15,
+    #                 cim=0.30, ECE=0.10, train_val_delta=0.03}
+    #   skipped = {minimum_lift_over_baseline}
+    assert overlaid["minimum_auc"] == pytest.approx(0.70, abs=1e-6)
+    assert overlaid["minimum_recall"] == pytest.approx(0.50, abs=1e-6)
+    assert overlaid["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
+    assert overlaid["minimum_mcc"] == pytest.approx(0.20, abs=1e-6)
+    assert overlaid["maximum_calibration_slope_deviation"] == pytest.approx(
+        0.15, abs=1e-6
+    )
+    assert overlaid["maximum_calibration_intercept_magnitude"] == pytest.approx(
+        0.30, abs=1e-6
+    )
+    # v3-deprecated keys popped — no precision/F1.
+    assert "minimum_precision" not in overlaid
+    assert "minimum_f1" not in overlaid
+    # Skipped: lift only.
+    assert "minimum_lift_over_baseline" not in overlaid
+    assert overlaid["_adaptive_skipped"] == ["minimum_lift_over_baseline"]
+    # v3 audit: p_t for adverse = 0.05.
+    assert overlaid["_adaptive_p_t"] == pytest.approx(0.05, abs=1e-6)
+    # Non-adaptive-managed keys preserved.
+    assert overlaid["criteria_source"] == "adaptive"
+    assert overlaid["experiment_id"] == "exp-overlay"
+
+
+def test_apply_adaptive_overlay_noop_when_not_adaptive() -> None:
+    """Without ``_adaptive_inputs``, overlay returns success_criteria unchanged."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _apply_adaptive_criteria_overlay,
+    )
+
+    success_criteria = {
+        "minimum_auc": 0.75,
+        "minimum_precision": 0.70,
+        "criteria_source": "fixed",
+    }
+    test_metrics = {"roc_auc": 0.80, "baseline_test_auc": 0.50}
+
+    overlaid = _apply_adaptive_criteria_overlay(success_criteria, test_metrics)
+    assert overlaid == success_criteria  # exact equality — no overwrite
+
+
+def test_apply_adaptive_overlay_noop_without_baseline_test_auc() -> None:
+    """Adaptive inputs present but baseline_test_auc absent (degenerate
+    split) ⇒ leave success_criteria unchanged. The validator owns
+    criteria_source; the overlay does not touch it.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _apply_adaptive_criteria_overlay,
+    )
+
+    success_criteria = {
+        "minimum_auc": 0.75,
+        "_adaptive_inputs": {
+            "n_samples": 900,
+            "prevalence": 0.02,
+            "feature_count": 14,
+            "regime": "adverse",
+        },
+    }
+    test_metrics = {"roc_auc": 0.78}  # no baseline_test_auc
+
+    overlaid = _apply_adaptive_criteria_overlay(success_criteria, test_metrics)
+    assert overlaid["minimum_auc"] == 0.75
+    assert "_adaptive_skipped" not in overlaid
+    assert "_adaptive_p_t" not in overlaid
+
+
+def test_apply_adaptive_overlay_default_regime_sets_p_t_0_20() -> None:
+    """Default-regime overlay sets ``_adaptive_p_t = 0.20`` (Vickers 2019
+    rubric-stress cost ratio 4:1)."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _apply_adaptive_criteria_overlay,
+    )
+
+    sc = {
+        "minimum_auc": 0.75,
+        "_adaptive_inputs": {
+            "n_samples": 900,
+            "prevalence": 0.30,
+            "feature_count": 14,
+            "regime": "default",
+        },
+    }
+    overlaid = _apply_adaptive_criteria_overlay(
+        sc, {"baseline_test_auc": 0.50}
+    )
+    assert overlaid["_adaptive_p_t"] == pytest.approx(0.20, abs=1e-6)
+    # Default regime drops min_auc.
+    assert "minimum_auc" not in overlaid
+    assert "minimum_auc" in overlaid["_adaptive_skipped"]
+
+
+def test_apply_adaptive_overlay_clean_regime_sets_p_t_0_30() -> None:
+    """Clean-regime overlay sets ``_adaptive_p_t = 0.30``."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _apply_adaptive_criteria_overlay,
+    )
+
+    sc = {
+        "minimum_auc": 0.75,
+        "_adaptive_inputs": {
+            "n_samples": 900,
+            "prevalence": 0.50,
+            "feature_count": 14,
+            "regime": "clean",
+        },
+    }
+    overlaid = _apply_adaptive_criteria_overlay(
+        sc, {"baseline_test_auc": 0.50}
+    )
+    assert overlaid["_adaptive_p_t"] == pytest.approx(0.30, abs=1e-6)
+
+
+def test_check_success_criteria_with_adaptive_overlay_end_to_end() -> None:
+    """Wire-end test: validator stashes ``_adaptive_inputs``, evaluator
+    overlay rewrites the criteria dict and ``_check_success_criteria``
+    aggregates correctly."""
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _check_success_criteria,
+    )
+
+    # Default regime, prev=0.30: AUC dropped (skipped), MCC=0.35,
+    # NB=0.0 at p_t=0.20, calibration gates fire, lift threshold 0.10.
+    success_criteria = {
+        "minimum_auc": 0.75,                 # popped by overlay (default skip)
+        "minimum_precision": 0.70,           # popped (v3-deprecated)
+        "minimum_recall": 0.65,
+        "minimum_f1": 0.70,                  # popped (v3-deprecated)
+        "minimum_lift_over_baseline": 0.10,
+        "_adaptive_inputs": {
+            "n_samples": 900,
+            "prevalence": 0.30,
+            "feature_count": 14,
+            "regime": "default",
+        },
+        "criteria_source": "adaptive",
+        "experiment_id": "e2e",
+        "baseline_model": "stratified_dummy",
+    }
+    test_metrics = {
+        "roc_auc": 0.62,
+        "precision": 0.55,
+        "recall": 0.62,                      # < 0.65 → fails
+        "f1_score": 0.583,
+        "mcc": 0.40,                         # > 0.35 → passes
+        "minimum_lift_over_baseline": 0.12,  # > 0.10 → passes
+        "baseline_test_auc": 0.50,
+        "calibrated_ece": 0.04,              # < 0.10 → passes
+        "train_val_auc_delta": 0.02,         # < 0.03 → passes
+        "calibration_slope_deviation": 0.10,  # < 0.15 → passes
+        "calibration_intercept_magnitude": 0.20,  # < 0.30 → passes
+        "net_benefit_grid": {"p_t=0.20": 0.005},  # > 0.0 → passes
+    }
+
+    result = _check_success_criteria(
+        test_metrics, success_criteria, "binary_classification"
+    )
+
+    # AUC removed by adaptive ⇒ recorded as met=None via post-loop pass.
+    assert result["success_criteria_results"]["minimum_auc"] is None
+    # Precision/F1 popped — they don't show up in results at all.
+    assert "minimum_precision" not in result["success_criteria_results"]
+    assert "minimum_f1" not in result["success_criteria_results"]
+    # Recall fires and FAILS.
+    assert result["success_criteria_results"]["minimum_recall"] is False
+    # NB > 0 at p_t=0.20: 0.005 > 0.0 → True.
+    assert result["success_criteria_results"]["minimum_net_benefit_at_p_t"] is True
+    assert result["success_criteria_results"]["minimum_mcc"] is True
+    assert result["success_criteria_results"]["maximum_calibration_slope_deviation"] is True
+    assert result["success_criteria_results"]["maximum_calibration_intercept_magnitude"] is True
+    assert result["success_criteria_results"]["maximum_calibration_error"] is True
+    assert result["success_criteria_results"]["maximum_train_val_delta"] is True
+    assert result["success_criteria_results"]["minimum_lift_over_baseline"] is True
+    # Aggregate False because recall fails.
+    assert result["success_criteria_met"] is False

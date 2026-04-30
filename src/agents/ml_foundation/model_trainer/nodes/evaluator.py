@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -318,6 +319,20 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 # Compute ECE improvement
                 cal_ece = compute_calibration_analysis(y_test_np, cal_proba)
                 metrics_result["calibrated_ece"] = cal_ece.get("calibration_ece")
+                # v3 B1 fix overlay: surface the post-isotonic ECE on the
+                # inner ``test_metrics`` dict so the alias
+                # ``maximum_calibration_error → calibrated_ece`` resolves
+                # at criterion-check time. The outer ``metrics_result``
+                # already carries the value at line above; this overlay
+                # makes it reachable from ``_check_success_criteria``,
+                # which only sees ``metrics_result["test_metrics"]``.
+                inner_test_metrics = metrics_result.get("test_metrics")
+                if isinstance(inner_test_metrics, dict):
+                    inner_test_metrics["calibrated_ece"] = (
+                        cal_ece.get("calibration_ece")
+                        if cal_ece.get("calibration_ece") is not None
+                        else float("nan")
+                    )
                 uncal_ece = metrics_result.get("calibration_error")
                 if uncal_ece is not None and cal_ece.get("calibration_ece") is not None:
                     logger.info(
@@ -540,6 +555,68 @@ def _normalize_cate(cate: np.ndarray) -> np.ndarray:
         return np.ones_like(cate) * 0.5
 
 
+# v3 NB grid p_t values (Vickers 2019). The validator-set ``_adaptive_p_t``
+# audit field selects the regime's p_t at criterion-check time; emitting a
+# grid keeps the cost bounded (6 floats) and lets downstream tools plot
+# decision-curve analyses at any p_t without re-evaluating.
+_V3_NB_GRID_P_T_VALUES: Tuple[float, ...] = (0.05, 0.10, 0.20, 0.30, 0.40, 0.50)
+
+
+def _compute_calibration_slope_intercept(
+    y_true: np.ndarray, y_proba: np.ndarray
+) -> Tuple[float, float]:
+    """Logistic recalibration. Returns ``(slope, intercept)`` per van Calster 2019.
+
+    Fits ``LogisticRegression(C=1e10)`` on the logit of predicted positive-
+    class probabilities. Slope == 1 and intercept == 0 mean perfect
+    calibration; slope < 1 means over-confident, slope > 1 under-confident.
+
+    Stability guard: requires ``n_pos >= 30`` AND ``n_neg >= 30``. Returns
+    ``(nan, nan)`` if either count is too low (the LR fit is unstable
+    below that threshold). Adverse-regime synthetic runs (``n_pos = 18`` at
+    ``N=900, prev=0.02``) hit this guard, and the evaluator's NaN-guard
+    branch records ``met=None`` for the calibration_*_deviation criteria.
+    """
+    if y_proba.ndim != 1:
+        raise ValueError(
+            f"y_proba must be 1d (positive-class probabilities); got shape {y_proba.shape}"
+        )
+    eps = 1e-9
+    y_proba_clipped = np.clip(y_proba, eps, 1.0 - eps)
+    logits = np.log(y_proba_clipped / (1.0 - y_proba_clipped)).reshape(-1, 1)
+    n_pos = int(np.sum(y_true == 1))
+    n_neg = int(np.sum(y_true == 0))
+    if n_pos < 30 or n_neg < 30:
+        return (float("nan"), float("nan"))
+    lr = LogisticRegression(C=1e10, solver="lbfgs", max_iter=1000)
+    lr.fit(logits, y_true.astype(int))
+    return (float(lr.coef_[0, 0]), float(lr.intercept_[0]))
+
+
+def _compute_net_benefit_at_p_t(
+    y_true: np.ndarray, y_proba: np.ndarray, p_t: float
+) -> float:
+    """Vickers 2006 net benefit at threshold probability ``p_t``.
+
+    ``NB = TP/n - (FP/n) * p_t / (1 - p_t)``. Operating point: predict
+    positive when ``y_proba >= p_t``. Returns ``nan`` for ``p_t`` outside
+    ``(0, 1)`` or empty inputs (NB is undefined there).
+
+    The decision-curve gate at ``NB > 0`` is operationally equivalent to
+    ``precision > p_t`` (Vickers 2006 algebra), but stating it as NB makes
+    the cost-ratio assumption explicit.
+    """
+    if not 0.0 < p_t < 1.0:
+        return float("nan")
+    n = len(y_true)
+    if n == 0:
+        return float("nan")
+    y_pred = (y_proba >= p_t).astype(int)
+    tp = int(np.sum((y_pred == 1) & (y_true == 1)))
+    fp = int(np.sum((y_pred == 1) & (y_true == 0)))
+    return (tp / n) - (fp / n) * p_t / (1.0 - p_t)
+
+
 def _compute_classification_metrics(
     y_train: Optional[np.ndarray],
     y_train_pred: Optional[np.ndarray],
@@ -736,6 +813,65 @@ def _compute_classification_metrics(
         test_auc = test_metrics.get("roc_auc")
         if test_auc is not None:
             test_metrics["minimum_lift_over_baseline"] = float(test_auc - baseline_auc)
+
+    # v3 emits (task 05 of adaptive_success_criteria plan, Option C):
+    # surface metrics the v3 active gates resolve against. All emits land
+    # on the inner ``test_metrics`` (B4 fix) — the dict that reaches
+    # ``_check_success_criteria`` via ``metrics_result["test_metrics"]``.
+    #
+    # 1. ``train_val_auc_delta`` (B2 fix): emit the gap between train and
+    #    validation AUC so the ``maximum_train_val_delta`` adaptive gate
+    #    has a metric. Without this, every adaptive run hard-fails the
+    #    criterion via the missing-metric path. Use absolute value so the
+    #    "max delta" gate fires regardless of direction.
+    train_auc_value = (
+        train_metrics.get("roc_auc") if isinstance(train_metrics, dict) else None
+    )
+    val_auc_value = (
+        validation_metrics.get("roc_auc")
+        if isinstance(validation_metrics, dict)
+        else None
+    )
+    if train_auc_value is not None and val_auc_value is not None:
+        try:
+            gap = float(train_auc_value) - float(val_auc_value)
+            test_metrics["train_val_auc_delta"] = abs(gap)
+        except (TypeError, ValueError):
+            logger.warning(
+                "train_val_auc_delta could not be computed "
+                f"(train roc_auc={train_auc_value!r}, val roc_auc={val_auc_value!r})"
+            )
+
+    # 2-4. Calibration slope/intercept (van Calster 2019, NEW v3) and
+    #      net-benefit grid (Vickers 2006, NEW v3). Both require positive-
+    #      class probabilities; skip the emit when y_test_proba is None.
+    if y_test_proba is not None:
+        y_test_proba_pos = _positive_class_proba(y_test_proba)
+        slope, intercept = _compute_calibration_slope_intercept(
+            np.asarray(y_test), y_test_proba_pos
+        )
+        test_metrics["calibration_slope"] = slope
+        test_metrics["calibration_intercept"] = intercept
+        test_metrics["calibration_slope_deviation"] = (
+            abs(slope - 1.0) if not math.isnan(slope) else float("nan")
+        )
+        test_metrics["calibration_intercept_magnitude"] = (
+            abs(intercept) if not math.isnan(intercept) else float("nan")
+        )
+        # NB grid keyed on ``p_t={p_t:.2f}`` strings; the evaluator's
+        # ``_resolve_net_benefit_from_grid`` reads the regime's ``p_t``
+        # from ``success_criteria['_adaptive_p_t']`` and looks up the
+        # matching key. Emit the full grid for downstream DCA plotting.
+        # Cast through Any to satisfy mypy — ``test_metrics`` is typed
+        # ``Dict[str, Optional[float]]`` from ``_compute_split_classification_metrics``,
+        # but the v3 emits add a dict-valued ``net_benefit_grid``.
+        test_metrics_any: Dict[str, Any] = test_metrics  # type: ignore[assignment]
+        test_metrics_any["net_benefit_grid"] = {
+            f"p_t={p_t:.2f}": _compute_net_benefit_at_p_t(
+                np.asarray(y_test), y_test_proba_pos, p_t
+            )
+            for p_t in _V3_NB_GRID_P_T_VALUES
+        }
 
     # Extract primary metrics for state
     auc_roc = test_metrics.get("roc_auc")
@@ -1552,6 +1688,15 @@ def _check_success_criteria(
             "success_criteria_results": {},
         }
 
+    # v3 (task 05 of adaptive_success_criteria plan): apply the adaptive
+    # overlay BEFORE iterating criteria. No-op when ``_adaptive_inputs``
+    # or ``baseline_test_auc`` are absent, so fixed-mode runs are
+    # unaffected. The overlay returns a possibly-rebuilt dict; we use
+    # it as ``success_criteria`` for the rest of this function.
+    success_criteria = _apply_adaptive_criteria_overlay(
+        success_criteria, test_metrics
+    )
+
     # Per-criterion outcome: True=met, False=not met, None=soft-skipped
     # (see narrow exemption below).
     results: Dict[str, Optional[bool]] = {}
@@ -1742,6 +1887,87 @@ def _check_success_criteria(
         "success_criteria_met": all_met,
         "success_criteria_results": results,
     }
+
+
+def _apply_adaptive_criteria_overlay(
+    success_criteria: Dict[str, Any],
+    test_metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Recompute v3 adaptive thresholds with the live ``baseline_test_auc``.
+
+    The scope_definer cannot compute ``baseline_auc`` — it runs before any
+    model is trained. It therefore stashes the four pre-eval inputs as
+    ``success_criteria['_adaptive_inputs']``; this helper reads that stash
+    and the freshly-computed ``baseline_test_auc`` from ``test_metrics``,
+    calls ``adaptive_success_criteria()``, and applies the resulting
+    ``(thresholds, skipped)`` tuple to a SHALLOW COPY of
+    ``success_criteria``:
+
+    - Skipped criteria are REMOVED from the dict (v3 invariant).
+    - The v3-deprecated fixed gates (precision / F1) are popped so only
+      v3 active gates fire downstream.
+    - Firing thresholds OVERWRITE the seeded fixed values.
+    - The audit list is stored at ``success_criteria['_adaptive_skipped']``.
+    - The regime-keyed threshold probability is stored at
+      ``success_criteria['_adaptive_p_t']`` for the NB > 0 gate resolver.
+
+    Returns the (possibly overlaid) dict. When ``_adaptive_inputs`` or
+    ``baseline_test_auc`` are absent, the criteria dict is returned
+    unchanged. See ``.claude/plans/adaptive_success_criteria/01-design.md``
+    for the v3 design contract and ``05-data-shape-introspection.md`` for
+    the two-phase hand-off rationale.
+    """
+    if "_adaptive_inputs" not in success_criteria:
+        return success_criteria
+    inputs = success_criteria.get("_adaptive_inputs")
+    if not isinstance(inputs, dict):
+        logger.warning(
+            "_adaptive_inputs is not a dict (%s); skipping adaptive overlay",
+            type(inputs).__name__,
+        )
+        return success_criteria
+    baseline_auc = test_metrics.get("baseline_test_auc")
+    if baseline_auc is None:
+        return success_criteria
+
+    # Local import avoids a top-level cross-agent dependency.
+    from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+        _V3_DEPRECATED_FIXED_KEYS,
+        _V3_REGIME_P_T,
+        adaptive_success_criteria,
+    )
+
+    try:
+        thresholds, skipped = adaptive_success_criteria(
+            n_samples=inputs["n_samples"],
+            prevalence=float(inputs["prevalence"]),
+            baseline_auc=float(baseline_auc),
+            feature_count=inputs["feature_count"],
+            regime=inputs.get("regime"),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        logger.warning(
+            "adaptive overlay refused inputs (%s); leaving success_criteria unchanged",
+            exc,
+        )
+        return success_criteria
+
+    overlaid: Dict[str, Any] = dict(success_criteria)
+    # Remove keys that adaptive skipped (v3 invariant: skipped ⇒ ABSENT).
+    for key in skipped:
+        overlaid.pop(key, None)
+    # Drop v3-deprecated fixed gates (precision / F1) so only v3 active
+    # gates fire downstream.
+    for key in _V3_DEPRECATED_FIXED_KEYS:
+        overlaid.pop(key, None)
+    # Apply firing thresholds.
+    overlaid.update(thresholds)
+    # Audit fields.
+    overlaid["_adaptive_skipped"] = sorted(skipped)
+    regime_in = inputs.get("regime")
+    effective_regime = regime_in if regime_in in _V3_REGIME_P_T else "clean"
+    overlaid["_adaptive_p_t"] = _V3_REGIME_P_T[effective_regime]
+    return overlaid
 
 
 def _resolve_net_benefit_from_grid(

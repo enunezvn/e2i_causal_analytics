@@ -572,6 +572,92 @@ async def test_adaptive_default_regime_drops_auc_from_success_criteria() -> None
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Two-phase stash path (task 05 of adaptive_success_criteria/) — the
+# production case where state has the 3 pre-eval inputs but NOT
+# baseline_auc, so the validator stashes inputs for the evaluator overlay.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adaptive_inputs_stashed_when_pre_eval_inputs_present_no_baseline_auc() -> None:
+    """v3 production path: state has n_samples / prevalence / feature_count
+    (and regime) but NOT baseline_auc. The validator stashes the inputs on
+    ``success_criteria['_adaptive_inputs']`` for the evaluator overlay to
+    pick up later. ``criteria_source`` tags ``"adaptive"`` (the overlay
+    will fill in actual thresholds and ``_adaptive_p_t`` at eval time).
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-stash",
+            "n_samples": 900,
+            "prevalence": 0.30,
+            "feature_count": 14,
+            "regime": "default",
+            # baseline_auc DELIBERATELY ABSENT — production case
+        }
+        result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    assert sc["criteria_source"] == "adaptive"
+    assert "_adaptive_inputs" in sc
+    inputs = sc["_adaptive_inputs"]
+    assert inputs["n_samples"] == 900
+    assert inputs["prevalence"] == pytest.approx(0.30, abs=1e-9)
+    assert inputs["feature_count"] == 14
+    assert inputs["regime"] == "default"
+    # No _adaptive_skipped or _adaptive_p_t yet — overlay sets them later.
+    assert "_adaptive_skipped" not in sc
+    assert "_adaptive_p_t" not in sc
+    # Fixed thresholds remain in place pending overlay.
+    assert sc["minimum_auc"] == 0.75
+    assert sc["minimum_precision"] == 0.70
+    assert sc["minimum_f1"] == 0.70
+
+
+@pytest.mark.asyncio
+async def test_adaptive_inputs_absent_when_flag_off() -> None:
+    """Flag off ⇒ no ``_adaptive_inputs`` sneaks into the dict."""
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "false"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-no-inputs",
+            "n_samples": 900,
+            "prevalence": 0.30,
+            "feature_count": 14,
+            "regime": "default",
+        }
+        result = await define_success_criteria(state)
+
+    assert "_adaptive_inputs" not in result["success_criteria"]
+
+
+@pytest.mark.asyncio
+async def test_pre_eval_inputs_incomplete_falls_back() -> None:
+    """If pre-eval inputs are incomplete (missing one of n_samples /
+    prevalence / feature_count), fall back to fixed with the third audit
+    value.
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-incomplete-stash",
+            "n_samples": 900,
+            "prevalence": 0.30,
+            # feature_count and regime missing
+        }
+        result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    assert sc["criteria_source"] == "adaptive_fallback_to_fixed"
+    assert "_adaptive_inputs" not in sc
+    assert sc["minimum_auc"] == 0.75
+
+
 @pytest.mark.asyncio
 async def test_none_threshold_in_performance_requirements_falls_back_to_default(
     caplog: pytest.LogCaptureFixture,

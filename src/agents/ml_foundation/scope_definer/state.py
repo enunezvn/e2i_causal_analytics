@@ -66,6 +66,20 @@ class ScopeDefinerState(TypedDict, total=False):
     # threading through a separate parameter.
     cost_matrix: Optional[Dict[str, float]]
 
+    # Adaptive success criteria pre-eval inputs (task 05 of
+    # adaptive_success_criteria plan). When ``ADAPTIVE_CRITERIA=true`` and
+    # all four are present, ``criteria_validator`` stashes them on
+    # ``success_criteria['_adaptive_inputs']`` for the evaluator overlay
+    # to pick up alongside the live ``baseline_test_auc``. Optional —
+    # when any is missing, the validator falls back to fixed thresholds
+    # with ``criteria_source="adaptive_fallback_to_fixed"``.
+    # NOTE: ``baseline_auc`` is intentionally NOT here — it is computed at
+    # eval time inside the evaluator, not at scope-definition time.
+    n_samples: Optional[int]            # training-split row count
+    prevalence: Optional[float]         # positive-class rate, in [0, 1]
+    feature_count: Optional[int]        # post-preprocessing feature count
+    regime: Optional[Literal["default", "clean", "adverse"]]
+
     # === INTERMEDIATE FIELDS ===
     # Problem classification
     inferred_problem_type: str  # Inferred ML problem type
