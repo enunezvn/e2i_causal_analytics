@@ -309,9 +309,7 @@ def test_check_success_criteria_skips_criteria_source_field() -> None:
         "experiment_id": "abc",  # existing precedent for skip-non-numeric
         "baseline_model": "stratified_dummy",
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
     assert result["success_criteria_met"] is True
     assert "criteria_source" not in result["success_criteria_results"]
     assert "experiment_id" not in result["success_criteria_results"]
@@ -340,14 +338,12 @@ def test_check_success_criteria_records_met_None_for_adaptive_skipped() -> None:
 
     test_metrics = {"recall": 0.60, "f1_score": 0.55}
     success_criteria = {
-        "minimum_recall": 0.50,                      # firing
-        "minimum_f1": 0.55,                          # firing
+        "minimum_recall": 0.50,  # firing
+        "minimum_f1": 0.55,  # firing
         # minimum_auc / minimum_precision NOT in dict at all (skipped)
         "_adaptive_skipped": ["minimum_auc", "minimum_precision"],
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     # Skipped names recorded as met=None
     assert result["success_criteria_results"]["minimum_auc"] is None
@@ -368,12 +364,10 @@ def test_check_success_criteria_adaptive_skipped_does_not_mask_real_fail() -> No
 
     test_metrics = {"recall": 0.40}
     success_criteria = {
-        "minimum_recall": 0.65,                      # firing — and failing
-        "_adaptive_skipped": ["minimum_auc"],        # explicit skip
+        "minimum_recall": 0.65,  # firing — and failing
+        "_adaptive_skipped": ["minimum_auc"],  # explicit skip
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     assert result["success_criteria_results"]["minimum_auc"] is None
     assert result["success_criteria_results"]["minimum_recall"] is False
@@ -400,9 +394,7 @@ def test_check_success_criteria_plain_None_threshold_does_NOT_skip_via_v1_genera
         "minimum_auc": None,  # plain None — NOT in _adaptive_skipped
         "minimum_recall": 0.65,
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     # Plain None threshold MUST NOT appear as met=None in results
     # (would mask a config typo). It silently drops via the existing
@@ -426,9 +418,7 @@ def test_check_success_criteria_missing_non_lift_metric_still_hard_fails() -> No
         "minimum_auc": 0.75,
         "minimum_recall": 0.65,  # threshold set but recall is MISSING from test_metrics
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     assert result["success_criteria_results"]["minimum_auc"] is True
     assert result["success_criteria_results"]["minimum_recall"] is False
@@ -447,9 +437,7 @@ def test_check_success_criteria_lift_exemption_still_works() -> None:
         "minimum_auc": 0.75,
         "minimum_lift_over_baseline": 0.10,  # threshold set, metric missing
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     assert result["success_criteria_results"]["minimum_auc"] is True
     assert result["success_criteria_results"]["minimum_lift_over_baseline"] is None
@@ -466,9 +454,7 @@ def test_check_success_criteria_calibration_error_alias() -> None:
 
     test_metrics = {"calibrated_ece": 0.04}
     success_criteria = {"maximum_calibration_error": 0.05}
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
     assert result["success_criteria_results"]["maximum_calibration_error"] is True
 
     test_metrics_fail = {"calibrated_ece": 0.08}
@@ -488,9 +474,7 @@ def test_check_success_criteria_train_val_delta_alias() -> None:
 
     test_metrics = {"train_val_auc_delta": 0.025}
     success_criteria = {"maximum_train_val_delta": 0.03}
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
     assert result["success_criteria_results"]["maximum_train_val_delta"] is True
 
     test_metrics_fail = {"train_val_auc_delta": 0.06}
@@ -512,9 +496,7 @@ def test_check_success_criteria_adaptive_skipped_field_not_treated_as_metric() -
         "minimum_auc": 0.75,
         "_adaptive_skipped": ["minimum_precision"],  # list — must be skipped
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     # The list itself is NOT a criterion result.
     assert "_adaptive_skipped" not in result["success_criteria_results"]
@@ -542,9 +524,7 @@ def test_check_success_criteria_skips_underscore_prefix_audit_fields() -> None:
         "minimum_auc": 0.75,
         "_adaptive_p_t": 0.30,  # float audit field — must NOT be evaluated
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     assert "_adaptive_p_t" not in result["success_criteria_results"]
     assert result["success_criteria_results"]["minimum_auc"] is True
@@ -570,9 +550,7 @@ def test_check_success_criteria_nan_actual_value_records_met_none() -> None:
         "minimum_auc": 0.75,
         "maximum_calibration_slope_deviation": 0.15,
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     # NaN comparison routed to met=None, not False.
     assert result["success_criteria_results"]["maximum_calibration_slope_deviation"] is None
@@ -587,11 +565,39 @@ def test_check_success_criteria_nan_actual_value_records_met_none() -> None:
         ("minimum_mcc", "mcc", 0.50, 0.45, False, True),
         ("minimum_mcc", "mcc", 0.40, 0.45, False, False),
         # Calibration slope deviation (lower-is-better)
-        ("maximum_calibration_slope_deviation", "calibration_slope_deviation", 0.10, 0.15, True, True),
-        ("maximum_calibration_slope_deviation", "calibration_slope_deviation", 0.20, 0.15, True, False),
+        (
+            "maximum_calibration_slope_deviation",
+            "calibration_slope_deviation",
+            0.10,
+            0.15,
+            True,
+            True,
+        ),
+        (
+            "maximum_calibration_slope_deviation",
+            "calibration_slope_deviation",
+            0.20,
+            0.15,
+            True,
+            False,
+        ),
         # Calibration intercept magnitude (lower-is-better)
-        ("maximum_calibration_intercept_magnitude", "calibration_intercept_magnitude", 0.20, 0.30, True, True),
-        ("maximum_calibration_intercept_magnitude", "calibration_intercept_magnitude", 0.40, 0.30, True, False),
+        (
+            "maximum_calibration_intercept_magnitude",
+            "calibration_intercept_magnitude",
+            0.20,
+            0.30,
+            True,
+            True,
+        ),
+        (
+            "maximum_calibration_intercept_magnitude",
+            "calibration_intercept_magnitude",
+            0.40,
+            0.30,
+            True,
+            False,
+        ),
     ],
 )
 def test_check_success_criteria_resolves_v3_aliases(
@@ -612,9 +618,7 @@ def test_check_success_criteria_resolves_v3_aliases(
 
     test_metrics = {metric: actual}
     success_criteria = {criterion: threshold}
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
     assert result["success_criteria_results"][criterion] is expected_met
 
 
@@ -630,17 +634,13 @@ def test_check_success_criteria_lower_is_better_includes_v3_calibration_deviatio
     # Slope deviation: actual > threshold ⇒ should FAIL (lower-is-better).
     test_metrics = {"calibration_slope_deviation": 0.20}
     success_criteria = {"maximum_calibration_slope_deviation": 0.15}
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
     assert result["success_criteria_results"]["maximum_calibration_slope_deviation"] is False
 
     # Intercept magnitude: actual > threshold ⇒ should FAIL.
     test_metrics2 = {"calibration_intercept_magnitude": 0.40}
     success_criteria2 = {"maximum_calibration_intercept_magnitude": 0.30}
-    result2 = _check_success_criteria(
-        test_metrics2, success_criteria2, "binary_classification"
-    )
+    result2 = _check_success_criteria(test_metrics2, success_criteria2, "binary_classification")
     assert result2["success_criteria_results"]["maximum_calibration_intercept_magnitude"] is False
 
 
@@ -666,9 +666,7 @@ def test_check_success_criteria_nb_at_p_t_resolves_via_grid() -> None:
         "minimum_net_benefit_at_p_t": 0.0,
         "_adaptive_p_t": 0.30,
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
     assert result["success_criteria_results"]["minimum_net_benefit_at_p_t"] is True
 
     # Clean regime, model worse than treat-none: NB ≤ 0 at p_t=0.30 ⇒ fail.
@@ -698,9 +696,7 @@ def test_check_success_criteria_nb_at_p_t_soft_skips_when_grid_missing() -> None
         "minimum_net_benefit_at_p_t": 0.0,
         "_adaptive_p_t": 0.30,
     }
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
     assert result["success_criteria_results"]["minimum_net_benefit_at_p_t"] is None
     assert result["success_criteria_results"]["minimum_auc"] is True
     # Other criteria can still aggregate to True.
@@ -879,17 +875,17 @@ def test_compute_classification_metrics_emits_v3_keys() -> None:
     assert isinstance(grid, dict)
     assert len(grid) == 6
     expected_keys = {
-        "p_t=0.05", "p_t=0.10", "p_t=0.20",
-        "p_t=0.30", "p_t=0.40", "p_t=0.50",
+        "p_t=0.05",
+        "p_t=0.10",
+        "p_t=0.20",
+        "p_t=0.30",
+        "p_t=0.40",
+        "p_t=0.50",
     }
     assert set(grid.keys()) == expected_keys
     # B2 sanity: gap matches train and val AUC.
-    expected_gap = abs(
-        result["train_metrics"]["roc_auc"] - result["validation_metrics"]["roc_auc"]
-    )
-    assert test_metrics["train_val_auc_delta"] == pytest.approx(
-        expected_gap, abs=1e-9
-    )
+    expected_gap = abs(result["train_metrics"]["roc_auc"] - result["validation_metrics"]["roc_auc"])
+    assert test_metrics["train_val_auc_delta"] == pytest.approx(expected_gap, abs=1e-9)
 
 
 def test_apply_adaptive_overlay_applies_v3_tuple() -> None:
@@ -905,7 +901,7 @@ def test_apply_adaptive_overlay_applies_v3_tuple() -> None:
         "minimum_auc": 0.75,
         "minimum_precision": 0.70,  # popped (v3-deprecated)
         "minimum_recall": 0.65,
-        "minimum_f1": 0.70,           # popped (v3-deprecated)
+        "minimum_f1": 0.70,  # popped (v3-deprecated)
         "minimum_lift_over_baseline": 0.10,
         "_adaptive_inputs": {
             "n_samples": 900,
@@ -928,12 +924,8 @@ def test_apply_adaptive_overlay_applies_v3_tuple() -> None:
     assert overlaid["minimum_recall"] == pytest.approx(0.50, abs=1e-6)
     assert overlaid["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
     assert overlaid["minimum_mcc"] == pytest.approx(0.20, abs=1e-6)
-    assert overlaid["maximum_calibration_slope_deviation"] == pytest.approx(
-        0.15, abs=1e-6
-    )
-    assert overlaid["maximum_calibration_intercept_magnitude"] == pytest.approx(
-        0.30, abs=1e-6
-    )
+    assert overlaid["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
+    assert overlaid["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
     # v3-deprecated keys popped — no precision/F1.
     assert "minimum_precision" not in overlaid
     assert "minimum_f1" not in overlaid
@@ -1006,9 +998,7 @@ def test_apply_adaptive_overlay_default_regime_sets_p_t_0_20() -> None:
             "regime": "default",
         },
     }
-    overlaid = _apply_adaptive_criteria_overlay(
-        sc, {"baseline_test_auc": 0.50}
-    )
+    overlaid = _apply_adaptive_criteria_overlay(sc, {"baseline_test_auc": 0.50})
     assert overlaid["_adaptive_p_t"] == pytest.approx(0.20, abs=1e-6)
     # Default regime drops min_auc.
     assert "minimum_auc" not in overlaid
@@ -1030,9 +1020,7 @@ def test_apply_adaptive_overlay_clean_regime_sets_p_t_0_30() -> None:
             "regime": "clean",
         },
     }
-    overlaid = _apply_adaptive_criteria_overlay(
-        sc, {"baseline_test_auc": 0.50}
-    )
+    overlaid = _apply_adaptive_criteria_overlay(sc, {"baseline_test_auc": 0.50})
     assert overlaid["_adaptive_p_t"] == pytest.approx(0.30, abs=1e-6)
 
 
@@ -1047,10 +1035,10 @@ def test_check_success_criteria_with_adaptive_overlay_end_to_end() -> None:
     # Default regime, prev=0.30: AUC dropped (skipped), MCC=0.35,
     # NB=0.0 at p_t=0.20, calibration gates fire, lift threshold 0.10.
     success_criteria = {
-        "minimum_auc": 0.75,                 # popped by overlay (default skip)
-        "minimum_precision": 0.70,           # popped (v3-deprecated)
+        "minimum_auc": 0.75,  # popped by overlay (default skip)
+        "minimum_precision": 0.70,  # popped (v3-deprecated)
         "minimum_recall": 0.65,
-        "minimum_f1": 0.70,                  # popped (v3-deprecated)
+        "minimum_f1": 0.70,  # popped (v3-deprecated)
         "minimum_lift_over_baseline": 0.10,
         "_adaptive_inputs": {
             "n_samples": 900,
@@ -1065,21 +1053,19 @@ def test_check_success_criteria_with_adaptive_overlay_end_to_end() -> None:
     test_metrics = {
         "roc_auc": 0.62,
         "precision": 0.55,
-        "recall": 0.62,                      # < 0.65 → fails
+        "recall": 0.62,  # < 0.65 → fails
         "f1_score": 0.583,
-        "mcc": 0.40,                         # > 0.35 → passes
+        "mcc": 0.40,  # > 0.35 → passes
         "minimum_lift_over_baseline": 0.12,  # > 0.10 → passes
         "baseline_test_auc": 0.50,
-        "calibrated_ece": 0.04,              # < 0.10 → passes
-        "train_val_auc_delta": 0.02,         # < 0.03 → passes
+        "calibrated_ece": 0.04,  # < 0.10 → passes
+        "train_val_auc_delta": 0.02,  # < 0.03 → passes
         "calibration_slope_deviation": 0.10,  # < 0.15 → passes
         "calibration_intercept_magnitude": 0.20,  # < 0.30 → passes
         "net_benefit_grid": {"p_t=0.20": 0.005},  # > 0.0 → passes
     }
 
-    result = _check_success_criteria(
-        test_metrics, success_criteria, "binary_classification"
-    )
+    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
 
     # AUC removed by adaptive ⇒ recorded as met=None via post-loop pass.
     assert result["success_criteria_results"]["minimum_auc"] is None

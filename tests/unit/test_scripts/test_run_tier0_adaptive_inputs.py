@@ -69,9 +69,7 @@ def test_compute_adaptive_inputs_returns_none_regime_for_unknown_label() -> None
 def test_compute_adaptive_inputs_handles_each_valid_regime() -> None:
     """All three valid regime labels round-trip through the helper."""
     runner = importlib.import_module("scripts.run_tier0_test")
-    df = pd.DataFrame(
-        {"x": [0.0] * 10, "discontinuation_flag": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]}
-    )
+    df = pd.DataFrame({"x": [0.0] * 10, "discontinuation_flag": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]})
 
     for regime in ("default", "clean", "adverse"):
         inputs = runner._compute_adaptive_state_inputs(

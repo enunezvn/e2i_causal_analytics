@@ -26,9 +26,7 @@ _BINARY_CLASSIFICATION_DEFAULTS: Dict[str, float] = {
 # v3 Option C drops these gates per Van Calster et al. 2025 (Lancet Digital
 # Health). When the adaptive path succeeds, these legacy keys are popped
 # from ``success_criteria`` so only the v3 active gates fire downstream.
-_V3_DEPRECATED_FIXED_KEYS: frozenset[str] = frozenset(
-    {"minimum_precision", "minimum_f1"}
-)
+_V3_DEPRECATED_FIXED_KEYS: frozenset[str] = frozenset({"minimum_precision", "minimum_f1"})
 
 # Regime → threshold-probability mapping for the v3 NB > 0 gate. The
 # decision-maker fixes ``p_t`` once based on the cost ratio between false
@@ -267,9 +265,7 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
             and not isinstance(feature_count_raw, bool)
         )
         regime: Optional[Literal["default", "clean", "adverse"]] = (
-            regime_raw
-            if regime_raw in ("default", "clean", "adverse")
-            else None
+            regime_raw if regime_raw in ("default", "clean", "adverse") else None
         )
 
         if (
@@ -307,12 +303,8 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
                 # calibration / train_val / ECE).
                 success_criteria.update(thresholds)
                 success_criteria["_adaptive_skipped"] = sorted(skipped)
-                effective_regime = (
-                    regime if regime in _V3_REGIME_P_T else "clean"
-                )
-                success_criteria["_adaptive_p_t"] = _V3_REGIME_P_T[
-                    effective_regime
-                ]
+                effective_regime = regime if regime in _V3_REGIME_P_T else "clean"
+                success_criteria["_adaptive_p_t"] = _V3_REGIME_P_T[effective_regime]
                 criteria_source = "adaptive"
             except ValueError as exc:
                 logger.warning(

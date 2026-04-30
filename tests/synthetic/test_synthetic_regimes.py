@@ -242,9 +242,7 @@ class TestDefaultRegimeGenerator:
         # Window matches the existing TestAdverseRegimeGenerator default-
         # regime test (0.05 ≤ share ≤ 0.35). Tighter windows risk false
         # positives from sklearn / numpy minor-version drift.
-        assert 0.05 <= share <= 0.35, (
-            f"default regime share drifted: {share:.3f}"
-        )
+        assert 0.05 <= share <= 0.35, f"default regime share drifted: {share:.3f}"
 
     def test_default_regime_no_extra_signalization(self):
         """Default keeps the original 3-feature signal surface.
@@ -258,11 +256,7 @@ class TestDefaultRegimeGenerator:
         """
         gen = SampleDataGenerator(seed=42)
         df = gen.ml_patients(n_patients=2000)
-        corr = (
-            df[["data_quality_score", "discontinuation_flag"]]
-            .corr()
-            .iloc[0, 1]
-        )
+        corr = df[["data_quality_score", "discontinuation_flag"]].corr().iloc[0, 1]
         assert abs(corr) < 0.05, (
             "default regime should not signalize data_quality_score; "
             f"|corr|={abs(corr):.3f} too large"
@@ -303,9 +297,7 @@ class TestCleanRegimeGenerator:
     def test_a_target_share_in_band(self):
         df = self._generate_clean()
         share = df["discontinuation_flag"].mean()
-        assert 0.20 <= share <= 0.45, (
-            f"clean regime share out of band: {share:.3f}"
-        )
+        assert 0.20 <= share <= 0.45, f"clean regime share out of band: {share:.3f}"
 
     def test_b_age_group_risk_gradient(self):
         df = self._generate_clean()
@@ -318,15 +310,10 @@ class TestCleanRegimeGenerator:
 
     def test_c_data_quality_score_correlation(self):
         df = self._generate_clean()
-        corr = (
-            df[["data_quality_score", "discontinuation_flag"]]
-            .corr()
-            .iloc[0, 1]
-        )
+        corr = df[["data_quality_score", "discontinuation_flag"]].corr().iloc[0, 1]
         # Coefficient is negative (higher dqs → lower risk).
         assert abs(corr) > 0.10, (
-            f"data_quality_score → target correlation too weak: "
-            f"corr={corr:.4f}"
+            f"data_quality_score → target correlation too weak: corr={corr:.4f}"
         )
 
     def test_d_west_region_negative_lift(self):
@@ -392,9 +379,7 @@ class TestCleanRegimeE2E:
         validation_metrics = pipeline_state.get("validation_metrics", {})
         val_auc = validation_metrics.get("roc_auc") or validation_metrics.get("auc_roc")
         assert val_auc is not None, "validation roc_auc missing"
-        assert 0.75 <= val_auc <= 0.85, (
-            f"clean regime val AUC out of band: {val_auc:.4f}"
-        )
+        assert 0.75 <= val_auc <= 0.85, f"clean regime val AUC out of band: {val_auc:.4f}"
 
     def test_train_val_gap_modest(self, pipeline_state):
         train_metrics = pipeline_state.get("train_metrics", {})
@@ -404,14 +389,14 @@ class TestCleanRegimeE2E:
         if train_auc is None or val_auc is None:
             pytest.skip("train or val AUC unavailable; gap check requires both")
         gap = train_auc - val_auc
-        assert gap < 0.08, f"train→val AUC gap too large: train={train_auc:.4f}, val={val_auc:.4f}, gap={gap:.4f}"
+        assert gap < 0.08, (
+            f"train→val AUC gap too large: train={train_auc:.4f}, val={val_auc:.4f}, gap={gap:.4f}"
+        )
 
     def test_lift_over_baseline_positive(self, pipeline_state):
         test_metrics = pipeline_state.get("test_metrics", {})
         lift = test_metrics.get("minimum_lift_over_baseline")
-        assert lift is not None, (
-            "minimum_lift_over_baseline missing — Section B not merged?"
-        )
+        assert lift is not None, "minimum_lift_over_baseline missing — Section B not merged?"
         # Comfortable margin over the 0.10 threshold; tolerate sklearn drift.
         assert lift > 0.10, f"clean-regime lift too small: {lift:.4f}"
 

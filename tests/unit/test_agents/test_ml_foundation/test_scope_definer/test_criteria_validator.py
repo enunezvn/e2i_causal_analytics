@@ -433,12 +433,8 @@ async def test_adaptive_path_used_when_flag_on_with_full_state() -> None:
     assert sc["minimum_auc"] == pytest.approx(0.70, abs=1e-6)
     assert sc["minimum_mcc"] == pytest.approx(0.20, abs=1e-6)
     assert sc["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
-    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(
-        0.15, abs=1e-6
-    )
-    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(
-        0.30, abs=1e-6
-    )
+    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
+    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
     # v3 audit field for the regime-keyed threshold probability.
     assert sc["_adaptive_p_t"] == pytest.approx(0.05, abs=1e-6)
 
@@ -518,9 +514,7 @@ async def test_flag_off_reproduces_fixed_thresholds_exactly() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_adaptive_p_t_audit_value_per_regime(
-    regime: object, expected_p_t: float
-) -> None:
+async def test_adaptive_p_t_audit_value_per_regime(regime: object, expected_p_t: float) -> None:
     """v3 audit field ``_adaptive_p_t`` carries the regime-keyed threshold
     probability used for the NB > 0 gate. Vickers 2019 cost-ratio defaults.
     """

@@ -183,9 +183,7 @@ class TestLiftEndToEndOnSignalData:
             random_state=42,
         )
         train, test = _split_indices(len(X))
-        model = RandomForestClassifier(n_estimators=20, random_state=42).fit(
-            X[train], y[train]
-        )
+        model = RandomForestClassifier(n_estimators=20, random_state=42).fit(X[train], y[train])
         from sklearn.metrics import roc_auc_score
 
         proba = model.predict_proba(X[test])[:, 1]
@@ -207,9 +205,7 @@ class TestLiftEndToEndOnSignalData:
         X = rng.normal(size=(300, 10))
         y = rng.integers(0, 2, size=300)
         train, test = _split_indices(len(X))
-        model = RandomForestClassifier(n_estimators=20, random_state=42).fit(
-            X[train], y[train]
-        )
+        model = RandomForestClassifier(n_estimators=20, random_state=42).fit(X[train], y[train])
         from sklearn.metrics import roc_auc_score
 
         proba = model.predict_proba(X[test])[:, 1]
@@ -220,6 +216,4 @@ class TestLiftEndToEndOnSignalData:
         lift = model_auc - baseline["baseline_test_auc"]
         # On pure-noise labels both should hover near 0.50 — lift well under
         # the 0.10 threshold proves the criterion meaningfully discriminates.
-        assert abs(lift) < 0.10, (
-            f"expected |lift| < 0.10 on random labels; got {lift:.4f}"
-        )
+        assert abs(lift) < 0.10, f"expected |lift| < 0.10 on random labels; got {lift:.4f}"

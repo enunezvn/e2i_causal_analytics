@@ -173,7 +173,7 @@ def test_clean_regime_with_adaptive_flag_on_v3() -> None:
     res = out["success_criteria_results"]
     assert res["minimum_auc"] is True
     assert res["minimum_recall"] is True
-    assert res["minimum_mcc"] is True   # path-D MCC ≈ 0.50 ≥ 0.45
+    assert res["minimum_mcc"] is True  # path-D MCC ≈ 0.50 ≥ 0.45
     # NB at p_t=0.30 should be > 0 if model is calibrated and
     # discriminates better than treat-all.
     assert res["minimum_net_benefit_at_p_t"] in (True, None)

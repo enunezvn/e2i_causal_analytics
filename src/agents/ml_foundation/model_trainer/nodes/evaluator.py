@@ -593,9 +593,7 @@ def _compute_calibration_slope_intercept(
     return (float(lr.coef_[0, 0]), float(lr.intercept_[0]))
 
 
-def _compute_net_benefit_at_p_t(
-    y_true: np.ndarray, y_proba: np.ndarray, p_t: float
-) -> float:
+def _compute_net_benefit_at_p_t(y_true: np.ndarray, y_proba: np.ndarray, p_t: float) -> float:
     """Vickers 2006 net benefit at threshold probability ``p_t``.
 
     ``NB = TP/n - (FP/n) * p_t / (1 - p_t)``. Operating point: predict
@@ -804,9 +802,7 @@ def _compute_classification_metrics(
     # (auc - baseline_auc) is preferred over relative because: (a) it
     # matches the natural reading of the criterion name; (b) it is not
     # deflated when the baseline drifts above 0.50 on small/skewed splits.
-    baseline_metrics = _compute_baseline_test_metrics(
-        y_train, y_test, "binary_classification"
-    )
+    baseline_metrics = _compute_baseline_test_metrics(y_train, y_test, "binary_classification")
     if "baseline_test_auc" in baseline_metrics:
         baseline_auc = baseline_metrics["baseline_test_auc"]
         test_metrics["baseline_test_auc"] = baseline_auc
@@ -824,13 +820,9 @@ def _compute_classification_metrics(
     #    has a metric. Without this, every adaptive run hard-fails the
     #    criterion via the missing-metric path. Use absolute value so the
     #    "max delta" gate fires regardless of direction.
-    train_auc_value = (
-        train_metrics.get("roc_auc") if isinstance(train_metrics, dict) else None
-    )
+    train_auc_value = train_metrics.get("roc_auc") if isinstance(train_metrics, dict) else None
     val_auc_value = (
-        validation_metrics.get("roc_auc")
-        if isinstance(validation_metrics, dict)
-        else None
+        validation_metrics.get("roc_auc") if isinstance(validation_metrics, dict) else None
     )
     if train_auc_value is not None and val_auc_value is not None:
         try:
@@ -867,9 +859,7 @@ def _compute_classification_metrics(
         # but the v3 emits add a dict-valued ``net_benefit_grid``.
         test_metrics_any: Dict[str, Any] = test_metrics  # type: ignore[assignment]
         test_metrics_any["net_benefit_grid"] = {
-            f"p_t={p_t:.2f}": _compute_net_benefit_at_p_t(
-                np.asarray(y_test), y_test_proba_pos, p_t
-            )
+            f"p_t={p_t:.2f}": _compute_net_benefit_at_p_t(np.asarray(y_test), y_test_proba_pos, p_t)
             for p_t in _V3_NB_GRID_P_T_VALUES
         }
 
@@ -1693,9 +1683,7 @@ def _check_success_criteria(
     # or ``baseline_test_auc`` are absent, so fixed-mode runs are
     # unaffected. The overlay returns a possibly-rebuilt dict; we use
     # it as ``success_criteria`` for the rest of this function.
-    success_criteria = _apply_adaptive_criteria_overlay(
-        success_criteria, test_metrics
-    )
+    success_criteria = _apply_adaptive_criteria_overlay(success_criteria, test_metrics)
 
     # Per-criterion outcome: True=met, False=not met, None=soft-skipped
     # (see narrow exemption below).
@@ -1841,8 +1829,7 @@ def _check_success_criteria(
         # n_neg < 30 (the LR fit is unstable and emits NaN).
         if isinstance(actual_value, float) and math.isnan(actual_value):
             logger.warning(
-                "Success criterion soft-skipped (metric value is NaN): "
-                "%s (resolved to '%s')",
+                "Success criterion soft-skipped (metric value is NaN): %s (resolved to '%s')",
                 criterion_name,
                 metric_name,
             )

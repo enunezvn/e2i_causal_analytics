@@ -75,9 +75,9 @@ class ScopeDefinerState(TypedDict, total=False):
     # with ``criteria_source="adaptive_fallback_to_fixed"``.
     # NOTE: ``baseline_auc`` is intentionally NOT here — it is computed at
     # eval time inside the evaluator, not at scope-definition time.
-    n_samples: Optional[int]            # training-split row count
-    prevalence: Optional[float]         # positive-class rate, in [0, 1]
-    feature_count: Optional[int]        # post-preprocessing feature count
+    n_samples: Optional[int]  # training-split row count
+    prevalence: Optional[float]  # positive-class rate, in [0, 1]
+    feature_count: Optional[int]  # post-preprocessing feature count
     regime: Optional[Literal["default", "clean", "adverse"]]
 
     # === INTERMEDIATE FIELDS ===

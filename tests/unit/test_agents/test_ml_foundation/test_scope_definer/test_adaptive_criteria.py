@@ -70,12 +70,8 @@ def test_adaptive_clean_regime_canonical_row() -> None:
     # v3: MCC sanity gate (clean threshold per Chicco-Jurman 2020)
     assert thresholds["minimum_mcc"] == pytest.approx(0.45, abs=1e-6)
     # v3: van Calster 2019 calibration quality
-    assert thresholds["maximum_calibration_slope_deviation"] == pytest.approx(
-        0.15, abs=1e-6
-    )
-    assert thresholds["maximum_calibration_intercept_magnitude"] == pytest.approx(
-        0.30, abs=1e-6
-    )
+    assert thresholds["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
+    assert thresholds["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
     # v3 drops precision/f1 entirely
     assert "minimum_precision" not in thresholds
     assert "minimum_precision" not in skipped
@@ -136,12 +132,8 @@ def test_adaptive_adverse_regime_skips_lift_only() -> None:
     # v3: adverse-regime gates fire, NB at p_t=0.05 ≡ precision > 0.05
     assert thresholds["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
     assert thresholds["minimum_mcc"] == pytest.approx(0.20, abs=1e-6)
-    assert thresholds["maximum_calibration_slope_deviation"] == pytest.approx(
-        0.15, abs=1e-6
-    )
-    assert thresholds["maximum_calibration_intercept_magnitude"] == pytest.approx(
-        0.30, abs=1e-6
-    )
+    assert thresholds["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
+    assert thresholds["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
     # n_pos = 18, SE = 0.5/sqrt(18) ≈ 0.118, 2*SE = 0.236 > 0.10 → skip
     assert "minimum_lift_over_baseline" not in thresholds
     assert "minimum_lift_over_baseline" in skipped
@@ -181,16 +173,14 @@ def test_adaptive_n_threshold_for_ece_tightening() -> None:
 @pytest.mark.parametrize(
     "n,features,expected",
     [
-        (900, 14, 0.03),       # 14/900 ≈ 1/64 ≤ 1/50 → 0.03
-        (5000, 30, 0.03),      # 30/5000 ≈ 1/167 ≤ 1/50 → 0.03
-        (600, 20, 0.05),       # 20/600 ≈ 1/30, in (1/50, 1/30] → 0.05
-        (300, 14, 0.07),       # 14/300 ≈ 1/21.4, in (1/30, 1/15] → 0.07
-        (200, 20, 0.10),       # 20/200 = 1/10 > 1/15 → 0.10
+        (900, 14, 0.03),  # 14/900 ≈ 1/64 ≤ 1/50 → 0.03
+        (5000, 30, 0.03),  # 30/5000 ≈ 1/167 ≤ 1/50 → 0.03
+        (600, 20, 0.05),  # 20/600 ≈ 1/30, in (1/50, 1/30] → 0.05
+        (300, 14, 0.07),  # 14/300 ≈ 1/21.4, in (1/30, 1/15] → 0.07
+        (200, 20, 0.10),  # 20/200 = 1/10 > 1/15 → 0.10
     ],
 )
-def test_adaptive_train_val_delta_step_function(
-    n: int, features: int, expected: float
-) -> None:
+def test_adaptive_train_val_delta_step_function(n: int, features: int, expected: float) -> None:
     """Feature-density step function across all four buckets."""
     from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
         adaptive_success_criteria,
@@ -263,9 +253,7 @@ def test_v3_drops_precision_and_f1_from_thresholds_and_skipped() -> None:
     ]:
         thresholds, skipped = adaptive_success_criteria(n, prev, 0.50, 14, regime)
         for key in ("minimum_precision", "minimum_f1"):
-            assert key not in thresholds, (
-                f"{regime} N={n} prev={prev}: v3 must not emit {key}"
-            )
+            assert key not in thresholds, f"{regime} N={n} prev={prev}: v3 must not emit {key}"
             assert key not in skipped, (
                 f"{regime} N={n} prev={prev}: v3 must not even mention {key} in skipped"
             )
@@ -281,9 +269,9 @@ def test_v3_calibration_gates_always_fire() -> None:
     for regime in ("clean", "default", "adverse"):
         prev = 0.02 if regime == "adverse" else (0.30 if regime == "default" else 0.50)
         thresholds, _ = adaptive_success_criteria(900, prev, 0.50, 14, regime)
-        assert thresholds["maximum_calibration_slope_deviation"] == pytest.approx(
-            0.15, abs=1e-6
-        ), regime
+        assert thresholds["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6), (
+            regime
+        )
         assert thresholds["maximum_calibration_intercept_magnitude"] == pytest.approx(
             0.30, abs=1e-6
         ), regime
