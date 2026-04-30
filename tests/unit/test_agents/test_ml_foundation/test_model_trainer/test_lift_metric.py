@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 import numpy as np
-import pytest
 from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 
