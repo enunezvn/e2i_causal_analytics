@@ -5397,6 +5397,44 @@ async def run_pipeline(
         if state.get("bentoml_persistent"):
             print(f"\n  Docker BentoML service left running ({BENTOML_DOCKER_ENDPOINT})")
 
+    # Test-fixture artifact (task 06 of adaptive_success_criteria plan).
+    # When TIER0_E2E_JSON_OUT is set, dump a structured JSON of the key
+    # outcomes for the integration tests to consume. Production runs do
+    # not set this env var, so behavior is unchanged for normal CLI
+    # invocations. Audit fields starting with ``_`` are filtered out of
+    # the success_criteria payload (they are evaluator-internal).
+    e2e_out = os.environ.get("TIER0_E2E_JSON_OUT")
+    if e2e_out:
+        import json
+        sc_state = state.get("success_criteria") or {}
+        artifact = {
+            "regime": regime,
+            "seed": 42,  # generate_sample_data hardcodes seed=42
+            "criteria_source": sc_state.get("criteria_source", "fixed"),
+            "success_criteria": {
+                k: v
+                for k, v in sc_state.items()
+                if not (isinstance(k, str) and k.startswith("_"))
+            },
+            "success_criteria_results": dict(
+                state.get("success_criteria_results") or {}
+            ),
+            "success_criteria_met": bool(state.get("success_criteria_met", False)),
+            "validation_metrics": {
+                k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+                for k, v in (state.get("validation_metrics") or {}).items()
+                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+            },
+            "test_metrics": {
+                k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+                for k, v in (state.get("test_metrics") or {}).items()
+                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+            },
+        }
+        e2e_path = Path(e2e_out)
+        e2e_path.parent.mkdir(parents=True, exist_ok=True)
+        e2e_path.write_text(json.dumps(artifact, indent=2, default=str))
+
     return state
 
 
