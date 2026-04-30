@@ -351,11 +351,11 @@ async def test_criteria_source_defaults_to_fixed_when_flag_unset() -> None:
 async def test_criteria_source_is_adaptive_when_flag_true() -> None:
     """ADAPTIVE_CRITERIA=true + complete pre-eval state ⇒ tagged 'adaptive'.
 
-    The fixture includes the pre-eval inputs (n_samples / prevalence /
-    feature_count / regime) so this test stays green after task 03 lands
-    its three-valued criteria_source logic — task 03 emits
-    'adaptive_fallback_to_fixed' when the flag is on but state is
-    incomplete.
+    The fixture includes ALL five pre-eval inputs (n_samples / prevalence /
+    baseline_auc / feature_count / regime) so this test stays green after
+    task 03 wires the three-valued ``criteria_source`` logic — task 03
+    emits ``"adaptive_fallback_to_fixed"`` when the flag is on but state
+    is incomplete.
     """
     with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
         state = {
@@ -364,6 +364,7 @@ async def test_criteria_source_is_adaptive_when_flag_true() -> None:
             "experiment_id": "exp-adapt",
             "n_samples": 900,
             "prevalence": 0.30,
+            "baseline_auc": 0.50,
             "feature_count": 14,
             "regime": "default",
         }
@@ -387,3 +388,215 @@ async def test_criteria_source_falsy_values_keep_fixed(falsy: str) -> None:
         }
         result = await define_success_criteria(state)
     assert result["success_criteria"]["criteria_source"] == "fixed"
+
+
+# ---------------------------------------------------------------------------
+# Validator branch — adaptive path wiring (task 03 of
+# .claude/plans/adaptive_success_criteria/)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adaptive_path_used_when_flag_on_with_full_state() -> None:
+    """Flag on AND state has dataset characteristics ⇒ adaptive thresholds.
+
+    v3 (Option C): precision/F1 are dropped entirely — they are NOT in
+    success_criteria when adaptive succeeds. Skipped criteria (e.g.,
+    lift at adverse) are absent from the dict and recorded on
+    ``_adaptive_skipped``. ``_adaptive_p_t`` carries the regime's
+    threshold probability.
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-adapt-full",
+            "n_samples": 900,
+            "prevalence": 0.02,
+            "baseline_auc": 0.50,
+            "feature_count": 14,
+            "regime": "adverse",
+        }
+        result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    assert sc["criteria_source"] == "adaptive"
+    # v3 drops precision/F1 entirely (Van Calster 2025).
+    assert "minimum_precision" not in sc
+    assert "minimum_f1" not in sc
+    # Adverse regime: lift skipped because n_pos=18 ⇒ 2*SE > 0.10.
+    assert "minimum_lift_over_baseline" not in sc
+    # Skipped names recorded; v3 only skips lift at adverse N=900 prev=0.02.
+    assert sc["_adaptive_skipped"] == ["minimum_lift_over_baseline"]
+    # Adverse-keyed thresholds fire.
+    assert sc["minimum_recall"] == pytest.approx(0.50, abs=1e-6)
+    assert sc["minimum_auc"] == pytest.approx(0.70, abs=1e-6)
+    assert sc["minimum_mcc"] == pytest.approx(0.20, abs=1e-6)
+    assert sc["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
+    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(
+        0.15, abs=1e-6
+    )
+    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(
+        0.30, abs=1e-6
+    )
+    # v3 audit field for the regime-keyed threshold probability.
+    assert sc["_adaptive_p_t"] == pytest.approx(0.05, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_adaptive_fallback_when_state_incomplete() -> None:
+    """Flag on but state missing dataset characteristics ⇒ fall back to
+    fixed defaults. The audit value is the v2 third option
+    ``"adaptive_fallback_to_fixed"`` so the gap is loud in audit logs.
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-adapt-incomplete",
+            # Note: no n_samples / prevalence / baseline_auc / feature_count
+        }
+        result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    # Fall back to fixed thresholds (precision/F1 retained per B2 fix
+    # so flag-OFF / Apr-26 baseline reproduces).
+    assert sc["minimum_auc"] == 0.75
+    assert sc["minimum_precision"] == 0.70
+    assert sc["minimum_recall"] == 0.65
+    assert sc["minimum_f1"] == 0.70
+    # ...and the audit tag is the v2 third value (NOT "adaptive").
+    assert sc["criteria_source"] == "adaptive_fallback_to_fixed"
+    # Adaptive-only audit fields absent in fallback.
+    assert "_adaptive_skipped" not in sc
+    assert "_adaptive_p_t" not in sc
+
+
+@pytest.mark.asyncio
+async def test_flag_off_reproduces_fixed_thresholds_exactly() -> None:
+    """The Apr-26 baseline guarantee: flag OFF ⇒ exactly the historical
+    fixed dict, regardless of state['regime'] / state['n_samples'].
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "false"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-fixed-with-state",
+            "n_samples": 900,
+            "prevalence": 0.02,
+            "baseline_auc": 0.50,
+            "feature_count": 14,
+            "regime": "adverse",
+        }
+        result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    assert sc["criteria_source"] == "fixed"
+    assert sc["minimum_auc"] == 0.75  # not the adaptive 0.70
+    assert sc["minimum_precision"] == 0.70  # NOT dropped under fixed mode
+    assert sc["minimum_recall"] == 0.65
+    assert sc["minimum_f1"] == 0.70  # NOT dropped under fixed mode
+    assert sc["minimum_lift_over_baseline"] == 0.10
+    # v3 active gates absent under fixed (only adaptive populates them).
+    assert "minimum_net_benefit_at_p_t" not in sc
+    assert "minimum_mcc" not in sc
+    assert "maximum_calibration_slope_deviation" not in sc
+    assert "maximum_calibration_intercept_magnitude" not in sc
+    assert "maximum_calibration_error" not in sc
+    assert "maximum_train_val_delta" not in sc
+    assert "_adaptive_skipped" not in sc
+    assert "_adaptive_p_t" not in sc
+
+
+@pytest.mark.parametrize(
+    "regime,expected_p_t",
+    [
+        ("adverse", 0.05),
+        ("default", 0.20),
+        ("clean", 0.30),
+        (None, 0.30),  # RWD: regime=None ⇒ treated as clean
+    ],
+)
+@pytest.mark.asyncio
+async def test_adaptive_p_t_audit_value_per_regime(
+    regime: object, expected_p_t: float
+) -> None:
+    """v3 audit field ``_adaptive_p_t`` carries the regime-keyed threshold
+    probability used for the NB > 0 gate. Vickers 2019 cost-ratio defaults.
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-pt-audit",
+            "n_samples": 900,
+            "prevalence": 0.30,  # nonzero so adverse path picks p_t=0.05 only via regime
+            "baseline_auc": 0.50,
+            "feature_count": 14,
+            "regime": regime,
+        }
+        result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    assert sc["criteria_source"] == "adaptive"
+    assert sc["_adaptive_p_t"] == pytest.approx(expected_p_t, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_adaptive_default_regime_drops_auc_from_success_criteria() -> None:
+    """Default-regime adaptive: ``minimum_auc`` is popped from
+    success_criteria (skipped via the explicit set), not retained from the
+    fixed dict.
+    """
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "true"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-default-adapt",
+            "n_samples": 900,
+            "prevalence": 0.30,
+            "baseline_auc": 0.50,
+            "feature_count": 14,
+            "regime": "default",
+        }
+        result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    assert sc["criteria_source"] == "adaptive"
+    assert "minimum_auc" not in sc
+    assert "minimum_auc" in sc["_adaptive_skipped"]
+
+
+# ---------------------------------------------------------------------------
+# Config-typo defense (S4 fix) — `_define_classification_criteria`
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_none_threshold_in_performance_requirements_falls_back_to_default(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A misconfigured ``min_auc: null`` upstream must NOT silently bypass
+    the AUC gate. The validator detects None thresholds for binary-
+    classification expected criteria, warns, and falls back to the safe
+    default.
+    """
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("ADAPTIVE_CRITERIA", None)
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {"min_auc": None, "min_recall": 0.65},
+            "experiment_id": "exp-typo",
+        }
+        with caplog.at_level("WARNING"):
+            result = await define_success_criteria(state)
+
+    sc = result["success_criteria"]
+    # Safe default applied, not None.
+    assert sc["minimum_auc"] == 0.75
+    # Warning emitted (substring match — the message content is the
+    # operator-visible part).
+    assert any(
+        "min_auc=None" in rec.getMessage() and "config typo" in rec.getMessage()
+        for rec in caplog.records
+    )
