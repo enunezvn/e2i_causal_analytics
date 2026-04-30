@@ -389,7 +389,7 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             # the mutation is skipped.
             has_proba = hasattr(loaded_model, "predict_proba")
 
-            def _predict_fn(arr: np.ndarray) -> np.ndarray:
+            def _predict_fn(arr: np.ndarray) -> Any:
                 return (
                     loaded_model.predict_proba(arr)
                     if has_proba
