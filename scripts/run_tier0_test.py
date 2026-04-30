@@ -48,7 +48,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -1667,8 +1667,22 @@ async def stop_bentoml_service(pid: int) -> dict:
 # STEP IMPLEMENTATIONS
 # =============================================================================
 
-async def step_1_scope_definer(experiment_id: str) -> dict[str, Any]:
-    """Step 1: Define ML problem scope."""
+async def step_1_scope_definer(
+    experiment_id: str,
+    adaptive_inputs: Optional[Dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Step 1: Define ML problem scope.
+
+    Args:
+        experiment_id: Unique identifier propagated through the pipeline.
+        adaptive_inputs: Optional pre-eval inputs for adaptive success
+            criteria (task 05 of adaptive_success_criteria plan). When
+            ``ADAPTIVE_CRITERIA=true``, these flow into
+            ``criteria_validator.define_success_criteria`` which stashes
+            them on ``success_criteria['_adaptive_inputs']`` for the
+            evaluator overlay. Pass ``None`` (the default) when adaptive
+            criteria are not desired.
+    """
     import time as time_mod
     step_start = time_mod.time()
 
@@ -1677,13 +1691,18 @@ async def step_1_scope_definer(experiment_id: str) -> dict[str, Any]:
     from src.agents.ml_foundation.scope_definer import ScopeDefinerAgent
 
     # Input preparation
-    input_data = {
+    input_data: Dict[str, Any] = {
         "problem_description": f"Predict patient discontinuation risk for {CONFIG.brand}",
         "business_objective": "Identify high-risk patients early for intervention",
         "target_outcome": CONFIG.target_outcome,
         "problem_type_hint": CONFIG.problem_type,
         "brand": CONFIG.brand,
     }
+    # Merge adaptive pre-eval inputs when provided (task 05). The agent
+    # forwards these into the state under the same field names; the
+    # validator consumes them when ADAPTIVE_CRITERIA is on.
+    if adaptive_inputs:
+        input_data.update(adaptive_inputs)
 
     print_input_section(input_data)
 
@@ -3763,6 +3782,32 @@ def _regime_kwargs(regime: str) -> Dict[str, Any]:
     return kwargs
 
 
+def _compute_adaptive_state_inputs(
+    df: pd.DataFrame,
+    feature_columns: List[str],
+    target_col: str,
+    regime: str,
+) -> Dict[str, Any]:
+    """Compute the four pre-eval inputs for the adaptive-criteria scheme.
+
+    The fifth input (``baseline_auc``) is computed inside the evaluator
+    via Section B parent branch (see
+    ``model_trainer/nodes/evaluator.py::_compute_baseline_test_metrics``)
+    and overlaid by ``_apply_adaptive_criteria_overlay``. This helper
+    handles the four inputs derivable from the dataframe and the regime
+    label.
+
+    See ``.claude/plans/adaptive_success_criteria/05-data-shape-introspection.md``.
+    """
+    valid_regimes = {"default", "clean", "adverse"}
+    return {
+        "n_samples": int(len(df)),
+        "prevalence": float(df[target_col].mean()),
+        "feature_count": len(feature_columns),
+        "regime": regime if regime in valid_regimes else None,
+    }
+
+
 def _default_demo_cost_matrix() -> Dict[str, float]:
     """Return the unit-shape demo cost matrix used by the synthetic runner.
 
@@ -3942,7 +3987,26 @@ async def run_pipeline(
         # Step 1: Scope Definer
         if 1 in steps_to_run:
             step_start = time.time()
-            result = await step_1_scope_definer(experiment_id)
+            # Adaptive success criteria pre-eval inputs (task 05 of
+            # adaptive_success_criteria plan). When ADAPTIVE_CRITERIA=true,
+            # the validator reads these from state and stashes them for the
+            # evaluator overlay. feature_columns are estimated from the
+            # source dataframe via the same exclusion list used downstream
+            # (see step_2_data_preparer line ~1787); the data_preparer may
+            # later drop or add columns, but the rough count is sufficient
+            # for the feature-density step function.
+            _adaptive_feature_columns = [
+                col
+                for col in patient_df.columns
+                if col not in ("patient_journey_id", CONFIG.target_outcome, "brand")
+            ]
+            adaptive_inputs = _compute_adaptive_state_inputs(
+                df=patient_df,
+                feature_columns=_adaptive_feature_columns,
+                target_col=CONFIG.target_outcome,
+                regime=regime,
+            )
+            result = await step_1_scope_definer(experiment_id, adaptive_inputs=adaptive_inputs)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
             state["scope_spec"]["experiment_id"] = experiment_id
             # Block 5B (#10): auto-inject the unit-shape placeholder cost
@@ -5332,6 +5396,44 @@ async def run_pipeline(
         # Cleanup: Docker BentoML is persistent — no PID to clean up
         if state.get("bentoml_persistent"):
             print(f"\n  Docker BentoML service left running ({BENTOML_DOCKER_ENDPOINT})")
+
+    # Test-fixture artifact (task 06 of adaptive_success_criteria plan).
+    # When TIER0_E2E_JSON_OUT is set, dump a structured JSON of the key
+    # outcomes for the integration tests to consume. Production runs do
+    # not set this env var, so behavior is unchanged for normal CLI
+    # invocations. Audit fields starting with ``_`` are filtered out of
+    # the success_criteria payload (they are evaluator-internal).
+    e2e_out = os.environ.get("TIER0_E2E_JSON_OUT")
+    if e2e_out:
+        import json
+        sc_state = state.get("success_criteria") or {}
+        artifact = {
+            "regime": regime,
+            "seed": 42,  # generate_sample_data hardcodes seed=42
+            "criteria_source": sc_state.get("criteria_source", "fixed"),
+            "success_criteria": {
+                k: v
+                for k, v in sc_state.items()
+                if not (isinstance(k, str) and k.startswith("_"))
+            },
+            "success_criteria_results": dict(
+                state.get("success_criteria_results") or {}
+            ),
+            "success_criteria_met": bool(state.get("success_criteria_met", False)),
+            "validation_metrics": {
+                k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+                for k, v in (state.get("validation_metrics") or {}).items()
+                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+            },
+            "test_metrics": {
+                k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+                for k, v in (state.get("test_metrics") or {}).items()
+                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+            },
+        }
+        e2e_path = Path(e2e_out)
+        e2e_path.parent.mkdir(parents=True, exist_ok=True)
+        e2e_path.write_text(json.dumps(artifact, indent=2, default=str))
 
     return state
 

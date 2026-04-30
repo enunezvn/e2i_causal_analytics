@@ -162,6 +162,17 @@ class ScopeDefinerAgent:
             "prediction_timestamp": input_data.get("prediction_timestamp"),
             # Block 5: business cost matrix for utility-weighted evaluation.
             "cost_matrix": input_data.get("cost_matrix"),
+            # Adaptive success criteria pre-eval inputs (task 05 of
+            # adaptive_success_criteria plan). Forwarded verbatim into the
+            # state so ``criteria_validator.define_success_criteria`` can
+            # stash them on ``success_criteria['_adaptive_inputs']`` when
+            # ADAPTIVE_CRITERIA=true. Each is optional — missing inputs
+            # cause the validator to fall back to fixed thresholds with
+            # ``criteria_source="adaptive_fallback_to_fixed"``.
+            "n_samples": input_data.get("n_samples"),
+            "prevalence": input_data.get("prevalence"),
+            "feature_count": input_data.get("feature_count"),
+            "regime": input_data.get("regime"),
         }
 
         start_time = datetime.now()

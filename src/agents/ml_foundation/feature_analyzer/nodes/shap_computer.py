@@ -362,9 +362,7 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
                     explainer = shap.LinearExplainer(loaded_model, X_sample)
                 shap_values_raw = explainer.shap_values(X_sample)
                 base_value_raw = explainer.expected_value
-                shap_values, base_value = _normalize_shap_binary(
-                    shap_values_raw, base_value_raw
-                )
+                shap_values, base_value = _normalize_shap_binary(shap_values_raw, base_value_raw)
             except Exception as native_exc:
                 logger.warning(
                     f"{explainer_type} failed for "
@@ -390,11 +388,7 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
             has_proba = hasattr(loaded_model, "predict_proba")
 
             def _predict_fn(arr: np.ndarray) -> Any:
-                return (
-                    loaded_model.predict_proba(arr)
-                    if has_proba
-                    else loaded_model.predict(arr)
-                )
+                return loaded_model.predict_proba(arr) if has_proba else loaded_model.predict(arr)
 
             explainer = shap.KernelExplainer(_predict_fn, background)
             shap_values_raw = explainer.shap_values(X_sample[:100])
