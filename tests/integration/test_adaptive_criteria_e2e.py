@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -27,7 +28,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 RUNNER = REPO / "scripts" / "run_tier0_test.py"
-PYTHON = REPO / ".venv" / "bin" / "python"
+# Use the active interpreter so the subprocess inherits whatever venv /
+# pip layout the test runner is using. Hardcoding ``.venv/bin/python``
+# breaks CI where the environment may use a global pip install.
+PYTHON = sys.executable
 
 
 def _run_tier0(env_overrides: Dict[str, str], regime: str) -> Dict[str, Any]:
@@ -48,7 +52,7 @@ def _run_tier0(env_overrides: Dict[str, str], regime: str) -> Dict[str, Any]:
     env["TIER0_E2E_JSON_OUT"] = str(artifact_path)
 
     completed = subprocess.run(
-        [str(PYTHON), str(RUNNER), "--regime", regime, "--no-save"],
+        [PYTHON, str(RUNNER), "--regime", regime, "--no-save"],
         cwd=REPO,
         env=env,
         capture_output=True,
