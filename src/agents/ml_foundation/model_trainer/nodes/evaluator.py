@@ -1582,24 +1582,71 @@ def _check_success_criteria(
         # behavior on missing values is gated on this exact criterion name
         # below — see _LIFT_OVER_BASELINE_CRITERION usage.
         "minimum_lift_over_baseline": "minimum_lift_over_baseline",
+        # Adaptive criteria (task 04 of adaptive_success_criteria plan v3):
+        # all five criteria below are emitted by adaptive_success_criteria()
+        # when ADAPTIVE_CRITERIA is on; the corresponding metrics are surfaced
+        # by _compute_classification_metrics in task 05. Lower-is-better is
+        # set on the resolved metric names below. ``minimum_net_benefit_at_p_t``
+        # is intentionally absent — it resolves via a special-case lookup
+        # against ``net_benefit_grid`` keyed on the regime's p_t (see W3 fix).
+        "maximum_calibration_error": "calibrated_ece",
+        "maximum_train_val_delta": "train_val_auc_delta",
+        "minimum_mcc": "mcc",
+        "maximum_calibration_slope_deviation": "calibration_slope_deviation",
+        "maximum_calibration_intercept_magnitude": "calibration_intercept_magnitude",
     }
     # Single source of truth for the narrow exemption below; any future
     # criterion that wants soft-skip behavior must go through the same
     # explicit allowlist (do NOT accept any criterion silently).
     _LIFT_OVER_BASELINE_CRITERION = "minimum_lift_over_baseline"
+    # v3 NB > 0 gate: resolved against ``net_benefit_grid[p_t=...]`` instead
+    # of a metric_aliases lookup. The audit field ``_adaptive_p_t`` (set by
+    # the validator when ADAPTIVE_CRITERIA is on) carries the regime's
+    # threshold probability; when absent, the criterion soft-skips.
+    _NB_AT_P_T_CRITERION = "minimum_net_benefit_at_p_t"
 
     # Metrics where lower is better
-    lower_is_better = {"rmse", "mae", "brier_score", "mse", "mape"}
+    lower_is_better = {
+        "rmse",
+        "mae",
+        "brier_score",
+        "mse",
+        "mape",
+        # Adaptive criteria (task 04 v3): all four resolved metrics are
+        # MAXIMUM tolerable values, so lower-is-better. ``mcc`` is
+        # higher-is-better (default); ``net_benefit_at_p_t`` is
+        # higher-is-better and resolved via the special-case path.
+        "calibrated_ece",
+        "train_val_auc_delta",
+        "calibration_slope_deviation",
+        "calibration_intercept_magnitude",
+    }
 
     for criterion_name, threshold in success_criteria.items():
+        # v3: skip audit fields (any key starting with underscore). The
+        # validator emits ``_adaptive_skipped`` (list — also caught by the
+        # skip-non-numeric branch below) and ``_adaptive_p_t`` (float —
+        # would otherwise be evaluated as a numeric criterion against the
+        # missing ``adaptive_p_t`` test metric).
+        if isinstance(criterion_name, str) and criterion_name.startswith("_"):
+            continue
+
         # Skip non-numeric thresholds (e.g. experiment_id, baseline_model, None placeholders)
         if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
             logger.debug(f"Skipping non-numeric success criterion: {criterion_name}={threshold}")
             continue
 
-        # Resolve metric name
-        metric_name = metric_aliases.get(criterion_name, criterion_name)
-        actual_value = test_metrics.get(metric_name)
+        # v3 W3 fix: NB > 0 gate resolves against ``net_benefit_grid`` keyed
+        # on the regime's p_t, not against a single ``net_benefit_at_p_t``
+        # metric. Soft-skip when ``_adaptive_p_t`` is missing or the grid
+        # does not carry the requested key.
+        if criterion_name == _NB_AT_P_T_CRITERION:
+            actual_value = _resolve_net_benefit_from_grid(test_metrics, success_criteria)
+            metric_name = "net_benefit_at_p_t"
+        else:
+            # Resolve metric name
+            metric_name = metric_aliases.get(criterion_name, criterion_name)
+            actual_value = test_metrics.get(metric_name)
 
         if actual_value is None:
             # Default policy: a missing metric is a hard fail of the success
@@ -1621,6 +1668,19 @@ def _check_success_criteria(
                 )
                 results[criterion_name] = None
                 continue
+            # v3 W3 fix: the NB > 0 gate also soft-skips when the audit
+            # ``_adaptive_p_t`` is unset (fixed mode) or the grid does not
+            # carry the regime's p_t. The validator does not emit the gate
+            # under fixed mode, but a stale config could still send it
+            # through — soft-skip rather than hard-fail.
+            if criterion_name == _NB_AT_P_T_CRITERION:
+                logger.warning(
+                    "Success criterion soft-skipped (NB grid unavailable "
+                    "or _adaptive_p_t unset): %s",
+                    criterion_name,
+                )
+                results[criterion_name] = None
+                continue
 
             logger.warning(
                 f"Success criterion metric not available: {criterion_name} "
@@ -1628,6 +1688,20 @@ def _check_success_criteria(
             )
             results[criterion_name] = False
             all_met = False
+            continue
+
+        # v3 B3 fix: NaN actual values record met=None instead of
+        # comparing (Python's `nan <= 0.15` evaluates to False). Fires
+        # for adverse-regime calibration metrics when n_pos < 30 or
+        # n_neg < 30 (the LR fit is unstable and emits NaN).
+        if isinstance(actual_value, float) and math.isnan(actual_value):
+            logger.warning(
+                "Success criterion soft-skipped (metric value is NaN): "
+                "%s (resolved to '%s')",
+                criterion_name,
+                metric_name,
+            )
+            results[criterion_name] = None
             continue
 
         # Check if metric meets threshold
@@ -1649,10 +1723,54 @@ def _check_success_criteria(
                 f"(threshold={threshold})"
             )
 
+    # v2/v3 explicit-skip set: criterion names listed in
+    # ``success_criteria['_adaptive_skipped']`` are recorded as met=None
+    # in results — the audit-trail recording for criteria the adaptive
+    # scheme intentionally excluded from aggregation. Plain None thresholds
+    # do NOT enter this path; they fall through the existing
+    # skip-non-numeric branch above and the validator's S4 defense in
+    # ``_define_classification_criteria`` warns + replaces them. See
+    # ``.claude/plans/adaptive_success_criteria/01-design.md`` §"Skip
+    # semantics" for the full contract.
+    adaptive_skipped = success_criteria.get("_adaptive_skipped")
+    if isinstance(adaptive_skipped, list):
+        for skipped_name in adaptive_skipped:
+            if isinstance(skipped_name, str):
+                results[skipped_name] = None
+
     return {
         "success_criteria_met": all_met,
         "success_criteria_results": results,
     }
+
+
+def _resolve_net_benefit_from_grid(
+    test_metrics: Dict[str, Any],
+    success_criteria: Dict[str, Any],
+) -> Optional[float]:
+    """Resolve the v3 ``minimum_net_benefit_at_p_t`` gate via the NB grid.
+
+    The validator emits ``_adaptive_p_t`` on ``success_criteria`` when
+    ADAPTIVE_CRITERIA is on; ``_compute_classification_metrics`` (task 05)
+    emits ``test_metrics['net_benefit_grid']`` keyed on canonical
+    ``"p_t={p_t:.2f}"`` strings. Returns the NB value at the regime's p_t,
+    or ``None`` when the grid is absent / does not carry the requested key.
+
+    Returning ``None`` triggers the soft-skip path in the caller — the
+    criterion is recorded as ``met=None`` rather than hard-failing on a
+    missing metric, because the NB gate only makes sense with a paired
+    ``_adaptive_p_t`` audit value.
+    """
+    p_t = success_criteria.get("_adaptive_p_t")
+    if not isinstance(p_t, (int, float)) or isinstance(p_t, bool):
+        return None
+    grid = test_metrics.get("net_benefit_grid")
+    if not isinstance(grid, dict):
+        return None
+    value = grid.get(f"p_t={float(p_t):.2f}")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
 
 
 def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
