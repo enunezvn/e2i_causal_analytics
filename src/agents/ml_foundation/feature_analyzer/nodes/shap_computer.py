@@ -8,13 +8,46 @@ import logging
 import re
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import mlflow
 import numpy as np
 import shap
+from mlflow.exceptions import MlflowException
 
 logger = logging.getLogger(__name__)
+
+
+def _load_model_flavor_agnostic(model_uri: str) -> Any:
+    """Load an MLflow model without assuming a specific flavor.
+
+    Tries native flavors first (xgboost, lightgbm, sklearn) and falls back
+    to pyfunc. If ``get_model_info`` itself fails (tracking server
+    unreachable, stale URI), drops directly to ``pyfunc.load_model`` —
+    pyfunc is the one loader guaranteed to exist for any MLflow-logged
+    model.
+
+    Args:
+        model_uri: MLflow model URI (already validated by ``validate_model_uri``).
+
+    Returns:
+        Loaded model object. The exact type depends on the resolved flavor.
+    """
+    try:
+        info = mlflow.models.get_model_info(model_uri)
+        flavors = set(info.flavors.keys())
+    except MlflowException:
+        return mlflow.pyfunc.load_model(model_uri)
+
+    flavor_loaders: Tuple[Tuple[str, Callable[[str], Any]], ...] = (
+        ("xgboost", mlflow.xgboost.load_model),
+        ("lightgbm", mlflow.lightgbm.load_model),
+        ("sklearn", mlflow.sklearn.load_model),
+    )
+    for flavor_name, loader in flavor_loaders:
+        if flavor_name in flavors:
+            return loader(model_uri)
+    return mlflow.pyfunc.load_model(model_uri)
 
 
 def validate_model_uri(model_uri: str) -> Tuple[bool, Optional[str]]:
@@ -232,8 +265,13 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
                 "status": "failed",
             }
 
-        # Load model from MLflow
-        loaded_model = mlflow.sklearn.load_model(model_uri)
+        # Prefer in-memory model (passed via agent.py initial_state from
+        # input_data["trained_model"] — survives node retries and avoids the
+        # MLflow round-trip). Falls back to a flavor-agnostic loader so that
+        # xgboost / lightgbm / pyfunc-only registrations don't break SHAP.
+        loaded_model = state.get("loaded_model")
+        if loaded_model is None:
+            loaded_model = _load_model_flavor_agnostic(model_uri)
 
         # Get training run metadata
         run_id = model_uri.split("/")[1] if "runs:/" in model_uri else None
@@ -305,27 +343,61 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
 
         samples_analyzed = len(X_sample)
 
-        # Choose appropriate SHAP explainer based on model type
+        # Choose appropriate SHAP explainer based on model type. The native
+        # explainer occasionally chokes on library version mismatches (e.g.
+        # SHAP 0.48 + XGBoost 3.x raises ValueError on base_score parse —
+        # XGBoost stores it as the array-encoded string "[5E-1]" which the
+        # SHAP TreeExplainer loader cannot deserialize). On any failure we
+        # fall through to KernelExplainer so the SHAP node still produces
+        # importance rankings rather than dropping the whole analysis.
         explainer_type = _select_explainer_type(loaded_model)
+        shap_values: Optional[np.ndarray] = None
+        base_value: Optional[float] = None
 
-        if explainer_type == "TreeExplainer":
-            explainer = shap.TreeExplainer(loaded_model)
-            shap_values_raw = explainer.shap_values(X_sample)
-            base_value_raw = explainer.expected_value
-            shap_values, base_value = _normalize_shap_binary(shap_values_raw, base_value_raw)
+        if explainer_type in ("TreeExplainer", "LinearExplainer"):
+            try:
+                if explainer_type == "TreeExplainer":
+                    explainer = shap.TreeExplainer(loaded_model)
+                else:
+                    explainer = shap.LinearExplainer(loaded_model, X_sample)
+                shap_values_raw = explainer.shap_values(X_sample)
+                base_value_raw = explainer.expected_value
+                shap_values, base_value = _normalize_shap_binary(
+                    shap_values_raw, base_value_raw
+                )
+            except Exception as native_exc:
+                logger.warning(
+                    f"{explainer_type} failed for "
+                    f"{loaded_model.__class__.__name__}: {native_exc!r} — "
+                    "falling back to KernelExplainer."
+                )
+                shap_values = None
+                explainer_type = "KernelExplainer"
 
-        elif explainer_type == "LinearExplainer":
-            explainer = shap.LinearExplainer(loaded_model, X_sample)
-            shap_values_raw = explainer.shap_values(X_sample)
-            base_value_raw = explainer.expected_value
-            shap_values, base_value = _normalize_shap_binary(shap_values_raw, base_value_raw)
-
-        else:  # KernelExplainer (fallback)
-            # Use a small background dataset for kernel explainer
-            background_size = min(100, len(X_sample) // 10)
+        if shap_values is None:  # KernelExplainer (selected or fallback)
+            # KernelExplainer is O(n²) in background size — uncapped pyfunc
+            # fallback can hang for tens of minutes. Caps mirror what
+            # TreeExplainer effectively gets via `max_samples`.
+            background_size = max(1, min(100, len(X_sample) // 10))
             background = shap.kmeans(X_sample, background_size)
-            explainer = shap.KernelExplainer(loaded_model.predict, background)
-            shap_values_raw = explainer.shap_values(X_sample[:100])  # Limit for speed
+            # Prefer predict_proba for classifiers (SHAP values align with
+            # AUC); fall back to predict for regressors / pyfunc wrappers.
+            # Wrap in a closure rather than passing the bound method directly:
+            # shap.utils._legacy mutates `bound_method.__self__.feature_names_in_`
+            # to None to suppress an sklearn warning, and that property is
+            # read-only on XGBoost 3.x — the closure has no `__self__`, so
+            # the mutation is skipped.
+            has_proba = hasattr(loaded_model, "predict_proba")
+
+            def _predict_fn(arr: np.ndarray) -> np.ndarray:
+                return (
+                    loaded_model.predict_proba(arr)
+                    if has_proba
+                    else loaded_model.predict(arr)
+                )
+
+            explainer = shap.KernelExplainer(_predict_fn, background)
+            shap_values_raw = explainer.shap_values(X_sample[:100])
             base_value_raw = explainer.expected_value
             shap_values, base_value = _normalize_shap_binary(shap_values_raw, base_value_raw)
             samples_analyzed = min(100, samples_analyzed)

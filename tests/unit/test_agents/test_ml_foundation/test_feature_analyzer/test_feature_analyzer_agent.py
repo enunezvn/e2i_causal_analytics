@@ -18,18 +18,6 @@ class TestFeatureAnalyzerAgent:
         return FeatureAnalyzerAgent()
 
     @pytest.fixture
-    def valid_input_data(self):
-        """Create valid input data for analysis."""
-        return {
-            "model_uri": "runs:/abc123/model",
-            "experiment_id": "exp_test_001",
-            "training_run_id": "run_001",
-            "max_samples": 100,
-            "compute_interactions": True,
-            "store_in_semantic_memory": True,
-        }
-
-    @pytest.fixture
     def mock_random_forest_model(self):
         """Create mock RandomForest model."""
         model = Mock()
@@ -39,6 +27,25 @@ class TestFeatureAnalyzerAgent:
         model.predict = Mock(return_value=np.random.randint(0, 2, 100))
         model.predict_proba = Mock(return_value=np.random.rand(100, 2))
         return model
+
+    @pytest.fixture
+    def valid_input_data(self, mock_random_forest_model):
+        """Create valid input data for analysis.
+
+        Includes ``trained_model`` so the C1 in-memory passthrough wires the
+        model into ``state["loaded_model"]`` and the SHAP node skips the
+        MLflow loader entirely. Tests that need to exercise the URI loader
+        path should construct their own input dict instead.
+        """
+        return {
+            "model_uri": "runs:/abc123/model",
+            "experiment_id": "exp_test_001",
+            "training_run_id": "run_001",
+            "max_samples": 100,
+            "compute_interactions": True,
+            "store_in_semantic_memory": True,
+            "trained_model": mock_random_forest_model,
+        }
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
