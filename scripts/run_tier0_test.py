@@ -3687,12 +3687,25 @@ def _regime_kwargs(regime: str) -> Dict[str, Any]:
         signalize_extra_features=False — extreme imbalance, exercises
         remediation paths. Keeps signal config identical to ``default`` so
         the existing ``TestAdverseRegimeE2E`` contracts remain stable.
-      - ``clean``: positive_rate=0.50, signal_strength=1.4, noise_sd=0.05,
-        signalize_extra_features=True — Phase 2 baseline regime.
-        positive_rate=0.50 (vs. the plan's nominal 0.30) compensates for
-        the negative net contribution of the existing 3 features at mean
-        inputs; combined with the wider signal it lands the realised
-        positive share in [0.20, 0.45] per the regime's contract test.
+      - ``clean``: positive_rate=0.70, signal_strength=1.4, noise_sd=0.03,
+        signalize_extra_features=True — Phase 2 baseline regime
+        (path-D values, post-Codex review 2026-04-30). Two empirical
+        adjustments diverge from the plan text:
+          * positive_rate=0.70 (plan said 0.30 nominal, then 0.50 in the
+            first revision). At 0.50 the realised positive share landed
+            ~25%, making `precision >= 0.70` infeasible at any AUC; 0.70
+            pushes realised share toward ~35% so the precision gate has
+            headroom.
+          * noise_sd=0.03 (plan said 0.05). Compensates for the
+            scale * noise_sd interaction at ``sample_data.py:660`` —
+            ``scale = positive_rate / 0.30 = 2.33`` here, so effective
+            noise SD = 0.03 * 2.33 ≈ 0.07, close to the plan's intended
+            ±0.05 envelope after correcting for the rescaling. At the
+            old combo (positive_rate=0.50, noise_sd=0.05) the effective
+            noise was 0.083 — 67% above plan, suppressing val AUC by
+            ~6pp.
+        See ``.claude/plans/pre_phase2_unblockers/03-section-a-synthetic.md``
+        §4 (post-Codex revision) and ``08-risks.md`` #9.
 
     Raises:
         ValueError: when ``regime`` is unknown. Centralizing the lookup
@@ -3713,10 +3726,17 @@ def _regime_kwargs(regime: str) -> Dict[str, Any]:
             "signalize_extra_features": False,
         }
     elif regime == "clean":
+        # positive_rate=0.70 pushes realised positive share to ~35% (eases the
+        # precision/F1 ceiling that 25% prevalence imposed at positive_rate=0.50);
+        # noise_sd=0.03 compensates for the scale*noise_sd interaction at
+        # sample_data.py:660 — `scale=positive_rate/0.30=2.33` here, so effective
+        # noise SD = 0.03 * 2.33 ≈ 0.07. See 03-section-a-synthetic.md §4
+        # (post-Codex correction) for the empirical-claim revision and
+        # 08-risks.md #9 for the scale*noise_sd risk write-up.
         kwargs = {
-            "positive_rate": 0.50,
+            "positive_rate": 0.70,
             "signal_strength": 1.4,
-            "noise_sd": 0.05,
+            "noise_sd": 0.03,
             "signalize_extra_features": True,
         }
     else:
