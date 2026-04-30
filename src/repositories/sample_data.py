@@ -537,6 +537,10 @@ class SampleDataGenerator:
         positive_rate: float = 0.30,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        *,
+        signal_strength: float = 1.0,
+        noise_sd: float = 0.10,
+        signalize_extra_features: bool = False,
     ) -> pd.DataFrame:
         """
         Generate ML-ready patient data with classification target.
@@ -557,6 +561,25 @@ class SampleDataGenerator:
                 to ``[0.05, 0.95]`` before Bernoulli sampling.
             start_date: Start date
             end_date: End date
+            signal_strength: Multiplier on the deterministic feature
+                contributions to ``risk_score``. ``1.0`` is the historical
+                default (preserves the ``default``/``adverse`` regime
+                behavior). Higher values widen the gap between high- and
+                low-risk patients and raise the achievable val AUC. Used by
+                the ``clean`` regime (Section A of pre_phase2_unblockers).
+            noise_sd: Standard deviation of the Gaussian noise added to
+                ``risk_score`` (further scaled by ``max(scale, 0.05)``).
+                Default ``0.10`` matches the historical generator. Lower
+                values raise SNR; higher values regularize the train→val
+                gap.
+            signalize_extra_features: When True, four additional features
+                contribute to ``risk_score``: ``age_group``,
+                ``geographic_region``, ``brand``, and ``data_quality_score``.
+                Coefficients chosen to be similar in magnitude to the
+                three existing signal features so no single feature
+                dominates SHAP rankings. Default False preserves the
+                original generator behavior (only ``hcp_visits``,
+                ``prior_treatments``, ``days_on_therapy`` carry signal).
 
         Returns:
             DataFrame with patient-level features and discontinuation_flag
@@ -599,17 +622,42 @@ class SampleDataGenerator:
             # `positive_rate / 0.30` so that when callers pass a low base rate
             # (e.g. 0.02 for the adverse regime) the clipping floor and noise do
             # NOT dominate the final positive class share.
+            #
+            # When ``signalize_extra_features=True`` (clean regime — Section A
+            # of pre_phase2_unblockers) four additional features contribute,
+            # so the SHAP feature ranking surface is non-degenerate without
+            # any one feature dominating. ``signal_strength`` uniformly
+            # multiplies the deterministic component for tuning headroom.
             scale = max(positive_rate / 0.30, 0.0)
+
+            extra_signal = 0.0
+            if signalize_extra_features:
+                # Coefficients tuned so the per-feature contribution span
+                # matches the existing 3 features (~±0.10 across each
+                # feature's range). data_quality_score has a narrow
+                # uniform [0.5, 1.0] support, so its coefficient (-0.40)
+                # is larger in absolute value than the binary indicators
+                # (+0.10 / -0.05 / +0.08) — what matters for SHAP balance
+                # is the *contribution* magnitude, not the raw coefficient.
+                extra_signal = (
+                    0.10 * (1 if age_group == ">65" else 0)
+                    - 0.05 * (1 if geographic_region == "west" else 0)
+                    + 0.08 * (1 if brand == "Kisqali" else 0)
+                    - 0.40 * (data_quality_score - 0.75)
+                )
+
             risk_score = (
                 positive_rate  # Base rate (regime-controlled)
                 + scale
+                * signal_strength
                 * (
                     -0.01 * hcp_visits  # More visits = lower risk
                     + 0.05 * prior_treatments  # More prior treatments = higher risk
                     - 0.001 * days_on_therapy  # Longer therapy = lower risk
+                    + extra_signal
                 )
             )
-            noise = np.random.normal(0, 0.1 * max(scale, 0.05))
+            noise = np.random.normal(0, noise_sd * max(scale, 0.05))
             min_floor = min(0.05, max(positive_rate * 0.5, 0.001))
             risk_score = max(min_floor, min(0.95, risk_score + noise))
             discontinuation_flag = 1 if np.random.random() < risk_score else 0
