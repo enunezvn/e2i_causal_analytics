@@ -11,6 +11,7 @@ import math
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
+from sklearn.dummy import DummyClassifier
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -39,6 +40,45 @@ from .advanced_validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_baseline_test_metrics(
+    y_train: Optional[np.ndarray],
+    y_test: Optional[np.ndarray],
+    problem_type: str,
+) -> Dict[str, float]:
+    """Stratified-dummy baseline AUC for the lift-over-baseline criterion.
+
+    The baseline is a ``DummyClassifier(strategy="stratified")`` fit on
+    ``y_train`` — its test-set AUC is the random-with-class-prior reference
+    against which the trained model's lift is measured. ``"stratified"`` is
+    the only strategy whose test predictions span both classes, so
+    ``roc_auc_score`` is well-defined; ``"most_frequent"`` and ``"prior"``
+    yield single-class predictions where AUC is undefined.
+
+    Returns an empty dict when the problem is not binary classification, or
+    when either split is too small / single-class to compute a meaningful
+    baseline. The caller treats an empty return as "skip the criterion"
+    (see narrow exemption at ``_check_success_criteria``); this is the only
+    success criterion that is exemptable, and only under these guards.
+
+    See ``.claude/plans/pre_phase2_unblockers.md`` Section B for the design.
+    """
+    if problem_type != "binary_classification":
+        return {}
+    if y_train is None or y_test is None:
+        return {}
+    if len(y_train) < 10 or len(y_test) < 10:
+        return {}
+    y_train_arr = np.asarray(y_train)
+    y_test_arr = np.asarray(y_test)
+    if np.unique(y_train_arr).size < 2 or np.unique(y_test_arr).size < 2:
+        return {}
+
+    dummy = DummyClassifier(strategy="stratified", random_state=42)
+    dummy.fit(np.zeros((len(y_train_arr), 1)), y_train_arr)
+    proba = dummy.predict_proba(np.zeros((len(y_test_arr), 1)))[:, 1]
+    return {"baseline_test_auc": float(roc_auc_score(y_test_arr, proba))}
 
 
 def _positive_class_proba(y_proba: np.ndarray) -> np.ndarray:
@@ -678,6 +718,24 @@ def _compute_classification_metrics(
         )
     else:
         test_metrics = test_metrics_standard
+
+    # Lift-over-baseline (Section B of pre_phase2_unblockers plan): inject a
+    # stratified-dummy baseline AUC and the absolute lift the trained model
+    # achieves over it. The criterion is read by ``_check_success_criteria``
+    # via metric_aliases below; threshold (default 0.10) lives in
+    # ``criteria_validator._define_classification_criteria``. Absolute lift
+    # (auc - baseline_auc) is preferred over relative because: (a) it
+    # matches the natural reading of the criterion name; (b) it is not
+    # deflated when the baseline drifts above 0.50 on small/skewed splits.
+    baseline_metrics = _compute_baseline_test_metrics(
+        y_train, y_test, "binary_classification"
+    )
+    if "baseline_test_auc" in baseline_metrics:
+        baseline_auc = baseline_metrics["baseline_test_auc"]
+        test_metrics["baseline_test_auc"] = baseline_auc
+        test_auc = test_metrics.get("roc_auc")
+        if test_auc is not None:
+            test_metrics["minimum_lift_over_baseline"] = float(test_auc - baseline_auc)
 
     # Extract primary metrics for state
     auc_roc = test_metrics.get("roc_auc")
@@ -1494,7 +1552,9 @@ def _check_success_criteria(
             "success_criteria_results": {},
         }
 
-    results: Dict[str, bool] = {}
+    # Per-criterion outcome: True=met, False=not met, None=soft-skipped
+    # (see narrow exemption below).
+    results: Dict[str, Optional[bool]] = {}
     all_met = True
 
     # Map metric aliases (including scope_definer naming conventions)
@@ -1517,7 +1577,16 @@ def _check_success_criteria(
         "minimum_r2": "r2",
         "mape": "mape",
         "minimum_mape": "mape",
+        # Section B (pre_phase2_unblockers): self-mapping documents that
+        # the criterion shares its name with the test_metrics key. Soft-skip
+        # behavior on missing values is gated on this exact criterion name
+        # below — see _LIFT_OVER_BASELINE_CRITERION usage.
+        "minimum_lift_over_baseline": "minimum_lift_over_baseline",
     }
+    # Single source of truth for the narrow exemption below; any future
+    # criterion that wants soft-skip behavior must go through the same
+    # explicit allowlist (do NOT accept any criterion silently).
+    _LIFT_OVER_BASELINE_CRITERION = "minimum_lift_over_baseline"
 
     # Metrics where lower is better
     lower_is_better = {"rmse", "mae", "brier_score", "mse", "mape"}
@@ -1533,10 +1602,26 @@ def _check_success_criteria(
         actual_value = test_metrics.get(metric_name)
 
         if actual_value is None:
-            # Metric requested by caller but not produced by the evaluator — this is a
-            # genuine failure of the success contract, not a soft skip. Returning True
-            # for "met" when we never actually checked the metric would silently mask
-            # the gap.
+            # Default policy: a missing metric is a hard fail of the success
+            # contract — silently passing would mask a genuine gap.
+            #
+            # NARROW EXEMPTION (Section B of pre_phase2_unblockers plan):
+            # ``minimum_lift_over_baseline`` is computed by
+            # ``_compute_baseline_test_metrics`` only when the binary problem
+            # has enough rows in both train and test, and both splits have
+            # both classes. When those guards trip the baseline AUC is
+            # legitimately undefined, so we soft-skip rather than hard-fail.
+            # ``met=None`` excludes the criterion from the aggregation; the
+            # log line still surfaces the skip so it isn't silent.
+            if criterion_name == _LIFT_OVER_BASELINE_CRITERION:
+                logger.warning(
+                    "Success criterion soft-skipped (degenerate split): "
+                    f"{criterion_name} (no baseline AUC available — "
+                    "see _compute_baseline_test_metrics guards)"
+                )
+                results[criterion_name] = None
+                continue
+
             logger.warning(
                 f"Success criterion metric not available: {criterion_name} "
                 f"(resolved to '{metric_name}', missing from test_metrics)"

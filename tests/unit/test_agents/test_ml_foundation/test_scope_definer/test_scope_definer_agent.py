@@ -87,7 +87,10 @@ async def test_scope_definer_full_pipeline_binary_classification():
     assert success_criteria["experiment_id"] == output["experiment_id"]
     assert success_criteria["minimum_auc"] is not None
     assert success_criteria["minimum_precision"] is not None
-    assert success_criteria["baseline_model"] == "random_forest_baseline"
+    # Section B (pre_phase2_unblockers): aligned the metadata label with
+    # the stratified-dummy baseline actually used by the evaluator's
+    # _compute_baseline_test_metrics helper.
+    assert success_criteria["baseline_model"] == "stratified_dummy"
 
 
 @pytest.mark.asyncio
