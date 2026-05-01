@@ -80,8 +80,14 @@ def _run_tier0(env_overrides: Dict[str, str], regime: str) -> Dict[str, Any]:
 @pytest.mark.integration
 def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     """``ADAPTIVE_CRITERIA=false`` ⇒ default-regime run reproduces the
-    Apr-26 baseline at ``docs/results/tier0_remediation_baseline_20260426.md``
-    within deterministic tolerance.
+    post-PR-#29 baseline at ``docs/results/tier0_remediation_baseline_20260426.md``
+    (see "Post-PR-#29 rebaseline (2026-05-01)" section) within
+    deterministic tolerance.
+
+    Rebaselined 2026-05-01: PR #29's generator/evaluator changes shifted
+    default-regime val_auc from 0.6942 → 0.5585 (deterministic at
+    seed=42; confirmed across two seeded runs). Doc + assertions updated
+    atomically per the original docstring contract below.
 
     Tolerances (S3 fix):
       - AUC and PR-AUC: ±0.005 (deterministic at seed=42 modulo
@@ -100,22 +106,22 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     assert out["regime"] == "default"
     assert out["criteria_source"] == "fixed"
 
-    # Validation metrics (Apr-26 doc lines 45-56)
+    # Validation metrics (post-PR-#29 doc — "Post-PR-#29 rebaseline" section)
     val = out["validation_metrics"]
-    assert val["roc_auc"] == pytest.approx(0.6942, abs=0.005)
-    assert val["pr_auc"] == pytest.approx(0.2848, abs=0.005)
-    assert val["accuracy"] == pytest.approx(0.6600, abs=0.02)
-    assert val["precision"] == pytest.approx(0.2456, abs=0.02)
-    assert val["recall"] == pytest.approx(0.6364, abs=0.02)
-    assert val["f1_score"] == pytest.approx(0.3544, abs=0.02)
+    assert val["roc_auc"] == pytest.approx(0.5585, abs=0.005)
+    assert val["pr_auc"] == pytest.approx(0.1958, abs=0.005)
+    assert val["accuracy"] == pytest.approx(0.7067, abs=0.02)
+    assert val["precision"] == pytest.approx(0.2410, abs=0.02)
+    assert val["recall"] == pytest.approx(0.4444, abs=0.02)
+    assert val["f1_score"] == pytest.approx(0.3125, abs=0.02)
 
-    # Test metrics (Apr-26 doc lines 64-69)
+    # Test metrics (post-PR-#29 doc — "Post-PR-#29 rebaseline" section)
     test = out["test_metrics"]
-    assert test["roc_auc"] == pytest.approx(0.5740, abs=0.005)
-    assert test["accuracy"] == pytest.approx(0.6600, abs=0.02)
-    assert test["precision"] == pytest.approx(0.2065, abs=0.02)
-    assert test["recall"] == pytest.approx(0.5758, abs=0.02)
-    assert test["f1_score"] == pytest.approx(0.3040, abs=0.02)
+    assert test["roc_auc"] == pytest.approx(0.6271, abs=0.005)
+    assert test["accuracy"] == pytest.approx(0.6756, abs=0.02)
+    assert test["precision"] == pytest.approx(0.1970, abs=0.02)
+    assert test["recall"] == pytest.approx(0.3939, abs=0.02)
+    assert test["f1_score"] == pytest.approx(0.2626, abs=0.02)
 
     # Apr-26 verdict line 18: Step 7 BLOCKED, success_criteria_met False.
     assert out["success_criteria_met"] is False

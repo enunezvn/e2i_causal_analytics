@@ -414,3 +414,79 @@ A default `python scripts/run_tier0_test.py` run on synthetic data
 | `tests/synthetic/test_business_utility_emitted.py` | new — closed-form arithmetic check on the evaluator's emitted `business_utility` |
 | `tests/unit/test_agents/test_ml_foundation/test_model_trainer/test_mlflow_logger.py` | extended `feast_fallback` tag tests with parallel `business_utility` tag tests |
 | `tests/integration/test_feast_tier0_auto_register.py` | new — FEAST_INTEGRATION-gated round-trip for `_auto_register_in_feast` |
+
+## Post-PR-#29 rebaseline (2026-05-01)
+
+PR [#29](https://github.com/enunezvn/e2i_causal_analytics/pull/29) (`feat/pre-phase2-unblockers`, MERGED 2026-04-30) shifted the
+default-regime val_auc from `0.6942` → `0.5585`. The shift is intentional drift caused by
+three commits in PR #29 that modified the synthetic generator and the model_trainer
+evaluator path:
+
+- `b7a6fb4 feat(synthetic): add clean regime with full-feature signal surface` — modified
+  `src/repositories/sample_data.py` and added regime-aware branches in
+  `scripts/run_tier0_test.py` that share random-state consumption with the default branch.
+- `e24059f fix(synthetic): tune clean regime to path-D after Codex review` — further tuned
+  the regime branches.
+- `50e16a3 feat(model_trainer): implement minimum_lift_over_baseline criterion` — added
+  `_compute_baseline_test_metrics()` to `evaluator.py`, which fits a stratified-dummy
+  baseline and consumes random state in the evaluator path.
+
+(`6c000b5 fix(feature_analyzer): flavor-agnostic SHAP loader` ruled out by file-touch
+analysis — only modifies SHAP/feature_analyzer code, doesn't reach val/test metric
+computation.)
+
+The new values reproduce deterministically across two seeded runs (`seed=42`), confirmed
+2026-05-01 via `TIER0_E2E_JSON_OUT=/tmp/runN.json .venv/bin/python scripts/run_tier0_test.py
+--regime default --no-save`. Diff of `validation_metrics + test_metrics` between two runs
+on `fix/adaptive-criteria-overlay-persistence` post-Step-4b: empty.
+
+### Run metadata (post-PR-#29)
+
+| Field | Value |
+|-------|-------|
+| Run timestamp | 2026-05-01 ~00:23 UTC |
+| Branch under test | `fix/adaptive-criteria-overlay-persistence` (head SHA captured at PR open) |
+| Cohort size | 1500 patients (unchanged) |
+| QC gate | PASSED |
+| Step status | 9 success / 1 warning / 1 failed (Step 7 MODEL DEPLOYER — same as Apr-26) |
+| Selected best model | LogisticRegression |
+| Test command | `TIER0_E2E_JSON_OUT=/tmp/run.json .venv/bin/python scripts/run_tier0_test.py --regime default --no-save` |
+
+### Validation-set metrics (post-PR-#29 default regime)
+
+| Metric | Apr-26 baseline | Post-PR-#29 | Delta |
+|--------|-----------------|-------------|-------|
+| roc_auc | 0.6942 | 0.5585 | -0.1357 |
+| pr_auc | 0.2848 | 0.1958 | -0.0890 |
+| accuracy | 0.7300 (Block 1A) | 0.7067 | -0.0233 |
+| precision | 0.2921 (Block 1A) | 0.2410 | -0.0511 |
+| recall | 0.5909 (Block 1A) | 0.4444 | -0.1465 |
+| f1_score | 0.3910 (Block 1A) | 0.3125 | -0.0785 |
+| mcc | 0.2671 (Block 1A) | 0.1576 | -0.1095 |
+| brier_score | 0.2369 | 0.2293 | -0.0076 |
+
+### Test-set metrics (post-PR-#29 default regime)
+
+| Metric | Apr-26 baseline | Post-PR-#29 | Delta |
+|--------|-----------------|-------------|-------|
+| auc_roc | 0.5740 | 0.6271 | +0.0531 |
+| accuracy | 0.7300\* | 0.6756 | -0.0544 |
+| precision | 0.1719 (Block 1A) | 0.1970 | +0.0251 |
+| recall | 0.3333 (Block 1A) | 0.3939 | +0.0606 |
+| f1_score | 0.2268 (Block 1A) | 0.2626 | +0.0358 |
+
+### Why the test assertions move now
+
+The `test_flag_off_reproduces_apr26_baseline_within_tolerance` test in
+`tests/integration/test_adaptive_criteria_e2e.py` was authored with the explicit contract
+in its docstring:
+
+> "If a future sklearn upgrade pushes a metric outside its tolerance, do NOT widen the
+> tolerance silently — confirm the new value reproduces deterministically across two
+> seeded runs, then update the doc + the assertion in the same commit."
+
+PR #29's generator/evaluator changes are the equivalent of "future sklearn upgrade"; they
+are out-of-band changes to the deterministic chain that the test pins. The assertions are
+now updated in the same commit as this doc append, per the test's own contract. The
+`success_criteria_met` boolean (False, because val_auc=0.5585 < 0.75) is preserved — the
+verdict has not changed, only the numeric snapshot.
