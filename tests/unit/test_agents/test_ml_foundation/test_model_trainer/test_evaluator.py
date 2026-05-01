@@ -1027,8 +1027,13 @@ def test_apply_adaptive_overlay_clean_regime_sets_p_t_0_30() -> None:
 def test_check_success_criteria_with_adaptive_overlay_end_to_end() -> None:
     """Wire-end test: validator stashes ``_adaptive_inputs``, evaluator
     overlay rewrites the criteria dict and ``_check_success_criteria``
-    aggregates correctly."""
+    aggregates correctly. Post-PR-#30 wiring fix: the overlay is now
+    applied by ``evaluate_model`` BEFORE ``_check_success_criteria`` is
+    called, so this test applies it explicitly to mirror the new
+    contract.
+    """
     from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _apply_adaptive_criteria_overlay,
         _check_success_criteria,
     )
 
@@ -1065,7 +1070,9 @@ def test_check_success_criteria_with_adaptive_overlay_end_to_end() -> None:
         "net_benefit_grid": {"p_t=0.20": 0.005},  # > 0.0 → passes
     }
 
-    result = _check_success_criteria(test_metrics, success_criteria, "binary_classification")
+    # Apply the overlay first — mirrors what evaluate_model now does.
+    overlaid = _apply_adaptive_criteria_overlay(success_criteria, test_metrics)
+    result = _check_success_criteria(test_metrics, overlaid, "binary_classification")
 
     # AUC removed by adaptive ⇒ recorded as met=None via post-loop pass.
     assert result["success_criteria_results"]["minimum_auc"] is None
