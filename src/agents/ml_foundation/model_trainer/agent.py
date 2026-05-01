@@ -283,9 +283,12 @@ class ModelTrainerAgent:
         r2 = final_state.get("r2")
         confidence_interval = final_state.get("confidence_interval", {})
 
-        # Success criteria
+        # Success criteria — extract the (possibly-overlaid) criteria
+        # dict alongside the two derived fields so the runner / pipeline
+        # can persist it (hops 3 and 4 in the v3 propagation chain).
         success_criteria_met = final_state.get("success_criteria_met", False)
         success_criteria_results = final_state.get("success_criteria_results", {})
+        success_criteria_out = final_state.get("success_criteria", {})
 
         # Preprocessing and HPO info
         preprocessing_statistics = final_state.get("preprocessing_statistics", {})
@@ -407,6 +410,7 @@ class ModelTrainerAgent:
             # Success criteria
             "success_criteria_met": success_criteria_met,
             "success_criteria_results": success_criteria_results,
+            "success_criteria": success_criteria_out,
             # MLflow info (extracted from mlflow_logger node)
             "mlflow_run_id": mlflow_run_id,
             "mlflow_experiment_id": mlflow_experiment_id,
