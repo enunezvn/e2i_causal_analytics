@@ -828,6 +828,19 @@ class MLFoundationPipeline:
         # Store outputs
         result.training_result = trainer_output
 
+        # Hop 4 of 4 (adaptive_criteria_v3_followup): propagate the
+        # trainer's (possibly-overlaid) success_criteria back onto
+        # ``PipelineResult.success_criteria``. Without this, the
+        # attribute set above this method from scope_definer's pre-
+        # overlay stash leaks through ``PipelineResult`` even though
+        # the JSON artifact / deployer signal are correct (hops 1-3).
+        # Empty-dict guard preserves the scope_definer stash if the
+        # trainer (or a stub) returns no overlay — mirrors hop 3's
+        # runner-side semantics.
+        sc_from_trainer = trainer_output.get("success_criteria")
+        if sc_from_trainer:
+            result.success_criteria = sc_from_trainer
+
         # Record timing
         stage_duration = (datetime.now(timezone.utc) - stage_start).total_seconds()
         result.stage_timings["model_training"] = stage_duration
