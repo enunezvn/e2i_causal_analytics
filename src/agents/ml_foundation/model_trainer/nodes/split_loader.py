@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from src.agents.ml_foundation.model_trainer.random_state import (
+    resolve_fold_random_state,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -293,6 +297,15 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     test_ratio = test_samples / total_samples
     holdout_ratio = holdout_samples / total_samples
 
+    # W3-lite Day 3 (shard 17 W3 row Day 3): propagate the per-fold seed when
+    # the orchestrator (Day 4-5) sets it. Absent => emit None so downstream
+    # consumers fall back to their existing random_state path. We deliberately
+    # do NOT default to 42 here — that decision belongs to the consumer via
+    # resolve_fold_random_state(state, fallback=...) at call time.
+    fold_random_state = (
+        resolve_fold_random_state(state) if "fold_random_state" in state else None
+    )
+
     return {
         "train_data": train_data,
         "validation_data": validation_data,
@@ -307,4 +320,5 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
         "validation_ratio": validation_ratio,
         "test_ratio": test_ratio,
         "holdout_ratio": holdout_ratio,
+        "fold_random_state": fold_random_state,
     }

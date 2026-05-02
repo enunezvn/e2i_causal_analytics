@@ -18,6 +18,10 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
+from src.agents.ml_foundation.model_trainer.random_state import (
+    resolve_fold_random_state,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -356,6 +360,7 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
             recommended_strategy=recommended_strategy,
             class_distribution=class_distribution,
             imbalance_severity=state.get("imbalance_severity", "none"),
+            random_state=resolve_fold_random_state(state),
         )
 
         # Filter search space to exclude params already pinned in fixed_params —
@@ -616,6 +621,8 @@ def _get_fixed_params(
     recommended_strategy: str = "none",
     class_distribution: Optional[Dict[int, int]] = None,
     imbalance_severity: str = "none",
+    *,
+    random_state: int = 42,
 ) -> Dict[str, Any]:
     """Get fixed parameters for algorithm that shouldn't be tuned.
 
@@ -627,6 +634,10 @@ def _get_fixed_params(
         recommended_strategy: Recommended remediation strategy
         class_distribution: Class distribution dict {class: count}
         imbalance_severity: Class imbalance severity (none, moderate, severe, extreme)
+        random_state: Per-fold seed for the W3-lite repeated-splits protocol
+            (shard 17 Day 3). Defaults to 42 for backward-compat with legacy
+            single-split callers; the Day 4-5 orchestrator passes a per-fold
+            value resolved via ``resolve_fold_random_state(state)``.
 
     Returns:
         Dictionary of fixed parameters
@@ -635,52 +646,52 @@ def _get_fixed_params(
 
     if algorithm_name == "XGBoost":
         fixed_params = {
-            "random_state": 42,
+            "random_state": random_state,
             "n_jobs": 1,
             "verbosity": 0,
         }
     elif algorithm_name == "LightGBM":
         fixed_params = {
-            "random_state": 42,
+            "random_state": random_state,
             "n_jobs": 1,
             "verbose": -1,
         }
     elif algorithm_name == "RandomForest":
         fixed_params = {
-            "random_state": 42,
+            "random_state": random_state,
             "n_jobs": 1,
         }
     elif algorithm_name == "LogisticRegression":
         fixed_params = {
-            "random_state": 42,
+            "random_state": random_state,
             "max_iter": 1000,
             "solver": "saga",
         }
     elif algorithm_name in ["Ridge", "Lasso"]:
         fixed_params = {
-            "random_state": 42,
+            "random_state": random_state,
         }
     elif algorithm_name == "CausalForest":
         fixed_params = {
             "n_jobs": 1,
             "inference": True,
-            "random_state": 42,
+            "random_state": random_state,
         }
     elif algorithm_name == "LinearDML":
         fixed_params = {
             "cv": 3,
             "mc_iters": 3,
-            "random_state": 42,
+            "random_state": random_state,
         }
     elif algorithm_name == "DRLearner":
         fixed_params = {
             "cv": 3,
-            "random_state": 42,
+            "random_state": random_state,
         }
     elif algorithm_name in ["SLearner", "TLearner", "XLearner"]:
         fixed_params = {
             "cv": 3,
-            "random_state": 42,
+            "random_state": random_state,
         }
 
     # Add class weight handling for imbalanced datasets

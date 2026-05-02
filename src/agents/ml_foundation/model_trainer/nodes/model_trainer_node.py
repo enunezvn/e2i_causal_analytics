@@ -13,6 +13,10 @@ from typing import Any, Dict, Optional, Type
 
 import numpy as np
 
+from src.agents.ml_foundation.model_trainer.random_state import (
+    resolve_fold_random_state,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,6 +113,17 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Prepare hyperparameters - filter out incompatible params
     filtered_params = _filter_hyperparameters(algorithm_name, best_hyperparameters)
+
+    # W3-lite Day 3 (shard 17 W3 row Day 3): when the orchestrator (Day 4-5)
+    # sets a per-fold seed on the state, override whatever HPO baked into
+    # ``best_hyperparameters['random_state']`` so the trained model uses the
+    # fold-specific seed. ``hyperparameter_tuner`` resolves the same seed
+    # upstream, so in-graph the values agree; this assignment makes
+    # ``train_model`` self-contained for direct callers (replay tooling,
+    # tier-0 smoke tests) that bypass HPO and pass ``best_hyperparameters``
+    # in pre-baked.
+    if "fold_random_state" in state:
+        filtered_params["random_state"] = resolve_fold_random_state(state)
 
     # Phase 1 W2 day-4 (shard 19 §C.4): if the candidate requires monotone
     # constraints, inject them from state["monotone_vector"] post-filter.
