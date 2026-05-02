@@ -302,3 +302,33 @@ class TestFilterAlgorithms:
 
         # Should exclude classification-only
         assert "LogisticRegression" not in algo_names
+
+
+class TestNGBoostRegistryEntry:
+    """Phase 1 W2 day-1: NGBoost is registered as a calibration-native binary
+    classifier with the new flags `distribution_predictor` and
+    `skip_post_hoc_calibration` (shard 19 §A.2 + §A.3).
+    """
+
+    def test_ngboost_present_in_registry(self):
+        assert "NGBoost" in ALGORITHM_REGISTRY
+
+    def test_ngboost_metadata_marks_it_calibration_native(self):
+        spec = ALGORITHM_REGISTRY["NGBoost"]
+        assert spec["family"] == "calibration_native"
+        assert spec["framework"] == "ngboost"
+        assert "binary_classification" in spec["problem_types"]
+        assert spec.get("distribution_predictor") is True
+        assert spec.get("skip_post_hoc_calibration") is True
+
+    def test_ngboost_filterable_for_binary_classification(self):
+        candidates = _filter_by_problem_type("binary_classification")
+        algo_names = [c["name"] for c in candidates]
+        assert "NGBoost" in algo_names
+
+    def test_ngboost_hyperparameter_space_well_formed(self):
+        spec = ALGORITHM_REGISTRY["NGBoost"]
+        hp_space = spec["hyperparameter_space"]
+        for hp_name in ("n_estimators", "learning_rate", "base_max_depth"):
+            assert hp_name in hp_space
+            assert "type" in hp_space[hp_name]

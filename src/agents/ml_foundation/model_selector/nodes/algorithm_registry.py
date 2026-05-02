@@ -170,6 +170,39 @@ ALGORITHM_REGISTRY = {
             "alpha": 1.0,
         },
     },
+    # === CALIBRATION-NATIVE (NGBoost) ===
+    # Phase 1 W2 day-1 (adaptive_criteria_v3_followup shard 19 §A.2). The two
+    # new flags `distribution_predictor` and `skip_post_hoc_calibration` are
+    # consumed by evaluator gating in W2 day-2; absent on legacy entries means
+    # legacy behavior is unchanged.
+    "NGBoost": {
+        "family": "calibration_native",
+        "framework": "ngboost",
+        "problem_types": ["binary_classification", "regression"],
+        "strengths": ["calibration", "uncertainty", "tabular_medical"],
+        "inference_latency_ms": 40,
+        "memory_gb": 2.0,
+        "interpretability_score": 0.5,
+        "scalability_score": 0.7,
+        "distribution_predictor": True,
+        "skip_post_hoc_calibration": True,
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 800, "step": 100},
+            "learning_rate": {"type": "float", "low": 0.005, "high": 0.1, "log": True},
+            "minibatch_frac": {"type": "float", "low": 0.5, "high": 1.0, "step": 0.1},
+            "col_sample": {"type": "float", "low": 0.5, "high": 1.0, "step": 0.1},
+            "base_max_depth": {"type": "int", "low": 2, "high": 6},
+            "base_min_samples_leaf": {"type": "int", "low": 5, "high": 50, "step": 5},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 500,
+            "learning_rate": 0.01,
+            "minibatch_frac": 1.0,
+            "col_sample": 1.0,
+            "base_max_depth": 3,
+            "base_min_samples_leaf": 5,
+        },
+    },
 }
 
 # Regularization-focused search spaces for quality remediation.

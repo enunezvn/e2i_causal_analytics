@@ -310,6 +310,18 @@ def _get_model_class_dynamic(
             }
             return mapping[algorithm_name]  # type: ignore[no-any-return]
 
+        elif algorithm_name == "NGBoost":
+            # Phase 1 W2 (shard 19 §A.4 mirror). Mirrors optuna_optimizer.get_model_class
+            # so the fallback path resolves NGBoost identically when the primary
+            # delegate import fails.
+            if is_classification:
+                from src.mlops.wrappers.ngboost_wrapper import NGBoostBinaryClassifier
+
+                return NGBoostBinaryClassifier  # type: ignore[no-any-return]
+            from ngboost import NGBRegressor
+
+            return NGBRegressor  # type: ignore[no-any-return]
+
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
             return None
@@ -492,6 +504,18 @@ def _filter_hyperparameters(
         "SLearner": {"overall_model", "cv", "random_state"},
         "TLearner": {"models", "cv", "random_state"},
         "XLearner": {"models", "propensity_model", "cate_models", "cv", "random_state"},
+        # Phase 1 W2 day-1 (shard 19 §A.5). Mirror of NGBoostBinaryClassifier
+        # constructor signature in src/mlops/wrappers/ngboost_wrapper.py.
+        "NGBoost": {
+            "n_estimators",
+            "learning_rate",
+            "minibatch_frac",
+            "col_sample",
+            "verbose",
+            "random_state",
+            "base_max_depth",
+            "base_min_samples_leaf",
+        },
     }
 
     # Get allowed params for this algorithm

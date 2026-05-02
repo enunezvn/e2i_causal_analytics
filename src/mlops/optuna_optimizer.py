@@ -1021,6 +1021,18 @@ def get_model_class(algorithm_name: str, problem_type: str) -> Optional[type]:
 
             return XLearner  # type: ignore[no-any-return]
 
+        elif algorithm_name == "NGBoost":
+            # Phase 1 W2 (shard 19 §A.4). Classification path uses our wrapper
+            # to guarantee (N, 2) predict_proba shape; regression path uses
+            # ngboost.NGBRegressor directly.
+            if is_classification:
+                from src.mlops.wrappers.ngboost_wrapper import NGBoostBinaryClassifier
+
+                return NGBoostBinaryClassifier  # type: ignore[no-any-return]
+            from ngboost import NGBRegressor
+
+            return NGBRegressor  # type: ignore[no-any-return]
+
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
             return None

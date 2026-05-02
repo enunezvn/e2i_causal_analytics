@@ -1087,6 +1087,26 @@ class TestGetModelClass:
 
         assert model_class == CausalForestDML
 
+    def test_ngboost_classifier_returns_wrapper(self):
+        """NGBoost binary classification resolves to NGBoostBinaryClassifier wrapper.
+
+        Phase 1 W2 day-1 (shard 19 §A.4). The wrapper normalizes predict_proba
+        shape to (N, 2) so the existing evaluator path is unchanged.
+        """
+        from src.mlops.wrappers.ngboost_wrapper import NGBoostBinaryClassifier
+
+        model_class = get_model_class("NGBoost", "binary_classification")
+
+        assert model_class is NGBoostBinaryClassifier
+
+    def test_ngboost_regression_returns_ngbregressor(self):
+        """NGBoost regression resolves to ngboost.NGBRegressor (no wrapper)."""
+        from ngboost import NGBRegressor
+
+        model_class = get_model_class("NGBoost", "regression")
+
+        assert model_class is NGBRegressor
+
 
 # ============================================================================
 # RUN HYPERPARAMETER OPTIMIZATION TESTS

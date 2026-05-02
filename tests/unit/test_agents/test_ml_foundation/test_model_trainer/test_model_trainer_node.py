@@ -228,6 +228,23 @@ class TestGetModelClassDynamic:
         model_class = _get_model_class_dynamic("UnknownAlgorithm", "binary_classification")
         assert model_class is None
 
+    def test_gets_ngboost_binary_wrapper(self):
+        """Phase 1 W2 day-1: NGBoost binary classification resolves to wrapper.
+
+        Reference: shard 19 §A.4 mirror in trainer fallback path.
+        """
+        from src.mlops.wrappers.ngboost_wrapper import NGBoostBinaryClassifier
+
+        model_class = _get_model_class_dynamic("NGBoost", "binary_classification")
+        assert model_class is NGBoostBinaryClassifier
+
+    def test_gets_ngboost_regressor(self):
+        """Phase 1 W2 day-1: NGBoost regression resolves to NGBRegressor."""
+        from ngboost import NGBRegressor
+
+        model_class = _get_model_class_dynamic("NGBoost", "regression")
+        assert model_class is NGBRegressor
+
 
 class TestFilterHyperparameters:
     """Test hyperparameter filtering."""
@@ -270,6 +287,32 @@ class TestFilterHyperparameters:
         assert "C" in filtered
         assert "penalty" in filtered
         assert "n_estimators" not in filtered
+
+    def test_filters_ngboost_params(self):
+        """Phase 1 W2 day-1: NGBoost-specific params pass through; foreign reject.
+
+        Reference: shard 19 §A.5 — NGBoost allowlist is n_estimators,
+        learning_rate, minibatch_frac, col_sample, verbose, random_state,
+        base_max_depth, base_min_samples_leaf.
+        """
+        params = {
+            "n_estimators": 200,
+            "learning_rate": 0.01,
+            "base_max_depth": 4,
+            "base_min_samples_leaf": 10,
+            "subsample": 0.8,  # XGBoost-specific; should drop
+            "num_leaves": 31,  # LightGBM-specific; should drop
+        }
+
+        filtered = _filter_hyperparameters("NGBoost", params)
+
+        assert filtered["n_estimators"] == 200
+        assert filtered["learning_rate"] == 0.01
+        assert filtered["base_max_depth"] == 4
+        assert filtered["base_min_samples_leaf"] == 10
+        assert "subsample" not in filtered
+        assert "num_leaves" not in filtered
+        assert "random_state" in filtered  # common param injected
 
 
 class TestGetFramework:
