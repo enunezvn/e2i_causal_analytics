@@ -94,6 +94,8 @@ def compute_stratified_cv(
     X: np.ndarray,
     y: np.ndarray,
     n_folds: int = 5,
+    *,
+    random_state: int = 42,
 ) -> Dict[str, Any]:
     """Stratified k-fold CV to validate metric stability.
 
@@ -105,11 +107,16 @@ def compute_stratified_cv(
         X: Full feature matrix (all splits combined)
         y: Full label vector (all splits combined)
         n_folds: Number of CV folds
+        random_state: Seed for the StratifiedKFold splitter (Day-3 W3-lite
+            wiring per shard 21 §A audit; threaded by the orchestrator's
+            ``resolve_fold_random_state`` helper so each repeated_k10 fold
+            sees a distinct nested-CV draw rather than re-using the same
+            historical 42).
 
     Returns:
         Dictionary with per-fold and aggregated metrics
     """
-    cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
 
     fold_metrics: Dict[str, List[float]] = {
         "roc_auc": [],

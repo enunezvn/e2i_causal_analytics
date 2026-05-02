@@ -64,7 +64,7 @@ def _apply_smote(
     # Adaptive k_neighbors based on minority count
     k_neighbors = min(5, minority_count - 1) if minority_count > 1 else 1
 
-    smote = SMOTE(random_state=42, k_neighbors=k_neighbors)
+    smote = SMOTE(random_state=42, k_neighbors=k_neighbors)  # noqa: random_state=42 — design-intentional fixed seed: stable cross-fold resampling reduces variance in repeated_k10 mode (per cycle-14 Q2 RESOLVED 2026-05-02)
     result = smote.fit_resample(X, y)
     return cast(Tuple[np.ndarray, np.ndarray], result)
 
@@ -84,7 +84,7 @@ def _apply_random_oversample(
     """
     from imblearn.over_sampling import RandomOverSampler
 
-    ros = RandomOverSampler(random_state=42)
+    ros = RandomOverSampler(random_state=42)  # noqa: random_state=42 — design-intentional fixed seed: stable cross-fold resampling reduces variance in repeated_k10 mode (per cycle-14 Q2 RESOLVED 2026-05-02)
     result = ros.fit_resample(X, y)
     return cast(Tuple[np.ndarray, np.ndarray], result)
 
@@ -104,7 +104,7 @@ def _apply_random_undersample(
     """
     from imblearn.under_sampling import RandomUnderSampler
 
-    rus = RandomUnderSampler(random_state=42)
+    rus = RandomUnderSampler(random_state=42)  # noqa: random_state=42 — design-intentional fixed seed: stable cross-fold resampling reduces variance in repeated_k10 mode (per cycle-14 Q2 RESOLVED 2026-05-02)
     result = rus.fit_resample(X, y)
     return cast(Tuple[np.ndarray, np.ndarray], result)
 
@@ -130,8 +130,8 @@ def _apply_smote_tomek(
     # Adaptive k_neighbors based on minority count
     k_neighbors = min(5, minority_count - 1) if minority_count > 1 else 1
 
-    smote = SMOTE(random_state=42, k_neighbors=k_neighbors)
-    smote_tomek = SMOTETomek(random_state=42, smote=smote)
+    smote = SMOTE(random_state=42, k_neighbors=k_neighbors)  # noqa: random_state=42 — design-intentional fixed seed: stable cross-fold resampling reduces variance in repeated_k10 mode (per cycle-14 Q2 RESOLVED 2026-05-02)
+    smote_tomek = SMOTETomek(random_state=42, smote=smote)  # noqa: random_state=42 — design-intentional fixed seed: stable cross-fold resampling reduces variance in repeated_k10 mode (per cycle-14 Q2 RESOLVED 2026-05-02)
     result = smote_tomek.fit_resample(X, y)
     return cast(Tuple[np.ndarray, np.ndarray], result)
 
@@ -160,7 +160,7 @@ def _apply_combined(
     k_neighbors = min(5, minority_count - 1) if minority_count > 1 else 1
 
     # Target 50% ratio instead of full balance
-    smote = SMOTE(random_state=42, k_neighbors=k_neighbors, sampling_strategy=0.5)
+    smote = SMOTE(random_state=42, k_neighbors=k_neighbors, sampling_strategy=0.5)  # noqa: random_state=42 — design-intentional fixed seed: stable cross-fold resampling reduces variance in repeated_k10 mode (per cycle-14 Q2 RESOLVED 2026-05-02)
     result = smote.fit_resample(X, y)
     return cast(Tuple[np.ndarray, np.ndarray], result)
 

@@ -19,12 +19,28 @@ Integration:
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
 
 from .graph import create_model_trainer_graph
+from .splitting import FoldSpec, RepeatedStratifiedSplitter
 from .state import ModelTrainerState
 
 logger = logging.getLogger(__name__)
+
+# Phase 1 W3-lite Day 4 (shard 17 W3 row Day 4 + shard 21 §B): the
+# `evaluation_mode` flag selects between the legacy single-graph path
+# ("single", default — byte-identical to the pre-W4-day-4 baseline) and the
+# k=10 repeated train/val/test orchestrator ("repeated_k10").
+#
+# Naming: shard 21 §B locks "single" / "repeated_k10"; shard 17 W3 row Day 4
+# uses "single_split" / "repeated_kfold". Implementation follows shard 21 since
+# the orchestrator + tests are written against those names. Naming divergence
+# is flagged in `adaptive_v3_followup_state.md` for user decision on whether
+# to amend shard 17 separately.
+_VALID_EVALUATION_MODES: Tuple[str, ...] = ("single", "repeated_k10")
 
 
 async def _get_training_run_repository():
@@ -133,6 +149,25 @@ class ModelTrainerAgent:
         Raises:
             ValueError: If required inputs missing or QC validation failed
         """
+        # W3-lite Day 4 (shard 21 §B) — `evaluation_mode` dispatch.
+        # The orchestrator (`_run_repeated_splits`) recursively calls this method
+        # per fold with `_repeated_mode_fold_invocation=True` set; that sentinel
+        # short-circuits the dispatch so the inner call falls through to the
+        # legacy single-graph path. The per-fold input still carries
+        # `evaluation_mode="repeated_k10"` so downstream nodes (split_enforcer,
+        # mlflow_logger, evaluator) can branch on the active mode.
+        evaluation_mode = input_data.get("evaluation_mode", "single")
+        if evaluation_mode not in _VALID_EVALUATION_MODES:
+            raise ValueError(
+                f"Unknown evaluation_mode={evaluation_mode!r}; "
+                f"valid: {_VALID_EVALUATION_MODES}"
+            )
+        if (
+            evaluation_mode == "repeated_k10"
+            and not input_data.get("_repeated_mode_fold_invocation", False)
+        ):
+            return await self._run_repeated_splits(input_data)
+
         # Validate required inputs
         required_fields = ["model_candidate", "qc_report", "experiment_id"]
         for field in required_fields:
@@ -208,6 +243,26 @@ class ModelTrainerAgent:
             "holdout_data": input_data.get("holdout_data") or {},
             # Configurable minimum samples per split (consumed by split_enforcer)
             "min_samples_per_split": input_data.get("min_samples_per_split", 10),
+            # Day-3 fold-iteration random_state plumbing (W3-lite Day 3 +
+            # consumed by `resolve_fold_random_state` in split_loader /
+            # hyperparameter_tuner / model_trainer_node). Populated only when
+            # the caller is the `_run_repeated_splits` orchestrator (Day-4)
+            # via `_build_fold_input`; legacy callers omit the field and
+            # the helper falls back to `random_state` -> `42`.
+            **(
+                {"fold_random_state": int(input_data["fold_random_state"])}
+                if "fold_random_state" in input_data
+                else {}
+            ),
+            **(
+                {"fold_idx": int(input_data["fold_idx"])}
+                if "fold_idx" in input_data
+                else {}
+            ),
+            # Day-4 active evaluation_mode flag — split_enforcer / mlflow_logger
+            # / evaluator branch on this; legacy callers omit it and the helper
+            # sites default to single-mode behavior.
+            "evaluation_mode": evaluation_mode,
         }
 
         # Execute LangGraph workflow with optional Opik tracing
@@ -631,6 +686,196 @@ class ModelTrainerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
+
+    async def _run_repeated_splits(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """W3-lite Day 4 orchestrator (shard 21 §B `_run_repeated_splits`).
+
+        Iterates k=10 stratified shuffle-split draws over ``input_data['full_data']``,
+        invoking the existing single-graph path once per fold with the fold's
+        train/val/test indices materialized into the legacy split-dict shape
+        consumed by ``load_splits``. Per-fold ``fold_random_state`` is threaded
+        via ``input_data['fold_random_state']`` so Day-3 ``resolve_fold_random_state``
+        replaces the historical hardcoded ``random_state=42`` in
+        ``split_loader`` / ``hyperparameter_tuner`` / ``model_trainer_node``.
+
+        Day-4 MVP scope: serial fold loop; basic ``fold_metrics`` aggregation as
+        a List[Dict]. ``joblib.Parallel`` + BCa CI aggregator + per-fold
+        nested-MLflow tags are Day-5 territory (shard 21 §C / §D — see
+        `cycle_15_brief.md` Q2 + Q4 for follow-up review).
+
+        Required input fields:
+          - ``full_data``: ``{"X": pd.DataFrame, "y": pd.Series}`` (the unsplit
+            stratification target — orchestrator owns the splitter).
+          - ``model_candidate`` / ``qc_report`` / ``experiment_id``: as for
+            single-mode (validation reused).
+
+        Optional input fields:
+          - ``seed_base`` (default 42): root seed for the splitter; per-fold
+            seeds derive deterministically from ``(fold_idx, seed_base)``.
+          - ``repeated_splits_config``: ``{k, train_frac, val_frac, test_frac,
+            strategy}`` overrides; defaults match shard 21 §A (k=10 / 70/15/15
+            / shuffle_split).
+        """
+        full_data = input_data.get("full_data")
+        if not isinstance(full_data, dict) or "X" not in full_data or "y" not in full_data:
+            raise ValueError(
+                "evaluation_mode='repeated_k10' requires input_data['full_data'] = "
+                "{'X': pd.DataFrame, 'y': pd.Series}"
+            )
+
+        X = full_data["X"]
+        y = full_data["y"]
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(np.asarray(X))
+        if not isinstance(y, pd.Series):
+            y = pd.Series(np.asarray(y), name="y")
+
+        seed_base = int(input_data.get("seed_base", 42))
+        cfg = input_data.get("repeated_splits_config", {}) or {}
+        splitter = RepeatedStratifiedSplitter(
+            k=int(cfg.get("k", 10)),
+            seed_base=seed_base,
+            train_frac=float(cfg.get("train_frac", 0.70)),
+            val_frac=float(cfg.get("val_frac", 0.15)),
+            test_frac=float(cfg.get("test_frac", 0.15)),
+            strategy=str(cfg.get("strategy", "shuffle_split")),
+        )
+
+        fold_specs: List[FoldSpec] = list(splitter.split(X, y))
+        fold_metrics: List[Dict[str, Any]] = []
+        fold_outputs: List[Dict[str, Any]] = []
+
+        logger.info(
+            f"_run_repeated_splits: starting k={splitter.k} folds "
+            f"(seed_base={seed_base}, strategy={splitter.strategy})"
+        )
+        for spec in fold_specs:
+            fold_input = self._build_fold_input(input_data, X, y, spec)
+            fold_output = await self.run(fold_input)
+            fold_outputs.append(fold_output)
+            # Per-fold record carries the bookkeeping required by aggregator tests
+            # (fold_random_state / fold_idx / per-split metrics). Day-5 will replace
+            # this dict with the structured `FoldMetricsRecord` from the aggregator.
+            fold_metrics.append(
+                {
+                    "fold_idx": spec.fold_idx,
+                    "fold_random_state": spec.seed,
+                    "test_metrics": fold_output.get("test_metrics", {}),
+                    "validation_metrics": fold_output.get("validation_metrics", {}),
+                    "train_metrics": fold_output.get("train_metrics", {}),
+                    "auc_roc": fold_output.get("auc_roc"),
+                    "brier_score": fold_output.get("brier_score"),
+                    "mlflow_run_id": fold_output.get("mlflow_run_id"),
+                }
+            )
+
+        logger.info(
+            f"_run_repeated_splits: completed {len(fold_metrics)} folds "
+            f"(seed_base={seed_base})"
+        )
+
+        # Compose top-level output: forward fold-0 fields for legacy consumers
+        # (test_metrics shape preserved per shard 21 Q-W3-6 RESOLVED — Option D)
+        # and append the new repeated-mode fields so downstream aggregator can
+        # operate on `fold_metrics` and gate-promotion logic can branch on
+        # `evaluation_mode`.
+        primary = fold_outputs[0] if fold_outputs else {}
+        output: Dict[str, Any] = dict(primary)
+        output["evaluation_mode"] = "repeated_k10"
+        output["fold_metrics"] = fold_metrics
+        # Per shard 21 Q-W3-6: legacy `test_metrics` populate strategy is
+        # "fold_mean" in repeated mode — Day-5 aggregator will compute this
+        # properly. For Day-4 MVP, we leave fold-0's test_metrics in place
+        # and emit a marker for downstream callers.
+        output["test_metrics_population_strategy"] = "fold_mean"
+        output["evaluation_result_schema_version"] = "adaptive_criteria_v3.phase1.1"
+        output["legacy_projection_warning"] = (
+            "test_metrics in repeated_k10 mode is fold-0; downstream callers "
+            "MUST consume aggregate_metrics (Day-5) for promotion-gate logic"
+        )
+        output["seed_base"] = seed_base
+        output["k_folds"] = splitter.k
+        output["splitter_strategy"] = splitter.strategy
+        return output
+
+    def _build_fold_input(
+        self,
+        input_data: Dict[str, Any],
+        X: pd.DataFrame,
+        y: pd.Series,
+        spec: FoldSpec,
+    ) -> Dict[str, Any]:
+        """Materialize a per-fold ``input_data`` for recursive ``self.run`` invocation.
+
+        Slices the full ``(X, y)`` per ``spec.{train_idx, val_idx, test_idx}`` and
+        injects them into the legacy ``train_data`` / ``validation_data`` /
+        ``test_data`` / ``holdout_data`` dict shape consumed by ``load_splits``.
+        Holdout is empty (placeholder satisfying the validator) — repeated_k10
+        does not produce a held-out split per shard 21 §A; the holdout-locked
+        contract is single-mode-only.
+
+        Side-effects:
+          - Sets ``evaluation_mode = "single"`` on the per-fold input so the
+            recursive ``self.run`` invocation falls through to the legacy path
+            (no infinite recursion).
+          - Sets ``fold_random_state = spec.seed`` on the per-fold input so
+            ``resolve_fold_random_state`` (Day-3) returns the fold's seed in
+            ``split_loader`` / ``hyperparameter_tuner`` / ``model_trainer_node``.
+          - Strips ``full_data`` from the per-fold input (no longer needed).
+        """
+        # Slice WITHOUT reset_index — the splitter's positional indices into the
+        # full dataset are already pairwise-disjoint (test_splitter_index_disjointness
+        # locks this), so preserving them lets `split_enforcer._check_duplicate_indices`
+        # see the disjoint sets directly. We ALSO emit explicit `indices` lists so the
+        # enforcer's `_get_indices` short-circuit picks them up unambiguously regardless
+        # of upstream pandas-index gymnastics.
+        X_train = X.iloc[spec.train_idx]
+        y_train = y.iloc[spec.train_idx]
+        X_val = X.iloc[spec.val_idx]
+        y_val = y.iloc[spec.val_idx]
+        X_test = X.iloc[spec.test_idx]
+        y_test = y.iloc[spec.test_idx]
+
+        empty_X = X.iloc[:0]
+        empty_y = y.iloc[:0]
+
+        per_fold = dict(input_data)
+        per_fold.pop("full_data", None)
+        # `evaluation_mode="repeated_k10"` is preserved on the per-fold input so
+        # downstream nodes (split_enforcer, mlflow_logger) can branch on the
+        # active mode; the orchestrator-level dispatch is skipped by the
+        # `_repeated_mode_fold_invocation=True` sentinel so the recursive
+        # `self.run` call falls through to the legacy single-graph path
+        # without re-entering `_run_repeated_splits`.
+        per_fold["evaluation_mode"] = "repeated_k10"
+        per_fold["_repeated_mode_fold_invocation"] = True
+        per_fold["fold_random_state"] = spec.seed
+        per_fold["fold_idx"] = spec.fold_idx
+        per_fold["train_data"] = {
+            "X": X_train,
+            "y": y_train,
+            "row_count": len(X_train),
+            "indices": spec.train_idx.tolist(),
+        }
+        per_fold["validation_data"] = {
+            "X": X_val,
+            "y": y_val,
+            "row_count": len(X_val),
+            "indices": spec.val_idx.tolist(),
+        }
+        per_fold["test_data"] = {
+            "X": X_test,
+            "y": y_test,
+            "row_count": len(X_test),
+            "indices": spec.test_idx.tolist(),
+        }
+        per_fold["holdout_data"] = {
+            "X": empty_X,
+            "y": empty_y,
+            "row_count": 0,
+            "indices": [],
+        }
+        return per_fold
 
     def _detect_framework(self, algorithm_class: str | None) -> str:
         """Detect ML framework from algorithm class name.

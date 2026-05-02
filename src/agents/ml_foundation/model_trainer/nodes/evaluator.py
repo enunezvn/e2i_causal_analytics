@@ -76,7 +76,7 @@ def _compute_baseline_test_metrics(
     if np.unique(y_train_arr).size < 2 or np.unique(y_test_arr).size < 2:
         return {}
 
-    dummy = DummyClassifier(strategy="stratified", random_state=42)
+    dummy = DummyClassifier(strategy="stratified", random_state=42)  # noqa: random_state=42 — design-intentional fixed seed: DummyClassifier baseline must be reproducible across folds for variance interpretation (per cycle-14 Q2 RESOLVED 2026-05-02)
     dummy.fit(np.zeros((len(y_train_arr), 1)), y_train_arr)
     proba = dummy.predict_proba(np.zeros((len(y_test_arr), 1)))[:, 1]
     return {"baseline_test_auc": float(roc_auc_score(y_test_arr, proba))}
@@ -291,7 +291,19 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 X_all = np.vstack([x.to_numpy() if hasattr(x, "to_numpy") else x for x in xs])
             y_all = np.concatenate(arrays_y)
-            cv_result = compute_stratified_cv(trained_model, X_all, y_all, n_folds=5)
+            # Thread the per-fold seed (Day-3 W3-lite) so repeated_k10 nested-CV
+            # draws diverge across folds instead of re-using random_state=42.
+            from src.agents.ml_foundation.model_trainer.random_state import (
+                resolve_fold_random_state,
+            )
+
+            cv_result = compute_stratified_cv(
+                trained_model,
+                X_all,
+                y_all,
+                n_folds=5,
+                random_state=resolve_fold_random_state(state),
+            )
             metrics_result["cv_results"] = cv_result
             if cv_result.get("cv_completed"):
                 logger.info(

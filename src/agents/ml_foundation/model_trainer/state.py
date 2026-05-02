@@ -45,6 +45,16 @@ class ModelTrainerState(TypedDict, total=False):
     enable_mlflow: bool  # Whether to log to MLflow
     enable_checkpointing: bool  # Whether to save model checkpoints
 
+    # W3-lite Day 3 + Day 4 (shard 17 W3 rows Day 3-4 + shard 21 §A/§B):
+    # repeated train/val/test fold-iteration plumbing. Populated by the
+    # ``_run_repeated_splits`` orchestrator (Day 4); consumed by
+    # ``resolve_fold_random_state`` in split_loader / hyperparameter_tuner /
+    # model_trainer_node (Day 3) and by ``split_enforcer`` /
+    # ``mlflow_logger`` (Day 4) for repeated-mode-aware behavior.
+    evaluation_mode: str  # "single" (default) | "repeated_k10"
+    fold_random_state: int  # Per-fold seed from RepeatedStratifiedSplitter
+    fold_idx: int  # 0..k-1 fold index for the active repeated-mode invocation
+
     # === INTERMEDIATE FIELDS ===
     # QC Gate
     qc_gate_passed: bool  # Whether QC gate check passed
