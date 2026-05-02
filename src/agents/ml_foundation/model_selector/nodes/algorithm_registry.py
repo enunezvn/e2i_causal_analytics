@@ -203,6 +203,90 @@ ALGORITHM_REGISTRY = {
             "base_min_samples_leaf": 5,
         },
     },
+    # === MAPIE CONFORMAL VARIANTS ===
+    # Phase 1 W2 day-3 (shard 19 §B.3). Each entry pairs a base estimator with
+    # MAPIE cross-conformal calibration (cv-folded, alpha=0.10 → 90% marginal
+    # coverage). The factory at optuna_optimizer.get_model_class strips the
+    # `_Conformal` suffix, recurses to fetch the base class, and returns a
+    # closure that wraps a fitted base in MapieConformalBinaryClassifier.
+    # Per amendment 3 (see mapie_wrapper.py docstring), MAPIE 0.8.6 does NOT
+    # expose predict_proba on MapieClassifier — the wrapper delegates predict_proba
+    # to the base estimator and surfaces conformal sets via predict_sets().
+    # `skip_post_hoc_calibration=True` retained verbatim per shard 19 §B.3;
+    # revisit at W4 multi-disease if non-calibration-native bases (LightGBM,
+    # LogisticRegression) underperform on calibration metrics.
+    "NGBoost_Conformal": {
+        "family": "calibration_native_conformal",
+        "framework": "mapie+ngboost",
+        "problem_types": ["binary_classification"],
+        "strengths": ["calibration", "uncertainty", "coverage_guarantee"],
+        "inference_latency_ms": 80,
+        "memory_gb": 2.5,
+        "interpretability_score": 0.4,
+        "scalability_score": 0.6,
+        "distribution_predictor": True,
+        "skip_post_hoc_calibration": True,
+        "conformal_wrapper": True,
+        "base_estimator": "NGBoost",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 200, "high": 600, "step": 100},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.05, "log": True},
+            "cv": {"type": "int", "low": 3, "high": 5},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 400,
+            "learning_rate": 0.01,
+            "cv": 5,
+        },
+    },
+    "LightGBM_Conformal": {
+        "family": "gradient_boosting_conformal",
+        "framework": "mapie+lightgbm",
+        "problem_types": ["binary_classification"],
+        "strengths": ["calibration", "speed", "coverage_guarantee"],
+        "inference_latency_ms": 60,
+        "memory_gb": 2.0,
+        "interpretability_score": 0.5,
+        "scalability_score": 0.85,
+        "skip_post_hoc_calibration": True,
+        "conformal_wrapper": True,
+        "base_estimator": "LightGBM",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 100},
+            "max_depth": {"type": "int", "low": 3, "high": 8},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
+            "cv": {"type": "int", "low": 3, "high": 5},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 300,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "cv": 5,
+        },
+    },
+    "LogisticRegression_Conformal": {
+        "family": "linear_conformal",
+        "framework": "mapie+sklearn",
+        "problem_types": ["binary_classification"],
+        "strengths": ["interpretable", "coverage_guarantee", "stable_baseline"],
+        "inference_latency_ms": 5,
+        "memory_gb": 0.2,
+        "interpretability_score": 0.95,
+        "scalability_score": 1.0,
+        "skip_post_hoc_calibration": True,
+        "conformal_wrapper": True,
+        "base_estimator": "LogisticRegression",
+        "hyperparameter_space": {
+            "C": {"type": "float", "low": 0.001, "high": 100, "log": True},
+            "penalty": {"type": "categorical", "choices": ["l1", "l2"]},
+            "cv": {"type": "int", "low": 3, "high": 5},
+        },
+        "default_hyperparameters": {
+            "C": 1.0,
+            "penalty": "l2",
+            "cv": 5,
+        },
+    },
 }
 
 # Regularization-focused search spaces for quality remediation.

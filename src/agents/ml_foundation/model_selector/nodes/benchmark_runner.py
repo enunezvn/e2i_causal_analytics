@@ -156,6 +156,14 @@ def _create_model_instance(
         Model instance or None if creation fails
     """
     try:
+        # Phase 1 W2 day-3 (shard 19 §B.6): skip CV-benchmarking for conformal
+        # variants. Cross-conformal is ~5× slower than the bare base estimator
+        # and the inner cross-fit gives the same ranking signal as the base —
+        # the model_selector pre-rank already orders them by family / interpretability.
+        # Mirrors the existing CausalForest skip below (return None at lines 195-201).
+        if algo_name.endswith("_Conformal"):
+            return None
+
         if algo_name == "XGBoost":
             from xgboost import XGBClassifier, XGBRegressor
 

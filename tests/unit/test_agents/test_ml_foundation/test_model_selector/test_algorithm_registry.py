@@ -332,3 +332,39 @@ class TestNGBoostRegistryEntry:
         for hp_name in ("n_estimators", "learning_rate", "base_max_depth"):
             assert hp_name in hp_space
             assert "type" in hp_space[hp_name]
+
+
+class TestConformalRegistryEntries:
+    """Phase 1 W2 day-3: three *_Conformal entries (NGBoost / LightGBM /
+    LogisticRegression) per shard 19 §B.3 with `conformal_wrapper=True`,
+    `skip_post_hoc_calibration=True`, and a `base_estimator` field that the
+    factory in `optuna_optimizer.get_model_class` consumes.
+    """
+
+    def test_three_conformal_entries_present(self):
+        for name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+            assert name in ALGORITHM_REGISTRY, f"{name} missing from registry"
+
+    def test_each_conformal_marks_skip_isotonic_and_conformal_wrapper(self):
+        for name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+            spec = ALGORITHM_REGISTRY[name]
+            assert spec.get("conformal_wrapper") is True, f"{name} missing conformal_wrapper=True"
+            assert spec.get("skip_post_hoc_calibration") is True, (
+                f"{name} missing skip_post_hoc_calibration=True"
+            )
+
+    def test_each_conformal_declares_base_estimator(self):
+        expected = {
+            "NGBoost_Conformal": "NGBoost",
+            "LightGBM_Conformal": "LightGBM",
+            "LogisticRegression_Conformal": "LogisticRegression",
+        }
+        for name, base in expected.items():
+            assert ALGORITHM_REGISTRY[name].get("base_estimator") == base, (
+                f"{name} should declare base_estimator={base}"
+            )
+
+    def test_conformal_search_space_includes_cv(self):
+        for name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+            hp_space = ALGORITHM_REGISTRY[name]["hyperparameter_space"]
+            assert "cv" in hp_space, f"{name} hyperparameter_space missing cv"

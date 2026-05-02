@@ -314,6 +314,69 @@ class TestFilterHyperparameters:
         assert "num_leaves" not in filtered
         assert "random_state" in filtered  # common param injected
 
+    def test_filters_conformal_params_compose_base_plus_common(self):
+        """Phase 1 W2 day-3 (shard 19 §B.5): conformal allowlist =
+        {method, cv, alpha, random_state} ∪ allowed_params[base].
+        """
+        params = {
+            # Base (LogisticRegression):
+            "C": 1.0,
+            "penalty": "l2",
+            # Conformal-common:
+            "method": "lac",
+            "cv": 5,
+            "alpha": 0.10,
+            # Foreign params should drop:
+            "n_estimators": 200,
+            "num_leaves": 31,
+        }
+        filtered = _filter_hyperparameters("LogisticRegression_Conformal", params)
+        # Base params kept:
+        assert filtered["C"] == 1.0
+        assert filtered["penalty"] == "l2"
+        # Conformal common kept:
+        assert filtered["method"] == "lac"
+        assert filtered["cv"] == 5
+        assert filtered["alpha"] == 0.10
+        # Foreign dropped:
+        assert "n_estimators" not in filtered
+        assert "num_leaves" not in filtered
+
+    def test_filters_lightgbm_conformal_params(self):
+        """LightGBM_Conformal allowlist composes LightGBM allowlist with conformal common."""
+        params = {
+            "n_estimators": 300,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "num_leaves": 31,
+            "method": "lac",
+            "cv": 5,
+            "alpha": 0.10,
+            "C": 1.0,  # Foreign (LR-specific); should drop
+        }
+        filtered = _filter_hyperparameters("LightGBM_Conformal", params)
+        assert filtered["n_estimators"] == 300
+        assert filtered["max_depth"] == 6
+        assert filtered["learning_rate"] == 0.05
+        assert filtered["num_leaves"] == 31
+        assert filtered["method"] == "lac"
+        assert filtered["cv"] == 5
+        assert filtered["alpha"] == 0.10
+        assert "C" not in filtered
+
+    def test_get_model_class_dynamic_resolves_conformal(self):
+        """Phase 1 W2 day-3 mirror (shard 19 §B.4): _get_model_class_dynamic
+        resolves *_Conformal names identically to optuna_optimizer.get_model_class.
+        """
+        from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+        factory = _get_model_class_dynamic("LogisticRegression_Conformal", "binary_classification")
+        assert factory is not None
+        assert callable(factory)
+        instance = factory(C=2.0, penalty="l2")
+        assert isinstance(instance, MapieConformalBinaryClassifier)
+        assert instance.base_estimator.C == 2.0
+
 
 class TestGetFramework:
     """Test framework identification."""

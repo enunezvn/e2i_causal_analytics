@@ -1107,6 +1107,32 @@ class TestGetModelClass:
 
         assert model_class is NGBRegressor
 
+    def test_conformal_resolves_to_callable_factory(self):
+        """Phase 1 W2 day-3 (shard 19 §B.4): *_Conformal names resolve to a
+        callable factory that wraps a base estimator.
+        """
+        factory = get_model_class("LogisticRegression_Conformal", "binary_classification")
+        assert factory is not None
+        assert callable(factory)
+
+    def test_conformal_factory_returns_wrapper_instance(self):
+        """Conformal factory composes base + MapieConformalBinaryClassifier."""
+        from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+        factory = get_model_class("LogisticRegression_Conformal", "binary_classification")
+        instance = factory(C=1.0, penalty="l2", method="lac", cv=3, alpha=0.10)
+        assert isinstance(instance, MapieConformalBinaryClassifier)
+        assert instance.method == "lac"
+        assert instance.cv == 3
+        assert instance.alpha == 0.10
+        assert instance.base_estimator.C == 1.0
+        assert instance.base_estimator.penalty == "l2"
+
+    def test_conformal_unknown_base_returns_none(self):
+        """Defensive: unknown base after suffix strip → None (logged warning)."""
+        result = get_model_class("UnknownBase_Conformal", "binary_classification")
+        assert result is None
+
 
 # ============================================================================
 # RUN HYPERPARAMETER OPTIMIZATION TESTS

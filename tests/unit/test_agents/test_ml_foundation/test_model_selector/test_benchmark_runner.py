@@ -148,6 +148,17 @@ class TestCreateModelInstance:
         model = _create_model_instance("CausalForest", "econml", {}, "binary_classification")
         assert model is None
 
+    def test_conformal_variants_skipped_from_benchmark(self):
+        """Phase 1 W2 day-3 (shard 19 §B.6): *_Conformal entries skip CV-benchmarking.
+
+        Cross-conformal is ~5× slower than the bare base; the inner cross-fit
+        gives the same ranking signal. This mirrors the existing CausalForest
+        skip — return None to bypass the short-path benchmark.
+        """
+        for algo_name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+            model = _create_model_instance(algo_name, "mapie", {}, "binary_classification")
+            assert model is None, f"{algo_name} should be skipped from CV-benchmarking"
+
     def test_respects_hyperparameters(self):
         """Should apply hyperparameters."""
         hyperparams = {"n_estimators": 50, "max_depth": 3}

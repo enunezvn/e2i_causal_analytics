@@ -1033,6 +1033,42 @@ def get_model_class(algorithm_name: str, problem_type: str) -> Optional[type]:
 
             return NGBRegressor  # type: ignore[no-any-return]
 
+        elif algorithm_name.endswith("_Conformal"):
+            # Phase 1 W2 day-3 (shard 19 §B.4): generic conformal factory.
+            # Strip the suffix, recurse to fetch the base class, return a
+            # closure that wraps a fitted base instance in
+            # MapieConformalBinaryClassifier. The closure is a callable
+            # masquerading as a class — `model_class(**filtered_params)` in
+            # model_trainer_node.py:115 still works because Python doesn't
+            # distinguish.
+            from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+            base_name = algorithm_name[: -len("_Conformal")]
+            base_cls = get_model_class(base_name, problem_type)
+            if base_cls is None:
+                logger.warning(
+                    f"Conformal wrapper requested for unknown base: {base_name}"
+                )
+                return None
+
+            def _conformal_factory(**params: Any) -> MapieConformalBinaryClassifier:
+                # Route conformal-specific kwargs to the wrapper, base kwargs
+                # to the base estimator constructor.
+                method = params.pop("method", "lac")
+                cv_val = params.pop("cv", 5)
+                alpha = params.pop("alpha", 0.10)
+                random_state = params.get("random_state", 42)
+                base_inst = base_cls(**params)
+                return MapieConformalBinaryClassifier(
+                    base_estimator=base_inst,
+                    method=method,
+                    cv=cv_val,
+                    alpha=alpha,
+                    random_state=random_state,
+                )
+
+            return _conformal_factory  # type: ignore[return-value]
+
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
             return None

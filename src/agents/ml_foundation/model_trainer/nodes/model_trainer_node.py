@@ -322,6 +322,33 @@ def _get_model_class_dynamic(
 
             return NGBRegressor  # type: ignore[no-any-return]
 
+        elif algorithm_name.endswith("_Conformal"):
+            # Phase 1 W2 day-3 (shard 19 §B.4 mirror). Same pattern as the
+            # primary path in optuna_optimizer.get_model_class: strip suffix,
+            # recurse to fetch the base class, return a closure factory.
+            from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+            base_name = algorithm_name[: -len("_Conformal")]
+            base_cls = _get_model_class_dynamic(base_name, problem_type)
+            if base_cls is None:
+                return None
+
+            def _conformal_factory(**params: Any) -> MapieConformalBinaryClassifier:
+                method = params.pop("method", "lac")
+                cv_val = params.pop("cv", 5)
+                alpha = params.pop("alpha", 0.10)
+                random_state = params.get("random_state", 42)
+                base_inst = base_cls(**params)
+                return MapieConformalBinaryClassifier(
+                    base_estimator=base_inst,
+                    method=method,
+                    cv=cv_val,
+                    alpha=alpha,
+                    random_state=random_state,
+                )
+
+            return _conformal_factory  # type: ignore[return-value]
+
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
             return None
@@ -518,8 +545,19 @@ def _filter_hyperparameters(
         },
     }
 
-    # Get allowed params for this algorithm
-    allowed = allowed_params.get(algorithm_name, set())
+    # Phase 1 W2 day-3 (shard 19 §B.5): conformal entries compose their
+    # allowlist as `{method, cv, alpha, random_state} ∪ allowed_params[base]`.
+    # Routes the conformal-specific kwargs to the wrapper and the base-estimator
+    # kwargs to the underlying constructor. The closure factory in
+    # get_model_class.pop()s the conformal kwargs before building the base.
+    _CONFORMAL_COMMON = {"method", "cv", "alpha", "random_state"}
+    if algorithm_name.endswith("_Conformal"):
+        base_name = algorithm_name[: -len("_Conformal")]
+        base_allowed = allowed_params.get(base_name, set())
+        allowed = _CONFORMAL_COMMON | base_allowed
+    else:
+        # Get allowed params for this algorithm
+        allowed = allowed_params.get(algorithm_name, set())
 
     # Filter hyperparameters
     filtered = {}
