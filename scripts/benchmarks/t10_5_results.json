@@ -1,0 +1,366 @@
+{
+  "config": {
+    "datestamp": "2026-05-02",
+    "n_iters": 10,
+    "n_rows": 500,
+    "n_features": 30,
+    "prevalence": 0.1,
+    "n_bootstrap": 1000,
+    "hardware": "8 vCPU / 16 GB RAM droplet (Ubuntu 24.04)",
+    "python": "3.12.3",
+    "numpy": "1.26.4",
+    "sklearn": "1.6.1",
+    "lightgbm": "4.6.0",
+    "joblib": "1.5.3",
+    "overall_wall_clock_s": 297.56140403915197
+  },
+  "summary": {
+    "n_iters": 10,
+    "fit_wall_clock_ms": {
+      "min": 95.89851461350918,
+      "median": 958.3445307798684,
+      "mean": 873.2170180417597,
+      "p95": 1539.2239012755451,
+      "max": 1666.1749854683876
+    },
+    "serialization_wall_clock_ms": {
+      "min": 19.917285069823265,
+      "median": 23.724560625851154,
+      "mean": 23.986871354281902,
+      "p95": 29.394134972244498,
+      "max": 30.737243592739105
+    },
+    "manifest_write_wall_clock_ms": {
+      "min": 3.9665913209319115,
+      "median": 4.775314591825008,
+      "mean": 5.049942433834076,
+      "p95": 6.3948864582926035,
+      "max": 6.455718539655209
+    },
+    "bootstrap_ci_wall_clock_ms": {
+      "min": 26830.299088731408,
+      "median": 28617.96447308734,
+      "mean": 28665.145005937666,
+      "p95": 30622.55884646438,
+      "max": 30817.790645174682
+    },
+    "reload_wall_clock_ms": {
+      "min": 20.161861553788185,
+      "median": 27.043219655752182,
+      "mean": 29.604797437787056,
+      "p95": 38.25297653675079,
+      "max": 38.779391907155514
+    },
+    "rss_before_write_mb": {
+      "min": 288.296875,
+      "median": 290.421875,
+      "mean": 290.15078125,
+      "p95": 290.76171875,
+      "max": 290.76171875
+    },
+    "rss_after_write_mb": {
+      "min": 288.296875,
+      "median": 290.421875,
+      "mean": 290.27578125,
+      "p95": 290.76171875,
+      "max": 290.76171875
+    },
+    "rss_after_bootstrap_mb": {
+      "min": 288.921875,
+      "median": 290.466796875,
+      "mean": 290.36328125,
+      "p95": 290.76171875,
+      "max": 290.76171875
+    },
+    "rss_after_del_mb": {
+      "min": 289.046875,
+      "median": 290.466796875,
+      "mean": 290.37578125,
+      "p95": 290.76171875,
+      "max": 290.76171875
+    },
+    "model_bytes": {
+      "min": 191636.0,
+      "median": 194180.0,
+      "mean": 195391.2,
+      "p95": 200164.8,
+      "max": 201108.0
+    },
+    "predictions_bytes": {
+      "min": 7900.0,
+      "median": 7900.0,
+      "mean": 7900.0,
+      "p95": 7900.0,
+      "max": 7900.0
+    },
+    "manifest_bytes": {
+      "min": 739.0,
+      "median": 753.0,
+      "mean": 747.8,
+      "p95": 754.0,
+      "max": 754.0
+    }
+  },
+  "records": [
+    {
+      "iter_idx": 0,
+      "derived_seed": 355231105,
+      "fit_wall_clock_ms": 1666.1749854683876,
+      "serialization_wall_clock_ms": 30.737243592739105,
+      "manifest_write_wall_clock_ms": 3.9665913209319115,
+      "bootstrap_ci_wall_clock_ms": 28438.583995215595,
+      "reload_wall_clock_ms": 38.779391907155514,
+      "rss_before_fit_mb": 281.83984375,
+      "rss_before_write_mb": 288.296875,
+      "rss_after_write_mb": 288.296875,
+      "rss_after_bootstrap_mb": 288.921875,
+      "model_bytes": 198084,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 753,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.8731343283582089,
+      "ci_auc": [
+        0.7618807118807118,
+        0.9528743592642847
+      ],
+      "rss_after_del_mb": 289.046875,
+      "python_traced_peak_mb": 1.8101415634155273
+    },
+    {
+      "iter_idx": 1,
+      "derived_seed": 3394225019,
+      "fit_wall_clock_ms": 700.8333820849657,
+      "serialization_wall_clock_ms": 24.468726478517056,
+      "manifest_write_wall_clock_ms": 6.455718539655209,
+      "bootstrap_ci_wall_clock_ms": 28990.08739180863,
+      "reload_wall_clock_ms": 27.52329222857952,
+      "rss_before_fit_mb": 289.046875,
+      "rss_before_write_mb": 290.171875,
+      "rss_after_write_mb": 290.171875,
+      "rss_after_bootstrap_mb": 290.171875,
+      "model_bytes": 199012,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 739,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.7104377104377104,
+      "ci_auc": [
+        0.48667703823953834,
+        0.890824042685256
+      ],
+      "rss_after_del_mb": 290.171875,
+      "python_traced_peak_mb": 1.9110069274902344
+    },
+    {
+      "iter_idx": 2,
+      "derived_seed": 2520480020,
+      "fit_wall_clock_ms": 1145.4385602846742,
+      "serialization_wall_clock_ms": 27.752557769417763,
+      "manifest_write_wall_clock_ms": 6.164015270769596,
+      "bootstrap_ci_wall_clock_ms": 28874.954475089908,
+      "reload_wall_clock_ms": 25.903817266225815,
+      "rss_before_fit_mb": 290.171875,
+      "rss_before_write_mb": 290.421875,
+      "rss_after_write_mb": 290.421875,
+      "rss_after_bootstrap_mb": 290.421875,
+      "model_bytes": 201108,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 754,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.6884328358208955,
+      "ci_auc": [
+        0.46603169014084517,
+        0.900031512605042
+      ],
+      "rss_after_del_mb": 290.421875,
+      "python_traced_peak_mb": 1.920670509338379
+    },
+    {
+      "iter_idx": 3,
+      "derived_seed": 1846748587,
+      "fit_wall_clock_ms": 1006.3122157007456,
+      "serialization_wall_clock_ms": 22.980394773185253,
+      "manifest_write_wall_clock_ms": 4.9205683171749115,
+      "bootstrap_ci_wall_clock_ms": 28628.20385210216,
+      "reload_wall_clock_ms": 26.563147082924843,
+      "rss_before_fit_mb": 290.421875,
+      "rss_before_write_mb": 290.421875,
+      "rss_after_write_mb": 290.421875,
+      "rss_after_bootstrap_mb": 290.421875,
+      "model_bytes": 192068,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 754,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.8880597014925373,
+      "ci_auc": [
+        0.7641815574220465,
+        0.9914285714285714
+      ],
+      "rss_after_del_mb": 290.421875,
+      "python_traced_peak_mb": 1.920670509338379
+    },
+    {
+      "iter_idx": 4,
+      "derived_seed": 2338070611,
+      "fit_wall_clock_ms": 1384.0614650398493,
+      "serialization_wall_clock_ms": 19.917285069823265,
+      "manifest_write_wall_clock_ms": 4.177476279437542,
+      "bootstrap_ci_wall_clock_ms": 27058.724215254188,
+      "reload_wall_clock_ms": 37.6095799729228,
+      "rss_before_fit_mb": 290.421875,
+      "rss_before_write_mb": 288.88671875,
+      "rss_after_write_mb": 290.13671875,
+      "rss_after_bootstrap_mb": 290.13671875,
+      "model_bytes": 194372,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 739,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.8148148148148148,
+      "ci_auc": [
+        0.6571373626373627,
+        0.9285847547974414
+      ],
+      "rss_after_del_mb": 290.13671875,
+      "python_traced_peak_mb": 1.9270858764648438
+    },
+    {
+      "iter_idx": 5,
+      "derived_seed": 630145353,
+      "fit_wall_clock_ms": 351.3552760705352,
+      "serialization_wall_clock_ms": 24.84185714274645,
+      "manifest_write_wall_clock_ms": 4.784663207828999,
+      "bootstrap_ci_wall_clock_ms": 28021.139098331332,
+      "reload_wall_clock_ms": 35.39834637194872,
+      "rss_before_fit_mb": 290.13671875,
+      "rss_before_write_mb": 290.26171875,
+      "rss_after_write_mb": 290.26171875,
+      "rss_after_bootstrap_mb": 290.51171875,
+      "model_bytes": 193988,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 753,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.6194029850746269,
+      "ci_auc": [
+        NaN,
+        NaN
+      ],
+      "rss_after_del_mb": 290.51171875,
+      "python_traced_peak_mb": 2.089122772216797
+    },
+    {
+      "iter_idx": 6,
+      "derived_seed": 3614364420,
+      "fit_wall_clock_ms": 1285.1662309840322,
+      "serialization_wall_clock_ms": 22.478582337498665,
+      "manifest_write_wall_clock_ms": 4.216739907860756,
+      "bootstrap_ci_wall_clock_ms": 26830.299088731408,
+      "reload_wall_clock_ms": 25.22814739495516,
+      "rss_before_fit_mb": 290.51171875,
+      "rss_before_write_mb": 290.76171875,
+      "rss_after_write_mb": 290.76171875,
+      "rss_after_bootstrap_mb": 290.76171875,
+      "model_bytes": 193956,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 739,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.7760942760942761,
+      "ci_auc": [
+        0.6018179625034463,
+        0.9243948325598896
+      ],
+      "rss_after_del_mb": 290.76171875,
+      "python_traced_peak_mb": 2.092836380004883
+    },
+    {
+      "iter_idx": 7,
+      "derived_seed": 2772192079,
+      "fit_wall_clock_ms": 186.5527043119073,
+      "serialization_wall_clock_ms": 22.026845254004,
+      "manifest_write_wall_clock_ms": 4.72714938223362,
+      "bootstrap_ci_wall_clock_ms": 30383.942203596234,
+      "reload_wall_clock_ms": 33.70755910873413,
+      "rss_before_fit_mb": 290.76171875,
+      "rss_before_write_mb": 290.76171875,
+      "rss_after_write_mb": 290.76171875,
+      "rss_after_bootstrap_mb": 290.76171875,
+      "model_bytes": 192948,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 739,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.909090909090909,
+      "ci_auc": [
+        0.7891419345579794,
+        0.9867880485527544
+      ],
+      "rss_after_del_mb": 290.76171875,
+      "python_traced_peak_mb": 2.0944013595581055
+    },
+    {
+      "iter_idx": 8,
+      "derived_seed": 2304704933,
+      "fit_wall_clock_ms": 95.89851461350918,
+      "serialization_wall_clock_ms": 24.676027707755566,
+      "manifest_write_wall_clock_ms": 6.320536136627197,
+      "bootstrap_ci_wall_clock_ms": 30817.790645174682,
+      "reload_wall_clock_ms": 20.161861553788185,
+      "rss_before_fit_mb": 290.76171875,
+      "rss_before_write_mb": 290.76171875,
+      "rss_after_write_mb": 290.76171875,
+      "rss_after_bootstrap_mb": 290.76171875,
+      "model_bytes": 191636,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 754,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.8097014925373135,
+      "ci_auc": [
+        NaN,
+        NaN
+      ],
+      "rss_after_del_mb": 290.76171875,
+      "python_traced_peak_mb": 2.097134590148926
+    },
+    {
+      "iter_idx": 9,
+      "derived_seed": 1142917115,
+      "fit_wall_clock_ms": 910.3768458589911,
+      "serialization_wall_clock_ms": 19.9891934171319,
+      "manifest_write_wall_clock_ms": 4.765965975821018,
+      "bootstrap_ci_wall_clock_ms": 28607.72509407252,
+      "reload_wall_clock_ms": 25.172831490635872,
+      "rss_before_fit_mb": 290.76171875,
+      "rss_before_write_mb": 290.76171875,
+      "rss_after_write_mb": 290.76171875,
+      "rss_after_bootstrap_mb": 290.76171875,
+      "model_bytes": 196740,
+      "predictions_bytes": 7900,
+      "manifest_bytes": 754,
+      "n_train": 350,
+      "n_val": 75,
+      "n_test": 75,
+      "auc_test": 0.8283582089552238,
+      "ci_auc": [
+        0.6953548085901027,
+        0.9323772987455851
+      ],
+      "rss_after_del_mb": 290.76171875,
+      "python_traced_peak_mb": 2.1050262451171875
+    }
+  ]
+}
