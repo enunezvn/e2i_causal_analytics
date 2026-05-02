@@ -20,8 +20,9 @@ class MapieConformalBinaryClassifier:
 
     The wrapped estimator must implement sklearn-compatible fit / predict_proba.
     `method='lac'` (Least Ambiguous set-valued Classifier; Sadinle 2019) is the
-    MAPIE 0.8+ default and produces calibrated softmax predict_proba. `cv` controls
-    the cross-conformal splitting (5-fold default).
+    MAPIE 0.8+ default and produces coverage-guaranteed prediction SETS (NOT
+    recalibrated softmax probabilities — see amendment 2 below; predict_proba
+    delegates to the base estimator).
 
     Phase 1 alpha is a single value (0.10) — 90% marginal coverage. For
     multi-alpha reporting (80/90/95% bands), iterate alpha at evaluation time;
@@ -42,6 +43,17 @@ class MapieConformalBinaryClassifier:
          (LightGBM_Conformal, LogisticRegression_Conformal) underperform on
          calibration metrics, revisit the `skip_post_hoc_calibration=True`
          registry default for those entries.
+      3. (Cycle-9 codex F1 / D1) The wrapper hardcodes MAPIE `cv="prefit"`
+         and pre-fits the base on FULL `(X, y)` — then calibrates MAPIE on
+         that SAME `(X, y)` (training-set conformal). This is statistically
+         weaker than a held-out conformal split (the marginal-coverage
+         guarantee is not honoured for new data). The constructor still
+         accepts a `cv` kwarg for forward compatibility but it is currently
+         IGNORED; it has been removed from the registry HPO search spaces +
+         defaults so Optuna does not waste trials on a dead knob. Restoring
+         honest cv-conformal requires either (a) a manual held-out split
+         inside `fit()` before MAPIE prefit, or (b) switching to MAPIE
+         `cv=int` mode which forces base re-fits on K-1 folds.
     """
 
     def __init__(

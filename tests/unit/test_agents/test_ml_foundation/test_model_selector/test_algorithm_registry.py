@@ -364,7 +364,17 @@ class TestConformalRegistryEntries:
                 f"{name} should declare base_estimator={base}"
             )
 
-    def test_conformal_search_space_includes_cv(self):
+    def test_conformal_search_space_excludes_dead_cv_knob(self):
+        """Cycle-9 codex F1 amendment: `cv` REMOVED from conformal search spaces.
+        The wrapper hardcodes MAPIE cv="prefit" (amendment 2 in
+        mapie_wrapper.py), so any tuned `cv` int would be silently ignored —
+        a misleading registry contract that wastes Optuna trials. Restoring
+        cv requires switching to a true held-out conformal split (future work).
+        """
         for name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
             hp_space = ALGORITHM_REGISTRY[name]["hyperparameter_space"]
-            assert "cv" in hp_space, f"{name} hyperparameter_space missing cv"
+            defaults = ALGORITHM_REGISTRY[name]["default_hyperparameters"]
+            assert "cv" not in hp_space, (
+                f"{name} hyperparameter_space must NOT include `cv` — wrapper hardcodes prefit"
+            )
+            assert "cv" not in defaults, f"{name} default_hyperparameters must NOT include `cv`"

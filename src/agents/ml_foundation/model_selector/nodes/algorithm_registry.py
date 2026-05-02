@@ -215,6 +215,14 @@ ALGORITHM_REGISTRY = {
     # `skip_post_hoc_calibration=True` retained verbatim per shard 19 §B.3;
     # revisit at W4 multi-disease if non-calibration-native bases (LightGBM,
     # LogisticRegression) underperform on calibration metrics.
+    # Cycle-9 codex F1 amendment: `cv` REMOVED from conformal search spaces +
+    # defaults. shard 19 §B.4 specified cv=3-5 implying MAPIE internal
+    # cross-conformal splits, but the wrapper's amendment 2 hardcodes
+    # cv="prefit" (MAPIE 0.8.6 semantics) — the cv int is silently ignored.
+    # Tuning a dead knob wastes Optuna trials. To re-enable real cv-conformal
+    # in a future commit: split (X, y) inside wrapper.fit() into base-train +
+    # MAPIE-calibrate folds and switch wrapper to cv=self.cv (would also cure
+    # the train-set-conformal honesty issue flagged by cycle-9 D1).
     "NGBoost_Conformal": {
         "family": "calibration_native_conformal",
         "framework": "mapie+ngboost",
@@ -231,12 +239,10 @@ ALGORITHM_REGISTRY = {
         "hyperparameter_space": {
             "n_estimators": {"type": "int", "low": 200, "high": 600, "step": 100},
             "learning_rate": {"type": "float", "low": 0.01, "high": 0.05, "log": True},
-            "cv": {"type": "int", "low": 3, "high": 5},
         },
         "default_hyperparameters": {
             "n_estimators": 400,
             "learning_rate": 0.01,
-            "cv": 5,
         },
     },
     "LightGBM_Conformal": {
@@ -255,13 +261,11 @@ ALGORITHM_REGISTRY = {
             "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 100},
             "max_depth": {"type": "int", "low": 3, "high": 8},
             "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
-            "cv": {"type": "int", "low": 3, "high": 5},
         },
         "default_hyperparameters": {
             "n_estimators": 300,
             "max_depth": 6,
             "learning_rate": 0.05,
-            "cv": 5,
         },
     },
     "LogisticRegression_Conformal": {
@@ -279,12 +283,10 @@ ALGORITHM_REGISTRY = {
         "hyperparameter_space": {
             "C": {"type": "float", "low": 0.001, "high": 100, "log": True},
             "penalty": {"type": "categorical", "choices": ["l1", "l2"]},
-            "cv": {"type": "int", "low": 3, "high": 5},
         },
         "default_hyperparameters": {
             "C": 1.0,
             "penalty": "l2",
-            "cv": 5,
         },
     },
 }

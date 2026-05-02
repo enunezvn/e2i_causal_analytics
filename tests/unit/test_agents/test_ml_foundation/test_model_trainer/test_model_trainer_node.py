@@ -377,6 +377,28 @@ class TestFilterHyperparameters:
         assert isinstance(instance, MapieConformalBinaryClassifier)
         assert instance.base_estimator.C == 2.0
 
+    def test_filters_lightgbm_conformal_injects_verbose_minus_one(self):
+        """Cycle-9 codex F2: LightGBM_Conformal must inject verbose=-1 like
+        bare LightGBM, otherwise day-5 integration smoke emits per-iteration
+        log spam.
+        """
+        params = {"n_estimators": 200, "learning_rate": 0.05}
+        filtered = _filter_hyperparameters("LightGBM_Conformal", params)
+        assert filtered.get("verbose") == -1, (
+            "LightGBM_Conformal allowlist should inject verbose=-1 default like bare LightGBM"
+        )
+
+    def test_filters_logistic_regression_conformal_injects_max_iter_1000(self):
+        """Cycle-9 codex F3: LogisticRegression_Conformal must inject max_iter=1000
+        like bare LogisticRegression, otherwise sklearn default 100 may emit
+        ConvergenceWarning at day-5 integration smoke.
+        """
+        params = {"C": 1.0, "penalty": "l2"}
+        filtered = _filter_hyperparameters("LogisticRegression_Conformal", params)
+        assert filtered.get("max_iter") == 1000, (
+            "LogisticRegression_Conformal allowlist should inject max_iter=1000 default"
+        )
+
 
 class TestGetFramework:
     """Test framework identification."""

@@ -571,15 +571,18 @@ def _filter_hyperparameters(
             filtered[key] = value
 
     # Algorithm-specific defaults
-    if algorithm_name == "XGBoost":
+    # Cycle-9 codex F2+F3 fix: extend defaults to *_Conformal variants so
+    # LightGBM_Conformal gets verbose=-1 (no log spam at day-5 smoke) and
+    # LogisticRegression_Conformal gets max_iter=1000 (avoid ConvergenceWarning).
+    if algorithm_name in {"XGBoost", "XGBoost_Conformal"}:
         if "verbosity" not in filtered:
             filtered["verbosity"] = 0
         if "use_label_encoder" not in filtered:
             filtered["use_label_encoder"] = False
-    elif algorithm_name == "LightGBM":
+    elif algorithm_name in {"LightGBM", "LightGBM_Conformal"}:
         if "verbose" not in filtered:
             filtered["verbose"] = -1
-    elif algorithm_name == "LogisticRegression":
+    elif algorithm_name in {"LogisticRegression", "LogisticRegression_Conformal"}:
         if "max_iter" not in filtered:
             filtered["max_iter"] = 1000
 
