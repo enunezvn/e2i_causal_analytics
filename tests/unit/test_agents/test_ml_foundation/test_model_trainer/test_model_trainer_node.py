@@ -554,6 +554,42 @@ class TestTrainModelMonotoneInjection:
         # No crash → no injection → defensive guard works.
         assert result["trained_model"] is not None
 
+    async def test_monotone_vector_length_mismatch_soft_degrades_with_warning(
+        self, binary_classification_state, caplog
+    ):
+        """Cycle-10 codex IMPORTANT finding fix: per shard 19 §H risk table,
+        a vector-length mismatch must soft-degrade to unconstrained training
+        with a WARNING — NOT hard-fail at LightGBM instantiation. Without this
+        pre-validation, the trainer would raise ValueError mid-fit and route
+        to error_type=instantiation_failed; the §H spec is to log + continue.
+        """
+        import logging
+
+        binary_classification_state["algorithm_name"] = "LightGBM_Monotone"
+        binary_classification_state["best_hyperparameters"] = {
+            "n_estimators": 5,
+            "max_depth": 3,
+        }
+        binary_classification_state["model_candidate"] = {
+            "monotone_constraints_required": True,
+        }
+        # Vector LENGTH mismatch: 3-element vector but X_train has N_FEATURES=5.
+        binary_classification_state["monotone_vector"] = [1, 0, -1]
+
+        with caplog.at_level(logging.WARNING):
+            result = await train_model(binary_classification_state)
+
+        assert "error" not in result, "Length mismatch should soft-degrade, not hard-fail"
+        assert result["trained_model"] is not None
+        warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "monotone_vector length" in m or "length mismatch" in m
+            for m in warning_msgs
+        ), f"Expected length-mismatch warning; got: {warning_msgs}"
+        # Trained model has NO monotone_constraints (the soft-degrade dropped them):
+        params = result["trained_model"].get_params()
+        assert params.get("monotone_constraints") is None or params.get("monotone_constraints") == "None"
+
 
 class TestGetFramework:
     """Test framework identification."""

@@ -115,7 +115,8 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
     # The constraint vector is per-feature and per-disease — it lives in
     # the data path (synthetic_data_generator_v2 emits it alongside
     # feature_columns), NOT the registry. Soft-fails to unconstrained
-    # training if monotone_vector is missing.
+    # training if monotone_vector is missing OR length-mismatched (cycle-10
+    # codex IMPORTANT fix per shard 19 §H risk-table mitigation).
     model_candidate_meta = state.get("model_candidate") or {}
     if model_candidate_meta.get("monotone_constraints_required"):
         monotone_vector = state.get("monotone_vector")
@@ -124,13 +125,32 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"{algorithm_name} requires monotone_vector but state is missing it; "
                 "training without constraints (degraded to unconstrained variant)."
             )
-        elif algorithm_name.startswith("LightGBM"):
-            filtered_params["monotone_constraints"] = list(monotone_vector)
-        elif algorithm_name.startswith("XGBoost"):
-            # XGBoost expects the string format "(1, 0, -1, ...)"
-            filtered_params["monotone_constraints"] = (
-                "(" + ", ".join(str(int(v)) for v in monotone_vector) + ")"
+        else:
+            # Cycle-10 codex IMPORTANT fix: validate length BEFORE dispatch.
+            # Without this, LightGBM raises a fatal C-side error mid-fit which
+            # routes to error_type=training_failed (hard-fail). §H mitigation
+            # says soft-degrade with WARNING.
+            n_features = (
+                X_train_preprocessed.shape[1]
+                if hasattr(X_train_preprocessed, "shape")
+                else None
             )
+            if n_features is not None and len(monotone_vector) != n_features:
+                logger.warning(
+                    f"{algorithm_name} monotone_vector length ({len(monotone_vector)}) "
+                    f"does not match X_train n_features ({n_features}); "
+                    "training without constraints (degraded to unconstrained variant)."
+                )
+            elif algorithm_name.startswith("LightGBM"):
+                # Cycle-10 codex COSMETIC: explicit int cast for dtype safety
+                # (numpy int64 elements survive list() but explicit cast is
+                # safer for forward-compat with future LightGBM versions).
+                filtered_params["monotone_constraints"] = [int(v) for v in monotone_vector]
+            elif algorithm_name.startswith("XGBoost"):
+                # XGBoost expects the string format "(1, 0, -1, ...)"
+                filtered_params["monotone_constraints"] = (
+                    "(" + ", ".join(str(int(v)) for v in monotone_vector) + ")"
+                )
 
     # Instantiate model
     try:
