@@ -122,7 +122,18 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
     # ``train_model`` self-contained for direct callers (replay tooling,
     # tier-0 smoke tests) that bypass HPO and pass ``best_hyperparameters``
     # in pre-baked.
-    if "fold_random_state" in state:
+    #
+    # Cycle-14 codex IMPORTANT Q3 fix: gate the injection on whether the
+    # algorithm's allowlist actually permits ``random_state``. Because
+    # ``_filter_hyperparameters`` adds ``random_state`` to its return dict
+    # for any allowed algorithm (via the ``common_params`` defaulting at the
+    # bottom of that function), the presence of the key in ``filtered_params``
+    # is an authoritative proxy for "allowlist permits it." For algorithms
+    # whose allowlist excludes ``random_state`` (e.g., a future
+    # ``LightGBM_Brier`` registered without an allowlist entry), blind
+    # injection would crash ``model_class(**filtered_params)`` with a
+    # ``TypeError`` on the unknown kwarg.
+    if "fold_random_state" in state and "random_state" in filtered_params:
         filtered_params["random_state"] = resolve_fold_random_state(state)
 
     # Phase 1 W2 day-4 (shard 19 §C.4): if the candidate requires monotone

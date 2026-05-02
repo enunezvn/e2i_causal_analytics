@@ -132,8 +132,12 @@ class TestSplitLoaderAcceptsFoldRandomState:
 
     def test_load_splits_omits_fold_random_state_when_not_set(self) -> None:
         """Backward-compat: without a per-fold seed the legacy single-split
-        callers get the same return shape they always have. The key may be
-        absent or explicitly None — assert it is not a non-None integer."""
+        callers get the same return shape they always have. Cycle-14 Q4 fix
+        (codex IMPORTANT): the key MUST be absent from the return dict — not
+        present-but-None — so LangGraph's default ``state.update(node_output)``
+        reducer cannot clobber a fold seed set by a future branch / parallel
+        emission upstream of ``load_splits``. Asserting absence locks in the
+        non-clobber contract."""
         from src.agents.ml_foundation.model_trainer.nodes.split_loader import (
             load_splits,
         )
@@ -142,7 +146,10 @@ class TestSplitLoaderAcceptsFoldRandomState:
         out = asyncio.run(load_splits(state))
 
         assert "error" not in out, out
-        assert out.get("fold_random_state") is None
+        assert "fold_random_state" not in out, (
+            f"load_splits must omit the key (not emit None) when state has no "
+            f"fold seed; got {out.get('fold_random_state')!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +272,70 @@ class TestTrainModelHonorsFoldRandomState:
         assert _RecordingModel.captured_random_state == 99, (
             f"expected 99 (fold_random_state), got {_RecordingModel.captured_random_state}; "
             f"best_hyperparameters['random_state']=42 must be overridden by the fold seed"
+        )
+
+    def test_override_skipped_when_random_state_not_in_allowlist(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cycle-14 codex IMPORTANT Q3 fix: when state['fold_random_state']
+        is set but the algorithm's allowlist does NOT include 'random_state',
+        the train-time override MUST NOT inject the key into filtered_params.
+        Otherwise ``model_class(**filtered_params)`` crashes with TypeError
+        on the unrecognized kwarg. Forward-looking guard for algos like
+        ``LightGBM_Brier`` that may be introduced without an allowlist entry.
+
+        We verify by routing through a synthetic algorithm name absent from
+        the ``_filter_hyperparameters`` allowlist table — the gate is
+        algorithm-table-driven so any unknown name reproduces the bug class.
+        """
+        from src.agents.ml_foundation.model_trainer.nodes import model_trainer_node
+
+        # Sentinel so we can distinguish "__init__ never ran" from "__init__
+        # ran and params.get('random_state') returned None (key absent)".
+        _RecordingModel.captured_random_state = "UNSET"
+
+        monkeypatch.setattr(
+            model_trainer_node,
+            "_get_model_class_dynamic",
+            lambda algorithm_name, problem_type: _RecordingModel,
+        )
+
+        rng = np.random.default_rng(0)
+        X_train = rng.standard_normal((16, 3)).astype(np.float64)
+        y_train = (rng.random(16) > 0.5).astype(int)
+        X_val = rng.standard_normal((8, 3)).astype(np.float64)
+        y_val = (rng.random(8) > 0.5).astype(int)
+
+        state: Dict[str, Any] = {
+            # Synthetic name absent from _filter_hyperparameters allowed_params
+            # table — exercises the empty-allowlist branch independently of
+            # whether any real algorithm currently lacks ``random_state``.
+            "algorithm_name": "FakeAlgoNoAllowlistEntry",
+            "problem_type": "binary_classification",
+            "best_hyperparameters": {"random_state": 42, "n_estimators": 5},
+            "X_train_preprocessed": X_train,
+            "X_validation_preprocessed": X_val,
+            "train_data": {"X": pd.DataFrame(X_train), "y": pd.Series(y_train), "row_count": 16},
+            "validation_data": {
+                "X": pd.DataFrame(X_val),
+                "y": pd.Series(y_val),
+                "row_count": 8,
+            },
+            "feature_columns": ["f0", "f1", "f2"],
+            "early_stopping": False,
+            "fold_random_state": 99,
+        }
+
+        out = asyncio.run(model_trainer_node.train_model(state))
+
+        # training_status==completed proves _RecordingModel.__init__ executed,
+        # so captured_random_state was reassigned from "UNSET" to whatever
+        # params.get("random_state") returned. Asserting None means the key
+        # was absent from filtered_params (override correctly skipped).
+        assert out.get("training_status") == "completed", out
+        assert _RecordingModel.captured_random_state is None, (
+            f"override should not inject random_state when algo's allowlist "
+            f"excludes it; captured={_RecordingModel.captured_random_state!r}"
         )
 
     def test_no_fold_random_state_preserves_best_hyperparameters_seed(

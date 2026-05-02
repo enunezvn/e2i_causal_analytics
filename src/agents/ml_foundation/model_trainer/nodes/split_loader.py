@@ -297,16 +297,7 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     test_ratio = test_samples / total_samples
     holdout_ratio = holdout_samples / total_samples
 
-    # W3-lite Day 3 (shard 17 W3 row Day 3): propagate the per-fold seed when
-    # the orchestrator (Day 4-5) sets it. Absent => emit None so downstream
-    # consumers fall back to their existing random_state path. We deliberately
-    # do NOT default to 42 here — that decision belongs to the consumer via
-    # resolve_fold_random_state(state, fallback=...) at call time.
-    fold_random_state = (
-        resolve_fold_random_state(state) if "fold_random_state" in state else None
-    )
-
-    return {
+    result: Dict[str, Any] = {
         "train_data": train_data,
         "validation_data": validation_data,
         "test_data": test_data,
@@ -320,5 +311,14 @@ async def load_splits(state: Dict[str, Any]) -> Dict[str, Any]:
         "validation_ratio": validation_ratio,
         "test_ratio": test_ratio,
         "holdout_ratio": holdout_ratio,
-        "fold_random_state": fold_random_state,
     }
+
+    # W3-lite Day 3 (shard 17 W3 row Day 3): propagate the per-fold seed when
+    # the orchestrator (Day 4-5) sets it. Cycle-14 codex IMPORTANT Q4 fix —
+    # OMIT the key entirely when absent (do not emit None). LangGraph's default
+    # ``state.update(node_output)`` reducer would otherwise let a None return
+    # clobber a fold seed produced by a parallel/branch upstream node.
+    if "fold_random_state" in state:
+        result["fold_random_state"] = resolve_fold_random_state(state)
+
+    return result
