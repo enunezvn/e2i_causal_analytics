@@ -865,5 +865,13 @@ def _get_framework(algorithm_name: str) -> str:
         "DRLearner": "econml",
         "TLearner": "econml",
         "XLearner": "econml",
+        # Phase 1 W2 (shard 19): NGBoost + monotone + conformal variants.
+        # Framework value matches the registry entry's `framework` field.
+        "NGBoost": "ngboost",
+        "LightGBM_Monotone": "lightgbm",
+        "XGBoost_Monotone": "xgboost",
+        "NGBoost_Conformal": "mapie+ngboost",
+        "LightGBM_Conformal": "mapie+lightgbm",
+        "LogisticRegression_Conformal": "mapie+sklearn",
     }
     return framework_map.get(algorithm_name, "unknown")
