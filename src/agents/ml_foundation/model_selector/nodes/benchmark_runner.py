@@ -164,6 +164,17 @@ def _create_model_instance(
         if algo_name.endswith("_Conformal"):
             return None
 
+        # Phase 1 W2 day-4 (shard 19 §C.6): _Monotone variants run as plain
+        # LightGBM / XGBoost during benchmark — monotone constraints injected
+        # only at trainer fit time. The benchmark only ranks; constraints
+        # typically improve calibration but slightly hurt raw AUC, so the
+        # benchmark sees an upper-bound on rankable performance. Strip the
+        # suffix and recurse so the rest of the function reaches the existing
+        # base-name branches.
+        if algo_name.endswith("_Monotone"):
+            base_name = algo_name[: -len("_Monotone")]
+            return _create_model_instance(base_name, framework, params, problem_type)
+
         if algo_name == "XGBoost":
             from xgboost import XGBClassifier, XGBRegressor
 

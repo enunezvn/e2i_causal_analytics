@@ -1133,6 +1133,24 @@ class TestGetModelClass:
         result = get_model_class("UnknownBase_Conformal", "binary_classification")
         assert result is None
 
+    def test_monotone_routes_to_base_class(self):
+        """Phase 1 W2 day-4 (shard 19 §C.2): _Monotone variants resolve to
+        the SAME class as the base (no new model class — registry-level
+        variant only; constraints injected at fit time).
+        """
+        from lightgbm import LGBMClassifier
+        from xgboost import XGBClassifier
+
+        lgbm_mono = get_model_class("LightGBM_Monotone", "binary_classification")
+        lgbm_base = get_model_class("LightGBM", "binary_classification")
+        assert lgbm_mono is lgbm_base
+        assert lgbm_mono is LGBMClassifier
+
+        xgb_mono = get_model_class("XGBoost_Monotone", "binary_classification")
+        xgb_base = get_model_class("XGBoost", "binary_classification")
+        assert xgb_mono is xgb_base
+        assert xgb_mono is XGBClassifier
+
 
 # ============================================================================
 # RUN HYPERPARAMETER OPTIMIZATION TESTS

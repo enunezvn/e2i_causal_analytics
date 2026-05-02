@@ -289,6 +289,63 @@ ALGORITHM_REGISTRY = {
             "penalty": "l2",
         },
     },
+    # === MONOTONE-CONSTRAINED VARIANTS ===
+    # Phase 1 W2 day-4 (shard 19 §C.3). NO new model class — these are
+    # registry-level variants of LightGBM/XGBoost that opt into the
+    # `monotone_constraints_required` flag. The trainer reads
+    # state["monotone_vector"] and injects monotone_constraints into
+    # filtered_params at fit time (shard 19 §C.4). The base LightGBM /
+    # XGBoost entries stay unchanged so the no-monotone path is bit-identical.
+    "LightGBM_Monotone": {
+        "family": "gradient_boosting_constrained",
+        "framework": "lightgbm",
+        "problem_types": ["binary_classification", "regression"],
+        "strengths": ["calibration", "clinical_knowledge_injection", "speed"],
+        "inference_latency_ms": 18,
+        "memory_gb": 1.6,
+        "interpretability_score": 0.65,
+        "scalability_score": 0.95,
+        "monotone_constraints_required": True,
+        "base_estimator": "LightGBM",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 50},
+            "max_depth": {"type": "int", "low": 3, "high": 8},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
+            "num_leaves": {"type": "int", "low": 15, "high": 63},
+            # monotone_constraints is NOT searched — it's a configured input.
+        },
+        "default_hyperparameters": {
+            "n_estimators": 300,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "num_leaves": 31,
+            # monotone_constraints injected at fit time from state["monotone_vector"].
+        },
+    },
+    "XGBoost_Monotone": {
+        "family": "gradient_boosting_constrained",
+        "framework": "xgboost",
+        "problem_types": ["binary_classification", "regression"],
+        "strengths": ["calibration", "clinical_knowledge_injection", "accuracy"],
+        "inference_latency_ms": 22,
+        "memory_gb": 2.0,
+        "interpretability_score": 0.65,
+        "scalability_score": 0.85,
+        "monotone_constraints_required": True,
+        "base_estimator": "XGBoost",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 50},
+            "max_depth": {"type": "int", "low": 3, "high": 8},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
+            "subsample": {"type": "float", "low": 0.6, "high": 1.0, "step": 0.1},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 300,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "subsample": 0.8,
+        },
+    },
 }
 
 # Regularization-focused search spaces for quality remediation.

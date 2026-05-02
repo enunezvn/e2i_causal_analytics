@@ -378,3 +378,40 @@ class TestConformalRegistryEntries:
                 f"{name} hyperparameter_space must NOT include `cv` — wrapper hardcodes prefit"
             )
             assert "cv" not in defaults, f"{name} default_hyperparameters must NOT include `cv`"
+
+
+class TestMonotoneRegistryEntries:
+    """Phase 1 W2 day-4: two *_Monotone entries (LightGBM_Monotone /
+    XGBoost_Monotone) per shard 19 §C.3 with `monotone_constraints_required=True`
+    flag, NO new model class (lookup recursively resolves to base). The trainer
+    injects monotone_constraints from `state["monotone_vector"]` at fit time.
+    """
+
+    def test_two_monotone_entries_present(self):
+        for name in ("LightGBM_Monotone", "XGBoost_Monotone"):
+            assert name in ALGORITHM_REGISTRY, f"{name} missing from registry"
+
+    def test_each_monotone_marks_required_flag_and_base(self):
+        expected_base = {
+            "LightGBM_Monotone": "LightGBM",
+            "XGBoost_Monotone": "XGBoost",
+        }
+        for name, base in expected_base.items():
+            spec = ALGORITHM_REGISTRY[name]
+            assert spec.get("monotone_constraints_required") is True, (
+                f"{name} missing monotone_constraints_required=True"
+            )
+            assert spec.get("base_estimator") == base, f"{name} base_estimator should be {base}"
+            assert spec["family"] == "gradient_boosting_constrained"
+
+    def test_monotone_search_space_excludes_monotone_constraints(self):
+        """monotone_constraints is NOT a hyperparameter — it's a configured
+        input from state["monotone_vector"]. Including it in the search space
+        would have Optuna sample random vectors which is meaningless.
+        """
+        for name in ("LightGBM_Monotone", "XGBoost_Monotone"):
+            hp_space = ALGORITHM_REGISTRY[name]["hyperparameter_space"]
+            assert "monotone_constraints" not in hp_space, (
+                f"{name} hyperparameter_space must NOT include monotone_constraints — "
+                "injected from state at fit time"
+            )

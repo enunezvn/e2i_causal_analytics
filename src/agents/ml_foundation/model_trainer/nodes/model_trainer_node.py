@@ -110,6 +110,28 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
     # Prepare hyperparameters - filter out incompatible params
     filtered_params = _filter_hyperparameters(algorithm_name, best_hyperparameters)
 
+    # Phase 1 W2 day-4 (shard 19 §C.4): if the candidate requires monotone
+    # constraints, inject them from state["monotone_vector"] post-filter.
+    # The constraint vector is per-feature and per-disease — it lives in
+    # the data path (synthetic_data_generator_v2 emits it alongside
+    # feature_columns), NOT the registry. Soft-fails to unconstrained
+    # training if monotone_vector is missing.
+    model_candidate_meta = state.get("model_candidate") or {}
+    if model_candidate_meta.get("monotone_constraints_required"):
+        monotone_vector = state.get("monotone_vector")
+        if monotone_vector is None:
+            logger.warning(
+                f"{algorithm_name} requires monotone_vector but state is missing it; "
+                "training without constraints (degraded to unconstrained variant)."
+            )
+        elif algorithm_name.startswith("LightGBM"):
+            filtered_params["monotone_constraints"] = list(monotone_vector)
+        elif algorithm_name.startswith("XGBoost"):
+            # XGBoost expects the string format "(1, 0, -1, ...)"
+            filtered_params["monotone_constraints"] = (
+                "(" + ", ".join(str(int(v)) for v in monotone_vector) + ")"
+            )
+
     # Instantiate model
     try:
         model = model_class(**filtered_params)
@@ -322,6 +344,12 @@ def _get_model_class_dynamic(
 
             return NGBRegressor  # type: ignore[no-any-return]
 
+        elif algorithm_name.endswith("_Monotone"):
+            # Phase 1 W2 day-4 (shard 19 §C.2 mirror): _Monotone variants
+            # reuse LightGBM/XGBoost. Strip suffix and recurse.
+            base_name = algorithm_name[: -len("_Monotone")]
+            return _get_model_class_dynamic(base_name, problem_type)
+
         elif algorithm_name.endswith("_Conformal"):
             # Phase 1 W2 day-3 (shard 19 §B.4 mirror). Same pattern as the
             # primary path in optuna_optimizer.get_model_class: strip suffix,
@@ -399,6 +427,9 @@ def _filter_hyperparameters(
             "eval_metric",
             "early_stopping_rounds",
             "use_label_encoder",
+            # Phase 1 W2 day-4 (shard 19 §C.5): monotone_constraints injected
+            # at fit time from state["monotone_vector"] for XGBoost_Monotone.
+            "monotone_constraints",
         },
         "LightGBM": {
             "n_estimators",
@@ -417,6 +448,10 @@ def _filter_hyperparameters(
             "importance_type",
             "subsample_freq",
             "min_split_gain",
+            # Phase 1 W2 day-4 (shard 19 §C.5): monotone_constraints +
+            # monotone_constraints_method injected for LightGBM_Monotone.
+            "monotone_constraints",
+            "monotone_constraints_method",
         },
         "RandomForest": {
             "n_estimators",
@@ -550,11 +585,17 @@ def _filter_hyperparameters(
     # Routes the conformal-specific kwargs to the wrapper and the base-estimator
     # kwargs to the underlying constructor. The closure factory in
     # get_model_class.pop()s the conformal kwargs before building the base.
+    # Phase 1 W2 day-4 (shard 19 §C.5): _Monotone variants reuse the base
+    # allowlist directly (monotone_constraints already added to LightGBM/XGBoost
+    # base allowlists above; injected from state["monotone_vector"] at fit time).
     _CONFORMAL_COMMON = {"method", "cv", "alpha", "random_state"}
     if algorithm_name.endswith("_Conformal"):
         base_name = algorithm_name[: -len("_Conformal")]
         base_allowed = allowed_params.get(base_name, set())
         allowed = _CONFORMAL_COMMON | base_allowed
+    elif algorithm_name.endswith("_Monotone"):
+        base_name = algorithm_name[: -len("_Monotone")]
+        allowed = allowed_params.get(base_name, set())
     else:
         # Get allowed params for this algorithm
         allowed = allowed_params.get(algorithm_name, set())
@@ -574,12 +615,14 @@ def _filter_hyperparameters(
     # Cycle-9 codex F2+F3 fix: extend defaults to *_Conformal variants so
     # LightGBM_Conformal gets verbose=-1 (no log spam at day-5 smoke) and
     # LogisticRegression_Conformal gets max_iter=1000 (avoid ConvergenceWarning).
-    if algorithm_name in {"XGBoost", "XGBoost_Conformal"}:
+    # Phase 1 W2 day-4: also extend to *_Monotone variants (LightGBM_Monotone
+    # / XGBoost_Monotone) for the same reason.
+    if algorithm_name in {"XGBoost", "XGBoost_Conformal", "XGBoost_Monotone"}:
         if "verbosity" not in filtered:
             filtered["verbosity"] = 0
         if "use_label_encoder" not in filtered:
             filtered["use_label_encoder"] = False
-    elif algorithm_name in {"LightGBM", "LightGBM_Conformal"}:
+    elif algorithm_name in {"LightGBM", "LightGBM_Conformal", "LightGBM_Monotone"}:
         if "verbose" not in filtered:
             filtered["verbose"] = -1
     elif algorithm_name in {"LogisticRegression", "LogisticRegression_Conformal"}:

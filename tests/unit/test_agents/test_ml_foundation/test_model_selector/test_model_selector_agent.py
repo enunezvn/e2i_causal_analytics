@@ -567,3 +567,21 @@ class TestBuildOutputCalibrationFlags:
         mc = output["model_candidate"]
         assert mc["skip_post_hoc_calibration"] is False
         assert mc["distribution_predictor"] is False
+        assert mc["monotone_constraints_required"] is False
+
+    def test_monotone_constraints_required_flag_propagated_when_true(self):
+        """Phase 1 W2 day-4: monotone_constraints_required surfaces from
+        primary_candidate to model_candidate so train_model can read it and
+        inject monotone_constraints from state["monotone_vector"] at fit time.
+        """
+        agent = ModelSelectorAgent()
+        final_state = {
+            "primary_candidate": {
+                "name": "LightGBM_Monotone",
+                "monotone_constraints_required": True,
+            },
+            "algorithm_name": "LightGBM_Monotone",
+        }
+        output = agent._build_output(final_state, experiment_id="exp_test")
+        mc = output["model_candidate"]
+        assert mc["monotone_constraints_required"] is True

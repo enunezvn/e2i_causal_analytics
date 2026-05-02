@@ -1033,6 +1033,14 @@ def get_model_class(algorithm_name: str, problem_type: str) -> Optional[type]:
 
             return NGBRegressor  # type: ignore[no-any-return]
 
+        elif algorithm_name.endswith("_Monotone"):
+            # Phase 1 W2 day-4 (shard 19 §C.2): no new model class — _Monotone
+            # variants reuse LightGBM/XGBoost. Strip suffix and recurse.
+            # The trainer reads state["monotone_vector"] and injects
+            # monotone_constraints into filtered_params at fit time.
+            base_name = algorithm_name[: -len("_Monotone")]
+            return get_model_class(base_name, problem_type)
+
         elif algorithm_name.endswith("_Conformal"):
             # Phase 1 W2 day-3 (shard 19 §B.4): generic conformal factory.
             # Strip the suffix, recurse to fetch the base class, return a

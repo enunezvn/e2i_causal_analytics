@@ -317,6 +317,11 @@ class ModelSelectorAgent:
             "benchmark_score": final_state.get("benchmark_score"),
             "skip_post_hoc_calibration": bool(primary.get("skip_post_hoc_calibration", False)),
             "distribution_predictor": bool(primary.get("distribution_predictor", False)),
+            # Phase 1 W2 day-4 (shard 19 §C.4): consumed by train_model
+            # when injecting monotone_constraints from state["monotone_vector"].
+            "monotone_constraints_required": bool(
+                primary.get("monotone_constraints_required", False)
+            ),
         }
 
         # Extract SelectionRationale

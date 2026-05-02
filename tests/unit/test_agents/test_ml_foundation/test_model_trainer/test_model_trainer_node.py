@@ -399,6 +399,161 @@ class TestFilterHyperparameters:
             "LogisticRegression_Conformal allowlist should inject max_iter=1000 default"
         )
 
+    def test_filters_lightgbm_monotone_uses_base_allowlist(self):
+        """Phase 1 W2 day-4 (shard 19 §C.5): LightGBM_Monotone reuses LightGBM
+        allowlist via the _Monotone-suffix branch. monotone_constraints must
+        be in the allowlist (added to LightGBM base in this commit) but is
+        NOT supplied via params — it's injected from state at fit time.
+        Foreign params drop; verbose=-1 + monotone-related params survive.
+        """
+        params = {
+            "n_estimators": 200,
+            "max_depth": 5,
+            "num_leaves": 31,
+            "monotone_constraints": [1, 0, -1],  # injected at fit time normally
+            "C": 1.0,  # Foreign (LR-specific); should drop
+            "method": "lac",  # Foreign (conformal-only); should drop
+        }
+        filtered = _filter_hyperparameters("LightGBM_Monotone", params)
+        assert filtered["n_estimators"] == 200
+        assert filtered["max_depth"] == 5
+        assert filtered["num_leaves"] == 31
+        assert filtered["monotone_constraints"] == [1, 0, -1]
+        assert filtered.get("verbose") == -1, (
+            "LightGBM_Monotone should inject verbose=-1 like bare LightGBM"
+        )
+        assert "C" not in filtered
+        assert "method" not in filtered
+
+    def test_filters_xgboost_monotone_uses_base_allowlist(self):
+        """XGBoost_Monotone reuses XGBoost allowlist. monotone_constraints
+        is in the allowlist (added to XGBoost base) but the value comes from
+        the trainer's fit-time injection, not params normally.
+        """
+        params = {
+            "n_estimators": 200,
+            "max_depth": 5,
+            "subsample": 0.8,
+            "monotone_constraints": "(1, 0, -1)",  # XGBoost string format
+        }
+        filtered = _filter_hyperparameters("XGBoost_Monotone", params)
+        assert filtered["n_estimators"] == 200
+        assert filtered["max_depth"] == 5
+        assert filtered["subsample"] == 0.8
+        assert filtered["monotone_constraints"] == "(1, 0, -1)"
+        assert filtered.get("verbosity") == 0
+        assert filtered.get("use_label_encoder") is False
+
+    def test_get_model_class_dynamic_resolves_monotone(self):
+        """Phase 1 W2 day-4 mirror (shard 19 §C.2): _Monotone variants resolve
+        to the same class as the base estimator.
+        """
+        from lightgbm import LGBMClassifier
+
+        cls = _get_model_class_dynamic("LightGBM_Monotone", "binary_classification")
+        assert cls is LGBMClassifier
+
+
+@pytest.mark.asyncio
+class TestTrainModelMonotoneInjection:
+    """Phase 1 W2 day-4 (shard 19 §C.4): when model_candidate carries
+    `monotone_constraints_required=True`, train_model injects
+    monotone_constraints from `state["monotone_vector"]` into filtered_params
+    before model instantiation. Soft-fails to unconstrained training if
+    monotone_vector is missing.
+    """
+
+    async def test_lightgbm_monotone_with_vector_injects_list(self, binary_classification_state):
+        """LightGBM_Monotone with monotone_vector → list[int] in get_params()."""
+        binary_classification_state["algorithm_name"] = "LightGBM_Monotone"
+        binary_classification_state["best_hyperparameters"] = {
+            "n_estimators": 5,
+            "max_depth": 3,
+            "learning_rate": 0.1,
+        }
+        binary_classification_state["model_candidate"] = {
+            "monotone_constraints_required": True,
+        }
+        # 5 features (N_FEATURES) → 5-element monotone vector
+        binary_classification_state["monotone_vector"] = [1, 0, -1, 0, 1]
+
+        result = await train_model(binary_classification_state)
+
+        assert "error" not in result
+        model = result["trained_model"]
+        params = model.get_params()
+        # LightGBM expects a list
+        assert params.get("monotone_constraints") == [1, 0, -1, 0, 1]
+
+    async def test_xgboost_monotone_with_vector_injects_string(self, binary_classification_state):
+        """XGBoost_Monotone with monotone_vector → tuple-string format."""
+        binary_classification_state["algorithm_name"] = "XGBoost_Monotone"
+        binary_classification_state["best_hyperparameters"] = {
+            "n_estimators": 5,
+            "max_depth": 3,
+            "learning_rate": 0.1,
+        }
+        binary_classification_state["model_candidate"] = {
+            "monotone_constraints_required": True,
+        }
+        binary_classification_state["monotone_vector"] = [1, 0, -1, 0, 1]
+
+        result = await train_model(binary_classification_state)
+
+        assert "error" not in result
+        model = result["trained_model"]
+        params = model.get_params()
+        # XGBoost expects the tuple-string format
+        assert params.get("monotone_constraints") == "(1, 0, -1, 0, 1)"
+
+    async def test_monotone_required_but_vector_missing_soft_fails(
+        self, binary_classification_state, caplog
+    ):
+        """When required flag is set but monotone_vector absent, the trainer
+        logs a warning and trains without constraints (degraded path).
+        """
+        import logging
+
+        binary_classification_state["algorithm_name"] = "LightGBM_Monotone"
+        binary_classification_state["best_hyperparameters"] = {
+            "n_estimators": 5,
+            "max_depth": 3,
+        }
+        binary_classification_state["model_candidate"] = {
+            "monotone_constraints_required": True,
+        }
+        # NO monotone_vector in state.
+
+        with caplog.at_level(logging.WARNING):
+            result = await train_model(binary_classification_state)
+
+        assert "error" not in result
+        # Trained successfully without constraints:
+        assert result["trained_model"] is not None
+        # Warning was emitted:
+        warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "requires monotone_vector" in m and "training without constraints" in m
+            for m in warning_msgs
+        ), f"Expected soft-fail warning; got: {warning_msgs}"
+
+    async def test_no_monotone_required_flag_skips_injection(self, binary_classification_state):
+        """When model_candidate.monotone_constraints_required is False or
+        absent, the injection block is a no-op even if state has a vector
+        (defensive: legacy candidates unchanged).
+        """
+        binary_classification_state["algorithm_name"] = "RandomForest"
+        binary_classification_state["best_hyperparameters"] = {"n_estimators": 5}
+        # No model_candidate or required=False; even with vector present, no injection.
+        binary_classification_state["monotone_vector"] = [1, 0, -1, 0, 1]
+
+        result = await train_model(binary_classification_state)
+
+        assert "error" not in result
+        # RandomForest doesn't accept monotone_constraints — would crash if injected.
+        # No crash → no injection → defensive guard works.
+        assert result["trained_model"] is not None
+
 
 class TestGetFramework:
     """Test framework identification."""

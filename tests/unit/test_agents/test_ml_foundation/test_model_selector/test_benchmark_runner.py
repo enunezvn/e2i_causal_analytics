@@ -159,6 +159,36 @@ class TestCreateModelInstance:
             model = _create_model_instance(algo_name, "mapie", {}, "binary_classification")
             assert model is None, f"{algo_name} should be skipped from CV-benchmarking"
 
+    def test_lightgbm_monotone_routes_to_lightgbm_class(self):
+        """Phase 1 W2 day-4 (shard 19 §C.6): _Monotone variants run as plain
+        LightGBM/XGBoost during benchmark — monotone_constraints injected
+        only at trainer fit time. The benchmark sees an upper-bound on
+        rankable performance with no constraints applied.
+        """
+        from lightgbm import LGBMClassifier
+
+        try:
+            model = _create_model_instance(
+                "LightGBM_Monotone", "lightgbm", {}, "binary_classification"
+            )
+            assert model is not None, "LightGBM_Monotone should NOT skip benchmark"
+            assert isinstance(model, LGBMClassifier)
+        except ImportError:
+            pytest.skip("LightGBM not installed")
+
+    def test_xgboost_monotone_routes_to_xgboost_class(self):
+        """XGBoost_Monotone routes through the existing XGBoost branch."""
+        try:
+            from xgboost import XGBClassifier
+
+            model = _create_model_instance(
+                "XGBoost_Monotone", "xgboost", {}, "binary_classification"
+            )
+            assert model is not None, "XGBoost_Monotone should NOT skip benchmark"
+            assert isinstance(model, XGBClassifier)
+        except ImportError:
+            pytest.skip("XGBoost not installed")
+
     def test_respects_hyperparameters(self):
         """Should apply hyperparameters."""
         hyperparams = {"n_estimators": 50, "max_depth": 3}
