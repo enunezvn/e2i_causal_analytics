@@ -168,7 +168,9 @@ def test_clean_regime_with_adaptive_flag_on_v3() -> None:
     assert sc["minimum_mcc"] == pytest.approx(0.45, abs=1e-6)
     assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
     assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
-    assert sc["maximum_calibration_error"] == pytest.approx(0.10, abs=0.01)
+    # ECE threshold is N-dependent: 0.05 at N=1500 (runner-hardcoded),
+    # not the 0.10 from the v3 worked-example table at N=900.
+    assert sc["maximum_calibration_error"] == pytest.approx(0.05, abs=0.01)
     assert sc["maximum_train_val_delta"] == pytest.approx(0.03, abs=1e-6)
     # v3: precision and F1 are DROPPED entirely.
     assert "minimum_precision" not in sc
@@ -251,8 +253,8 @@ def test_adverse_regime_with_adaptive_flag_on_v3() -> None:
     assert "minimum_f1" not in sc
     # Lift skipped at n_pos=18 (2*SE ≈ 0.236 > 0.10).
     assert "minimum_lift_over_baseline" not in sc
-    # ECE always fires.
-    assert sc["maximum_calibration_error"] == pytest.approx(0.10, abs=0.01)
+    # ECE always fires; threshold 0.05 at N=1500 (runner-hardcoded).
+    assert sc["maximum_calibration_error"] == pytest.approx(0.05, abs=0.01)
 
     # Pipeline did not halt — skipped names recorded as met=None.
     res = out["success_criteria_results"]
