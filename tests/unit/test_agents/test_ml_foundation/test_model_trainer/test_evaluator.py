@@ -1091,3 +1091,51 @@ def test_check_success_criteria_with_adaptive_overlay_end_to_end() -> None:
     assert result["success_criteria_results"]["minimum_lift_over_baseline"] is True
     # Aggregate False because recall fails.
     assert result["success_criteria_met"] is False
+
+
+@pytest.mark.asyncio
+class TestPostHocCalibrationGate:
+    """Phase 1 W2 day-2: gate the post-hoc isotonic calibration block on
+    `model_candidate.skip_post_hoc_calibration`. Calibration-native algorithms
+    (NGBoost, MAPIE) ship pre-calibrated predict_proba; layering isotonic on
+    top tends to over-fit small validation sets and degrade test calibration
+    (Duan et al. 2020 §4). Ref: shard 19 §A.7.
+    """
+
+    async def test_isotonic_runs_when_no_model_candidate_legacy_default(
+        self, real_classifier_state
+    ):
+        """Backward compat: state without model_candidate gets isotonic (legacy behavior)."""
+        result = await evaluate_model(real_classifier_state)
+        assert "post_hoc_calibration" in result
+        cal = result["post_hoc_calibration"]
+        # Isotonic ran (calibration_applied=True with X_val + y_val present)
+        assert cal.get("calibration_applied") is True
+        assert cal.get("skip_reason") != "skip_post_hoc_calibration_flag"
+
+    async def test_isotonic_runs_when_flag_explicitly_false(self, real_classifier_state):
+        """Explicit False keeps isotonic on (same as legacy)."""
+        real_classifier_state["model_candidate"] = {
+            "algorithm_name": "LightGBM",
+            "skip_post_hoc_calibration": False,
+        }
+        result = await evaluate_model(real_classifier_state)
+        assert "post_hoc_calibration" in result
+        cal = result["post_hoc_calibration"]
+        assert cal.get("calibration_applied") is True
+        assert cal.get("skip_reason") != "skip_post_hoc_calibration_flag"
+
+    async def test_isotonic_skipped_when_flag_true(self, real_classifier_state):
+        """Calibration-native: skip flag prevents isotonic; metadata records skip reason."""
+        real_classifier_state["model_candidate"] = {
+            "algorithm_name": "NGBoost",
+            "skip_post_hoc_calibration": True,
+        }
+        result = await evaluate_model(real_classifier_state)
+        assert "post_hoc_calibration" in result
+        cal = result["post_hoc_calibration"]
+        assert cal.get("calibration_applied") is False
+        assert cal.get("skip_reason") == "skip_post_hoc_calibration_flag"
+        # No calibrated_test_metrics added because no calibrated model created.
+        assert "calibrated_test_metrics" not in result
+        assert "calibrated_ece" not in result

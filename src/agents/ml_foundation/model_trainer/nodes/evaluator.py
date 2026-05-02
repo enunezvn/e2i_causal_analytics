@@ -301,8 +301,25 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     f"±{cv_result.get('cv_pr_auc_std', 0):.4f}"
                 )
 
-        # 6. Post-hoc calibration (isotonic) — better probability estimates
-        if X_val_np is not None and y_val_np is not None:
+        # 6. Post-hoc calibration (isotonic) — better probability estimates.
+        # Phase 1 W2 day-2 (shard 19 §A.7): calibration-native algorithms
+        # (NGBoost, MAPIE-conformal) ship pre-calibrated predict_proba; layering
+        # isotonic on top tends to over-fit small validation sets and degrade
+        # test calibration (Duan et al. 2020 §4). Gate the block on the
+        # `skip_post_hoc_calibration` flag propagated from the model_selector
+        # registry entry. Default False preserves legacy behavior.
+        model_candidate_meta = state.get("model_candidate") or {}
+        skip_isotonic = bool(model_candidate_meta.get("skip_post_hoc_calibration", False))
+        if skip_isotonic:
+            metrics_result["post_hoc_calibration"] = {
+                "calibration_applied": False,
+                "skip_reason": "skip_post_hoc_calibration_flag",
+            }
+            logger.info(
+                "Skipping post-hoc isotonic calibration "
+                "(skip_post_hoc_calibration=True from model_candidate)"
+            )
+        elif X_val_np is not None and y_val_np is not None:
             calibrated_model, cal_info = apply_post_hoc_calibration(
                 trained_model, X_val_np, y_val_np, method="isotonic"
             )
