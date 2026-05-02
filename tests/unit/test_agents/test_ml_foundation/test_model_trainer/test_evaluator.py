@@ -1138,4 +1138,35 @@ class TestPostHocCalibrationGate:
         assert cal.get("skip_reason") == "skip_post_hoc_calibration_flag"
         # No calibrated_test_metrics added because no calibrated model created.
         assert "calibrated_test_metrics" not in result
-        assert "calibrated_ece" not in result
+
+    async def test_skip_path_copies_native_ece_into_calibrated_ece_alias(
+        self, real_classifier_state
+    ):
+        """Cycle-8 codex IMPORTANT finding fix.
+
+        When `skip_post_hoc_calibration=True`, the alias resolution
+        `maximum_calibration_error → calibrated_ece` (evaluator line 1759)
+        would otherwise return None (no isotonic ECE was computed) and
+        hard-fail the criterion at line 1818, even though the native
+        calibration-native ECE IS available at
+        `metrics_result["calibration_error"]` (line 265). The skip path
+        copies the native uncalibrated ECE into both `metrics_result` and
+        `test_metrics["calibrated_ece"]` so the alias resolves to the
+        native value (lower-is-better; NGBoost's calibration-native ECE
+        IS the best-available calibration estimate without isotonic).
+        """
+        real_classifier_state["model_candidate"] = {
+            "algorithm_name": "NGBoost",
+            "skip_post_hoc_calibration": True,
+        }
+        result = await evaluate_model(real_classifier_state)
+        # Native uncal ECE is computed at line 265 regardless of the gate.
+        native_ece = result.get("calibration_error")
+        assert native_ece is not None, (
+            "calibration_error should be present at metrics_result level even when "
+            "isotonic is skipped (computed at evaluator.py line 265)"
+        )
+        # Skip path must copy native ECE into calibrated_ece alias on both layers.
+        assert result.get("calibrated_ece") == native_ece
+        test_metrics = result.get("test_metrics", {})
+        assert test_metrics.get("calibrated_ece") == native_ece

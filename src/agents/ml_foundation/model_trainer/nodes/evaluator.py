@@ -315,9 +315,26 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 "calibration_applied": False,
                 "skip_reason": "skip_post_hoc_calibration_flag",
             }
+            # Cycle-8 codex IMPORTANT finding fix: the alias resolution
+            # `maximum_calibration_error → calibrated_ece` (line 1759) would
+            # otherwise return None and hard-fail the criterion at line 1818,
+            # even though calibration-native algorithms produce a valid ECE
+            # at metrics_result["calibration_error"] (line 265). Copy the
+            # native ECE into both the outer metrics_result and the inner
+            # test_metrics overlay so the alias resolves to the
+            # calibration-native value (which IS the best-available estimate
+            # for an algorithm that needs no isotonic).
+            native_ece = metrics_result.get("calibration_error")
+            metrics_result["calibrated_ece"] = native_ece
+            inner_test_metrics = metrics_result.get("test_metrics")
+            if isinstance(inner_test_metrics, dict):
+                inner_test_metrics["calibrated_ece"] = (
+                    native_ece if native_ece is not None else float("nan")
+                )
             logger.info(
                 "Skipping post-hoc isotonic calibration "
-                "(skip_post_hoc_calibration=True from model_candidate)"
+                "(skip_post_hoc_calibration=True from model_candidate); "
+                "using native calibration_error as calibrated_ece alias"
             )
         elif X_val_np is not None and y_val_np is not None:
             calibrated_model, cal_info = apply_post_hoc_calibration(
