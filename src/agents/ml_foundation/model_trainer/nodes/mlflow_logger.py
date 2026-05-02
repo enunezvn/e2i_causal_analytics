@@ -503,6 +503,19 @@ def _get_mlflow_flavor(algorithm_name: str, framework: str) -> str:
         return "xgboost"
     elif algorithm_name == "LightGBM" or framework == "lightgbm":
         return "lightgbm"
+    # Phase 1 W2 day-5 follow-up (cycle-11 codex IMPORTANT): explicit
+    # branches for the W2 algorithms so the flavor choice is intentional,
+    # not a silent fallthrough. NGBoost and MAPIE conformal wrappers have
+    # no native MLflow flavor — they serialize via cloudpickle through
+    # the sklearn flavor (works because the wrappers expose
+    # sklearn-compatible fit/predict/predict_proba). Future work: switch
+    # to mlflow.pyfunc with a PythonModel adapter when full registry
+    # deployment lands (W3-lite or later when k=10 runs surface 10× MLflow
+    # artifacts per algorithm).
+    elif framework == "ngboost":
+        return "sklearn"  # cloudpickle: NGBoost wrapper, sklearn-compatible
+    elif framework.startswith("mapie+"):
+        return "sklearn"  # cloudpickle: MapieConformalBinaryClassifier wrapper
     else:
         return "sklearn"
 

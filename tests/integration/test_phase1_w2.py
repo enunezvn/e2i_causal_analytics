@@ -164,6 +164,10 @@ async def test_w2_smoke_ngboost_conformal_end_to_end():
     )
     # Conformal also marks skip_post_hoc_calibration:
     assert eval_result["post_hoc_calibration"]["calibration_applied"] is False
+    # Cycle-11 codex IMPORTANT fix: assert metrics-emitted half of the
+    # acceptance criterion (was missing in the original day-5 commit).
+    assert "test_metrics" in eval_result
+    assert "accuracy" in eval_result.get("test_metrics", {})
 
 
 @pytest.mark.integration
