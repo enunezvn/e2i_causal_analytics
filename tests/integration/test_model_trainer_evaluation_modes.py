@@ -311,9 +311,12 @@ def test_no_unallowlisted_random_state_42_in_model_trainer() -> None:
 
     helper_module = model_trainer_dir / "random_state.py"
 
-    # Match `random_state=42` only when followed by `,`, `)`, or whitespace+end —
-    # i.e., a real Python kwarg site, not a prose reference.
-    code_pattern = re.compile(r"random_state\s*=\s*42\s*[,)\s]")
+    # Match `random_state=42` only when followed by `,`, `)`, whitespace, or
+    # end-of-line — i.e., a real Python kwarg site, not a prose reference.
+    # The end-of-line alternate (cycle-15 I-6 fix per codex) closes the
+    # false-negative gap for multi-line kwarg patterns where `random_state=42`
+    # is the last token before `\n` followed by `)` on the next line.
+    code_pattern = re.compile(r"random_state\s*=\s*42\s*[,)\s]|random_state\s*=\s*42$")
     allow_pattern = re.compile(r"#\s*noqa:\s*random_state=42")
 
     offenders: list[str] = []

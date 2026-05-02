@@ -271,6 +271,59 @@ class TestSeedDerivationCanonicalForm:
         ]
         assert len(set(seeds)) == 10, f"seed_base=0 produced colliding fold seeds: {seeds}"
 
+    def test_inner_seed_canonical_form(self) -> None:
+        """Cycle-15 I-1 (codex): _derive_inner_seed uses canonical SeedSequence idiom.
+
+        Replaces the original ad-hoc ``(fold_seed + 1) % 2**32`` arithmetic offset
+        with a second SeedSequence call ``SeedSequence((fold_idx + 1000, seed_base))``
+        — compositionally symmetric with the outer Q-W3-4 form.
+        """
+        from src.agents.ml_foundation.model_trainer.splitting import (
+            RepeatedStratifiedSplitter,
+        )
+
+        for fold_idx in range(10):
+            expected = int(
+                np.random.SeedSequence((fold_idx + 1000, 42)).generate_state(1)[0]
+            )
+            assert RepeatedStratifiedSplitter._derive_inner_seed(42, fold_idx) == expected
+
+    def test_inner_seed_distinct_from_outer_seed(self) -> None:
+        """Cycle-15 I-1 (codex): inner_seed must differ from outer_seed for every fold.
+
+        The inner stratified split (val-vs-train materialization) needs its own
+        deterministic seed distinct from the outer (test-vs-rest) seed so the val
+        draw within a fold cannot spuriously correlate with the outer test draw.
+        """
+        from src.agents.ml_foundation.model_trainer.splitting import (
+            RepeatedStratifiedSplitter,
+        )
+
+        for seed_base in (0, 42, 43, 12345, 2**31 - 1):
+            outer = [
+                RepeatedStratifiedSplitter._derive_seed(seed_base, i) for i in range(10)
+            ]
+            inner = [
+                RepeatedStratifiedSplitter._derive_inner_seed(seed_base, i) for i in range(10)
+            ]
+            assert set(outer).isdisjoint(set(inner)), (
+                f"outer/inner seed collision at seed_base={seed_base}: "
+                f"outer={outer}, inner={inner}"
+            )
+
+    def test_inner_seed_unique_across_folds(self) -> None:
+        """Inner seeds must also be distinct across folds (mirrors outer guarantee)."""
+        from src.agents.ml_foundation.model_trainer.splitting import (
+            RepeatedStratifiedSplitter,
+        )
+
+        inner_seeds = [
+            RepeatedStratifiedSplitter._derive_inner_seed(42, i) for i in range(10)
+        ]
+        assert len(set(inner_seeds)) == 10, (
+            f"inner seeds collided across folds: {inner_seeds}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Configurability + invariants

@@ -815,13 +815,17 @@ class ModelTrainerAgent:
         contract is single-mode-only.
 
         Side-effects:
-          - Sets ``evaluation_mode = "single"`` on the per-fold input so the
-            recursive ``self.run`` invocation falls through to the legacy path
-            (no infinite recursion).
+          - Preserves ``evaluation_mode = "repeated_k10"`` on the per-fold input
+            so downstream nodes (split_enforcer, evaluator, mlflow_logger) apply
+            repeated-mode logic. Recursion-termination is the
+            ``_repeated_mode_fold_invocation = True`` sentinel — it is what
+            prevents the recursive ``self.run`` invocation from re-entering
+            ``_run_repeated_splits``, NOT a switch to ``evaluation_mode="single"``.
           - Sets ``fold_random_state = spec.seed`` on the per-fold input so
             ``resolve_fold_random_state`` (Day-3) returns the fold's seed in
             ``split_loader`` / ``hyperparameter_tuner`` / ``model_trainer_node``.
-          - Strips ``full_data`` from the per-fold input (no longer needed).
+          - Strips ``full_data`` from the per-fold input (no longer needed
+            after the splitter materialized indices).
         """
         # Slice WITHOUT reset_index — the splitter's positional indices into the
         # full dataset are already pairwise-disjoint (test_splitter_index_disjointness

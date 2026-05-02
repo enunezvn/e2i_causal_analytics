@@ -116,6 +116,33 @@ class RepeatedStratifiedSplitter:
         """
         return int(np.random.SeedSequence((fold_idx, seed_base)).generate_state(1)[0])
 
+    @staticmethod
+    def _derive_inner_seed(seed_base: int, fold_idx: int) -> int:
+        """Second-level (val/train) seed for the per-fold inner stratified split.
+
+        The inner split materializes the 15% validation partition out of the
+        70%+15% "train+val rest" block (since ``StratifiedShuffleSplit`` only
+        emits 2-way splits). It needs its own deterministic seed distinct
+        from the outer seed so that the val-vs-train draw within a fold
+        cannot spuriously correlate with the outer test-vs-rest draw.
+
+        Cycle-15 codex review (I-1) flagged the original arithmetic offset
+        ``(fold_seed + 1) % 2**32`` as ad-hoc and unspecified in shard 21.
+        Canonical fix: derive the inner seed via a second ``SeedSequence`` call
+        with a disjoint entropy tuple ``(fold_idx + 1000, seed_base)``. Both
+        the outer and inner derivations now use the same numpy SeedSequence
+        idiom (compositionally symmetric with the outer Q-W3-4 form), and the
+        ``+ 1000`` offset moves the inner seed into a different region of the
+        SeedSequence entropy tree, guaranteeing inner ≠ outer for any
+        (seed_base, fold_idx) pair within k < 1000.
+
+        Locked by ``test_inner_seed_distinct_from_outer_seed`` and
+        ``test_inner_seed_canonical_form`` in ``test_repeated_splitter.py``.
+        """
+        return int(
+            np.random.SeedSequence((fold_idx + 1000, seed_base)).generate_state(1)[0]
+        )
+
     def split(
         self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray
     ) -> Iterator[FoldSpec]:
@@ -160,9 +187,10 @@ class RepeatedStratifiedSplitter:
             ((rest_idx, test_idx),) = outer.split(all_indices, y_arr)
 
             # Inner split on the "rest" block: relative val fraction over (train + val).
-            # Use a deterministic offset of fold_seed so the inner draw is reproducible
-            # AND distinct from the outer draw (avoids any spurious correlation).
-            inner_seed = (fold_seed + 1) % (2**32)
+            # Use a SECOND SeedSequence derivation (canonical form, cycle-15 I-1 fix —
+            # see _derive_inner_seed docstring) so the inner draw is reproducible AND
+            # disjoint from the outer draw via the entropy tree.
+            inner_seed = self._derive_inner_seed(self.seed_base, fold_idx)
             inner = StratifiedShuffleSplit(
                 n_splits=1,
                 test_size=relative_val_frac,
