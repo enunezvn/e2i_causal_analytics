@@ -214,6 +214,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 minority_ratio=minority_ratio,
                 cost_matrix=cost_matrix,
                 bootstrap_random_state=bootstrap_random_state,
+                success_criteria=success_criteria,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -877,6 +878,8 @@ def _resolve_tau_grid_for_metrics(
 
       1. ``clinical_threshold_range.evaluation_grid`` (caller-supplied) wins outright.
       2. ``dataset_disease`` in ``_DISEASE_SPECIFIC_DEFAULTS`` → disease-specific bounds.
+         The disease label may live at the top level of ``success_criteria``
+         OR nested under ``clinical_threshold_range`` — both keys are checked.
       3. ``clinical_threshold_range.use_case == "custom"`` → explicit ``tau_low`` / ``tau_high``.
       4. ``clinical_threshold_range.use_case`` in ``_USE_CASE_DEFAULTS`` → use-case defaults.
       5. No schema or unknown use_case → ``legacy_grid``.
@@ -1053,6 +1056,7 @@ def _compute_classification_metrics(
     minority_ratio: float = 0.5,
     cost_matrix: Optional[Dict[str, float]] = None,
     bootstrap_random_state: Optional[int] = None,
+    success_criteria: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
@@ -1287,6 +1291,82 @@ def _compute_classification_metrics(
             f"p_t={p_t:.2f}": _compute_net_benefit_at_p_t(np.asarray(y_test), y_test_proba_pos, p_t)
             for p_t in _V3_NB_GRID_P_T_VALUES
         }
+
+        # W1 day-2 — NB-area + DCA + anchor-point emissions per shard 20
+        # §A.4 / §B / §A.5.3. Gated by ``clinical_threshold_range``
+        # presence (NOT truthiness) in ``success_criteria``: when the
+        # key is absent, only the legacy ``net_benefit_grid`` above is
+        # emitted (single-mode parity per shard 20 §G acceptance #7).
+        # An empty dict still triggers the gate — caller signalled they
+        # want the metrics suite but the resolver will fall back to
+        # ``_V3_NB_GRID_P_T_VALUES`` and emit the COSMETIC-2 INFO.
+        ctr_present = bool(
+            success_criteria is not None
+            and "clinical_threshold_range" in success_criteria
+        )
+        if ctr_present:
+            tau_grid_resolved = _resolve_tau_grid_for_metrics(
+                success_criteria,
+                legacy_grid=_V3_NB_GRID_P_T_VALUES,
+            )
+            if tau_grid_resolved is not None and len(tau_grid_resolved) >= 2:
+                # Cycle-20 IMPORTANT-1 (Q1.B): treat-all NB blows up as
+                # τ → 1 (denominator (1−τ) → 0). At τ_high ≥ 0.80 the
+                # treat-all integrand exceeds −15·(1−prev), letting any
+                # model dominate it on volume alone. WARN so callers can
+                # validate intentionality. Cycle-21 C-1: include 0.80
+                # itself in the WARNING band — 1·(1−prev)·(0.80/0.20) = 4
+                # already amplifies treat-all tail noise.
+                if tau_grid_resolved[-1] >= 0.80:
+                    logger.warning(
+                        "clinical_threshold_range emits tau_high=%.4f > 0.80 — "
+                        "treat-all NB diverges near τ→1; net_benefit_area_relative_to_treat_all "
+                        "is dominated by the integration tail rather than model quality. "
+                        "Verify use_case=custom upper bound is intentional.",
+                        tau_grid_resolved[-1],
+                    )
+                # Cycle-20 COSMETIC-2: a K=6 legacy grid yields a
+                # ~1e-2 trapezoidal residual per shard 20 §E.3 — well
+                # above the bootstrap noise floor. Emit a one-time INFO
+                # so downstream consumers know to interpret NB-area on
+                # legacy fallback as approximate.
+                if (
+                    len(tau_grid_resolved) == len(_V3_NB_GRID_P_T_VALUES)
+                    and all(
+                        math.isclose(a, b)
+                        for a, b in zip(
+                            tau_grid_resolved, _V3_NB_GRID_P_T_VALUES, strict=True
+                        )
+                    )
+                ):
+                    logger.info(
+                        "NB-area computed on K=6 legacy grid; trapezoidal "
+                        "residual ~1e-2 per shard 20 §E.3. Treat values "
+                        "as approximate — supply clinical_threshold_range "
+                        "with a denser grid for higher precision."
+                    )
+                nb_area_block = _compute_net_benefit_area(
+                    np.asarray(y_test),
+                    y_test_proba_pos,
+                    tau_grid_resolved,
+                )
+                test_metrics_any.update(nb_area_block)
+                test_metrics_any["decision_curve_data"] = _compute_dca_curves(
+                    np.asarray(y_test),
+                    y_test_proba_pos,
+                    tau_grid_resolved,
+                )
+                # Anchor-point + secondary-gate trigger (Q-W5-2 RESOLVED).
+                primary_tau_resolved = _resolve_primary_tau(success_criteria)
+                anchor_block = _compute_anchor_point_metrics(
+                    np.asarray(y_test),
+                    y_test_proba_pos,
+                    primary_tau=primary_tau_resolved,
+                    nb_area_relative=nb_area_block[
+                        "net_benefit_area_relative_to_treat_all"
+                    ],
+                )
+                test_metrics_any.update(anchor_block)
 
     # Extract primary metrics for state
     auc_roc = test_metrics.get("roc_auc")

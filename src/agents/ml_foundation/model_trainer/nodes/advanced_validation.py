@@ -235,12 +235,73 @@ def compute_calibration_analysis(
             }
         )
 
-    return {
+    result: Dict[str, Any] = {
         "calibration_ece": float(ece),
         "calibration_curve_true": fraction_of_positives.tolist(),
         "calibration_curve_pred": mean_predicted_value.tolist(),
         "calibration_bins": bin_details,
         "n_bins": n_bins,
+    }
+    # Brier decomposition (Murphy 1973 / Bröcker 2009) — shard 20 §C.3.
+    # Defensively recompute the Brier score over the test sample so the
+    # identity check is local to this function (the upstream
+    # ``brier_score`` field comes from sklearn on the same arrays).
+    brier_score_for_decomp = float(np.mean((y_proba_pos - y_true) ** 2))
+    result.update(
+        _compute_brier_decomposition(y_true, bin_details, brier_score_for_decomp)
+    )
+    return result
+
+
+def _compute_brier_decomposition(
+    y_true: np.ndarray,
+    bin_details: List[Dict[str, float]],
+    brier_score: float,
+) -> Dict[str, float]:
+    """Murphy 1973 / Bröcker 2009 Brier decomposition (shard 20 §C.3).
+
+    Reuses the per-bin (n, accuracy=o_k, confidence=f_k) tuples already
+    computed by the ECE loop. Returns a dict with reliability, resolution,
+    uncertainty, and a ``recombined`` value that should match
+    ``brier_score`` within ~1e-6 for K ≥ 10 bins on tier0-scale data
+    (sanity-check of the decomposition identity).
+
+    Sign convention: Bröcker 2009 writes ``Brier = reliability − resolution
+    + uncertainty`` (resolution enters with a minus sign because higher
+    resolution reduces Brier). DeGroot 1983 writes the same identity
+    differently — we keep Bröcker's printed-resolution sign.
+
+    When ``bin_details`` is empty (e.g., calibration_curve raised) or the
+    summed sample count is zero, returns NaN-valued fields so callers can
+    detect the degenerate case.
+    """
+    nan_block: Dict[str, float] = {
+        "brier_reliability": float("nan"),
+        "brier_resolution": float("nan"),
+        "brier_uncertainty": float("nan"),
+        "brier_recombined": float("nan"),
+        "brier_decomposition_residual": float("nan"),
+    }
+    if not bin_details:
+        return nan_block
+    n_total = float(sum(b["n_samples"] for b in bin_details))
+    if n_total <= 0:
+        return nan_block
+    p_bar = float(np.mean(y_true == 1))
+    reliability = sum(
+        b["n_samples"] * (b["confidence"] - b["accuracy"]) ** 2 for b in bin_details
+    ) / n_total
+    resolution = sum(
+        b["n_samples"] * (b["accuracy"] - p_bar) ** 2 for b in bin_details
+    ) / n_total
+    uncertainty = p_bar * (1.0 - p_bar)
+    recombined = reliability - resolution + uncertainty
+    return {
+        "brier_reliability": float(reliability),
+        "brier_resolution": float(resolution),
+        "brier_uncertainty": float(uncertainty),
+        "brier_recombined": float(recombined),
+        "brier_decomposition_residual": float(abs(recombined - brier_score)),
     }
 
 
