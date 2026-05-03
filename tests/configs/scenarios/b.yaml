@@ -1,0 +1,36 @@
+# Scenario B — Fabhalta / IgA nephropathy 5y ESKD progression
+# See .claude/plans/synthetic_data_generator_v2/06-yaml-configs.md §D.
+schema_version: "synthetic_v2.scenario.v1"
+name: "scenario_b_screening_igan_eskd_5y"
+short_code: "B"
+franchise: "Fabhalta (iptacopan) — pipeline-priority nephrology brand"
+disease: "IgA nephropathy (5-year ESKD/50%-eGFR-decline progression)"
+outcome_field: "igan_eskd_5y"
+
+synthetic_config:
+  n_total: 6000
+  prevalence: 0.05
+  signal_strength: "low"
+  feature_count: 25
+  feature_correlation: "low"
+
+clinical_threshold_range:
+  use_case: "screening"
+  primary_tau: 0.075
+  tau_low: 0.01
+  tau_high: 0.10
+
+target_auc_band:
+  low: 0.72
+  high: 0.78
+
+reporting:
+  expected_winners:
+    - "NGBoost (long-tail probability mass at low prevalence)"
+    - "Logistic regression (well-calibrated baseline)"
+  primary_decision_context: "Early Factor B inhibition (iptacopan) candidate identification vs supportive care + RAAS blockade"
+  citation_anchors:
+    - "Barbour SJ et al. Evaluating a New International IgA Nephropathy Risk Prediction Tool (IIRPT). JASN 2019."
+    - "KDIGO 2021 Clinical Practice Guideline for the Management of Glomerular Diseases."
+    - "Pesce F et al. External validation of IIRPT in European cohorts. Nephrol Dial Transplant 2023."
+    - "Wheeler DC et al. DAPA-CKD subgroup analysis covering IgA nephropathy. Lancet Diabetes Endocrinol 2021."
