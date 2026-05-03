@@ -151,10 +151,7 @@ def test_emission_info_when_legacy_grid_used(
     sc = {"clinical_threshold_range": {}}
     with caplog.at_level(logging.INFO):
         _compute_classification_metrics(**kwargs, success_criteria=sc)
-    assert any(
-        "K=6 legacy grid" in rec.getMessage()
-        for rec in caplog.records
-    )
+    assert any("K=6 legacy grid" in rec.getMessage() for rec in caplog.records)
     # Verify the grid that was used matches legacy (length 6).
     # (Inferred via the response: tau_low/tau_high pin the legacy bounds.)
 

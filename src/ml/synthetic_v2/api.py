@@ -194,10 +194,13 @@ def generate_scenario(
     X_for_labels = (X_corr - full_mean) / full_std_safe
 
     # 4. Compute logits (with slope multiplier) and solve intercept
-    coefs = np.array(
-        [m.coefficient for m in builder.feature_manifest],
-        dtype=np.float64,
-    ) * builder.slope_multiplier
+    coefs = (
+        np.array(
+            [m.coefficient for m in builder.feature_manifest],
+            dtype=np.float64,
+        )
+        * builder.slope_multiplier
+    )
     intercept = solve_intercept(X_for_labels, coefs, builder.target_prevalence)
 
     # 5. Sample labels via inverse-CDF on the calibrated sigmoid
@@ -205,23 +208,19 @@ def generate_scenario(
     y = (rng.uniform(size=resolved_n_total) < p).astype(np.int64)
 
     # 6. Stratified train/val/test split on the standardized cohort
-    X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = (
-        stratified_train_val_test_split(
-            X_for_labels,
-            y,
-            train_ratio=train_ratio,
-            val_ratio=val_ratio,
-            test_ratio=test_ratio,
-            seed=seed,
-        )
+    X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = stratified_train_val_test_split(
+        X_for_labels,
+        y,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+        test_ratio=test_ratio,
+        seed=seed,
     )
 
     # 7. Train-only z-score correction (small adjustment since the data is
     # already standardized at full-cohort level; preserves the ML-pipeline
     # train-only-stats contract per shard 02 §A.3)
-    X_train, X_val, X_test, _, _ = standardize_train_val_test(
-        X_train_raw, X_val_raw, X_test_raw
-    )
+    X_train, X_val, X_test, _, _ = standardize_train_val_test(X_train_raw, X_val_raw, X_test_raw)
 
     # 8. Stratify key — full-cohort, pre-split ordering (shard 21 §B contract)
     stratify = y.copy()

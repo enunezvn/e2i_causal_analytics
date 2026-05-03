@@ -53,6 +53,7 @@ class TestLoadRwdCsuCohort:
             _load_from_excel,
             _load_from_json_outputs,
         )
+
         with pytest.raises(NotImplementedError):
             _load_from_json_outputs(tmp_path, outcome_window_weeks=12, tolerance_weeks=4)
         with pytest.raises(NotImplementedError):
@@ -135,9 +136,7 @@ class TestKSAndFailRate:
         """Pass path: synthetic and RWD should mostly agree (low fail rate)."""
         rwd = load_rwd_csu_cohort("data/does/not/exist", allow_synthesized_fixture=True)
         # Build synthetic_X dict from generate_scenario, indexed by feature name
-        ds = generate_scenario(
-            ScenarioName.C_TREATMENT_CSU_RESPONSE, seed=42, n_total=2000
-        )
+        ds = generate_scenario(ScenarioName.C_TREATMENT_CSU_RESPONSE, seed=42, n_total=2000)
         # ds.X_train is post-standardization; for KS we need raw distributions.
         # Use the manifest's distributions directly, sampling at scale.
         synthetic_X = {}
@@ -150,9 +149,9 @@ class TestKSAndFailRate:
                     size=2000,
                 )
             elif m.distribution == "bernoulli":
-                synthetic_X[m.name] = rng.binomial(
-                    1, m.distribution_params["p"], size=2000
-                ).astype(float)
+                synthetic_X[m.name] = rng.binomial(1, m.distribution_params["p"], size=2000).astype(
+                    float
+                )
 
         ks = compute_feature_distribution_ks(synthetic_X, rwd, p_value_threshold=0.001)
         assert ks  # non-empty

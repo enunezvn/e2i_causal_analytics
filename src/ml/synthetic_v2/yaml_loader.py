@@ -208,8 +208,7 @@ def load_scenario_from_yaml(path: str | Path) -> ScenarioSpec:
     _validate_required(band_raw, ["low", "high"], f"{path}.target_auc_band")
     if band_raw["low"] >= band_raw["high"]:
         raise ValueError(
-            f"{path}.target_auc_band: low ({band_raw['low']}) must be "
-            f"< high ({band_raw['high']})"
+            f"{path}.target_auc_band: low ({band_raw['low']}) must be < high ({band_raw['high']})"
         )
     auc_band = AUCBandSpec(low=float(band_raw["low"]), high=float(band_raw["high"]))
 
@@ -227,7 +226,13 @@ def load_scenario_from_yaml(path: str | Path) -> ScenarioSpec:
         rwd_raw = raw["rwd_concurrent_validation"]
         _validate_required(
             rwd_raw,
-            ["enabled", "rwd_loader", "rwd_data_path", "validation_metrics", "acceptance_thresholds"],
+            [
+                "enabled",
+                "rwd_loader",
+                "rwd_data_path",
+                "validation_metrics",
+                "acceptance_thresholds",
+            ],
             f"{path}.rwd_concurrent_validation",
         )
         rwd = RWDConcurrentValidationSpec(

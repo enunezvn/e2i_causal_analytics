@@ -35,27 +35,29 @@ import pytest
 # defaults / choices / nargs / type / action class so silent semantic drift
 # (e.g., default value flipping, choices narrowing) is caught — not just
 # the addition / removal of option strings.
-EXPECTED_TIER0_CLI_ARGS: FrozenSet[str] = frozenset({
-    "-h",
-    "--help",
-    "--step",
-    "--disable-mlflow",
-    "--enable-opik",
-    "--hpo-trials",
-    "--min-samples-per-split",
-    "--dry-run",
-    "--imbalanced",
-    "--no-bentoml",
-    "--output-dir",
-    "--no-save",
-    "--data-dir",
-    "--brand",
-    "--target",
-    "--indication",
-    "--regime",
-    "--split",
-    "--no-demo-cost-matrix",
-})
+EXPECTED_TIER0_CLI_ARGS: FrozenSet[str] = frozenset(
+    {
+        "-h",
+        "--help",
+        "--step",
+        "--disable-mlflow",
+        "--enable-opik",
+        "--hpo-trials",
+        "--min-samples-per-split",
+        "--dry-run",
+        "--imbalanced",
+        "--no-bentoml",
+        "--output-dir",
+        "--no-save",
+        "--data-dir",
+        "--brand",
+        "--target",
+        "--indication",
+        "--regime",
+        "--split",
+        "--no-demo-cost-matrix",
+    }
+)
 
 
 # Action-descriptor snapshot per flag: (default, choices, nargs, type_name,
@@ -64,74 +66,123 @@ EXPECTED_TIER0_CLI_ARGS: FrozenSet[str] = frozenset({
 # Python versions; the string name is the stable comparator.
 EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
     "--step": {
-        "default": None, "choices": list(range(1, 9)), "nargs": None,
-        "type_name": "int", "action": "_StoreAction",
+        "default": None,
+        "choices": list(range(1, 9)),
+        "nargs": None,
+        "type_name": "int",
+        "action": "_StoreAction",
     },
     "--disable-mlflow": {
-        "default": False, "choices": None, "nargs": 0,
-        "type_name": "_no_type", "action": "_StoreTrueAction",
+        "default": False,
+        "choices": None,
+        "nargs": 0,
+        "type_name": "_no_type",
+        "action": "_StoreTrueAction",
     },
     "--enable-opik": {
-        "default": False, "choices": None, "nargs": 0,
-        "type_name": "_no_type", "action": "_StoreTrueAction",
+        "default": False,
+        "choices": None,
+        "nargs": 0,
+        "type_name": "_no_type",
+        "action": "_StoreTrueAction",
     },
     "--hpo-trials": {
-        "default": 10, "choices": None, "nargs": None,
-        "type_name": "int", "action": "_StoreAction",
+        "default": 10,
+        "choices": None,
+        "nargs": None,
+        "type_name": "int",
+        "action": "_StoreAction",
     },
     "--min-samples-per-split": {
-        "default": 10, "choices": None, "nargs": None,
-        "type_name": "int", "action": "_StoreAction",
+        "default": 10,
+        "choices": None,
+        "nargs": None,
+        "type_name": "int",
+        "action": "_StoreAction",
     },
     "--dry-run": {
-        "default": False, "choices": None, "nargs": 0,
-        "type_name": "_no_type", "action": "_StoreTrueAction",
+        "default": False,
+        "choices": None,
+        "nargs": 0,
+        "type_name": "_no_type",
+        "action": "_StoreTrueAction",
     },
     "--imbalanced": {
-        "default": None, "choices": None, "nargs": None,
-        "type_name": "float", "action": "_StoreAction",
+        "default": None,
+        "choices": None,
+        "nargs": None,
+        "type_name": "float",
+        "action": "_StoreAction",
     },
     "--no-bentoml": {
-        "default": False, "choices": None, "nargs": 0,
-        "type_name": "_no_type", "action": "_StoreTrueAction",
+        "default": False,
+        "choices": None,
+        "nargs": 0,
+        "type_name": "_no_type",
+        "action": "_StoreTrueAction",
     },
     "--output-dir": {
-        "default": "docs/results", "choices": None, "nargs": None,
-        "type_name": "str", "action": "_StoreAction",
+        "default": "docs/results",
+        "choices": None,
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
     },
     "--no-save": {
-        "default": False, "choices": None, "nargs": 0,
-        "type_name": "_no_type", "action": "_StoreTrueAction",
+        "default": False,
+        "choices": None,
+        "nargs": 0,
+        "type_name": "_no_type",
+        "action": "_StoreTrueAction",
     },
     "--data-dir": {
-        "default": None, "choices": None, "nargs": None,
-        "type_name": "str", "action": "_StoreAction",
+        "default": None,
+        "choices": None,
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
     },
     "--brand": {
-        "default": None, "choices": None, "nargs": None,
-        "type_name": "str", "action": "_StoreAction",
+        "default": None,
+        "choices": None,
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
     },
     "--target": {
-        "default": None, "choices": None, "nargs": None,
-        "type_name": "str", "action": "_StoreAction",
+        "default": None,
+        "choices": None,
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
     },
     "--indication": {
-        "default": None, "choices": None, "nargs": None,
-        "type_name": "str", "action": "_StoreAction",
+        "default": None,
+        "choices": None,
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
     },
     "--regime": {
         "default": "default",
         "choices": ["default", "adverse", "clean"],
-        "nargs": None, "type_name": "str", "action": "_StoreAction",
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
     },
     "--split": {
         "default": "auto",
         "choices": ["auto", "random", "combined"],
-        "nargs": None, "type_name": "str", "action": "_StoreAction",
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
     },
     "--no-demo-cost-matrix": {
-        "default": False, "choices": None, "nargs": 0,
-        "type_name": "_no_type", "action": "_StoreTrueAction",
+        "default": False,
+        "choices": None,
+        "nargs": 0,
+        "type_name": "_no_type",
+        "action": "_StoreTrueAction",
     },
 }
 
@@ -162,9 +213,7 @@ def _collect_parser_descriptors() -> Dict[str, Dict[str, Any]]:
             continue
         # Use the longest option string as the primary key (typically --foo over -f)
         primary = max(action.option_strings, key=len)
-        choices = (
-            list(action.choices) if action.choices is not None else None
-        )
+        choices = list(action.choices) if action.choices is not None else None
         type_callable = getattr(action, "type", None)
         type_name = type_callable.__name__ if type_callable is not None else "_no_type"
         descriptors[primary] = {
@@ -375,8 +424,7 @@ async def test_orchestrator_single_mode_output_keys_within_allow_list() -> None:
     }
     repeated_leaks = output_keys & repeated_k10_indicators
     assert not repeated_leaks, (
-        f"REGRESSION: single-mode output leaked repeated_k10 fields: "
-        f"{sorted(repeated_leaks)}"
+        f"REGRESSION: single-mode output leaked repeated_k10 fields: {sorted(repeated_leaks)}"
     )
 
     # Byte-identity guarantee: single-mode ``_build_output`` does NOT add an
@@ -554,8 +602,7 @@ async def test_orchestrator_single_mode_real_graph_output_surface() -> None:
     # the unit interval (loose bound — the test is about output shape, not
     # model quality).
     assert output.get("training_status") == "completed", (
-        f"Real-graph single-mode did not complete: status="
-        f"{output.get('training_status')!r}"
+        f"Real-graph single-mode did not complete: status={output.get('training_status')!r}"
     )
     auc = output.get("auc_roc")
     assert isinstance(auc, (int, float)), f"auc_roc not numeric: {auc!r}"

@@ -50,10 +50,7 @@ def test_brier_decomposition_recombines_to_brier_score() -> None:
     # Recompute the same Brier score the helper used.
     brier = float(np.mean((p - y) ** 2))
     residual = abs(
-        cal["brier_reliability"]
-        - cal["brier_resolution"]
-        + cal["brier_uncertainty"]
-        - brier
+        cal["brier_reliability"] - cal["brier_resolution"] + cal["brier_uncertainty"] - brier
     )
     assert residual < 1e-4
     assert cal["brier_decomposition_residual"] < 1e-4
@@ -128,10 +125,7 @@ def test_brier_decomposition_perfect_calibration() -> None:
     # Decomposition identity holds within sign-convention safety bound.
     brier = float(np.mean((p - y) ** 2))
     residual = abs(
-        cal["brier_reliability"]
-        - cal["brier_resolution"]
-        + cal["brier_uncertainty"]
-        - brier
+        cal["brier_reliability"] - cal["brier_resolution"] + cal["brier_uncertainty"] - brier
     )
     assert residual < 1e-4
 
@@ -149,11 +143,16 @@ def test_brier_decomposition_handles_empty_bins() -> None:
 def test_brier_decomposition_zero_n_total_returns_nan() -> None:
     """A degenerate ``n_samples=0`` row sums to zero → NaN block."""
     bins: list[dict[str, float]] = [
-        {"bin_lo": 0.0, "bin_hi": 0.5, "n_samples": 0, "accuracy": 0.0, "confidence": 0.0, "gap": 0.0},
+        {
+            "bin_lo": 0.0,
+            "bin_hi": 0.5,
+            "n_samples": 0,
+            "accuracy": 0.0,
+            "confidence": 0.0,
+            "gap": 0.0,
+        },
     ]
-    out = _compute_brier_decomposition(
-        np.array([0, 1, 0, 1]), bins, brier_score=0.25
-    )
+    out = _compute_brier_decomposition(np.array([0, 1, 0, 1]), bins, brier_score=0.25)
     assert math.isnan(out["brier_reliability"])
     assert math.isnan(out["brier_uncertainty"])
 

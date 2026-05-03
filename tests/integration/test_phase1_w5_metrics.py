@@ -86,15 +86,11 @@ async def test_pipeline_smoke_emits_nb_area_and_dca() -> None:
     state = _make_state(sc)
 
     train_result = await train_model(state)
-    assert "error" not in train_result, (
-        f"LogReg train failed: {train_result.get('error')}"
-    )
+    assert "error" not in train_result, f"LogReg train failed: {train_result.get('error')}"
 
     eval_state = {**state, **train_result}
     eval_result = await evaluate_model(eval_state)
-    assert "error" not in eval_result, (
-        f"LogReg eval failed: {eval_result.get('error')}"
-    )
+    assert "error" not in eval_result, f"LogReg eval failed: {eval_result.get('error')}"
     test_metrics = eval_result["test_metrics"]
 
     # NB-area block (§G #7).
@@ -130,8 +126,7 @@ async def test_pipeline_smoke_emits_nb_area_and_dca() -> None:
     # top-level ``calibration_analysis`` key of the evaluator result.
     cal_block = eval_result.get("calibration_analysis") or {}
     assert "brier_reliability" in cal_block, (
-        f"Expected brier_reliability in calibration_analysis; "
-        f"keys={sorted(cal_block.keys())}"
+        f"Expected brier_reliability in calibration_analysis; keys={sorted(cal_block.keys())}"
     )
     assert "brier_resolution" in cal_block
     assert "brier_uncertainty" in cal_block
@@ -166,7 +161,12 @@ async def test_pipeline_smoke_legacy_path_unchanged_when_no_schema() -> None:
     assert isinstance(nb_grid, dict)
     assert len(nb_grid) == 6
     assert set(nb_grid.keys()) == {
-        "p_t=0.05", "p_t=0.10", "p_t=0.20", "p_t=0.30", "p_t=0.40", "p_t=0.50",
+        "p_t=0.05",
+        "p_t=0.10",
+        "p_t=0.20",
+        "p_t=0.30",
+        "p_t=0.40",
+        "p_t=0.50",
     }
     for value in nb_grid.values():
         # NB values are floats (or NaN for boundary cases); never None.

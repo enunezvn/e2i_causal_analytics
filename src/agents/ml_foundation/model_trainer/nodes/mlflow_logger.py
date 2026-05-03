@@ -188,9 +188,8 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
         # `evaluation_mode=repeated_k10` / `fold_seed` so the MLflow UI
         # surfaces the parent ↔ child topology.
         evaluation_mode = state.get("evaluation_mode", "single")
-        is_repeated_fold = (
-            evaluation_mode == "repeated_k10"
-            and bool(state.get("_repeated_mode_fold_invocation", False))
+        is_repeated_fold = evaluation_mode == "repeated_k10" and bool(
+            state.get("_repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold:
             fold_idx_value = state.get("fold_idx", 0)
@@ -231,13 +230,16 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
         # _maybe_serialize_nested_run when invoked per-fold so concurrent
         # asyncio.gather(n_jobs > 1) folds cannot overlap their nested-run
         # opens against MLflow's thread-local active-run state.
-        async with _maybe_serialize_nested_run(serialize=is_repeated_fold), mlflow_conn.start_run(
-            experiment_id=mlflow_experiment_id,
-            run_name=run_name,
-            tags=run_tags,
-            description=f"Training run for {algorithm_name} on {problem_type}",
-            nested=is_repeated_fold,
-        ) as run:
+        async with (
+            _maybe_serialize_nested_run(serialize=is_repeated_fold),
+            mlflow_conn.start_run(
+                experiment_id=mlflow_experiment_id,
+                run_name=run_name,
+                tags=run_tags,
+                description=f"Training run for {algorithm_name} on {problem_type}",
+                nested=is_repeated_fold,
+            ) as run,
+        ):
             mlflow_run_id = run.run_id
 
             # Log hyperparameters

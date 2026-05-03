@@ -158,9 +158,7 @@ async def test_w2_smoke_ngboost_conformal_end_to_end():
 
     eval_state = {**state, **train_result}
     eval_result = await evaluate_model(eval_state)
-    assert "error" not in eval_result, (
-        f"NGBoost_Conformal eval failed: {eval_result.get('error')}"
-    )
+    assert "error" not in eval_result, f"NGBoost_Conformal eval failed: {eval_result.get('error')}"
     # Conformal also marks skip_post_hoc_calibration:
     assert eval_result["post_hoc_calibration"]["calibration_applied"] is False
     # Cycle-11 codex IMPORTANT fix: assert metrics-emitted half of the
@@ -203,11 +201,11 @@ async def test_w2_smoke_lightgbm_monotone_with_vector():
 
     eval_state = {**state, **train_result}
     eval_result = await evaluate_model(eval_state)
-    assert "error" not in eval_result, (
-        f"LightGBM_Monotone eval failed: {eval_result.get('error')}"
-    )
+    assert "error" not in eval_result, f"LightGBM_Monotone eval failed: {eval_result.get('error')}"
     # Standard isotonic path runs (no skip flag for monotone variants):
-    assert eval_result["post_hoc_calibration"].get("skip_reason") != "skip_post_hoc_calibration_flag"
+    assert (
+        eval_result["post_hoc_calibration"].get("skip_reason") != "skip_post_hoc_calibration_flag"
+    )
 
 
 @pytest.mark.integration

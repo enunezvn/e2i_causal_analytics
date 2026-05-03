@@ -116,7 +116,9 @@ class TestAggregateFoldMetrics:
         assert isinstance(stat, AggregateStat)
         assert stat.n_folds == 10
         assert stat.mean == pytest.approx(0.845, abs=1e-9)
-        assert stat.std == pytest.approx(np.std([0.80 + 0.01 * i for i in range(10)], ddof=1), abs=1e-9)
+        assert stat.std == pytest.approx(
+            np.std([0.80 + 0.01 * i for i in range(10)], ddof=1), abs=1e-9
+        )
         assert stat.percentile_ci_lo <= stat.mean <= stat.percentile_ci_hi
         assert len(stat.raw_values) == 10
         assert stat.bca_ci_lo is not None

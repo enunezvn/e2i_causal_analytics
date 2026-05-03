@@ -49,8 +49,7 @@ class ScenarioName(str, Enum):
         key = short.upper()
         if key not in mapping:
             raise ValueError(
-                f"Unknown scenario short code {short!r}; choose from "
-                f"{sorted(mapping.keys())}"
+                f"Unknown scenario short code {short!r}; choose from {sorted(mapping.keys())}"
             )
         return mapping[key]
 

@@ -67,7 +67,10 @@ class TestScenarioCManifestAlignment:
         """prior_h1_antihistamine_* features are inclusion-criterion (all
         patients have value=1 by definition); coefficient=0 + is_noise=True
         per FeatureManifest invariant."""
-        for name in ("prior_h1_antihistamine_standard_dose", "prior_h1_antihistamine_4x_dose_failed"):
+        for name in (
+            "prior_h1_antihistamine_standard_dose",
+            "prior_h1_antihistamine_4x_dose_failed",
+        ):
             feat = next(m for m in SCENARIO_C_MANIFEST if m.name == name)
             assert feat.coefficient == 0.0
             assert feat.is_noise is True

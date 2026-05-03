@@ -208,9 +208,7 @@ def solve_intercept(
     bracket is too narrow to contain the solution.
     """
     if not 0.0 < target_prevalence < 1.0:
-        raise ValueError(
-            f"target_prevalence must be in (0, 1); got {target_prevalence}"
-        )
+        raise ValueError(f"target_prevalence must be in (0, 1); got {target_prevalence}")
     if X.ndim != 2:
         raise ValueError(f"X must be 2-D; got shape {X.shape}")
     if coefficients.ndim != 1 or coefficients.shape[0] != X.shape[1]:

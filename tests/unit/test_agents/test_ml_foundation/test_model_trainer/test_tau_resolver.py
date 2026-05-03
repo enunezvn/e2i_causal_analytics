@@ -157,7 +157,13 @@ def test_resolve_primary_tau_handles_disease_in_ctr_subdict() -> None:
 
 def test_use_case_defaults_complete() -> None:
     """All 5 use-case rows are populated with valid τ ordering."""
-    expected = {"screening", "diagnostic", "treatment_decision", "critical_action", "generic_benchmark"}
+    expected = {
+        "screening",
+        "diagnostic",
+        "treatment_decision",
+        "critical_action",
+        "generic_benchmark",
+    }
     assert set(_USE_CASE_DEFAULTS) == expected
     for name, row in _USE_CASE_DEFAULTS.items():
         assert 0.0 < row["tau_low"] < row["tau_high"] < 1.0, name

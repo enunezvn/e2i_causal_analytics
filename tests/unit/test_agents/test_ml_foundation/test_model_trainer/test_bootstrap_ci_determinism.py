@@ -50,12 +50,20 @@ class TestBootstrapCiDeterminismKwarg:
     def test_same_random_state_produces_identical_ci(self) -> None:
         y_true, y_pred, y_proba = _make_classification_arrays(seed=0)
         ci_a, n_a = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
-            n_bootstrap=200, random_state=42,
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
+            n_bootstrap=200,
+            random_state=42,
         )
         ci_b, n_b = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
-            n_bootstrap=200, random_state=42,
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
+            n_bootstrap=200,
+            random_state=42,
         )
         assert n_a == n_b == 200
         assert ci_a.keys() == ci_b.keys()
@@ -68,20 +76,25 @@ class TestBootstrapCiDeterminismKwarg:
     def test_different_random_state_produces_different_ci(self) -> None:
         y_true, y_pred, y_proba = _make_classification_arrays(seed=0)
         ci_42, _ = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
-            n_bootstrap=200, random_state=42,
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
+            n_bootstrap=200,
+            random_state=42,
         )
         ci_43, _ = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
-            n_bootstrap=200, random_state=43,
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
+            n_bootstrap=200,
+            random_state=43,
         )
         # At least one metric's CI endpoint must differ — bootstrap CIs are
         # noisy across seeds, so identical CIs would indicate the seed is
         # silently ignored
-        any_diff = any(
-            ci_42[m][0] != ci_43[m][0] or ci_42[m][1] != ci_43[m][1]
-            for m in ci_42
-        )
+        any_diff = any(ci_42[m][0] != ci_43[m][0] or ci_42[m][1] != ci_43[m][1] for m in ci_42)
         assert any_diff, "random_state appears ignored — CI endpoints identical across seeds"
 
     def test_none_random_state_uses_global_rng_no_error(self) -> None:
@@ -89,14 +102,20 @@ class TestBootstrapCiDeterminismKwarg:
         y_true, y_pred, y_proba = _make_classification_arrays(seed=0)
         np.random.seed(123)
         ci_a, _ = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
             n_bootstrap=200,
         )
         # Re-seed global, repeat — should produce identical CIs (global RNG
         # is reproducible when seeded)
         np.random.seed(123)
         ci_b, _ = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
             n_bootstrap=200,
         )
         assert ci_a.keys() == ci_b.keys()
@@ -116,17 +135,29 @@ class TestBootstrapCiDeterminismKwarg:
         y_true, y_pred, y_proba = _make_classification_arrays(seed=0)
         # Fold 0 in isolation
         ci0_solo, _ = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
-            n_bootstrap=100, random_state=100,
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
+            n_bootstrap=100,
+            random_state=100,
         )
         # Now interleave fold 0 with a "fold 1" call in between
         _ = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
-            n_bootstrap=100, random_state=200,
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
+            n_bootstrap=100,
+            random_state=200,
         )
         ci0_after_interleave, _ = _compute_bootstrap_ci(
-            y_true, y_pred, y_proba, problem_type="binary_classification",
-            n_bootstrap=100, random_state=100,
+            y_true,
+            y_pred,
+            y_proba,
+            problem_type="binary_classification",
+            n_bootstrap=100,
+            random_state=100,
         )
         # Fold 0's CI must be identical regardless of intervening fold 1 call
         for metric in ci0_solo:
@@ -183,8 +214,6 @@ class TestEvaluateModelThreadsFoldSeed:
         result_b = await evaluate_model(state_b)
         ci_a = result_a.get("confidence_interval", {})
         ci_b = result_b.get("confidence_interval", {})
-        assert ci_a.keys() == ci_b.keys() and len(ci_a) > 0, (
-            "no CIs computed — test setup invalid"
-        )
+        assert ci_a.keys() == ci_b.keys() and len(ci_a) > 0, "no CIs computed — test setup invalid"
         any_diff = any(ci_a[m] != ci_b[m] for m in ci_a)
         assert any_diff, "different fold_random_state produced identical CIs (seed not threaded)"

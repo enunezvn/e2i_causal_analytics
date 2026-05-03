@@ -1054,9 +1054,7 @@ def get_model_class(algorithm_name: str, problem_type: str) -> Optional[type]:
             base_name = algorithm_name[: -len("_Conformal")]
             base_cls = get_model_class(base_name, problem_type)
             if base_cls is None:
-                logger.warning(
-                    f"Conformal wrapper requested for unknown base: {base_name}"
-                )
+                logger.warning(f"Conformal wrapper requested for unknown base: {base_name}")
                 return None
 
             def _conformal_factory(**params: Any) -> MapieConformalBinaryClassifier:

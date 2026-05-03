@@ -22,7 +22,9 @@ from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
 )
 
 
-def _logistic_dgp(n: int = 1500, prevalence: float = 0.20, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
+def _logistic_dgp(
+    n: int = 1500, prevalence: float = 0.20, seed: int = 42
+) -> tuple[np.ndarray, np.ndarray]:
     """Generate a labelled sample with a deterministic logistic DGP.
 
     Returns ``(y_true, y_proba_pos)``. The probabilities are drawn from a
@@ -45,9 +47,7 @@ def test_nb_area_matches_trapz_on_synthetic_logistic() -> None:
     tau_grid = np.linspace(0.05, 0.30, 21)
     result = _compute_net_benefit_area(y, p, tau_grid)
 
-    nb_manual = np.array(
-        [_compute_net_benefit_at_p_t(y, p, float(t)) for t in tau_grid]
-    )
+    nb_manual = np.array([_compute_net_benefit_at_p_t(y, p, float(t)) for t in tau_grid])
     expected_area = float(np.trapz(nb_manual, tau_grid))
 
     assert result["net_benefit_area"] == pytest.approx(expected_area, abs=1e-9)

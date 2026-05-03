@@ -23,8 +23,12 @@ def stratified_train_val_test_split(
     test_ratio: float,
     seed: int,
 ) -> tuple[
-    np.ndarray, np.ndarray, np.ndarray,
-    np.ndarray, np.ndarray, np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
 ]:
     """Two-stage stratified split (shard 02 §D).
 
@@ -37,15 +41,18 @@ def stratified_train_val_test_split(
             f"got {train_ratio} + {val_ratio} + {test_ratio} "
             f"= {train_ratio + val_ratio + test_ratio}"
         )
-    for label, value in (("train_ratio", train_ratio), ("val_ratio", val_ratio), ("test_ratio", test_ratio)):
+    for label, value in (
+        ("train_ratio", train_ratio),
+        ("val_ratio", val_ratio),
+        ("test_ratio", test_ratio),
+    ):
         if not 0.0 < value < 1.0:
             raise ValueError(f"{label} must be in (0, 1); got {value}")
     if X.ndim != 2:
         raise ValueError(f"X must be 2-D; got shape {X.shape}")
     if y.ndim != 1 or y.shape[0] != X.shape[0]:
         raise ValueError(
-            "y must be 1-D with len(y) == X.shape[0]; got "
-            f"y.shape={y.shape}, X.shape={X.shape}"
+            f"y must be 1-D with len(y) == X.shape[0]; got y.shape={y.shape}, X.shape={X.shape}"
         )
 
     X_temp, X_test, y_temp, y_test = train_test_split(

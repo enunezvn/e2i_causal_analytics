@@ -62,8 +62,7 @@ def test_ci_method_auto_below_min_falls_back_to_percentile(
             random_state=11,
         )
     assert any(
-        "used=percentile" in rec.getMessage()
-        and "auto_below_min_n_for_bca" in rec.getMessage()
+        "used=percentile" in rec.getMessage() and "auto_below_min_n_for_bca" in rec.getMessage()
         for rec in caplog.records
     )
 
@@ -128,9 +127,7 @@ def test_ci_method_unknown_warns_and_falls_back(
             random_state=11,
             ci_method="not_a_real_method",
         )
-    assert any(
-        "Unknown ci_method" in rec.getMessage() for rec in caplog.records
-    )
+    assert any("Unknown ci_method" in rec.getMessage() for rec in caplog.records)
 
 
 def test_compute_point_estimates_binary_classification() -> None:

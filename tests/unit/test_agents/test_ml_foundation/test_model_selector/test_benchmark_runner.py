@@ -155,7 +155,11 @@ class TestCreateModelInstance:
         gives the same ranking signal. This mirrors the existing CausalForest
         skip — return None to bypass the short-path benchmark.
         """
-        for algo_name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+        for algo_name in (
+            "NGBoost_Conformal",
+            "LightGBM_Conformal",
+            "LogisticRegression_Conformal",
+        ):
             model = _create_model_instance(algo_name, "mapie", {}, "binary_classification")
             assert model is None, f"{algo_name} should be skipped from CV-benchmarking"
 

@@ -134,9 +134,7 @@ def test_anchor_metrics_disagree_detection_deterministic() -> None:
     y[:n_pos] = 1
     rng.shuffle(y)
     p = np.full(n, 0.01)  # constant low predictions, no positives at any τ ≥ 0.01
-    res = _compute_anchor_point_metrics(
-        y, p, primary_tau=0.05, nb_area_relative=0.01
-    )
+    res = _compute_anchor_point_metrics(y, p, primary_tau=0.05, nb_area_relative=0.01)
     # Pre-conditions for the disagree case.
     assert res["nb_anchor_secondary_gate_active"] is True
     assert res["net_benefit_at_primary_tau_relative_to_treat_all"] < 0.0
@@ -149,14 +147,9 @@ def test_anchor_metrics_disagree_detection_deterministic() -> None:
 def test_anchor_metrics_agree_when_both_pass() -> None:
     """Sanity: when area + anchor both pass, ``disagree`` is False."""
     y, p = _stratified_dgp(n=2000, prevalence=0.40, separation="good")
-    res = _compute_anchor_point_metrics(
-        y, p, primary_tau=0.40, nb_area_relative=0.05
-    )
-    if (
-        res["nb_anchor_passes"] is True
-        and not math.isnan(
-            res["net_benefit_at_primary_tau_relative_to_treat_all"]
-        )
+    res = _compute_anchor_point_metrics(y, p, primary_tau=0.40, nb_area_relative=0.05)
+    if res["nb_anchor_passes"] is True and not math.isnan(
+        res["net_benefit_at_primary_tau_relative_to_treat_all"]
     ):
         assert res["nb_anchor_vs_area_disagree"] is False
 
@@ -185,9 +178,7 @@ def test_anchor_metrics_no_primary_tau_out_of_range() -> None:
 def test_anchor_metrics_threshold_kwarg_override() -> None:
     """``prevalence_threshold=0.05`` flips a 0.07-prev sample to gate-active."""
     y, p = _stratified_dgp(n=4000, prevalence=0.07, separation="good")
-    res_default = _compute_anchor_point_metrics(
-        y, p, primary_tau=0.05, nb_area_relative=0.01
-    )
+    res_default = _compute_anchor_point_metrics(y, p, primary_tau=0.05, nb_area_relative=0.01)
     res_override = _compute_anchor_point_metrics(
         y,
         p,

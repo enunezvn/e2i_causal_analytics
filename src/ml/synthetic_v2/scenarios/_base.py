@@ -120,13 +120,14 @@ class ScenarioBuilder(ABC):
         if X.ndim != 2:
             raise ValueError(f"X must be 2-D; got shape {X.shape}")
         if X.shape[1] != self.n_features:
-            raise ValueError(
-                f"X.shape[1]={X.shape[1]} does not match n_features={self.n_features}"
+            raise ValueError(f"X.shape[1]={X.shape[1]} does not match n_features={self.n_features}")
+        coefs = (
+            np.array(
+                [m.coefficient for m in self.feature_manifest],
+                dtype=np.float64,
             )
-        coefs = np.array(
-            [m.coefficient for m in self.feature_manifest],
-            dtype=np.float64,
-        ) * self.slope_multiplier
+            * self.slope_multiplier
+        )
         return np.asarray(X @ coefs + intercept, dtype=np.float64)
 
     def validate_manifest_alignment(self) -> None:
@@ -147,6 +148,5 @@ class ScenarioBuilder(ABC):
         if len(set(names)) != len(names):
             duplicates = sorted({n for n in names if names.count(n) > 1})
             raise ValueError(
-                f"feature_manifest has duplicate names {duplicates} for "
-                f"scenario {self.name!r}"
+                f"feature_manifest has duplicate names {duplicates} for scenario {self.name!r}"
             )

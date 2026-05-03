@@ -165,12 +165,10 @@ class ModelTrainerAgent:
         evaluation_mode = input_data.get("evaluation_mode", "single")
         if evaluation_mode not in _VALID_EVALUATION_MODES:
             raise ValueError(
-                f"Unknown evaluation_mode={evaluation_mode!r}; "
-                f"valid: {_VALID_EVALUATION_MODES}"
+                f"Unknown evaluation_mode={evaluation_mode!r}; valid: {_VALID_EVALUATION_MODES}"
             )
-        if (
-            evaluation_mode == "repeated_k10"
-            and not input_data.get("_repeated_mode_fold_invocation", False)
+        if evaluation_mode == "repeated_k10" and not input_data.get(
+            "_repeated_mode_fold_invocation", False
         ):
             return await self._run_repeated_splits(input_data)
 
@@ -260,11 +258,7 @@ class ModelTrainerAgent:
                 if "fold_random_state" in input_data
                 else {}
             ),
-            **(
-                {"fold_idx": int(input_data["fold_idx"])}
-                if "fold_idx" in input_data
-                else {}
-            ),
+            **({"fold_idx": int(input_data["fold_idx"])} if "fold_idx" in input_data else {}),
             # Day-4 active evaluation_mode flag — split_enforcer / mlflow_logger
             # / evaluator branch on this; legacy callers omit it and the helper
             # sites default to single-mode behavior.
@@ -813,9 +807,7 @@ class ModelTrainerAgent:
         }
         parent_run_name = f"repeated_k10_seed{seed_base}"
         experiment_id = input_data.get("experiment_id", "model_trainer_repeated")
-        experiment_name = input_data.get(
-            "experiment_name", f"model_trainer_{experiment_id}"
-        )
+        experiment_name = input_data.get("experiment_name", f"model_trainer_{experiment_id}")
 
         if mlflow_conn is not None:
             try:
@@ -876,9 +868,7 @@ class ModelTrainerAgent:
             nep19_params[f"fold_{spec.fold_idx:02d}_seed_base"] = seed_base
             nep19_params[f"fold_{spec.fold_idx:02d}_derived_seed"] = spec.seed
 
-        async def _log_aggregate_to_parent(
-            run, agg: Dict[str, AggregateStat]
-        ) -> None:
+        async def _log_aggregate_to_parent(run, agg: Dict[str, AggregateStat]) -> None:
             """Log aggregate metrics to the parent MLflow run.
 
             Cycle-16 I-1 (Q1-C): emits ``aggregate_<metric>_bca_unstable`` as
@@ -900,12 +890,8 @@ class ModelTrainerAgent:
                 metrics_payload[f"aggregate_{metric_name}_mean"] = stat.mean
                 metrics_payload[f"aggregate_{metric_name}_std"] = stat.std
                 metrics_payload[f"aggregate_{metric_name}_n_folds"] = float(stat.n_folds)
-                metrics_payload[f"aggregate_{metric_name}_percentile_lo"] = (
-                    stat.percentile_ci_lo
-                )
-                metrics_payload[f"aggregate_{metric_name}_percentile_hi"] = (
-                    stat.percentile_ci_hi
-                )
+                metrics_payload[f"aggregate_{metric_name}_percentile_lo"] = stat.percentile_ci_lo
+                metrics_payload[f"aggregate_{metric_name}_percentile_hi"] = stat.percentile_ci_hi
                 if stat.bca_ci_lo is not None:
                     metrics_payload[f"aggregate_{metric_name}_bca_lo"] = stat.bca_ci_lo
                 if stat.bca_ci_hi is not None:
@@ -918,9 +904,9 @@ class ModelTrainerAgent:
                     n_unstable += 1
             if n_total > 0:
                 metrics_payload["aggregate_bca_unstable_metric_count"] = float(n_unstable)
-                metrics_payload["aggregate_bca_unstable_metric_fraction"] = (
-                    float(n_unstable) / float(n_total)
-                )
+                metrics_payload["aggregate_bca_unstable_metric_fraction"] = float(
+                    n_unstable
+                ) / float(n_total)
             # Cycle-18 IMPORTANT-3 (Q4.A): wrap log_metrics in try/except so a
             # connector failure here cannot propagate past _log_aggregate_to_parent
             # and silently skip the cycle-17 I-4 partial-failure observability
@@ -930,20 +916,14 @@ class ModelTrainerAgent:
                 try:
                     await run.log_metrics(metrics_payload)
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug(
-                        f"parent aggregate metrics logging failed: {exc!r}"
-                    )
+                    logger.debug(f"parent aggregate metrics logging failed: {exc!r}")
             # COSMETIC-1: mirror the unstable flag as a string tag so MLflow
             # run-search queries (which can filter by tag but not by metric
             # value) can quickly find runs with any unstable BCa CI.
             try:
-                await run.set_tags(
-                    {"has_bca_unstable": "true" if n_unstable > 0 else "false"}
-                )
+                await run.set_tags({"has_bca_unstable": "true" if n_unstable > 0 else "false"})
             except Exception as exc:  # noqa: BLE001
-                logger.debug(
-                    f"parent has_bca_unstable tag logging failed: {exc!r}"
-                )
+                logger.debug(f"parent has_bca_unstable tag logging failed: {exc!r}")
 
         async def _run_all_folds() -> None:
             if n_jobs == 1:
@@ -984,17 +964,11 @@ class ModelTrainerAgent:
                     n_failed_folds = sum(
                         1 for fm in fold_metrics if fm.get("fold_status") == "failed"
                     )
-                    aggregate_status = (
-                        "PARTIAL" if n_failed_folds > 0 else "COMPLETE"
-                    )
+                    aggregate_status = "PARTIAL" if n_failed_folds > 0 else "COMPLETE"
                     try:
-                        await parent_run.log_metrics(
-                            {"n_failed_folds": float(n_failed_folds)}
-                        )
+                        await parent_run.log_metrics({"n_failed_folds": float(n_failed_folds)})
                     except Exception as exc:  # noqa: BLE001
-                        logger.debug(
-                            f"parent n_failed_folds metric logging failed: {exc!r}"
-                        )
+                        logger.debug(f"parent n_failed_folds metric logging failed: {exc!r}")
                     try:
                         await parent_run.set_tags(
                             {
@@ -1008,9 +982,7 @@ class ModelTrainerAgent:
                         # runs; a silent failure to emit it would leave
                         # operators without visibility. WARNING (not DEBUG) so
                         # default log levels surface the issue.
-                        logger.warning(
-                            f"parent aggregate_status tag logging failed: {exc!r}"
-                        )
+                        logger.warning(f"parent aggregate_status tag logging failed: {exc!r}")
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     f"_run_repeated_splits: parent MLflow run wrapper failed: {exc!r}; "
@@ -1025,9 +997,7 @@ class ModelTrainerAgent:
             await _run_all_folds()
             aggregate = aggregate_fold_metrics(fold_metrics)
 
-        n_failed = sum(
-            1 for fm in fold_metrics if fm.get("fold_status") == "failed"
-        )
+        n_failed = sum(1 for fm in fold_metrics if fm.get("fold_status") == "failed")
         aggregate_status = "PARTIAL" if n_failed > 0 else "COMPLETE"
 
         logger.info(
@@ -1039,9 +1009,7 @@ class ModelTrainerAgent:
         # (test_metrics shape preserved per shard 21 Q-W3-6 RESOLVED — Option D)
         # and append the new repeated-mode fields so downstream gate-promotion
         # logic can branch on `evaluation_mode` + consume `aggregate_metrics`.
-        primary = next(
-            (fo for fo in fold_outputs if fo), {}
-        )
+        primary = next((fo for fo in fold_outputs if fo), {})
         output: Dict[str, Any] = dict(primary)
         output["evaluation_mode"] = "repeated_k10"
         output["fold_metrics"] = fold_metrics

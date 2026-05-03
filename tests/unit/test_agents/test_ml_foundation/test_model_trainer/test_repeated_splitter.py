@@ -178,8 +178,10 @@ class TestSplitterIndexInvariants:
 
         X, y = _make_synthetic_dataset(n=200, prevalence=0.30)
         for spec in RepeatedStratifiedSplitter(seed_base=42).split(X, y):
-            covered = set(spec.train_idx.tolist()) | set(spec.val_idx.tolist()) | set(
-                spec.test_idx.tolist()
+            covered = (
+                set(spec.train_idx.tolist())
+                | set(spec.val_idx.tolist())
+                | set(spec.test_idx.tolist())
             )
             assert covered == set(range(len(X))), (
                 f"fold {spec.fold_idx} did not cover all N rows: missing "
@@ -216,9 +218,7 @@ class TestSeedDerivationCanonicalForm:
         )
 
         for fold_idx in range(10):
-            expected = int(
-                np.random.SeedSequence((fold_idx, 42)).generate_state(1)[0]
-            )
+            expected = int(np.random.SeedSequence((fold_idx, 42)).generate_state(1)[0])
             assert RepeatedStratifiedSplitter._derive_seed(42, fold_idx) == expected, (
                 f"fold {fold_idx} seed mismatch: expected canonical "
                 f"SeedSequence((fold_idx, seed_base)).generate_state(1)[0]"
@@ -249,10 +249,7 @@ class TestSeedDerivationCanonicalForm:
         )
 
         for seed_base, fold_idx in [(42, 0), (42, 9), (0, 0), (0, 9)]:
-            calls = [
-                RepeatedStratifiedSplitter._derive_seed(seed_base, fold_idx)
-                for _ in range(5)
-            ]
+            calls = [RepeatedStratifiedSplitter._derive_seed(seed_base, fold_idx) for _ in range(5)]
             assert len(set(calls)) == 1, f"Non-deterministic at ({seed_base}, {fold_idx})"
 
     def test_derive_seed_with_zero_seed_base(self) -> None:
@@ -266,9 +263,7 @@ class TestSeedDerivationCanonicalForm:
             RepeatedStratifiedSplitter,
         )
 
-        seeds = [
-            RepeatedStratifiedSplitter._derive_seed(0, fold_idx) for fold_idx in range(10)
-        ]
+        seeds = [RepeatedStratifiedSplitter._derive_seed(0, fold_idx) for fold_idx in range(10)]
         assert len(set(seeds)) == 10, f"seed_base=0 produced colliding fold seeds: {seeds}"
 
     def test_inner_seed_canonical_form(self) -> None:
@@ -283,9 +278,7 @@ class TestSeedDerivationCanonicalForm:
         )
 
         for fold_idx in range(10):
-            expected = int(
-                np.random.SeedSequence((fold_idx + 1000, 42)).generate_state(1)[0]
-            )
+            expected = int(np.random.SeedSequence((fold_idx + 1000, 42)).generate_state(1)[0])
             assert RepeatedStratifiedSplitter._derive_inner_seed(42, fold_idx) == expected
 
     def test_inner_seed_distinct_from_outer_seed(self) -> None:
@@ -300,15 +293,10 @@ class TestSeedDerivationCanonicalForm:
         )
 
         for seed_base in (0, 42, 43, 12345, 2**31 - 1):
-            outer = [
-                RepeatedStratifiedSplitter._derive_seed(seed_base, i) for i in range(10)
-            ]
-            inner = [
-                RepeatedStratifiedSplitter._derive_inner_seed(seed_base, i) for i in range(10)
-            ]
+            outer = [RepeatedStratifiedSplitter._derive_seed(seed_base, i) for i in range(10)]
+            inner = [RepeatedStratifiedSplitter._derive_inner_seed(seed_base, i) for i in range(10)]
             assert set(outer).isdisjoint(set(inner)), (
-                f"outer/inner seed collision at seed_base={seed_base}: "
-                f"outer={outer}, inner={inner}"
+                f"outer/inner seed collision at seed_base={seed_base}: outer={outer}, inner={inner}"
             )
 
     def test_inner_seed_unique_across_folds(self) -> None:
@@ -317,12 +305,8 @@ class TestSeedDerivationCanonicalForm:
             RepeatedStratifiedSplitter,
         )
 
-        inner_seeds = [
-            RepeatedStratifiedSplitter._derive_inner_seed(42, i) for i in range(10)
-        ]
-        assert len(set(inner_seeds)) == 10, (
-            f"inner seeds collided across folds: {inner_seeds}"
-        )
+        inner_seeds = [RepeatedStratifiedSplitter._derive_inner_seed(42, i) for i in range(10)]
+        assert len(set(inner_seeds)) == 10, f"inner seeds collided across folds: {inner_seeds}"
 
 
 # ---------------------------------------------------------------------------

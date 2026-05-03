@@ -8,7 +8,9 @@ import pytest
 from src.ml.synthetic_v2.splits import stratified_train_val_test_split
 
 
-def _make_balanced_dataset(rng: np.random.Generator, n: int = 1_000, prevalence: float = 0.3) -> tuple[np.ndarray, np.ndarray]:
+def _make_balanced_dataset(
+    rng: np.random.Generator, n: int = 1_000, prevalence: float = 0.3
+) -> tuple[np.ndarray, np.ndarray]:
     X = rng.normal(size=(n, 4))
     n_pos = int(round(n * prevalence))
     y = np.zeros(n, dtype=np.int64)
@@ -76,16 +78,24 @@ class TestDeterminism:
     def test_same_seed_gives_same_splits(self) -> None:
         rng = np.random.default_rng(42)
         X, y = _make_balanced_dataset(rng, n=500, prevalence=0.3)
-        out1 = stratified_train_val_test_split(X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=11)
-        out2 = stratified_train_val_test_split(X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=11)
+        out1 = stratified_train_val_test_split(
+            X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=11
+        )
+        out2 = stratified_train_val_test_split(
+            X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=11
+        )
         for a, b in zip(out1, out2, strict=True):
             np.testing.assert_array_equal(a, b)
 
     def test_different_seeds_give_different_splits(self) -> None:
         rng = np.random.default_rng(42)
         X, y = _make_balanced_dataset(rng, n=500, prevalence=0.3)
-        out1 = stratified_train_val_test_split(X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=11)
-        out2 = stratified_train_val_test_split(X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=12)
+        out1 = stratified_train_val_test_split(
+            X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=11
+        )
+        out2 = stratified_train_val_test_split(
+            X, y, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2, seed=12
+        )
         # At least the y-arrays differ between splits
         assert not np.array_equal(out1[3], out2[3]) or not np.array_equal(out1[4], out2[4])
 
@@ -95,7 +105,9 @@ class TestValidation:
         rng = np.random.default_rng(42)
         X, y = _make_balanced_dataset(rng, n=200, prevalence=0.3)
         with pytest.raises(ValueError, match="must sum to 1.0"):
-            stratified_train_val_test_split(X, y, train_ratio=0.5, val_ratio=0.2, test_ratio=0.2, seed=0)
+            stratified_train_val_test_split(
+                X, y, train_ratio=0.5, val_ratio=0.2, test_ratio=0.2, seed=0
+            )
 
     @pytest.mark.parametrize("bad_ratio", [0.0, 1.0, -0.1, 1.5])
     def test_ratios_in_open_unit_interval(self, bad_ratio: float) -> None:

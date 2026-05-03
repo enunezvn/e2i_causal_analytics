@@ -113,9 +113,7 @@ def aggregate_fold_metrics(
         return {}
 
     ok_folds_flat: List[Dict[str, float]] = [
-        flatten_fold_record(fm)
-        for fm in fold_metrics
-        if fm.get("fold_status", "ok") != "failed"
+        flatten_fold_record(fm) for fm in fold_metrics if fm.get("fold_status", "ok") != "failed"
     ]
     if not ok_folds_flat:
         logger.warning(

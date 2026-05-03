@@ -92,9 +92,7 @@ class TestScenarioCRWDConcurrentValidation:
         rwd_auc = roc_auc_score(rwd.outcome, rwd_proba)
 
         # Generate synthetic with matching feature dimensionality
-        ds = generate_scenario(
-            ScenarioName.C_TREATMENT_CSU_RESPONSE, seed=42, n_total=2000
-        )
+        ds = generate_scenario(ScenarioName.C_TREATMENT_CSU_RESPONSE, seed=42, n_total=2000)
         # Subset synthetic features to those present in RWD
         feat_names = list(ds.metadata.feature_names)
         rwd_feat_set = set(rwd.rwd_direct_or_derived_features())

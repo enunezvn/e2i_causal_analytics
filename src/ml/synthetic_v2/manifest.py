@@ -28,9 +28,7 @@ _VALID_DISTRIBUTIONS: Final[frozenset[str]] = frozenset(
     {"normal", "uniform", "bernoulli", "categorical"}
 )
 _VALID_MONOTONE: Final[frozenset[int]] = frozenset({-1, 0, 1})
-_VALID_CITATION_STRENGTH: Final[frozenset[str]] = frozenset(
-    {"strong", "moderate", "weak"}
-)
+_VALID_CITATION_STRENGTH: Final[frozenset[str]] = frozenset({"strong", "moderate", "weak"})
 
 
 def _coerce_to_jsonable(value: Any) -> Any:

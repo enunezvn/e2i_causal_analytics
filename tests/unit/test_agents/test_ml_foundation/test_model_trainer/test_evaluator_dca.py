@@ -18,7 +18,9 @@ from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
 )
 
 
-def _logistic_dgp(n: int = 1000, prevalence: float = 0.20, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
+def _logistic_dgp(
+    n: int = 1000, prevalence: float = 0.20, seed: int = 42
+) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     y = (rng.uniform(size=n) < prevalence).astype(int)
     proba_pos = np.where(
@@ -60,9 +62,7 @@ def test_dca_treat_all_matches_vickers_2006_eq3() -> None:
     res = _compute_dca_curves(y, p, tau_grid)
     prev = res["prevalence"]
 
-    expected = [
-        prev - (1.0 - prev) * float(t) / (1.0 - float(t)) for t in tau_grid
-    ]
+    expected = [prev - (1.0 - prev) * float(t) / (1.0 - float(t)) for t in tau_grid]
     for actual, want in zip(res["nb_treat_all"], expected, strict=True):
         assert actual == pytest.approx(want, abs=1e-9)
 

@@ -90,9 +90,7 @@ class RepeatedStratifiedSplitter:
                 f"= {train_frac + val_frac + test_frac})"
             )
         if strategy not in _VALID_STRATEGIES:
-            raise ValueError(
-                f"Unknown strategy={strategy!r}; valid: {_VALID_STRATEGIES}"
-            )
+            raise ValueError(f"Unknown strategy={strategy!r}; valid: {_VALID_STRATEGIES}")
         self.k = k
         self.seed_base = seed_base
         self.train_frac = train_frac
@@ -139,13 +137,9 @@ class RepeatedStratifiedSplitter:
         Locked by ``test_inner_seed_distinct_from_outer_seed`` and
         ``test_inner_seed_canonical_form`` in ``test_repeated_splitter.py``.
         """
-        return int(
-            np.random.SeedSequence((fold_idx + 1000, seed_base)).generate_state(1)[0]
-        )
+        return int(np.random.SeedSequence((fold_idx + 1000, seed_base)).generate_state(1)[0])
 
-    def split(
-        self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray
-    ) -> Iterator[FoldSpec]:
+    def split(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> Iterator[FoldSpec]:
         """Yield k FoldSpec objects, deterministic given (seed_base, fold_idx).
 
         Algorithm (strategy="shuffle_split"):

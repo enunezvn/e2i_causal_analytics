@@ -693,11 +693,11 @@ _PREVALENCE_GATE_THRESHOLD: float = 0.10
 
 # Section E.2 — τ-range defaults per use_case (shard 20 §E.2).
 _USE_CASE_DEFAULTS: Dict[str, Dict[str, float]] = {
-    "screening":          {"tau_low": 0.01, "tau_high": 0.10},
-    "diagnostic":         {"tau_low": 0.05, "tau_high": 0.30},
+    "screening": {"tau_low": 0.01, "tau_high": 0.10},
+    "diagnostic": {"tau_low": 0.05, "tau_high": 0.30},
     "treatment_decision": {"tau_low": 0.20, "tau_high": 0.50},
-    "critical_action":    {"tau_low": 0.30, "tau_high": 0.70},
-    "generic_benchmark":  {"tau_low": 0.05, "tau_high": 0.30},
+    "critical_action": {"tau_low": 0.30, "tau_high": 0.70},
+    "generic_benchmark": {"tau_low": 0.05, "tau_high": 0.30},
 }
 
 # Per-disease overrides — Novartis US commercial-analytics portfolio
@@ -708,22 +708,22 @@ _USE_CASE_DEFAULTS: Dict[str, Dict[str, float]] = {
 _DISEASE_SPECIFIC_DEFAULTS: Dict[str, Dict[str, float]] = {
     # cv_risk_10y — Leqvio (inclisiran). 2018 ACC/AHA cholesterol guideline
     # statin-initiation threshold 7.5%. STRONG.
-    "cv_risk_10y":              {"tau_low": 0.05, "tau_high": 0.15, "primary_tau": 0.075},
+    "cv_risk_10y": {"tau_low": 0.05, "tau_high": 0.15, "primary_tau": 0.075},
     # hf_readmission_30d — Entresto (sacubitril/valsartan). LACE-HF + CMS
     # HRRP excess-readmission threshold ~22%. MODERATE.
-    "hf_readmission_30d":       {"tau_low": 0.10, "tau_high": 0.30, "primary_tau": 0.20},
+    "hf_readmission_30d": {"tau_low": 0.10, "tau_high": 0.30, "primary_tau": 0.20},
     # breast_cancer_recurrence — Kisqali (ribociclib). TAILORx + RxPONDER
     # Oncotype DX RS 11-25 → 10-30% 10y distant recurrence. STRONG.
     "breast_cancer_recurrence": {"tau_low": 0.10, "tau_high": 0.30, "primary_tau": 0.21},
     # ms_treatment_escalation — Kesimpta + Mayzent. NEDA-3 failure /
     # Rio Score. MODERATE.
-    "ms_treatment_escalation":  {"tau_low": 0.20, "tau_high": 0.40, "primary_tau": 0.30},
+    "ms_treatment_escalation": {"tau_low": 0.20, "tau_high": 0.40, "primary_tau": 0.30},
     # psoriasis_pasi_response — Cosentyx (secukinumab). PASI 75 at 16 weeks.
     # WEAK — no probability-threshold guideline; validate before deployment.
-    "psoriasis_pasi_response":  {"tau_low": 0.30, "tau_high": 0.60, "primary_tau": 0.45},
+    "psoriasis_pasi_response": {"tau_low": 0.30, "tau_high": 0.60, "primary_tau": 0.45},
     # mcrpc_progression_risk — Pluvicto (177Lu-PSMA-617). VISION + PROfound
     # post-taxane progression rates. MODERATE.
-    "mcrpc_progression_risk":   {"tau_low": 0.25, "tau_high": 0.55, "primary_tau": 0.40},
+    "mcrpc_progression_risk": {"tau_low": 0.25, "tau_high": 0.55, "primary_tau": 0.40},
 }
 
 
@@ -789,9 +789,7 @@ def _compute_net_benefit_area(
         # 1e-6 buffer matches the resolver's invariant; without it a
         # caller-supplied 0.0 would leak NaN through the NB grid.
         taus = np.clip(taus, 1e-6, 1.0 - 1e-6)
-    nb_model = np.array(
-        [_compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus]
-    )
+    nb_model = np.array([_compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus])
     nb_treat_all = prev - (1.0 - prev) * taus / (1.0 - taus)
     if np.any(np.isnan(nb_model)):
         # Don't integrate over partial NaN — emit NaN for the area.
@@ -799,9 +797,7 @@ def _compute_net_benefit_area(
     else:
         area_model = float(np.trapz(nb_model, taus))
     area_treat_all = float(np.trapz(nb_treat_all, taus))
-    area_relative = (
-        area_model - area_treat_all if not math.isnan(area_model) else float("nan")
-    )
+    area_relative = area_model - area_treat_all if not math.isnan(area_model) else float("nan")
     return {
         "net_benefit_area": area_model,
         "net_benefit_area_treat_all": area_treat_all,
@@ -848,10 +844,8 @@ def _compute_dca_curves(
             "tau_low": float("nan"),
             "tau_high": float("nan"),
         }
-    nb_model = [
-        _compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus
-    ]
-    nb_treat_all_arr = (prev - (1.0 - prev) * taus / (1.0 - taus))
+    nb_model = [_compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus]
+    nb_treat_all_arr = prev - (1.0 - prev) * taus / (1.0 - taus)
     nb_treat_all = [float(v) for v in nb_treat_all_arr]
     nb_treat_none = [0.0] * len(taus)
     return {
@@ -901,9 +895,7 @@ def _resolve_tau_grid_for_metrics(
     # overridden by a stale ``use_case=screening`` config — the explicit
     # disease label always wins.
     dataset_disease = (
-        success_criteria.get("dataset_disease")
-        or ctr.get("dataset_disease")
-        or ""
+        success_criteria.get("dataset_disease") or ctr.get("dataset_disease") or ""
     ).strip()
     if dataset_disease and dataset_disease in _DISEASE_SPECIFIC_DEFAULTS:
         ds = _DISEASE_SPECIFIC_DEFAULTS[dataset_disease]
@@ -921,7 +913,8 @@ def _resolve_tau_grid_for_metrics(
             logger.warning(
                 "clinical_threshold_range.use_case=custom but tau_low/tau_high "
                 "missing or invalid (%s, %s); falling back to legacy grid",
-                tl, th,
+                tl,
+                th,
             )
             return list(legacy_grid)
         return [float(t) for t in np.linspace(tl_f, th_f, n_grid_points)]
@@ -929,8 +922,7 @@ def _resolve_tau_grid_for_metrics(
     if use_case in _USE_CASE_DEFAULTS:
         defaults = _USE_CASE_DEFAULTS[use_case]
         return [
-            float(t)
-            for t in np.linspace(defaults["tau_low"], defaults["tau_high"], n_grid_points)
+            float(t) for t in np.linspace(defaults["tau_low"], defaults["tau_high"], n_grid_points)
         ]
 
     return list(legacy_grid)
@@ -959,9 +951,7 @@ def _resolve_primary_tau(
         except (TypeError, ValueError):
             pass
     dataset_disease = (
-        success_criteria.get("dataset_disease")
-        or ctr.get("dataset_disease")
-        or ""
+        success_criteria.get("dataset_disease") or ctr.get("dataset_disease") or ""
     ).strip()
     if dataset_disease and dataset_disease in _DISEASE_SPECIFIC_DEFAULTS:
         primary = _DISEASE_SPECIFIC_DEFAULTS[dataset_disease].get("primary_tau")
@@ -1022,13 +1012,9 @@ def _compute_anchor_point_metrics(
         anchor_passes = bool(nb_relative > 0.0)
     else:
         anchor_passes = None
-    area_passes = (
-        bool(nb_area_relative > 0.0) if not math.isnan(nb_area_relative) else None
-    )
+    area_passes = bool(nb_area_relative > 0.0) if not math.isnan(nb_area_relative) else None
     disagree = bool(
-        anchor_passes is not None
-        and area_passes is not None
-        and anchor_passes != area_passes
+        anchor_passes is not None and area_passes is not None and anchor_passes != area_passes
     )
     return {
         "primary_tau": p_tau,
@@ -1301,8 +1287,7 @@ def _compute_classification_metrics(
         # want the metrics suite but the resolver will fall back to
         # ``_V3_NB_GRID_P_T_VALUES`` and emit the COSMETIC-2 INFO.
         ctr_present = bool(
-            success_criteria is not None
-            and "clinical_threshold_range" in success_criteria
+            success_criteria is not None and "clinical_threshold_range" in success_criteria
         )
         if ctr_present:
             tau_grid_resolved = _resolve_tau_grid_for_metrics(
@@ -1330,14 +1315,9 @@ def _compute_classification_metrics(
                 # above the bootstrap noise floor. Emit a one-time INFO
                 # so downstream consumers know to interpret NB-area on
                 # legacy fallback as approximate.
-                if (
-                    len(tau_grid_resolved) == len(_V3_NB_GRID_P_T_VALUES)
-                    and all(
-                        math.isclose(a, b)
-                        for a, b in zip(
-                            tau_grid_resolved, _V3_NB_GRID_P_T_VALUES, strict=True
-                        )
-                    )
+                if len(tau_grid_resolved) == len(_V3_NB_GRID_P_T_VALUES) and all(
+                    math.isclose(a, b)
+                    for a, b in zip(tau_grid_resolved, _V3_NB_GRID_P_T_VALUES, strict=True)
                 ):
                     logger.info(
                         "NB-area computed on K=6 legacy grid; trapezoidal "
@@ -1362,9 +1342,7 @@ def _compute_classification_metrics(
                     np.asarray(y_test),
                     y_test_proba_pos,
                     primary_tau=primary_tau_resolved,
-                    nb_area_relative=nb_area_block[
-                        "net_benefit_area_relative_to_treat_all"
-                    ],
+                    nb_area_relative=nb_area_block["net_benefit_area_relative_to_treat_all"],
                 )
                 test_metrics_any.update(anchor_block)
 
@@ -1418,7 +1396,9 @@ def _compute_classification_metrics(
     # Bootstrap confidence intervals (cycle-16 I-4: per-fold seed for
     # asyncio.gather n_jobs > 1 determinism)
     confidence_interval, bootstrap_samples = _compute_bootstrap_ci(
-        y_test, y_test_pred_optimal, y_test_proba,
+        y_test,
+        y_test_pred_optimal,
+        y_test_proba,
         problem_type="binary_classification",
         random_state=bootstrap_random_state,
     )
@@ -1690,7 +1670,10 @@ def _compute_regression_metrics(
 
     # Bootstrap confidence intervals (cycle-16 I-4: per-fold seed)
     confidence_interval, bootstrap_samples = _compute_bootstrap_ci(
-        y_test, y_test_pred, None, problem_type="regression",
+        y_test,
+        y_test_pred,
+        None,
+        problem_type="regression",
         random_state=bootstrap_random_state,
     )
 
@@ -2093,9 +2076,7 @@ def _compute_bootstrap_ci(
     elif ci_method == "percentile":
         method_resolved = "percentile"
     else:
-        logger.warning(
-            "Unknown ci_method=%r — falling back to percentile.", ci_method
-        )
+        logger.warning("Unknown ci_method=%r — falling back to percentile.", ci_method)
         method_resolved = "percentile"
         fallback_reason = f"unknown_ci_method:{ci_method}"
 
@@ -2120,12 +2101,8 @@ def _compute_bootstrap_ci(
     # once, then call bca_ci_from_resamples per metric.
     from src.utils.bootstrap_utils import bca_ci_from_resamples
 
-    point_estimates = _compute_point_estimates(
-        y_true, y_pred, y_proba_pos, problem_type
-    )
-    jackknife_cache = _compute_jackknife_metrics(
-        y_true, y_pred, y_proba_pos, problem_type
-    )
+    point_estimates = _compute_point_estimates(y_true, y_pred, y_proba_pos, problem_type)
+    jackknife_cache = _compute_jackknife_metrics(y_true, y_pred, y_proba_pos, problem_type)
     bca_unstable = False
     for metric_name, values in bootstrap_metrics.items():
         if len(values) == 0 or metric_name not in point_estimates:

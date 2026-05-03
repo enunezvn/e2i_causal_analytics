@@ -247,9 +247,7 @@ def compute_calibration_analysis(
     # identity check is local to this function (the upstream
     # ``brier_score`` field comes from sklearn on the same arrays).
     brier_score_for_decomp = float(np.mean((y_proba_pos - y_true) ** 2))
-    result.update(
-        _compute_brier_decomposition(y_true, bin_details, brier_score_for_decomp)
-    )
+    result.update(_compute_brier_decomposition(y_true, bin_details, brier_score_for_decomp))
     return result
 
 
@@ -288,12 +286,10 @@ def _compute_brier_decomposition(
     if n_total <= 0:
         return nan_block
     p_bar = float(np.mean(y_true == 1))
-    reliability = sum(
-        b["n_samples"] * (b["confidence"] - b["accuracy"]) ** 2 for b in bin_details
-    ) / n_total
-    resolution = sum(
-        b["n_samples"] * (b["accuracy"] - p_bar) ** 2 for b in bin_details
-    ) / n_total
+    reliability = (
+        sum(b["n_samples"] * (b["confidence"] - b["accuracy"]) ** 2 for b in bin_details) / n_total
+    )
+    resolution = sum(b["n_samples"] * (b["accuracy"] - p_bar) ** 2 for b in bin_details) / n_total
     uncertainty = p_bar * (1.0 - p_bar)
     recombined = reliability - resolution + uncertainty
     return {

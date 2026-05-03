@@ -47,9 +47,7 @@ def _make_full_data(prevalence: float = 0.30) -> Dict[str, Any]:
     return {"X": X, "y": pd.Series(y_arr, name="y")}
 
 
-def _make_minimal_input(
-    evaluation_mode: str | None = None, k: int | None = None
-) -> Dict[str, Any]:
+def _make_minimal_input(evaluation_mode: str | None = None, k: int | None = None) -> Dict[str, Any]:
     """Build a minimal agent.run input that exercises dispatch only.
 
     For dispatch tests we don't actually need the graph to succeed; we only
@@ -189,9 +187,7 @@ async def test_repeated_k10_runs_k_folds_smoke() -> None:
     agent = ModelTrainerAgent()
     mock, _ = _fold_invocation_recorder()
     with patch.object(agent.graph, "ainvoke", mock):
-        output = await agent.run(
-            _make_minimal_input(evaluation_mode="repeated_k10", k=3)
-        )
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
 
     assert "fold_metrics" in output, "fold_metrics missing from repeated_k10 output"
     assert isinstance(output["fold_metrics"], list), (
@@ -221,9 +217,7 @@ async def test_repeated_k10_threads_distinct_fold_random_state_per_fold() -> Non
     agent = ModelTrainerAgent()
     mock, captured_states = _fold_invocation_recorder()
     with patch.object(agent.graph, "ainvoke", mock):
-        output = await agent.run(
-            _make_minimal_input(evaluation_mode="repeated_k10", k=3)
-        )
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
 
     # The fold_metrics records carry the splitter's per-fold seed.
     fold_seeds_from_records = [fm.get("fold_random_state") for fm in output["fold_metrics"]]
@@ -252,9 +246,7 @@ async def test_repeated_k10_emits_evaluation_mode_in_output() -> None:
     agent = ModelTrainerAgent()
     mock, _ = _fold_invocation_recorder()
     with patch.object(agent.graph, "ainvoke", mock):
-        output = await agent.run(
-            _make_minimal_input(evaluation_mode="repeated_k10", k=3)
-        )
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
     assert output.get("evaluation_mode") == "repeated_k10"
     assert output.get("test_metrics_population_strategy") == "fold_mean"
     assert "evaluation_result_schema_version" in output
@@ -279,9 +271,7 @@ async def test_repeated_k10_aggregate_means_match_per_fold_means() -> None:
     agent = ModelTrainerAgent()
     mock, _ = _fold_invocation_recorder()
     with patch.object(agent.graph, "ainvoke", mock):
-        output = await agent.run(
-            _make_minimal_input(evaluation_mode="repeated_k10", k=10)
-        )
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=10))
 
     assert "aggregate_metrics" in output, "aggregate_metrics missing from repeated_k10 output"
     agg = output["aggregate_metrics"]
@@ -309,9 +299,7 @@ async def test_repeated_k10_bca_ci_brackets_mean() -> None:
     agent = ModelTrainerAgent()
     mock, _ = _fold_invocation_recorder()
     with patch.object(agent.graph, "ainvoke", mock):
-        output = await agent.run(
-            _make_minimal_input(evaluation_mode="repeated_k10", k=10)
-        )
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=10))
 
     agg = output["aggregate_metrics"]
     bracket_failures: list[str] = []
@@ -323,8 +311,8 @@ async def test_repeated_k10_bca_ci_brackets_mean() -> None:
                 f"{metric_name}: bca_ci_lo={stat.bca_ci_lo} mean={stat.mean} "
                 f"bca_ci_hi={stat.bca_ci_hi}"
             )
-    assert not bracket_failures, (
-        "BCa CI does not bracket mean for some metrics:\n" + "\n".join(bracket_failures)
+    assert not bracket_failures, "BCa CI does not bracket mean for some metrics:\n" + "\n".join(
+        bracket_failures
     )
 
 
@@ -337,9 +325,7 @@ async def test_repeated_k10_bca_ci_skipped_below_4_folds() -> None:
     agent = ModelTrainerAgent()
     mock, _ = _fold_invocation_recorder()
     with patch.object(agent.graph, "ainvoke", mock):
-        output = await agent.run(
-            _make_minimal_input(evaluation_mode="repeated_k10", k=3)
-        )
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
 
     agg = output["aggregate_metrics"]
     assert "auc_roc" in agg
@@ -424,9 +410,7 @@ async def test_repeated_k10_records_partial_status_on_fold_failure() -> None:
         }
 
     with patch.object(agent.graph, "ainvoke", AsyncMock(side_effect=fake_ainvoke)):
-        output = await agent.run(
-            _make_minimal_input(evaluation_mode="repeated_k10", k=5)
-        )
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=5))
 
     assert output.get("aggregate_status") == "PARTIAL"
     fold_statuses = [fm.get("fold_status") for fm in output["fold_metrics"]]
@@ -589,9 +573,7 @@ def test_no_unallowlisted_random_state_42_in_model_trainer() -> None:
         text = py.read_text()
         for line_no, line in enumerate(text.splitlines(), start=1):
             if code_pattern.search(line) and not allow_pattern.search(line):
-                offenders.append(
-                    f"{py.relative_to(repo_root)}:{line_no}: {line.strip()}"
-                )
+                offenders.append(f"{py.relative_to(repo_root)}:{line_no}: {line.strip()}")
 
     assert not offenders, (
         "Found unallowlisted `random_state=42` kwarg literals under model_trainer/. "

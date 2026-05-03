@@ -54,6 +54,7 @@ def test_bca_ci_matches_scipy_on_known_synthetic() -> None:
     jack = _jackknife_for_mean(sample)
 
     from scipy.stats import bootstrap as scipy_bootstrap
+
     scipy_res = scipy_bootstrap(
         (sample,),
         np.mean,
@@ -70,12 +71,8 @@ def test_bca_ci_matches_scipy_on_known_synthetic() -> None:
         confidence_level=0.95,
     )
     assert ours.method == "bca"
-    assert ours.ci_lo == pytest.approx(
-        float(scipy_res.confidence_interval.low), abs=1e-3
-    )
-    assert ours.ci_hi == pytest.approx(
-        float(scipy_res.confidence_interval.high), abs=1e-3
-    )
+    assert ours.ci_lo == pytest.approx(float(scipy_res.confidence_interval.low), abs=1e-3)
+    assert ours.ci_hi == pytest.approx(float(scipy_res.confidence_interval.high), abs=1e-3)
 
 
 def test_bca_ci_degenerate_distribution_fallback() -> None:
@@ -106,7 +103,9 @@ def test_bca_ci_point_estimate_outside_bootstrap_range() -> None:
 
 def test_bca_ci_empty_bootstrap_returns_none() -> None:
     """Empty bootstrap → ``method=='none'`` and CI endpoints None."""
-    res = bca_ci_from_resamples(np.array([]), point_estimate=0.5, jackknife_values=np.array([0.5, 0.5]))
+    res = bca_ci_from_resamples(
+        np.array([]), point_estimate=0.5, jackknife_values=np.array([0.5, 0.5])
+    )
     assert res.method == "none"
     assert res.ci_lo is None
     assert res.ci_hi is None
@@ -115,9 +114,7 @@ def test_bca_ci_empty_bootstrap_returns_none() -> None:
 def test_bca_ci_too_small_jackknife_falls_back() -> None:
     """Jackknife with < 2 values → percentile fallback (acceleration undefined)."""
     boot = _bootstrap_distribution_for_mean(np.array([1.0, 2.0, 3.0]), n_bootstrap=500)
-    res = bca_ci_from_resamples(
-        boot, point_estimate=2.0, jackknife_values=np.array([2.0])
-    )
+    res = bca_ci_from_resamples(boot, point_estimate=2.0, jackknife_values=np.array([2.0]))
     assert res.method == "percentile_fallback"
     assert res.fallback_reason == "jackknife_too_small"
 

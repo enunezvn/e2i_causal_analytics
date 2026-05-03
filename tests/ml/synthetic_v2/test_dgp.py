@@ -16,7 +16,9 @@ from src.ml.synthetic_v2.dgp import (
 class TestSampleOneFeature:
     def test_normal_distribution_roughly_matches_params(self) -> None:
         rng = np.random.default_rng(42)
-        x = sample_one_feature(rng, n=10_000, distribution="normal", params={"loc": 5.0, "scale": 2.0})
+        x = sample_one_feature(
+            rng, n=10_000, distribution="normal", params={"loc": 5.0, "scale": 2.0}
+        )
         assert x.shape == (10_000,)
         # SE on mean ≈ 2.0/sqrt(10000) = 0.02; 4σ tolerance for stability
         assert abs(x.mean() - 5.0) < 0.08
@@ -24,7 +26,9 @@ class TestSampleOneFeature:
 
     def test_uniform_distribution_within_bounds(self) -> None:
         rng = np.random.default_rng(42)
-        x = sample_one_feature(rng, n=5_000, distribution="uniform", params={"low": -1.0, "high": 3.0})
+        x = sample_one_feature(
+            rng, n=5_000, distribution="uniform", params={"low": -1.0, "high": 3.0}
+        )
         assert x.shape == (5_000,)
         assert x.min() >= -1.0
         assert x.max() <= 3.0
@@ -77,7 +81,9 @@ class TestSampleOneFeature:
 
 
 class TestApplyBlockCorrelation:
-    def _make_independent_features(self, rng: np.random.Generator, n: int, n_features: int) -> np.ndarray:
+    def _make_independent_features(
+        self, rng: np.random.Generator, n: int, n_features: int
+    ) -> np.ndarray:
         return rng.normal(size=(n, n_features))
 
     def test_realizes_target_pearson_r_positive(self) -> None:
@@ -321,7 +327,9 @@ class TestEndToEndPrimitiveDeterminism:
             cols = []
             for _ in range(5):
                 cols.append(
-                    sample_one_feature(rng, n=500, distribution="normal", params={"loc": 0.0, "scale": 1.0})
+                    sample_one_feature(
+                        rng, n=500, distribution="normal", params={"loc": 0.0, "scale": 1.0}
+                    )
                 )
             X = np.stack(cols, axis=1)
             rng2 = np.random.default_rng(seed + 1000)

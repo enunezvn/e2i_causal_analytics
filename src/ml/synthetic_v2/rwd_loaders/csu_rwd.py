@@ -197,9 +197,7 @@ def _load_from_excel(
     )
 
 
-def _synthesize_fixture(
-    n_patients: int = 200, seed: int = 42
-) -> RwdCsuCohort:
+def _synthesize_fixture(n_patients: int = 200, seed: int = 42) -> RwdCsuCohort:
     """Deterministic synthesized fixture for unit tests (no PHI dependency)."""
     rng = np.random.default_rng(seed)
     feature_matrix: dict[str, np.ndarray] = {}
@@ -295,10 +293,9 @@ def derive_csu_remib_response_outcome(
     visit (more conservative interpretation).
     """
     in_window = [
-        v for v in visits
-        if target_week - tolerance_weeks
-        <= v["week_post_remib"]
-        <= target_week + tolerance_weeks
+        v
+        for v in visits
+        if target_week - tolerance_weeks <= v["week_post_remib"] <= target_week + tolerance_weeks
     ]
     if not in_window:
         return None

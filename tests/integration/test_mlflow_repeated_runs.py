@@ -75,7 +75,9 @@ class _FakeConnector:
         self._counter = 0
         self._enabled = True
 
-    async def get_or_create_experiment(self, name: str, tags: Optional[Dict[str, str]] = None) -> str:
+    async def get_or_create_experiment(
+        self, name: str, tags: Optional[Dict[str, str]] = None
+    ) -> str:
         return f"exp:{name}"
 
     @asynccontextmanager
@@ -140,9 +142,8 @@ def _fold_invocation_recorder_with_logging(connector: _FakeConnector):
 
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
-        is_repeated_fold = (
-            state.get("evaluation_mode") == "repeated_k10"
-            and bool(state.get("_repeated_mode_fold_invocation", False))
+        is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
+            state.get("_repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold:
             fold_seed = int(state.get("fold_random_state", 0))
@@ -201,11 +202,14 @@ async def test_parent_run_has_aggregate_metrics() -> None:
     fake = _FakeConnector()
     agent = ModelTrainerAgent()
     mock_graph = _fold_invocation_recorder_with_logging(fake)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         output = await agent.run(_make_input(k=10))
 
     parent_runs = [r for r in fake.runs if not r.is_nested]
@@ -245,11 +249,14 @@ async def test_10_nested_child_runs_logged() -> None:
     fake = _FakeConnector()
     agent = ModelTrainerAgent()
     mock_graph = _fold_invocation_recorder_with_logging(fake)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         await agent.run(_make_input(k=10))
 
     parent_runs = [r for r in fake.runs if not r.is_nested]
@@ -274,11 +281,14 @@ async def test_child_run_logs_per_fold_metrics() -> None:
     fake = _FakeConnector()
     agent = ModelTrainerAgent()
     mock_graph = _fold_invocation_recorder_with_logging(fake)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         await agent.run(_make_input(k=10))
 
     children = [r for r in fake.runs if r.is_nested]
@@ -301,11 +311,14 @@ async def test_child_run_logs_fold_seed_param_and_tags() -> None:
     fake = _FakeConnector()
     agent = ModelTrainerAgent()
     mock_graph = _fold_invocation_recorder_with_logging(fake)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         await agent.run(_make_input(k=10))
 
     children = [r for r in fake.runs if r.is_nested]
@@ -338,11 +351,14 @@ async def test_parent_run_has_nep19_version_params() -> None:
     fake = _FakeConnector()
     agent = ModelTrainerAgent()
     mock_graph = _fold_invocation_recorder_with_logging(fake)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         await agent.run(_make_input(k=10))
 
     parent_runs = [r for r in fake.runs if not r.is_nested]
@@ -367,9 +383,8 @@ def _fold_invocation_recorder_constant_metric(connector: _FakeConnector):
 
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
-        is_repeated_fold = (
-            state.get("evaluation_mode") == "repeated_k10"
-            and bool(state.get("_repeated_mode_fold_invocation", False))
+        is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
+            state.get("_repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold:
             tags = {
@@ -472,11 +487,14 @@ async def test_parent_run_logs_bca_unstable_warning_per_metric() -> None:
     fake = _FakeConnector()
     agent = ModelTrainerAgent()
     mock_graph = _fold_invocation_recorder_constant_metric(fake)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         output = await agent.run(_make_input(k=10))
 
     parent_runs = [r for r in fake.runs if not r.is_nested]
@@ -484,8 +502,7 @@ async def test_parent_run_logs_bca_unstable_warning_per_metric() -> None:
     parent = parent_runs[0]
     # Stable metric: bca_unstable=0.0 + finite bca endpoints
     assert "aggregate_auc_roc_bca_unstable" in parent.metrics, (
-        f"Missing aggregate_auc_roc_bca_unstable in parent metrics: "
-        f"{sorted(parent.metrics.keys())}"
+        f"Missing aggregate_auc_roc_bca_unstable in parent metrics: {sorted(parent.metrics.keys())}"
     )
     assert parent.metrics["aggregate_auc_roc_bca_unstable"] == 0.0
     assert "aggregate_auc_roc_bca_lo" in parent.metrics
@@ -508,15 +525,11 @@ async def test_parent_run_logs_bca_unstable_warning_per_metric() -> None:
     assert "aggregate_bca_unstable_metric_count" in parent.metrics
     assert parent.metrics["aggregate_bca_unstable_metric_count"] == 1.0
     assert "aggregate_bca_unstable_metric_fraction" in parent.metrics
-    assert parent.metrics["aggregate_bca_unstable_metric_fraction"] == pytest.approx(
-        0.5, abs=1e-12
-    )
+    assert parent.metrics["aggregate_bca_unstable_metric_fraction"] == pytest.approx(0.5, abs=1e-12)
     assert parent.tags.get("has_bca_unstable") == "true"
 
 
-def _fold_invocation_recorder_with_failure(
-    connector: _FakeConnector, failed_fold_idx: int
-):
+def _fold_invocation_recorder_with_failure(connector: _FakeConnector, failed_fold_idx: int):
     """Recorder variant where one fold raises mid-execution.
 
     Used for cycle-17 IMPORTANT-4 verification: when a fold raises,
@@ -528,9 +541,8 @@ def _fold_invocation_recorder_with_failure(
 
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
-        is_repeated_fold = (
-            state.get("evaluation_mode") == "repeated_k10"
-            and bool(state.get("_repeated_mode_fold_invocation", False))
+        is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
+            state.get("_repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold and idx == failed_fold_idx:
             # Simulate a downstream node failure inside the fold's subgraph
@@ -577,26 +589,26 @@ async def test_parent_run_records_partial_failure_observability() -> None:
     agent = ModelTrainerAgent()
     failed_idx = 2
     mock_graph = _fold_invocation_recorder_with_failure(fake, failed_fold_idx=failed_idx)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         output = await agent.run(_make_input(k=5))
 
     # Output dict status (already covered by other tests; reaffirm here)
     assert output.get("aggregate_status") == "PARTIAL"
-    assert sum(
-        1 for fm in output["fold_metrics"] if fm.get("fold_status") == "failed"
-    ) == 1
+    assert sum(1 for fm in output["fold_metrics"] if fm.get("fold_status") == "failed") == 1
 
     # Parent run observability: n_failed_folds metric + aggregate_status tag
     parent_runs = [r for r in fake.runs if not r.is_nested]
     assert len(parent_runs) == 1
     parent = parent_runs[0]
     assert "n_failed_folds" in parent.metrics, (
-        f"Parent run is missing n_failed_folds metric: "
-        f"{sorted(parent.metrics.keys())}"
+        f"Parent run is missing n_failed_folds metric: {sorted(parent.metrics.keys())}"
     )
     assert parent.metrics["n_failed_folds"] == 1.0
     assert parent.tags.get("aggregate_status") == "PARTIAL", (
@@ -619,11 +631,14 @@ async def test_parent_run_records_complete_status_when_all_ok() -> None:
     fake = _FakeConnector()
     agent = ModelTrainerAgent()
     mock_graph = _fold_invocation_recorder_with_logging(fake)
-    with patch.object(
-        ModelTrainerAgent,
-        "_get_mlflow_connector_or_none",
-        staticmethod(lambda: fake),
-    ), patch.object(agent.graph, "ainvoke", mock_graph):
+    with (
+        patch.object(
+            ModelTrainerAgent,
+            "_get_mlflow_connector_or_none",
+            staticmethod(lambda: fake),
+        ),
+        patch.object(agent.graph, "ainvoke", mock_graph),
+    ):
         output = await agent.run(_make_input(k=5))
 
     assert output.get("aggregate_status") == "COMPLETE"

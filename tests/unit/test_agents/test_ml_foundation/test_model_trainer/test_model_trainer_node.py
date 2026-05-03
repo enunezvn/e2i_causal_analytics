@@ -582,13 +582,15 @@ class TestTrainModelMonotoneInjection:
         assert "error" not in result, "Length mismatch should soft-degrade, not hard-fail"
         assert result["trained_model"] is not None
         warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
-        assert any(
-            "monotone_vector length" in m or "length mismatch" in m
-            for m in warning_msgs
-        ), f"Expected length-mismatch warning; got: {warning_msgs}"
+        assert any("monotone_vector length" in m or "length mismatch" in m for m in warning_msgs), (
+            f"Expected length-mismatch warning; got: {warning_msgs}"
+        )
         # Trained model has NO monotone_constraints (the soft-degrade dropped them):
         params = result["trained_model"].get_params()
-        assert params.get("monotone_constraints") is None or params.get("monotone_constraints") == "None"
+        assert (
+            params.get("monotone_constraints") is None
+            or params.get("monotone_constraints") == "None"
+        )
 
 
 class TestGetFramework:

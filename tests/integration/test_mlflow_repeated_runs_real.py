@@ -102,9 +102,8 @@ def _build_minimal_graph_recorder(force_fold_failure_idx: int | None = None):
 
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
-        is_repeated_fold = (
-            state.get("evaluation_mode") == "repeated_k10"
-            and bool(state.get("_repeated_mode_fold_invocation", False))
+        is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
+            state.get("_repeated_mode_fold_invocation", False)
         )
 
         # Minimal fitted model (DummyClassifier needs only sample arrays)
@@ -147,16 +146,11 @@ def _build_minimal_graph_recorder(force_fold_failure_idx: int | None = None):
                 "src.agents.ml_foundation.model_trainer.nodes.mlflow_logger._log_model_artifact",
                 side_effect=_noop_artifact,
             ):
-                if (
-                    force_fold_failure_idx is not None
-                    and idx == force_fold_failure_idx
-                ):
+                if force_fold_failure_idx is not None and idx == force_fold_failure_idx:
                     # Simulate mid-fold failure AFTER mlflow_logger opened the
                     # nested run: patch the per-split metric logger to raise.
                     async def _raise_mid_run(*_args: Any, **_kwargs: Any) -> None:
-                        raise RuntimeError(
-                            f"injected mid-fold failure at fold {idx}"
-                        )
+                        raise RuntimeError(f"injected mid-fold failure at fold {idx}")
 
                     with patch(
                         "src.agents.ml_foundation.model_trainer.nodes.mlflow_logger._log_split_metrics",
@@ -233,12 +227,9 @@ async def test_real_mlflow_parent_plus_k_children_visible_via_search_runs(
     mlflow.set_tracking_uri(real_mlflow_tempdir)
     client = MlflowClient(tracking_uri=real_mlflow_tempdir)
     experiments = client.search_experiments()
-    exp = next(
-        (e for e in experiments if REAL_SMOKE_EXPERIMENT_NAME in e.name), None
-    )
+    exp = next((e for e in experiments if REAL_SMOKE_EXPERIMENT_NAME in e.name), None)
     assert exp is not None, (
-        f"Experiment not created in tracking store: "
-        f"{[e.name for e in experiments]}"
+        f"Experiment not created in tracking store: {[e.name for e in experiments]}"
     )
 
     # Children are runs whose mlflow.parentRunId tag equals the parent run id
@@ -316,9 +307,7 @@ async def test_real_mlflow_mid_fold_exception_failed_child_subsequent_attached(
     mlflow.set_tracking_uri(real_mlflow_tempdir)
     client = MlflowClient(tracking_uri=real_mlflow_tempdir)
     experiments = client.search_experiments()
-    exp = next(
-        (e for e in experiments if REAL_SMOKE_EXPERIMENT_NAME in e.name), None
-    )
+    exp = next((e for e in experiments if REAL_SMOKE_EXPERIMENT_NAME in e.name), None)
     assert exp is not None
 
     children = client.search_runs(
@@ -385,9 +374,7 @@ async def test_real_mlflow_n_jobs_2_lock_preserves_topology(
     mlflow.set_tracking_uri(real_mlflow_tempdir)
     client = MlflowClient(tracking_uri=real_mlflow_tempdir)
     experiments = client.search_experiments()
-    exp = next(
-        (e for e in experiments if REAL_SMOKE_EXPERIMENT_NAME in e.name), None
-    )
+    exp = next((e for e in experiments if REAL_SMOKE_EXPERIMENT_NAME in e.name), None)
     assert exp is not None
 
     children = client.search_runs(

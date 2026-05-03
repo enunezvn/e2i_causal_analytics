@@ -157,9 +157,7 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
             # routes to error_type=training_failed (hard-fail). §H mitigation
             # says soft-degrade with WARNING.
             n_features = (
-                X_train_preprocessed.shape[1]
-                if hasattr(X_train_preprocessed, "shape")
-                else None
+                X_train_preprocessed.shape[1] if hasattr(X_train_preprocessed, "shape") else None
             )
             if n_features is not None and len(monotone_vector) != n_features:
                 logger.warning(

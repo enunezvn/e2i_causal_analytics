@@ -174,11 +174,11 @@ def _jackknife_acceleration(values: np.ndarray) -> float:
     loo_means = (total - values) / (n - 1)
     grand = float(np.mean(loo_means))
     diffs = grand - loo_means
-    num = float(np.sum(diffs ** 3))
-    den_sq_sum = float(np.sum(diffs ** 2))
+    num = float(np.sum(diffs**3))
+    den_sq_sum = float(np.sum(diffs**2))
     if den_sq_sum == 0.0:
         return float("nan")
-    den = 6.0 * (den_sq_sum ** 1.5)
+    den = 6.0 * (den_sq_sum**1.5)
     return float(num / den)
 
 
@@ -255,7 +255,9 @@ def bca_ci_from_resamples(
 
     alpha = (1.0 - confidence_level) / 2.0
 
-    def _percentile_fallback(reason: str, z0: Optional[float], a: Optional[float]) -> BcaFromResamplesResult:
+    def _percentile_fallback(
+        reason: str, z0: Optional[float], a: Optional[float]
+    ) -> BcaFromResamplesResult:
         return BcaFromResamplesResult(
             ci_lo=float(np.percentile(boot, alpha * 100)),
             ci_hi=float(np.percentile(boot, (1.0 - alpha) * 100)),
@@ -270,6 +272,7 @@ def bca_ci_from_resamples(
     if p_lt <= 0.0 or p_lt >= 1.0:
         return _percentile_fallback("z0_undefined", None, None)
     from scipy.stats import norm  # local import keeps cold-start light
+
     z0 = float(norm.ppf(p_lt))
     if not np.isfinite(z0):
         return _percentile_fallback("z0_nonfinite", None, None)
@@ -279,11 +282,11 @@ def bca_ci_from_resamples(
         return _percentile_fallback("jackknife_too_small", z0, None)
     jack_mean = float(np.mean(jack))
     diffs = jack_mean - jack
-    num = float(np.sum(diffs ** 3))
-    den_sq = float(np.sum(diffs ** 2))
+    num = float(np.sum(diffs**3))
+    den_sq = float(np.sum(diffs**2))
     if den_sq == 0.0:
         return _percentile_fallback("acceleration_constant_statistic", z0, None)
-    a = num / (6.0 * den_sq ** 1.5)
+    a = num / (6.0 * den_sq**1.5)
     if not np.isfinite(a):
         return _percentile_fallback("acceleration_nonfinite", z0, None)
 
