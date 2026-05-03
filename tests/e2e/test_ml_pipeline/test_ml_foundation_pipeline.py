@@ -211,6 +211,14 @@ def mock_model_trainer_output():
             "min_precision": True,
             "min_recall": True,
         },
+        # Mirror the post-PR-#30 wiring fix: ModelTrainerAgent.run now
+        # forwards the (possibly-overlaid) success_criteria dict alongside
+        # the two derived fields, so the runner / pipeline can persist it.
+        "success_criteria": {
+            "minimum_auc": 0.75,
+            "minimum_recall": 0.65,
+            "criteria_source": "fixed",
+        },
         "best_hyperparameters": {
             "n_estimators": 150,
             "max_depth": 7,

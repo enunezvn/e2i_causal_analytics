@@ -4741,6 +4741,17 @@ async def run_pipeline(
                     or result.get("mlflow_model_uri")
                 )
                 state["success_criteria_met"] = result.get("success_criteria_met", False)
+                # Hop 3 of 4 (adaptive_criteria_v3_followup): copy the
+                # (possibly-overlaid) success_criteria from the agent's
+                # result into runner state so the JSON artifact + deployer
+                # signal see v3 active gates / regime overrides / popped
+                # deprecated keys. Empty-dict guard preserves the
+                # validator's pre-overlay stash when the agent (or a test
+                # stub) returns no success_criteria — see
+                # tests/unit/test_scripts/test_tier0_cache.py _StubAgent.
+                sc_from_result = result.get("success_criteria")
+                if sc_from_result:
+                    state["success_criteria"] = sc_from_result
                 state["model_usefulness"] = result.get("model_usefulness", "unknown")
 
                 # Capture class imbalance information

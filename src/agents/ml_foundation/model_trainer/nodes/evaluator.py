@@ -347,6 +347,16 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             if split_val.get("stratification_warning"):
                 logger.warning(split_val["stratification_warning"])
 
+    # v3 (adaptive criteria follow-up): apply the overlay HERE so the
+    # overlaid dict can be persisted into ``state["success_criteria"]``
+    # downstream (Edit 3 returns it; agent.py extracts at hop 2; runner
+    # + pipeline copy at hops 3 and 4). The overlay is idempotent: when
+    # ``_adaptive_inputs`` or ``baseline_test_auc`` are absent (fixed
+    # mode), it returns ``success_criteria`` unchanged.
+    success_criteria = _apply_adaptive_criteria_overlay(
+        success_criteria, metrics_result["test_metrics"]
+    )
+
     # Check success criteria
     success_results = _check_success_criteria(
         metrics_result["test_metrics"],
@@ -370,11 +380,16 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             f"reasons={suspicion_result['suspicion_reasons']}"
         )
 
-    # Merge results
+    # Merge results — include the (possibly-overlaid) success_criteria
+    # so the v3 active gates / regime overrides / deprecation pops
+    # persist into LangGraph node state, then up through agent.run, then
+    # into the runner's state dict and PipelineResult.success_criteria
+    # (see hops 2-4 in adaptive_criteria_v3_followup plan).
     return {
         **metrics_result,
         **success_results,
         **suspicion_result,
+        "success_criteria": success_criteria,
     }
 
 
@@ -1678,12 +1693,14 @@ def _check_success_criteria(
             "success_criteria_results": {},
         }
 
-    # v3 (task 05 of adaptive_success_criteria plan): apply the adaptive
-    # overlay BEFORE iterating criteria. No-op when ``_adaptive_inputs``
-    # or ``baseline_test_auc`` are absent, so fixed-mode runs are
-    # unaffected. The overlay returns a possibly-rebuilt dict; we use
-    # it as ``success_criteria`` for the rest of this function.
-    success_criteria = _apply_adaptive_criteria_overlay(success_criteria, test_metrics)
+    # v3 (adaptive criteria follow-up): the adaptive overlay is now
+    # applied by ``evaluate_model`` BEFORE this function is called, so
+    # the overlaid dict can persist into ``state["success_criteria"]``
+    # via the LangGraph node return. ``_check_success_criteria`` is now
+    # a pure check over the already-overlaid criteria — easier to unit-
+    # test in isolation. Tests that previously passed a stash-shaped
+    # dict here and expected internal overlay must call
+    # ``_apply_adaptive_criteria_overlay`` first.
 
     # Per-criterion outcome: True=met, False=not met, None=soft-skipped
     # (see narrow exemption below).
