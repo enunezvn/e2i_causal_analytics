@@ -427,7 +427,15 @@ async def test_orchestrator_single_mode_real_graph_output_surface() -> None:
         name="y",
     )
 
-    # E2I-required split ratios: 60% / 20% / 15% / 5%
+    # E2I-required split ratios: 60% / 20% / 15% / 5%.
+    # Cycle-18 IMPORTANT-2: the 5-row holdout (rows 95-99) is not consumed by
+    # the active evaluator node — confirmed by absence of holdout_data
+    # references in src/agents/ml_foundation/model_trainer/nodes/evaluator.py.
+    # The holdout is loaded by split_loader and stored in state for downstream
+    # consumers but the primary AUC computation uses the 15-row test_data,
+    # giving ~99.99% margin against an all-one-class accident at this seed.
+    # Future evaluator changes that consume holdout MUST revisit this size
+    # (5 rows is too small for AUC if both classes are required).
     train_end = int(0.60 * n)
     val_end = train_end + int(0.20 * n)
     test_end = val_end + int(0.15 * n)
@@ -492,18 +500,32 @@ async def test_orchestrator_single_mode_real_graph_output_surface() -> None:
         f"fields: {sorted(repeated_leaks)}"
     )
 
-    # Required legacy keys observable end-to-end. This is the same set as
-    # the cheap test (mocked-graph) but verified via the LIVE LangGraph path.
-    # If a node refactor drops one of these keys silently, this test catches
-    # it where the cheap test cannot. The "minimum" framing means downstream
-    # consumers (Tier-0 supervisor, FastAPI endpoint, contract tests) will
-    # still find what they need.
+    # Required legacy keys observable end-to-end. Mirrors the cheap test's
+    # required set but verified via the LIVE LangGraph path. If a node
+    # refactor drops one of these keys silently, this test catches it where
+    # the cheap test cannot.
+    #
+    # Cycle-18 IMPORTANT-1 / COSMETIC-1: the slow test originally omitted
+    # ``brier_score`` / ``algorithm_class`` / ``training_duration_seconds``
+    # without explanation, creating an undocumented asymmetry with the cheap
+    # test's required set. All three are produced unconditionally by the
+    # real graph for binary classification (brier_score from
+    # sklearn.metrics.brier_score_loss in evaluator.py; algorithm_class set
+    # on initial_state in agent.py; training_duration_seconds set in
+    # _build_output). Including them here closes the slow test's coverage
+    # gap.
+    #
+    # MLflow keys (``mlflow_run_id``, ``mlflow_status``) are intentionally
+    # omitted here because this test runs with ``enable_mlflow=False`` —
+    # ``mlflow_status`` is "skipped" and ``mlflow_run_id`` is None. The
+    # cheap test exercises that path explicitly.
     must_be_present_in_single_mode = {
         # Core classification metrics
         "auc_roc",
         "precision",
         "recall",
         "f1_score",
+        "brier_score",
         "test_metrics",
         "validation_metrics",
         "train_metrics",
@@ -512,11 +534,13 @@ async def test_orchestrator_single_mode_real_graph_output_surface() -> None:
         "training_run_id",
         "model_id",
         "algorithm_name",
+        "algorithm_class",
         "framework",
         # Status / context
         "training_status",
         "experiment_id",
         "problem_type",
+        "training_duration_seconds",
     }
     output_keys = set(output.keys())
     missing_required = must_be_present_in_single_mode - output_keys

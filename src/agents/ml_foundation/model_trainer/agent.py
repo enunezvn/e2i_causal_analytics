@@ -921,8 +921,18 @@ class ModelTrainerAgent:
                 metrics_payload["aggregate_bca_unstable_metric_fraction"] = (
                     float(n_unstable) / float(n_total)
                 )
+            # Cycle-18 IMPORTANT-3 (Q4.A): wrap log_metrics in try/except so a
+            # connector failure here cannot propagate past _log_aggregate_to_parent
+            # and silently skip the cycle-17 I-4 partial-failure observability
+            # block (n_failed_folds metric + aggregate_status tag) at the call
+            # site. Symmetric with the set_tags handler immediately below.
             if metrics_payload:
-                await run.log_metrics(metrics_payload)
+                try:
+                    await run.log_metrics(metrics_payload)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        f"parent aggregate metrics logging failed: {exc!r}"
+                    )
             # COSMETIC-1: mirror the unstable flag as a string tag so MLflow
             # run-search queries (which can filter by tag but not by metric
             # value) can quickly find runs with any unstable BCa CI.
@@ -993,7 +1003,12 @@ class ModelTrainerAgent:
                             }
                         )
                     except Exception as exc:  # noqa: BLE001
-                        logger.debug(
+                        # Cycle-18 COSMETIC-2 (Q4.C): aggregate_status is the
+                        # primary consumer-visible signal for partial-failure
+                        # runs; a silent failure to emit it would leave
+                        # operators without visibility. WARNING (not DEBUG) so
+                        # default log levels surface the issue.
+                        logger.warning(
                             f"parent aggregate_status tag logging failed: {exc!r}"
                         )
             except Exception as exc:  # noqa: BLE001
