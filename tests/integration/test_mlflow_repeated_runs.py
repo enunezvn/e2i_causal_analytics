@@ -58,6 +58,9 @@ class _FakeRun:
     async def log_params(self, params: Dict[str, Any]) -> None:
         self.params.update({k: str(v) for k, v in params.items()})
 
+    async def set_tags(self, tags: Dict[str, str]) -> None:
+        self.tags.update({k: str(v) for k, v in tags.items()})
+
 
 class _FakeConnector:
     """In-memory MLflow connector substitute for orchestrator + node tests.
@@ -226,6 +229,11 @@ async def test_parent_run_has_aggregate_metrics() -> None:
     assert "aggregate_auc_roc_bca_hi" in parent.metrics
     # Sanity: aggregate_status COMPLETE
     assert output["aggregate_status"] == "COMPLETE"
+    # Cycle-17 COSMETIC-1/2: when all metrics are BCa-stable the summary
+    # count is 0 and the tag mirrors that for non-chart consumers.
+    assert parent.metrics.get("aggregate_bca_unstable_metric_count") == 0.0
+    assert parent.metrics.get("aggregate_bca_unstable_metric_fraction") == 0.0
+    assert parent.tags.get("has_bca_unstable") == "false"
 
 
 @pytest.mark.integration
@@ -492,3 +500,136 @@ async def test_parent_run_logs_bca_unstable_warning_per_metric() -> None:
     aggregate = output["aggregate_metrics"]
     assert aggregate["auc_roc"].bca_unstable_warning is False
     assert aggregate["brier_score"].bca_unstable_warning is True
+
+    # Cycle-17 COSMETIC-1/2: parent-level summary metrics + tag for
+    # multi-run comparison ergonomics. The constant-metric recorder above
+    # produces N=2 metrics (auc_roc stable, brier_score unstable), so the
+    # summary should be count=1, fraction=0.5, tag="true".
+    assert "aggregate_bca_unstable_metric_count" in parent.metrics
+    assert parent.metrics["aggregate_bca_unstable_metric_count"] == 1.0
+    assert "aggregate_bca_unstable_metric_fraction" in parent.metrics
+    assert parent.metrics["aggregate_bca_unstable_metric_fraction"] == pytest.approx(
+        0.5, abs=1e-12
+    )
+    assert parent.tags.get("has_bca_unstable") == "true"
+
+
+def _fold_invocation_recorder_with_failure(
+    connector: _FakeConnector, failed_fold_idx: int
+):
+    """Recorder variant where one fold raises mid-execution.
+
+    Used for cycle-17 IMPORTANT-4 verification: when a fold raises,
+    `_run_repeated_splits` records `fold_status="failed"` and the
+    parent run's lifecycle code MUST emit `n_failed_folds` metric +
+    `aggregate_status` tag BEFORE the parent run closes.
+    """
+    from unittest.mock import AsyncMock
+
+    async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
+        idx = int(state.get("fold_idx", 0))
+        is_repeated_fold = (
+            state.get("evaluation_mode") == "repeated_k10"
+            and bool(state.get("_repeated_mode_fold_invocation", False))
+        )
+        if is_repeated_fold and idx == failed_fold_idx:
+            # Simulate a downstream node failure inside the fold's subgraph
+            raise RuntimeError(f"simulated fold {idx} failure")
+        if is_repeated_fold:
+            tags = {
+                "fold_idx": str(idx),
+                "evaluation_mode": "repeated_k10",
+                "fold_seed": str(int(state.get("fold_random_state", 0))),
+            }
+            async with connector.start_run(
+                experiment_id="exp:test_g4_mlflow_repeated_exp",
+                run_name=f"fold_{idx:02d}",
+                tags=tags,
+                nested=True,
+            ):
+                pass
+        return {
+            **state,
+            "trained_model": object(),
+            "auc_roc": 0.77 + 0.005 * idx,
+            "brier_score": 0.18 - 0.002 * idx,
+            "framework": "lightgbm",
+        }
+
+    return AsyncMock(side_effect=fake_ainvoke)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_parent_run_records_partial_failure_observability() -> None:
+    """Cycle-17 IMPORTANT-4: parent run carries `aggregate_status` + `n_failed_folds`.
+
+    Per the cycle-17 verdict, fold-level exceptions are caught inside
+    `_execute_one_fold` and converted to `fold_status="failed"`, so the parent
+    MLflow context never sees the exception and would otherwise close as
+    FINISHED with no partial-failure signal at the run level. The cycle-17
+    fix logs `n_failed_folds` as a parent metric and `aggregate_status` as a
+    parent tag BEFORE the parent context closes. This test exercises that path.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    fake = _FakeConnector()
+    agent = ModelTrainerAgent()
+    failed_idx = 2
+    mock_graph = _fold_invocation_recorder_with_failure(fake, failed_fold_idx=failed_idx)
+    with patch.object(
+        ModelTrainerAgent,
+        "_get_mlflow_connector_or_none",
+        staticmethod(lambda: fake),
+    ), patch.object(agent.graph, "ainvoke", mock_graph):
+        output = await agent.run(_make_input(k=5))
+
+    # Output dict status (already covered by other tests; reaffirm here)
+    assert output.get("aggregate_status") == "PARTIAL"
+    assert sum(
+        1 for fm in output["fold_metrics"] if fm.get("fold_status") == "failed"
+    ) == 1
+
+    # Parent run observability: n_failed_folds metric + aggregate_status tag
+    parent_runs = [r for r in fake.runs if not r.is_nested]
+    assert len(parent_runs) == 1
+    parent = parent_runs[0]
+    assert "n_failed_folds" in parent.metrics, (
+        f"Parent run is missing n_failed_folds metric: "
+        f"{sorted(parent.metrics.keys())}"
+    )
+    assert parent.metrics["n_failed_folds"] == 1.0
+    assert parent.tags.get("aggregate_status") == "PARTIAL", (
+        f"Parent run aggregate_status tag wrong: {parent.tags!r}"
+    )
+    assert parent.tags.get("n_failed_folds") == "1"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_parent_run_records_complete_status_when_all_ok() -> None:
+    """Cycle-17 IMPORTANT-4 complement: zero-failure path emits COMPLETE + n_failed_folds=0.
+
+    Mirrors `test_parent_run_records_partial_failure_observability` for the
+    success path so we have explicit coverage of both branches of the new
+    parent-status logic.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    fake = _FakeConnector()
+    agent = ModelTrainerAgent()
+    mock_graph = _fold_invocation_recorder_with_logging(fake)
+    with patch.object(
+        ModelTrainerAgent,
+        "_get_mlflow_connector_or_none",
+        staticmethod(lambda: fake),
+    ), patch.object(agent.graph, "ainvoke", mock_graph):
+        output = await agent.run(_make_input(k=5))
+
+    assert output.get("aggregate_status") == "COMPLETE"
+    parent_runs = [r for r in fake.runs if not r.is_nested]
+    assert len(parent_runs) == 1
+    parent = parent_runs[0]
+    assert parent.metrics.get("n_failed_folds") == 0.0
+    assert parent.tags.get("aggregate_status") == "COMPLETE"
+    assert parent.tags.get("n_failed_folds") == "0"

@@ -885,8 +885,17 @@ class ModelTrainerAgent:
             1.0|0.0 per metric so MLflow UI consumers can distinguish reliable
             BCa CIs from degenerate fallbacks where ``bca_ci_lo/hi`` are None
             and the percentile_ci should be preferred for downstream gates.
+
+            Cycle-17 COSMETIC-1/2: also emits a parent-level summary —
+            ``aggregate_bca_unstable_metric_count`` and ``_fraction`` so MLflow
+            UI consumers comparing many runs can rank by BCa-unstable density
+            without scanning every per-metric flag, plus a ``has_bca_unstable``
+            tag (string) so non-chart consumers (run-list filters, run-search
+            queries) can branch on a single boolean rather than a numeric metric.
             """
             metrics_payload: Dict[str, float] = {}
+            n_unstable = 0
+            n_total = 0
             for metric_name, stat in agg.items():
                 metrics_payload[f"aggregate_{metric_name}_mean"] = stat.mean
                 metrics_payload[f"aggregate_{metric_name}_std"] = stat.std
@@ -904,8 +913,27 @@ class ModelTrainerAgent:
                 metrics_payload[f"aggregate_{metric_name}_bca_unstable"] = (
                     1.0 if stat.bca_unstable_warning else 0.0
                 )
+                n_total += 1
+                if stat.bca_unstable_warning:
+                    n_unstable += 1
+            if n_total > 0:
+                metrics_payload["aggregate_bca_unstable_metric_count"] = float(n_unstable)
+                metrics_payload["aggregate_bca_unstable_metric_fraction"] = (
+                    float(n_unstable) / float(n_total)
+                )
             if metrics_payload:
                 await run.log_metrics(metrics_payload)
+            # COSMETIC-1: mirror the unstable flag as a string tag so MLflow
+            # run-search queries (which can filter by tag but not by metric
+            # value) can quickly find runs with any unstable BCa CI.
+            try:
+                await run.set_tags(
+                    {"has_bca_unstable": "true" if n_unstable > 0 else "false"}
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    f"parent has_bca_unstable tag logging failed: {exc!r}"
+                )
 
         async def _run_all_folds() -> None:
             if n_jobs == 1:
@@ -939,6 +967,35 @@ class ModelTrainerAgent:
                     await _run_all_folds()
                     aggregate = aggregate_fold_metrics(fold_metrics)
                     await _log_aggregate_to_parent(parent_run, aggregate)
+                    # Cycle-17 IMPORTANT-4: surface partial-failure observability
+                    # at the parent run BEFORE it closes, so MLflow UI consumers
+                    # can filter by aggregate_status / n_failed_folds without
+                    # opening every child run.
+                    n_failed_folds = sum(
+                        1 for fm in fold_metrics if fm.get("fold_status") == "failed"
+                    )
+                    aggregate_status = (
+                        "PARTIAL" if n_failed_folds > 0 else "COMPLETE"
+                    )
+                    try:
+                        await parent_run.log_metrics(
+                            {"n_failed_folds": float(n_failed_folds)}
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(
+                            f"parent n_failed_folds metric logging failed: {exc!r}"
+                        )
+                    try:
+                        await parent_run.set_tags(
+                            {
+                                "aggregate_status": aggregate_status,
+                                "n_failed_folds": str(n_failed_folds),
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(
+                            f"parent aggregate_status tag logging failed: {exc!r}"
+                        )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     f"_run_repeated_splits: parent MLflow run wrapper failed: {exc!r}; "
