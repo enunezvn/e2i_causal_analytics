@@ -43,6 +43,10 @@ from src.agents.ml_foundation.model_trainer.nodes.evaluator import (  # noqa: E4
 from src.agents.ml_foundation.model_trainer.nodes.model_trainer_node import (  # noqa: E402
     train_model,
 )
+from src.ml.synthetic_v2 import ScenarioName, generate_scenario  # noqa: E402
+from src.ml.synthetic_v2.yaml_loader import (  # noqa: E402
+    discover_scenarios,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,15 +216,95 @@ async def _run_one_algorithm(
     return artifact
 
 
+def _materialize_scenario_dataset(
+    scenario_short: str, *, seed: int = SEED, n_total: int | None = None
+) -> tuple[Dict[str, np.ndarray], Dict[str, Any]]:
+    """Materialize dataset for `--scenario A|B|C` per shard 07 §A.
+
+    Returns (data_dict, scenario_metadata_dict). The data_dict has the
+    same X_train/X_val/X_test/y_* keys the placeholder DGP returned so
+    the downstream training loop is unchanged.
+    """
+    name = ScenarioName.from_short(scenario_short)
+    n_for_smoke = n_total if n_total is not None else 1500
+    ds = generate_scenario(name, seed=seed, n_total=n_for_smoke)
+
+    # Pull human-readable franchise/disease labels from the YAML config so
+    # the artifact carries provenance without forcing scenario_a.py to host
+    # display strings.
+    yaml_meta = next(
+        (s for s in discover_scenarios("tests/configs/scenarios") if s.name == name),
+        None,
+    )
+    metadata = {
+        "scenario_name": ds.metadata.scenario.value,
+        "short_code": scenario_short,
+        "franchise": yaml_meta.franchise if yaml_meta else "",
+        "disease": yaml_meta.disease if yaml_meta else "",
+        "outcome_field": yaml_meta.outcome_field if yaml_meta else "",
+        "feature_count": len(ds.metadata.feature_names),
+        "target_prevalence": ds.metadata.target_prevalence,
+        "realized_prevalence": ds.metadata.realized_prevalence,
+        "target_auc_band": list(ds.metadata.target_auc_band),
+        "audit_fingerprint": ds.metadata.audit_fingerprint,
+        "n_train": ds.metadata.n_train,
+        "n_val": ds.metadata.n_val,
+        "n_test": ds.metadata.n_test,
+        "intercept": ds.metadata.intercept,
+        "slope_multiplier": ds.metadata.slope_multiplier,
+    }
+    data = {
+        "X_train": ds.X_train,
+        "y_train": ds.y_train,
+        "X_val": ds.X_val,
+        "y_val": ds.y_val,
+        "X_test": ds.X_test,
+        "y_test": ds.y_test,
+    }
+    return data, metadata
+
+
 async def _run_diagnostic_async(
     output_path: Path,
     algorithms: List[Dict[str, Any]],
+    *,
+    scenario_short: str = "placeholder",
+    seed: int = SEED,
+    n_total: int | None = None,
 ) -> Dict[str, Any]:
     """Async entry point: run all algorithms, write JSON, return summary."""
-    data = _make_diagnostic_synthetic()
+    if scenario_short == "placeholder":
+        data = _make_diagnostic_synthetic(seed=seed)
+        scenario_metadata: Dict[str, Any] = {
+            "scenario_name": "placeholder_tier0_diagnostic",
+            "short_code": "placeholder",
+            "franchise": "",
+            "disease": "breast_cancer_recurrence",
+            "outcome_field": "",
+            "feature_count": N_FEATURES,
+            "target_prevalence": 0.27,
+            "realized_prevalence": float(data["y_train"].mean()),
+            "target_auc_band": [0.0, 1.0],
+            "audit_fingerprint": "placeholder",
+            "n_train": N_TRAIN,
+            "n_val": N_VAL,
+            "n_test": N_TEST,
+            "intercept": -0.5,
+            "slope_multiplier": 1.5,
+        }
+        success_criteria_disease = "breast_cancer_recurrence"
+        success_criteria_use_case = "diagnostic"
+    else:
+        data, scenario_metadata = _materialize_scenario_dataset(
+            scenario_short, seed=seed, n_total=n_total
+        )
+        success_criteria_disease = scenario_metadata.get("outcome_field", "") or "scenario_outcome"
+        # Map A/B/C to use_case via canonical mapping
+        use_case_map = {"A": "diagnostic", "B": "screening", "C": "treatment_decision"}
+        success_criteria_use_case = use_case_map[scenario_short]
     success_criteria: Dict[str, Any] = {
-        "dataset_disease": "breast_cancer_recurrence",
-        "clinical_threshold_range": {"use_case": "diagnostic"},
+        "dataset_disease": success_criteria_disease,
+        "clinical_threshold_range": {"use_case": success_criteria_use_case},
     }
     results: List[Dict[str, Any]] = []
     for algo in algorithms:
@@ -236,23 +320,17 @@ async def _run_diagnostic_async(
             result.get("net_benefit_area_relative_to_treat_all"),
         )
 
+    schema_version = (
+        "phase1_diagnostic.v1" if scenario_short == "placeholder" else "phase1_diagnostic.v2"
+    )
     artifact: Dict[str, Any] = {
-        "schema_version": "phase1_diagnostic.v1",
+        "schema_version": schema_version,
         "generated_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
-        "scenario": "placeholder_tier0_diagnostic",
-        "scenario_note": (
-            "Generated from tier0-style synthetic per shard 17 line 106 "
-            "mitigation; replace with synthetic_data_generator_v2 Scenario A "
-            "when delivered."
-        ),
+        "scenario": scenario_metadata,
         "fixture": {
-            "seed": SEED,
-            "n_train": N_TRAIN,
-            "n_val": N_VAL,
-            "n_test": N_TEST,
-            "n_features": N_FEATURES,
-            "label_dgp": "y ~ Bernoulli(sigmoid(1.5 * X[:,0] - 0.5))",
-            "expected_prevalence": 0.27,
+            "seed": seed,
+            "n_total": n_total,
+            "scenario_short": scenario_short,
         },
         "success_criteria": success_criteria,
         "results": results,
@@ -278,34 +356,48 @@ def main() -> int:
     )
     parser.add_argument(
         "--scenario",
-        choices=["placeholder"],
+        choices=["A", "B", "C", "placeholder"],
         default="placeholder",
         help=(
-            "Scenario selector. Phase 1 ships only `placeholder`; "
-            "A/B/C will become valid choices once "
-            "synthetic_data_generator_v2 delivers them (shard 17 W4 "
-            "Prerequisites). Cycle-24 C-1: A/B/C removed from `choices` "
-            "to prevent argparse from advertising them in --help when "
-            "the runtime path rejects them anyway."
+            "Scenario selector. A/B/C dispatch through synthetic_v2 "
+            "generate_scenario; placeholder uses the cycle-24 tier0-style DGP "
+            "for backward-compat smoke runs."
         ),
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=SEED,
+        help="Random seed for the synthetic_v2 generator (or placeholder DGP).",
+    )
+    parser.add_argument(
+        "--n-total",
+        type=int,
+        default=None,
+        help="Override default cohort size (synthetic_v2 only; ignored for placeholder).",
+    )
     args = parser.parse_args()
-    # Defensive: argparse already restricts ``choices``, but a future
-    # caller may pass directly to ``main`` programmatically.
-    if args.scenario != "placeholder":
-        parser.error(
-            "scenarios A/B/C not yet supported — synthetic_data_generator_v2 "
-            "must deliver them first (shard 17 W4 Prerequisites)."
-        )
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s — %(message)s",
     )
+    date_stamp = datetime.now(UTC).strftime("%Y%m%d")
     output_path = args.output or (
-        ROOT / "docs" / "results" / f"phase1_diagnostic_{datetime.now(UTC).strftime('%Y%m%d')}.json"
+        ROOT
+        / "docs"
+        / "results"
+        / f"phase1_diagnostic_{args.scenario}_{date_stamp}.json"
     )
-    artifact = asyncio.run(_run_diagnostic_async(output_path, PLACEHOLDER_ALGORITHMS))
+    artifact = asyncio.run(
+        _run_diagnostic_async(
+            output_path,
+            PLACEHOLDER_ALGORITHMS,
+            scenario_short=args.scenario,
+            seed=args.seed,
+            n_total=args.n_total,
+        )
+    )
     n_ok = sum(1 for r in artifact["results"] if r.get("status") == "ok")
     n_total = len(artifact["results"])
     print(f"wrote {output_path}")
