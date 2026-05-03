@@ -1949,6 +1949,13 @@ def _compute_precision_at_k(
     return result
 
 
+# Q-W5-3 RESOLVED 2026-05-02 cycle 6: BCa default flipped to ``"auto"``.
+# Below ``_MIN_N_FOR_BCA`` bootstrap units, BCa acceleration is unstable
+# (Bengio & Grandvalet 2004 — no distribution-free unbiased k-fold CV
+# variance estimator). 30 is the codex B verdict cutoff.
+_MIN_N_FOR_BCA: int = 30
+
+
 def _compute_bootstrap_ci(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -1957,8 +1964,10 @@ def _compute_bootstrap_ci(
     n_bootstrap: int = 1000,
     confidence: float = 0.95,
     random_state: Optional[int] = None,
+    ci_method: str = "auto",
+    force_bca: bool = False,
 ) -> Tuple[Dict[str, Tuple[float, float]], int]:
-    """Compute bootstrap confidence intervals for metrics.
+    """Compute bootstrap confidence intervals for metrics (shard 20 §D.3).
 
     Args:
         y_true: True labels
@@ -1976,9 +1985,21 @@ def _compute_bootstrap_ci(
             ``np.random.choice`` — preserves byte-identity for legacy
             callers that don't supply a fold seed (single-mode evaluation,
             external test fixtures with explicit ``np.random.seed``).
+        ci_method: One of ``"auto"`` (default), ``"bca"``, ``"percentile"``.
+            Q-W5-3 RESOLVED 2026-05-02 cycle 6: ``"auto"`` resolves to
+            percentile when ``n_bootstrap < _MIN_N_FOR_BCA`` (=30), BCa
+            otherwise. Legacy snapshot tests should pin
+            ``ci_method="percentile"`` explicitly.
+        force_bca: When True + ``ci_method="bca"`` + ``n_bootstrap < _MIN_N_FOR_BCA``,
+            still attempt BCa (caller acknowledges small-N fragility). When
+            False (default), falls back to percentile with
+            ``bca_fallback_reason="below_min_n_for_bca"`` logged at INFO.
 
     Returns:
-        Tuple of (confidence_intervals, n_bootstrap)
+        Tuple of (confidence_intervals, n_bootstrap). Provenance fields
+        (``ci_method_requested`` / ``ci_method_used`` / ``bca_fallback_reason``
+        / ``bca_unstable_warning``) are emitted via INFO log to avoid
+        breaking the legacy 2-tuple contract.
     """
     n_samples = len(y_true)
     alpha = (1 - confidence) / 2
@@ -2054,15 +2075,193 @@ def _compute_bootstrap_ci(
             except ValueError:
                 pass
 
-    # Compute confidence intervals
-    confidence_intervals = {}
-    for metric_name, values in bootstrap_metrics.items():
-        if len(values) > 0:
-            lower = float(np.percentile(values, alpha * 100))
-            upper = float(np.percentile(values, (1 - alpha) * 100))
-            confidence_intervals[metric_name] = (lower, upper)
+    # Resolve ci_method per Q-W5-3 RESOLVED. Below the BCa min-N cutoff
+    # (Bengio & Grandvalet 2004 — k-fold variance estimator instability),
+    # auto resolves to percentile and "bca" without ``force_bca`` falls back.
+    method_requested = ci_method
+    fallback_reason: Optional[str] = None
+    if ci_method == "auto":
+        method_resolved = "bca" if n_bootstrap >= _MIN_N_FOR_BCA else "percentile"
+        if method_resolved == "percentile":
+            fallback_reason = "auto_below_min_n_for_bca"
+    elif ci_method == "bca":
+        if n_bootstrap < _MIN_N_FOR_BCA and not force_bca:
+            method_resolved = "percentile"
+            fallback_reason = "below_min_n_for_bca"
+        else:
+            method_resolved = "bca"
+    elif ci_method == "percentile":
+        method_resolved = "percentile"
+    else:
+        logger.warning(
+            "Unknown ci_method=%r — falling back to percentile.", ci_method
+        )
+        method_resolved = "percentile"
+        fallback_reason = f"unknown_ci_method:{ci_method}"
 
+    confidence_intervals: Dict[str, Tuple[float, float]] = {}
+    method_used: Dict[str, str] = {}
+
+    if method_resolved == "percentile":
+        for metric_name, values in bootstrap_metrics.items():
+            if len(values) > 0:
+                lower = float(np.percentile(values, alpha * 100))
+                upper = float(np.percentile(values, (1 - alpha) * 100))
+                confidence_intervals[metric_name] = (lower, upper)
+                method_used[metric_name] = "percentile"
+        logger.info(
+            "bootstrap CI: requested=%s used=percentile fallback_reason=%s",
+            method_requested,
+            fallback_reason,
+        )
+        return confidence_intervals, n_bootstrap
+
+    # BCa branch — compute point estimates + jackknife distributions
+    # once, then call bca_ci_from_resamples per metric.
+    from src.utils.bootstrap_utils import bca_ci_from_resamples
+
+    point_estimates = _compute_point_estimates(
+        y_true, y_pred, y_proba_pos, problem_type
+    )
+    jackknife_cache = _compute_jackknife_metrics(
+        y_true, y_pred, y_proba_pos, problem_type
+    )
+    bca_unstable = False
+    for metric_name, values in bootstrap_metrics.items():
+        if len(values) == 0 or metric_name not in point_estimates:
+            continue
+        result = bca_ci_from_resamples(
+            bootstrap_values=values,
+            point_estimate=point_estimates[metric_name],
+            jackknife_values=jackknife_cache.get(metric_name, np.array([])),
+            confidence_level=confidence,
+        )
+        if result.ci_lo is None or result.ci_hi is None:
+            continue
+        confidence_intervals[metric_name] = (result.ci_lo, result.ci_hi)
+        method_used[metric_name] = result.method
+        if result.method != "bca":
+            bca_unstable = True
+    # Cycle-22 C-2: report which per-metric methods actually applied so
+    # log consumers can distinguish "BCa requested + delivered for all"
+    # from "BCa requested but every metric fell back to percentile."
+    logger.info(
+        "bootstrap CI: requested=%s resolved=bca per_metric_methods=%s any_fallback=%s",
+        method_requested,
+        method_used,
+        bca_unstable,
+    )
     return confidence_intervals, n_bootstrap
+
+
+def _compute_point_estimates(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba_pos: Optional[np.ndarray],
+    problem_type: str,
+) -> Dict[str, float]:
+    """Per-metric point estimate on the original (non-resampled) sample.
+
+    Mirrors the metric set computed inside the bootstrap loop in
+    :func:`_compute_bootstrap_ci`; required input to BCa bias-correction
+    (``z0 = Φ⁻¹(P(boot < point_estimate))``).
+    """
+    out: Dict[str, float] = {}
+    if problem_type == "binary_classification":
+        out["accuracy"] = float(accuracy_score(y_true, y_pred))
+        if y_proba_pos is not None:
+            try:
+                out["auc"] = float(roc_auc_score(y_true, y_proba_pos))
+            except ValueError:
+                pass
+        out["precision"] = float(precision_score(y_true, y_pred, zero_division=0))
+        out["recall"] = float(recall_score(y_true, y_pred, zero_division=0))
+    elif problem_type == "regression":
+        mse_val = float(mean_squared_error(y_true, y_pred))
+        out["rmse"] = float(np.sqrt(mse_val))
+        out["mae"] = float(mean_absolute_error(y_true, y_pred))
+        try:
+            out["r2"] = float(r2_score(y_true, y_pred))
+        except ValueError:
+            pass
+    return out
+
+
+def _compute_jackknife_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba_pos: Optional[np.ndarray],
+    problem_type: str,
+) -> Dict[str, np.ndarray]:
+    """Per-metric leave-one-out distribution for BCa acceleration.
+
+    Returns ``{metric_name: ndarray of length N}`` where the i-th value
+    is the metric on ``(y_true, y_pred, y_proba_pos)`` with sample i
+    excluded. Used by :func:`bca_ci_from_resamples` for the jackknife
+    acceleration term.
+
+    Computational cost: N metric evaluations per metric. At N=1500 this
+    is ~3 seconds for all 4 binary metrics — well under the existing
+    bootstrap loop's 1000-iteration cost.
+    """
+    n = int(len(y_true))
+    if n < 2:
+        return {}
+    idx = np.arange(n)
+    out: Dict[str, np.ndarray] = {}
+
+    if problem_type == "binary_classification":
+        accuracy_jack = np.empty(n, dtype=float)
+        precision_jack = np.empty(n, dtype=float)
+        recall_jack = np.empty(n, dtype=float)
+        auc_jack = np.full(n, np.nan, dtype=float)
+        for i in range(n):
+            mask = idx != i
+            yt = y_true[mask]
+            yp = y_pred[mask]
+            accuracy_jack[i] = accuracy_score(yt, yp)
+            precision_jack[i] = precision_score(yt, yp, zero_division=0)
+            recall_jack[i] = recall_score(yt, yp, zero_division=0)
+            if y_proba_pos is not None:
+                try:
+                    auc_jack[i] = roc_auc_score(yt, y_proba_pos[mask])
+                except ValueError:
+                    pass
+        out["accuracy"] = accuracy_jack
+        out["precision"] = precision_jack
+        out["recall"] = recall_jack
+        if y_proba_pos is not None:
+            # Cycle-22 C-1: AUC jackknife array length asymmetry. Unlike
+            # accuracy/precision/recall which always have N entries, the
+            # AUC array only retains entries where the leave-one-out
+            # sub-sample was non-degenerate (both classes present). The
+            # NaN-drop is intentional — a NaN in the BCa acceleration
+            # numerator destroys the Σ(...)³ formula. Downstream
+            # ``bca_ci_from_resamples`` reads ``len(jackknife) >= 2`` as
+            # its sanity guard.
+            valid = ~np.isnan(auc_jack)
+            if valid.sum() >= 2:
+                out["auc"] = auc_jack[valid]
+    elif problem_type == "regression":
+        rmse_jack = np.empty(n, dtype=float)
+        mae_jack = np.empty(n, dtype=float)
+        r2_jack = np.full(n, np.nan, dtype=float)
+        for i in range(n):
+            mask = idx != i
+            yt = y_true[mask]
+            yp = y_pred[mask]
+            rmse_jack[i] = float(np.sqrt(mean_squared_error(yt, yp)))
+            mae_jack[i] = mean_absolute_error(yt, yp)
+            try:
+                r2_jack[i] = r2_score(yt, yp)
+            except ValueError:
+                pass
+        out["rmse"] = rmse_jack
+        out["mae"] = mae_jack
+        valid = ~np.isnan(r2_jack)
+        if valid.sum() >= 2:
+            out["r2"] = r2_jack[valid]
+    return out
 
 
 def _check_metric_suspicion(

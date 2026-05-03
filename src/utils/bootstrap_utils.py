@@ -182,4 +182,150 @@ def _jackknife_acceleration(values: np.ndarray) -> float:
     return float(num / den)
 
 
-__all__ = ["BcaResult", "bca_confidence_interval"]
+@dataclass(frozen=True)
+class BcaFromResamplesResult:
+    """BCa CI computed from a precomputed bootstrap distribution.
+
+    Returned by :func:`bca_ci_from_resamples`. Distinct from
+    :class:`BcaResult` because the input contract is different — here the
+    caller has already done the bootstrap (typical in
+    ``_compute_bootstrap_ci`` which produces 1000 resamples per metric)
+    and supplies the bootstrap values + point estimate + jackknife
+    distribution for acceleration. ``method`` is one of ``"bca"``,
+    ``"percentile_fallback"``, or ``"none"`` (when even percentile is not
+    computable, e.g. empty bootstrap).
+    """
+
+    ci_lo: Optional[float]
+    ci_hi: Optional[float]
+    method: str
+    fallback_reason: Optional[str]
+    acceleration: Optional[float]
+    bias_correction: Optional[float]
+
+
+def bca_ci_from_resamples(
+    bootstrap_values: "np.ndarray | list[float] | tuple[float, ...]",
+    point_estimate: float,
+    jackknife_values: "np.ndarray | list[float] | tuple[float, ...]",
+    *,
+    confidence_level: float = 0.95,
+) -> BcaFromResamplesResult:
+    """BCa CI given a precomputed bootstrap distribution.
+
+    Implements the canonical Efron 1987 formula:
+
+      * ``z0 = Φ⁻¹(P(boot < point_estimate))`` — bias correction.
+      * ``a = Σᵢ (J̄ − J_i)³ / [6 · (Σᵢ (J̄ − J_i)²)^1.5]`` — acceleration
+        from leave-one-out jackknife distribution.
+      * Adjusted percentiles α₁, α₂ via the BCa shift-and-scale formula.
+      * CI = ``(percentile(boot, α₁·100), percentile(boot, α₂·100))``.
+
+    Falls back to plain percentile when:
+      * bootstrap distribution is empty,
+      * ``z0`` is non-finite (``point_estimate`` outside bootstrap range),
+      * ``a`` is non-finite (jackknife denominator vanishes — constant statistic),
+      * adjusted percentile lands outside [0, 1] (extreme tail correction).
+
+    Args:
+        bootstrap_values: 1-D bootstrap distribution of the statistic.
+        point_estimate: Statistic on the original (non-resampled) sample.
+        jackknife_values: Statistic on each leave-one-out sample.
+        confidence_level: Two-sided CI coverage. Phase 1 default 0.95.
+
+    Returns:
+        :class:`BcaFromResamplesResult` with CI endpoints and provenance.
+    """
+    boot = np.asarray(bootstrap_values, dtype=float)
+    jack = np.asarray(jackknife_values, dtype=float)
+    if boot.ndim != 1:
+        raise ValueError(
+            f"bca_ci_from_resamples expects 1-D bootstrap_values, got shape {boot.shape}"
+        )
+
+    if boot.size == 0:
+        return BcaFromResamplesResult(
+            ci_lo=None,
+            ci_hi=None,
+            method="none",
+            fallback_reason="empty_bootstrap",
+            acceleration=None,
+            bias_correction=None,
+        )
+
+    alpha = (1.0 - confidence_level) / 2.0
+
+    def _percentile_fallback(reason: str, z0: Optional[float], a: Optional[float]) -> BcaFromResamplesResult:
+        return BcaFromResamplesResult(
+            ci_lo=float(np.percentile(boot, alpha * 100)),
+            ci_hi=float(np.percentile(boot, (1.0 - alpha) * 100)),
+            method="percentile_fallback",
+            fallback_reason=reason,
+            acceleration=a,
+            bias_correction=z0,
+        )
+
+    # Bias correction.
+    p_lt = float(np.mean(boot < point_estimate))
+    if p_lt <= 0.0 or p_lt >= 1.0:
+        return _percentile_fallback("z0_undefined", None, None)
+    from scipy.stats import norm  # local import keeps cold-start light
+    z0 = float(norm.ppf(p_lt))
+    if not np.isfinite(z0):
+        return _percentile_fallback("z0_nonfinite", None, None)
+
+    # Acceleration via jackknife formula.
+    if jack.size < 2:
+        return _percentile_fallback("jackknife_too_small", z0, None)
+    jack_mean = float(np.mean(jack))
+    diffs = jack_mean - jack
+    num = float(np.sum(diffs ** 3))
+    den_sq = float(np.sum(diffs ** 2))
+    if den_sq == 0.0:
+        return _percentile_fallback("acceleration_constant_statistic", z0, None)
+    a = num / (6.0 * den_sq ** 1.5)
+    if not np.isfinite(a):
+        return _percentile_fallback("acceleration_nonfinite", z0, None)
+
+    # Adjusted percentiles.
+    z_alpha_lo = float(norm.ppf(alpha))
+    z_alpha_hi = float(norm.ppf(1.0 - alpha))
+    denom_lo = 1.0 - a * (z0 + z_alpha_lo)
+    denom_hi = 1.0 - a * (z0 + z_alpha_hi)
+    if denom_lo == 0.0 or denom_hi == 0.0:
+        return _percentile_fallback("adjusted_percentile_singular", z0, a)
+    alpha_1 = float(norm.cdf(z0 + (z0 + z_alpha_lo) / denom_lo))
+    alpha_2 = float(norm.cdf(z0 + (z0 + z_alpha_hi) / denom_hi))
+    if not (0.0 <= alpha_1 <= 1.0 and 0.0 <= alpha_2 <= 1.0):
+        return _percentile_fallback("adjusted_percentile_out_of_range", z0, a)
+    if alpha_1 > alpha_2:
+        # Numerical edge case (extreme acceleration); fall back symmetrically.
+        return _percentile_fallback("adjusted_percentile_inverted", z0, a)
+
+    return BcaFromResamplesResult(
+        ci_lo=float(np.percentile(boot, alpha_1 * 100)),
+        ci_hi=float(np.percentile(boot, alpha_2 * 100)),
+        method="bca",
+        fallback_reason=None,
+        acceleration=a,
+        bias_correction=z0,
+    )
+
+
+# Cycle-22 I-1: shard 20 §G acceptance #4 + §D.2 prototype use the names
+# ``bca_ci`` / ``jackknife_metric``. We ship the longer
+# ``bca_ci_from_resamples`` / ``_compute_jackknife_metrics`` (the latter
+# private to evaluator.py — its inputs are evaluator-specific so it
+# doesn't generalise as a public utility). The ``bca_ci`` alias here
+# satisfies the §G name contract without forcing a rename across the
+# codebase.
+bca_ci = bca_ci_from_resamples
+
+
+__all__ = [
+    "BcaResult",
+    "bca_confidence_interval",
+    "BcaFromResamplesResult",
+    "bca_ci_from_resamples",
+    "bca_ci",
+]
