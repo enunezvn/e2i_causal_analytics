@@ -17,13 +17,17 @@ from src.ml.synthetic_v2.scenarios import SCENARIO_REGISTRY
 
 class TestRegistryLookup:
     def test_unknown_scenario_raises_keyerror(self) -> None:
-        # SCENARIO_REGISTRY is empty by default at this commit
+        # Scenario B is not yet registered (commit 08).
+        if ScenarioName.B_SCREENING_IGAN_ESKD in SCENARIO_REGISTRY:
+            pytest.skip("Scenario B is registered; pre-commit-08 invariant.")
         with pytest.raises(KeyError, match="not registered"):
-            generate_scenario(ScenarioName.A_DIAGNOSTIC_BC_IDFS, seed=42)
+            generate_scenario(ScenarioName.B_SCREENING_IGAN_ESKD, seed=42)
 
     def test_keyerror_lists_available_scenarios(self) -> None:
+        if ScenarioName.C_TREATMENT_CSU_RESPONSE in SCENARIO_REGISTRY:
+            pytest.skip("Scenario C is registered; pre-commit-09 invariant.")
         with pytest.raises(KeyError) as excinfo:
-            generate_scenario(ScenarioName.B_SCREENING_IGAN_ESKD, seed=42)
+            generate_scenario(ScenarioName.C_TREATMENT_CSU_RESPONSE, seed=42)
         assert "available:" in str(excinfo.value)
 
 

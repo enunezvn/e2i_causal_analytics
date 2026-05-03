@@ -73,6 +73,7 @@ class TestScenarioRegistry:
     def test_registry_is_dict(self) -> None:
         assert isinstance(SCENARIO_REGISTRY, dict)
 
-    def test_registry_starts_empty(self) -> None:
-        """Commits 07/08/09 will populate; commit 04+05 ships an empty dict."""
-        assert SCENARIO_REGISTRY == {}
+    def test_registry_only_contains_registered_scenarios(self) -> None:
+        """Commit 07 registers Scenario A; commits 08/09 add B/C."""
+        assert ScenarioName.A_DIAGNOSTIC_BC_IDFS in SCENARIO_REGISTRY
+        # B and C land in commits 08 and 09 — until then, only A is registered.

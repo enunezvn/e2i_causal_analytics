@@ -63,3 +63,11 @@ SCENARIO_REGISTRY: dict[ScenarioName, Callable[[], ScenarioBuilder]] = {}
 
 
 __all__ = ["SCENARIO_REGISTRY", "ScenarioName"]
+
+
+# Side-effect imports: each scenario module appends itself to SCENARIO_REGISTRY
+# at import time. Imports MUST be at the bottom of this file so ScenarioName +
+# SCENARIO_REGISTRY are already bound by the time scenario_* execute.
+# B and C are added by commits 08 and 09; missing modules cause ImportError on
+# package load until those commits land.
+from src.ml.synthetic_v2.scenarios import scenario_a as _scenario_a  # noqa: E402, F401
