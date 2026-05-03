@@ -17,11 +17,19 @@ on ``AggregateStat`` rather than the BCa endpoint. Bengio & Grandvalet 2004
 (JMLR) is the load-bearing citation: there is no universal unbiased estimator
 of k-fold CV variance — BCa here is an asymmetry-corrected percentile, not a
 variance-corrected interval.
+
+Threshold conservatism (cycle-16 C-1): the 0.25 default ``instability_threshold``
+is calibrated against DiCiccio & Tibshirani 1987 Table 1 — at n=10 the BCa
+coverage breakdown threshold is empirically near |a|·n^{1/2} = 1, i.e. |a| ≈
+0.32. The 0.25 default leaves a ~22% safety margin so callers see
+``unstable_warning=True`` BEFORE the coverage actually degrades; this matches
+shard 21 §D's "exploratory not inferential" framing.
 """
 
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -89,14 +97,29 @@ def bca_confidence_interval(
 
     try:
         rng = np.random.default_rng(rng_seed)
-        res = bootstrap(
-            (arr,),
-            np.mean,
-            method="BCa",
-            n_resamples=n_resamples,
-            confidence_level=confidence_level,
-            rng=rng,
-        )
+        # Cycle-16 I-2: scipy emits DegenerateDataWarning + RuntimeWarning when
+        # the BCa endpoint can't be calculated (e.g., constant fold values).
+        # The unstable_warning fallback below is the documented contract; the
+        # scipy warning duplicates it noisily. Filter at the call site so
+        # downstream loggers see clean output.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="The BCa confidence interval cannot be calculated",
+            )
+            warnings.filterwarnings(
+                "ignore",
+                category=RuntimeWarning,
+                message="invalid value encountered",
+            )
+            res = bootstrap(
+                (arr,),
+                np.mean,
+                method="BCa",
+                n_resamples=n_resamples,
+                confidence_level=confidence_level,
+                rng=rng,
+            )
         ci_lo = float(res.confidence_interval.low)
         ci_hi = float(res.confidence_interval.high)
     except Exception as exc:

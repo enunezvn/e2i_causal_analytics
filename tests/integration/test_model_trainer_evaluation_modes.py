@@ -472,6 +472,13 @@ async def test_single_mode_output_omits_repeated_k10_fields() -> None:
             "framework": "lightgbm",
         }
 
+    # Cycle-16 I-8 + C-3: allow-list / denylist approach. The set below
+    # enumerates EVERY field added to the output dict in the repeated_k10
+    # branch of `_run_repeated_splits`. If a future PR adds a new field there,
+    # extend this set — single-mode output should NEVER carry any of these.
+    # Phase 2 hardening could switch to a frozen "expected single-mode keys"
+    # set for stricter byte-identity (current allow-list is a denylist; a
+    # frozen-set would catch single-mode schema regressions too).
     repeated_k10_only_fields = {
         "fold_metrics",
         "aggregate_metrics",
@@ -480,6 +487,11 @@ async def test_single_mode_output_omits_repeated_k10_fields() -> None:
         "splitter_strategy",
         "n_jobs",
         "parent_mlflow_run_id",
+        # cycle-16 I-8: 4 fields previously missing from the allow-list
+        "test_metrics_population_strategy",
+        "evaluation_result_schema_version",
+        "legacy_projection_warning",
+        "seed_base",
     }
 
     # Run with evaluation_mode absent

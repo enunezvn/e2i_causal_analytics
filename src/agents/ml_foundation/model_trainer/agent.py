@@ -733,9 +733,23 @@ class ModelTrainerAgent:
              ``asyncio.gather`` + ``Semaphore`` — concurrent at the asyncio
              level rather than process-level joblib.Parallel. Determinism is
              preserved because each fold's seed is sourced from
-             ``spec.seed`` (FoldSpec) regardless of execution order. The
-             shard 21 §F process-parallel design aspiration is deferred —
-             see ``cycle_16_brief.md`` Q2 for the rationale.
+             ``spec.seed`` (FoldSpec) regardless of execution order.
+
+             DIVERGENCE FROM SHARD 21 §F (cycle-16 I-3, inlined here so it
+             survives any cycle_16_brief.md cleanup): shard 21 §F specifies
+             process-level joblib.Parallel(n_jobs=2) with a ~5-7 min wall-clock
+             target; this implementation uses asyncio.gather instead because
+             (a) ``self.run`` is async and joblib doesn't natively support
+             coroutines; (b) process-level Parallel duplicates the agent's
+             ~280 MB Python state per worker, risky on the 16 GB shared
+             droplet; (c) overlap of MLflow/DB I/O is the primary win
+             expected from concurrency anyway. CONSEQUENCE: per-fold
+             bootstrap-CI compute (~30s/fold per shard 21 §F T10.5) does NOT
+             parallelize — wall-clock at n_jobs=2 is roughly equal to
+             n_jobs=1 minus the I/O-overlap savings, NOT halved as §F's
+             projection. Process-level Parallel is deferred to shard 22
+             multi-disease orchestration where per-disease isolation is the
+             natural motivator.
 
         Required input fields:
           - ``full_data``: ``{"X": pd.DataFrame, "y": pd.Series}`` (the unsplit
@@ -794,6 +808,7 @@ class ModelTrainerAgent:
             "k": str(splitter.k),
             "seed_base": str(seed_base),
             "splitter_strategy": splitter.strategy,
+            "n_jobs": str(n_jobs),  # cycle-16 C-2
             "source": "model_trainer_agent",
         }
         parent_run_name = f"repeated_k10_seed{seed_base}"
