@@ -54,6 +54,10 @@ class ModelTrainerState(TypedDict, total=False):
     evaluation_mode: str  # "single" (default) | "repeated_k10"
     fold_random_state: int  # Per-fold seed from RepeatedStratifiedSplitter
     fold_idx: int  # 0..k-1 fold index for the active repeated-mode invocation
+    # Day-5 (cycle-15 I-4): orchestrator sentinel propagated into graph state so
+    # per-fold nodes (notably ``mlflow_logger``) can branch on "called per-fold
+    # inside repeated_k10". Single-mode callers omit this field; default False.
+    _repeated_mode_fold_invocation: bool
 
     # === INTERMEDIATE FIELDS ===
     # QC Gate

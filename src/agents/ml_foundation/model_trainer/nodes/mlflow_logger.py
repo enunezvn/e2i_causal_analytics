@@ -133,32 +133,60 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # Generate run name
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        run_name = f"{algorithm_name}_{timestamp}"
 
-        # Start MLflow run
+        # Phase 1 W3-lite Day-5 (cycle-15 I-4): when invoked from the
+        # `_run_repeated_splits` orchestrator (per-fold recursion sentinel
+        # `_repeated_mode_fold_invocation=True`), the parent run is already
+        # open at the orchestrator level — open this fold's run as a NESTED
+        # child of the parent and tag it with `fold_idx` /
+        # `evaluation_mode=repeated_k10` / `fold_seed` so the MLflow UI
+        # surfaces the parent ↔ child topology.
+        evaluation_mode = state.get("evaluation_mode", "single")
+        is_repeated_fold = (
+            evaluation_mode == "repeated_k10"
+            and bool(state.get("_repeated_mode_fold_invocation", False))
+        )
+        if is_repeated_fold:
+            fold_idx_value = state.get("fold_idx", 0)
+            fold_seed_value = state.get("fold_random_state", 0)
+            run_name = f"fold_{int(fold_idx_value):02d}"
+            fold_tags = {
+                "fold_idx": str(int(fold_idx_value)),
+                "evaluation_mode": "repeated_k10",
+                "fold_seed": str(int(fold_seed_value)),
+            }
+        else:
+            run_name = f"{algorithm_name}_{timestamp}"
+            fold_tags = {}
+
+        run_tags = {
+            "algorithm": algorithm_name,
+            "problem_type": problem_type,
+            "framework": framework,
+            "source": "model_trainer_agent",
+            "hpo_enabled": str(hpo_completed),
+            "feast_fallback": str(feast_fallback_used),
+            # Block 5B (#10): emit the validation-set business_utility
+            # number as a tag so the MLflow UI can display "what this
+            # run was worth" alongside accuracy/AUC. Mirrors the
+            # feast_fallback tag pattern. ``"N/A"`` when no
+            # cost_matrix was provided (validation_metrics omits
+            # the key in that case — see evaluator.py: the
+            # ``if cost_matrix is not None`` short-circuit in
+            # ``_compute_classification_metrics`` skips
+            # business_utility computation, so the metrics dict
+            # never picks up the key).
+            "business_utility": str(validation_metrics.get("business_utility", "N/A")),
+            **fold_tags,
+        }
+
+        # Start MLflow run (nested when invoked per-fold inside repeated_k10)
         async with mlflow_conn.start_run(
             experiment_id=mlflow_experiment_id,
             run_name=run_name,
-            tags={
-                "algorithm": algorithm_name,
-                "problem_type": problem_type,
-                "framework": framework,
-                "source": "model_trainer_agent",
-                "hpo_enabled": str(hpo_completed),
-                "feast_fallback": str(feast_fallback_used),
-                # Block 5B (#10): emit the validation-set business_utility
-                # number as a tag so the MLflow UI can display "what this
-                # run was worth" alongside accuracy/AUC. Mirrors the
-                # feast_fallback tag pattern. ``"N/A"`` when no
-                # cost_matrix was provided (validation_metrics omits
-                # the key in that case — see evaluator.py: the
-                # ``if cost_matrix is not None`` short-circuit in
-                # ``_compute_classification_metrics`` skips
-                # business_utility computation, so the metrics dict
-                # never picks up the key).
-                "business_utility": str(validation_metrics.get("business_utility", "N/A")),
-            },
+            tags=run_tags,
             description=f"Training run for {algorithm_name} on {problem_type}",
+            nested=is_repeated_fold,
         ) as run:
             mlflow_run_id = run.run_id
 

@@ -16,14 +16,20 @@ Integration:
 - Observability: Opik tracing
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import sklearn
 
+from .aggregation import (
+    AggregateStat,
+    aggregate_fold_metrics,
+)
 from .graph import create_model_trainer_graph
 from .splitting import FoldSpec, RepeatedStratifiedSplitter
 from .state import ModelTrainerState
@@ -263,6 +269,14 @@ class ModelTrainerAgent:
             # / evaluator branch on this; legacy callers omit it and the helper
             # sites default to single-mode behavior.
             "evaluation_mode": evaluation_mode,
+            # Day-5 (cycle-15 I-4): propagate the orchestrator sentinel into
+            # graph state so per-fold nodes (notably ``mlflow_logger``) can
+            # detect "I'm being called per-fold inside repeated_k10" and open
+            # a NESTED MLflow run with fold tags. Single-mode callers do not
+            # set this field, so it defaults to False.
+            "_repeated_mode_fold_invocation": bool(
+                input_data.get("_repeated_mode_fold_invocation", False)
+            ),
         }
 
         # Execute LangGraph workflow with optional Opik tracing
@@ -688,7 +702,7 @@ class ModelTrainerAgent:
             logger.debug(f"Failed to update procedural memory: {e}")
 
     async def _run_repeated_splits(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """W3-lite Day 4 orchestrator (shard 21 §B `_run_repeated_splits`).
+        """W3-lite Day-5 orchestrator (shard 21 §B/§C/§D + cycle-15 I-2/I-3/I-4).
 
         Iterates k=10 stratified shuffle-split draws over ``input_data['full_data']``,
         invoking the existing single-graph path once per fold with the fold's
@@ -698,10 +712,30 @@ class ModelTrainerAgent:
         replaces the historical hardcoded ``random_state=42`` in
         ``split_loader`` / ``hyperparameter_tuner`` / ``model_trainer_node``.
 
-        Day-4 MVP scope: serial fold loop; basic ``fold_metrics`` aggregation as
-        a List[Dict]. ``joblib.Parallel`` + BCa CI aggregator + per-fold
-        nested-MLflow tags are Day-5 territory (shard 21 §C / §D — see
-        `cycle_15_brief.md` Q2 + Q4 for follow-up review).
+        Day-5 scope additions over Day-4 MVP:
+          1. Parent MLflow run wraps the fold loop (shard 21 §C); per-fold
+             nested children are opened by the per-fold ``mlflow_logger`` node
+             when it observes ``state["evaluation_mode"]=="repeated_k10"`` AND
+             ``state["_repeated_mode_fold_invocation"]`` (cycle-15 I-4).
+          2. Try/except per fold — partial-fold contract per cycle-15 I-3.
+             Each ``fold_metrics`` entry carries
+             ``fold_status: Literal["ok","failed"]``; aggregator skips failed
+             folds; ``aggregate_status`` on the output dict is
+             ``"PARTIAL"`` if any fold failed, ``"COMPLETE"`` otherwise.
+          3. NEP 19 per-fold params logged to MLflow per cycle-15 I-2:
+             ``seed_base / fold_idx / derived_seed=spec.seed /
+             numpy.__version__ / sklearn.__version__``.
+          4. ``aggregate_fold_metrics`` (shard 21 §D) is called over the
+             flattened per-fold scalar dicts; aggregate ``mean / std /
+             percentile_ci / bca_ci / n_folds`` per metric is emitted on
+             ``output["aggregate_metrics"]`` and logged to the parent run.
+          5. ``n_jobs`` (default 1) controls fold concurrency via
+             ``asyncio.gather`` + ``Semaphore`` — concurrent at the asyncio
+             level rather than process-level joblib.Parallel. Determinism is
+             preserved because each fold's seed is sourced from
+             ``spec.seed`` (FoldSpec) regardless of execution order. The
+             shard 21 §F process-parallel design aspiration is deferred —
+             see ``cycle_16_brief.md`` Q2 for the rationale.
 
         Required input fields:
           - ``full_data``: ``{"X": pd.DataFrame, "y": pd.Series}`` (the unsplit
@@ -713,8 +747,8 @@ class ModelTrainerAgent:
           - ``seed_base`` (default 42): root seed for the splitter; per-fold
             seeds derive deterministically from ``(fold_idx, seed_base)``.
           - ``repeated_splits_config``: ``{k, train_frac, val_frac, test_frac,
-            strategy}`` overrides; defaults match shard 21 §A (k=10 / 70/15/15
-            / shuffle_split).
+            strategy, n_jobs}`` overrides; defaults match shard 21 §A (k=10 /
+            70/15/15 / shuffle_split / n_jobs=1).
         """
         full_data = input_data.get("full_data")
         if not isinstance(full_data, dict) or "X" not in full_data or "y" not in full_data:
@@ -732,6 +766,7 @@ class ModelTrainerAgent:
 
         seed_base = int(input_data.get("seed_base", 42))
         cfg = input_data.get("repeated_splits_config", {}) or {}
+        n_jobs = max(1, int(cfg.get("n_jobs", 1)))
         splitter = RepeatedStratifiedSplitter(
             k=int(cfg.get("k", 10)),
             seed_base=seed_base,
@@ -742,24 +777,58 @@ class ModelTrainerAgent:
         )
 
         fold_specs: List[FoldSpec] = list(splitter.split(X, y))
-        fold_metrics: List[Dict[str, Any]] = []
-        fold_outputs: List[Dict[str, Any]] = []
 
         logger.info(
             f"_run_repeated_splits: starting k={splitter.k} folds "
-            f"(seed_base={seed_base}, strategy={splitter.strategy})"
+            f"(seed_base={seed_base}, strategy={splitter.strategy}, n_jobs={n_jobs})"
         )
-        for spec in fold_specs:
+
+        # Open parent MLflow run wrapping the fold loop. Best-effort: if the
+        # connector is unavailable, fall back to None and continue without
+        # parent-level aggregate logging (per-fold runs still emit when their
+        # own connector path succeeds).
+        mlflow_conn = self._get_mlflow_connector_or_none()
+        parent_experiment_id: Optional[str] = None
+        parent_tags = {
+            "evaluation_mode": "repeated_k10",
+            "k": str(splitter.k),
+            "seed_base": str(seed_base),
+            "splitter_strategy": splitter.strategy,
+            "source": "model_trainer_agent",
+        }
+        parent_run_name = f"repeated_k10_seed{seed_base}"
+        experiment_id = input_data.get("experiment_id", "model_trainer_repeated")
+        experiment_name = input_data.get(
+            "experiment_name", f"model_trainer_{experiment_id}"
+        )
+
+        if mlflow_conn is not None:
+            try:
+                parent_experiment_id = await mlflow_conn.get_or_create_experiment(
+                    name=experiment_name,
+                    tags={"source": "model_trainer_agent", "mode": "repeated_k10"},
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort MLflow
+                logger.warning(
+                    f"_run_repeated_splits: parent experiment creation failed: {exc!r}; "
+                    "continuing without parent-level aggregate logging"
+                )
+                mlflow_conn = None
+
+        fold_outputs: List[Dict[str, Any]] = [{} for _ in fold_specs]
+        fold_metrics: List[Dict[str, Any]] = [{} for _ in fold_specs]
+
+        async def _execute_one_fold(spec: FoldSpec) -> None:
+            """Run one fold; populate fold_outputs[idx] + fold_metrics[idx]."""
+            idx = spec.fold_idx
             fold_input = self._build_fold_input(input_data, X, y, spec)
-            fold_output = await self.run(fold_input)
-            fold_outputs.append(fold_output)
-            # Per-fold record carries the bookkeeping required by aggregator tests
-            # (fold_random_state / fold_idx / per-split metrics). Day-5 will replace
-            # this dict with the structured `FoldMetricsRecord` from the aggregator.
-            fold_metrics.append(
-                {
-                    "fold_idx": spec.fold_idx,
+            try:
+                fold_output = await self.run(fold_input)
+                fold_outputs[idx] = fold_output
+                fold_metrics[idx] = {
+                    "fold_idx": idx,
                     "fold_random_state": spec.seed,
+                    "fold_status": "ok",
                     "test_metrics": fold_output.get("test_metrics", {}),
                     "validation_metrics": fold_output.get("validation_metrics", {}),
                     "train_metrics": fold_output.get("train_metrics", {}),
@@ -767,36 +836,144 @@ class ModelTrainerAgent:
                     "brier_score": fold_output.get("brier_score"),
                     "mlflow_run_id": fold_output.get("mlflow_run_id"),
                 }
-            )
+            except Exception as exc:  # noqa: BLE001 — cycle-15 I-3 partial contract
+                logger.warning(
+                    f"_run_repeated_splits: fold {idx} (seed={spec.seed}) failed: {exc!r}"
+                )
+                fold_outputs[idx] = {}
+                fold_metrics[idx] = {
+                    "fold_idx": idx,
+                    "fold_random_state": spec.seed,
+                    "fold_status": "failed",
+                    "exception_repr": repr(exc),
+                }
+
+        # NEP 19 per-fold MLflow params (cycle-15 I-2): logged to the parent
+        # run since the per-fold child runs are opened deeper in the graph
+        # (mlflow_logger node). We log a per-fold flat dict so the parent
+        # carries the full provenance trace even when individual children
+        # fail to open.
+        nep19_params: Dict[str, Any] = {
+            "numpy_version": np.__version__,
+            "sklearn_version": sklearn.__version__,
+        }
+        for spec in fold_specs:
+            nep19_params[f"fold_{spec.fold_idx:02d}_seed_base"] = seed_base
+            nep19_params[f"fold_{spec.fold_idx:02d}_derived_seed"] = spec.seed
+
+        async def _log_aggregate_to_parent(
+            run, agg: Dict[str, AggregateStat]
+        ) -> None:
+            """Log aggregate metrics to the parent MLflow run."""
+            metrics_payload: Dict[str, float] = {}
+            for metric_name, stat in agg.items():
+                metrics_payload[f"aggregate_{metric_name}_mean"] = stat.mean
+                metrics_payload[f"aggregate_{metric_name}_std"] = stat.std
+                metrics_payload[f"aggregate_{metric_name}_n_folds"] = float(stat.n_folds)
+                metrics_payload[f"aggregate_{metric_name}_percentile_lo"] = (
+                    stat.percentile_ci_lo
+                )
+                metrics_payload[f"aggregate_{metric_name}_percentile_hi"] = (
+                    stat.percentile_ci_hi
+                )
+                if stat.bca_ci_lo is not None:
+                    metrics_payload[f"aggregate_{metric_name}_bca_lo"] = stat.bca_ci_lo
+                if stat.bca_ci_hi is not None:
+                    metrics_payload[f"aggregate_{metric_name}_bca_hi"] = stat.bca_ci_hi
+            if metrics_payload:
+                await run.log_metrics(metrics_payload)
+
+        async def _run_all_folds() -> None:
+            if n_jobs == 1:
+                for spec in fold_specs:
+                    await _execute_one_fold(spec)
+            else:
+                semaphore = asyncio.Semaphore(n_jobs)
+
+                async def _bounded(spec: FoldSpec) -> None:
+                    async with semaphore:
+                        await _execute_one_fold(spec)
+
+                await asyncio.gather(*(_bounded(s) for s in fold_specs))
+
+        if mlflow_conn is not None and parent_experiment_id is not None:
+            try:
+                async with mlflow_conn.start_run(
+                    experiment_id=parent_experiment_id,
+                    run_name=parent_run_name,
+                    tags=parent_tags,
+                    description=(
+                        f"Repeated k={splitter.k} train/val/test splits "
+                        f"(seed_base={seed_base}, strategy={splitter.strategy})"
+                    ),
+                ) as parent_run:
+                    parent_run_id = parent_run.run_id
+                    try:
+                        await parent_run.log_params(nep19_params)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(f"NEP 19 parent param logging failed: {exc!r}")
+                    await _run_all_folds()
+                    aggregate = aggregate_fold_metrics(fold_metrics)
+                    await _log_aggregate_to_parent(parent_run, aggregate)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"_run_repeated_splits: parent MLflow run wrapper failed: {exc!r}; "
+                    "fold loop ran outside the parent context"
+                )
+                parent_run_id = None
+                if not any(fm for fm in fold_metrics):
+                    await _run_all_folds()
+                aggregate = aggregate_fold_metrics(fold_metrics)
+        else:
+            parent_run_id = None
+            await _run_all_folds()
+            aggregate = aggregate_fold_metrics(fold_metrics)
+
+        n_failed = sum(
+            1 for fm in fold_metrics if fm.get("fold_status") == "failed"
+        )
+        aggregate_status = "PARTIAL" if n_failed > 0 else "COMPLETE"
 
         logger.info(
-            f"_run_repeated_splits: completed {len(fold_metrics)} folds "
-            f"(seed_base={seed_base})"
+            f"_run_repeated_splits: completed {len(fold_metrics) - n_failed}/{len(fold_metrics)} "
+            f"folds OK (seed_base={seed_base}, status={aggregate_status})"
         )
 
         # Compose top-level output: forward fold-0 fields for legacy consumers
         # (test_metrics shape preserved per shard 21 Q-W3-6 RESOLVED — Option D)
-        # and append the new repeated-mode fields so downstream aggregator can
-        # operate on `fold_metrics` and gate-promotion logic can branch on
-        # `evaluation_mode`.
-        primary = fold_outputs[0] if fold_outputs else {}
+        # and append the new repeated-mode fields so downstream gate-promotion
+        # logic can branch on `evaluation_mode` + consume `aggregate_metrics`.
+        primary = next(
+            (fo for fo in fold_outputs if fo), {}
+        )
         output: Dict[str, Any] = dict(primary)
         output["evaluation_mode"] = "repeated_k10"
         output["fold_metrics"] = fold_metrics
-        # Per shard 21 Q-W3-6: legacy `test_metrics` populate strategy is
-        # "fold_mean" in repeated mode — Day-5 aggregator will compute this
-        # properly. For Day-4 MVP, we leave fold-0's test_metrics in place
-        # and emit a marker for downstream callers.
+        output["aggregate_metrics"] = aggregate
+        output["aggregate_status"] = aggregate_status
         output["test_metrics_population_strategy"] = "fold_mean"
         output["evaluation_result_schema_version"] = "adaptive_criteria_v3.phase1.1"
         output["legacy_projection_warning"] = (
             "test_metrics in repeated_k10 mode is fold-0; downstream callers "
-            "MUST consume aggregate_metrics (Day-5) for promotion-gate logic"
+            "MUST consume aggregate_metrics for promotion-gate logic"
         )
         output["seed_base"] = seed_base
         output["k_folds"] = splitter.k
         output["splitter_strategy"] = splitter.strategy
+        output["n_jobs"] = n_jobs
+        output["parent_mlflow_run_id"] = parent_run_id
         return output
+
+    @staticmethod
+    def _get_mlflow_connector_or_none():
+        """Lazy-import MLflow connector (avoids circular deps + test-friendly None)."""
+        try:
+            from src.mlops.mlflow_connector import get_mlflow_connector
+
+            return get_mlflow_connector()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"MLflow connector unavailable: {exc!r}")
+            return None
 
     def _build_fold_input(
         self,
