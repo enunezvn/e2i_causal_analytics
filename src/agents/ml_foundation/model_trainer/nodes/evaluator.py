@@ -194,6 +194,10 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     assert y_test_np is not None
 
     # Compute metrics based on problem type
+    # Cycle-16 I-4 (Q2-B): thread per-fold seed into bootstrap CI to make
+    # asyncio.gather n_jobs > 1 deterministic. Single-mode callers don't
+    # supply fold_random_state — None preserves legacy global-RNG path.
+    bootstrap_random_state = state.get("fold_random_state")
     try:
         if problem_type in ["binary_classification"]:
             metrics_result = _compute_classification_metrics(
@@ -209,6 +213,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 imbalance_detected=imbalance_detected,
                 minority_ratio=minority_ratio,
                 cost_matrix=cost_matrix,
+                bootstrap_random_state=bootstrap_random_state,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -230,6 +235,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 y_validation_pred=predictions["y_val_pred"],
                 y_test=y_test_np,
                 y_test_pred=predictions["y_test_pred"],
+                bootstrap_random_state=bootstrap_random_state,
             )
         else:
             logger.error(f"Unsupported problem type: {problem_type}")
@@ -689,6 +695,7 @@ def _compute_classification_metrics(
     imbalance_detected: bool = False,
     minority_ratio: float = 0.5,
     cost_matrix: Optional[Dict[str, float]] = None,
+    bootstrap_random_state: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
@@ -971,9 +978,12 @@ def _compute_classification_metrics(
     # Precision at k
     precision_at_k = _compute_precision_at_k(y_test, y_test_proba, k_values=[100, 500, 1000])
 
-    # Bootstrap confidence intervals
+    # Bootstrap confidence intervals (cycle-16 I-4: per-fold seed for
+    # asyncio.gather n_jobs > 1 determinism)
     confidence_interval, bootstrap_samples = _compute_bootstrap_ci(
-        y_test, y_test_pred_optimal, y_test_proba, problem_type="binary_classification"
+        y_test, y_test_pred_optimal, y_test_proba,
+        problem_type="binary_classification",
+        random_state=bootstrap_random_state,
     )
 
     # Build result dictionary
@@ -1193,6 +1203,7 @@ def _compute_regression_metrics(
     y_validation_pred: Optional[np.ndarray],
     y_test: np.ndarray,
     y_test_pred: np.ndarray,
+    bootstrap_random_state: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compute regression metrics using sklearn.
 
@@ -1203,6 +1214,8 @@ def _compute_regression_metrics(
         y_validation_pred: Validation predictions
         y_test: Test labels
         y_test_pred: Test predictions
+        bootstrap_random_state: Optional per-fold seed threaded into
+            ``_compute_bootstrap_ci`` (cycle-16 I-4 / Q2-B). See helper docstring.
 
     Returns:
         Dictionary of metrics
@@ -1238,9 +1251,10 @@ def _compute_regression_metrics(
         "r2": float(r2_score(y_test, y_test_pred)),
     }
 
-    # Bootstrap confidence intervals
+    # Bootstrap confidence intervals (cycle-16 I-4: per-fold seed)
     confidence_interval, bootstrap_samples = _compute_bootstrap_ci(
-        y_test, y_test_pred, None, problem_type="regression"
+        y_test, y_test_pred, None, problem_type="regression",
+        random_state=bootstrap_random_state,
     )
 
     return {
@@ -1505,6 +1519,7 @@ def _compute_bootstrap_ci(
     problem_type: str,
     n_bootstrap: int = 1000,
     confidence: float = 0.95,
+    random_state: Optional[int] = None,
 ) -> Tuple[Dict[str, Tuple[float, float]], int]:
     """Compute bootstrap confidence intervals for metrics.
 
@@ -1515,6 +1530,15 @@ def _compute_bootstrap_ci(
         problem_type: Problem type
         n_bootstrap: Number of bootstrap samples
         confidence: Confidence level
+        random_state: Optional per-fold seed (cycle-16 I-4 / Q2-B). When
+            provided, uses ``np.random.default_rng(random_state)`` for
+            bootstrap-index generation so two folds running concurrently
+            under ``asyncio.gather(n_jobs > 1)`` produce bit-identical CI
+            endpoints regardless of execution order. When ``None``
+            (default), falls back to numpy's global RNG via
+            ``np.random.choice`` — preserves byte-identity for legacy
+            callers that don't supply a fold seed (single-mode evaluation,
+            external test fixtures with explicit ``np.random.seed``).
 
     Returns:
         Tuple of (confidence_intervals, n_bootstrap)
@@ -1528,9 +1552,16 @@ def _compute_bootstrap_ci(
     # Store bootstrap metrics
     bootstrap_metrics: Dict[str, List[float]] = {}
 
+    # Cycle-16 I-4: per-fold-seeded bootstrap RNG when caller supplies seed;
+    # global-RNG fallback preserves backward-compat byte-identity.
+    rng = np.random.default_rng(random_state) if random_state is not None else None
+
     for _ in range(n_bootstrap):
         # Bootstrap sample indices
-        indices = np.random.choice(n_samples, size=n_samples, replace=True)
+        if rng is not None:
+            indices = rng.integers(low=0, high=n_samples, size=n_samples)
+        else:
+            indices = np.random.choice(n_samples, size=n_samples, replace=True)
 
         y_true_boot = y_true[indices]
         y_pred_boot = y_pred[indices]

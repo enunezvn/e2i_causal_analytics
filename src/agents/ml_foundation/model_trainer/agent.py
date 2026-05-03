@@ -879,7 +879,13 @@ class ModelTrainerAgent:
         async def _log_aggregate_to_parent(
             run, agg: Dict[str, AggregateStat]
         ) -> None:
-            """Log aggregate metrics to the parent MLflow run."""
+            """Log aggregate metrics to the parent MLflow run.
+
+            Cycle-16 I-1 (Q1-C): emits ``aggregate_<metric>_bca_unstable`` as
+            1.0|0.0 per metric so MLflow UI consumers can distinguish reliable
+            BCa CIs from degenerate fallbacks where ``bca_ci_lo/hi`` are None
+            and the percentile_ci should be preferred for downstream gates.
+            """
             metrics_payload: Dict[str, float] = {}
             for metric_name, stat in agg.items():
                 metrics_payload[f"aggregate_{metric_name}_mean"] = stat.mean
@@ -895,6 +901,9 @@ class ModelTrainerAgent:
                     metrics_payload[f"aggregate_{metric_name}_bca_lo"] = stat.bca_ci_lo
                 if stat.bca_ci_hi is not None:
                     metrics_payload[f"aggregate_{metric_name}_bca_hi"] = stat.bca_ci_hi
+                metrics_payload[f"aggregate_{metric_name}_bca_unstable"] = (
+                    1.0 if stat.bca_unstable_warning else 0.0
+                )
             if metrics_payload:
                 await run.log_metrics(metrics_payload)
 

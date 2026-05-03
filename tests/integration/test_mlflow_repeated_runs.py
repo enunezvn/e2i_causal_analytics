@@ -346,3 +346,149 @@ async def test_parent_run_has_nep19_version_params() -> None:
     for i in range(10):
         assert f"fold_{i:02d}_seed_base" in parent.params
         assert f"fold_{i:02d}_derived_seed" in parent.params
+
+
+def _fold_invocation_recorder_constant_metric(connector: _FakeConnector):
+    """Variant of the recorder that emits a CONSTANT metric across folds.
+
+    Used to drive ``bca_unstable_warning=True`` for I-1 verification: when
+    all per-fold values for a metric are equal, the jackknife denominator
+    collapses and BCa is degenerate.
+    """
+    from unittest.mock import AsyncMock
+
+    async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
+        idx = int(state.get("fold_idx", 0))
+        is_repeated_fold = (
+            state.get("evaluation_mode") == "repeated_k10"
+            and bool(state.get("_repeated_mode_fold_invocation", False))
+        )
+        if is_repeated_fold:
+            tags = {
+                "fold_idx": str(idx),
+                "evaluation_mode": "repeated_k10",
+                "fold_seed": str(int(state.get("fold_random_state", 0))),
+            }
+            async with connector.start_run(
+                experiment_id="exp:test_g4_mlflow_repeated_exp",
+                run_name=f"fold_{idx:02d}",
+                tags=tags,
+                nested=True,
+            ):
+                pass
+        return {
+            **state,
+            "trained_model": object(),
+            # Smooth metric — BCa stable
+            "auc_roc": 0.77 + 0.005 * idx,
+            # Constant metric — BCa unstable (degenerate jackknife)
+            "brier_score": 0.20,
+            "framework": "lightgbm",
+        }
+
+    return AsyncMock(side_effect=fake_ainvoke)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_nested_run_lock_serializes_concurrent_repeated_folds() -> None:
+    """Cycle-16 I-6 (Q3-C): asyncio.Lock prevents concurrent nested-run opens.
+
+    Under ``n_jobs > 1`` two folds running in parallel via asyncio.gather
+    share the event loop's thread-local state. MLflow's
+    ``mlflow.start_run(nested=True)`` consults a thread-local active-run
+    stack — concurrent unprotected opens would mis-attach children.
+
+    This test verifies the module-level lock at the mlflow_logger boundary
+    serializes the nested-run lifecycle. With the lock acquired, even if
+    a fold yields control mid-run (simulated via ``asyncio.sleep``), no
+    other fold can open its nested run until the first releases.
+    """
+    import asyncio as _asyncio
+
+    from src.agents.ml_foundation.model_trainer.nodes import mlflow_logger as mlf
+
+    # Reset the module-level lock so we're testing the lazy-init path
+    # within this loop's lifetime.
+    mlf._nested_run_lock = None
+
+    lock = mlf._get_nested_run_lock()
+    assert isinstance(lock, _asyncio.Lock)
+    # Same call returns the same lock — no per-call reallocation
+    assert mlf._get_nested_run_lock() is lock
+
+    # Acquired-state observation: when held, second acquirer blocks
+    async with mlf._maybe_serialize_nested_run(serialize=True):
+        # While held, attempting to acquire elsewhere must fail-fast under
+        # asyncio.wait_for with a tiny timeout (proves serialization)
+        async def _try_acquire() -> bool:
+            try:
+                await _asyncio.wait_for(lock.acquire(), timeout=0.05)
+                lock.release()
+                return True
+            except _asyncio.TimeoutError:
+                return False
+
+        acquired = await _try_acquire()
+        assert acquired is False, "Lock did not actually serialize — second acquirer succeeded"
+
+    # After release, lock acquires immediately
+    async with mlf._maybe_serialize_nested_run(serialize=True):
+        pass
+
+    # Single-mode path skips the lock entirely (no overhead)
+    async with mlf._maybe_serialize_nested_run(serialize=False):
+        # Lock must be acquirable concurrently — no serialization
+        try:
+            await _asyncio.wait_for(lock.acquire(), timeout=0.05)
+            lock.release()
+            unblocked = True
+        except _asyncio.TimeoutError:
+            unblocked = False
+        assert unblocked, "single-mode incorrectly held the nested-run lock"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_parent_run_logs_bca_unstable_warning_per_metric() -> None:
+    """Parent run must log ``aggregate_<metric>_bca_unstable: 1.0|0.0`` per metric (cycle-16 I-1).
+
+    Asserts presence + correct boolean-as-float encoding for both stable
+    (varying smooth values) and unstable (constant values) cases. MLflow UI
+    consumers need this flag to distinguish reliable BCa CIs from degenerate
+    fallbacks where ``bca_ci_lo/hi`` are None and percentile_ci should be
+    preferred.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    fake = _FakeConnector()
+    agent = ModelTrainerAgent()
+    mock_graph = _fold_invocation_recorder_constant_metric(fake)
+    with patch.object(
+        ModelTrainerAgent,
+        "_get_mlflow_connector_or_none",
+        staticmethod(lambda: fake),
+    ), patch.object(agent.graph, "ainvoke", mock_graph):
+        output = await agent.run(_make_input(k=10))
+
+    parent_runs = [r for r in fake.runs if not r.is_nested]
+    assert len(parent_runs) == 1
+    parent = parent_runs[0]
+    # Stable metric: bca_unstable=0.0 + finite bca endpoints
+    assert "aggregate_auc_roc_bca_unstable" in parent.metrics, (
+        f"Missing aggregate_auc_roc_bca_unstable in parent metrics: "
+        f"{sorted(parent.metrics.keys())}"
+    )
+    assert parent.metrics["aggregate_auc_roc_bca_unstable"] == 0.0
+    assert "aggregate_auc_roc_bca_lo" in parent.metrics
+    assert "aggregate_auc_roc_bca_hi" in parent.metrics
+    # Unstable metric: bca_unstable=1.0 + bca endpoints OMITTED (because they
+    # are None when the warning fires) — percentile_ci is the fallback
+    assert "aggregate_brier_score_bca_unstable" in parent.metrics
+    assert parent.metrics["aggregate_brier_score_bca_unstable"] == 1.0
+    assert "aggregate_brier_score_bca_lo" not in parent.metrics
+    assert "aggregate_brier_score_bca_hi" not in parent.metrics
+    # In-process aggregate dict still carries the flag for direct callers
+    aggregate = output["aggregate_metrics"]
+    assert aggregate["auc_roc"].bca_unstable_warning is False
+    assert aggregate["brier_score"].bca_unstable_warning is True

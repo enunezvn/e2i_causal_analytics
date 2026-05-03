@@ -12,6 +12,7 @@ for complete traceability between Optuna studies and training runs.
 Version: 1.1.0
 """
 
+import asyncio
 import json
 import logging
 import tempfile
@@ -20,6 +21,51 @@ from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
+
+
+# Cycle-16 I-6 (Q3-C): MLflow's `mlflow.start_run(nested=True)` consults a
+# thread-local active-run stack to attach the new run to the currently-open
+# parent. Under `asyncio.gather(n_jobs > 1)` two folds running concurrently
+# in the SAME thread share that thread-local — if fold A opens a nested
+# child and yields control to fold B before closing it, fold B's
+# `start_run(nested=True)` would attach to A's child instead of the outer
+# parent, producing wrong topology in the MLflow UI.
+#
+# This module-level asyncio.Lock serializes the entire nested-run lifecycle
+# (open + log + close) for repeated_k10 fold invocations so concurrent
+# nested-run opens are impossible. Trade-off: serializes the MLflow-tracking
+# portion of fold work; the rest of each fold (training, evaluation) still
+# parallelizes via the orchestrator's Semaphore.
+#
+# Lazy creation avoids binding the lock to a specific event loop at import
+# time — `asyncio.Lock()` constructed on first use binds to the running loop.
+_nested_run_lock: Optional[asyncio.Lock] = None
+
+
+def _get_nested_run_lock() -> asyncio.Lock:
+    """Return the module-level nested-run lock, creating it on first use."""
+    global _nested_run_lock
+    if _nested_run_lock is None:
+        _nested_run_lock = asyncio.Lock()
+    return _nested_run_lock
+
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _maybe_serialize_nested_run(serialize: bool):
+    """Acquire the nested-run lock only when ``serialize=True``.
+
+    Single-mode invocations (``serialize=False``) skip locking entirely so
+    tests + production single-runs incur no overhead. Repeated-mode fold
+    invocations acquire the lock for the full nested-run lifecycle.
+    """
+    if serialize:
+        async with _get_nested_run_lock():
+            yield
+    else:
+        yield
 
 
 def _get_training_run_repository():
@@ -181,7 +227,11 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
         # Start MLflow run (nested when invoked per-fold inside repeated_k10)
-        async with mlflow_conn.start_run(
+        # Cycle-16 I-6 (Q3-C): wrap the nested-run lifecycle in
+        # _maybe_serialize_nested_run when invoked per-fold so concurrent
+        # asyncio.gather(n_jobs > 1) folds cannot overlap their nested-run
+        # opens against MLflow's thread-local active-run state.
+        async with _maybe_serialize_nested_run(serialize=is_repeated_fold), mlflow_conn.start_run(
             experiment_id=mlflow_experiment_id,
             run_name=run_name,
             tags=run_tags,
