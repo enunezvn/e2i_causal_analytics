@@ -164,6 +164,25 @@ class TestFeatureManifestValidation:
         assert m.is_noise is False
         assert m.coefficient == pytest.approx(0.5)
 
+    def test_is_noise_false_with_zero_coefficient_raises(self) -> None:
+        """Symmetric invariant: signal feature must have non-zero coefficient.
+
+        A zero-coefficient signal feature is silently inert (logit dot product
+        ignores it) but the manifest claims it is signal — contradicts the
+        clinical_justification audit story.
+        """
+        with pytest.raises(ValueError, match="is_noise=False requires coefficient!=0"):
+            FeatureManifest(
+                name="x",
+                distribution="normal",
+                distribution_params={"loc": 0.0, "scale": 1.0},
+                coefficient=0.0,
+                monotone_direction=1,
+                is_noise=False,
+                clinical_justification="signal feature mistakenly zeroed",
+                citation_strength="moderate",
+            )
+
     def test_blank_justification_raises(self) -> None:
         with pytest.raises(ValueError, match="clinical_justification must be non-empty"):
             FeatureManifest(
@@ -230,6 +249,102 @@ class TestFeatureManifestSerialization:
         parsed = json.loads(s)
         assert parsed[0]["name"] == "lace_score"
         assert parsed[0]["distribution_params"] == {"loc": 5.5, "scale": 2.0}
+
+
+class TestFeatureManifestNumpyCoercion:
+    """``to_dict()`` must coerce numpy types so consumers can ``json.dumps``."""
+
+    def test_to_dict_coerces_numpy_scalar_in_params(self) -> None:
+        np = pytest.importorskip("numpy")
+        m = FeatureManifest(
+            name="x",
+            distribution="normal",
+            distribution_params={"loc": np.float64(0.5), "scale": np.float32(1.5)},
+            coefficient=0.1,
+            monotone_direction=0,
+            is_noise=False,
+            clinical_justification="numpy-derived params",
+            citation_strength="weak",
+        )
+        d = m.to_dict()
+        # After coercion the values must be JSON-native
+        s = json.dumps(d, sort_keys=True)
+        parsed = json.loads(s)
+        assert parsed["distribution_params"]["loc"] == pytest.approx(0.5)
+        assert parsed["distribution_params"]["scale"] == pytest.approx(1.5)
+
+    def test_to_dict_coerces_numpy_array_in_params(self) -> None:
+        np = pytest.importorskip("numpy")
+        m = FeatureManifest(
+            name="x",
+            distribution="categorical",
+            distribution_params={
+                "categories": ["a", "b", "c"],
+                "probabilities": np.array([0.5, 0.3, 0.2]),
+            },
+            coefficient=0.1,
+            monotone_direction=0,
+            is_noise=False,
+            clinical_justification="numpy-derived probabilities",
+            citation_strength="weak",
+        )
+        d = m.to_dict()
+        s = json.dumps(d, sort_keys=True)
+        parsed = json.loads(s)
+        assert parsed["distribution_params"]["probabilities"] == pytest.approx([0.5, 0.3, 0.2])
+
+    def test_to_dict_coerces_numpy_int(self) -> None:
+        np = pytest.importorskip("numpy")
+        m = FeatureManifest(
+            name="x",
+            distribution="bernoulli",
+            distribution_params={"p": 0.3, "extra_count": np.int64(5)},
+            coefficient=0.1,
+            monotone_direction=0,
+            is_noise=False,
+            clinical_justification="numpy-derived count",
+            citation_strength="weak",
+        )
+        d = m.to_dict()
+        s = json.dumps(d, sort_keys=True)
+        parsed = json.loads(s)
+        assert parsed["distribution_params"]["extra_count"] == 5
+
+    def test_to_dict_coerces_nested_numpy(self) -> None:
+        np = pytest.importorskip("numpy")
+        m = FeatureManifest(
+            name="x",
+            distribution="categorical",
+            distribution_params={
+                "matrix": [np.array([1.0, 2.0]), np.array([3.0, 4.0])],
+            },
+            coefficient=0.1,
+            monotone_direction=0,
+            is_noise=False,
+            clinical_justification="nested numpy",
+            citation_strength="weak",
+        )
+        d = m.to_dict()
+        s = json.dumps(d, sort_keys=True)
+        parsed = json.loads(s)
+        assert parsed["distribution_params"]["matrix"] == [[1.0, 2.0], [3.0, 4.0]]
+
+    def test_to_dict_raises_on_unsupported_type(self) -> None:
+        class _Unrepresentable:
+            pass
+
+        m = FeatureManifest(
+            name="x",
+            distribution="normal",
+            distribution_params={"weird": _Unrepresentable()},
+            coefficient=0.1,
+            monotone_direction=0,
+            is_noise=False,
+            clinical_justification="bad params",
+            citation_strength="weak",
+        )
+        with pytest.raises(TypeError, match="non-JSON-serializable"):
+            m.to_dict()
 
 
 class TestFeatureManifestEqualityAndHash:

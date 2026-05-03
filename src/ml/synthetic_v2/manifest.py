@@ -33,6 +33,38 @@ _VALID_CITATION_STRENGTH: Final[frozenset[str]] = frozenset(
 )
 
 
+def _coerce_to_jsonable(value: Any) -> Any:
+    """Coerce numpy / non-builtin values to JSON-serializable Python builtins.
+
+    Why: shard 03/04/05 per-scenario manifests may compute coefficients or
+    distribution params via numpy and end up with ``np.float64`` /
+    ``np.ndarray`` values inside ``distribution_params``. ``json.dumps``
+    raises ``TypeError`` on those without help. ``asdict`` does not coerce.
+    Run output of ``to_dict()`` through this helper so the audit fingerprint
+    (shard 01 §C.6) can ``json.dumps(..., sort_keys=True)`` straight away.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int, float, type(None))):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _coerce_to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_coerce_to_jsonable(x) for x in value]
+    # numpy.ndarray + numpy.matrix: tolist() returns a Python list / nested list
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return _coerce_to_jsonable(tolist())
+    # numpy scalars: .item() returns a Python builtin
+    item = getattr(value, "item", None)
+    if callable(item):
+        return _coerce_to_jsonable(item())
+    raise TypeError(
+        "FeatureManifest serialization received a non-JSON-serializable value "
+        f"of type {type(value).__name__}: {value!r}"
+    )
+
+
 @dataclass(frozen=True)
 class FeatureManifest:
     """Per-feature audit record (shard 01 §C.5).
@@ -40,12 +72,9 @@ class FeatureManifest:
     Frozen so consumers (W2 day-4 monotone-LightGBM, audit fingerprint) can
     rely on immutability. Note: instances are intentionally unhashable because
     ``distribution_params`` is a dict; use ``to_dict()`` for serialization,
-    not ``hash()``.
-
-    ``slots=True`` is intentionally omitted: combining ``frozen=True`` with
-    ``slots=True`` triggers a no-arg-``super()`` cell-binding edge case in the
-    generated ``__setattr__`` (Python 3.12); memory savings for the ~125
-    manifest instances across A/B/C are negligible.
+    not ``hash()``. ``slots=True`` is omitted because the dict field already
+    blocks hashability and instance counts (~125 across A/B/C) make the
+    memory savings negligible.
     """
 
     name: str
@@ -80,6 +109,14 @@ class FeatureManifest:
                 "FeatureManifest.is_noise=True requires coefficient=0.0; "
                 f"got coefficient={self.coefficient!r} for feature {self.name!r}"
             )
+        if not self.is_noise and self.coefficient == 0.0:
+            raise ValueError(
+                "FeatureManifest.is_noise=False requires coefficient!=0.0; "
+                f"feature {self.name!r} has coefficient=0.0 but is_noise=False — "
+                "either flip is_noise=True or assign a non-zero coefficient. "
+                "(Audit invariant: is_noise is the canonical signal/noise label, "
+                "and a zero-coefficient signal feature is contradictory.)"
+            )
         if not self.clinical_justification.strip():
             raise ValueError(
                 "FeatureManifest.clinical_justification must be non-empty "
@@ -87,8 +124,14 @@ class FeatureManifest:
             )
 
     def to_dict(self) -> dict[str, Any]:
-        """JSON-serializable dict (used by audit fingerprint, shard 01 §C.6)."""
-        return asdict(self)
+        """JSON-serializable dict (used by audit fingerprint, shard 01 §C.6).
+
+        Numpy scalars / arrays inside ``distribution_params`` are coerced to
+        Python builtins so the consumer can ``json.dumps(..., sort_keys=True)``
+        without a ``TypeError``.
+        """
+        raw = asdict(self)
+        return {k: _coerce_to_jsonable(v) for k, v in raw.items()}
 
 
 def manifest_to_jsonable(
