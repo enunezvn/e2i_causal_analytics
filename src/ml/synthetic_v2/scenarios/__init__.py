@@ -71,3 +71,4 @@ __all__ = ["SCENARIO_REGISTRY", "ScenarioName"]
 # B and C are added by commits 08 and 09; missing modules cause ImportError on
 # package load until those commits land.
 from src.ml.synthetic_v2.scenarios import scenario_a as _scenario_a  # noqa: E402, F401
+from src.ml.synthetic_v2.scenarios import scenario_b as _scenario_b  # noqa: E402, F401
