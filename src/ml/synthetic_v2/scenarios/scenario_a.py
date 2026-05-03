@@ -23,19 +23,15 @@ from src.ml.synthetic_v2.manifest import FeatureManifest
 from src.ml.synthetic_v2.scenarios import SCENARIO_REGISTRY, ScenarioName
 from src.ml.synthetic_v2.scenarios._base import ScenarioBuilder
 
-SLOPE_MULTIPLIER: float = 0.062  # calibrated 2026-05-03 via §B.4 bisection: 10/10 seeds in [0.78, 0.83] AUC band, median 0.812.
-# Bisection log:
-#   slope=0.055 -> 6/10 in band, median 0.787
-#   slope=0.060 -> 8/10 in band, median 0.804
-#   slope=0.062 -> 10/10 in band, median 0.812  *** LOCKED ***
-#   slope=0.064 -> 9/10 in band, median 0.811
-#   slope=0.068 -> 8/10 in band, median 0.823
-#   slope=0.072 -> 3/10 in band, median 0.839
-# The shard 03 §B.4 initial estimate of ~0.55 assumed sum-of-squared-coefs ~3
-# from a back-of-envelope 28-active-feature linear-additive logit; the actual
-# manifest has ~36 effective signal features (sum-sq-coefs ~14) so the empirical
-# slope is ~9x smaller. Action item: shard 03 §B.4 initial-estimate should be
-# updated to reflect the calibrated value.
+SLOPE_MULTIPLIER: float = 0.67  # calibrated 2026-05-03 via §B.4 bisection (post full-cohort standardization fix): 9/10 seeds in [0.78, 0.83] AUC band, median 0.793.
+# Bisection log (after api.py full-cohort standardization fix):
+#   slope=0.65 -> 5/10 in band, median 0.784
+#   slope=0.66 -> 7/10 in band, median 0.794
+#   slope=0.67 -> 9/10 in band, median 0.793  *** LOCKED ***
+#   slope=0.68 -> 7/10 in band, median 0.817
+# Action item: shard 03 §B.4 prose should be updated to reflect that
+# manifest coefficients work on standardized (unit-variance) features per
+# the api.py step-3 standardization fix; initial estimate ~0.55 is now ~0.67.
 
 SCENARIO_A_MANIFEST: tuple[FeatureManifest, ...] = (
     # Cluster 1: Demographics + reproductive history (5)

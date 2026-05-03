@@ -22,18 +22,17 @@ from src.ml.synthetic_v2.manifest import FeatureManifest
 from src.ml.synthetic_v2.scenarios import SCENARIO_REGISTRY, ScenarioName
 from src.ml.synthetic_v2.scenarios._base import ScenarioBuilder
 
-SLOPE_MULTIPLIER: float = 0.060  # calibrated 2026-05-03 via §B.4 bisection: 8/10 seeds in [0.72, 0.78] AUC band, median 0.766.
-# Bisection log:
-#   slope=0.050 -> 2/10 in band, median 0.703
-#   slope=0.055 -> 4/10 in band, median 0.757
-#   slope=0.058 -> 7/10 in band, median 0.768
-#   slope=0.060 -> 8/10 in band, median 0.766  *** LOCKED ***
-#   slope=0.063 -> 5/10 in band, median 0.779
-#   slope=0.066 -> 3/10 in band, median 0.786
+SLOPE_MULTIPLIER: float = 0.70  # calibrated 2026-05-03 via §B.4 bisection (post full-cohort standardization fix): 8/10 seeds in [0.72, 0.78] AUC band, median 0.738.
+# Bisection log (after api.py full-cohort standardization fix):
+#   slope=0.60 -> 2/10 in band, median 0.705
+#   slope=0.70 -> 8/10 in band, median 0.738  *** LOCKED ***
+#   slope=0.80 -> 7/10 in band, median 0.756
+#   slope=0.90 -> 5/10 in band, median 0.784
 # Acceptance relaxed from 9/10 to 8/10 per shard 04 §B.4 risk note: at low
-# prevalence (0.05) and AUC band ±0.03, per-seed variance is wider than the
-# budget allows. Risk R-1 in shard 09 §B.1 contemplated this exact relaxation.
-# Action item: shard 04 §B.4 acceptance prose update needed (9/10 -> 8/10).
+# prevalence (0.05) and AUC band +/- 0.03, per-seed variance is wider than
+# the budget allows. Risk R-1 in shard 09 §B.1 contemplated this relaxation.
+# Action item: shard 04 §B.4 should update both the initial-slope estimate
+# and the 9/10 -> 8/10 acceptance threshold.
 
 SCENARIO_B_MANIFEST: tuple[FeatureManifest, ...] = (
     # Cluster 1: Demographics + diagnosis context (4)

@@ -72,3 +72,4 @@ __all__ = ["SCENARIO_REGISTRY", "ScenarioName"]
 # package load until those commits land.
 from src.ml.synthetic_v2.scenarios import scenario_a as _scenario_a  # noqa: E402, F401
 from src.ml.synthetic_v2.scenarios import scenario_b as _scenario_b  # noqa: E402, F401
+from src.ml.synthetic_v2.scenarios import scenario_c as _scenario_c  # noqa: E402, F401

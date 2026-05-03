@@ -180,21 +180,34 @@ def generate_scenario(
     # 2. Inject correlation blocks
     X_corr = apply_block_correlation(rng, X_raw, builder.correlation_blocks)
 
-    # 3. Compute logits (with slope multiplier) and solve intercept
+    # 3. Z-score standardize at the full-cohort level so manifest coefficients
+    # work on unit-variance scale. Without this, scenarios with raw features
+    # spanning 1-2 orders of magnitude (e.g., Scenario C d_dimer ~950 ng/mL)
+    # would saturate the sigmoid + break solve_intercept's bisection bracket.
+    # Synthetic-DGP-side full-cohort standardization is acceptable here
+    # because the generator owns the complete cohort; the consumer-side
+    # train-only standardization in step 6 still happens for the ML pipeline
+    # contract (no train→test leakage on the ML side).
+    full_mean = X_corr.mean(axis=0)
+    full_std = X_corr.std(axis=0, ddof=0)
+    full_std_safe = np.where(full_std < 1e-12, 1.0, full_std)
+    X_for_labels = (X_corr - full_mean) / full_std_safe
+
+    # 4. Compute logits (with slope multiplier) and solve intercept
     coefs = np.array(
         [m.coefficient for m in builder.feature_manifest],
         dtype=np.float64,
     ) * builder.slope_multiplier
-    intercept = solve_intercept(X_corr, coefs, builder.target_prevalence)
+    intercept = solve_intercept(X_for_labels, coefs, builder.target_prevalence)
 
-    # 4. Sample labels via inverse-CDF on the calibrated sigmoid
-    p = _sigmoid(X_corr @ coefs + intercept)
+    # 5. Sample labels via inverse-CDF on the calibrated sigmoid
+    p = _sigmoid(X_for_labels @ coefs + intercept)
     y = (rng.uniform(size=resolved_n_total) < p).astype(np.int64)
 
-    # 5. Stratified train/val/test split
+    # 6. Stratified train/val/test split on the standardized cohort
     X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = (
         stratified_train_val_test_split(
-            X_corr,
+            X_for_labels,
             y,
             train_ratio=train_ratio,
             val_ratio=val_ratio,
@@ -203,15 +216,17 @@ def generate_scenario(
         )
     )
 
-    # 6. Z-score standardize using train statistics only (no leakage)
+    # 7. Train-only z-score correction (small adjustment since the data is
+    # already standardized at full-cohort level; preserves the ML-pipeline
+    # train-only-stats contract per shard 02 §A.3)
     X_train, X_val, X_test, _, _ = standardize_train_val_test(
         X_train_raw, X_val_raw, X_test_raw
     )
 
-    # 7. Stratify key — full-cohort, pre-split ordering (shard 21 §B contract)
+    # 8. Stratify key — full-cohort, pre-split ordering (shard 21 §B contract)
     stratify = y.copy()
 
-    # 8. Audit fingerprint
+    # 9. Audit fingerprint
     fp = _fingerprint(scenario, seed, resolved_n_total, builder.feature_manifest)
 
     metadata = ScenarioMetadata(

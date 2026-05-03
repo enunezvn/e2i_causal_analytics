@@ -46,7 +46,7 @@ class TestScenarioBManifestAlignment:
         assert ScenarioBBuilder().target_auc_band == (0.72, 0.78)
 
     def test_slope_multiplier_locked(self) -> None:
-        assert SLOPE_MULTIPLIER == pytest.approx(0.060)
+        assert SLOPE_MULTIPLIER == pytest.approx(0.70)
 
     def test_correlation_blocks_within_n_features_range(self) -> None:
         for cols, _ in SCENARIO_B_CORRELATION_BLOCKS:

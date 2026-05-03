@@ -51,7 +51,7 @@ class TestScenarioAManifestAlignment:
 
     def test_slope_multiplier_locked(self) -> None:
         assert ScenarioABuilder().slope_multiplier == SLOPE_MULTIPLIER
-        assert SLOPE_MULTIPLIER == pytest.approx(0.062)
+        assert SLOPE_MULTIPLIER == pytest.approx(0.67)
 
     def test_correlation_blocks_within_n_features_range(self) -> None:
         for cols, _ in SCENARIO_A_CORRELATION_BLOCKS:
