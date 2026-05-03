@@ -517,8 +517,8 @@ async def test_orchestrator_single_mode_real_graph_output_surface() -> None:
     #
     # MLflow keys (``mlflow_run_id``, ``mlflow_status``) are intentionally
     # omitted here because this test runs with ``enable_mlflow=False`` —
-    # ``mlflow_status`` is "skipped" and ``mlflow_run_id`` is None. The
-    # cheap test exercises that path explicitly.
+    # ``mlflow_status`` is "disabled" (per mlflow_logger.py) and
+    # ``mlflow_run_id`` is None. The cheap test exercises that path explicitly.
     must_be_present_in_single_mode = {
         # Core classification metrics
         "auc_roc",
