@@ -8,7 +8,7 @@ Version: 2.0.0
 
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 
 import numpy as np
 from sklearn.dummy import DummyClassifier
@@ -680,6 +680,363 @@ def _compute_net_benefit_at_p_t(y_true: np.ndarray, y_proba: np.ndarray, p_t: fl
     tp = int(np.sum((y_pred == 1) & (y_true == 1)))
     fp = int(np.sum((y_pred == 1) & (y_true == 0)))
     return (tp / n) - (fp / n) * p_t / (1.0 - p_t)
+
+
+# Q-W5-2 RESOLVED 2026-05-01 — anchor-point gate fires when observed
+# prevalence > 0.10. See shard 20 §A.5.5 for the geometric / empirical /
+# operational reasoning behind 0.10. Symmetric with Q-W5-1 RESOLVED
+# `promotion_gate_metric` form-selection (raw when prev <= 0.10, relative
+# when prev > 0.10).
+_PREVALENCE_GATE_THRESHOLD: float = 0.10
+
+
+# Section E.2 — τ-range defaults per use_case (shard 20 §E.2).
+_USE_CASE_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "screening":          {"tau_low": 0.01, "tau_high": 0.10},
+    "diagnostic":         {"tau_low": 0.05, "tau_high": 0.30},
+    "treatment_decision": {"tau_low": 0.20, "tau_high": 0.50},
+    "critical_action":    {"tau_low": 0.30, "tau_high": 0.70},
+    "generic_benchmark":  {"tau_low": 0.05, "tau_high": 0.30},
+}
+
+# Per-disease overrides — Novartis US commercial-analytics portfolio
+# alignment per Q-W5-6 RESOLVED 2026-05-01. Citation-strength legend
+# (per row): STRONG = single guideline / RCT-derived threshold;
+# MODERATE = multi-source clinical risk-stratification literature;
+# WEAK = no probability-threshold guideline; requires user validation.
+_DISEASE_SPECIFIC_DEFAULTS: Dict[str, Dict[str, float]] = {
+    # cv_risk_10y — Leqvio (inclisiran). 2018 ACC/AHA cholesterol guideline
+    # statin-initiation threshold 7.5%. STRONG.
+    "cv_risk_10y":              {"tau_low": 0.05, "tau_high": 0.15, "primary_tau": 0.075},
+    # hf_readmission_30d — Entresto (sacubitril/valsartan). LACE-HF + CMS
+    # HRRP excess-readmission threshold ~22%. MODERATE.
+    "hf_readmission_30d":       {"tau_low": 0.10, "tau_high": 0.30, "primary_tau": 0.20},
+    # breast_cancer_recurrence — Kisqali (ribociclib). TAILORx + RxPONDER
+    # Oncotype DX RS 11-25 → 10-30% 10y distant recurrence. STRONG.
+    "breast_cancer_recurrence": {"tau_low": 0.10, "tau_high": 0.30, "primary_tau": 0.21},
+    # ms_treatment_escalation — Kesimpta + Mayzent. NEDA-3 failure /
+    # Rio Score. MODERATE.
+    "ms_treatment_escalation":  {"tau_low": 0.20, "tau_high": 0.40, "primary_tau": 0.30},
+    # psoriasis_pasi_response — Cosentyx (secukinumab). PASI 75 at 16 weeks.
+    # WEAK — no probability-threshold guideline; validate before deployment.
+    "psoriasis_pasi_response":  {"tau_low": 0.30, "tau_high": 0.60, "primary_tau": 0.45},
+    # mcrpc_progression_risk — Pluvicto (177Lu-PSMA-617). VISION + PROfound
+    # post-taxane progression rates. MODERATE.
+    "mcrpc_progression_risk":   {"tau_low": 0.25, "tau_high": 0.55, "primary_tau": 0.40},
+}
+
+
+def _compute_net_benefit_area(
+    y_true: np.ndarray,
+    y_proba_pos: np.ndarray,
+    tau_grid: Sequence[float],
+    prevalence_gate_threshold: float = _PREVALENCE_GATE_THRESHOLD,
+) -> Dict[str, Any]:
+    """Trapezoidal integral of NB over ``tau_grid`` (Vickers 2006 + shard 20 §A.2).
+
+    Computes NB_area for the model and for the treat-all reference, plus
+    their difference (the operationally meaningful quantity per Vickers
+    2006). Returns a dict so callers can serialize a single block. Returns
+    NaN-valued fields when ``tau_grid`` is empty / non-monotonic / contains
+    values outside ``(0, 1)``. The ``net_benefit_area_form`` field is the
+    informational Q-W5-1 RESOLVED 2026-05-02 cycle 6 disposition: per the
+    prevalence-conditional ``promotion_gate_metric`` rule, the gating form
+    is raw when ``prevalence <= prevalence_gate_threshold`` and
+    relative-to-treat-all otherwise. Both fields are populated regardless;
+    consumers (W6 ``criteria_validator``) read ``net_benefit_area_form`` to
+    decide which to gate against.
+
+    Args:
+        y_true: 1D binary labels (0/1).
+        y_proba_pos: 1D positive-class probabilities.
+        tau_grid: Sorted ascending list of τ values in ``(0, 1)``. Phase 1
+            default is 21 evenly-spaced points across ``[tau_low, tau_high]``.
+        prevalence_gate_threshold: Cutoff for ``net_benefit_area_form``
+            informational selection. Defaults to ``_PREVALENCE_GATE_THRESHOLD``
+            (Q-W5-2 + Q-W5-1 RESOLVED).
+
+    Returns:
+        ``{"net_benefit_area", "net_benefit_area_treat_all",
+        "net_benefit_area_relative_to_treat_all", "tau_low", "tau_high",
+        "n_grid_points", "prevalence", "net_benefit_area_form"}``.
+    """
+    n = len(y_true)
+    prev = float(np.mean(y_true == 1)) if n > 0 else float("nan")
+    form: Literal["raw", "relative_to_treat_all"] = (
+        "relative_to_treat_all"
+        if (not math.isnan(prev) and prev > prevalence_gate_threshold)
+        else "raw"
+    )
+    nan_block: Dict[str, Any] = {
+        "net_benefit_area": float("nan"),
+        "net_benefit_area_treat_all": float("nan"),
+        "net_benefit_area_relative_to_treat_all": float("nan"),
+        "tau_low": float("nan"),
+        "tau_high": float("nan"),
+        "n_grid_points": int(len(tau_grid)),
+        "prevalence": prev,
+        "net_benefit_area_form": form,
+    }
+    if len(tau_grid) < 2 or n == 0:
+        return nan_block
+    taus = np.asarray(tau_grid, dtype=float)
+    if not np.all(np.diff(taus) > 0):
+        # Non-monotonic — defensive; the resolver should sort.
+        taus = np.sort(taus)
+    if taus[0] <= 0.0 or taus[-1] >= 1.0:
+        # NB undefined at boundaries; clamp into open interval. The
+        # 1e-6 buffer matches the resolver's invariant; without it a
+        # caller-supplied 0.0 would leak NaN through the NB grid.
+        taus = np.clip(taus, 1e-6, 1.0 - 1e-6)
+    nb_model = np.array(
+        [_compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus]
+    )
+    nb_treat_all = prev - (1.0 - prev) * taus / (1.0 - taus)
+    if np.any(np.isnan(nb_model)):
+        # Don't integrate over partial NaN — emit NaN for the area.
+        area_model = float("nan")
+    else:
+        area_model = float(np.trapz(nb_model, taus))
+    area_treat_all = float(np.trapz(nb_treat_all, taus))
+    area_relative = (
+        area_model - area_treat_all if not math.isnan(area_model) else float("nan")
+    )
+    return {
+        "net_benefit_area": area_model,
+        "net_benefit_area_treat_all": area_treat_all,
+        "net_benefit_area_relative_to_treat_all": area_relative,
+        "tau_low": float(taus[0]),
+        "tau_high": float(taus[-1]),
+        "n_grid_points": int(len(taus)),
+        "prevalence": prev,
+        "net_benefit_area_form": form,
+    }
+
+
+def _compute_dca_curves(
+    y_true: np.ndarray,
+    y_proba_pos: np.ndarray,
+    tau_grid: Sequence[float],
+) -> Dict[str, Any]:
+    """Decision-curve analysis artifact (Vickers 2006; shard 20 §B.2).
+
+    Returns aligned arrays so downstream consumers (MLflow, Opik, Grafana)
+    can plot decision curves without recomputing. Emits Python lists, not
+    numpy arrays, so the dict is JSON-serializable for ``mlflow.log_dict``.
+
+    Args:
+        y_true: 1D binary labels (0/1).
+        y_proba_pos: 1D positive-class probabilities.
+        tau_grid: Sorted ascending list of τ values in ``(0, 1)``.
+
+    Returns:
+        Dict with ``tau_grid``, ``nb_model``, ``nb_treat_all``,
+        ``nb_treat_none`` arrays of length K, plus ``prevalence`` and
+        ``tau_low`` / ``tau_high`` bounds.
+    """
+    taus = np.asarray(tau_grid, dtype=float) if len(tau_grid) > 0 else np.array([])
+    prev = float(np.mean(y_true == 1)) if len(y_true) > 0 else float("nan")
+    if len(taus) == 0:
+        return {
+            "tau_grid": [],
+            "nb_model": [],
+            "nb_treat_all": [],
+            "nb_treat_none": [],
+            "n_grid_points": 0,
+            "prevalence": prev,
+            "tau_low": float("nan"),
+            "tau_high": float("nan"),
+        }
+    nb_model = [
+        _compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus
+    ]
+    nb_treat_all_arr = (prev - (1.0 - prev) * taus / (1.0 - taus))
+    nb_treat_all = [float(v) for v in nb_treat_all_arr]
+    nb_treat_none = [0.0] * len(taus)
+    return {
+        "tau_grid": [float(t) for t in taus],
+        "nb_model": [float(v) for v in nb_model],
+        "nb_treat_all": nb_treat_all,
+        "nb_treat_none": nb_treat_none,
+        "n_grid_points": int(len(taus)),
+        "prevalence": prev,
+        "tau_low": float(taus[0]),
+        "tau_high": float(taus[-1]),
+    }
+
+
+def _resolve_tau_grid_for_metrics(
+    success_criteria: Optional[Dict[str, Any]],
+    legacy_grid: Sequence[float],
+    n_grid_points: int = 21,
+) -> Optional[List[float]]:
+    """Resolve τ_low, τ_high, and a uniform grid from ``success_criteria``.
+
+    Resolution order per shard 16 §3 + shard 20 §E.2 (disease label is more
+    specific than ``use_case=custom``, so it beats it):
+
+      1. ``clinical_threshold_range.evaluation_grid`` (caller-supplied) wins outright.
+      2. ``dataset_disease`` in ``_DISEASE_SPECIFIC_DEFAULTS`` → disease-specific bounds.
+      3. ``clinical_threshold_range.use_case == "custom"`` → explicit ``tau_low`` / ``tau_high``.
+      4. ``clinical_threshold_range.use_case`` in ``_USE_CASE_DEFAULTS`` → use-case defaults.
+      5. No schema or unknown use_case → ``legacy_grid``.
+
+    Returns the resolved grid (a list of floats), or ``None`` only when the
+    caller signalled they want the metrics suite skipped entirely (currently
+    not used — kept in the signature for forward compatibility).
+    """
+    if not success_criteria:
+        return list(legacy_grid)
+    ctr = success_criteria.get("clinical_threshold_range") or {}
+    use_case = (ctr.get("use_case") or "").strip()
+    explicit_grid = ctr.get("evaluation_grid")
+    if explicit_grid:  # caller-supplied grid wins outright
+        return [float(t) for t in explicit_grid]
+
+    # Disease-specific override (when dataset is labeled). Disease beats
+    # use_case so a Novartis franchise default cannot be silently
+    # overridden by a stale ``use_case=screening`` config — the explicit
+    # disease label always wins.
+    dataset_disease = (
+        success_criteria.get("dataset_disease")
+        or ctr.get("dataset_disease")
+        or ""
+    ).strip()
+    if dataset_disease and dataset_disease in _DISEASE_SPECIFIC_DEFAULTS:
+        ds = _DISEASE_SPECIFIC_DEFAULTS[dataset_disease]
+        return [float(t) for t in np.linspace(ds["tau_low"], ds["tau_high"], n_grid_points)]
+
+    if use_case == "custom":
+        tl = ctr.get("tau_low")
+        th = ctr.get("tau_high")
+        try:
+            tl_f = float(tl) if tl is not None else None
+            th_f = float(th) if th is not None else None
+        except (TypeError, ValueError):
+            tl_f = th_f = None
+        if tl_f is None or th_f is None or not 0.0 < tl_f < th_f < 1.0:
+            logger.warning(
+                "clinical_threshold_range.use_case=custom but tau_low/tau_high "
+                "missing or invalid (%s, %s); falling back to legacy grid",
+                tl, th,
+            )
+            return list(legacy_grid)
+        return [float(t) for t in np.linspace(tl_f, th_f, n_grid_points)]
+
+    if use_case in _USE_CASE_DEFAULTS:
+        defaults = _USE_CASE_DEFAULTS[use_case]
+        return [
+            float(t)
+            for t in np.linspace(defaults["tau_low"], defaults["tau_high"], n_grid_points)
+        ]
+
+    return list(legacy_grid)
+
+
+def _resolve_primary_tau(
+    success_criteria: Optional[Dict[str, Any]],
+) -> Optional[float]:
+    """Resolve the optional ``primary_tau`` clinical anchor (shard 20 §A.5.1).
+
+    Resolution order:
+
+      1. ``clinical_threshold_range.primary_tau`` (explicit caller config).
+      2. ``_DISEASE_SPECIFIC_DEFAULTS[dataset_disease].primary_tau``.
+      3. ``None`` — no anchor available; anchor-point metrics emit NaN.
+    """
+    if not success_criteria:
+        return None
+    ctr = success_criteria.get("clinical_threshold_range") or {}
+    explicit = ctr.get("primary_tau")
+    if explicit is not None:
+        try:
+            t = float(explicit)
+            if 0.0 < t < 1.0:
+                return t
+        except (TypeError, ValueError):
+            pass
+    dataset_disease = (
+        success_criteria.get("dataset_disease")
+        or ctr.get("dataset_disease")
+        or ""
+    ).strip()
+    if dataset_disease and dataset_disease in _DISEASE_SPECIFIC_DEFAULTS:
+        primary = _DISEASE_SPECIFIC_DEFAULTS[dataset_disease].get("primary_tau")
+        if primary is not None:
+            try:
+                t = float(primary)
+                if 0.0 < t < 1.0:
+                    return t
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _compute_anchor_point_metrics(
+    y_true: np.ndarray,
+    y_proba_pos: np.ndarray,
+    primary_tau: Optional[float],
+    nb_area_relative: float,
+    prevalence_threshold: float = _PREVALENCE_GATE_THRESHOLD,
+) -> Dict[str, Any]:
+    """Single-τ anchor-point NB + Q-W5-2 RESOLVED secondary-gate trigger.
+
+    Always emitted when ``primary_tau`` resolves. The boolean
+    ``nb_anchor_secondary_gate_active`` is True iff observed prevalence on
+    ``y_true`` exceeds ``prevalence_threshold`` — W6 wires this boolean
+    into ``criteria_validator`` so the gate fires only when active.
+
+    The ``nb_anchor_vs_area_disagree`` diagnostic is True when the anchor
+    pass/fail differs from the NB-area-relative pass/fail. After the first
+    multi-disease run (shard 22), inspect disagreement rates per regime: if
+    < 1% the gate adds little signal; if > 5% it is catching real misses.
+    """
+    prev = float(np.mean(y_true == 1)) if len(y_true) > 0 else float("nan")
+    nan_block: Dict[str, Any] = {
+        "primary_tau": None,
+        "net_benefit_at_primary_tau": float("nan"),
+        "net_benefit_at_primary_tau_treat_all": float("nan"),
+        "net_benefit_at_primary_tau_relative_to_treat_all": float("nan"),
+        "nb_anchor_secondary_gate_active": False,
+        "nb_anchor_passes": None,
+        "nb_anchor_vs_area_disagree": False,
+        "prevalence": prev,
+    }
+    if primary_tau is None or not (0.0 < float(primary_tau) < 1.0):
+        return nan_block
+
+    p_tau = float(primary_tau)
+    nb_at_primary = _compute_net_benefit_at_p_t(y_true, y_proba_pos, p_tau)
+    nb_treat_all_at_primary = float(prev - (1.0 - prev) * p_tau / (1.0 - p_tau))
+    nb_relative = (
+        float(nb_at_primary - nb_treat_all_at_primary)
+        if not math.isnan(nb_at_primary)
+        else float("nan")
+    )
+    gate_active = bool(not math.isnan(prev) and prev > prevalence_threshold)
+    anchor_passes: Optional[bool]
+    if gate_active and not math.isnan(nb_relative):
+        anchor_passes = bool(nb_relative > 0.0)
+    else:
+        anchor_passes = None
+    area_passes = (
+        bool(nb_area_relative > 0.0) if not math.isnan(nb_area_relative) else None
+    )
+    disagree = bool(
+        anchor_passes is not None
+        and area_passes is not None
+        and anchor_passes != area_passes
+    )
+    return {
+        "primary_tau": p_tau,
+        "net_benefit_at_primary_tau": float(nb_at_primary),
+        "net_benefit_at_primary_tau_treat_all": nb_treat_all_at_primary,
+        "net_benefit_at_primary_tau_relative_to_treat_all": nb_relative,
+        "nb_anchor_secondary_gate_active": gate_active,
+        "nb_anchor_passes": anchor_passes,
+        "nb_anchor_vs_area_disagree": disagree,
+        "prevalence": prev,
+    }
 
 
 def _compute_classification_metrics(
