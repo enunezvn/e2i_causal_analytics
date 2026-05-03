@@ -31,7 +31,6 @@ import pytest
 from src.agents.ml_foundation.model_trainer.nodes.evaluator import evaluate_model
 from src.agents.ml_foundation.model_trainer.nodes.model_trainer_node import train_model
 
-
 SEED = 42
 N_TRAIN = 100
 N_VAL = 30

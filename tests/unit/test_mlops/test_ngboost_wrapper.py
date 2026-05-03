@@ -11,7 +11,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-
 SEED = 42
 N_SAMPLES = 200
 N_FEATURES = 5

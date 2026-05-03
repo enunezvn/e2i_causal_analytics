@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from sklearn.linear_model import LogisticRegression
-
 
 SEED = 42
 N_SAMPLES = 200
