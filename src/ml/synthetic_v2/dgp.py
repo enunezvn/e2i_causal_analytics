@@ -6,7 +6,15 @@ Hosts the per-scenario-agnostic primitives every ``ScenarioBuilder`` relies on:
 - ``apply_block_correlation``: Cholesky-injected block correlation (§A.2);
   signed Pearson ``r`` is accepted as long as the resulting target matrix is
   positive semi-definite. Non-PSD blocks raise ``ValueError`` with a clear
-  message instead of letting NumPy emit a cryptic ``LinAlgError``.
+  message instead of letting NumPy emit a cryptic ``LinAlgError``. The
+  implementation is **stricter** than shard 02 §A.2 step 4 prose ("Re-scale
+  back to original mean + std"): we re-standardize the Cholesky-transformed
+  columns before re-scaling so the input block's marginal mean/std are
+  preserved EXACTLY, not just in expectation. Per-column z-scoring is a
+  linear transform → it does not change Pearson correlations, so the target
+  ``r`` is still hit. Action item: future shard refresh should bring the
+  prose in line with this implementation; do NOT regress to the pseudocode
+  literal version without coordinating a test-tolerance update.
 - ``standardize_train_val_test``: train-stats z-score, no leakage (§A.3).
 - ``solve_intercept``: monotone bisection on logistic intercept to hit a
   target prevalence within tolerance (§B.1).
@@ -156,6 +164,10 @@ def standardize_train_val_test(
 
     Returns ``(X_train_z, X_val_z, X_test_z, mean, std)``. Val/test get the
     same mean+std the training pipeline computes — prevents data leakage.
+
+    The returned ``std`` is the **raw** train-set std (without zero-variance
+    safe substitution) so callers can detect degenerate columns. Internally
+    the division uses a safe-substituted vector to avoid divide-by-zero.
     """
     if X_train.ndim != 2 or X_val.ndim != 2 or X_test.ndim != 2:
         raise ValueError(
@@ -175,7 +187,7 @@ def standardize_train_val_test(
         (X_val - mean) / std_safe,
         (X_test - mean) / std_safe,
         mean,
-        std_safe,
+        std,
     )
 
 

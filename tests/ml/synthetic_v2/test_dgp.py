@@ -100,6 +100,16 @@ class TestApplyBlockCorrelation:
         c = np.corrcoef(out, rowvar=False)
         assert abs(c[0, 1] - (-0.7)) < 0.04
 
+    def test_realizes_target_pearson_r_negative_three_col(self) -> None:
+        """3-col block with PSD-valid negative r (-0.3 > -1/(3-1) = -0.5)."""
+        rng = np.random.default_rng(2024)
+        X = self._make_independent_features(rng, n=20_000, n_features=3)
+        out = apply_block_correlation(rng, X, blocks=[([0, 1, 2], -0.3)])
+        c = np.corrcoef(out, rowvar=False)
+        for i in range(3):
+            for j in range(i + 1, 3):
+                assert abs(c[i, j] - (-0.3)) < 0.04, f"corr[{i},{j}]={c[i, j]}"
+
     def test_preserves_marginal_mean_and_std(self) -> None:
         rng = np.random.default_rng(99)
         X = rng.normal(loc=5.0, scale=2.0, size=(20_000, 3))
@@ -187,7 +197,10 @@ class TestStandardizeTrainValTest:
         assert np.all(np.abs(Xv.mean(axis=0)) > 5.0)
         assert np.all(np.abs(Xte.mean(axis=0)) > 5.0)
 
-    def test_zero_variance_column_uses_safe_std(self) -> None:
+    def test_zero_variance_column_uses_safe_std_internally(self) -> None:
+        """Internal divide uses safe-substituted std → no NaN. Returned ``std``
+        is the raw value (0.0 for degenerate columns) so callers can detect them.
+        """
         X_train = np.zeros((100, 3))
         X_val = np.zeros((20, 3))
         X_test = np.zeros((20, 3))
@@ -195,7 +208,21 @@ class TestStandardizeTrainValTest:
         assert not np.any(np.isnan(Xt))
         assert not np.any(np.isnan(Xv))
         assert not np.any(np.isnan(Xte))
-        assert np.all(std == 1.0)
+        # Raw std is 0.0 for degenerate columns (caller can detect via std == 0)
+        np.testing.assert_array_equal(std, np.zeros(3))
+
+    def test_returned_std_is_raw_train_std(self) -> None:
+        """Returned ``std`` must be the raw train-set std for downstream
+        de-standardization (``X_z * std + mean``). A non-degenerate column's
+        std is returned exactly.
+        """
+        rng = np.random.default_rng(42)
+        X_train = rng.normal(loc=5.0, scale=2.0, size=(1_000, 4))
+        X_val = X_train[:200]
+        X_test = X_train[200:400]
+        _, _, _, mean, std = standardize_train_val_test(X_train, X_val, X_test)
+        np.testing.assert_array_equal(std, X_train.std(axis=0, ddof=0))
+        np.testing.assert_array_equal(mean, X_train.mean(axis=0))
 
     def test_ndim_validation(self) -> None:
         with pytest.raises(ValueError, match="2-D"):
@@ -230,8 +257,13 @@ class TestSolveIntercept:
         X = np.zeros((1_000, 3))
         coefs = np.zeros(3)
         target = 0.30
-        b = solve_intercept(X, coefs, target_prevalence=target)
-        # With all-zero coefs and X, sigmoid(b) == target → b == logit(target)
+        b = solve_intercept(X, coefs, target_prevalence=target, tol=1e-4)
+        # With all-zero coefs and X, sigmoid(b) == target → b == logit(target).
+        # Bisection halts when |sigmoid(b) - target| < tol; the resulting
+        # |b - logit(target)| is bounded by tol / sigmoid'(logit(target)).
+        # For target=0.3, sigmoid'(logit(0.3)) = 0.3 * 0.7 = 0.21, so
+        # |b - logit(target)| <= 1e-4 / 0.21 ≈ 4.8e-4. We assert 1e-3 to
+        # leave a small safety margin against future bisection-bracket changes.
         expected = float(np.log(target / (1.0 - target)))
         assert abs(b - expected) < 1e-3
 
