@@ -47,14 +47,38 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
     holdout_samples = state.get("holdout_samples", 0)
     total_samples = state.get("total_samples", 0)
 
-    # Expected ratios (E2I ML Foundation split policy)
-    expected_ratios = {
-        "train": 0.60,
-        "validation": 0.20,
-        "test": 0.15,
-        "holdout": 0.05,
-    }
-    tolerance = 0.02  # ±2%
+    # W3-lite Day 4 (shard 17 W3 row Day 4 + shard 21 §A): when the
+    # `_run_repeated_splits` orchestrator built the per-fold split via
+    # `RepeatedStratifiedSplitter`, ratios + holdout requirements are
+    # owned by the repeated-mode contract (70/15/15 + no holdout) and the
+    # legacy 60/20/15/5 expectation does NOT apply. The splitter's own
+    # invariants (`test_repeated_splitter.py`) guarantee per-fold
+    # train/val/test disjointness; the leakage `_check_duplicate_indices`
+    # path still runs and operates on the explicit `indices` key the
+    # orchestrator emits.
+    #
+    # Q-W3-1 RESOLVED 2026-05-01 cycle 2: estimand is "frozen-config
+    # performance variability over k stratified resampling draws
+    # conditional on the observed dataset" — holdout is single-mode-only.
+    repeated_mode = state.get("evaluation_mode") == "repeated_k10"
+    if repeated_mode:
+        # 70/15/15 fractions per shard 21 §A; holdout intentionally absent.
+        expected_ratios = {
+            "train": 0.70,
+            "validation": 0.15,
+            "test": 0.15,
+            "holdout": 0.00,
+        }
+        tolerance = 0.05  # widened — splitter's stratified shuffle leaves ±2-3% slack at small N
+    else:
+        # E2I ML Foundation split policy (legacy single-mode contract).
+        expected_ratios = {
+            "train": 0.60,
+            "validation": 0.20,
+            "test": 0.15,
+            "holdout": 0.05,
+        }
+        tolerance = 0.02  # ±2%
     # Add small epsilon for floating point comparison (0.62 - 0.60 may be 0.0200000001)
     epsilon = 1e-9
 
@@ -124,11 +148,13 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         ratios_valid = False
 
-    # Check holdout - warn if zero (holdout is optional but important for final validation)
-    if holdout_samples == 0 and holdout_ratio > 0:
+    # Check holdout - warn if zero (holdout is optional but important for final validation).
+    # In repeated_k10 mode the splitter contract has no holdout (shard 21 §A) so we skip
+    # the empty-holdout failure path and only emit a soft note for traceability.
+    if holdout_samples == 0 and holdout_ratio > 0 and not repeated_mode:
         leakage_warnings.append(f"Holdout split has 0 samples but ratio is {holdout_ratio:.2%}")
         ratios_valid = False
-    elif holdout_samples == 0:
+    elif holdout_samples == 0 and not repeated_mode:
         leakage_warnings.append(
             "Holdout split has 0 samples - final model validation will be limited"
         )

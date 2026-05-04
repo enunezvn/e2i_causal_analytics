@@ -1,0 +1,583 @@
+"""W3-lite Day 4 — evaluation_mode dispatch + repeated_kfold_orchestrator integration.
+
+Spec: shard 17 W3 row Day 4 + shard 21 §B (TrainerInput evaluation_mode + dispatch logic) +
+§G.2 (Backward compatibility) + §G.3 (Repeated mode tests).
+
+Naming decision: shard 21 uses ``"single" | "repeated_k10"`` (default ``"single"``); shard 17
+W3 row Day 4 uses ``"single_split" | "repeated_kfold"``. Implementation follows shard 21
+since orchestrator + tests are written against those names. Naming divergence flagged in
+state file (`adaptive_v3_followup_state.md`) for user decision on whether to amend shard 17.
+
+Backward-compat invariant: when ``evaluation_mode`` is absent OR explicitly ``"single"``,
+the agent path MUST be byte-identical to the pre-W4-day-4 baseline (no extra MLflow nesting,
+no fold_metrics, no aggregate_metrics).
+
+The repeated-mode tests mock the per-fold graph invocation
+(``ModelTrainerAgent.graph.ainvoke``) with a fast stub so the orchestrator's dispatch +
+fold loop + state threading is exercised in <5s instead of the full graph's bootstrap-CI
++ advanced-validation pipeline. End-to-end k=10 with the real graph is deferred to Day-5
+``@pytest.mark.slow`` per the W2-prep memory-pressure callout (16 GB / 6 GB-swap droplet).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+from unittest.mock import AsyncMock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
+SEED = 42
+N = 200
+N_FEATURES = 4
+
+
+def _make_full_data(prevalence: float = 0.30) -> Dict[str, Any]:
+    """Build a deterministic synthetic full_data dict for repeated mode."""
+    rng = np.random.default_rng(SEED)
+    X = pd.DataFrame(
+        rng.standard_normal((N, N_FEATURES)),
+        columns=[f"x{i}" for i in range(N_FEATURES)],
+    )
+    n_positive = int(round(N * prevalence))
+    y_arr = np.zeros(N, dtype=int)
+    positive_idx = rng.choice(N, size=n_positive, replace=False)
+    y_arr[positive_idx] = 1
+    return {"X": X, "y": pd.Series(y_arr, name="y")}
+
+
+def _make_minimal_input(evaluation_mode: str | None = None, k: int | None = None) -> Dict[str, Any]:
+    """Build a minimal agent.run input that exercises dispatch only.
+
+    For dispatch tests we don't actually need the graph to succeed; we only
+    need the dispatch decision to be made. The ``model_candidate`` + ``qc_report``
+    + ``experiment_id`` validation in agent.run runs BEFORE dispatch, so all 3
+    must be present.
+
+    ``k`` overrides the splitter's k (default 10). Smoke tests use k=3 to keep
+    wall-clock under the W2-prep memory-pressure callout budget — the
+    ``len(fold_metrics) == k`` invariant is what we're verifying, not the
+    full 10-fold throughput (Day-5 will exercise k=10 end-to-end).
+    """
+    full_data = _make_full_data()
+    inp: Dict[str, Any] = {
+        "model_candidate": {
+            "algorithm_name": "LightGBM",
+            "algorithm_class": "lightgbm.LGBMClassifier",
+            "hyperparameter_search_space": {},
+            "default_hyperparameters": {"n_estimators": 5, "verbose": -1},
+        },
+        "qc_report": {"qc_passed": True},
+        "experiment_id": "test_evaluation_mode_dispatch",
+        "success_criteria": {},
+        "enable_hpo": False,
+        "enable_mlflow": False,
+        "enable_checkpointing": False,
+        "full_data": full_data,
+    }
+    if evaluation_mode is not None:
+        inp["evaluation_mode"] = evaluation_mode
+    if k is not None:
+        inp["repeated_splits_config"] = {"k": k}
+    return inp
+
+
+# ---------------------------------------------------------------------------
+# G.2 — Backward compatibility (shard 21 §G.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_unknown_evaluation_mode_raises_value_error() -> None:
+    """agent.run({"evaluation_mode": "wat", ...}) must raise ValueError naming valid modes."""
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    with pytest.raises(ValueError, match=r"single.*repeated_k10|repeated_k10.*single"):
+        await agent.run(_make_minimal_input(evaluation_mode="wat"))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_explicit_single_mode_is_accepted() -> None:
+    """evaluation_mode='single' must be accepted without raising the unknown-mode error."""
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    # Single mode without prebuilt splits will fail downstream in the graph;
+    # dispatch validation should NOT raise the unknown-mode error first.
+    try:
+        await agent.run(_make_minimal_input(evaluation_mode="single"))
+    except ValueError as e:
+        assert "evaluation_mode" not in str(e), (
+            f"single mode should not be rejected by dispatch: {e}"
+        )
+    except Exception:
+        # Downstream graph failures are expected without prebuilt splits;
+        # dispatch is what we're verifying here.
+        pass
+
+
+# ---------------------------------------------------------------------------
+# G.3 — Repeated mode tests (shard 21 §G.3)
+# ---------------------------------------------------------------------------
+
+
+def _fold_invocation_recorder(
+    *, vary_metrics: bool = True
+) -> tuple[AsyncMock, list[Dict[str, Any]]]:
+    """Build a fast mock for ``self.graph.ainvoke`` that records per-fold state.
+
+    The orchestrator invokes ``self.run`` recursively per fold (which in turn
+    runs the LangGraph pipeline). Mocking ``self.graph.ainvoke`` lets us
+    bypass the full pipeline (heavy: bootstrap CI / advanced validation /
+    LightGBM training) while still exercising the orchestrator's dispatch +
+    per-fold state construction + fold_random_state threading.
+
+    When ``vary_metrics=True`` (default), each fold returns metrics that depend
+    deterministically on ``state["fold_idx"]`` so aggregator tests see
+    fold-to-fold variability. When False, all folds return the same values
+    (legacy dispatch-only tests where variability is irrelevant).
+    """
+    captured_states: list[Dict[str, Any]] = []
+
+    async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
+        captured_states.append(dict(state))
+        idx = int(state.get("fold_idx", 0))
+        if vary_metrics:
+            base_auroc = 0.77 + 0.005 * idx
+            base_brier = 0.18 - 0.002 * idx
+            train_auroc = 0.80 + 0.005 * idx
+            val_auroc = 0.78 + 0.005 * idx
+        else:
+            base_auroc = 0.77
+            base_brier = 0.18
+            train_auroc = 0.80
+            val_auroc = 0.78
+        return {
+            **state,
+            "trained_model": object(),
+            "train_metrics": {"auroc": train_auroc},
+            "validation_metrics": {"auroc": val_auroc},
+            "test_metrics": {"auroc": base_auroc, "accuracy": 0.85 + 0.003 * idx},
+            "auc_roc": base_auroc,
+            "brier_score": base_brier,
+            "framework": "lightgbm",
+        }
+
+    mock = AsyncMock(side_effect=fake_ainvoke)
+    return mock, captured_states
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_runs_k_folds_smoke() -> None:
+    """evaluation_mode='repeated_k10' produces fold_metrics with k entries (smoke).
+
+    Day-4 MVP smoke: exercises the orchestrator dispatch + per-fold loop with
+    a reduced k=3 fixture and a mocked graph invocation. Verifies the
+    ``len(fold_metrics) == k`` invariant and the legacy single-graph path is
+    invoked once per fold. The full k=10 end-to-end is deferred to Day-5
+    ``@pytest.mark.slow``.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    mock, _ = _fold_invocation_recorder()
+    with patch.object(agent.graph, "ainvoke", mock):
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
+
+    assert "fold_metrics" in output, "fold_metrics missing from repeated_k10 output"
+    assert isinstance(output["fold_metrics"], list), (
+        f"fold_metrics is {type(output['fold_metrics']).__name__}, expected list"
+    )
+    assert len(output["fold_metrics"]) == 3, (
+        f"Expected 3 fold_metrics (k=3 smoke fixture), got {len(output['fold_metrics'])}"
+    )
+    assert output.get("k_folds") == 3
+    assert output.get("splitter_strategy") == "shuffle_split"
+    assert mock.await_count == 3, (
+        f"Graph should be invoked once per fold (3); got {mock.await_count}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_threads_distinct_fold_random_state_per_fold() -> None:
+    """Each fold's state must carry a distinct fold_random_state from the splitter.
+
+    This is the critical handoff between Day-3 wiring (resolve_fold_random_state) and
+    Day-4 orchestrator. Without per-fold seed threading, every fold would train with
+    the same RNG state and the selection-bias correction would be void.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    mock, captured_states = _fold_invocation_recorder()
+    with patch.object(agent.graph, "ainvoke", mock):
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
+
+    # The fold_metrics records carry the splitter's per-fold seed.
+    fold_seeds_from_records = [fm.get("fold_random_state") for fm in output["fold_metrics"]]
+    assert all(s is not None for s in fold_seeds_from_records), (
+        f"Some folds missing fold_random_state: {fold_seeds_from_records}"
+    )
+    assert len(set(fold_seeds_from_records)) == 3, (
+        f"Fold seeds collided in fold_metrics: {fold_seeds_from_records}"
+    )
+
+    # The downstream graph state ALSO sees the per-fold seed via initial_state
+    # (Day-3 ``resolve_fold_random_state`` reads ``state['fold_random_state']``).
+    fold_seeds_in_state = [s.get("fold_random_state") for s in captured_states]
+    assert fold_seeds_in_state == fold_seeds_from_records, (
+        f"Per-fold state.fold_random_state {fold_seeds_in_state} does not match "
+        f"fold_metrics.fold_random_state {fold_seeds_from_records} — handoff is broken"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_emits_evaluation_mode_in_output() -> None:
+    """Output must record the evaluation_mode that was run (for downstream gating logic)."""
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    mock, _ = _fold_invocation_recorder()
+    with patch.object(agent.graph, "ainvoke", mock):
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
+    assert output.get("evaluation_mode") == "repeated_k10"
+    assert output.get("test_metrics_population_strategy") == "fold_mean"
+    assert "evaluation_result_schema_version" in output
+
+
+# ---------------------------------------------------------------------------
+# G.3 Day-5 — aggregate metrics + BCa CI + serial-vs-parallel determinism
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_aggregate_means_match_per_fold_means() -> None:
+    """Aggregate `auc_roc.mean` must equal mean of per-fold `auc_roc` values (shard 21 G.3).
+
+    Verifies the orchestrator's hand-off to ``aggregate_fold_metrics``: the
+    aggregator output for a metric should bit-match the arithmetic mean of
+    the per-fold scalar values when all folds succeeded.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    mock, _ = _fold_invocation_recorder()
+    with patch.object(agent.graph, "ainvoke", mock):
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=10))
+
+    assert "aggregate_metrics" in output, "aggregate_metrics missing from repeated_k10 output"
+    agg = output["aggregate_metrics"]
+    assert "auc_roc" in agg, f"auc_roc missing from aggregate_metrics: {sorted(agg.keys())}"
+    per_fold_auc = [fm["auc_roc"] for fm in output["fold_metrics"]]
+    expected_mean = float(np.mean(per_fold_auc))
+    assert agg["auc_roc"].mean == pytest.approx(expected_mean, abs=1e-9), (
+        f"aggregate_metrics['auc_roc'].mean={agg['auc_roc'].mean} "
+        f"!= mean(fold_auc_roc)={expected_mean}"
+    )
+    assert agg["auc_roc"].n_folds == 10
+    assert output.get("aggregate_status") == "COMPLETE"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_bca_ci_brackets_mean() -> None:
+    """For each aggregate stat with a BCa CI, ``bca_ci_lo <= mean <= bca_ci_hi`` (shard 21 G.3).
+
+    With per-fold values varying linearly (varied_recorder produces a stable
+    sequence at k=10), the BCa endpoints should bracket the arithmetic mean.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    mock, _ = _fold_invocation_recorder()
+    with patch.object(agent.graph, "ainvoke", mock):
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=10))
+
+    agg = output["aggregate_metrics"]
+    bracket_failures: list[str] = []
+    for metric_name, stat in agg.items():
+        if stat.bca_ci_lo is None or stat.bca_ci_hi is None:
+            continue
+        if not (stat.bca_ci_lo <= stat.mean <= stat.bca_ci_hi):
+            bracket_failures.append(
+                f"{metric_name}: bca_ci_lo={stat.bca_ci_lo} mean={stat.mean} "
+                f"bca_ci_hi={stat.bca_ci_hi}"
+            )
+    assert not bracket_failures, "BCa CI does not bracket mean for some metrics:\n" + "\n".join(
+        bracket_failures
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_bca_ci_skipped_below_4_folds() -> None:
+    """When k < 4, BCa endpoints must be None and unstable_warning True (shard 21 G.3)."""
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    mock, _ = _fold_invocation_recorder()
+    with patch.object(agent.graph, "ainvoke", mock):
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=3))
+
+    agg = output["aggregate_metrics"]
+    assert "auc_roc" in agg
+    stat = agg["auc_roc"]
+    assert stat.n_folds == 3
+    assert stat.bca_ci_lo is None
+    assert stat.bca_ci_hi is None
+    assert stat.bca_unstable_warning is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_serial_matches_parallel() -> None:
+    """n_jobs=1 vs n_jobs=2 must produce bit-identical aggregate.mean (shard 21 G.3 / I.6).
+
+    Determinism contract: per-fold seeds come from ``spec.seed`` (FoldSpec) so
+    fold execution order is irrelevant to the output. The aggregate.mean over
+    ok folds is a sum-divided-by-count over the same set of values regardless
+    of the order in which they were collected.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent_serial = ModelTrainerAgent()
+    mock_serial, _ = _fold_invocation_recorder()
+    serial_input = _make_minimal_input(evaluation_mode="repeated_k10", k=10)
+    serial_input["repeated_splits_config"] = {"k": 10, "n_jobs": 1}
+    with patch.object(agent_serial.graph, "ainvoke", mock_serial):
+        serial_output = await agent_serial.run(serial_input)
+
+    agent_parallel = ModelTrainerAgent()
+    mock_parallel, _ = _fold_invocation_recorder()
+    parallel_input = _make_minimal_input(evaluation_mode="repeated_k10", k=10)
+    parallel_input["repeated_splits_config"] = {"k": 10, "n_jobs": 2}
+    with patch.object(agent_parallel.graph, "ainvoke", mock_parallel):
+        parallel_output = await agent_parallel.run(parallel_input)
+
+    serial_agg = serial_output["aggregate_metrics"]
+    parallel_agg = parallel_output["aggregate_metrics"]
+
+    assert set(serial_agg.keys()) == set(parallel_agg.keys()), (
+        f"Aggregate metric keys differ: serial={sorted(serial_agg.keys())} "
+        f"parallel={sorted(parallel_agg.keys())}"
+    )
+    for name in serial_agg:
+        assert serial_agg[name].mean == pytest.approx(parallel_agg[name].mean, abs=1e-12), (
+            f"{name}.mean mismatch: serial={serial_agg[name].mean} "
+            f"parallel={parallel_agg[name].mean}"
+        )
+        assert serial_agg[name].n_folds == parallel_agg[name].n_folds
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_k10_records_partial_status_on_fold_failure() -> None:
+    """Cycle-15 I-3: per-fold try/except + fold_status partial contract.
+
+    When one fold raises mid-execution, the orchestrator MUST: (a) record
+    fold_status='failed' on that fold, (b) continue running remaining folds,
+    (c) emit ``aggregate_status='PARTIAL'`` on the output, (d) include only
+    ok folds in the aggregate.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    captured: list[Dict[str, Any]] = []
+    failed_fold_idx = 1
+
+    async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
+        captured.append(dict(state))
+        idx = int(state.get("fold_idx", 0))
+        if idx == failed_fold_idx:
+            raise RuntimeError(f"simulated fold {idx} failure")
+        return {
+            **state,
+            "trained_model": object(),
+            "train_metrics": {"auroc": 0.80},
+            "validation_metrics": {"auroc": 0.78},
+            "test_metrics": {"auroc": 0.77 + 0.005 * idx},
+            "auc_roc": 0.77 + 0.005 * idx,
+            "brier_score": 0.18,
+            "framework": "lightgbm",
+        }
+
+    with patch.object(agent.graph, "ainvoke", AsyncMock(side_effect=fake_ainvoke)):
+        output = await agent.run(_make_minimal_input(evaluation_mode="repeated_k10", k=5))
+
+    assert output.get("aggregate_status") == "PARTIAL"
+    fold_statuses = [fm.get("fold_status") for fm in output["fold_metrics"]]
+    assert fold_statuses.count("failed") == 1
+    assert fold_statuses.count("ok") == 4
+    failed_record = output["fold_metrics"][failed_fold_idx]
+    assert failed_record["fold_status"] == "failed"
+    assert "exception_repr" in failed_record
+    assert "simulated fold" in failed_record["exception_repr"]
+    # aggregate excludes failed fold
+    assert output["aggregate_metrics"]["auc_roc"].n_folds == 4
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat: default mode (single) without full_data
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_single_mode_output_omits_repeated_k10_fields() -> None:
+    """Shard 21 §H item 8: single-mode output must NOT include repeated_k10 fields.
+
+    With ``evaluation_mode`` absent or ``"single"``, the orchestrator must NOT
+    add ``fold_metrics`` / ``aggregate_metrics`` / ``aggregate_status`` /
+    ``k_folds`` / ``splitter_strategy`` / ``n_jobs`` / ``parent_mlflow_run_id``
+    to the output. These are the schema-divergence fields that distinguish
+    repeated_k10 outputs from single-mode outputs.
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+
+    async def fake_single_run(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **state,
+            "trained_model": object(),
+            "train_metrics": {"auroc": 0.80},
+            "validation_metrics": {"auroc": 0.78},
+            "test_metrics": {"auroc": 0.77},
+            "auc_roc": 0.77,
+            "brier_score": 0.18,
+            "framework": "lightgbm",
+        }
+
+    # Cycle-16 I-8 + C-3: allow-list / denylist approach. The set below
+    # enumerates EVERY field added to the output dict in the repeated_k10
+    # branch of `_run_repeated_splits`. If a future PR adds a new field there,
+    # extend this set — single-mode output should NEVER carry any of these.
+    # Phase 2 hardening could switch to a frozen "expected single-mode keys"
+    # set for stricter byte-identity (current allow-list is a denylist; a
+    # frozen-set would catch single-mode schema regressions too).
+    repeated_k10_only_fields = {
+        "fold_metrics",
+        "aggregate_metrics",
+        "aggregate_status",
+        "k_folds",
+        "splitter_strategy",
+        "n_jobs",
+        "parent_mlflow_run_id",
+        # cycle-16 I-8: 4 fields previously missing from the allow-list
+        "test_metrics_population_strategy",
+        "evaluation_result_schema_version",
+        "legacy_projection_warning",
+        "seed_base",
+    }
+
+    # Run with evaluation_mode absent
+    with patch.object(agent.graph, "ainvoke", AsyncMock(side_effect=fake_single_run)):
+        absent_output = await agent.run(_make_minimal_input(evaluation_mode=None))
+    leaked_absent = repeated_k10_only_fields & set(absent_output.keys())
+    assert not leaked_absent, (
+        f"Single-mode output (evaluation_mode absent) leaks repeated_k10 fields: {leaked_absent}"
+    )
+
+    # Run with explicit evaluation_mode="single"
+    with patch.object(agent.graph, "ainvoke", AsyncMock(side_effect=fake_single_run)):
+        explicit_output = await agent.run(_make_minimal_input(evaluation_mode="single"))
+    leaked_explicit = repeated_k10_only_fields & set(explicit_output.keys())
+    assert not leaked_explicit, (
+        f"Single-mode output (explicit) leaks repeated_k10 fields: {leaked_explicit}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_default_mode_is_single_when_evaluation_mode_absent() -> None:
+    """No evaluation_mode → dispatch routes to single (legacy) path.
+
+    Verifies via the absence-of-fold-metrics signal in single mode (the orchestrator
+    does NOT populate fold_metrics). This is the byte-identity proxy for backward-compat
+    callers (Tier-0 supervisor, FastAPI endpoint, contract tests).
+    """
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    # Single mode with full_data only (no prebuilt splits) will fail downstream in the
+    # graph; we only verify dispatch chose the single path (would have raised
+    # ValueError if dispatch interpreted absent flag as "repeated_k10").
+    try:
+        output = await agent.run(_make_minimal_input(evaluation_mode=None))
+        # If we got here, the legacy path succeeded; assert no fold_metrics was emitted.
+        assert "fold_metrics" not in output or output.get("fold_metrics") is None, (
+            "Single mode emitted fold_metrics (expected only in repeated_k10 mode)"
+        )
+    except ValueError as e:
+        # The validation ValueError for "Unknown evaluation_mode" would prove dispatch
+        # broke; any other ValueError (e.g., from downstream nodes) is unrelated.
+        assert "evaluation_mode" not in str(e), (
+            f"Default-mode dispatch incorrectly raised evaluation_mode error: {e}"
+        )
+    except Exception:
+        # Downstream graph failures (missing splits) are expected — they prove
+        # the legacy single-graph path was taken.
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Q2 contract regression: grep-based audit of unallowlisted random_state=42
+# ---------------------------------------------------------------------------
+
+
+def test_no_unallowlisted_random_state_42_in_model_trainer() -> None:
+    """Cycle-14 Q2 deferred-sites contract: every code-level ``random_state=42`` under
+    src/agents/ml_foundation/model_trainer/ MUST be either:
+      (a) inside random_state.py itself (the helper module), OR
+      (b) marked with the noqa-style allow-list comment ``# noqa: random_state=42 — <reason>``.
+
+    Locks the Day-4/5 contract per cycle-14 codex Q2 IMPORTANT finding: prevents
+    silent-leak regressions where a new ``random_state=42`` literal is added without
+    threading through ``resolve_fold_random_state`` or being intentionally fixed.
+
+    Heuristic for "code-level": the literal appears followed by ``,`` ``)`` or
+    end-of-token in a Python expression context (kwarg site or end-of-call). Prose
+    mentions in docstrings / comments using backticks (``random_state=42``) or
+    plain text references are NOT flagged — only actual constructor / function-call
+    kwarg usage that would emit the seed at runtime.
+    """
+    import re
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    model_trainer_dir = repo_root / "src" / "agents" / "ml_foundation" / "model_trainer"
+    assert model_trainer_dir.exists(), f"model_trainer directory not found: {model_trainer_dir}"
+
+    helper_module = model_trainer_dir / "random_state.py"
+
+    # Match `random_state=42` only when followed by `,`, `)`, whitespace, or
+    # end-of-line — i.e., a real Python kwarg site, not a prose reference.
+    # The end-of-line alternate (cycle-15 I-6 fix per codex) closes the
+    # false-negative gap for multi-line kwarg patterns where `random_state=42`
+    # is the last token before `\n` followed by `)` on the next line.
+    code_pattern = re.compile(r"random_state\s*=\s*42\s*[,)\s]|random_state\s*=\s*42$")
+    allow_pattern = re.compile(r"#\s*noqa:\s*random_state=42")
+
+    offenders: list[str] = []
+    for py in model_trainer_dir.rglob("*.py"):
+        if py == helper_module:
+            continue
+        text = py.read_text()
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if code_pattern.search(line) and not allow_pattern.search(line):
+                offenders.append(f"{py.relative_to(repo_root)}:{line_no}: {line.strip()}")
+
+    assert not offenders, (
+        "Found unallowlisted `random_state=42` kwarg literals under model_trainer/. "
+        "Each occurrence must either thread through resolve_fold_random_state OR "
+        "carry an explicit `# noqa: random_state=42 — <reason>` comment. Offenders:\n"
+        + "\n".join(offenders)
+    )

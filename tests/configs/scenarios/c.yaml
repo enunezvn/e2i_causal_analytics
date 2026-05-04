@@ -1,0 +1,50 @@
+# Scenario C — Remibrutinib (Rhapsido) / CSU 12-week UAS7=0 response
+# MAIN RWD COHORT — only Phase 1 scenario with concurrent-validation hook.
+# See .claude/plans/synthetic_data_generator_v2/06-yaml-configs.md §E.
+schema_version: "synthetic_v2.scenario.v1"
+name: "scenario_c_treatment_decision_csu_remib_response"
+short_code: "C"
+franchise: "Remibrutinib (Rhapsido) — pipeline-priority oral BTK inhibitor; ALSO the main RWD pipeline cohort"
+disease: "Chronic spontaneous urticaria (CSU) 12-week UAS7=0 response on remibrutinib"
+outcome_field: "csu_remib_response"
+
+synthetic_config:
+  n_total: 6000
+  prevalence: 0.40
+  signal_strength: "high"
+  feature_count: 60
+  feature_correlation: "high"
+
+clinical_threshold_range:
+  use_case: "treatment_decision"
+  primary_tau: 0.30
+  tau_low: 0.20
+  tau_high: 0.50
+
+target_auc_band:
+  low: 0.82
+  high: 0.88
+
+# RWD concurrent-validation hook — Scenario C ONLY (asymmetry per shard 05 §G.6 is intentional).
+rwd_concurrent_validation:
+  enabled: true
+  rwd_loader: "scripts.convert_csu_rwd"
+  rwd_data_path: "data/rwd/csu/csu_data.xlsx"
+  validation_metrics:
+    - "feature_distribution_ks"
+    - "auc_delta"
+  acceptance_thresholds:
+    feature_distribution_ks_max_fail_rate: 0.25
+    auc_delta_max_abs: 0.10
+
+reporting:
+  expected_winners:
+    - "LightGBM with monotone constraints + Brier objective"
+    - "NGBoost (head-to-head comparison)"
+  primary_decision_context: "Post-H1-failure escalation triage: continue dose-escalated H1 vs add-on omalizumab vs cyclosporine vs BTK monotherapy"
+  citation_anchors:
+    - "Metz M et al. Remibrutinib in chronic spontaneous urticaria (REMIX-1 / REMIX-2). NEJM 2024."
+    - "Maurer M et al. Omalizumab for the treatment of chronic idiopathic or spontaneous urticaria (ASTERIA / GLACIAL). NEJM 2013."
+    - "Maurer M et al. Predicting omalizumab non-response in CSU: a biomarker analysis. JACI 2023."
+    - "Asero R et al. D-dimer plasma levels in chronic spontaneous urticaria. JEADV 2017."
+    - "Schoepke N et al. Biomarkers and clinical characteristics of autoimmune chronic spontaneous urticaria. Allergy 2019."

@@ -1091,3 +1091,82 @@ def test_check_success_criteria_with_adaptive_overlay_end_to_end() -> None:
     assert result["success_criteria_results"]["minimum_lift_over_baseline"] is True
     # Aggregate False because recall fails.
     assert result["success_criteria_met"] is False
+
+
+@pytest.mark.asyncio
+class TestPostHocCalibrationGate:
+    """Phase 1 W2 day-2: gate the post-hoc isotonic calibration block on
+    `model_candidate.skip_post_hoc_calibration`. Calibration-native algorithms
+    (NGBoost, MAPIE) ship pre-calibrated predict_proba; layering isotonic on
+    top tends to over-fit small validation sets and degrade test calibration
+    (Duan et al. 2020 §4). Ref: shard 19 §A.7.
+    """
+
+    async def test_isotonic_runs_when_no_model_candidate_legacy_default(
+        self, real_classifier_state
+    ):
+        """Backward compat: state without model_candidate gets isotonic (legacy behavior)."""
+        result = await evaluate_model(real_classifier_state)
+        assert "post_hoc_calibration" in result
+        cal = result["post_hoc_calibration"]
+        # Isotonic ran (calibration_applied=True with X_val + y_val present)
+        assert cal.get("calibration_applied") is True
+        assert cal.get("skip_reason") != "skip_post_hoc_calibration_flag"
+
+    async def test_isotonic_runs_when_flag_explicitly_false(self, real_classifier_state):
+        """Explicit False keeps isotonic on (same as legacy)."""
+        real_classifier_state["model_candidate"] = {
+            "algorithm_name": "LightGBM",
+            "skip_post_hoc_calibration": False,
+        }
+        result = await evaluate_model(real_classifier_state)
+        assert "post_hoc_calibration" in result
+        cal = result["post_hoc_calibration"]
+        assert cal.get("calibration_applied") is True
+        assert cal.get("skip_reason") != "skip_post_hoc_calibration_flag"
+
+    async def test_isotonic_skipped_when_flag_true(self, real_classifier_state):
+        """Calibration-native: skip flag prevents isotonic; metadata records skip reason."""
+        real_classifier_state["model_candidate"] = {
+            "algorithm_name": "NGBoost",
+            "skip_post_hoc_calibration": True,
+        }
+        result = await evaluate_model(real_classifier_state)
+        assert "post_hoc_calibration" in result
+        cal = result["post_hoc_calibration"]
+        assert cal.get("calibration_applied") is False
+        assert cal.get("skip_reason") == "skip_post_hoc_calibration_flag"
+        # No calibrated_test_metrics added because no calibrated model created.
+        assert "calibrated_test_metrics" not in result
+
+    async def test_skip_path_copies_native_ece_into_calibrated_ece_alias(
+        self, real_classifier_state
+    ):
+        """Cycle-8 codex IMPORTANT finding fix.
+
+        When `skip_post_hoc_calibration=True`, the alias resolution
+        `maximum_calibration_error → calibrated_ece` (evaluator line 1759)
+        would otherwise return None (no isotonic ECE was computed) and
+        hard-fail the criterion at line 1818, even though the native
+        calibration-native ECE IS available at
+        `metrics_result["calibration_error"]` (line 265). The skip path
+        copies the native uncalibrated ECE into both `metrics_result` and
+        `test_metrics["calibrated_ece"]` so the alias resolves to the
+        native value (lower-is-better; NGBoost's calibration-native ECE
+        IS the best-available calibration estimate without isotonic).
+        """
+        real_classifier_state["model_candidate"] = {
+            "algorithm_name": "NGBoost",
+            "skip_post_hoc_calibration": True,
+        }
+        result = await evaluate_model(real_classifier_state)
+        # Native uncal ECE is computed at line 265 regardless of the gate.
+        native_ece = result.get("calibration_error")
+        assert native_ece is not None, (
+            "calibration_error should be present at metrics_result level even when "
+            "isotonic is skipped (computed at evaluator.py line 265)"
+        )
+        # Skip path must copy native ECE into calibrated_ece alias on both layers.
+        assert result.get("calibrated_ece") == native_ece
+        test_metrics = result.get("test_metrics", {})
+        assert test_metrics.get("calibrated_ece") == native_ece

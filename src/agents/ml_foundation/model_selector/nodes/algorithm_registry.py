@@ -170,6 +170,182 @@ ALGORITHM_REGISTRY = {
             "alpha": 1.0,
         },
     },
+    # === CALIBRATION-NATIVE (NGBoost) ===
+    # Phase 1 W2 day-1 (adaptive_criteria_v3_followup shard 19 §A.2). The two
+    # new flags `distribution_predictor` and `skip_post_hoc_calibration` are
+    # consumed by evaluator gating in W2 day-2; absent on legacy entries means
+    # legacy behavior is unchanged.
+    "NGBoost": {
+        "family": "calibration_native",
+        "framework": "ngboost",
+        "problem_types": ["binary_classification", "regression"],
+        "strengths": ["calibration", "uncertainty", "tabular_medical"],
+        "inference_latency_ms": 40,
+        "memory_gb": 2.0,
+        "interpretability_score": 0.5,
+        "scalability_score": 0.7,
+        "distribution_predictor": True,
+        "skip_post_hoc_calibration": True,
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 800, "step": 100},
+            "learning_rate": {"type": "float", "low": 0.005, "high": 0.1, "log": True},
+            "minibatch_frac": {"type": "float", "low": 0.5, "high": 1.0, "step": 0.1},
+            "col_sample": {"type": "float", "low": 0.5, "high": 1.0, "step": 0.1},
+            "base_max_depth": {"type": "int", "low": 2, "high": 6},
+            "base_min_samples_leaf": {"type": "int", "low": 5, "high": 50, "step": 5},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 500,
+            "learning_rate": 0.01,
+            "minibatch_frac": 1.0,
+            "col_sample": 1.0,
+            "base_max_depth": 3,
+            "base_min_samples_leaf": 5,
+        },
+    },
+    # === MAPIE CONFORMAL VARIANTS ===
+    # Phase 1 W2 day-3 (shard 19 §B.3). Each entry pairs a base estimator with
+    # MAPIE cross-conformal calibration (cv-folded, alpha=0.10 → 90% marginal
+    # coverage). The factory at optuna_optimizer.get_model_class strips the
+    # `_Conformal` suffix, recurses to fetch the base class, and returns a
+    # closure that wraps a fitted base in MapieConformalBinaryClassifier.
+    # Per amendment 3 (see mapie_wrapper.py docstring), MAPIE 0.8.6 does NOT
+    # expose predict_proba on MapieClassifier — the wrapper delegates predict_proba
+    # to the base estimator and surfaces conformal sets via predict_sets().
+    # `skip_post_hoc_calibration=True` retained verbatim per shard 19 §B.3;
+    # revisit at W4 multi-disease if non-calibration-native bases (LightGBM,
+    # LogisticRegression) underperform on calibration metrics.
+    # Cycle-9 codex F1 amendment: `cv` REMOVED from conformal search spaces +
+    # defaults. shard 19 §B.4 specified cv=3-5 implying MAPIE internal
+    # cross-conformal splits, but the wrapper's amendment 2 hardcodes
+    # cv="prefit" (MAPIE 0.8.6 semantics) — the cv int is silently ignored.
+    # Tuning a dead knob wastes Optuna trials. To re-enable real cv-conformal
+    # in a future commit: split (X, y) inside wrapper.fit() into base-train +
+    # MAPIE-calibrate folds and switch wrapper to cv=self.cv (would also cure
+    # the train-set-conformal honesty issue flagged by cycle-9 D1).
+    "NGBoost_Conformal": {
+        "family": "calibration_native_conformal",
+        "framework": "mapie+ngboost",
+        "problem_types": ["binary_classification"],
+        "strengths": ["calibration", "uncertainty", "coverage_guarantee"],
+        "inference_latency_ms": 80,
+        "memory_gb": 2.5,
+        "interpretability_score": 0.4,
+        "scalability_score": 0.6,
+        "distribution_predictor": True,
+        "skip_post_hoc_calibration": True,
+        "conformal_wrapper": True,
+        "base_estimator": "NGBoost",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 200, "high": 600, "step": 100},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.05, "log": True},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 400,
+            "learning_rate": 0.01,
+        },
+    },
+    "LightGBM_Conformal": {
+        "family": "gradient_boosting_conformal",
+        "framework": "mapie+lightgbm",
+        "problem_types": ["binary_classification"],
+        "strengths": ["calibration", "speed", "coverage_guarantee"],
+        "inference_latency_ms": 60,
+        "memory_gb": 2.0,
+        "interpretability_score": 0.5,
+        "scalability_score": 0.85,
+        "skip_post_hoc_calibration": True,
+        "conformal_wrapper": True,
+        "base_estimator": "LightGBM",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 100},
+            "max_depth": {"type": "int", "low": 3, "high": 8},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 300,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+        },
+    },
+    "LogisticRegression_Conformal": {
+        "family": "linear_conformal",
+        "framework": "mapie+sklearn",
+        "problem_types": ["binary_classification"],
+        "strengths": ["interpretable", "coverage_guarantee", "stable_baseline"],
+        "inference_latency_ms": 5,
+        "memory_gb": 0.2,
+        "interpretability_score": 0.95,
+        "scalability_score": 1.0,
+        "skip_post_hoc_calibration": True,
+        "conformal_wrapper": True,
+        "base_estimator": "LogisticRegression",
+        "hyperparameter_space": {
+            "C": {"type": "float", "low": 0.001, "high": 100, "log": True},
+            "penalty": {"type": "categorical", "choices": ["l1", "l2"]},
+        },
+        "default_hyperparameters": {
+            "C": 1.0,
+            "penalty": "l2",
+        },
+    },
+    # === MONOTONE-CONSTRAINED VARIANTS ===
+    # Phase 1 W2 day-4 (shard 19 §C.3). NO new model class — these are
+    # registry-level variants of LightGBM/XGBoost that opt into the
+    # `monotone_constraints_required` flag. The trainer reads
+    # state["monotone_vector"] and injects monotone_constraints into
+    # filtered_params at fit time (shard 19 §C.4). The base LightGBM /
+    # XGBoost entries stay unchanged so the no-monotone path is bit-identical.
+    "LightGBM_Monotone": {
+        "family": "gradient_boosting_constrained",
+        "framework": "lightgbm",
+        "problem_types": ["binary_classification", "regression"],
+        "strengths": ["calibration", "clinical_knowledge_injection", "speed"],
+        "inference_latency_ms": 18,
+        "memory_gb": 1.6,
+        "interpretability_score": 0.65,
+        "scalability_score": 0.95,
+        "monotone_constraints_required": True,
+        "base_estimator": "LightGBM",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 50},
+            "max_depth": {"type": "int", "low": 3, "high": 8},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
+            "num_leaves": {"type": "int", "low": 15, "high": 63},
+            # monotone_constraints is NOT searched — it's a configured input.
+        },
+        "default_hyperparameters": {
+            "n_estimators": 300,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "num_leaves": 31,
+            # monotone_constraints injected at fit time from state["monotone_vector"].
+        },
+    },
+    "XGBoost_Monotone": {
+        "family": "gradient_boosting_constrained",
+        "framework": "xgboost",
+        "problem_types": ["binary_classification", "regression"],
+        "strengths": ["calibration", "clinical_knowledge_injection", "accuracy"],
+        "inference_latency_ms": 22,
+        "memory_gb": 2.0,
+        "interpretability_score": 0.65,
+        "scalability_score": 0.85,
+        "monotone_constraints_required": True,
+        "base_estimator": "XGBoost",
+        "hyperparameter_space": {
+            "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 50},
+            "max_depth": {"type": "int", "low": 3, "high": 8},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.1, "log": True},
+            "subsample": {"type": "float", "low": 0.6, "high": 1.0, "step": 0.1},
+        },
+        "default_hyperparameters": {
+            "n_estimators": 300,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "subsample": 0.8,
+        },
+    },
 }
 
 # Regularization-focused search spaces for quality remediation.

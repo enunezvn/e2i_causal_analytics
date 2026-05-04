@@ -16,15 +16,37 @@ Integration:
 - Observability: Opik tracing
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+import pandas as pd
+import sklearn
+
+from .aggregation import (
+    AggregateStat,
+    aggregate_fold_metrics,
+)
 from .graph import create_model_trainer_graph
+from .splitting import FoldSpec, RepeatedStratifiedSplitter
 from .state import ModelTrainerState
 
 logger = logging.getLogger(__name__)
+
+# Phase 1 W3-lite Day 4 (shard 17 W3 row Day 4 + shard 21 §B): the
+# `evaluation_mode` flag selects between the legacy single-graph path
+# ("single", default — byte-identical to the pre-W4-day-4 baseline) and the
+# k=10 repeated train/val/test orchestrator ("repeated_k10").
+#
+# Naming: shard 21 §B locks "single" / "repeated_k10"; shard 17 W3 row Day 4
+# uses "single_split" / "repeated_kfold". Implementation follows shard 21 since
+# the orchestrator + tests are written against those names. Naming divergence
+# is flagged in `adaptive_v3_followup_state.md` for user decision on whether
+# to amend shard 17 separately.
+_VALID_EVALUATION_MODES: Tuple[str, ...] = ("single", "repeated_k10")
 
 
 async def _get_training_run_repository():
@@ -133,6 +155,23 @@ class ModelTrainerAgent:
         Raises:
             ValueError: If required inputs missing or QC validation failed
         """
+        # W3-lite Day 4 (shard 21 §B) — `evaluation_mode` dispatch.
+        # The orchestrator (`_run_repeated_splits`) recursively calls this method
+        # per fold with `_repeated_mode_fold_invocation=True` set; that sentinel
+        # short-circuits the dispatch so the inner call falls through to the
+        # legacy single-graph path. The per-fold input still carries
+        # `evaluation_mode="repeated_k10"` so downstream nodes (split_enforcer,
+        # mlflow_logger, evaluator) can branch on the active mode.
+        evaluation_mode = input_data.get("evaluation_mode", "single")
+        if evaluation_mode not in _VALID_EVALUATION_MODES:
+            raise ValueError(
+                f"Unknown evaluation_mode={evaluation_mode!r}; valid: {_VALID_EVALUATION_MODES}"
+            )
+        if evaluation_mode == "repeated_k10" and not input_data.get(
+            "_repeated_mode_fold_invocation", False
+        ):
+            return await self._run_repeated_splits(input_data)
+
         # Validate required inputs
         required_fields = ["model_candidate", "qc_report", "experiment_id"]
         for field in required_fields:
@@ -208,6 +247,30 @@ class ModelTrainerAgent:
             "holdout_data": input_data.get("holdout_data") or {},
             # Configurable minimum samples per split (consumed by split_enforcer)
             "min_samples_per_split": input_data.get("min_samples_per_split", 10),
+            # Day-3 fold-iteration random_state plumbing (W3-lite Day 3 +
+            # consumed by `resolve_fold_random_state` in split_loader /
+            # hyperparameter_tuner / model_trainer_node). Populated only when
+            # the caller is the `_run_repeated_splits` orchestrator (Day-4)
+            # via `_build_fold_input`; legacy callers omit the field and
+            # the helper falls back to `random_state` -> `42`.
+            **(
+                {"fold_random_state": int(input_data["fold_random_state"])}
+                if "fold_random_state" in input_data
+                else {}
+            ),
+            **({"fold_idx": int(input_data["fold_idx"])} if "fold_idx" in input_data else {}),
+            # Day-4 active evaluation_mode flag — split_enforcer / mlflow_logger
+            # / evaluator branch on this; legacy callers omit it and the helper
+            # sites default to single-mode behavior.
+            "evaluation_mode": evaluation_mode,
+            # Day-5 (cycle-15 I-4): propagate the orchestrator sentinel into
+            # graph state so per-fold nodes (notably ``mlflow_logger``) can
+            # detect "I'm being called per-fold inside repeated_k10" and open
+            # a NESTED MLflow run with fold tags. Single-mode callers do not
+            # set this field, so it defaults to False.
+            "_repeated_mode_fold_invocation": bool(
+                input_data.get("_repeated_mode_fold_invocation", False)
+            ),
         }
 
         # Execute LangGraph workflow with optional Opik tracing
@@ -631,6 +694,433 @@ class ModelTrainerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
+
+    async def _run_repeated_splits(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """W3-lite Day-5 orchestrator (shard 21 §B/§C/§D + cycle-15 I-2/I-3/I-4).
+
+        Iterates k=10 stratified shuffle-split draws over ``input_data['full_data']``,
+        invoking the existing single-graph path once per fold with the fold's
+        train/val/test indices materialized into the legacy split-dict shape
+        consumed by ``load_splits``. Per-fold ``fold_random_state`` is threaded
+        via ``input_data['fold_random_state']`` so Day-3 ``resolve_fold_random_state``
+        replaces the historical hardcoded ``random_state=42`` in
+        ``split_loader`` / ``hyperparameter_tuner`` / ``model_trainer_node``.
+
+        Day-5 scope additions over Day-4 MVP:
+          1. Parent MLflow run wraps the fold loop (shard 21 §C); per-fold
+             nested children are opened by the per-fold ``mlflow_logger`` node
+             when it observes ``state["evaluation_mode"]=="repeated_k10"`` AND
+             ``state["_repeated_mode_fold_invocation"]`` (cycle-15 I-4).
+          2. Try/except per fold — partial-fold contract per cycle-15 I-3.
+             Each ``fold_metrics`` entry carries
+             ``fold_status: Literal["ok","failed"]``; aggregator skips failed
+             folds; ``aggregate_status`` on the output dict is
+             ``"PARTIAL"`` if any fold failed, ``"COMPLETE"`` otherwise.
+          3. NEP 19 per-fold params logged to MLflow per cycle-15 I-2:
+             ``seed_base / fold_idx / derived_seed=spec.seed /
+             numpy.__version__ / sklearn.__version__``.
+          4. ``aggregate_fold_metrics`` (shard 21 §D) is called over the
+             flattened per-fold scalar dicts; aggregate ``mean / std /
+             percentile_ci / bca_ci / n_folds`` per metric is emitted on
+             ``output["aggregate_metrics"]`` and logged to the parent run.
+          5. ``n_jobs`` (default 1) controls fold concurrency via
+             ``asyncio.gather`` + ``Semaphore`` — concurrent at the asyncio
+             level rather than process-level joblib.Parallel. Determinism is
+             preserved because each fold's seed is sourced from
+             ``spec.seed`` (FoldSpec) regardless of execution order.
+
+             DIVERGENCE FROM SHARD 21 §F (cycle-16 I-3, inlined here so it
+             survives any cycle_16_brief.md cleanup): shard 21 §F specifies
+             process-level joblib.Parallel(n_jobs=2) with a ~5-7 min wall-clock
+             target; this implementation uses asyncio.gather instead because
+             (a) ``self.run`` is async and joblib doesn't natively support
+             coroutines; (b) process-level Parallel duplicates the agent's
+             ~280 MB Python state per worker, risky on the 16 GB shared
+             droplet; (c) overlap of MLflow/DB I/O is the primary win
+             expected from concurrency anyway. CONSEQUENCE: per-fold
+             bootstrap-CI compute (~30s/fold per shard 21 §F T10.5) does NOT
+             parallelize — wall-clock at n_jobs=2 is roughly equal to
+             n_jobs=1 minus the I/O-overlap savings, NOT halved as §F's
+             projection. Process-level Parallel is deferred to shard 22
+             multi-disease orchestration where per-disease isolation is the
+             natural motivator.
+
+        Required input fields:
+          - ``full_data``: ``{"X": pd.DataFrame, "y": pd.Series}`` (the unsplit
+            stratification target — orchestrator owns the splitter).
+          - ``model_candidate`` / ``qc_report`` / ``experiment_id``: as for
+            single-mode (validation reused).
+
+        Optional input fields:
+          - ``seed_base`` (default 42): root seed for the splitter; per-fold
+            seeds derive deterministically from ``(fold_idx, seed_base)``.
+          - ``repeated_splits_config``: ``{k, train_frac, val_frac, test_frac,
+            strategy, n_jobs}`` overrides; defaults match shard 21 §A (k=10 /
+            70/15/15 / shuffle_split / n_jobs=1).
+        """
+        full_data = input_data.get("full_data")
+        if not isinstance(full_data, dict) or "X" not in full_data or "y" not in full_data:
+            raise ValueError(
+                "evaluation_mode='repeated_k10' requires input_data['full_data'] = "
+                "{'X': pd.DataFrame, 'y': pd.Series}"
+            )
+
+        X = full_data["X"]
+        y = full_data["y"]
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(np.asarray(X))
+        if not isinstance(y, pd.Series):
+            y = pd.Series(np.asarray(y), name="y")
+
+        seed_base = int(input_data.get("seed_base", 42))
+        cfg = input_data.get("repeated_splits_config", {}) or {}
+        n_jobs = max(1, int(cfg.get("n_jobs", 1)))
+        splitter = RepeatedStratifiedSplitter(
+            k=int(cfg.get("k", 10)),
+            seed_base=seed_base,
+            train_frac=float(cfg.get("train_frac", 0.70)),
+            val_frac=float(cfg.get("val_frac", 0.15)),
+            test_frac=float(cfg.get("test_frac", 0.15)),
+            strategy=str(cfg.get("strategy", "shuffle_split")),
+        )
+
+        fold_specs: List[FoldSpec] = list(splitter.split(X, y))
+
+        logger.info(
+            f"_run_repeated_splits: starting k={splitter.k} folds "
+            f"(seed_base={seed_base}, strategy={splitter.strategy}, n_jobs={n_jobs})"
+        )
+
+        # Open parent MLflow run wrapping the fold loop. Best-effort: if the
+        # connector is unavailable, fall back to None and continue without
+        # parent-level aggregate logging (per-fold runs still emit when their
+        # own connector path succeeds).
+        mlflow_conn = self._get_mlflow_connector_or_none()
+        parent_experiment_id: Optional[str] = None
+        parent_tags = {
+            "evaluation_mode": "repeated_k10",
+            "k": str(splitter.k),
+            "seed_base": str(seed_base),
+            "splitter_strategy": splitter.strategy,
+            "n_jobs": str(n_jobs),  # cycle-16 C-2
+            "source": "model_trainer_agent",
+        }
+        parent_run_name = f"repeated_k10_seed{seed_base}"
+        experiment_id = input_data.get("experiment_id", "model_trainer_repeated")
+        experiment_name = input_data.get("experiment_name", f"model_trainer_{experiment_id}")
+
+        if mlflow_conn is not None:
+            try:
+                parent_experiment_id = await mlflow_conn.get_or_create_experiment(
+                    name=experiment_name,
+                    tags={"source": "model_trainer_agent", "mode": "repeated_k10"},
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort MLflow
+                logger.warning(
+                    f"_run_repeated_splits: parent experiment creation failed: {exc!r}; "
+                    "continuing without parent-level aggregate logging"
+                )
+                mlflow_conn = None
+
+        fold_outputs: List[Dict[str, Any]] = [{} for _ in fold_specs]
+        fold_metrics: List[Dict[str, Any]] = [{} for _ in fold_specs]
+
+        async def _execute_one_fold(spec: FoldSpec) -> None:
+            """Run one fold; populate fold_outputs[idx] + fold_metrics[idx]."""
+            idx = spec.fold_idx
+            fold_input = self._build_fold_input(input_data, X, y, spec)
+            try:
+                fold_output = await self.run(fold_input)
+                fold_outputs[idx] = fold_output
+                fold_metrics[idx] = {
+                    "fold_idx": idx,
+                    "fold_random_state": spec.seed,
+                    "fold_status": "ok",
+                    "test_metrics": fold_output.get("test_metrics", {}),
+                    "validation_metrics": fold_output.get("validation_metrics", {}),
+                    "train_metrics": fold_output.get("train_metrics", {}),
+                    "auc_roc": fold_output.get("auc_roc"),
+                    "brier_score": fold_output.get("brier_score"),
+                    "mlflow_run_id": fold_output.get("mlflow_run_id"),
+                }
+            except Exception as exc:  # noqa: BLE001 — cycle-15 I-3 partial contract
+                logger.warning(
+                    f"_run_repeated_splits: fold {idx} (seed={spec.seed}) failed: {exc!r}"
+                )
+                fold_outputs[idx] = {}
+                fold_metrics[idx] = {
+                    "fold_idx": idx,
+                    "fold_random_state": spec.seed,
+                    "fold_status": "failed",
+                    "exception_repr": repr(exc),
+                }
+
+        # NEP 19 per-fold MLflow params (cycle-15 I-2): logged to the parent
+        # run since the per-fold child runs are opened deeper in the graph
+        # (mlflow_logger node). We log a per-fold flat dict so the parent
+        # carries the full provenance trace even when individual children
+        # fail to open.
+        nep19_params: Dict[str, Any] = {
+            "numpy_version": np.__version__,
+            "sklearn_version": sklearn.__version__,
+        }
+        for spec in fold_specs:
+            nep19_params[f"fold_{spec.fold_idx:02d}_seed_base"] = seed_base
+            nep19_params[f"fold_{spec.fold_idx:02d}_derived_seed"] = spec.seed
+
+        async def _log_aggregate_to_parent(run, agg: Dict[str, AggregateStat]) -> None:
+            """Log aggregate metrics to the parent MLflow run.
+
+            Cycle-16 I-1 (Q1-C): emits ``aggregate_<metric>_bca_unstable`` as
+            1.0|0.0 per metric so MLflow UI consumers can distinguish reliable
+            BCa CIs from degenerate fallbacks where ``bca_ci_lo/hi`` are None
+            and the percentile_ci should be preferred for downstream gates.
+
+            Cycle-17 COSMETIC-1/2: also emits a parent-level summary —
+            ``aggregate_bca_unstable_metric_count`` and ``_fraction`` so MLflow
+            UI consumers comparing many runs can rank by BCa-unstable density
+            without scanning every per-metric flag, plus a ``has_bca_unstable``
+            tag (string) so non-chart consumers (run-list filters, run-search
+            queries) can branch on a single boolean rather than a numeric metric.
+            """
+            metrics_payload: Dict[str, float] = {}
+            n_unstable = 0
+            n_total = 0
+            for metric_name, stat in agg.items():
+                metrics_payload[f"aggregate_{metric_name}_mean"] = stat.mean
+                metrics_payload[f"aggregate_{metric_name}_std"] = stat.std
+                metrics_payload[f"aggregate_{metric_name}_n_folds"] = float(stat.n_folds)
+                metrics_payload[f"aggregate_{metric_name}_percentile_lo"] = stat.percentile_ci_lo
+                metrics_payload[f"aggregate_{metric_name}_percentile_hi"] = stat.percentile_ci_hi
+                if stat.bca_ci_lo is not None:
+                    metrics_payload[f"aggregate_{metric_name}_bca_lo"] = stat.bca_ci_lo
+                if stat.bca_ci_hi is not None:
+                    metrics_payload[f"aggregate_{metric_name}_bca_hi"] = stat.bca_ci_hi
+                metrics_payload[f"aggregate_{metric_name}_bca_unstable"] = (
+                    1.0 if stat.bca_unstable_warning else 0.0
+                )
+                n_total += 1
+                if stat.bca_unstable_warning:
+                    n_unstable += 1
+            if n_total > 0:
+                metrics_payload["aggregate_bca_unstable_metric_count"] = float(n_unstable)
+                metrics_payload["aggregate_bca_unstable_metric_fraction"] = float(
+                    n_unstable
+                ) / float(n_total)
+            # Cycle-18 IMPORTANT-3 (Q4.A): wrap log_metrics in try/except so a
+            # connector failure here cannot propagate past _log_aggregate_to_parent
+            # and silently skip the cycle-17 I-4 partial-failure observability
+            # block (n_failed_folds metric + aggregate_status tag) at the call
+            # site. Symmetric with the set_tags handler immediately below.
+            if metrics_payload:
+                try:
+                    await run.log_metrics(metrics_payload)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"parent aggregate metrics logging failed: {exc!r}")
+            # COSMETIC-1: mirror the unstable flag as a string tag so MLflow
+            # run-search queries (which can filter by tag but not by metric
+            # value) can quickly find runs with any unstable BCa CI.
+            try:
+                await run.set_tags({"has_bca_unstable": "true" if n_unstable > 0 else "false"})
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"parent has_bca_unstable tag logging failed: {exc!r}")
+
+        async def _run_all_folds() -> None:
+            if n_jobs == 1:
+                for spec in fold_specs:
+                    await _execute_one_fold(spec)
+            else:
+                semaphore = asyncio.Semaphore(n_jobs)
+
+                async def _bounded(spec: FoldSpec) -> None:
+                    async with semaphore:
+                        await _execute_one_fold(spec)
+
+                await asyncio.gather(*(_bounded(s) for s in fold_specs))
+
+        if mlflow_conn is not None and parent_experiment_id is not None:
+            try:
+                async with mlflow_conn.start_run(
+                    experiment_id=parent_experiment_id,
+                    run_name=parent_run_name,
+                    tags=parent_tags,
+                    description=(
+                        f"Repeated k={splitter.k} train/val/test splits "
+                        f"(seed_base={seed_base}, strategy={splitter.strategy})"
+                    ),
+                ) as parent_run:
+                    parent_run_id = parent_run.run_id
+                    try:
+                        await parent_run.log_params(nep19_params)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(f"NEP 19 parent param logging failed: {exc!r}")
+                    await _run_all_folds()
+                    aggregate = aggregate_fold_metrics(fold_metrics)
+                    await _log_aggregate_to_parent(parent_run, aggregate)
+                    # Cycle-17 IMPORTANT-4: surface partial-failure observability
+                    # at the parent run BEFORE it closes, so MLflow UI consumers
+                    # can filter by aggregate_status / n_failed_folds without
+                    # opening every child run.
+                    n_failed_folds = sum(
+                        1 for fm in fold_metrics if fm.get("fold_status") == "failed"
+                    )
+                    aggregate_status = "PARTIAL" if n_failed_folds > 0 else "COMPLETE"
+                    try:
+                        await parent_run.log_metrics({"n_failed_folds": float(n_failed_folds)})
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(f"parent n_failed_folds metric logging failed: {exc!r}")
+                    try:
+                        await parent_run.set_tags(
+                            {
+                                "aggregate_status": aggregate_status,
+                                "n_failed_folds": str(n_failed_folds),
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        # Cycle-18 COSMETIC-2 (Q4.C): aggregate_status is the
+                        # primary consumer-visible signal for partial-failure
+                        # runs; a silent failure to emit it would leave
+                        # operators without visibility. WARNING (not DEBUG) so
+                        # default log levels surface the issue.
+                        logger.warning(f"parent aggregate_status tag logging failed: {exc!r}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"_run_repeated_splits: parent MLflow run wrapper failed: {exc!r}; "
+                    "fold loop ran outside the parent context"
+                )
+                parent_run_id = None
+                if not any(fm for fm in fold_metrics):
+                    await _run_all_folds()
+                aggregate = aggregate_fold_metrics(fold_metrics)
+        else:
+            parent_run_id = None
+            await _run_all_folds()
+            aggregate = aggregate_fold_metrics(fold_metrics)
+
+        n_failed = sum(1 for fm in fold_metrics if fm.get("fold_status") == "failed")
+        aggregate_status = "PARTIAL" if n_failed > 0 else "COMPLETE"
+
+        logger.info(
+            f"_run_repeated_splits: completed {len(fold_metrics) - n_failed}/{len(fold_metrics)} "
+            f"folds OK (seed_base={seed_base}, status={aggregate_status})"
+        )
+
+        # Compose top-level output: forward fold-0 fields for legacy consumers
+        # (test_metrics shape preserved per shard 21 Q-W3-6 RESOLVED — Option D)
+        # and append the new repeated-mode fields so downstream gate-promotion
+        # logic can branch on `evaluation_mode` + consume `aggregate_metrics`.
+        primary = next((fo for fo in fold_outputs if fo), {})
+        output: Dict[str, Any] = dict(primary)
+        output["evaluation_mode"] = "repeated_k10"
+        output["fold_metrics"] = fold_metrics
+        output["aggregate_metrics"] = aggregate
+        output["aggregate_status"] = aggregate_status
+        output["test_metrics_population_strategy"] = "fold_mean"
+        output["evaluation_result_schema_version"] = "adaptive_criteria_v3.phase1.1"
+        output["legacy_projection_warning"] = (
+            "test_metrics in repeated_k10 mode is fold-0; downstream callers "
+            "MUST consume aggregate_metrics for promotion-gate logic"
+        )
+        output["seed_base"] = seed_base
+        output["k_folds"] = splitter.k
+        output["splitter_strategy"] = splitter.strategy
+        output["n_jobs"] = n_jobs
+        output["parent_mlflow_run_id"] = parent_run_id
+        return output
+
+    @staticmethod
+    def _get_mlflow_connector_or_none():
+        """Lazy-import MLflow connector (avoids circular deps + test-friendly None)."""
+        try:
+            from src.mlops.mlflow_connector import get_mlflow_connector
+
+            return get_mlflow_connector()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"MLflow connector unavailable: {exc!r}")
+            return None
+
+    def _build_fold_input(
+        self,
+        input_data: Dict[str, Any],
+        X: pd.DataFrame,
+        y: pd.Series,
+        spec: FoldSpec,
+    ) -> Dict[str, Any]:
+        """Materialize a per-fold ``input_data`` for recursive ``self.run`` invocation.
+
+        Slices the full ``(X, y)`` per ``spec.{train_idx, val_idx, test_idx}`` and
+        injects them into the legacy ``train_data`` / ``validation_data`` /
+        ``test_data`` / ``holdout_data`` dict shape consumed by ``load_splits``.
+        Holdout is empty (placeholder satisfying the validator) — repeated_k10
+        does not produce a held-out split per shard 21 §A; the holdout-locked
+        contract is single-mode-only.
+
+        Side-effects:
+          - Preserves ``evaluation_mode = "repeated_k10"`` on the per-fold input
+            so downstream nodes (split_enforcer, evaluator, mlflow_logger) apply
+            repeated-mode logic. Recursion-termination is the
+            ``_repeated_mode_fold_invocation = True`` sentinel — it is what
+            prevents the recursive ``self.run`` invocation from re-entering
+            ``_run_repeated_splits``, NOT a switch to ``evaluation_mode="single"``.
+          - Sets ``fold_random_state = spec.seed`` on the per-fold input so
+            ``resolve_fold_random_state`` (Day-3) returns the fold's seed in
+            ``split_loader`` / ``hyperparameter_tuner`` / ``model_trainer_node``.
+          - Strips ``full_data`` from the per-fold input (no longer needed
+            after the splitter materialized indices).
+        """
+        # Slice WITHOUT reset_index — the splitter's positional indices into the
+        # full dataset are already pairwise-disjoint (test_splitter_index_disjointness
+        # locks this), so preserving them lets `split_enforcer._check_duplicate_indices`
+        # see the disjoint sets directly. We ALSO emit explicit `indices` lists so the
+        # enforcer's `_get_indices` short-circuit picks them up unambiguously regardless
+        # of upstream pandas-index gymnastics.
+        X_train = X.iloc[spec.train_idx]
+        y_train = y.iloc[spec.train_idx]
+        X_val = X.iloc[spec.val_idx]
+        y_val = y.iloc[spec.val_idx]
+        X_test = X.iloc[spec.test_idx]
+        y_test = y.iloc[spec.test_idx]
+
+        empty_X = X.iloc[:0]
+        empty_y = y.iloc[:0]
+
+        per_fold = dict(input_data)
+        per_fold.pop("full_data", None)
+        # `evaluation_mode="repeated_k10"` is preserved on the per-fold input so
+        # downstream nodes (split_enforcer, mlflow_logger) can branch on the
+        # active mode; the orchestrator-level dispatch is skipped by the
+        # `_repeated_mode_fold_invocation=True` sentinel so the recursive
+        # `self.run` call falls through to the legacy single-graph path
+        # without re-entering `_run_repeated_splits`.
+        per_fold["evaluation_mode"] = "repeated_k10"
+        per_fold["_repeated_mode_fold_invocation"] = True
+        per_fold["fold_random_state"] = spec.seed
+        per_fold["fold_idx"] = spec.fold_idx
+        per_fold["train_data"] = {
+            "X": X_train,
+            "y": y_train,
+            "row_count": len(X_train),
+            "indices": spec.train_idx.tolist(),
+        }
+        per_fold["validation_data"] = {
+            "X": X_val,
+            "y": y_val,
+            "row_count": len(X_val),
+            "indices": spec.val_idx.tolist(),
+        }
+        per_fold["test_data"] = {
+            "X": X_test,
+            "y": y_test,
+            "row_count": len(X_test),
+            "indices": spec.test_idx.tolist(),
+        }
+        per_fold["holdout_data"] = {
+            "X": empty_X,
+            "y": empty_y,
+            "row_count": 0,
+            "indices": [],
+        }
+        return per_fold
 
     def _detect_framework(self, algorithm_class: str | None) -> str:
         """Detect ML framework from algorithm class name.

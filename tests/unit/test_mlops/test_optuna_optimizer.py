@@ -1087,6 +1087,70 @@ class TestGetModelClass:
 
         assert model_class == CausalForestDML
 
+    def test_ngboost_classifier_returns_wrapper(self):
+        """NGBoost binary classification resolves to NGBoostBinaryClassifier wrapper.
+
+        Phase 1 W2 day-1 (shard 19 §A.4). The wrapper normalizes predict_proba
+        shape to (N, 2) so the existing evaluator path is unchanged.
+        """
+        from src.mlops.wrappers.ngboost_wrapper import NGBoostBinaryClassifier
+
+        model_class = get_model_class("NGBoost", "binary_classification")
+
+        assert model_class is NGBoostBinaryClassifier
+
+    def test_ngboost_regression_returns_ngbregressor(self):
+        """NGBoost regression resolves to ngboost.NGBRegressor (no wrapper)."""
+        from ngboost import NGBRegressor
+
+        model_class = get_model_class("NGBoost", "regression")
+
+        assert model_class is NGBRegressor
+
+    def test_conformal_resolves_to_callable_factory(self):
+        """Phase 1 W2 day-3 (shard 19 §B.4): *_Conformal names resolve to a
+        callable factory that wraps a base estimator.
+        """
+        factory = get_model_class("LogisticRegression_Conformal", "binary_classification")
+        assert factory is not None
+        assert callable(factory)
+
+    def test_conformal_factory_returns_wrapper_instance(self):
+        """Conformal factory composes base + MapieConformalBinaryClassifier."""
+        from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+        factory = get_model_class("LogisticRegression_Conformal", "binary_classification")
+        instance = factory(C=1.0, penalty="l2", method="lac", cv=3, alpha=0.10)
+        assert isinstance(instance, MapieConformalBinaryClassifier)
+        assert instance.method == "lac"
+        assert instance.cv == 3
+        assert instance.alpha == 0.10
+        assert instance.base_estimator.C == 1.0
+        assert instance.base_estimator.penalty == "l2"
+
+    def test_conformal_unknown_base_returns_none(self):
+        """Defensive: unknown base after suffix strip → None (logged warning)."""
+        result = get_model_class("UnknownBase_Conformal", "binary_classification")
+        assert result is None
+
+    def test_monotone_routes_to_base_class(self):
+        """Phase 1 W2 day-4 (shard 19 §C.2): _Monotone variants resolve to
+        the SAME class as the base (no new model class — registry-level
+        variant only; constraints injected at fit time).
+        """
+        from lightgbm import LGBMClassifier
+        from xgboost import XGBClassifier
+
+        lgbm_mono = get_model_class("LightGBM_Monotone", "binary_classification")
+        lgbm_base = get_model_class("LightGBM", "binary_classification")
+        assert lgbm_mono is lgbm_base
+        assert lgbm_mono is LGBMClassifier
+
+        xgb_mono = get_model_class("XGBoost_Monotone", "binary_classification")
+        xgb_base = get_model_class("XGBoost", "binary_classification")
+        assert xgb_mono is xgb_base
+        assert xgb_mono is XGBClassifier
+
 
 # ============================================================================
 # RUN HYPERPARAMETER OPTIMIZATION TESTS

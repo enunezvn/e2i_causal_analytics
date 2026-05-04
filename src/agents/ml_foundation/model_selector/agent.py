@@ -294,6 +294,12 @@ class ModelSelectorAgent:
             Structured output dictionary
         """
         # Extract ModelCandidate
+        # Phase 1 W2 day-2 (shard 19 §A.7): the calibration-native flags
+        # `skip_post_hoc_calibration` and `distribution_predictor` are sourced
+        # directly from the registry entry stored in primary_candidate so adding
+        # new flags in algorithm_registry.py auto-flows here. Default False
+        # preserves legacy behavior for candidates that don't define them.
+        primary = final_state.get("primary_candidate") or {}
         model_candidate = {
             "algorithm_name": final_state.get("algorithm_name", ""),
             "algorithm_class": final_state.get("algorithm_class", ""),
@@ -309,6 +315,13 @@ class ModelSelectorAgent:
             "selection_score": final_state.get("selection_score", 0.5),
             "combined_score": final_state.get("combined_score"),
             "benchmark_score": final_state.get("benchmark_score"),
+            "skip_post_hoc_calibration": bool(primary.get("skip_post_hoc_calibration", False)),
+            "distribution_predictor": bool(primary.get("distribution_predictor", False)),
+            # Phase 1 W2 day-4 (shard 19 §C.4): consumed by train_model
+            # when injecting monotone_constraints from state["monotone_vector"].
+            "monotone_constraints_required": bool(
+                primary.get("monotone_constraints_required", False)
+            ),
         }
 
         # Extract SelectionRationale

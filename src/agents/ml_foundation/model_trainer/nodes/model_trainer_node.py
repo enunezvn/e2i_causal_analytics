@@ -13,6 +13,10 @@ from typing import Any, Dict, Optional, Type
 
 import numpy as np
 
+from src.agents.ml_foundation.model_trainer.random_state import (
+    resolve_fold_random_state,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,6 +113,68 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Prepare hyperparameters - filter out incompatible params
     filtered_params = _filter_hyperparameters(algorithm_name, best_hyperparameters)
+
+    # W3-lite Day 3 (shard 17 W3 row Day 3): when the orchestrator (Day 4-5)
+    # sets a per-fold seed on the state, override whatever HPO baked into
+    # ``best_hyperparameters['random_state']`` so the trained model uses the
+    # fold-specific seed. ``hyperparameter_tuner`` resolves the same seed
+    # upstream, so in-graph the values agree; this assignment makes
+    # ``train_model`` self-contained for direct callers (replay tooling,
+    # tier-0 smoke tests) that bypass HPO and pass ``best_hyperparameters``
+    # in pre-baked.
+    #
+    # Cycle-14 codex IMPORTANT Q3 fix: gate the injection on whether the
+    # algorithm's allowlist actually permits ``random_state``. Because
+    # ``_filter_hyperparameters`` adds ``random_state`` to its return dict
+    # for any allowed algorithm (via the ``common_params`` defaulting at the
+    # bottom of that function), the presence of the key in ``filtered_params``
+    # is an authoritative proxy for "allowlist permits it." For algorithms
+    # whose allowlist excludes ``random_state`` (e.g., a future
+    # ``LightGBM_Brier`` registered without an allowlist entry), blind
+    # injection would crash ``model_class(**filtered_params)`` with a
+    # ``TypeError`` on the unknown kwarg.
+    if "fold_random_state" in state and "random_state" in filtered_params:
+        filtered_params["random_state"] = resolve_fold_random_state(state)
+
+    # Phase 1 W2 day-4 (shard 19 §C.4): if the candidate requires monotone
+    # constraints, inject them from state["monotone_vector"] post-filter.
+    # The constraint vector is per-feature and per-disease — it lives in
+    # the data path (synthetic_data_generator_v2 emits it alongside
+    # feature_columns), NOT the registry. Soft-fails to unconstrained
+    # training if monotone_vector is missing OR length-mismatched (cycle-10
+    # codex IMPORTANT fix per shard 19 §H risk-table mitigation).
+    model_candidate_meta = state.get("model_candidate") or {}
+    if model_candidate_meta.get("monotone_constraints_required"):
+        monotone_vector = state.get("monotone_vector")
+        if monotone_vector is None:
+            logger.warning(
+                f"{algorithm_name} requires monotone_vector but state is missing it; "
+                "training without constraints (degraded to unconstrained variant)."
+            )
+        else:
+            # Cycle-10 codex IMPORTANT fix: validate length BEFORE dispatch.
+            # Without this, LightGBM raises a fatal C-side error mid-fit which
+            # routes to error_type=training_failed (hard-fail). §H mitigation
+            # says soft-degrade with WARNING.
+            n_features = (
+                X_train_preprocessed.shape[1] if hasattr(X_train_preprocessed, "shape") else None
+            )
+            if n_features is not None and len(monotone_vector) != n_features:
+                logger.warning(
+                    f"{algorithm_name} monotone_vector length ({len(monotone_vector)}) "
+                    f"does not match X_train n_features ({n_features}); "
+                    "training without constraints (degraded to unconstrained variant)."
+                )
+            elif algorithm_name.startswith("LightGBM"):
+                # Cycle-10 codex COSMETIC: explicit int cast for dtype safety
+                # (numpy int64 elements survive list() but explicit cast is
+                # safer for forward-compat with future LightGBM versions).
+                filtered_params["monotone_constraints"] = [int(v) for v in monotone_vector]
+            elif algorithm_name.startswith("XGBoost"):
+                # XGBoost expects the string format "(1, 0, -1, ...)"
+                filtered_params["monotone_constraints"] = (
+                    "(" + ", ".join(str(int(v)) for v in monotone_vector) + ")"
+                )
 
     # Instantiate model
     try:
@@ -310,6 +376,51 @@ def _get_model_class_dynamic(
             }
             return mapping[algorithm_name]  # type: ignore[no-any-return]
 
+        elif algorithm_name == "NGBoost":
+            # Phase 1 W2 (shard 19 §A.4 mirror). Mirrors optuna_optimizer.get_model_class
+            # so the fallback path resolves NGBoost identically when the primary
+            # delegate import fails.
+            if is_classification:
+                from src.mlops.wrappers.ngboost_wrapper import NGBoostBinaryClassifier
+
+                return NGBoostBinaryClassifier  # type: ignore[no-any-return]
+            from ngboost import NGBRegressor
+
+            return NGBRegressor  # type: ignore[no-any-return]
+
+        elif algorithm_name.endswith("_Monotone"):
+            # Phase 1 W2 day-4 (shard 19 §C.2 mirror): _Monotone variants
+            # reuse LightGBM/XGBoost. Strip suffix and recurse.
+            base_name = algorithm_name[: -len("_Monotone")]
+            return _get_model_class_dynamic(base_name, problem_type)
+
+        elif algorithm_name.endswith("_Conformal"):
+            # Phase 1 W2 day-3 (shard 19 §B.4 mirror). Same pattern as the
+            # primary path in optuna_optimizer.get_model_class: strip suffix,
+            # recurse to fetch the base class, return a closure factory.
+            from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+            base_name = algorithm_name[: -len("_Conformal")]
+            base_cls = _get_model_class_dynamic(base_name, problem_type)
+            if base_cls is None:
+                return None
+
+            def _conformal_factory(**params: Any) -> MapieConformalBinaryClassifier:
+                method = params.pop("method", "lac")
+                cv_val = params.pop("cv", 5)
+                alpha = params.pop("alpha", 0.10)
+                random_state = params.get("random_state", 42)
+                base_inst = base_cls(**params)
+                return MapieConformalBinaryClassifier(
+                    base_estimator=base_inst,
+                    method=method,
+                    cv=cv_val,
+                    alpha=alpha,
+                    random_state=random_state,
+                )
+
+            return _conformal_factory  # type: ignore[return-value]
+
         else:
             logger.warning(f"Unknown algorithm: {algorithm_name}")
             return None
@@ -360,6 +471,9 @@ def _filter_hyperparameters(
             "eval_metric",
             "early_stopping_rounds",
             "use_label_encoder",
+            # Phase 1 W2 day-4 (shard 19 §C.5): monotone_constraints injected
+            # at fit time from state["monotone_vector"] for XGBoost_Monotone.
+            "monotone_constraints",
         },
         "LightGBM": {
             "n_estimators",
@@ -378,6 +492,10 @@ def _filter_hyperparameters(
             "importance_type",
             "subsample_freq",
             "min_split_gain",
+            # Phase 1 W2 day-4 (shard 19 §C.5): monotone_constraints +
+            # monotone_constraints_method injected for LightGBM_Monotone.
+            "monotone_constraints",
+            "monotone_constraints_method",
         },
         "RandomForest": {
             "n_estimators",
@@ -492,10 +610,39 @@ def _filter_hyperparameters(
         "SLearner": {"overall_model", "cv", "random_state"},
         "TLearner": {"models", "cv", "random_state"},
         "XLearner": {"models", "propensity_model", "cate_models", "cv", "random_state"},
+        # Phase 1 W2 day-1 (shard 19 §A.5). Mirror of NGBoostBinaryClassifier
+        # constructor signature in src/mlops/wrappers/ngboost_wrapper.py.
+        "NGBoost": {
+            "n_estimators",
+            "learning_rate",
+            "minibatch_frac",
+            "col_sample",
+            "verbose",
+            "random_state",
+            "base_max_depth",
+            "base_min_samples_leaf",
+        },
     }
 
-    # Get allowed params for this algorithm
-    allowed = allowed_params.get(algorithm_name, set())
+    # Phase 1 W2 day-3 (shard 19 §B.5): conformal entries compose their
+    # allowlist as `{method, cv, alpha, random_state} ∪ allowed_params[base]`.
+    # Routes the conformal-specific kwargs to the wrapper and the base-estimator
+    # kwargs to the underlying constructor. The closure factory in
+    # get_model_class.pop()s the conformal kwargs before building the base.
+    # Phase 1 W2 day-4 (shard 19 §C.5): _Monotone variants reuse the base
+    # allowlist directly (monotone_constraints already added to LightGBM/XGBoost
+    # base allowlists above; injected from state["monotone_vector"] at fit time).
+    _CONFORMAL_COMMON = {"method", "cv", "alpha", "random_state"}
+    if algorithm_name.endswith("_Conformal"):
+        base_name = algorithm_name[: -len("_Conformal")]
+        base_allowed = allowed_params.get(base_name, set())
+        allowed = _CONFORMAL_COMMON | base_allowed
+    elif algorithm_name.endswith("_Monotone"):
+        base_name = algorithm_name[: -len("_Monotone")]
+        allowed = allowed_params.get(base_name, set())
+    else:
+        # Get allowed params for this algorithm
+        allowed = allowed_params.get(algorithm_name, set())
 
     # Filter hyperparameters
     filtered = {}
@@ -509,15 +656,20 @@ def _filter_hyperparameters(
             filtered[key] = value
 
     # Algorithm-specific defaults
-    if algorithm_name == "XGBoost":
+    # Cycle-9 codex F2+F3 fix: extend defaults to *_Conformal variants so
+    # LightGBM_Conformal gets verbose=-1 (no log spam at day-5 smoke) and
+    # LogisticRegression_Conformal gets max_iter=1000 (avoid ConvergenceWarning).
+    # Phase 1 W2 day-4: also extend to *_Monotone variants (LightGBM_Monotone
+    # / XGBoost_Monotone) for the same reason.
+    if algorithm_name in {"XGBoost", "XGBoost_Conformal", "XGBoost_Monotone"}:
         if "verbosity" not in filtered:
             filtered["verbosity"] = 0
         if "use_label_encoder" not in filtered:
             filtered["use_label_encoder"] = False
-    elif algorithm_name == "LightGBM":
+    elif algorithm_name in {"LightGBM", "LightGBM_Conformal", "LightGBM_Monotone"}:
         if "verbose" not in filtered:
             filtered["verbose"] = -1
-    elif algorithm_name == "LogisticRegression":
+    elif algorithm_name in {"LogisticRegression", "LogisticRegression_Conformal"}:
         if "max_iter" not in filtered:
             filtered["max_iter"] = 1000
 
@@ -737,5 +889,13 @@ def _get_framework(algorithm_name: str) -> str:
         "DRLearner": "econml",
         "TLearner": "econml",
         "XLearner": "econml",
+        # Phase 1 W2 (shard 19): NGBoost + monotone + conformal variants.
+        # Framework value matches the registry entry's `framework` field.
+        "NGBoost": "ngboost",
+        "LightGBM_Monotone": "lightgbm",
+        "XGBoost_Monotone": "xgboost",
+        "NGBoost_Conformal": "mapie+ngboost",
+        "LightGBM_Conformal": "mapie+lightgbm",
+        "LogisticRegression_Conformal": "mapie+sklearn",
     }
     return framework_map.get(algorithm_name, "unknown")

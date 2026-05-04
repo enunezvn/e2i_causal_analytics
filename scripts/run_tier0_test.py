@@ -4752,6 +4752,16 @@ async def run_pipeline(
                 sc_from_result = result.get("success_criteria")
                 if sc_from_result:
                     state["success_criteria"] = sc_from_result
+                # Hop 5 of 5 (adaptive_criteria_v3_followup): also copy the
+                # per-criterion outcomes so the integration test that reads
+                # ``out["success_criteria_results"]`` sees the v3 audit
+                # (skipped names with met=None, NB / MCC / calibration
+                # outcomes). Without this, the JSON artifact at line 5430
+                # and the integration assertions at test_adaptive_criteria_e2e
+                # see a stale / empty dict from scope_definer.
+                state["success_criteria_results"] = result.get(
+                    "success_criteria_results", {}
+                )
                 state["model_usefulness"] = result.get("model_usefulness", "unknown")
 
                 # Capture class imbalance information
@@ -4970,6 +4980,19 @@ async def run_pipeline(
                         state["minority_precision"] = _winner.get("minority_precision")
                         state["model_usefulness"] = _winner.get("model_usefulness", "unknown")
                         state["success_criteria_met"] = _winner.get("success_criteria_met", False)
+                        # Edit 9 (adaptive_criteria_v3_followup): when an
+                        # alternative model wins Step 5b, also propagate its
+                        # success_criteria + success_criteria_results so the
+                        # downstream artifact + integration assertions see the
+                        # winner's pass/fail outcomes (otherwise state has
+                        # winner's test_metrics but primary's check results,
+                        # producing artifacts where actual AUC > threshold yet
+                        # minimum_auc=False).
+                        if "success_criteria" in _winner:
+                            state["success_criteria"] = _winner["success_criteria"]
+                        state["success_criteria_results"] = _winner.get(
+                            "success_criteria_results", {}
+                        )
                         state["fitted_preprocessor"] = _winner.get("fitted_preprocessor")
                         state["model_uri"] = (
                             _winner.get("model_uri")

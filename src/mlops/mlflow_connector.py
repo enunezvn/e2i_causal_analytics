@@ -709,7 +709,18 @@ class MLflowConnector:
 
         finally:
             if self._enabled and run and self._mlflow is not None:
-                self._mlflow.end_run()
+                # Cycle-16 I-5 (Q3-A): propagate the wrapper's status to
+                # MLflow so failed runs land as ``FAILED`` in the tracking
+                # store, not silently as ``FINISHED``. Default
+                # ``mlflow.end_run()`` writes FINISHED regardless of whether
+                # the inner block raised; the explicit status keyword is
+                # required to record the actual outcome.
+                status = (
+                    "FAILED"
+                    if mlflow_run is not None and mlflow_run._status == RunStatus.FAILED
+                    else "FINISHED"
+                )
+                self._mlflow.end_run(status=status)
 
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get run information by ID.

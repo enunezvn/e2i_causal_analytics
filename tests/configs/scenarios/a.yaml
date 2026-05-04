@@ -1,0 +1,36 @@
+# Scenario A — Kisqali / HR+/HER2- early breast cancer 5y iDFS
+# See .claude/plans/synthetic_data_generator_v2/06-yaml-configs.md §C.
+schema_version: "synthetic_v2.scenario.v1"
+name: "scenario_a_diagnostic_ebc_idfs_5y"
+short_code: "A"
+franchise: "Kisqali (ribociclib) — pipeline-priority oncology brand"
+disease: "HR+/HER2- early breast cancer (5-year invasive disease-free survival)"
+outcome_field: "ebc_idfs_5y"
+
+synthetic_config:
+  n_total: 6000
+  prevalence: 0.20
+  signal_strength: "moderate"
+  feature_count: 40
+  feature_correlation: "medium"
+
+clinical_threshold_range:
+  use_case: "diagnostic"
+  primary_tau: 0.20
+  tau_low: 0.05
+  tau_high: 0.30
+
+target_auc_band:
+  low: 0.78
+  high: 0.83
+
+reporting:
+  expected_winners:
+    - "NGBoost"
+    - "LightGBM (Brier objective)"
+  primary_decision_context: "Adjuvant CDK4/6 inhibitor escalation candidate identification (NATALEE-style)"
+  citation_anchors:
+    - "Slamon DJ et al. Ribociclib plus endocrine therapy in HR+/HER2- early breast cancer (NATALEE). NEJM 2024."
+    - "Johnston SR et al. Abemaciclib combined with endocrine therapy for early breast cancer (monarchE). JCO 2020."
+    - "Cardoso F et al. 70-Gene signature as an aid to treatment decisions in early-stage breast cancer (MINDACT). NEJM 2016."
+    - "Sparano JA et al. Adjuvant chemotherapy guided by a 21-gene expression assay (TAILORx). NEJM 2018."

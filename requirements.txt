@@ -341,3 +341,9 @@ xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
 zstandard==0.25.0
+
+# Phase 1 W2 (adaptive_criteria_v3_followup): calibration-native + conformal.
+# Pinned as ranges per shard 19 §E — 0.5.x / 0.8.x APIs are stable; next
+# minor releases are planned breaking changes.
+ngboost>=0.5.1,<0.6
+mapie>=0.8.0,<0.9

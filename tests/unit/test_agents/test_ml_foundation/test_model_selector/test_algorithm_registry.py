@@ -302,3 +302,116 @@ class TestFilterAlgorithms:
 
         # Should exclude classification-only
         assert "LogisticRegression" not in algo_names
+
+
+class TestNGBoostRegistryEntry:
+    """Phase 1 W2 day-1: NGBoost is registered as a calibration-native binary
+    classifier with the new flags `distribution_predictor` and
+    `skip_post_hoc_calibration` (shard 19 §A.2 + §A.3).
+    """
+
+    def test_ngboost_present_in_registry(self):
+        assert "NGBoost" in ALGORITHM_REGISTRY
+
+    def test_ngboost_metadata_marks_it_calibration_native(self):
+        spec = ALGORITHM_REGISTRY["NGBoost"]
+        assert spec["family"] == "calibration_native"
+        assert spec["framework"] == "ngboost"
+        assert "binary_classification" in spec["problem_types"]
+        assert spec.get("distribution_predictor") is True
+        assert spec.get("skip_post_hoc_calibration") is True
+
+    def test_ngboost_filterable_for_binary_classification(self):
+        candidates = _filter_by_problem_type("binary_classification")
+        algo_names = [c["name"] for c in candidates]
+        assert "NGBoost" in algo_names
+
+    def test_ngboost_hyperparameter_space_well_formed(self):
+        spec = ALGORITHM_REGISTRY["NGBoost"]
+        hp_space = spec["hyperparameter_space"]
+        for hp_name in ("n_estimators", "learning_rate", "base_max_depth"):
+            assert hp_name in hp_space
+            assert "type" in hp_space[hp_name]
+
+
+class TestConformalRegistryEntries:
+    """Phase 1 W2 day-3: three *_Conformal entries (NGBoost / LightGBM /
+    LogisticRegression) per shard 19 §B.3 with `conformal_wrapper=True`,
+    `skip_post_hoc_calibration=True`, and a `base_estimator` field that the
+    factory in `optuna_optimizer.get_model_class` consumes.
+    """
+
+    def test_three_conformal_entries_present(self):
+        for name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+            assert name in ALGORITHM_REGISTRY, f"{name} missing from registry"
+
+    def test_each_conformal_marks_skip_isotonic_and_conformal_wrapper(self):
+        for name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+            spec = ALGORITHM_REGISTRY[name]
+            assert spec.get("conformal_wrapper") is True, f"{name} missing conformal_wrapper=True"
+            assert spec.get("skip_post_hoc_calibration") is True, (
+                f"{name} missing skip_post_hoc_calibration=True"
+            )
+
+    def test_each_conformal_declares_base_estimator(self):
+        expected = {
+            "NGBoost_Conformal": "NGBoost",
+            "LightGBM_Conformal": "LightGBM",
+            "LogisticRegression_Conformal": "LogisticRegression",
+        }
+        for name, base in expected.items():
+            assert ALGORITHM_REGISTRY[name].get("base_estimator") == base, (
+                f"{name} should declare base_estimator={base}"
+            )
+
+    def test_conformal_search_space_excludes_dead_cv_knob(self):
+        """Cycle-9 codex F1 amendment: `cv` REMOVED from conformal search spaces.
+        The wrapper hardcodes MAPIE cv="prefit" (amendment 2 in
+        mapie_wrapper.py), so any tuned `cv` int would be silently ignored —
+        a misleading registry contract that wastes Optuna trials. Restoring
+        cv requires switching to a true held-out conformal split (future work).
+        """
+        for name in ("NGBoost_Conformal", "LightGBM_Conformal", "LogisticRegression_Conformal"):
+            hp_space = ALGORITHM_REGISTRY[name]["hyperparameter_space"]
+            defaults = ALGORITHM_REGISTRY[name]["default_hyperparameters"]
+            assert "cv" not in hp_space, (
+                f"{name} hyperparameter_space must NOT include `cv` — wrapper hardcodes prefit"
+            )
+            assert "cv" not in defaults, f"{name} default_hyperparameters must NOT include `cv`"
+
+
+class TestMonotoneRegistryEntries:
+    """Phase 1 W2 day-4: two *_Monotone entries (LightGBM_Monotone /
+    XGBoost_Monotone) per shard 19 §C.3 with `monotone_constraints_required=True`
+    flag, NO new model class (lookup recursively resolves to base). The trainer
+    injects monotone_constraints from `state["monotone_vector"]` at fit time.
+    """
+
+    def test_two_monotone_entries_present(self):
+        for name in ("LightGBM_Monotone", "XGBoost_Monotone"):
+            assert name in ALGORITHM_REGISTRY, f"{name} missing from registry"
+
+    def test_each_monotone_marks_required_flag_and_base(self):
+        expected_base = {
+            "LightGBM_Monotone": "LightGBM",
+            "XGBoost_Monotone": "XGBoost",
+        }
+        for name, base in expected_base.items():
+            spec = ALGORITHM_REGISTRY[name]
+            assert spec.get("monotone_constraints_required") is True, (
+                f"{name} missing monotone_constraints_required=True"
+            )
+            assert spec.get("base_estimator") == base, f"{name} base_estimator should be {base}"
+            assert spec["family"] == "gradient_boosting_constrained"
+
+    def test_monotone_search_space_excludes_monotone_constraints(self):
+        """monotone_constraints is NOT a hyperparameter — it's a configured
+        input from state["monotone_vector"]. Including it in the search space
+        would have Optuna sample random vectors which is meaningless.
+        """
+        for name in ("LightGBM_Monotone", "XGBoost_Monotone"):
+            hp_space = ALGORITHM_REGISTRY[name]["hyperparameter_space"]
+            assert "monotone_constraints" not in hp_space, (
+                f"{name} hyperparameter_space must NOT include monotone_constraints — "
+                "injected from state at fit time"
+            )

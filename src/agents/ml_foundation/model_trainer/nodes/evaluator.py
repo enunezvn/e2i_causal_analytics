@@ -8,7 +8,7 @@ Version: 2.0.0
 
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 
 import numpy as np
 from sklearn.dummy import DummyClassifier
@@ -76,7 +76,7 @@ def _compute_baseline_test_metrics(
     if np.unique(y_train_arr).size < 2 or np.unique(y_test_arr).size < 2:
         return {}
 
-    dummy = DummyClassifier(strategy="stratified", random_state=42)
+    dummy = DummyClassifier(strategy="stratified", random_state=42)  # noqa: random_state=42 — design-intentional fixed seed: DummyClassifier baseline must be reproducible across folds for variance interpretation (per cycle-14 Q2 RESOLVED 2026-05-02)
     dummy.fit(np.zeros((len(y_train_arr), 1)), y_train_arr)
     proba = dummy.predict_proba(np.zeros((len(y_test_arr), 1)))[:, 1]
     return {"baseline_test_auc": float(roc_auc_score(y_test_arr, proba))}
@@ -194,6 +194,10 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     assert y_test_np is not None
 
     # Compute metrics based on problem type
+    # Cycle-16 I-4 (Q2-B): thread per-fold seed into bootstrap CI to make
+    # asyncio.gather n_jobs > 1 deterministic. Single-mode callers don't
+    # supply fold_random_state — None preserves legacy global-RNG path.
+    bootstrap_random_state = state.get("fold_random_state")
     try:
         if problem_type in ["binary_classification"]:
             metrics_result = _compute_classification_metrics(
@@ -209,6 +213,8 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 imbalance_detected=imbalance_detected,
                 minority_ratio=minority_ratio,
                 cost_matrix=cost_matrix,
+                bootstrap_random_state=bootstrap_random_state,
+                success_criteria=success_criteria,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -230,6 +236,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 y_validation_pred=predictions["y_val_pred"],
                 y_test=y_test_np,
                 y_test_pred=predictions["y_test_pred"],
+                bootstrap_random_state=bootstrap_random_state,
             )
         else:
             logger.error(f"Unsupported problem type: {problem_type}")
@@ -291,7 +298,19 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 X_all = np.vstack([x.to_numpy() if hasattr(x, "to_numpy") else x for x in xs])
             y_all = np.concatenate(arrays_y)
-            cv_result = compute_stratified_cv(trained_model, X_all, y_all, n_folds=5)
+            # Thread the per-fold seed (Day-3 W3-lite) so repeated_k10 nested-CV
+            # draws diverge across folds instead of re-using random_state=42.
+            from src.agents.ml_foundation.model_trainer.random_state import (
+                resolve_fold_random_state,
+            )
+
+            cv_result = compute_stratified_cv(
+                trained_model,
+                X_all,
+                y_all,
+                n_folds=5,
+                random_state=resolve_fold_random_state(state),
+            )
             metrics_result["cv_results"] = cv_result
             if cv_result.get("cv_completed"):
                 logger.info(
@@ -301,8 +320,42 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     f"±{cv_result.get('cv_pr_auc_std', 0):.4f}"
                 )
 
-        # 6. Post-hoc calibration (isotonic) — better probability estimates
-        if X_val_np is not None and y_val_np is not None:
+        # 6. Post-hoc calibration (isotonic) — better probability estimates.
+        # Phase 1 W2 day-2 (shard 19 §A.7): calibration-native algorithms
+        # (NGBoost, MAPIE-conformal) ship pre-calibrated predict_proba; layering
+        # isotonic on top tends to over-fit small validation sets and degrade
+        # test calibration (Duan et al. 2020 §4). Gate the block on the
+        # `skip_post_hoc_calibration` flag propagated from the model_selector
+        # registry entry. Default False preserves legacy behavior.
+        model_candidate_meta = state.get("model_candidate") or {}
+        skip_isotonic = bool(model_candidate_meta.get("skip_post_hoc_calibration", False))
+        if skip_isotonic:
+            metrics_result["post_hoc_calibration"] = {
+                "calibration_applied": False,
+                "skip_reason": "skip_post_hoc_calibration_flag",
+            }
+            # Cycle-8 codex IMPORTANT finding fix: the alias resolution
+            # `maximum_calibration_error → calibrated_ece` (line 1759) would
+            # otherwise return None and hard-fail the criterion at line 1818,
+            # even though calibration-native algorithms produce a valid ECE
+            # at metrics_result["calibration_error"] (line 265). Copy the
+            # native ECE into both the outer metrics_result and the inner
+            # test_metrics overlay so the alias resolves to the
+            # calibration-native value (which IS the best-available estimate
+            # for an algorithm that needs no isotonic).
+            native_ece = metrics_result.get("calibration_error")
+            metrics_result["calibrated_ece"] = native_ece
+            inner_test_metrics = metrics_result.get("test_metrics")
+            if isinstance(inner_test_metrics, dict):
+                inner_test_metrics["calibrated_ece"] = (
+                    native_ece if native_ece is not None else float("nan")
+                )
+            logger.info(
+                "Skipping post-hoc isotonic calibration "
+                "(skip_post_hoc_calibration=True from model_candidate); "
+                "using native calibration_error as calibrated_ece alias"
+            )
+        elif X_val_np is not None and y_val_np is not None:
             calibrated_model, cal_info = apply_post_hoc_calibration(
                 trained_model, X_val_np, y_val_np, method="isotonic"
             )
@@ -630,6 +683,351 @@ def _compute_net_benefit_at_p_t(y_true: np.ndarray, y_proba: np.ndarray, p_t: fl
     return (tp / n) - (fp / n) * p_t / (1.0 - p_t)
 
 
+# Q-W5-2 RESOLVED 2026-05-01 — anchor-point gate fires when observed
+# prevalence > 0.10. See shard 20 §A.5.5 for the geometric / empirical /
+# operational reasoning behind 0.10. Symmetric with Q-W5-1 RESOLVED
+# `promotion_gate_metric` form-selection (raw when prev <= 0.10, relative
+# when prev > 0.10).
+_PREVALENCE_GATE_THRESHOLD: float = 0.10
+
+
+# Section E.2 — τ-range defaults per use_case (shard 20 §E.2).
+_USE_CASE_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "screening": {"tau_low": 0.01, "tau_high": 0.10},
+    "diagnostic": {"tau_low": 0.05, "tau_high": 0.30},
+    "treatment_decision": {"tau_low": 0.20, "tau_high": 0.50},
+    "critical_action": {"tau_low": 0.30, "tau_high": 0.70},
+    "generic_benchmark": {"tau_low": 0.05, "tau_high": 0.30},
+}
+
+# Per-disease overrides — Novartis US commercial-analytics portfolio
+# alignment per Q-W5-6 RESOLVED 2026-05-01. Citation-strength legend
+# (per row): STRONG = single guideline / RCT-derived threshold;
+# MODERATE = multi-source clinical risk-stratification literature;
+# WEAK = no probability-threshold guideline; requires user validation.
+_DISEASE_SPECIFIC_DEFAULTS: Dict[str, Dict[str, float]] = {
+    # cv_risk_10y — Leqvio (inclisiran). 2018 ACC/AHA cholesterol guideline
+    # statin-initiation threshold 7.5%. STRONG.
+    "cv_risk_10y": {"tau_low": 0.05, "tau_high": 0.15, "primary_tau": 0.075},
+    # hf_readmission_30d — Entresto (sacubitril/valsartan). LACE-HF + CMS
+    # HRRP excess-readmission threshold ~22%. MODERATE.
+    "hf_readmission_30d": {"tau_low": 0.10, "tau_high": 0.30, "primary_tau": 0.20},
+    # breast_cancer_recurrence — Kisqali (ribociclib). TAILORx + RxPONDER
+    # Oncotype DX RS 11-25 → 10-30% 10y distant recurrence. STRONG.
+    "breast_cancer_recurrence": {"tau_low": 0.10, "tau_high": 0.30, "primary_tau": 0.21},
+    # ms_treatment_escalation — Kesimpta + Mayzent. NEDA-3 failure /
+    # Rio Score. MODERATE.
+    "ms_treatment_escalation": {"tau_low": 0.20, "tau_high": 0.40, "primary_tau": 0.30},
+    # psoriasis_pasi_response — Cosentyx (secukinumab). PASI 75 at 16 weeks.
+    # WEAK — no probability-threshold guideline; validate before deployment.
+    "psoriasis_pasi_response": {"tau_low": 0.30, "tau_high": 0.60, "primary_tau": 0.45},
+    # mcrpc_progression_risk — Pluvicto (177Lu-PSMA-617). VISION + PROfound
+    # post-taxane progression rates. MODERATE.
+    "mcrpc_progression_risk": {"tau_low": 0.25, "tau_high": 0.55, "primary_tau": 0.40},
+}
+
+
+def _compute_net_benefit_area(
+    y_true: np.ndarray,
+    y_proba_pos: np.ndarray,
+    tau_grid: Sequence[float],
+    prevalence_gate_threshold: float = _PREVALENCE_GATE_THRESHOLD,
+) -> Dict[str, Any]:
+    """Trapezoidal integral of NB over ``tau_grid`` (Vickers 2006 + shard 20 §A.2).
+
+    Computes NB_area for the model and for the treat-all reference, plus
+    their difference (the operationally meaningful quantity per Vickers
+    2006). Returns a dict so callers can serialize a single block. Returns
+    NaN-valued fields when ``tau_grid`` is empty / non-monotonic / contains
+    values outside ``(0, 1)``. The ``net_benefit_area_form`` field is the
+    informational Q-W5-1 RESOLVED 2026-05-02 cycle 6 disposition: per the
+    prevalence-conditional ``promotion_gate_metric`` rule, the gating form
+    is raw when ``prevalence <= prevalence_gate_threshold`` and
+    relative-to-treat-all otherwise. Both fields are populated regardless;
+    consumers (W6 ``criteria_validator``) read ``net_benefit_area_form`` to
+    decide which to gate against.
+
+    Args:
+        y_true: 1D binary labels (0/1).
+        y_proba_pos: 1D positive-class probabilities.
+        tau_grid: Sorted ascending list of τ values in ``(0, 1)``. Phase 1
+            default is 21 evenly-spaced points across ``[tau_low, tau_high]``.
+        prevalence_gate_threshold: Cutoff for ``net_benefit_area_form``
+            informational selection. Defaults to ``_PREVALENCE_GATE_THRESHOLD``
+            (Q-W5-2 + Q-W5-1 RESOLVED).
+
+    Returns:
+        ``{"net_benefit_area", "net_benefit_area_treat_all",
+        "net_benefit_area_relative_to_treat_all", "tau_low", "tau_high",
+        "n_grid_points", "prevalence", "net_benefit_area_form"}``.
+    """
+    n = len(y_true)
+    prev = float(np.mean(y_true == 1)) if n > 0 else float("nan")
+    form: Literal["raw", "relative_to_treat_all"] = (
+        "relative_to_treat_all"
+        if (not math.isnan(prev) and prev > prevalence_gate_threshold)
+        else "raw"
+    )
+    nan_block: Dict[str, Any] = {
+        "net_benefit_area": float("nan"),
+        "net_benefit_area_treat_all": float("nan"),
+        "net_benefit_area_relative_to_treat_all": float("nan"),
+        "tau_low": float("nan"),
+        "tau_high": float("nan"),
+        "n_grid_points": int(len(tau_grid)),
+        "prevalence": prev,
+        "net_benefit_area_form": form,
+    }
+    if len(tau_grid) < 2 or n == 0:
+        return nan_block
+    taus = np.asarray(tau_grid, dtype=float)
+    if not np.all(np.diff(taus) > 0):
+        # Non-monotonic — defensive; the resolver should sort.
+        taus = np.sort(taus)
+    if taus[0] <= 0.0 or taus[-1] >= 1.0:
+        # NB undefined at boundaries; clamp into open interval. The
+        # 1e-6 buffer matches the resolver's invariant; without it a
+        # caller-supplied 0.0 would leak NaN through the NB grid.
+        taus = np.clip(taus, 1e-6, 1.0 - 1e-6)
+    nb_model = np.array([_compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus])
+    nb_treat_all = prev - (1.0 - prev) * taus / (1.0 - taus)
+    if np.any(np.isnan(nb_model)):
+        # Don't integrate over partial NaN — emit NaN for the area.
+        area_model = float("nan")
+    else:
+        area_model = float(np.trapz(nb_model, taus))
+    area_treat_all = float(np.trapz(nb_treat_all, taus))
+    area_relative = area_model - area_treat_all if not math.isnan(area_model) else float("nan")
+    return {
+        "net_benefit_area": area_model,
+        "net_benefit_area_treat_all": area_treat_all,
+        "net_benefit_area_relative_to_treat_all": area_relative,
+        "tau_low": float(taus[0]),
+        "tau_high": float(taus[-1]),
+        "n_grid_points": int(len(taus)),
+        "prevalence": prev,
+        "net_benefit_area_form": form,
+    }
+
+
+def _compute_dca_curves(
+    y_true: np.ndarray,
+    y_proba_pos: np.ndarray,
+    tau_grid: Sequence[float],
+) -> Dict[str, Any]:
+    """Decision-curve analysis artifact (Vickers 2006; shard 20 §B.2).
+
+    Returns aligned arrays so downstream consumers (MLflow, Opik, Grafana)
+    can plot decision curves without recomputing. Emits Python lists, not
+    numpy arrays, so the dict is JSON-serializable for ``mlflow.log_dict``.
+
+    Args:
+        y_true: 1D binary labels (0/1).
+        y_proba_pos: 1D positive-class probabilities.
+        tau_grid: Sorted ascending list of τ values in ``(0, 1)``.
+
+    Returns:
+        Dict with ``tau_grid``, ``nb_model``, ``nb_treat_all``,
+        ``nb_treat_none`` arrays of length K, plus ``prevalence`` and
+        ``tau_low`` / ``tau_high`` bounds.
+    """
+    taus = np.asarray(tau_grid, dtype=float) if len(tau_grid) > 0 else np.array([])
+    prev = float(np.mean(y_true == 1)) if len(y_true) > 0 else float("nan")
+    if len(taus) == 0:
+        return {
+            "tau_grid": [],
+            "nb_model": [],
+            "nb_treat_all": [],
+            "nb_treat_none": [],
+            "n_grid_points": 0,
+            "prevalence": prev,
+            "tau_low": float("nan"),
+            "tau_high": float("nan"),
+        }
+    nb_model = [_compute_net_benefit_at_p_t(y_true, y_proba_pos, float(t)) for t in taus]
+    nb_treat_all_arr = prev - (1.0 - prev) * taus / (1.0 - taus)
+    nb_treat_all = [float(v) for v in nb_treat_all_arr]
+    nb_treat_none = [0.0] * len(taus)
+    return {
+        "tau_grid": [float(t) for t in taus],
+        "nb_model": [float(v) for v in nb_model],
+        "nb_treat_all": nb_treat_all,
+        "nb_treat_none": nb_treat_none,
+        "n_grid_points": int(len(taus)),
+        "prevalence": prev,
+        "tau_low": float(taus[0]),
+        "tau_high": float(taus[-1]),
+    }
+
+
+def _resolve_tau_grid_for_metrics(
+    success_criteria: Optional[Dict[str, Any]],
+    legacy_grid: Sequence[float],
+    n_grid_points: int = 21,
+) -> Optional[List[float]]:
+    """Resolve τ_low, τ_high, and a uniform grid from ``success_criteria``.
+
+    Resolution order per shard 16 §3 + shard 20 §E.2 (disease label is more
+    specific than ``use_case=custom``, so it beats it):
+
+      1. ``clinical_threshold_range.evaluation_grid`` (caller-supplied) wins outright.
+      2. ``dataset_disease`` in ``_DISEASE_SPECIFIC_DEFAULTS`` → disease-specific bounds.
+         The disease label may live at the top level of ``success_criteria``
+         OR nested under ``clinical_threshold_range`` — both keys are checked.
+      3. ``clinical_threshold_range.use_case == "custom"`` → explicit ``tau_low`` / ``tau_high``.
+      4. ``clinical_threshold_range.use_case`` in ``_USE_CASE_DEFAULTS`` → use-case defaults.
+      5. No schema or unknown use_case → ``legacy_grid``.
+
+    Returns the resolved grid (a list of floats), or ``None`` only when the
+    caller signalled they want the metrics suite skipped entirely (currently
+    not used — kept in the signature for forward compatibility).
+    """
+    if not success_criteria:
+        return list(legacy_grid)
+    ctr = success_criteria.get("clinical_threshold_range") or {}
+    use_case = (ctr.get("use_case") or "").strip()
+    explicit_grid = ctr.get("evaluation_grid")
+    if explicit_grid:  # caller-supplied grid wins outright
+        return [float(t) for t in explicit_grid]
+
+    # Disease-specific override (when dataset is labeled). Disease beats
+    # use_case so a Novartis franchise default cannot be silently
+    # overridden by a stale ``use_case=screening`` config — the explicit
+    # disease label always wins.
+    dataset_disease = (
+        success_criteria.get("dataset_disease") or ctr.get("dataset_disease") or ""
+    ).strip()
+    if dataset_disease and dataset_disease in _DISEASE_SPECIFIC_DEFAULTS:
+        ds = _DISEASE_SPECIFIC_DEFAULTS[dataset_disease]
+        return [float(t) for t in np.linspace(ds["tau_low"], ds["tau_high"], n_grid_points)]
+
+    if use_case == "custom":
+        tl = ctr.get("tau_low")
+        th = ctr.get("tau_high")
+        try:
+            tl_f = float(tl) if tl is not None else None
+            th_f = float(th) if th is not None else None
+        except (TypeError, ValueError):
+            tl_f = th_f = None
+        if tl_f is None or th_f is None or not 0.0 < tl_f < th_f < 1.0:
+            logger.warning(
+                "clinical_threshold_range.use_case=custom but tau_low/tau_high "
+                "missing or invalid (%s, %s); falling back to legacy grid",
+                tl,
+                th,
+            )
+            return list(legacy_grid)
+        return [float(t) for t in np.linspace(tl_f, th_f, n_grid_points)]
+
+    if use_case in _USE_CASE_DEFAULTS:
+        defaults = _USE_CASE_DEFAULTS[use_case]
+        return [
+            float(t) for t in np.linspace(defaults["tau_low"], defaults["tau_high"], n_grid_points)
+        ]
+
+    return list(legacy_grid)
+
+
+def _resolve_primary_tau(
+    success_criteria: Optional[Dict[str, Any]],
+) -> Optional[float]:
+    """Resolve the optional ``primary_tau`` clinical anchor (shard 20 §A.5.1).
+
+    Resolution order:
+
+      1. ``clinical_threshold_range.primary_tau`` (explicit caller config).
+      2. ``_DISEASE_SPECIFIC_DEFAULTS[dataset_disease].primary_tau``.
+      3. ``None`` — no anchor available; anchor-point metrics emit NaN.
+    """
+    if not success_criteria:
+        return None
+    ctr = success_criteria.get("clinical_threshold_range") or {}
+    explicit = ctr.get("primary_tau")
+    if explicit is not None:
+        try:
+            t = float(explicit)
+            if 0.0 < t < 1.0:
+                return t
+        except (TypeError, ValueError):
+            pass
+    dataset_disease = (
+        success_criteria.get("dataset_disease") or ctr.get("dataset_disease") or ""
+    ).strip()
+    if dataset_disease and dataset_disease in _DISEASE_SPECIFIC_DEFAULTS:
+        primary = _DISEASE_SPECIFIC_DEFAULTS[dataset_disease].get("primary_tau")
+        if primary is not None:
+            try:
+                t = float(primary)
+                if 0.0 < t < 1.0:
+                    return t
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _compute_anchor_point_metrics(
+    y_true: np.ndarray,
+    y_proba_pos: np.ndarray,
+    primary_tau: Optional[float],
+    nb_area_relative: float,
+    prevalence_threshold: float = _PREVALENCE_GATE_THRESHOLD,
+) -> Dict[str, Any]:
+    """Single-τ anchor-point NB + Q-W5-2 RESOLVED secondary-gate trigger.
+
+    Always emitted when ``primary_tau`` resolves. The boolean
+    ``nb_anchor_secondary_gate_active`` is True iff observed prevalence on
+    ``y_true`` exceeds ``prevalence_threshold`` — W6 wires this boolean
+    into ``criteria_validator`` so the gate fires only when active.
+
+    The ``nb_anchor_vs_area_disagree`` diagnostic is True when the anchor
+    pass/fail differs from the NB-area-relative pass/fail. After the first
+    multi-disease run (shard 22), inspect disagreement rates per regime: if
+    < 1% the gate adds little signal; if > 5% it is catching real misses.
+    """
+    prev = float(np.mean(y_true == 1)) if len(y_true) > 0 else float("nan")
+    nan_block: Dict[str, Any] = {
+        "primary_tau": None,
+        "net_benefit_at_primary_tau": float("nan"),
+        "net_benefit_at_primary_tau_treat_all": float("nan"),
+        "net_benefit_at_primary_tau_relative_to_treat_all": float("nan"),
+        "nb_anchor_secondary_gate_active": False,
+        "nb_anchor_passes": None,
+        "nb_anchor_vs_area_disagree": False,
+        "prevalence": prev,
+    }
+    if primary_tau is None or not (0.0 < float(primary_tau) < 1.0):
+        return nan_block
+
+    p_tau = float(primary_tau)
+    nb_at_primary = _compute_net_benefit_at_p_t(y_true, y_proba_pos, p_tau)
+    nb_treat_all_at_primary = float(prev - (1.0 - prev) * p_tau / (1.0 - p_tau))
+    nb_relative = (
+        float(nb_at_primary - nb_treat_all_at_primary)
+        if not math.isnan(nb_at_primary)
+        else float("nan")
+    )
+    gate_active = bool(not math.isnan(prev) and prev > prevalence_threshold)
+    anchor_passes: Optional[bool]
+    if gate_active and not math.isnan(nb_relative):
+        anchor_passes = bool(nb_relative > 0.0)
+    else:
+        anchor_passes = None
+    area_passes = bool(nb_area_relative > 0.0) if not math.isnan(nb_area_relative) else None
+    disagree = bool(
+        anchor_passes is not None and area_passes is not None and anchor_passes != area_passes
+    )
+    return {
+        "primary_tau": p_tau,
+        "net_benefit_at_primary_tau": float(nb_at_primary),
+        "net_benefit_at_primary_tau_treat_all": nb_treat_all_at_primary,
+        "net_benefit_at_primary_tau_relative_to_treat_all": nb_relative,
+        "nb_anchor_secondary_gate_active": gate_active,
+        "nb_anchor_passes": anchor_passes,
+        "nb_anchor_vs_area_disagree": disagree,
+        "prevalence": prev,
+    }
+
+
 def _compute_classification_metrics(
     y_train: Optional[np.ndarray],
     y_train_pred: Optional[np.ndarray],
@@ -643,6 +1041,8 @@ def _compute_classification_metrics(
     imbalance_detected: bool = False,
     minority_ratio: float = 0.5,
     cost_matrix: Optional[Dict[str, float]] = None,
+    bootstrap_random_state: Optional[int] = None,
+    success_criteria: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
@@ -878,6 +1278,74 @@ def _compute_classification_metrics(
             for p_t in _V3_NB_GRID_P_T_VALUES
         }
 
+        # W1 day-2 — NB-area + DCA + anchor-point emissions per shard 20
+        # §A.4 / §B / §A.5.3. Gated by ``clinical_threshold_range``
+        # presence (NOT truthiness) in ``success_criteria``: when the
+        # key is absent, only the legacy ``net_benefit_grid`` above is
+        # emitted (single-mode parity per shard 20 §G acceptance #7).
+        # An empty dict still triggers the gate — caller signalled they
+        # want the metrics suite but the resolver will fall back to
+        # ``_V3_NB_GRID_P_T_VALUES`` and emit the COSMETIC-2 INFO.
+        ctr_present = bool(
+            success_criteria is not None and "clinical_threshold_range" in success_criteria
+        )
+        if ctr_present:
+            tau_grid_resolved = _resolve_tau_grid_for_metrics(
+                success_criteria,
+                legacy_grid=_V3_NB_GRID_P_T_VALUES,
+            )
+            if tau_grid_resolved is not None and len(tau_grid_resolved) >= 2:
+                # Cycle-20 IMPORTANT-1 (Q1.B): treat-all NB blows up as
+                # τ → 1 (denominator (1−τ) → 0). At τ_high ≥ 0.80 the
+                # treat-all integrand exceeds −15·(1−prev), letting any
+                # model dominate it on volume alone. WARN so callers can
+                # validate intentionality. Cycle-21 C-1: include 0.80
+                # itself in the WARNING band — 1·(1−prev)·(0.80/0.20) = 4
+                # already amplifies treat-all tail noise.
+                if tau_grid_resolved[-1] >= 0.80:
+                    logger.warning(
+                        "clinical_threshold_range emits tau_high=%.4f > 0.80 — "
+                        "treat-all NB diverges near τ→1; net_benefit_area_relative_to_treat_all "
+                        "is dominated by the integration tail rather than model quality. "
+                        "Verify use_case=custom upper bound is intentional.",
+                        tau_grid_resolved[-1],
+                    )
+                # Cycle-20 COSMETIC-2: a K=6 legacy grid yields a
+                # ~1e-2 trapezoidal residual per shard 20 §E.3 — well
+                # above the bootstrap noise floor. Emit a one-time INFO
+                # so downstream consumers know to interpret NB-area on
+                # legacy fallback as approximate.
+                if len(tau_grid_resolved) == len(_V3_NB_GRID_P_T_VALUES) and all(
+                    math.isclose(a, b)
+                    for a, b in zip(tau_grid_resolved, _V3_NB_GRID_P_T_VALUES, strict=True)
+                ):
+                    logger.info(
+                        "NB-area computed on K=6 legacy grid; trapezoidal "
+                        "residual ~1e-2 per shard 20 §E.3. Treat values "
+                        "as approximate — supply clinical_threshold_range "
+                        "with a denser grid for higher precision."
+                    )
+                nb_area_block = _compute_net_benefit_area(
+                    np.asarray(y_test),
+                    y_test_proba_pos,
+                    tau_grid_resolved,
+                )
+                test_metrics_any.update(nb_area_block)
+                test_metrics_any["decision_curve_data"] = _compute_dca_curves(
+                    np.asarray(y_test),
+                    y_test_proba_pos,
+                    tau_grid_resolved,
+                )
+                # Anchor-point + secondary-gate trigger (Q-W5-2 RESOLVED).
+                primary_tau_resolved = _resolve_primary_tau(success_criteria)
+                anchor_block = _compute_anchor_point_metrics(
+                    np.asarray(y_test),
+                    y_test_proba_pos,
+                    primary_tau=primary_tau_resolved,
+                    nb_area_relative=nb_area_block["net_benefit_area_relative_to_treat_all"],
+                )
+                test_metrics_any.update(anchor_block)
+
     # Extract primary metrics for state
     auc_roc = test_metrics.get("roc_auc")
     precision = test_metrics.get("precision")
@@ -925,9 +1393,14 @@ def _compute_classification_metrics(
     # Precision at k
     precision_at_k = _compute_precision_at_k(y_test, y_test_proba, k_values=[100, 500, 1000])
 
-    # Bootstrap confidence intervals
+    # Bootstrap confidence intervals (cycle-16 I-4: per-fold seed for
+    # asyncio.gather n_jobs > 1 determinism)
     confidence_interval, bootstrap_samples = _compute_bootstrap_ci(
-        y_test, y_test_pred_optimal, y_test_proba, problem_type="binary_classification"
+        y_test,
+        y_test_pred_optimal,
+        y_test_proba,
+        problem_type="binary_classification",
+        random_state=bootstrap_random_state,
     )
 
     # Build result dictionary
@@ -1147,6 +1620,7 @@ def _compute_regression_metrics(
     y_validation_pred: Optional[np.ndarray],
     y_test: np.ndarray,
     y_test_pred: np.ndarray,
+    bootstrap_random_state: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compute regression metrics using sklearn.
 
@@ -1157,6 +1631,8 @@ def _compute_regression_metrics(
         y_validation_pred: Validation predictions
         y_test: Test labels
         y_test_pred: Test predictions
+        bootstrap_random_state: Optional per-fold seed threaded into
+            ``_compute_bootstrap_ci`` (cycle-16 I-4 / Q2-B). See helper docstring.
 
     Returns:
         Dictionary of metrics
@@ -1192,9 +1668,13 @@ def _compute_regression_metrics(
         "r2": float(r2_score(y_test, y_test_pred)),
     }
 
-    # Bootstrap confidence intervals
+    # Bootstrap confidence intervals (cycle-16 I-4: per-fold seed)
     confidence_interval, bootstrap_samples = _compute_bootstrap_ci(
-        y_test, y_test_pred, None, problem_type="regression"
+        y_test,
+        y_test_pred,
+        None,
+        problem_type="regression",
+        random_state=bootstrap_random_state,
     )
 
     return {
@@ -1452,6 +1932,13 @@ def _compute_precision_at_k(
     return result
 
 
+# Q-W5-3 RESOLVED 2026-05-02 cycle 6: BCa default flipped to ``"auto"``.
+# Below ``_MIN_N_FOR_BCA`` bootstrap units, BCa acceleration is unstable
+# (Bengio & Grandvalet 2004 — no distribution-free unbiased k-fold CV
+# variance estimator). 30 is the codex B verdict cutoff.
+_MIN_N_FOR_BCA: int = 30
+
+
 def _compute_bootstrap_ci(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -1459,8 +1946,11 @@ def _compute_bootstrap_ci(
     problem_type: str,
     n_bootstrap: int = 1000,
     confidence: float = 0.95,
+    random_state: Optional[int] = None,
+    ci_method: str = "auto",
+    force_bca: bool = False,
 ) -> Tuple[Dict[str, Tuple[float, float]], int]:
-    """Compute bootstrap confidence intervals for metrics.
+    """Compute bootstrap confidence intervals for metrics (shard 20 §D.3).
 
     Args:
         y_true: True labels
@@ -1469,9 +1959,30 @@ def _compute_bootstrap_ci(
         problem_type: Problem type
         n_bootstrap: Number of bootstrap samples
         confidence: Confidence level
+        random_state: Optional per-fold seed (cycle-16 I-4 / Q2-B). When
+            provided, uses ``np.random.default_rng(random_state)`` for
+            bootstrap-index generation so two folds running concurrently
+            under ``asyncio.gather(n_jobs > 1)`` produce bit-identical CI
+            endpoints regardless of execution order. When ``None``
+            (default), falls back to numpy's global RNG via
+            ``np.random.choice`` — preserves byte-identity for legacy
+            callers that don't supply a fold seed (single-mode evaluation,
+            external test fixtures with explicit ``np.random.seed``).
+        ci_method: One of ``"auto"`` (default), ``"bca"``, ``"percentile"``.
+            Q-W5-3 RESOLVED 2026-05-02 cycle 6: ``"auto"`` resolves to
+            percentile when ``n_bootstrap < _MIN_N_FOR_BCA`` (=30), BCa
+            otherwise. Legacy snapshot tests should pin
+            ``ci_method="percentile"`` explicitly.
+        force_bca: When True + ``ci_method="bca"`` + ``n_bootstrap < _MIN_N_FOR_BCA``,
+            still attempt BCa (caller acknowledges small-N fragility). When
+            False (default), falls back to percentile with
+            ``bca_fallback_reason="below_min_n_for_bca"`` logged at INFO.
 
     Returns:
-        Tuple of (confidence_intervals, n_bootstrap)
+        Tuple of (confidence_intervals, n_bootstrap). Provenance fields
+        (``ci_method_requested`` / ``ci_method_used`` / ``bca_fallback_reason``
+        / ``bca_unstable_warning``) are emitted via INFO log to avoid
+        breaking the legacy 2-tuple contract.
     """
     n_samples = len(y_true)
     alpha = (1 - confidence) / 2
@@ -1482,9 +1993,16 @@ def _compute_bootstrap_ci(
     # Store bootstrap metrics
     bootstrap_metrics: Dict[str, List[float]] = {}
 
+    # Cycle-16 I-4: per-fold-seeded bootstrap RNG when caller supplies seed;
+    # global-RNG fallback preserves backward-compat byte-identity.
+    rng = np.random.default_rng(random_state) if random_state is not None else None
+
     for _ in range(n_bootstrap):
         # Bootstrap sample indices
-        indices = np.random.choice(n_samples, size=n_samples, replace=True)
+        if rng is not None:
+            indices = rng.integers(low=0, high=n_samples, size=n_samples)
+        else:
+            indices = np.random.choice(n_samples, size=n_samples, replace=True)
 
         y_true_boot = y_true[indices]
         y_pred_boot = y_pred[indices]
@@ -1540,15 +2058,187 @@ def _compute_bootstrap_ci(
             except ValueError:
                 pass
 
-    # Compute confidence intervals
-    confidence_intervals = {}
-    for metric_name, values in bootstrap_metrics.items():
-        if len(values) > 0:
-            lower = float(np.percentile(values, alpha * 100))
-            upper = float(np.percentile(values, (1 - alpha) * 100))
-            confidence_intervals[metric_name] = (lower, upper)
+    # Resolve ci_method per Q-W5-3 RESOLVED. Below the BCa min-N cutoff
+    # (Bengio & Grandvalet 2004 — k-fold variance estimator instability),
+    # auto resolves to percentile and "bca" without ``force_bca`` falls back.
+    method_requested = ci_method
+    fallback_reason: Optional[str] = None
+    if ci_method == "auto":
+        method_resolved = "bca" if n_bootstrap >= _MIN_N_FOR_BCA else "percentile"
+        if method_resolved == "percentile":
+            fallback_reason = "auto_below_min_n_for_bca"
+    elif ci_method == "bca":
+        if n_bootstrap < _MIN_N_FOR_BCA and not force_bca:
+            method_resolved = "percentile"
+            fallback_reason = "below_min_n_for_bca"
+        else:
+            method_resolved = "bca"
+    elif ci_method == "percentile":
+        method_resolved = "percentile"
+    else:
+        logger.warning("Unknown ci_method=%r — falling back to percentile.", ci_method)
+        method_resolved = "percentile"
+        fallback_reason = f"unknown_ci_method:{ci_method}"
 
+    confidence_intervals: Dict[str, Tuple[float, float]] = {}
+    method_used: Dict[str, str] = {}
+
+    if method_resolved == "percentile":
+        for metric_name, values in bootstrap_metrics.items():
+            if len(values) > 0:
+                lower = float(np.percentile(values, alpha * 100))
+                upper = float(np.percentile(values, (1 - alpha) * 100))
+                confidence_intervals[metric_name] = (lower, upper)
+                method_used[metric_name] = "percentile"
+        logger.info(
+            "bootstrap CI: requested=%s used=percentile fallback_reason=%s",
+            method_requested,
+            fallback_reason,
+        )
+        return confidence_intervals, n_bootstrap
+
+    # BCa branch — compute point estimates + jackknife distributions
+    # once, then call bca_ci_from_resamples per metric.
+    from src.utils.bootstrap_utils import bca_ci_from_resamples
+
+    point_estimates = _compute_point_estimates(y_true, y_pred, y_proba_pos, problem_type)
+    jackknife_cache = _compute_jackknife_metrics(y_true, y_pred, y_proba_pos, problem_type)
+    bca_unstable = False
+    for metric_name, values in bootstrap_metrics.items():
+        if len(values) == 0 or metric_name not in point_estimates:
+            continue
+        result = bca_ci_from_resamples(
+            bootstrap_values=values,
+            point_estimate=point_estimates[metric_name],
+            jackknife_values=jackknife_cache.get(metric_name, np.array([])),
+            confidence_level=confidence,
+        )
+        if result.ci_lo is None or result.ci_hi is None:
+            continue
+        confidence_intervals[metric_name] = (result.ci_lo, result.ci_hi)
+        method_used[metric_name] = result.method
+        if result.method != "bca":
+            bca_unstable = True
+    # Cycle-22 C-2: report which per-metric methods actually applied so
+    # log consumers can distinguish "BCa requested + delivered for all"
+    # from "BCa requested but every metric fell back to percentile."
+    logger.info(
+        "bootstrap CI: requested=%s resolved=bca per_metric_methods=%s any_fallback=%s",
+        method_requested,
+        method_used,
+        bca_unstable,
+    )
     return confidence_intervals, n_bootstrap
+
+
+def _compute_point_estimates(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba_pos: Optional[np.ndarray],
+    problem_type: str,
+) -> Dict[str, float]:
+    """Per-metric point estimate on the original (non-resampled) sample.
+
+    Mirrors the metric set computed inside the bootstrap loop in
+    :func:`_compute_bootstrap_ci`; required input to BCa bias-correction
+    (``z0 = Φ⁻¹(P(boot < point_estimate))``).
+    """
+    out: Dict[str, float] = {}
+    if problem_type == "binary_classification":
+        out["accuracy"] = float(accuracy_score(y_true, y_pred))
+        if y_proba_pos is not None:
+            try:
+                out["auc"] = float(roc_auc_score(y_true, y_proba_pos))
+            except ValueError:
+                pass
+        out["precision"] = float(precision_score(y_true, y_pred, zero_division=0))
+        out["recall"] = float(recall_score(y_true, y_pred, zero_division=0))
+    elif problem_type == "regression":
+        mse_val = float(mean_squared_error(y_true, y_pred))
+        out["rmse"] = float(np.sqrt(mse_val))
+        out["mae"] = float(mean_absolute_error(y_true, y_pred))
+        try:
+            out["r2"] = float(r2_score(y_true, y_pred))
+        except ValueError:
+            pass
+    return out
+
+
+def _compute_jackknife_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba_pos: Optional[np.ndarray],
+    problem_type: str,
+) -> Dict[str, np.ndarray]:
+    """Per-metric leave-one-out distribution for BCa acceleration.
+
+    Returns ``{metric_name: ndarray of length N}`` where the i-th value
+    is the metric on ``(y_true, y_pred, y_proba_pos)`` with sample i
+    excluded. Used by :func:`bca_ci_from_resamples` for the jackknife
+    acceleration term.
+
+    Computational cost: N metric evaluations per metric. At N=1500 this
+    is ~3 seconds for all 4 binary metrics — well under the existing
+    bootstrap loop's 1000-iteration cost.
+    """
+    n = int(len(y_true))
+    if n < 2:
+        return {}
+    idx = np.arange(n)
+    out: Dict[str, np.ndarray] = {}
+
+    if problem_type == "binary_classification":
+        accuracy_jack = np.empty(n, dtype=float)
+        precision_jack = np.empty(n, dtype=float)
+        recall_jack = np.empty(n, dtype=float)
+        auc_jack = np.full(n, np.nan, dtype=float)
+        for i in range(n):
+            mask = idx != i
+            yt = y_true[mask]
+            yp = y_pred[mask]
+            accuracy_jack[i] = accuracy_score(yt, yp)
+            precision_jack[i] = precision_score(yt, yp, zero_division=0)
+            recall_jack[i] = recall_score(yt, yp, zero_division=0)
+            if y_proba_pos is not None:
+                try:
+                    auc_jack[i] = roc_auc_score(yt, y_proba_pos[mask])
+                except ValueError:
+                    pass
+        out["accuracy"] = accuracy_jack
+        out["precision"] = precision_jack
+        out["recall"] = recall_jack
+        if y_proba_pos is not None:
+            # Cycle-22 C-1: AUC jackknife array length asymmetry. Unlike
+            # accuracy/precision/recall which always have N entries, the
+            # AUC array only retains entries where the leave-one-out
+            # sub-sample was non-degenerate (both classes present). The
+            # NaN-drop is intentional — a NaN in the BCa acceleration
+            # numerator destroys the Σ(...)³ formula. Downstream
+            # ``bca_ci_from_resamples`` reads ``len(jackknife) >= 2`` as
+            # its sanity guard.
+            valid = ~np.isnan(auc_jack)
+            if valid.sum() >= 2:
+                out["auc"] = auc_jack[valid]
+    elif problem_type == "regression":
+        rmse_jack = np.empty(n, dtype=float)
+        mae_jack = np.empty(n, dtype=float)
+        r2_jack = np.full(n, np.nan, dtype=float)
+        for i in range(n):
+            mask = idx != i
+            yt = y_true[mask]
+            yp = y_pred[mask]
+            rmse_jack[i] = float(np.sqrt(mean_squared_error(yt, yp)))
+            mae_jack[i] = mean_absolute_error(yt, yp)
+            try:
+                r2_jack[i] = r2_score(yt, yp)
+            except ValueError:
+                pass
+        out["rmse"] = rmse_jack
+        out["mae"] = mae_jack
+        valid = ~np.isnan(r2_jack)
+        if valid.sum() >= 2:
+            out["r2"] = r2_jack[valid]
+    return out
 
 
 def _check_metric_suspicion(

@@ -259,6 +259,33 @@ class TestGetMlflowFlavor:
         assert _get_mlflow_flavor("RandomForest", "sklearn") == "sklearn"
         assert _get_mlflow_flavor("LogisticRegression", "sklearn") == "sklearn"
 
+    def test_routes_lightgbm_monotone_to_lightgbm_flavor(self):
+        """Cycle-11 codex IMPORTANT fix: framework='lightgbm' for monotone
+        variant must reach the LightGBM flavor branch (not sklearn fallback).
+        """
+        assert _get_mlflow_flavor("LightGBM_Monotone", "lightgbm") == "lightgbm"
+
+    def test_routes_xgboost_monotone_to_xgboost_flavor(self):
+        assert _get_mlflow_flavor("XGBoost_Monotone", "xgboost") == "xgboost"
+
+    def test_ngboost_explicit_branch_returns_sklearn_with_intent(self):
+        """Cycle-11 codex IMPORTANT fix: NGBoost has no native MLflow flavor;
+        Phase 1 ships the cloudpickle-via-sklearn path explicitly so the
+        choice is intentional, not a silent fallthrough. Future work: switch
+        to mlflow.pyfunc with a PythonModel adapter when full registry
+        deployment lands.
+        """
+        assert _get_mlflow_flavor("NGBoost", "ngboost") == "sklearn"
+
+    def test_conformal_variants_explicit_branch_returns_sklearn_with_intent(self):
+        """Cycle-11 codex IMPORTANT fix: MapieConformalBinaryClassifier is a
+        custom wrapper; no native MLflow flavor. Phase 1 ships the cloudpickle-
+        via-sklearn path explicitly. Same future-work trigger as NGBoost.
+        """
+        assert _get_mlflow_flavor("NGBoost_Conformal", "mapie+ngboost") == "sklearn"
+        assert _get_mlflow_flavor("LightGBM_Conformal", "mapie+lightgbm") == "sklearn"
+        assert _get_mlflow_flavor("LogisticRegression_Conformal", "mapie+sklearn") == "sklearn"
+
 
 class TestGetPrimaryMetric:
     """Test primary metric selection."""

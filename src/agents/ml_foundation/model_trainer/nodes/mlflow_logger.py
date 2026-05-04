@@ -12,6 +12,7 @@ for complete traceability between Optuna studies and training runs.
 Version: 1.1.0
 """
 
+import asyncio
 import json
 import logging
 import tempfile
@@ -20,6 +21,51 @@ from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
+
+
+# Cycle-16 I-6 (Q3-C): MLflow's `mlflow.start_run(nested=True)` consults a
+# thread-local active-run stack to attach the new run to the currently-open
+# parent. Under `asyncio.gather(n_jobs > 1)` two folds running concurrently
+# in the SAME thread share that thread-local — if fold A opens a nested
+# child and yields control to fold B before closing it, fold B's
+# `start_run(nested=True)` would attach to A's child instead of the outer
+# parent, producing wrong topology in the MLflow UI.
+#
+# This module-level asyncio.Lock serializes the entire nested-run lifecycle
+# (open + log + close) for repeated_k10 fold invocations so concurrent
+# nested-run opens are impossible. Trade-off: serializes the MLflow-tracking
+# portion of fold work; the rest of each fold (training, evaluation) still
+# parallelizes via the orchestrator's Semaphore.
+#
+# Lazy creation avoids binding the lock to a specific event loop at import
+# time — `asyncio.Lock()` constructed on first use binds to the running loop.
+_nested_run_lock: Optional[asyncio.Lock] = None
+
+
+def _get_nested_run_lock() -> asyncio.Lock:
+    """Return the module-level nested-run lock, creating it on first use."""
+    global _nested_run_lock
+    if _nested_run_lock is None:
+        _nested_run_lock = asyncio.Lock()
+    return _nested_run_lock
+
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _maybe_serialize_nested_run(serialize: bool):
+    """Acquire the nested-run lock only when ``serialize=True``.
+
+    Single-mode invocations (``serialize=False``) skip locking entirely so
+    tests + production single-runs incur no overhead. Repeated-mode fold
+    invocations acquire the lock for the full nested-run lifecycle.
+    """
+    if serialize:
+        async with _get_nested_run_lock():
+            yield
+    else:
+        yield
 
 
 def _get_training_run_repository():
@@ -133,33 +179,67 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # Generate run name
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        run_name = f"{algorithm_name}_{timestamp}"
 
-        # Start MLflow run
-        async with mlflow_conn.start_run(
-            experiment_id=mlflow_experiment_id,
-            run_name=run_name,
-            tags={
-                "algorithm": algorithm_name,
-                "problem_type": problem_type,
-                "framework": framework,
-                "source": "model_trainer_agent",
-                "hpo_enabled": str(hpo_completed),
-                "feast_fallback": str(feast_fallback_used),
-                # Block 5B (#10): emit the validation-set business_utility
-                # number as a tag so the MLflow UI can display "what this
-                # run was worth" alongside accuracy/AUC. Mirrors the
-                # feast_fallback tag pattern. ``"N/A"`` when no
-                # cost_matrix was provided (validation_metrics omits
-                # the key in that case — see evaluator.py: the
-                # ``if cost_matrix is not None`` short-circuit in
-                # ``_compute_classification_metrics`` skips
-                # business_utility computation, so the metrics dict
-                # never picks up the key).
-                "business_utility": str(validation_metrics.get("business_utility", "N/A")),
-            },
-            description=f"Training run for {algorithm_name} on {problem_type}",
-        ) as run:
+        # Phase 1 W3-lite Day-5 (cycle-15 I-4): when invoked from the
+        # `_run_repeated_splits` orchestrator (per-fold recursion sentinel
+        # `_repeated_mode_fold_invocation=True`), the parent run is already
+        # open at the orchestrator level — open this fold's run as a NESTED
+        # child of the parent and tag it with `fold_idx` /
+        # `evaluation_mode=repeated_k10` / `fold_seed` so the MLflow UI
+        # surfaces the parent ↔ child topology.
+        evaluation_mode = state.get("evaluation_mode", "single")
+        is_repeated_fold = evaluation_mode == "repeated_k10" and bool(
+            state.get("_repeated_mode_fold_invocation", False)
+        )
+        if is_repeated_fold:
+            fold_idx_value = state.get("fold_idx", 0)
+            fold_seed_value = state.get("fold_random_state", 0)
+            run_name = f"fold_{int(fold_idx_value):02d}"
+            fold_tags = {
+                "fold_idx": str(int(fold_idx_value)),
+                "evaluation_mode": "repeated_k10",
+                "fold_seed": str(int(fold_seed_value)),
+            }
+        else:
+            run_name = f"{algorithm_name}_{timestamp}"
+            fold_tags = {}
+
+        run_tags = {
+            "algorithm": algorithm_name,
+            "problem_type": problem_type,
+            "framework": framework,
+            "source": "model_trainer_agent",
+            "hpo_enabled": str(hpo_completed),
+            "feast_fallback": str(feast_fallback_used),
+            # Block 5B (#10): emit the validation-set business_utility
+            # number as a tag so the MLflow UI can display "what this
+            # run was worth" alongside accuracy/AUC. Mirrors the
+            # feast_fallback tag pattern. ``"N/A"`` when no
+            # cost_matrix was provided (validation_metrics omits
+            # the key in that case — see evaluator.py: the
+            # ``if cost_matrix is not None`` short-circuit in
+            # ``_compute_classification_metrics`` skips
+            # business_utility computation, so the metrics dict
+            # never picks up the key).
+            "business_utility": str(validation_metrics.get("business_utility", "N/A")),
+            **fold_tags,
+        }
+
+        # Start MLflow run (nested when invoked per-fold inside repeated_k10)
+        # Cycle-16 I-6 (Q3-C): wrap the nested-run lifecycle in
+        # _maybe_serialize_nested_run when invoked per-fold so concurrent
+        # asyncio.gather(n_jobs > 1) folds cannot overlap their nested-run
+        # opens against MLflow's thread-local active-run state.
+        async with (
+            _maybe_serialize_nested_run(serialize=is_repeated_fold),
+            mlflow_conn.start_run(
+                experiment_id=mlflow_experiment_id,
+                run_name=run_name,
+                tags=run_tags,
+                description=f"Training run for {algorithm_name} on {problem_type}",
+                nested=is_repeated_fold,
+            ) as run,
+        ):
             mlflow_run_id = run.run_id
 
             # Log hyperparameters
@@ -503,6 +583,19 @@ def _get_mlflow_flavor(algorithm_name: str, framework: str) -> str:
         return "xgboost"
     elif algorithm_name == "LightGBM" or framework == "lightgbm":
         return "lightgbm"
+    # Phase 1 W2 day-5 follow-up (cycle-11 codex IMPORTANT): explicit
+    # branches for the W2 algorithms so the flavor choice is intentional,
+    # not a silent fallthrough. NGBoost and MAPIE conformal wrappers have
+    # no native MLflow flavor — they serialize via cloudpickle through
+    # the sklearn flavor (works because the wrappers expose
+    # sklearn-compatible fit/predict/predict_proba). Future work: switch
+    # to mlflow.pyfunc with a PythonModel adapter when full registry
+    # deployment lands (W3-lite or later when k=10 runs surface 10× MLflow
+    # artifacts per algorithm).
+    elif framework == "ngboost":
+        return "sklearn"  # cloudpickle: NGBoost wrapper, sklearn-compatible
+    elif framework.startswith("mapie+"):
+        return "sklearn"  # cloudpickle: MapieConformalBinaryClassifier wrapper
     else:
         return "sklearn"
 

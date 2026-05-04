@@ -518,3 +518,70 @@ class TestModelSelectorAgentOutputFormats:
         # Should contain key sections
         assert "Primary Reason:" in rationale_text
         assert "Supporting Factors:" in rationale_text
+
+
+class TestBuildOutputCalibrationFlags:
+    """Phase 1 W2 day-2: model_candidate dict propagates the new
+    calibration-native flags from the registry entry stored in
+    primary_candidate. Ref: shard 19 §A.7 — flags are read from the
+    registry as the single source of truth and surfaced as top-level
+    fields on model_candidate so the trainer/evaluator path can gate
+    behavior without re-querying the registry.
+    """
+
+    def test_skip_post_hoc_calibration_propagated_when_true(self):
+        """NGBoost-shaped registry entry surfaces as model_candidate flag."""
+        agent = ModelSelectorAgent()
+        final_state = {
+            "primary_candidate": {
+                "name": "NGBoost",
+                "skip_post_hoc_calibration": True,
+                "distribution_predictor": True,
+            },
+            "algorithm_name": "NGBoost",
+        }
+        output = agent._build_output(final_state, experiment_id="exp_test")
+        mc = output["model_candidate"]
+        assert mc["skip_post_hoc_calibration"] is True
+        assert mc["distribution_predictor"] is True
+
+    def test_legacy_candidate_defaults_flags_to_false(self):
+        """Legacy registry entries (no new flags) default both to False."""
+        agent = ModelSelectorAgent()
+        final_state = {
+            "primary_candidate": {
+                "name": "LightGBM",
+            },
+            "algorithm_name": "LightGBM",
+        }
+        output = agent._build_output(final_state, experiment_id="exp_test")
+        mc = output["model_candidate"]
+        assert mc["skip_post_hoc_calibration"] is False
+        assert mc["distribution_predictor"] is False
+
+    def test_missing_primary_candidate_defaults_flags_to_false(self):
+        """If primary_candidate missing entirely, flags default to False (defensive)."""
+        agent = ModelSelectorAgent()
+        final_state = {"algorithm_name": "X"}
+        output = agent._build_output(final_state, experiment_id="exp_test")
+        mc = output["model_candidate"]
+        assert mc["skip_post_hoc_calibration"] is False
+        assert mc["distribution_predictor"] is False
+        assert mc["monotone_constraints_required"] is False
+
+    def test_monotone_constraints_required_flag_propagated_when_true(self):
+        """Phase 1 W2 day-4: monotone_constraints_required surfaces from
+        primary_candidate to model_candidate so train_model can read it and
+        inject monotone_constraints from state["monotone_vector"] at fit time.
+        """
+        agent = ModelSelectorAgent()
+        final_state = {
+            "primary_candidate": {
+                "name": "LightGBM_Monotone",
+                "monotone_constraints_required": True,
+            },
+            "algorithm_name": "LightGBM_Monotone",
+        }
+        output = agent._build_output(final_state, experiment_id="exp_test")
+        mc = output["model_candidate"]
+        assert mc["monotone_constraints_required"] is True
