@@ -215,6 +215,12 @@ class DataPreparerAgent:
                     "recommended_actions": final_state.get("recommended_actions", []),
                 },
                 "gate_passed": final_state["gate_passed"],
+                # Sampling-frame audit report (Phase-1 Task 1.3 promotes this from
+                # advisory to blocking; runners read it to surface a dedicated
+                # sampling_frame_audit step result independent of the QC gate).
+                "sampling_frame_audit_report": final_state.get(
+                    "sampling_frame_audit_report"
+                ),
                 # DataFrames for downstream consumers (Feast registration, model training)
                 "train_df": final_state.get("train_df"),
                 "validation_df": final_state.get("validation_df"),

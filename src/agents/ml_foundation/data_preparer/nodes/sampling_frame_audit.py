@@ -1,14 +1,17 @@
 """Sampling-frame audit node for the data_preparer agent.
 
-This node performs an *advisory* drift comparison between the training
-distribution and an optional ``deployment_reference`` declared on
-``scope_spec``. It is intended to surface sampling-frame mismatches before
-training without blocking the pipeline.
+This node performs a drift comparison between the training distribution and
+an optional ``deployment_reference`` declared on ``scope_spec``. It surfaces
+sampling-frame mismatches before training and now also acts as a *blocking
+gate* (Phase-1 Task 1.3): when the worst per-column drift exceeds
+``sampling_frame_max_drift`` (read from ``scope_spec`` with a module-level
+default of ``0.3``), the node appends a structured entry to
+``state["blocking_issues"]`` so the QC gate fails downstream.
 
 The reference is OPTIONAL — when no ``deployment_reference`` is provided in
 ``scope_spec`` (the default for synthetic data), the node emits an advisory
 ``"no_reference_provided"`` entry to ``state["sampling_frame_audit_report"]``
-and passes through.
+and passes through without blocking.
 
 When present, ``deployment_reference`` must follow this shape:
 
@@ -44,9 +47,17 @@ Drift methodology (one consistent approach, documented up-front):
   ``categorical_drift_threshold`` (default ``0.2``). The JS divergence is
   computed in nats (natural log) and is bounded by ``ln(2) ≈ 0.693``.
 
-Failures are NON-BLOCKING. The node emits a ``WARNING`` log and adds an
-advisory entry to state under ``sampling_frame_audit_report`` — it does NOT
-populate ``blocking_issues``.
+Blocking gate (Phase-1 Task 1.3):
+  The audit computes a single ``max_drift_score`` = max of all per-column
+  ``metric_value`` entries (treating non-finite SMD as +inf). When this
+  exceeds ``sampling_frame_max_drift`` (default ``0.3``, overridable via
+  ``scope_spec["sampling_frame_max_drift"]``), the node appends a stable
+  ``"sampling_frame_drift: ..."`` string to ``state["blocking_issues"]``
+  and mirrors structured detail (kind, severity, divergence, threshold)
+  into ``sampling_frame_audit_report["blocking_detail"]``. Because
+  ``run_quality_checks`` overwrites ``blocking_issues`` with a fresh list,
+  ``finalize_output`` re-promotes the drift entry from ``blocking_detail``
+  so the gate decision is durable across the pipeline.
 """
 
 from __future__ import annotations
@@ -68,22 +79,38 @@ logger = logging.getLogger(__name__)
 DEFAULT_NUMERIC_DRIFT_THRESHOLD = 0.5  # Cohen's d
 DEFAULT_CATEGORICAL_DRIFT_THRESHOLD = 0.2  # JS divergence (nats)
 
+# Blocking gate threshold (Phase-1 Task 1.3). Compared against ``max_drift_score``,
+# which is the worst per-column ``metric_value`` (with non-finite SMD treated as
+# +inf). Overridable via ``scope_spec["sampling_frame_max_drift"]``.
+DEFAULT_SAMPLING_FRAME_MAX_DRIFT = 0.3
+
+# Stable identifier embedded in the blocking_issues string so callers can grep for
+# the gate trip without parsing the full message.
+SAMPLING_FRAME_DRIFT_BLOCKING_KIND = "sampling_frame_drift"
+
 
 async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
     """Compare training distribution to ``scope_spec.deployment_reference``.
 
-    The audit is advisory: it surfaces possible sampling-frame drift, but it
-    does NOT add anything to ``blocking_issues``. The report is written to
-    ``sampling_frame_audit_report`` for downstream consumers.
+    The audit writes the full report to ``sampling_frame_audit_report`` and
+    additionally promotes excessive drift to a blocking gate: when the worst
+    per-column drift exceeds ``sampling_frame_max_drift`` (default ``0.3``),
+    a single descriptive entry is appended to ``state["blocking_issues"]``
+    and the structured detail is mirrored into
+    ``sampling_frame_audit_report["blocking_detail"]``.
 
     Args:
         state: Current data_preparer agent state. Must contain ``train_df``;
-            reads optional ``scope_spec["deployment_reference"]`` and
-            ``scope_spec["sampling_frame_audit"]`` (threshold overrides).
+            reads optional ``scope_spec["deployment_reference"]``,
+            ``scope_spec["sampling_frame_audit"]`` (per-metric threshold
+            overrides), and ``scope_spec["sampling_frame_max_drift"]``
+            (blocking-gate threshold override).
 
     Returns:
-        Partial state update with ``sampling_frame_audit_report``. The report
-        is JSON-serialisable (no numpy types, no DataFrames).
+        Partial state update with ``sampling_frame_audit_report`` (always),
+        and ``blocking_issues`` (only when ``max_drift_score`` exceeds the
+        blocking threshold). The report is JSON-serialisable (no numpy
+        types, no DataFrames).
     """
     experiment_id = state.get("experiment_id", "unknown")
     logger.info("Running sampling-frame audit for experiment %s", experiment_id)
@@ -97,6 +124,9 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
     )
     categorical_threshold = float(
         audit_config.get("categorical_drift_threshold", DEFAULT_CATEGORICAL_DRIFT_THRESHOLD)
+    )
+    blocking_threshold = float(
+        scope_spec.get("sampling_frame_max_drift", DEFAULT_SAMPLING_FRAME_MAX_DRIFT)
     )
 
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -218,28 +248,80 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
     drift_detected = len(columns_with_drift) > 0
     status = "drift_detected" if drift_detected else "no_drift"
 
-    report = {
+    # Aggregate worst-column drift into a single score for the blocking gate.
+    # ``extreme_drift`` (non-finite SMD on a constant) is treated as +inf, then
+    # serialised as ``None`` for RFC 8259 ``allow_nan=False`` compatibility.
+    max_drift_score = _max_drift_score(per_column)
+    if max_drift_score is None or not math.isfinite(max_drift_score):
+        max_drift_for_payload: Optional[float] = None
+    else:
+        max_drift_for_payload = float(max_drift_score)
+
+    report: Dict[str, Any] = {
         "status": status,
         "drift_detected": drift_detected,
         "columns_checked": columns_checked,
         "columns_with_drift": columns_with_drift,
         "per_column": per_column,
+        "max_drift_score": max_drift_for_payload,
         "thresholds": {
             "numeric_drift_threshold": numeric_threshold,
             "categorical_drift_threshold": categorical_threshold,
+            "sampling_frame_max_drift": blocking_threshold,
         },
         "n_reference_samples": _coerce_int(deployment_reference.get("n_reference_samples")),
         "n_train_samples": int(len(train_df)),
         "audited_at": timestamp,
     }
 
+    # Blocking-gate decision (Phase-1 Task 1.3). ``max_drift_score is None``
+    # means no columns were checked → cannot evaluate drift → do NOT block.
+    blocking_triggered = (
+        max_drift_score is not None
+        and (not math.isfinite(max_drift_score) or max_drift_score > blocking_threshold)
+    )
+
+    if blocking_triggered:
+        worst_col = _worst_drift_column(per_column)
+        score_str = "inf" if max_drift_for_payload is None else f"{max_drift_for_payload:.4f}"
+        message = (
+            f"Sampling-frame drift exceeds blocking threshold: "
+            f"max_drift_score={score_str} > {blocking_threshold:.4f} "
+            f"(worst column: {worst_col!r}, columns_with_drift={columns_with_drift})"
+        )
+        report["blocking_detail"] = {
+            "kind": SAMPLING_FRAME_DRIFT_BLOCKING_KIND,
+            "severity": "high",
+            "divergence": max_drift_for_payload,
+            "threshold": float(blocking_threshold),
+            "worst_column": worst_col,
+            "columns_with_drift": list(columns_with_drift),
+            "message": message,
+        }
+        logger.warning(
+            "Sampling-frame audit BLOCKING: max_drift=%s > threshold=%.4f "
+            "across %d columns (%s) — appending to blocking_issues",
+            score_str, blocking_threshold, len(columns_with_drift),
+            ", ".join(columns_with_drift),
+        )
+        # ``blocking_issues`` is typed ``List[str]`` (state.py); follow the
+        # schema_validator/quality_checker pattern: copy + append a stable,
+        # grep-able prefix string. Structured detail is in ``blocking_detail``.
+        new_blocking = list(state.get("blocking_issues") or [])
+        new_blocking.append(f"{SAMPLING_FRAME_DRIFT_BLOCKING_KIND}: {message}")
+        return {
+            "sampling_frame_audit_report": report,
+            "blocking_issues": new_blocking,
+        }
+
     if drift_detected:
         logger.warning(
             "Sampling-frame audit detected drift in %d/%d columns: %s "
-            "(advisory — pipeline NOT blocked)",
+            "(below blocking threshold %.4f — pipeline NOT blocked)",
             len(columns_with_drift),
             columns_checked,
             ", ".join(columns_with_drift),
+            blocking_threshold,
         )
     else:
         logger.info(
@@ -453,6 +535,59 @@ def _kl_divergence(p_vec: np.ndarray, q_vec: np.ndarray) -> float:
     # non-zero.
     safe_q = np.where(q_vec > 0, q_vec, 1e-12)
     return float(np.sum(p_vec[mask] * np.log(p_vec[mask] / safe_q[mask])))
+
+
+def _max_drift_score(per_column: Mapping[str, Mapping[str, Any]]) -> Optional[float]:
+    """Return the worst per-column drift score, or ``None`` if no columns checked.
+
+    A ``status="extreme_drift"`` entry (non-finite SMD on a constant column) is
+    treated as ``+inf`` so the blocking gate always trips on it. Skipped
+    entries (no metric_value) are ignored.
+    """
+    worst: Optional[float] = None
+    for entry in per_column.values():
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("status") == "extreme_drift":
+            return float("inf")
+        value = entry.get("metric_value")
+        if value is None:
+            continue
+        try:
+            value_f = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(value_f):
+            return float("inf")
+        if worst is None or value_f > worst:
+            worst = value_f
+    return worst
+
+
+def _worst_drift_column(per_column: Mapping[str, Mapping[str, Any]]) -> Optional[str]:
+    """Return the column name with the highest per-column drift score.
+
+    Tiebreaker: first column reaching the max wins (deterministic given the
+    mapping iteration order, which in modern Python is insertion-ordered).
+    """
+    worst_name: Optional[str] = None
+    worst_value: Optional[float] = None
+    for col, entry in per_column.items():
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("status") == "extreme_drift":
+            return col
+        value = entry.get("metric_value")
+        if value is None:
+            continue
+        try:
+            value_f = float(value)
+        except (TypeError, ValueError):
+            continue
+        if worst_value is None or value_f > worst_value:
+            worst_value = value_f
+            worst_name = col
+    return worst_name
 
 
 def _coerce_float(value: Any) -> Optional[float]:
