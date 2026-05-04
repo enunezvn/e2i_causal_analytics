@@ -129,6 +129,8 @@ docs/results/*
 # Phase 1 W4 days 2-5 multi-disease validation outcomes (synthetic_v2 shard 09 §F closure)
 !docs/results/phase1_w4_days25_*.md
 !docs/results/phase1_w4_days25_*.json
+# Phase 4b CSU converter masking remediation evidence (per §8.3 of csu_field_audit.md)
+!docs/results/csu_post_lineage_audit_*.md
 
 # OS
 Thumbs.db

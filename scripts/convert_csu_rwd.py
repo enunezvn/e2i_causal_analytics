@@ -246,17 +246,24 @@ class CSUDataConverter:
         excel_path: str | Path,
         output_dir: str | Path,
         max_patients: int | None = None,
+        lookback_days: int | None = None,
     ) -> None:
         self.excel_path = Path(excel_path)
         self.output_dir = Path(output_dir)
         self.max_patients = max_patients
+        # Lookback masking. When ``None``, all aggregate features are computed
+        # over the entire patient panel (POST-INDEX leakage — see
+        # ``docs/lineage/csu_field_audit.md`` §3 for details). When set to an
+        # integer, only events in [index_date - lookback_days, index_date) are
+        # used and ``journey_status`` is overridden to ``"lookback_masked"``.
+        self.lookback_days = lookback_days
 
         # Will be populated during conversion
         self.sheets: dict[str, pd.DataFrame] = {}
-        self.patient_id_map: dict[int, str] = {}   # patid -> PAT_XXXXXX
-        self.journey_id_map: dict[int, str] = {}    # patid -> PJ_XXXXXX
-        self.hcp_npi_map: dict[str, str] = {}       # obfuscated -> HCP_XXXXXX
-        self.hcp_id_map: dict[str, str] = {}        # obfuscated -> generated NPI
+        self.patient_id_map: dict[int, str] = {}  # patid -> PAT_XXXXXX
+        self.journey_id_map: dict[int, str] = {}  # patid -> PJ_XXXXXX
+        self.hcp_npi_map: dict[str, str] = {}  # obfuscated -> HCP_XXXXXX
+        self.hcp_id_map: dict[str, str] = {}  # obfuscated -> generated NPI
 
         # Precomputed per-patient data for efficiency
         self._med_by_pat: dict[int, pd.DataFrame] = {}
@@ -345,9 +352,7 @@ class CSUDataConverter:
             df = pd.read_excel(xl, sheet_name=sheet)
             # Drop all-NaN columns (Excel padding)
             df = df.dropna(axis=1, how="all")
-            logger.info(
-                "  Sheet '%s': %d rows x %d cols", sheet, len(df), len(df.columns)
-            )
+            logger.info("  Sheet '%s': %d rows x %d cols", sheet, len(df), len(df.columns))
             result[sheet] = df
 
         for skip in SHEETS_TO_SKIP:
@@ -452,9 +457,7 @@ class CSUDataConverter:
 
         if self.max_patients is not None:
             all_patids_sorted = all_patids_sorted[: self.max_patients]
-            logger.info(
-                "  Limited to %d patients (--max-patients)", self.max_patients
-            )
+            logger.info("  Limited to %d patients (--max-patients)", self.max_patients)
 
         for seq, patid in enumerate(all_patids_sorted):
             self.patient_id_map[patid] = f"PAT_{seq:06d}"
@@ -714,10 +717,20 @@ class CSUDataConverter:
             # This makes the converter dataset-agnostic: a future dataset with
             # different demo columns will have them forwarded automatically.
             _ALREADY_EXTRACTED_DEMO_COLS = {
-                "patid", "gdr_cd", "age", "zipcode_5", "bus", "diagcode",
+                "patid",
+                "gdr_cd",
+                "age",
+                "zipcode_5",
+                "bus",
+                "diagcode",
                 "continuous_enrollment",
                 # ID / date columns (not useful as raw features)
-                "clmid", "pat_planid", "eligeff", "eligend", "yrdob", "indexdt",
+                "clmid",
+                "pat_planid",
+                "eligeff",
+                "eligend",
+                "yrdob",
+                "indexdt",
             }
             extra_demo: dict[str, Any] = {}
             if demo_row is not None:
@@ -734,51 +747,75 @@ class CSUDataConverter:
             # age_continuous: raw numeric age (not binned)
             age_continuous = age  # age is already extracted above as float or None
 
-            # eligibility_duration_days: days between eligeff and eligend
+            # eligibility_duration_days: days between eligeff and eligend.
+            # When masking is on, clip to [index_date - lookback_days, index_date)
+            # so the value reflects only the lookback portion of enrollment.
             eligibility_duration_days = None
             if demo_row is not None:
                 elig_start = demo_row.get("eligeff")
                 elig_end = demo_row.get("eligend")
                 if pd.notna(elig_start) and pd.notna(elig_end):
                     try:
-                        eligibility_duration_days = max(0, (elig_end - elig_start).days)
+                        if self.lookback_days is not None and index_date is not None:
+                            lookback_start = index_date - timedelta(days=self.lookback_days)
+                            clipped_start = max(elig_start, lookback_start)
+                            clipped_end = min(elig_end, index_date)
+                            eligibility_duration_days = max(0, (clipped_end - clipped_start).days)
+                        else:
+                            eligibility_duration_days = max(0, (elig_end - elig_start).days)
                     except Exception:
                         pass
 
-            # Claim counts per table (generic — no column-name assumptions)
-            medication_claim_count = len(self._med_by_pat.get(patid, []))
-            procedure_claim_count = len(self._proc_by_pat.get(patid, []))
-            lab_claim_count = len(self._lab_by_pat.get(patid, []))
+            # Per-patient frames windowed by lookback when masking is on; the
+            # helper returns the original df unchanged when masking is off.
+            med_df_full = self._med_by_pat.get(patid, pd.DataFrame())
+            proc_df_full = self._proc_by_pat.get(patid, pd.DataFrame())
+            lab_df_full = self._lab_by_pat.get(patid, pd.DataFrame())
+            med_df_w = self._apply_lookback_window(med_df_full, "medication_date", index_date)
+            proc_df_w = self._apply_lookback_window(proc_df_full, "proc_date", index_date)
+            lab_df_w = self._apply_lookback_window(lab_df_full, "fst_dt", index_date)
 
-            # Treatment flags
+            # Claim counts per table (windowed when masking is on)
+            medication_claim_count = len(med_df_w)
+            procedure_claim_count = len(proc_df_w)
+            lab_claim_count = len(lab_df_w)
+
+            # Treatment flags. ``treatment_initiated`` is the prediction TARGET
+            # (defined as "patient appears anywhere in the medication panel")
+            # — masking it would erase the supervised signal, so it stays
+            # full-panel even when lookback is on. ``disease_severity`` and
+            # ``engagement`` honour ``index_date`` to apply lookback windowing
+            # internally.
             treatment_initiated = 1 if patid in self._med_by_pat else 0
             discontinuation = self._derive_discontinuation_flag(patid)
-            disease_severity = self._derive_disease_severity(patid)
-            engagement = self._derive_engagement_score(patid, continuous)
+            disease_severity = self._derive_disease_severity(patid, index_date)
+            engagement = self._derive_engagement_score(patid, continuous, index_date)
 
-            # ML features
+            # ML features (windowed when masking is on)
             days_on_therapy = 0
             hcp_visits = 0
             prior_treatments = 0
 
-            if patid in self._med_by_pat:
-                med_df = self._med_by_pat[patid]
-                # days_on_therapy = sum of days_sup
-                if "days_sup" in med_df.columns:
-                    days_on_therapy = int(med_df["days_sup"].fillna(0).sum())
+            if "days_sup" in med_df_w.columns and len(med_df_w) > 0:
+                days_on_therapy = int(med_df_w["days_sup"].fillna(0).sum())
 
-                # hcp_visits = unique (npi, medication_date) pairs
-                if "npi" in med_df.columns and "medication_date" in med_df.columns:
-                    visit_pairs = med_df[["npi", "medication_date"]].dropna()
-                    hcp_visits = len(
-                        visit_pairs.drop_duplicates(subset=["npi", "medication_date"])
-                    )
+            if (
+                "npi" in med_df_w.columns
+                and "medication_date" in med_df_w.columns
+                and len(med_df_w) > 0
+            ):
+                visit_pairs = med_df_w[["npi", "medication_date"]].dropna()
+                hcp_visits = len(visit_pairs.drop_duplicates(subset=["npi", "medication_date"]))
 
-                # prior_treatments = distinct drugs before index date
-                if index_date is not None and "brand_normalised" in med_df.columns:
-                    before_idx = med_df[
-                        med_df["medication_date"] < index_date
-                    ]
+            # prior_treatments = distinct brands strictly before index_date.
+            # Already lookback-correct without masking; under masking, the
+            # already-windowed med_df_w is upper-bounded by index_date, so the
+            # filter still applies cleanly.
+            if index_date is not None and "brand_normalised" in med_df_full.columns:
+                if self.lookback_days is not None:
+                    prior_treatments = med_df_w["brand_normalised"].nunique()
+                else:
+                    before_idx = med_df_full[med_df_full["medication_date"] < index_date]
                     prior_treatments = before_idx["brand_normalised"].nunique()
 
             # Brand
@@ -800,8 +837,16 @@ class CSUDataConverter:
             else:
                 journey_stage = "diagnosis"
 
-            # Journey status
-            if discontinuation == 1:
+            # Journey status. When masking is on, the per-patient enum below
+            # would derive from un-windowed quantities (``treatment_initiated``
+            # is target-equivalent; ``discontinuation`` is post-index by
+            # definition) and re-introduce structural leakage on the
+            # ``journey_status`` field itself. Override to ``"lookback_masked"``
+            # so downstream code can detect the mode and avoid using the field
+            # as a feature.
+            if self.lookback_days is not None:
+                journey_status = "lookback_masked"
+            elif discontinuation == 1:
                 journey_status = "completed"
             elif treatment_initiated:
                 journey_status = "active"
@@ -809,52 +854,52 @@ class CSUDataConverter:
                 journey_status = "monitoring"
 
             journey_dict = {
-                    "patient_journey_id": pj_id,
-                    "patient_id": pat_id,
-                    "patient_hash": _patient_hash(patid),
-                    "journey_start_date": _safe_date(index_date),
-                    "journey_end_date": _safe_date(end_date),
-                    "journey_duration_days": duration_days,
-                    "journey_stage": journey_stage,
-                    "journey_status": journey_status,
-                    "primary_diagnosis_code": diagcode or "L50.8",
-                    "primary_diagnosis_desc": "Chronic Spontaneous Urticaria",
-                    "secondary_diagnosis_codes": [],
-                    "brand": brand,
-                    "age_group": age_grp,
-                    "gender": gender,
-                    "geographic_region": region,
-                    "state": None,
-                    "zip_code": zip_code,
-                    "insurance_type": insurance,
-                    "data_quality_score": dq_score,
-                    "comorbidities": [],
-                    "risk_score": None,
-                    "data_source": "RWD_Claims",
-                    "data_sources_matched": ["RWD_Claims"],
-                    "source_match_confidence": None,
-                    "source_stacking_flag": False,
-                    "source_combination_method": None,
-                    "source_timestamp": None,
-                    "ingestion_timestamp": self.now_iso,
-                    "data_lag_hours": None,
-                    "data_split": None,  # Set during chronological split
-                    "split_config_id": self.split_config_id,
-                    "created_at": self.now_iso,
-                    "updated_at": self.now_iso,
-                    "treatment_initiated": treatment_initiated,
-                    "discontinuation_flag": discontinuation,
-                    "disease_severity": round(disease_severity, 1),
-                    "engagement_score": round(engagement, 1),
-                    "days_on_therapy": days_on_therapy,
-                    "hcp_visits": hcp_visits,
-                    "prior_treatments": prior_treatments,
-                    # New generic features
-                    "age_continuous": age_continuous,
-                    "eligibility_duration_days": eligibility_duration_days,
-                    "medication_claim_count": medication_claim_count,
-                    "procedure_claim_count": procedure_claim_count,
-                    "lab_claim_count": lab_claim_count,
+                "patient_journey_id": pj_id,
+                "patient_id": pat_id,
+                "patient_hash": _patient_hash(patid),
+                "journey_start_date": _safe_date(index_date),
+                "journey_end_date": _safe_date(end_date),
+                "journey_duration_days": duration_days,
+                "journey_stage": journey_stage,
+                "journey_status": journey_status,
+                "primary_diagnosis_code": diagcode or "L50.8",
+                "primary_diagnosis_desc": "Chronic Spontaneous Urticaria",
+                "secondary_diagnosis_codes": [],
+                "brand": brand,
+                "age_group": age_grp,
+                "gender": gender,
+                "geographic_region": region,
+                "state": None,
+                "zip_code": zip_code,
+                "insurance_type": insurance,
+                "data_quality_score": dq_score,
+                "comorbidities": [],
+                "risk_score": None,
+                "data_source": "RWD_Claims",
+                "data_sources_matched": ["RWD_Claims"],
+                "source_match_confidence": None,
+                "source_stacking_flag": False,
+                "source_combination_method": None,
+                "source_timestamp": None,
+                "ingestion_timestamp": self.now_iso,
+                "data_lag_hours": None,
+                "data_split": None,  # Set during chronological split
+                "split_config_id": self.split_config_id,
+                "created_at": self.now_iso,
+                "updated_at": self.now_iso,
+                "treatment_initiated": treatment_initiated,
+                "discontinuation_flag": discontinuation,
+                "disease_severity": round(disease_severity, 1),
+                "engagement_score": round(engagement, 1),
+                "days_on_therapy": days_on_therapy,
+                "hcp_visits": hcp_visits,
+                "prior_treatments": prior_treatments,
+                # New generic features
+                "age_continuous": age_continuous,
+                "eligibility_duration_days": eligibility_duration_days,
+                "medication_claim_count": medication_claim_count,
+                "procedure_claim_count": procedure_claim_count,
+                "lab_claim_count": lab_claim_count,
             }
             # Merge in any extra demo columns discovered at runtime
             journey_dict.update(extra_demo)
@@ -1019,9 +1064,7 @@ class CSUDataConverter:
                 pj_id = self.journey_id_map[patid]
 
                 proc_code = (
-                    str(row["proc_code"]).strip()
-                    if pd.notna(row.get("proc_code"))
-                    else None
+                    str(row["proc_code"]).strip() if pd.notna(row.get("proc_code")) else None
                 )
 
                 # Days from diagnosis
@@ -1082,16 +1125,8 @@ class CSUDataConverter:
                 pat_id = self.patient_id_map[patid]
                 pj_id = self.journey_id_map[patid]
 
-                loinc = (
-                    str(row["loinc_cd"]).strip()
-                    if pd.notna(row.get("loinc_cd"))
-                    else None
-                )
-                tst_desc = (
-                    str(row["tst_desc"]).strip()
-                    if pd.notna(row.get("tst_desc"))
-                    else None
-                )
+                loinc = str(row["loinc_cd"]).strip() if pd.notna(row.get("loinc_cd")) else None
+                tst_desc = str(row["tst_desc"]).strip() if pd.notna(row.get("tst_desc")) else None
                 rslt_nbr = _safe_float(row.get("rslt_nbr"))
                 lab_values: dict[str, Any] = {}
                 if tst_desc and rslt_nbr is not None:
@@ -1158,9 +1193,7 @@ class CSUDataConverter:
             for j in self.patient_journeys
             if j["journey_start_date"] is not None
         ]
-        undated_journeys = [
-            j for j in self.patient_journeys if j["journey_start_date"] is None
-        ]
+        undated_journeys = [j for j in self.patient_journeys if j["journey_start_date"] is None]
 
         dated_journeys.sort(key=lambda x: x[1])
 
@@ -1205,13 +1238,9 @@ class CSUDataConverter:
             if train_end > 0:
                 self._split_dates["train_end"] = dated_journeys[train_end - 1][1]
             if val_end > 0 and val_end <= n:
-                self._split_dates["validation_end"] = dated_journeys[
-                    min(val_end - 1, n - 1)
-                ][1]
+                self._split_dates["validation_end"] = dated_journeys[min(val_end - 1, n - 1)][1]
             if test_end > 0 and test_end <= n:
-                self._split_dates["test_end"] = dated_journeys[
-                    min(test_end - 1, n - 1)
-                ][1]
+                self._split_dates["test_end"] = dated_journeys[min(test_end - 1, n - 1)][1]
 
         # Log split sizes
         split_counts: dict[str, int] = {}
@@ -1253,7 +1282,27 @@ class CSUDataConverter:
     # Derived Causal Variables
     # ------------------------------------------------------------------
 
-    def _derive_disease_severity(self, patid: int) -> float:
+    def _apply_lookback_window(
+        self,
+        df: pd.DataFrame,
+        date_col: str,
+        index_date: Any,
+    ) -> pd.DataFrame:
+        """Mask ``df`` to events in ``[index_date - lookback_days, index_date)``.
+
+        - When ``self.lookback_days is None`` (masking off), returns ``df`` unchanged.
+        - When masking is on but ``index_date`` is missing or ``date_col`` is
+          absent, returns an empty DataFrame with the same schema (downstream
+          aggregates that count rows / sum columns become 0).
+        """
+        if self.lookback_days is None:
+            return df
+        if index_date is None or date_col not in df.columns:
+            return df.iloc[0:0]
+        lookback_start = index_date - timedelta(days=self.lookback_days)
+        return df[(df[date_col] >= lookback_start) & (df[date_col] < index_date)]
+
+    def _derive_disease_severity(self, patid: int, index_date: Any = None) -> float:
         """Compute disease severity score (0-10) for a patient.
 
         Base 2.0 (CSU diagnosis)
@@ -1295,39 +1344,41 @@ class CSUDataConverter:
         additional_l50 = max(0, len(l50_subcodes) - 1)
         score += min(additional_l50 * 1.0, 2.0)
 
-        # Medication fills
+        # Medication fills (windowed when masking is on)
         if patid in self._med_by_pat:
-            n_fills = len(self._med_by_pat[patid])
+            med_df_w = self._apply_lookback_window(
+                self._med_by_pat[patid], "medication_date", index_date
+            )
+            n_fills = len(med_df_w)
             score += min(n_fills * 0.5, 3.0)
 
-        # J2357 procedures
+        # J2357 procedures (windowed when masking is on)
         if patid in self._proc_by_pat:
-            proc_df = self._proc_by_pat[patid]
+            proc_df = self._apply_lookback_window(self._proc_by_pat[patid], "proc_date", index_date)
             if "proc_code" in proc_df.columns:
                 j2357_count = (
-                    proc_df["proc_code"]
-                    .astype(str)
-                    .str.strip()
-                    .str.lower()
-                    .eq("j2357")
-                    .sum()
+                    proc_df["proc_code"].astype(str).str.strip().str.lower().eq("j2357").sum()
                 )
                 score += min(j2357_count * 0.5, 2.0)
 
-        # Abnormal lab
+        # Abnormal lab (windowed when masking is on)
         if patid in self._lab_by_pat:
-            lab_df = self._lab_by_pat[patid]
-            if "abnl_cd" in lab_df.columns:
-                has_abnormal = lab_df["abnl_cd"].notna().any() and (
-                    lab_df["abnl_cd"].astype(str).str.strip() != ""
-                ).any()
+            lab_df = self._apply_lookback_window(self._lab_by_pat[patid], "fst_dt", index_date)
+            if "abnl_cd" in lab_df.columns and len(lab_df) > 0:
+                has_abnormal = (
+                    lab_df["abnl_cd"].notna().any()
+                    and (lab_df["abnl_cd"].astype(str).str.strip() != "").any()
+                )
                 if has_abnormal:
                     score += 1.0
 
         return float(np.clip(score, 0.0, 10.0))
 
     def _derive_engagement_score(
-        self, patid: int, continuous_enrollment: int = 0
+        self,
+        patid: int,
+        continuous_enrollment: int = 0,
+        index_date: Any = None,
     ) -> float:
         """Compute engagement score (0-10) for a patient.
 
@@ -1339,10 +1390,12 @@ class CSUDataConverter:
         """
         score = 0.0
 
-        # Unique HCPs (from medication NPIs)
+        # Unique HCPs (from medication NPIs, windowed when masking is on)
         unique_hcps: set[str] = set()
         if patid in self._med_by_pat:
-            med_df = self._med_by_pat[patid]
+            med_df = self._apply_lookback_window(
+                self._med_by_pat[patid], "medication_date", index_date
+            )
             if "npi" in med_df.columns:
                 for npi in med_df["npi"].dropna():
                     npi_str = str(npi).strip()
@@ -1350,14 +1403,18 @@ class CSUDataConverter:
                         unique_hcps.add(npi_str)
         score += min(len(unique_hcps) * 2.0, 4.0)
 
-        # Medication fills
+        # Medication fills (windowed when masking is on)
         if patid in self._med_by_pat:
-            n_fills = len(self._med_by_pat[patid])
+            med_df_w = self._apply_lookback_window(
+                self._med_by_pat[patid], "medication_date", index_date
+            )
+            n_fills = len(med_df_w)
             score += min((n_fills // 3) * 1.0, 3.0)
 
-        # Lab tests
+        # Lab tests (windowed when masking is on)
         if patid in self._lab_by_pat:
-            n_labs = len(self._lab_by_pat[patid])
+            lab_df_w = self._apply_lookback_window(self._lab_by_pat[patid], "fst_dt", index_date)
+            n_labs = len(lab_df_w)
             score += min(n_labs * 0.1, 2.0)
 
         # Continuous enrollment
@@ -1381,9 +1438,7 @@ class CSUDataConverter:
         if "medication_date" not in med_df.columns or "days_sup" not in med_df.columns:
             return None
 
-        med_df = med_df.dropna(subset=["medication_date"]).sort_values(
-            "medication_date"
-        )
+        med_df = med_df.dropna(subset=["medication_date"]).sort_values("medication_date")
         if len(med_df) == 0:
             return None
 
@@ -1453,21 +1508,15 @@ class CSUDataConverter:
             if j["patient_id"] is None:
                 errors.append("Null patient_id")
             if j["journey_start_date"] is None:
-                warnings.append(
-                    f"Null journey_start_date for {j['patient_journey_id']}"
-                )
+                warnings.append(f"Null journey_start_date for {j['patient_journey_id']}")
 
             # Range checks
             ds = j.get("disease_severity")
             if ds is not None and (ds < 0 or ds > 10):
-                errors.append(
-                    f"disease_severity out of range for {j['patient_journey_id']}: {ds}"
-                )
+                errors.append(f"disease_severity out of range for {j['patient_journey_id']}: {ds}")
             es = j.get("engagement_score")
             if es is not None and (es < 0 or es > 10):
-                errors.append(
-                    f"engagement_score out of range for {j['patient_journey_id']}: {es}"
-                )
+                errors.append(f"engagement_score out of range for {j['patient_journey_id']}: {es}")
             dq = j.get("data_quality_score")
             if dq is not None and (dq < 0 or dq > 1):
                 errors.append(
@@ -1482,8 +1531,7 @@ class CSUDataConverter:
             # FK integrity
             if te["patient_id"] not in valid_pat_ids:
                 errors.append(
-                    f"TE {te['treatment_event_id']} references unknown patient "
-                    f"{te['patient_id']}"
+                    f"TE {te['treatment_event_id']} references unknown patient {te['patient_id']}"
                 )
             if te["patient_journey_id"] not in valid_pj_ids:
                 errors.append(
@@ -1492,8 +1540,7 @@ class CSUDataConverter:
                 )
             if te["hcp_id"] is not None and te["hcp_id"] not in valid_hcp_ids:
                 errors.append(
-                    f"TE {te['treatment_event_id']} references unknown HCP "
-                    f"{te['hcp_id']}"
+                    f"TE {te['treatment_event_id']} references unknown HCP {te['hcp_id']}"
                 )
 
         # Report
@@ -1541,12 +1588,8 @@ class CSUDataConverter:
         )
 
         type_a = len(demo_patids & clinical_patids & set(self.patient_id_map.keys()))
-        type_b = len(
-            (demo_patids - clinical_patids) & set(self.patient_id_map.keys())
-        )
-        type_c = len(
-            (clinical_patids - demo_patids) & set(self.patient_id_map.keys())
-        )
+        type_b = len((demo_patids - clinical_patids) & set(self.patient_id_map.keys()))
+        type_c = len((clinical_patids - demo_patids) & set(self.patient_id_map.keys()))
         logger.info("  Patient archetypes:")
         logger.info("    Type A (demo + clinical): %d", type_a)
         logger.info("    Type B (demo only):       %d", type_b)
@@ -1559,9 +1602,7 @@ class CSUDataConverter:
             split_counts[s] = split_counts.get(s, 0) + 1
         logger.info("  Split distribution:")
         for split_name in ("train", "validation", "test", "holdout"):
-            logger.info(
-                "    %-12s: %d", split_name, split_counts.get(split_name, 0)
-            )
+            logger.info("    %-12s: %d", split_name, split_counts.get(split_name, 0))
 
         # Region distribution
         region_counts: dict[str, int] = {}
@@ -1570,34 +1611,16 @@ class CSUDataConverter:
             region_counts[r] = region_counts.get(r, 0) + 1
         logger.info("  Region distribution:")
         for region_name in sorted(region_counts.keys()):
-            logger.info(
-                "    %-12s: %d", region_name, region_counts[region_name]
-            )
+            logger.info("    %-12s: %d", region_name, region_counts[region_name])
 
         # Target variable distributions
         treated = sum(1 for j in self.patient_journeys if j["treatment_initiated"] == 1)
-        not_treated = sum(
-            1 for j in self.patient_journeys if j["treatment_initiated"] == 0
-        )
-        disc = sum(
-            1
-            for j in self.patient_journeys
-            if j["discontinuation_flag"] == 1
-        )
-        no_disc = sum(
-            1
-            for j in self.patient_journeys
-            if j["discontinuation_flag"] == 0
-        )
-        null_disc = sum(
-            1
-            for j in self.patient_journeys
-            if j["discontinuation_flag"] is None
-        )
+        not_treated = sum(1 for j in self.patient_journeys if j["treatment_initiated"] == 0)
+        disc = sum(1 for j in self.patient_journeys if j["discontinuation_flag"] == 1)
+        no_disc = sum(1 for j in self.patient_journeys if j["discontinuation_flag"] == 0)
+        null_disc = sum(1 for j in self.patient_journeys if j["discontinuation_flag"] is None)
         logger.info("  Target distributions:")
-        logger.info(
-            "    treatment_initiated: 1=%d, 0=%d", treated, not_treated
-        )
+        logger.info("    treatment_initiated: 1=%d, 0=%d", treated, not_treated)
         logger.info(
             "    discontinuation:     1=%d, 0=%d, null=%d",
             disc,
@@ -1676,6 +1699,17 @@ def main() -> int:
         help="Limit to N patients (for quick testing)",
     )
     parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=None,
+        help=(
+            "If set, mask aggregate features to events in "
+            "[index_date - N, index_date). When unset, aggregates span the "
+            "entire patient panel (POST-INDEX leakage; see "
+            "docs/lineage/csu_field_audit.md §3 for details)."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate only — do not write output files",
@@ -1699,6 +1733,7 @@ def main() -> int:
         excel_path=args.input,
         output_dir=args.output,
         max_patients=args.max_patients,
+        lookback_days=args.lookback_days,
     )
 
     try:
