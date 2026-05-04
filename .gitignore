@@ -131,6 +131,8 @@ docs/results/*
 !docs/results/phase1_w4_days25_*.json
 # Phase 4b CSU converter masking remediation evidence (per §8.3 of csu_field_audit.md)
 !docs/results/csu_post_lineage_audit_*.md
+# Phase 6 training-serving skew regression-guard evidence (R6)
+!docs/results/training_serving_skew_*.md
 
 # OS
 Thumbs.db
