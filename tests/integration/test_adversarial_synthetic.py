@@ -43,7 +43,6 @@ Hazard / detector / asserted signal:
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -270,7 +269,8 @@ class TestPositivityViolation:
     check (``check_categorical_class_separation``) at threshold > 0.5.
     """
 
-    def test_positivity_violation_detected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_positivity_violation_detected(self) -> None:
         baseline = _baseline_cohort()
         violated = inject_positivity_violation(baseline, seed=_HAZARD_SEED)
 
@@ -291,7 +291,7 @@ class TestPositivityViolation:
             "scope_spec": scope_spec,
             "train_df": violated,
         }
-        result = asyncio.run(detect_leakage(state))
+        result = await detect_leakage(state)
 
         findings: List[Dict[str, Any]] = result["leakage_findings"]
         age_findings = [f for f in findings if f["feature"] == "age_group"]
@@ -320,7 +320,8 @@ class TestLabelLeakage:
     HIGH or CRITICAL severity (single-feature AUC > 0.90 by construction).
     """
 
-    def test_label_leakage_detected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_label_leakage_detected(self) -> None:
         baseline = _baseline_cohort()
         leaked = inject_label_leakage(baseline, seed=_HAZARD_SEED)
 
@@ -340,7 +341,7 @@ class TestLabelLeakage:
             "scope_spec": scope_spec,
             "train_df": leaked,
         }
-        result = asyncio.run(detect_leakage(state))
+        result = await detect_leakage(state)
 
         findings: List[Dict[str, Any]] = result["leakage_findings"]
         leak_findings = [f for f in findings if f["feature"] == "post_treatment_visits"]
@@ -370,7 +371,8 @@ class TestSamplingFrameDrift:
     (the PR #35 blocking gate).
     """
 
-    def test_sampling_frame_drift_detected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_sampling_frame_drift_detected(self) -> None:
         baseline = _baseline_cohort()
         # Brief defaults (5%/40%) yield max_drift_score ~0.10 — below the
         # 0.3 blocking threshold. Push to 1%/85% so the gate fires
@@ -394,7 +396,7 @@ class TestSamplingFrameDrift:
             "train_df": drifted,
             "blocking_issues": [],
         }
-        result = asyncio.run(audit_sampling_frame(state))
+        result = await audit_sampling_frame(state)
 
         report = result["sampling_frame_audit_report"]
         max_drift = report.get("max_drift_score")
