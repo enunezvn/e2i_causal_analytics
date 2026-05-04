@@ -3817,6 +3817,12 @@ def _compute_adaptive_state_inputs(
     }
 
 
+_DEMO_COST_MATRIX_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "cost_matrix_demo.yaml"
+)
+_REQUIRED_DEMO_COST_KEYS = ("tp", "fn", "fp", "tn")
+
+
 def _default_demo_cost_matrix() -> Dict[str, float]:
     """Return the unit-shape demo cost matrix used by the synthetic runner.
 
@@ -3827,21 +3833,26 @@ def _default_demo_cost_matrix() -> Dict[str, float]:
     business_utility number, which made Block 5's metric impossible to
     verify end-to-end.
 
-    The shape here is deliberately **unit-scaled, not dollar-denominated**:
+    Phase 5 Task 5.1 (tier0_evaluation_vs_distilled_mlops.md): the matrix
+    used to be hardcoded here; it now lives at ``config/cost_matrix_demo.yaml``
+    so the placeholder is visible, reviewable, and replaceable without
+    touching this script. The caller surface (``_should_inject_demo_cost_matrix``)
+    is unchanged — production callers still must supply their own matrix.
 
-      - tp = +1.0  : a true-positive prediction is worth one unit
-      - fn = -1.0  : a missed target costs the same one unit
-      - fp = -0.05 : a false-positive costs 5 % of a unit (rep-time penalty)
-      - tn =  0.0  : a true-negative is neutral
-
-    Per-prescription value is brand-specific and deeply commercial; we
-    refuse to embed a fake dollar number in the dev runner. Production
-    callers (LangGraph orchestrator wired by Celery / API) MUST supply a
-    real per-brand dollar matrix instead — this default never reaches a
-    production pipeline because the auto-inject lives at the dev-script
-    CLI boundary only.
+    Returns the four-key dict ``{tp, fn, fp, tn}`` parsed from the YAML.
+    Raises FileNotFoundError or KeyError if the YAML is missing or malformed
+    — failing loudly is preferable to silently injecting a wrong matrix.
     """
-    return {"tp": 1.0, "fp": -0.05, "fn": -1.0, "tn": 0.0}
+    import yaml  # local import: yaml is already in deps via Feast/MLflow
+
+    with open(_DEMO_COST_MATRIX_PATH) as fh:
+        loaded = yaml.safe_load(fh) or {}
+
+    missing = [k for k in _REQUIRED_DEMO_COST_KEYS if k not in loaded]
+    if missing:
+        raise KeyError(f"config/cost_matrix_demo.yaml missing required keys: {missing}")
+
+    return {k: float(loaded[k]) for k in _REQUIRED_DEMO_COST_KEYS}
 
 
 def _should_inject_demo_cost_matrix(
