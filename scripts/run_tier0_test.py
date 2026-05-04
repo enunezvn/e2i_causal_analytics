@@ -5638,7 +5638,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="default",
         help=(
             "Synthetic data regime (Block 4 + Section A of pre_phase2_unblockers). "
-            "'default': positive_rate=0.30, baseline 13-18% positive share. "
+            "'default': positive_rate=0.30, baseline 13-18%% positive share. "
             "'adverse': positive_rate=0.02 → extreme imbalance, exercises "
             "remediation paths (recommended_strategy=combined). "
             "'clean': positive_rate=0.50 + signal_strength=1.4 + noise_sd=0.05 "
