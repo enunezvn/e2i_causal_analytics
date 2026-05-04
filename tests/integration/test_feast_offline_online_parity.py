@@ -534,3 +534,109 @@ def _floats_close(a: float, b: float) -> bool:
     if math.isnan(a) and math.isnan(b):
         return True
     return math.isclose(a, b, rel_tol=PARITY_RTOL, abs_tol=PARITY_ATOL)
+
+
+# --------------------------------------------------------------------------- #
+# 9-FV coverage hard floor — Phase 3 Task 3.2 invariant guard                  #
+# --------------------------------------------------------------------------- #
+#
+# Why this exists.
+# ----------------
+# PR #36 promised 9/9 FeatureView parity coverage and converted the prior
+# empty-parametrize silent-pass on Feast 0.43 into a runtime skip, but the
+# probe count is still derived dynamically from the feature_repo registry
+# at import time. A registry shrink (e.g. an FV dropped or renamed) or an
+# entity-resolution regression in ``_build_feature_view_probes`` would
+# silently reduce coverage without failing CI. These two tests are the
+# hard floor: they fire if the count drifts away from 9 for any reason.
+#
+# Two complementary checks split the failure modes:
+#
+#   * ``test_feature_view_probe_count_invariant`` — count of probes built
+#     by ``_build_feature_view_probes()`` (catches BOTH registry shrink
+#     AND probe-build regressions).
+#   * ``test_feature_view_map_registers_exactly_9_fvs`` — count of FVs in
+#     the source-of-truth ``FEATURE_VIEW_MAP`` registry (isolates registry
+#     shrink from probe-build regressions; if only the probe-count check
+#     fails, the issue is in entity resolution or source.get_table_query_string).
+#
+# Both run unconditionally — they do NOT skip on missing FEAST_INTEGRATION,
+# because they only require the feast SDK + the feature_repo Python modules
+# to be importable, not a reachable Feast deployment. The module-level
+# ``pytest.importorskip("feast")`` already gates the file on feast SDK.
+
+
+EXPECTED_FEATURE_VIEW_COUNT = 9
+
+
+def test_feature_view_probe_count_invariant() -> None:
+    """Hard floor: ``FEATURE_VIEW_PROBES`` must have exactly 9 entries.
+
+    Catches both registry shrink (an FV dropped from FEATURE_VIEW_MAP) and
+    probe-build regressions (entity resolution failed, source-subquery
+    extraction raised). Either failure mode silently reduces parity
+    coverage without this guard.
+    """
+    actual = len(FEATURE_VIEW_PROBES)
+    actual_names = sorted(p[0] for p in FEATURE_VIEW_PROBES)
+    assert actual == EXPECTED_FEATURE_VIEW_COUNT, (
+        f"FEATURE_VIEW_PROBES has {actual} entries, expected "
+        f"{EXPECTED_FEATURE_VIEW_COUNT}. Phase 3 Task 3.2 promised "
+        f"9/9 FV coverage; partial coverage silently masks parity violations "
+        f"on missing FVs. Probe names: {actual_names!r}. "
+        f"Investigate feature_repo/features/__init__.py FEATURE_VIEW_MAP "
+        f"and _build_feature_view_probes() entity resolution."
+    )
+
+
+def test_feature_view_map_registers_exactly_9_fvs() -> None:
+    """Upstream registry invariant — isolates registry shrink from probe-build bugs.
+
+    Companion to ``test_feature_view_probe_count_invariant``. Reads
+    ``FEATURE_VIEW_MAP`` directly. Failure-mode triage:
+
+    * Both this AND ``test_feature_view_probe_count_invariant`` fail →
+      the source registry shrank; fix ``feature_repo/features/__init__.py``.
+    * Only the probe-count fails → probe-build logic regressed
+      (entity resolution or source.get_table_query_string raised);
+      fix ``_build_feature_view_probes()`` in this module.
+    """
+    feature_repo_path = str(FEATURE_REPO)
+    if feature_repo_path not in _sys.path:
+        _sys.path.insert(0, feature_repo_path)
+    try:
+        from features import FEATURE_VIEW_MAP  # type: ignore[import-not-found]
+    except ImportError as exc:
+        pytest.fail(
+            f"feature_repo/features/__init__.py not importable from "
+            f"{FEATURE_REPO!r}: {exc!s:.300}. The 9-FV registry invariant "
+            f"cannot be verified — the parity coverage commitment is broken."
+        )
+    actual = len(FEATURE_VIEW_MAP)
+    registered = sorted(FEATURE_VIEW_MAP.keys())
+    assert actual == EXPECTED_FEATURE_VIEW_COUNT, (
+        f"FEATURE_VIEW_MAP has {actual} entries, expected "
+        f"{EXPECTED_FEATURE_VIEW_COUNT}. Registered FVs: {registered!r}. "
+        f"Check feature_repo/features/__init__.py for adds/drops."
+    )
+
+
+def test_feature_view_probe_count_invariant_discriminates() -> None:
+    """Vacuous-pass guard for the 9-FV invariant.
+
+    Per ``feedback_pr_merge_workflow.md`` §7, the invariant test must fail
+    when the count drifts. Confirms the assertion machinery would actually
+    fire under a synthetic 8-element regression scenario (one FV dropped).
+    """
+    shrunk_probes: list[tuple[str, tuple[str, ...], str]] = list(FEATURE_VIEW_PROBES)[:-1]
+    if len(FEATURE_VIEW_PROBES) == 0:
+        pytest.fail(
+            "FEATURE_VIEW_PROBES is empty; the discrimination check is moot. "
+            "Investigate _build_feature_view_probes() before relying on the "
+            "9-FV invariant."
+        )
+    with pytest.raises(AssertionError, match=r"expected 9"):
+        actual = len(shrunk_probes)
+        assert actual == EXPECTED_FEATURE_VIEW_COUNT, (
+            f"FEATURE_VIEW_PROBES has {actual} entries, expected {EXPECTED_FEATURE_VIEW_COUNT}."
+        )
