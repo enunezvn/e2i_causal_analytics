@@ -4931,6 +4931,14 @@ async def run_pipeline(
                             },
                             "default_hyperparameters": alt.get("default_hyperparameters", {}),
                         }
+                        # Propagate registry flags consumed by downstream evaluator gating.
+                        # Without this, calibration-native + conformal-wrapped algorithms
+                        # (NGBoost*, *_Conformal) re-enter the post-hoc isotonic path and
+                        # crash predict_proba on the regressor-shaped FrozenEstimator.
+                        for _flag in ("skip_post_hoc_calibration", "distribution_predictor",
+                                      "conformal_wrapper", "base_estimator"):
+                            if _flag in alt:
+                                new_candidate[_flag] = alt[_flag]
                         # Force class_weight for imbalanced tree/linear models
                         if imb_sev in ("severe", "extreme") and alt["name"] in ("RandomForest", "LogisticRegression"):
                             new_candidate["default_hyperparameters"] = {
