@@ -133,6 +133,8 @@ docs/results/*
 !docs/results/csu_post_lineage_audit_*.md
 # Phase 6 training-serving skew regression-guard evidence (R6)
 !docs/results/training_serving_skew_*.md
+# Optum cohort re-validation evidence (close-out arc regression detection)
+!docs/results/optum_initiation_revalidation_*.md
 
 # OS
 Thumbs.db
