@@ -135,6 +135,8 @@ docs/results/*
 !docs/results/training_serving_skew_*.md
 # Optum cohort re-validation evidence (close-out arc regression detection)
 !docs/results/optum_initiation_revalidation_*.md
+# Phase 5.2 dry-run scale-machinery evidence (synthetic boundaries)
+!docs/results/phase5p2_scale_machinery_*.md
 
 # OS
 Thumbs.db
