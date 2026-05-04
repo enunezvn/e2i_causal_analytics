@@ -102,6 +102,12 @@ class TestConfig:
     # Default 10 matches split_enforcer's internal default; override via
     # --min-samples-per-split for small-cohort RWD runs (e.g., Optum n=47).
     min_samples_per_split: int = 10
+    # Sampling-frame drift gate (Phase-1 Task 1.3): when the worst per-column
+    # drift in ``sampling_frame_audit_report["max_drift_score"]`` exceeds this
+    # threshold, the runner records a failed ``SAMPLING FRAME AUDIT`` step
+    # alongside (and independent of) the QC gate. Mirrored into ``scope_spec``
+    # as ``sampling_frame_max_drift`` so the audit node sees the same value.
+    sampling_frame_max_drift: float = 0.3
 
 
 CONFIG = TestConfig()
@@ -1806,7 +1812,9 @@ async def step_2_data_preparer(
         if col not in ["patient_journey_id", CONFIG.target_outcome, "brand"]
     ]
 
-    # Ensure scope_spec has required fields with realistic values
+    # Ensure scope_spec has required fields with realistic values.
+    # ``sampling_frame_max_drift`` is forwarded so the audit node and the
+    # runner gate use the same threshold.
     scope_spec.update({
         "experiment_id": experiment_id,
         "use_sample_data": True,
@@ -1815,6 +1823,7 @@ async def step_2_data_preparer(
         "problem_type": CONFIG.problem_type,
         "required_features": available_features,
         "max_staleness_days": 90,
+        "sampling_frame_max_drift": CONFIG.sampling_frame_max_drift,
     })
 
     input_data = {
@@ -4171,6 +4180,43 @@ async def run_pipeline(
 
             if not state["gate_passed"]:
                 print_failure("QC Gate blocked training. Pipeline stopped.")
+                return
+
+            # === Step 2a: Sampling-frame audit gate (Phase-1 Task 1.3) ===
+            # Surface the audit's blocking decision as its own step result so
+            # operators see "SAMPLING FRAME AUDIT: failed" alongside (and
+            # independent of) the QC gate. The audit node itself populates
+            # blocking_issues, so the QC gate above usually catches drift;
+            # this branch also halts if a downstream node clobbered the
+            # blocking entry but the audit report still has blocking_detail.
+            sampling_frame_report = result.get("sampling_frame_audit_report", {}) or {}
+            sf_threshold = CONFIG.sampling_frame_max_drift
+            sf_max_drift = sampling_frame_report.get("max_drift_score")
+            sf_blocking_detail = sampling_frame_report.get("blocking_detail") or {}
+            sf_exceeded = bool(sf_blocking_detail) or (
+                sf_max_drift is not None and float(sf_max_drift) > sf_threshold
+            )
+            sf_message = (
+                sf_blocking_detail.get("message")
+                if sf_blocking_detail
+                else f"max_drift_score={sf_max_drift!r} <= {sf_threshold:.4f}"
+            )
+            step_results.append(StepResult(
+                step_num="2a",
+                step_name="SAMPLING FRAME AUDIT",
+                status="failed" if sf_exceeded else "success",
+                key_metrics={
+                    "max_drift_score": sf_max_drift,
+                    "threshold": sf_threshold,
+                    "columns_with_drift": sampling_frame_report.get(
+                        "columns_with_drift", []
+                    ),
+                },
+                details={"blocking_detail": sf_blocking_detail},
+                result_message=sf_message,
+            ))
+            if sf_exceeded:
+                print_failure(f"Sampling-frame audit blocked training: {sf_message}")
                 return
 
         # Step 2b: Feast Feature Registration (gracefully degrading)

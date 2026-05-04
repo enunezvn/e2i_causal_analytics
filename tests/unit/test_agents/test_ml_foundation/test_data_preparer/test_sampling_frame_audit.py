@@ -228,13 +228,20 @@ async def test_audit_flags_categorical_drift(base_train_df):
 
 
 # ---------------------------------------------------------------------------
-# 5. Advisory contract — never blocks the pipeline
+# 5. Blocking-gate contract (Phase-1 Task 1.3) — extreme drift now blocks.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_audit_failure_does_not_block_pipeline(base_train_df):
-    """Drift detection MUST NOT add anything to ``blocking_issues``."""
+async def test_audit_failure_blocks_pipeline_above_threshold(base_train_df):
+    """Drift above ``sampling_frame_max_drift`` MUST populate blocking_issues.
+
+    This locks in the Phase-1 Task 1.3 behavior change: the audit was
+    previously advisory-only; it now appends a structured entry to
+    ``blocking_issues`` and mirrors the structured detail into the report
+    under ``blocking_detail`` when ``max_drift_score`` exceeds the
+    blocking threshold (default 0.3).
+    """
     reference = {
         "distributions": {
             "age": {"mean": 200.0, "std": 1.0},  # extreme drift
@@ -244,7 +251,7 @@ async def test_audit_failure_does_not_block_pipeline(base_train_df):
         },
     }
     state: Dict[str, Any] = {
-        "experiment_id": "exp_audit_advisory",
+        "experiment_id": "exp_audit_blocking",
         "scope_spec": {"deployment_reference": reference},
         "train_df": base_train_df,
         "blocking_issues": [],
@@ -254,10 +261,18 @@ async def test_audit_failure_does_not_block_pipeline(base_train_df):
 
     report = result["sampling_frame_audit_report"]
     assert report["drift_detected"] is True
-    # The advisory contract: the node returns ONLY the report key, never
-    # touches blocking_issues, even when extreme drift is observed.
-    assert set(result.keys()) == {"sampling_frame_audit_report"}
-    assert "blocking_issues" not in result
+    # The blocking contract: with extreme drift, the audit returns BOTH the
+    # report and an updated blocking_issues list.
+    assert "blocking_issues" in result
+    blocking = result["blocking_issues"]
+    assert len(blocking) == 1
+    assert blocking[0].startswith("sampling_frame_drift:")
+    # Structured detail is mirrored into the report so consumers can
+    # introspect the gate trip without parsing the message string.
+    detail = report["blocking_detail"]
+    assert detail["kind"] == "sampling_frame_drift"
+    assert detail["severity"] == "high"
+    assert detail["threshold"] == pytest.approx(0.3)
 
 
 # ---------------------------------------------------------------------------
