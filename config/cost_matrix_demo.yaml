@@ -1,0 +1,26 @@
+# Demo cost matrix for tier-0 e2e (synthetic / dev runner only).
+#
+# Per-prescription value is brand-specific and deeply commercial; this file
+# embeds an intentionally unit-scaled placeholder, NOT a dollar-denominated
+# matrix. It exists so `python scripts/run_tier0_test.py` can produce a
+# business_utility number end-to-end without forcing every dev caller to
+# hand-craft a stand-in.
+#
+# Production callers (LangGraph orchestrator, Celery / API) MUST supply a
+# real per-brand dollar matrix. The auto-inject helper at the dev-script CLI
+# boundary deliberately uses this file only when no caller-supplied matrix
+# is present (see `_should_inject_demo_cost_matrix` in `scripts/run_tier0_test.py`).
+#
+# Schema:
+#   tp: outcome value when model correctly predicts a positive
+#   fn: outcome value when model misses a positive (typically negative)
+#   fp: outcome value when model raises a false alarm (typically negative)
+#   tn: outcome value when model correctly predicts a negative
+#
+# Phase 5 Task 5.1 (tier0_evaluation_vs_distilled_mlops.md). Extracted from the
+# previously-hardcoded `_default_demo_cost_matrix()` so the placeholder is
+# visible, reviewable, and replaceable without touching the runner script.
+tp: 1.0
+fn: -1.0
+fp: -0.05
+tn: 0.0
