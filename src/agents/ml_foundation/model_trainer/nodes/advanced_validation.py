@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from sklearn.base import clone
+from sklearn.base import clone, is_classifier
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.metrics import (
     average_precision_score,
@@ -526,6 +526,24 @@ def apply_post_hoc_calibration(
     Returns:
         Tuple of (calibrated_model, calibration_info_dict)
     """
+    # Defense-in-depth: CalibratedClassifierCV.fit() does NOT validate that the
+    # underlying estimator is a classifier — sklearn only catches the mismatch
+    # later when predict_proba is called, by which time the caller has stored
+    # `calibration_applied=True` and downstream code crashes inside
+    # sklearn._get_response_values. Skip calibration cleanly when the base
+    # model is not sklearn-classifier-compatible (covers conformal wrappers,
+    # NGBoost-style distribution predictors, custom regressor wrappers).
+    if not is_classifier(model):
+        logger.info(
+            "Skipping post-hoc calibration: base model is not a sklearn classifier "
+            "(typically a conformal wrapper or distribution predictor). "
+            "Set skip_post_hoc_calibration=True in the registry entry to silence this check."
+        )
+        return model, {
+            "calibration_method": method,
+            "calibration_applied": False,
+            "skip_reason": "base_model_not_a_classifier",
+        }
     try:
         # Use FrozenEstimator if available (sklearn >= 1.6), else cv="prefit"
         try:
