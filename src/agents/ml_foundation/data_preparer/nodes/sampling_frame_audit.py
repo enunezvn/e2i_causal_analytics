@@ -276,9 +276,8 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
 
     # Blocking-gate decision (Phase-1 Task 1.3). ``max_drift_score is None``
     # means no columns were checked → cannot evaluate drift → do NOT block.
-    blocking_triggered = (
-        max_drift_score is not None
-        and (not math.isfinite(max_drift_score) or max_drift_score > blocking_threshold)
+    blocking_triggered = max_drift_score is not None and (
+        not math.isfinite(max_drift_score) or max_drift_score > blocking_threshold
     )
 
     if blocking_triggered:
@@ -301,7 +300,9 @@ async def audit_sampling_frame(state: DataPreparerState) -> Dict[str, Any]:
         logger.warning(
             "Sampling-frame audit BLOCKING: max_drift=%s > threshold=%.4f "
             "across %d columns (%s) — appending to blocking_issues",
-            score_str, blocking_threshold, len(columns_with_drift),
+            score_str,
+            blocking_threshold,
+            len(columns_with_drift),
             ", ".join(columns_with_drift),
         )
         # ``blocking_issues`` is typed ``List[str]`` (state.py); follow the

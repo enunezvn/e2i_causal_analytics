@@ -212,9 +212,9 @@ async def test_custom_threshold_overrides_default_and_suppresses_blocking(
     # give a false sense of security.
     smd = report["max_drift_score"]
     assert smd is not None
-    assert (
-        DEFAULT_SAMPLING_FRAME_MAX_DRIFT < smd < 0.5
-    ), f"Test pre-condition violated: expected 0.3 < SMD < 0.5, got {smd!r}"
+    assert DEFAULT_SAMPLING_FRAME_MAX_DRIFT < smd < 0.5, (
+        f"Test pre-condition violated: expected 0.3 < SMD < 0.5, got {smd!r}"
+    )
 
     # Custom threshold (0.5) > observed SMD (~0.4) → no blocking entry.
     assert "blocking_issues" not in result
