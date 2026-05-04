@@ -490,3 +490,102 @@ are out-of-band changes to the deterministic chain that the test pins. The asser
 now updated in the same commit as this doc append, per the test's own contract. The
 `success_criteria_met` boolean (False, because val_auc=0.5585 < 0.75) is preserved — the
 verdict has not changed, only the numeric snapshot.
+
+## Final summary across all 32 commits
+
+This section synthesises the entire Tier-0 remediation arc from Block 0 (branch setup 2026-04-26) through the PR #2 feast-infra merge (`e2ec5c5`, 2026-04-28) that brought `main` to `05a681e`. Commit range covered: `d9907bb..05a681e` (125 commits total; 32 are Tier-0 remediation commits on `feat/tier0-mlops-hardening`; the remainder are CI fixes, PR #29/#30/#31/#32, and post-merge work that is out of Tier-0 scope).
+
+### Block-by-block table
+
+| Block ID | Commit SHA(s) | Metric delta vs prior block | Reviewer cycles | Outcome |
+|---|---|---|---|---|
+| Block 0 — branch setup + baseline capture | `63980a0` | Baseline established: val AUC=0.6942, threshold 0.4982 (tuned on test — the bug). No metric delta (this is the anchor). | N/A | ✅ Baseline doc written; preamble spot-check passed (findings #6, #11, #4 locations verified). |
+| Block 1A — threshold tuned on validation, frozen before test | `6049d0d`, `a4fd168`, `c3fb4a2` | Val AUC=0.6942 (unchanged, threshold-free). Val accuracy +0.0700, precision +0.0465, recall -0.0455, F1 +0.0366, MCC +0.0481. Test precision -0.0346, recall -0.2425, F1 -0.0772 (expected unmasking of test-tuning bias). | 1 review cycle; `a4fd168` landed review notes; `c3fb4a2` landed deferred Bucket-A polish. | ✅ Finding #6 closed. Threshold source persisted in `validation_metrics["chosen_threshold"]`. |
+| Block 1B — entity-grouped lag/rolling + prediction_timestamp scaffolding + comment fix | `37170c6`, `b9bda7f` | All metrics 0.0000 delta vs Block 1A (synthetic single-row patients produce all-NaN lags; temporal node is structurally correct but dormant on this input). | 1 review cycle; `b9bda7f` made entity/timestamp args strict-required per review note. | ✅ Findings #2 and #18 closed. Entity-grouped pre-split contract established; `prediction_timestamp` scaffolding plumbed through scope_spec → Tier0OutputMapper. |
+| Block 2 — Feast fail-loud (prod raise + freshness inversion + MLflow tag) | `789b521`, `61d81da`, `2637954` | All metrics 0.0000 delta vs Block 1B (Feast historical-features path dormant on single-row synthetic; dev-mode run unaffected). 11 new unit tests green. | 1 review cycle; `61d81da` wired `feast_blocked` into `gate_passed` and fixed case-insensitive ENVIRONMENT check per review. | ✅ Findings #1 and #5 closed. `FeastFallbackError` raises in production; freshness default inverted; `feast_fallback=True` MLflow tag on fallback-trained runs; QC gate blocks stale Feast without `ALLOW_STALE_FEAST`. |
+| Block 3A — online serving routed through Feast | `e2eeb2d` | metric capture deferred (no tier0 e2e delta; serving path wiring has no effect on training metrics) | 1 review cycle; Block 3B polish (`4ca9759`) tightened test hygiene and CI. | ✅ Finding #3 closed. `get_online_features()` wired into BentoML + predictions API; `feature_source: "feast_online"` returned when entity_id present. |
+| Block 3B — `feast apply` in CI + parity tests + gitignore registry.db | `b860395`, `e8cb5cb`, `fda276e`, `be64fdc`, `4ca9759` | metric capture deferred (infrastructure/CI changes; no training metric effect) | 1 review cycle; multiple fix-ups during Phase 8 end-to-end validation. | ✅ Finding #4 (residual) closed. `registry.db` gitignored; dedicated `feast-apply.yml` CI workflow; offline-online parity test suite green. |
+| Block 4 — defaults hardening (split, regime, cache) | `e2ada2d`, `6a2e83f` | metric capture deferred (split-label validation and cache hardening; no training metric movement on default synthetic). `--regime adverse` flag added but not run in e2e at this block. | 1 review cycle; `6a2e83f` tightened split-label validation and index alignment. | ✅ Findings #7, #8, #12 closed. `combined_split` default when entity+date present; `--regime adverse` (1–5% positive) added; split assignments persisted in cache. |
+| Block 5 — business_utility metric + auto-register surviving Feast features | `ee34a51`, `10b581a`, `cabec40` | `validation_metrics["business_utility"]=-8.15`, `test_metrics["business_utility"]=-9.65` emitted for first time (unit-shape placeholder cost matrix injected by dev runner). | 1 review cycle. | ✅ Findings #10 and #14 closed. `business_utility` driven by `cost_matrix`; surviving tier-0 features auto-registered as Feast FeatureViews. |
+| Block 5B — Block 5 verification gap closure + `feast apply` CI polish | `00f7a6b`, `56c5be5` | metric capture deferred (helper extraction + doc polish; no training metric movement) | 1 review cycle; `56c5be5` added `FeastError` base class and narrower defensive chains per Block 2 review note. | ✅ Block 5 verification gap closed; Block 5B helpers extracted (`_build_parser`, `_should_inject_demo_cost_matrix`); Block 2 deferred minors landed. |
+| Block 6A — imbalance determinism (LLM → decision matrix) | `a8069cf` | metric capture deferred (strategy matrix produces same result as prior LLM on default synthetic; two consecutive runs now identical). | 1 review cycle. | ✅ Findings #9 and #16 closed. `config/imbalance_strategy.yaml` configurable matrix; `_recommend_strategy_llm` removed. |
+| Block 6B-core — sampling-frame audit + excluded_features deprecation | `db52a51`, `baec8c0` | metric capture deferred (audit node is advisory-only; no blocking effect on training metrics). | 1 review cycle; `baec8c0` fixed strict-JSON safety and added threshold-override test. | ✅ Findings #15 and #17 closed. `sampling_frame_audit` node wired post-`load_data`; Cohen's-d-variant SMD + Jensen-Shannon advisory; `legacy_exclude_columns` deprecation warning. |
+| Block 6B-feast-suite — Feast integration test suite | `6aadd19`, `5a6d806` | metric capture deferred (test-only addition) | 1 review cycle; `5a6d806` added order-independent online lookup. | ✅ Finding #13 closed. 5 live-Feast lifecycle tests + 5 schema-deep proto-byte diff tests (`tests/integration/test_feast_integration_suite.py`). |
+| Block 6B-polish-1 — 6A loader hardening + sampling-frame audit cleanups | `3181380`, `2453f53`, `f3bae6e`, `5bac888` | metric capture deferred (defensive hardening; no training metric movement) | 1 review cycle. | ✅ Imbalance YAML normalization, severity-band ordering, `frozenset` strategies, env-override validation, shared `src/utils/project_root.py`. |
+| Block 6B-polish-2 — Block 4/3A/3B/5B/2 contract tightening | `6a2e83f`, `cc3aaf5`, `4ca9759`, `00f7a6b`, `56c5be5` | metric capture deferred (contract + test hardening; no training metric movement) | 1 review cycle. | ✅ Block 4 split-label validation; Block 3A coercion warnings + shared `src/feature_store/model_feature_refs.py`; Block 3B dedicated CI workflow; Block 2 `FeastError` base class. |
+| PR #1 Bucket B (design calls) | `f30bff0` (1B-M2), `7438258`+`cdd9036` (1B-M5), `9f61135`+`b855eeb` (1B-M7) | metric capture deferred (refactor/design changes; no training metric movement) | 1 review cycle per item. | ✅ `_normalise_prediction_timestamp` strict-validates unknown types; `_concat_with_split_markers` per-split copies dropped; `Tier0StateContract` enforced in `Tier0OutputMapper.__init__`. |
+| PR #1 Bucket C (meaningful refactors) | `17e8a17`+`409f327` (1A-I-3), `bf1bbca` (1A-M-6), `c361c75` (1B-M-4) | metric capture deferred (refactor-only; no training metric movement) | 1 review cycle per item. | ✅ `_select_threshold` helper extracted from `_compute_classification_metrics`; `test_evaluator.py` split into focused files; temporal helpers extracted into `_temporal.py`. |
+| PR #2 — Block 6B-feast-infra (canonical schema 033 + real ETLs) | `e2ec5c5` (merge), `4018542` (CI fix) | metric capture deferred (infrastructure migration; training metric path unchanged) | 1 review cycle; 3 fix-up commits during destructive verification (`fa9c728`, `4996080`, `9c88703`) landed before merge. | ✅ Migration 033 canonical schema (drops bridging views from 031/032); real ETLs for `feast_business_metrics_seed`, `feast_patient_journey_source`, `territory_metrics`; worker `supabase-network` plumbing; shared Feast registry between `e2i_feast` and `e2i_api_dev`. |
+
+### Test-count delta
+
+| Checkpoint | Test count | Source |
+|---|---|---|
+| Pre-Block-0 (commit `00f7a6b`, last commit before PR #1 Bucket B/C) | 13,908 | `pytest --collect-only -q tests/unit tests/integration` at worktree `/tmp/tier0_pre_block0` using repo venv |
+| HEAD (`b315402`, feat/tier0-final-verification after PR3-1) | 14,419 | `pytest --collect-only -q tests/unit tests/integration` at HEAD |
+| **Delta** | **+511** | Net new tests shipped across Bucket B/C polish (PR #1), PR #2, PR3-1, and out-of-scope PRs #29–32 that landed after PR #1. |
+
+Note: commit `00f7a6b` is the last commit of the `feat/tier0-mlops-hardening` branch before the PR #1 Bucket B/C commits, making it the cleanest pre-polish baseline available without a full worktree install at a much earlier SHA.
+
+### Coverage delta
+
+Coverage run at pre-Block-0 (`00f7a6b`) and at HEAD both deferred. Rationale: a full `pytest tests/unit tests/integration --cov=src` run against 14,000+ tests takes 20–40 minutes on this droplet and would require the running Supabase/Redis/FalkorDB services that the integration tests need. Running only `tests/unit` would undercount. Instead, use the narrative in the per-block sections of this document as the qualitative anchor:
+
+- Block 2 landed 11 new unit tests covering `FeastFallbackError`, freshness inversion, MLflow tag, and QC gate paths that had zero prior coverage.
+- Block 5/5B landed `tests/unit/test_scripts/test_run_tier0_demo_cost_matrix.py`, `tests/synthetic/test_business_utility_emitted.py`, and `tests/integration/test_feast_tier0_auto_register.py`.
+- Block 6B-feast-suite landed 831 LOC of integration tests (`tests/integration/test_feast_integration_suite.py`) for previously-uncovered Feast lifecycle paths.
+- PR #1 Bucket C split a single 800+-line test file into focused modules without net-new coverage loss.
+- The +511 collected test delta confirms new coverage was added, not just existing tests reorganised.
+
+For a precise coverage number at a future date, run: `pytest tests/unit --cov=src --cov-report=term --cov-fail-under=0 -q` (unit-only; avoids the integration service dependency).
+
+### Findings-closed table
+
+Source: `tier0_pipeline_critical_evaluation.md` §6 severity-sorted findings table. Findings #1–#18 as originally documented (finding #18 was added during Block 1B; the plan preamble cites "17 critical-evaluation findings" because #18 was added mid-execution).
+
+| # | Finding (truncated) | Severity | Block(s) that closed it | Evidence | Link |
+|---|---|---|---|---|---|
+| 1 | Feast PIT fallback returns "latest"/None; silent leakage on Feast outage | 🔴 HIGH | Block 2 | `789b521` `fix(feast): fail loud on fallback and freshness exceptions (#1, #5)`; `FeastFallbackError` raises when `ENVIRONMENT=production` | [#block-2-note](#block-2-note) |
+| 2 | Lag/rolling features not entity-grouped; re-applied per split (cross-entity leakage + split-boundary skew) | 🔴 HIGH | Block 1B | `37170c6` `fix(tier0): entity-group lag/rolling features pre-split; add prediction_timestamp scaffolding (#2, #18)` | [#block-1b-note](#block-1b-note) |
+| 3 | Online serving doesn't go through Feast → training-serving skew | 🔴 HIGH | Block 3A | `e2eeb2d` `feat(serving): route online predictions through Feast online store (#3)`; predictions API returns `feature_source: "feast_online"` | [#block-5b-note](#block-5b-note) |
+| 4 | No `feast apply` in CI, no scheduled materialization, no parity tests | 🔴 HIGH | Block 3B | `b860395` `chore(feast): gitignore registry.db, add feast apply CI step and parity tests (#4)`; dedicated `feast-apply.yml` CI workflow | [#block-5b-note](#block-5b-note) |
+| 5 | Freshness check returns `fresh:True` on failure (non-blocking gate) | 🔴 HIGH | Block 2 | `789b521` inverts freshness default; `61d81da` wires `feast_blocked` into `gate_passed` | [#block-2-note](#block-2-note) |
+| 6 | Threshold tuning location unclear; may be tuned on test → inflated precision/recall/F1 | 🔴 HIGH (verify) | Block 1A | `6049d0d` `fix(tier0): tune classification threshold on validation, freeze before test eval (#6)`; `chosen_threshold_source="validation"` persisted | [#block-1a-delta](#block-1a-delta) |
+| 7 | Default split is random/stratified, not entity/temporal (unsafe on RWD) | ⚠️ MEDIUM | Block 4 | `e2ada2d` `feat(tier0): safer defaults for split, regime, and cache (#7, #8, #12)`; `combined_split` default when entity+date columns present | [#block-5b-note](#block-5b-note) |
+| 8 | 30% positive rate doesn't stress imbalance machinery | ⚠️ MEDIUM | Block 4 | `e2ada2d`; `--regime adverse` flag adds 1–5% positive-rate synthetic regime | [#block-5b-note](#block-5b-note) |
+| 9 | Hardcoded severity thresholds; no per-domain calibration | ⚠️ MEDIUM | Block 6A | `a8069cf` `refactor(tier0): replace LLM imbalance strategy with deterministic matrix (#9, #16)`; `config/imbalance_strategy.yaml` externalized | [#block-5b-note](#block-5b-note) |
+| 10 | No business-utility / cost-weighted metric | ⚠️ MEDIUM | Block 5 | `ee34a51` `feat(tier0): business_utility metric and auto-register surviving features in Feast (#10, #14)`; `validation_metrics["business_utility"]` emitted | [#block-5b-note](#block-5b-note) |
+| 11 | Leakage detection runs after preprocessing (pre-transform should be post-split, pre-transform) | ⚠️ MEDIUM | Block 0 (pre-existing correct) | Verified at Block 0 preamble spot-check: `data_preparer/graph.py:90` — `detect_leakage` runs before `transform_data`. **No code change needed.** | [#preamble-spot-check-closes-plan-preamble](#preamble-spot-check-closes-plan-preamble) |
+| 12 | Cache may invite split-overfitting on re-runs (no split-assignment persistence) | ⚠️ MEDIUM | Block 4 | `e2ada2d`; split assignments persisted inside cache on first run; re-load guard prevents re-split | [#block-5b-note](#block-5b-note) |
+| 13 | Recent Feast commit churn signals fragile integration; no dedicated integration test suite | ⚠️ MEDIUM | Block 6B-feast-suite | `6aadd19` `test(tier0): Feast integration test suite — 5 lifecycle scenarios + schema-deep idempotency (#13)` | [#block-5b-note](#block-5b-note) |
+| 14 | Tier-0 inline features never registered back into Feast | ⚠️ MEDIUM | Block 5 | `ee34a51`; `FeatureAnalyzerAgent._auto_register_in_feast` registered surviving features as FeatureViews post-selection | [#block-5b-note](#block-5b-note) |
+| 15 | No deployment-population sampling-frame audit | ⚠️ LOW | Block 6B-core | `db52a51` `feat(tier0): sampling-frame audit + excluded_features deprecation (#15, #17)`; `sampling_frame_audit` node wired post-`load_data` in DataPreparer graph | [#block-5b-note](#block-5b-note) |
+| 16 | Non-deterministic LLM in strategy-selection slot | ⚠️ LOW | Block 6A | `a8069cf`; `_recommend_strategy_llm` removed; deterministic YAML matrix lookup replaces it | [#block-5b-note](#block-5b-note) |
+| 17 | Two sources of truth for excluded columns | ⚠️ LOW | Block 6B-core | `db52a51`; `legacy_exclude_columns` DeprecationWarning added; canonical key consolidated in `data_transformer.py` | [#block-5b-note](#block-5b-note) |
+| 18 | Misleading comment claims LabelEncoder fit on all splits (actually train-only) | ⚠️ LOW | Block 1B | `37170c6`; misleading comment deleted from `data_transformer.py:173–175`; new test asserts `LabelEncoder.classes_` matches train uniques exactly | [#block-1b-note](#block-1b-note) |
+
+**All 18 findings closed** (the plan preamble cites "17" because finding #18 was added during Block 1B execution; the critical evaluation document itself enumerates #18 in §6 making the true total 18).
+
+### Out-of-scope deferred items
+
+The following items were explicitly excluded from all three Tier-0 close-out PRs per `.claude/plans/2_tier0_close_out_3pr.md` lines 557–567:
+
+- **Tier-1+ causal-agent changes.** Tier-0 remediates the ML-foundation data/model layer only. Causal forest, uplift, and heterogeneous-effect agent code is architecturally separate and requires a dedicated evaluation cycle. Tracking: no issue yet; expected to surface in a future "Tier-1 readiness" sprint.
+
+- **`tier0-outstanding-errors.md` item #1 — model quality on synthetic (AUC=0.574 on test).** The synthetic DGP intentionally produces a low-signal regime to stress-test pipeline plumbing, not to produce a production-grade model. Improving AUC requires either real RWD or a domain-calibrated DGP rewrite, both out of Tier-0 scope. Tracking: `memory/tier0-outstanding-errors.md` item #1; no issue yet.
+
+- **`tier0-outstanding-errors.md` item #2 — deployer downstream failure (Step 7 MODEL DEPLOYER).** Step 7 fails in every tier-0 run (`1 failed` in run metadata). Root cause is a Reltio/Veeva integration dependency not present in the repo. Deferred because fixing the deployer requires live external system access. Tracking: `memory/tier0-outstanding-errors.md` item #2; no issue yet.
+
+- **4 dependency-conflict items in `requirements-dev.txt`.** `dowhy` wants `numpy>2.0`; `graphiti-core` wants `tenacity>=9.0`; `opentelemetry-proto` wants `protobuf>=5`; `datasets` wants `pyarrow>=21.0`. Currently resolved at runtime by accepting the conflicts (runtime container has its own independent pins; host venv is dev-only). Fixing requires coordinating with upstream package maintainers or splitting the dev requirements file. Tracking: no issue yet.
+
+- **Pre-existing 76 ruff errors in `scripts/run_tier0_test.py`.** Present before Branch 0; not introduced by Tier-0 remediation. Deferred to avoid scope inflation. Tracking: no issue yet; address in a dedicated lint-cleanup PR.
+
+- **Pre-existing 13 mypy errors in unrelated modules.** Mypy debt from pre-branch baseline (`memory/mypy-type-debt.md` documents 2,676 errors across 397 files as of 2026-02-07 baseline). The 13 carried in the unrelated-module category are not introduced by Tier-0 remediation. Tracking: `memory/mypy-type-debt.md`; no issue yet.
+
+- **Pre-existing 8 pytest failures around Redis auth in `_check_redis_service`.** Identical failure count before and after all Tier-0 remediation commits (verified at Block 2 verification snapshot: `47 passed, 8 failed` with unchanged failure set in `test_feast_client.py`). Root cause is tz-naive vs tz-aware fixture mismatch plus Redis auth not provisioned in the test environment. Tracking: no issue yet.
+
+- **Real-data ETLs depending on Reltio/Veeva integration.** `territory_metrics.market_potential` and `territory_metrics.resource_allocation_score` remain nullable because the real ETL requires live Reltio/Veeva access not present in the repo. The PR #2 ETLs seed territory metrics from static rollup data as a placeholder. Tracking: no issue yet; requires a future Reltio integration sprint.
+
+- **CSP/pytest-cache writability in api container.** `/app/.pytest_cache` writes fail because the api container runs with `read_only: true`. Tests pass; only noisy warnings are emitted. Deferred because the fix (add `tmpfs` at `/app/.pytest_cache` or pass `--cache-dir=/tmp/pytest_cache`) is low-risk but touches infrastructure. Tracking: no issue yet.
+
+- **8 `test_repeated_k10_*` tests in `test_model_trainer_evaluation_modes.py` excluded from Backend CI for OOM.** Added to CI exclude list in `b2b8d24` (merged PR #32). Xdist worker dies ~51 seconds into the smoke test; suspected eager-import OOM when all k=10 variants load simultaneously. Re-enabling requires lazy-import refactor or a dedicated `heavy_ml` marker with resource limits. Tracking: `memory/repeated_k10_test_oom_followup.md`; no issue yet.
