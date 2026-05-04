@@ -399,9 +399,7 @@ def test_offline_online_parity_per_feature_view(
     assert not online_df.empty, f"Online retrieval returned no rows for {fv_name}"
 
     # ---- Compare ----------------------------------------------------------
-    feature_cols = [
-        c for c in offline_df.columns if c not in set(join_keys) | {"event_timestamp"}
-    ]
+    feature_cols = [c for c in offline_df.columns if c not in set(join_keys) | {"event_timestamp"}]
     assert feature_cols, f"No comparable feature columns found for {fv_name}"
 
     mismatches = _compare_offline_online(fv_name, join_keys, feature_cols, offline_df, online_df)
@@ -491,9 +489,7 @@ def test_parity_with_clock_skew(feature_store: Any) -> None:
     )
 
     # ---- TTL assertion: every cell must be populated under the skew --------
-    feature_cols = [
-        c for c in offline_df.columns if c not in set(join_keys) | {"event_timestamp"}
-    ]
+    feature_cols = [c for c in offline_df.columns if c not in set(join_keys) | {"event_timestamp"}]
     online_indexed = (
         online_df.set_index(join_keys[0])
         if len(join_keys) == 1
