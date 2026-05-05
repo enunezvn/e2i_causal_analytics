@@ -188,6 +188,52 @@ class BaseAgentSchema(BaseModel):
             return default
         return default if value is None else value
 
+    def items(self):  # type: ignore[no-untyped-def]
+        """Dict-like ``items()`` for iteration patterns like
+        ``for k, v in state.items()``.
+
+        Yields (key, value) pairs from BOTH declared fields AND
+        ``model_extra`` contents. Skips fields whose value is ``None``
+        — matches ``get(key, default)`` coalescing semantics so a
+        consumer iterating ``items()`` sees the same set of keys it
+        would see via ``get()`` returning a non-default value.
+
+        Added (D2.3 follow-up, 2026-05-05): consumers like
+        ``model_trainer/nodes/evaluator.py:2465`` iterate
+        ``success_criteria.items()`` after the schema-typed wiring; the
+        underlying pydantic BaseModel does not provide ``items()``, so
+        we expose it here. Skipping None values is intentional — a
+        criterion threshold of ``None`` means "not configured" and the
+        evaluator's loop should treat it as absent.
+        """
+        for field_name in type(self).model_fields:
+            value = getattr(self, field_name)
+            if value is not None:
+                yield field_name, value
+        extra = self.model_extra or {}
+        for k, v in extra.items():
+            if v is not None:
+                yield k, v
+
+    def keys(self):  # type: ignore[no-untyped-def]
+        """Dict-like ``keys()`` companion to ``items()``.
+
+        Yields keys from declared fields with non-None values + all
+        ``model_extra`` keys with non-None values. See ``items()`` for
+        the None-skip rationale.
+        """
+        for k, _ in self.items():
+            yield k
+
+    def values(self):  # type: ignore[no-untyped-def]
+        """Dict-like ``values()`` companion to ``items()``.
+
+        Yields values for declared non-None fields + ``model_extra``
+        non-None values. See ``items()`` for the None-skip rationale.
+        """
+        for _, v in self.items():
+            yield v
+
 
 def coerce_uuid(value: Any) -> UUID:
     """Coerce a string or UUID into a UUID instance.
