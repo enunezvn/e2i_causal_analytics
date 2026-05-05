@@ -1,13 +1,43 @@
 """State definition for data_preparer agent.
 
-This module defines the TypedDict state used by the data_preparer LangGraph.
+Migrated from ``TypedDict(total=False)`` to pydantic v2 ``BaseModel``
+in Shard A of the migration tracked at
+``.claude/plans/typeddict_to_pydantic_migration_plan_20260504.md``.
+
+The state inherits from ``BaseAgentSchema`` which provides:
+
+- ``extra="allow"`` for forward-compat during the multi-shard rollout.
+- TypedDict-compat dict-like accessors (``__getitem__``, ``get``, etc.)
+  so the existing ``state["key"]`` / ``state.get("key", default)`` call
+  sites in ``data_preparer/nodes/`` (33 + 232 = 265 total) continue
+  to work unchanged.
+- ``audit_workflow_id_validator()`` factory for str↔UUID coercion at
+  checkpoint-replay boundaries (Decision 7a).
+
+Per Decision 8a, every field is ``Optional[T] = None`` except
+``audit_workflow_id`` (required — it identifies the audit chain).
+
+``qc_report`` is NOT a field on this state — it's the output the agent
+constructs in ``data_preparer/agent.py::run`` after the graph runs,
+NOT a piece of pipeline state. ``QCReportSchema`` exists in
+``data_preparer/schemas.py`` for callers that want to typed-validate
+the agent output dict; wiring is left to a follow-up sub-shard.
 """
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
-from uuid import UUID
+from __future__ import annotations
+
+from typing import Any, Dict, List, Literal, Optional, Union
+from uuid import UUID, uuid4
+
+from pydantic import Field
+
+from src.agents.ml_foundation._pydantic_utils import (
+    BaseAgentSchema,
+    audit_workflow_id_validator,
+)
 
 
-class DataPreparerState(TypedDict, total=False):
+class DataPreparerState(BaseAgentSchema):
     """State for data_preparer agent.
 
     The data_preparer validates data quality, computes baseline metrics,
@@ -16,8 +46,8 @@ class DataPreparerState(TypedDict, total=False):
 
     # === INPUT FIELDS ===
     # From scope_definer
-    experiment_id: str
-    scope_spec: Dict[str, Any]  # ScopeSpec from scope_definer
+    experiment_id: Optional[str] = None
+    scope_spec: Optional[Dict[str, Any]] = None  # ScopeSpec from scope_definer
 
     # Data source configuration
     # May be either:
@@ -26,138 +56,149 @@ class DataPreparerState(TypedDict, total=False):
     #       {"type": "file_dir", "path": "<dir>"} — read canonical
     #         e2i_ml_v3_* files from a directory
     #       {"type": "files", "paths": {"patient_journeys": "<path>", ...}}
-    data_source: Union[str, Dict[str, Any]]
-    split_id: Optional[str]  # ML split ID (if using existing split)
+    data_source: Optional[Union[str, Dict[str, Any]]] = None
+    split_id: Optional[str] = None  # ML split ID (if using existing split)
 
     # Validation configuration
-    validation_suite: Optional[str]  # Great Expectations suite name
-    skip_leakage_check: bool  # Skip data leakage detection (NOT RECOMMENDED)
+    validation_suite: Optional[str] = None  # Great Expectations suite name
+    skip_leakage_check: Optional[bool] = None  # Skip data leakage detection (NOT RECOMMENDED)
 
     # === INTERMEDIATE FIELDS ===
     # Data loading
-    train_df: Any  # pandas DataFrame (train split)
-    validation_df: Any  # pandas DataFrame (validation split)
-    test_df: Any  # pandas DataFrame (test split)
-    holdout_df: Any  # pandas DataFrame (holdout split)
+    train_df: Optional[Any] = None  # pandas DataFrame (train split)
+    validation_df: Optional[Any] = None  # pandas DataFrame (validation split)
+    test_df: Optional[Any] = None  # pandas DataFrame (test split)
+    holdout_df: Optional[Any] = None  # pandas DataFrame (holdout split)
 
     # Sampling-frame audit (advisory; emitted by audit_sampling_frame node)
     # Compares train_df distribution to scope_spec["deployment_reference"].
     # Failures are non-blocking: status surfaces in the report, never in
     # blocking_issues. See nodes/sampling_frame_audit.py for the report
     # schema.
-    sampling_frame_audit_report: Optional[Dict[str, Any]]
+    sampling_frame_audit_report: Optional[Dict[str, Any]] = None
 
     # Schema validation (Pandera)
-    schema_validation_status: Literal["passed", "failed", "skipped", "error"]
-    schema_validation_errors: List[Dict[str, Any]]
-    schema_splits_validated: int
-    schema_validation_time_ms: int
+    schema_validation_status: Optional[Literal["passed", "failed", "skipped", "error"]] = None
+    schema_validation_errors: Optional[List[Dict[str, Any]]] = None
+    schema_splits_validated: Optional[int] = None
+    schema_validation_time_ms: Optional[int] = None
 
     # Quality checks
-    expectation_results: List[Dict[str, Any]]  # Great Expectations results
-    failed_expectations: List[str]
-    warnings: List[str]
+    expectation_results: Optional[List[Dict[str, Any]]] = None  # Great Expectations results
+    failed_expectations: Optional[List[str]] = None
+    warnings: Optional[List[str]] = None
 
     # Dimension scores
-    completeness_score: float
-    validity_score: float
-    consistency_score: float
-    uniqueness_score: float
-    timeliness_score: float
-    overall_score: float
+    completeness_score: Optional[float] = None
+    validity_score: Optional[float] = None
+    consistency_score: Optional[float] = None
+    uniqueness_score: Optional[float] = None
+    timeliness_score: Optional[float] = None
+    overall_score: Optional[float] = None
 
     # Leakage detection
-    leakage_detected: bool
-    leakage_issues: List[str]
-    leakage_findings: List[Dict[str, Any]]  # Structured LeakageFinding dicts
-    leakage_severity: str  # "critical" / "high" / "moderate" / "info" / "none"
-    leaked_features: List[str]  # Feature names flagged at CRITICAL or HIGH
+    leakage_detected: Optional[bool] = None
+    leakage_issues: Optional[List[str]] = None
+    leakage_findings: Optional[List[Dict[str, Any]]] = None  # Structured LeakageFinding dicts
+    leakage_severity: Optional[str] = None  # "critical" / "high" / "moderate" / "info" / "none"
+    leaked_features: Optional[List[str]] = None  # Feature names flagged at CRITICAL or HIGH
 
     # Leakage remediation (LLM-assisted)
-    leakage_remediation_status: Literal[
-        "not_needed",
-        "applied",
-        "failed",
-        "manual_required",
-        "error",
-        "max_attempts_reached",
-    ]
-    leakage_remediation_attempts: int
-    leakage_remediated_features: List[str]  # Clean features after remediation
-    leakage_dropped_features: List[str]  # Features removed due to leakage
-    leakage_added_features: List[str]  # Alternative features added
-    leakage_remediation_reasoning: Optional[str]  # LLM reasoning summary
-    leakage_remediation_viable: bool  # Whether a viable feature set was found
-    requires_leakage_revalidation: bool  # Trigger re-check loop
+    leakage_remediation_status: Optional[
+        Literal[
+            "not_needed",
+            "applied",
+            "failed",
+            "manual_required",
+            "error",
+            "max_attempts_reached",
+        ]
+    ] = None
+    leakage_remediation_attempts: Optional[int] = None
+    leakage_remediated_features: Optional[List[str]] = None  # Clean features after remediation
+    leakage_dropped_features: Optional[List[str]] = None  # Features removed due to leakage
+    leakage_added_features: Optional[List[str]] = None  # Alternative features added
+    leakage_remediation_reasoning: Optional[str] = None  # LLM reasoning summary
+    leakage_remediation_viable: Optional[bool] = None  # Whether a viable feature set was found
+    requires_leakage_revalidation: Optional[bool] = None  # Trigger re-check loop
 
     # Baseline computation
-    feature_stats: Dict[str, Dict[str, Any]]  # Per-feature statistics
-    target_rate: Optional[float]  # For classification
-    target_distribution: Dict[str, Any]
-    correlation_matrix: Dict[str, Dict[str, float]]
+    feature_stats: Optional[Dict[str, Dict[str, Any]]] = None  # Per-feature statistics
+    target_rate: Optional[float] = None  # For classification
+    target_distribution: Optional[Dict[str, Any]] = None
+    correlation_matrix: Optional[Dict[str, Dict[str, float]]] = None
 
     # Feast registration
-    feast_registration_status: Literal[
-        "completed", "empty", "skipped", "error", "blocked_stale_features"
-    ]
-    feast_features_registered: int  # Count of features registered
-    feast_freshness_check: Optional[Dict[str, Any]]  # Freshness check result
-    feast_warnings: List[str]  # Non-blocking warnings
-    feast_registered_at: Optional[str]  # ISO timestamp
-    feast_blocked: bool  # True when stale features hard-block training
-    feast_fallback_used: bool  # True when the historical-features fallback fired
+    feast_registration_status: Optional[
+        Literal["completed", "empty", "skipped", "error", "blocked_stale_features"]
+    ] = None
+    feast_features_registered: Optional[int] = None  # Count of features registered
+    feast_freshness_check: Optional[Dict[str, Any]] = None  # Freshness check result
+    feast_warnings: Optional[List[str]] = None  # Non-blocking warnings
+    feast_registered_at: Optional[str] = None  # ISO timestamp
+    feast_blocked: Optional[bool] = None  # True when stale features hard-block training
+    feast_fallback_used: Optional[bool] = None  # True when the historical-features fallback fired
 
     # Recommendations
-    remediation_steps: List[str]
-    blocking_issues: List[str]  # If non-empty, blocks training
+    remediation_steps: Optional[List[str]] = None
+    blocking_issues: Optional[List[str]] = None  # If non-empty, blocks training
 
     # === OUTPUT FIELDS ===
     # QC Report
-    report_id: str
-    qc_status: Literal["passed", "failed", "warning", "skipped"]
-    row_count: int
-    column_count: int
-    validated_at: str  # ISO timestamp
+    report_id: Optional[str] = None
+    qc_status: Optional[Literal["passed", "failed", "warning", "skipped"]] = None
+    row_count: Optional[int] = None
+    column_count: Optional[int] = None
+    validated_at: Optional[str] = None  # ISO timestamp
 
     # Data Readiness
-    total_samples: int
-    train_samples: int
-    validation_samples: int
-    test_samples: int
-    holdout_samples: int
-    available_features: List[str]
-    missing_required_features: List[str]
-    is_ready: bool
-    qc_passed: bool
-    qc_score: float
-    blockers: List[str]
+    total_samples: Optional[int] = None
+    train_samples: Optional[int] = None
+    validation_samples: Optional[int] = None
+    test_samples: Optional[int] = None
+    holdout_samples: Optional[int] = None
+    available_features: Optional[List[str]] = None
+    missing_required_features: Optional[List[str]] = None
+    is_ready: Optional[bool] = None
+    qc_passed: Optional[bool] = None
+    qc_score: Optional[float] = None
+    blockers: Optional[List[str]] = None
 
     # Gate decision
-    gate_passed: bool  # CRITICAL: blocks model_trainer if False
+    gate_passed: Optional[bool] = None  # CRITICAL: blocks model_trainer if False
 
     # Metadata
-    validation_duration_seconds: float
-    computed_at: str  # ISO timestamp
-    training_samples: int  # For baseline metrics
+    validation_duration_seconds: Optional[float] = None
+    computed_at: Optional[str] = None  # ISO timestamp
+    training_samples: Optional[int] = None  # For baseline metrics
 
     # Error handling
-    error: Optional[str]
-    error_type: Optional[str]
+    error: Optional[str] = None
+    error_type: Optional[str] = None
 
     # QC Remediation Loop
-    remediation_status: Literal[
-        "not_needed", "applied", "failed", "manual_required", "exhausted", "error"
-    ]
-    remediation_attempts: int  # Count of remediation attempts
-    remediation_actions_taken: List[str]  # Actions applied during remediation
-    remediation_error: Optional[str]  # Error message if remediation failed
-    requires_revalidation: bool  # Whether to re-run validation after remediation
-    llm_analysis: Optional[str]  # LLM-generated root cause summary
-    root_causes: List[str]  # Identified root causes
-    recommended_actions: List[str]  # Recommended manual actions
-    estimated_effort: str  # Low/Medium/High effort estimate
-    blocking_issues_analysis: List[Dict[str, Any]]  # Detailed blocking issue analysis
-    failure_summary: Optional[str]  # Summary when remediation exhausted
+    remediation_status: Optional[
+        Literal["not_needed", "applied", "failed", "manual_required", "exhausted", "error"]
+    ] = None
+    remediation_attempts: Optional[int] = None  # Count of remediation attempts
+    remediation_actions_taken: Optional[List[str]] = None  # Actions applied during remediation
+    remediation_error: Optional[str] = None  # Error message if remediation failed
+    requires_revalidation: Optional[bool] = None  # Whether to re-run validation after remediation
+    llm_analysis: Optional[str] = None  # LLM-generated root cause summary
+    root_causes: Optional[List[str]] = None  # Identified root causes
+    recommended_actions: Optional[List[str]] = None  # Recommended manual actions
+    estimated_effort: Optional[str] = None  # Low/Medium/High effort estimate
+    blocking_issues_analysis: Optional[List[Dict[str, Any]]] = None  # Detailed blocking analysis
+    failure_summary: Optional[str] = None  # Summary when remediation exhausted
 
-    # Audit chain
-    audit_workflow_id: UUID
+    # Audit chain — Decision 7a: typed as UUID (never None), with str↔UUID
+    # coercion for checkpoint-replay JSON-restore compat via the validator
+    # factory. Decision 8a explicit override: NOT Optional[UUID]=None.
+    #
+    # ``default_factory=uuid4`` matches the scope_definer convention so
+    # existing agent flows that construct DataPreparerState as a dict
+    # literal without audit_workflow_id keep working. A future sub-shard
+    # can tighten to "caller MUST provide audit_workflow_id".
+    audit_workflow_id: UUID = Field(default_factory=uuid4)
+
+    _validate_audit_id = audit_workflow_id_validator()

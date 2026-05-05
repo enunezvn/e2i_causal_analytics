@@ -205,6 +205,19 @@ jobs:
           pip install -r requirements.txt
           pip install pytest-cov pytest-xdist pytest-timeout pytest-asyncio
 
+      # Integration test exclusions:
+      # - chatbot/RAG/signal_flow/observability/prediction/digital_twin/feedback_loop:
+      #     require live LLM/observability/RAG infra not available in CI.
+      # - test_tier0_e2e + test_adaptive_criteria_e2e + test_model_trainer_evaluation_modes:
+      #     long-running e2e suites (OOM / >60s timeout).
+      # - test_migration/: requires Supabase/PostgREST.
+      # - test_agents/test_data_preparer/: requires Supabase + feature store
+      #     per commit 8f97a92e (2026-02-04). Re-evaluated 2026-05-05 during
+      #     Shard A of the TypedDict→Pydantic migration; environmental reason
+      #     still valid (no Supabase in GitHub Actions). DataPreparerState
+      #     migration is verified instead via tests/unit/test_ml_foundation_schemas.py
+      #     and tests/integration/test_agents/test_state_checkpoint_replay.py.
+      # - api/test_rbac_endpoints.py: needs live API.
       - name: Run integration tests
         run: |
           pytest tests/integration/ \
