@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
@@ -89,16 +89,34 @@ class ModelTrainerState(BaseAgentSchema):
     # to open NESTED MLflow runs under the parent run instead of new top-level
     # runs. Single-mode callers omit this field; default None acts as False.
     #
-    # Sub-shard D4 (PR post-2444fd8): renamed from ``_repeated_mode_fold_invocation``
-    # to drop the underscore prefix. Pydantic v2 reserves underscore-prefixed
-    # names for private attributes, so the original name could not be a
-    # declared model field. Without a declared field, LangGraph 1.0 dropped
-    # the value from channel state on every node coercion (model_extra is NOT
-    # propagated through channels) — `mlflow_logger.py:192` always read False
-    # in repeated_k10 mode, breaking MLflow run nesting (codex review B2,
-    # 2026-05-05). Now that this is a declared field, LangGraph treats it as
-    # a proper channel and propagates the value through node invocations.
-    repeated_mode_fold_invocation: Optional[bool] = None
+    # Sub-shard D4 (PR #53, post-2444fd8): renamed from
+    # ``_repeated_mode_fold_invocation`` to drop the underscore prefix.
+    # Pydantic v2 reserves underscore-prefixed names for private attributes,
+    # so the original name could not be a declared model field. Without a
+    # declared field, LangGraph 1.0 dropped the value from channel state on
+    # every node coercion (``model_extra`` is NOT propagated through channels)
+    # — ``mlflow_logger.py:192`` always read False in repeated_k10 mode,
+    # breaking MLflow run nesting (codex review B2, 2026-05-05). Now that
+    # this is a declared field, LangGraph treats it as a proper channel and
+    # propagates the value through node invocations.
+    #
+    # Backward-compat alias (codex review N1, 2026-05-05): pre-PR-#53
+    # checkpoints persisted with the original underscore-prefixed key still
+    # need to deserialize cleanly. ``validation_alias=AliasChoices(...)``
+    # accepts BOTH the canonical name (post-PR-#53) AND the legacy
+    # underscore form (pre-PR-#53) at construction/validation time.
+    # ``populate_by_name=True`` (inherited from BaseAgentSchema) is
+    # automatically implied by ``AliasChoices`` here. Serialization uses
+    # the python field name (``repeated_mode_fold_invocation``) — newly
+    # written checkpoints use the canonical name, NOT the legacy alias.
+    # This is asymmetric on purpose: read-old / write-new.
+    repeated_mode_fold_invocation: Optional[bool] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "repeated_mode_fold_invocation",  # canonical (post-PR-#53)
+            "_repeated_mode_fold_invocation",  # legacy underscore (pre-PR-#53)
+        ),
+    )
 
     # === INTERMEDIATE FIELDS ===
     # QC Gate

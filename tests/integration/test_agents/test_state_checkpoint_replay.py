@@ -637,3 +637,111 @@ def test_model_trainer_state_repeated_mode_fold_invocation_propagates_through_la
     # (the pre-D4 model_extra regression), this assertion fires loud.
     assert captured_at_node_b["sentinel"] is True
     assert captured_at_node_b["evaluation_mode"] == "repeated_k10"
+
+
+# --------------------------------------------------------------------------- #
+# Codex review N1 follow-up: backward-compat alias for legacy underscore key  #
+# --------------------------------------------------------------------------- #
+#
+# PR #53 (sub-shard D4) renamed _repeated_mode_fold_invocation to
+# repeated_mode_fold_invocation (drop underscore prefix) so the field could
+# be a declared pydantic channel. Codex's post-fix review flagged that any
+# Redis/DB checkpoints persisted PRE-PR-#53 would contain the legacy
+# underscore key in their JSON payloads, and would silently land in
+# model_extra rather than mapping to the new field.
+#
+# The fix in this test file's companion PR adds
+# ``validation_alias=AliasChoices("repeated_mode_fold_invocation",
+# "_repeated_mode_fold_invocation")`` to the field declaration. These tests
+# pin the resulting contract:
+#
+# 1. Construction via legacy underscore kwarg works.
+# 2. ``model_validate_json`` with legacy underscore key in the JSON payload
+#    works — this is the actual checkpoint-replay scenario.
+# 3. Serialization uses the canonical (python field name), NOT the legacy
+#    alias — newly-written checkpoints use the new format. Asymmetric on
+#    purpose: read-old / write-new.
+#
+# Scope limit: the alias only affects pydantic schema construction +
+# JSON deserialization. LangGraph's channel routing uses the python field
+# name, NOT the alias. So passing the legacy underscore key to
+# ``graph.ainvoke({"_repeated_mode_fold_invocation": True})`` will NOT
+# propagate via channels — production callers must use the canonical name
+# at the LangGraph boundary. This is why we don't have a
+# "test_langgraph_legacy_key_propagates" test: the alias does not fix that
+# path, and that path is not what codex N1 flagged. All production
+# callers of model_trainer use the canonical name post-PR-#53.
+
+
+def test_model_trainer_state_accepts_legacy_underscore_key_at_construction() -> None:
+    """N1 fix: ``ModelTrainerState(_repeated_mode_fold_invocation=True)``
+    constructs successfully via the validation_alias.
+
+    This is the smallest unit of the alias contract — confirms the
+    AliasChoices declaration accepts the legacy form at the kwarg
+    level. Subsequent tests exercise the more realistic JSON-load path.
+    """
+    state = ModelTrainerState(**{"_repeated_mode_fold_invocation": True})
+    assert state.repeated_mode_fold_invocation is True
+
+
+def test_model_trainer_state_replays_legacy_checkpoint_with_underscore_key() -> None:
+    """N1 fix: pre-PR-#53 JSON checkpoints with the legacy underscore
+    key deserialize cleanly via ``model_validate_json``.
+
+    This is the actual checkpoint-replay scenario codex N1 flagged.
+    Pre-fix: the underscore key would land in ``model_extra`` (via
+    extra="allow") because it didn't match any declared field name —
+    silently breaking the propagation contract that mlflow_logger.py
+    relies on. Post-fix: the validation_alias maps the underscore key
+    to the canonical field at deserialization time.
+    """
+    audit_id = uuid4()
+    legacy_checkpoint = {
+        "audit_workflow_id": str(audit_id),
+        "experiment_id": "exp_test",
+        "evaluation_mode": "repeated_k10",
+        # Legacy underscore key — pre-PR-#53 format
+        "_repeated_mode_fold_invocation": True,
+        "fold_idx": 5,
+    }
+    restored = ModelTrainerState.model_validate_json(json.dumps(legacy_checkpoint))
+
+    # Audit chain still round-trips (Decision 7a).
+    assert restored.audit_workflow_id == audit_id
+
+    # Legacy key mapped to canonical field via validation_alias.
+    assert restored.repeated_mode_fold_invocation is True
+
+    # Other fields preserved.
+    assert restored.evaluation_mode == "repeated_k10"
+    assert restored.fold_idx == 5
+
+    # The legacy key should NOT remain in model_extra — pre-fix it would
+    # have fallen there; post-fix it's promoted to the declared field.
+    assert "_repeated_mode_fold_invocation" not in (restored.model_extra or {})
+
+
+def test_model_trainer_state_serializes_with_canonical_name_not_legacy_alias() -> None:
+    """N1 fix: newly-written checkpoints use the canonical python field
+    name, NOT the legacy underscore alias.
+
+    This pins the asymmetric design: read both forms (validation_alias),
+    write only the canonical form (no serialization_alias, no plain
+    alias). Future loads of newly-written checkpoints will see the
+    canonical name and fail-fast if some future schema change drops
+    the canonical name without coordinating with checkpoint persistence.
+    """
+    state = ModelTrainerState(repeated_mode_fold_invocation=True, experiment_id="exp_test")
+    json_str = state.model_dump_json(exclude_none=True)
+    parsed = json.loads(json_str)
+
+    # Canonical (post-PR-#53) name MUST be in the serialization output.
+    assert "repeated_mode_fold_invocation" in parsed
+    assert parsed["repeated_mode_fold_invocation"] is True
+
+    # Legacy underscore form MUST NOT be in the serialization output.
+    # If a future change adds ``alias=...`` (instead of validation_alias),
+    # this test fires loud — the asymmetric read-old/write-new contract
+    # would be broken.
+    assert "_repeated_mode_fold_invocation" not in parsed
