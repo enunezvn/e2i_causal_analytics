@@ -459,3 +459,35 @@ def timer():
             return self._elapsed
 
     return Timer()
+
+
+# ---------------------------------------------------------------------------
+# D1.3 — audit_workflow_id fixture for ml_foundation agent tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def audit_workflow_id():
+    """Workflow-scoped UUID for threading through ml_foundation agent
+    ``input_data`` dicts in tests.
+
+    Tests that call ``agent.run({...})`` should include
+    ``"audit_workflow_id": audit_workflow_id`` in input_data so the State
+    receives a caller-provided UUID rather than relying on the
+    ``Field(default_factory=uuid4)`` transition shim. After sub-shard
+    D1.4 drops the default_factory, this fixture becomes load-bearing
+    for any test that constructs initial agent state.
+
+    Example::
+
+        @pytest.mark.asyncio
+        async def test_thing(audit_workflow_id):
+            input_data = {
+                "audit_workflow_id": audit_workflow_id,
+                ...
+            }
+            result = await agent.run(input_data)
+    """
+    from uuid import uuid4
+
+    return uuid4()
