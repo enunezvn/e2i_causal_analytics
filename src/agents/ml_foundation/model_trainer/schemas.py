@@ -6,17 +6,18 @@ migration plan, this module hosts the canonical ``MetricsSchema`` —
 ``model_deployer`` and ``feature_analyzer`` will import from here in
 Shard C.
 
-The OptunaDistributionSchema for hyperparameter_search_space is
-intentionally NOT in this scaffolding PR — that's a Shard B
-deliverable because it requires deeper integration with the
-hyperparameter-search flow.
+Shard B adds ``OptunaDistributionSchema`` — the typed encoding of
+``hyperparameter_search_space`` entries currently passed as
+``Dict[str, Dict[str, Any]]`` between model_selector and model_trainer.
+The schema is offered for opt-in use; the state.py field stays as
+``Dict[str, Dict[str, Any]]`` until consumer migration is complete.
 """
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Any, List, Literal, Optional, Union
 
-from pydantic import model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.agents.ml_foundation._pydantic_utils import BaseAgentSchema
 
@@ -109,3 +110,83 @@ class MetricsSchema(BaseAgentSchema):
         # causal_inference and time_series do not yet have a canonical
         # metric subset declared in this schema; allow through.
         return self
+
+
+# --------------------------------------------------------------------------- #
+# OptunaDistributionSchema — typed hyperparameter_search_space entries        #
+# --------------------------------------------------------------------------- #
+#
+# Shard B deliverable. The plan (Hotspot #3) flagged this as non-trivial
+# because Optuna distributions don't have a single canonical pydantic
+# representation. The discriminated-union pattern below covers the three
+# distribution kinds the project uses today:
+#
+# - "int":         {type, low, high, [step], [log]}
+# - "float":       {type, low, high, [step], [log]}
+# - "categorical": {type, choices: [...]}
+#
+# A model_selector entry today might look like:
+#   {"learning_rate": {"type": "float", "low": 1e-4, "high": 0.1, "log": True}}
+# After opt-in migration:
+#   OptunaFloatDistribution(type="float", low=1e-4, high=0.1, log=True)
+#
+# The schemas use plain ``BaseModel`` (not ``BaseAgentSchema``) because they
+# are leaf data-shape descriptors, not state nodes — they do not need
+# the dict-like accessor shim or extra="allow" tolerance.
+
+
+class _OptunaDistributionBase(BaseModel):
+    """Common config for Optuna distribution variants."""
+
+    model_config = ConfigDict(extra="forbid")  # strict — typed shape
+
+
+class OptunaIntDistribution(_OptunaDistributionBase):
+    """Optuna integer distribution (``suggest_int``).
+
+    Encoded today as ``{"type": "int", "low": int, "high": int,
+    "step": Optional[int], "log": Optional[bool]}``.
+    """
+
+    type: Literal["int"]
+    low: int
+    high: int
+    step: Optional[int] = None
+    log: Optional[bool] = None
+
+
+class OptunaFloatDistribution(_OptunaDistributionBase):
+    """Optuna float distribution (``suggest_float``).
+
+    Encoded today as ``{"type": "float", "low": float, "high": float,
+    "step": Optional[float], "log": Optional[bool]}``.
+    """
+
+    type: Literal["float"]
+    low: float
+    high: float
+    step: Optional[float] = None
+    log: Optional[bool] = None
+
+
+class OptunaCategoricalDistribution(_OptunaDistributionBase):
+    """Optuna categorical distribution (``suggest_categorical``).
+
+    Encoded today as ``{"type": "categorical", "choices": [...]}``.
+    Choices are kept as ``List[Any]`` because they include int/float/str
+    values across different hyperparameters.
+    """
+
+    type: Literal["categorical"]
+    choices: List[Any] = Field(min_length=1)
+
+
+# Discriminated union — pydantic v2 picks the variant by the ``type`` tag.
+OptunaDistribution = Annotated[
+    Union[
+        OptunaIntDistribution,
+        OptunaFloatDistribution,
+        OptunaCategoricalDistribution,
+    ],
+    Field(discriminator="type"),
+]

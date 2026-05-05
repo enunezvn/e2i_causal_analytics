@@ -1,13 +1,48 @@
 """State definition for model_trainer agent.
 
-This module defines the TypedDict state used by the model_trainer LangGraph.
+Migrated from ``TypedDict(total=False)`` to pydantic v2 ``BaseModel``
+in Shard B of the migration tracked at
+``.claude/plans/typeddict_to_pydantic_migration_plan_20260504.md``.
+
+Inherits from ``BaseAgentSchema`` (extra="allow",
+arbitrary_types_allowed=True, dict-like accessors) so the existing
+``state["key"]`` / ``state.get("key", default)`` call sites in
+``model_trainer/nodes/`` work unchanged. Per Decision 8a, every field
+is ``Optional[T] = None`` except ``audit_workflow_id`` (UUID with
+``Field(default_factory=uuid4)`` matching scope_definer + data_preparer).
+
+The ``arbitrary_types_allowed`` setting from BaseAgentSchema is
+load-bearing here — model_trainer state holds 15+ non-pydantic
+runtime objects: ``trained_model: Any`` (sklearn/xgboost),
+``preprocessor: Any`` (fitted Pipeline), ``X_train_resampled``,
+``X_train_preprocessed`` etc. (numpy arrays / pandas DataFrames).
+
+NOTE on ``_repeated_mode_fold_invocation``: pydantic v2 reserves
+underscore-prefixed names for private attributes — the field cannot
+be declared directly with a leading underscore. The agent code at
+``model_trainer/agent.py:1096`` passes the key as a dict-style update
+(`per_fold["_repeated_mode_fold_invocation"] = True`); under the
+BaseAgentSchema ``extra="allow"`` config + dict-like ``__setitem__``,
+this routes into ``model_extra`` and remains accessible via
+``state.get("_repeated_mode_fold_invocation", False)``. Behavior is
+preserved at runtime; type-level documentation of this sentinel is
+deferred to a follow-up sub-shard that renames the call sites.
 """
 
-from typing import Any, Dict, List, Optional, TypedDict
-from uuid import UUID
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID, uuid4
+
+from pydantic import Field
+
+from src.agents.ml_foundation._pydantic_utils import (
+    BaseAgentSchema,
+    audit_workflow_id_validator,
+)
 
 
-class ModelTrainerState(TypedDict, total=False):
+class ModelTrainerState(BaseAgentSchema):
     """State for model_trainer agent.
 
     The model_trainer executes the complete ML training pipeline with strict
@@ -16,234 +51,233 @@ class ModelTrainerState(TypedDict, total=False):
 
     # === INPUT FIELDS ===
     # From model_selector
-    model_candidate: Dict[str, Any]  # Complete ModelCandidate
-    algorithm_name: str  # Extracted from model_candidate
-    algorithm_class: str  # Python class path
-    hyperparameter_search_space: Dict[str, Dict[str, Any]]  # Optuna search space
-    default_hyperparameters: Dict[str, Any]  # Starting hyperparameters
+    model_candidate: Optional[Dict[str, Any]] = None  # Complete ModelCandidate
+    algorithm_name: Optional[str] = None
+    algorithm_class: Optional[str] = None
+    hyperparameter_search_space: Optional[Dict[str, Dict[str, Any]]] = None  # Optuna search space
+    default_hyperparameters: Optional[Dict[str, Any]] = None
 
     # From data_preparer
-    qc_report: Dict[str, Any]  # QC validation report
-    experiment_id: str  # Experiment identifier
-    feast_fallback_used: bool  # True when data_preparer used the Feast historical-features fallback
+    qc_report: Optional[Dict[str, Any]] = None  # QC validation report
+    experiment_id: Optional[str] = None
+    feast_fallback_used: Optional[bool] = None  # data_preparer Feast historical-features fallback
 
     # From scope_definer
-    success_criteria: Dict[str, float]  # Performance thresholds to meet
-    problem_type: str  # binary_classification, regression, etc.
+    success_criteria: Optional[Dict[str, float]] = None  # Performance thresholds to meet
+    problem_type: Optional[str] = None  # binary_classification, regression, etc.
     # Block 5: optional business cost matrix (tp/fp/fn/tn dollar values).
     # When set, the evaluator computes business_utility from the confusion
     # matrix at the chosen (validation-tuned) threshold and adds it to
     # validation_metrics + test_metrics (#10).
-    cost_matrix: Optional[Dict[str, float]]
+    cost_matrix: Optional[Dict[str, float]] = None
 
     # Training configuration
-    enable_hpo: bool  # Whether to run hyperparameter optimization
-    hpo_trials: int  # Number of Optuna trials
-    hpo_timeout_hours: Optional[float]  # HPO timeout
-    early_stopping: bool  # Enable early stopping
-    early_stopping_patience: int  # Early stopping patience epochs
-    enable_mlflow: bool  # Whether to log to MLflow
-    enable_checkpointing: bool  # Whether to save model checkpoints
+    enable_hpo: Optional[bool] = None
+    hpo_trials: Optional[int] = None
+    hpo_timeout_hours: Optional[float] = None
+    early_stopping: Optional[bool] = None
+    early_stopping_patience: Optional[int] = None
+    enable_mlflow: Optional[bool] = None
+    enable_checkpointing: Optional[bool] = None
 
     # W3-lite Day 3 + Day 4 (shard 17 W3 rows Day 3-4 + shard 21 §A/§B):
-    # repeated train/val/test fold-iteration plumbing. Populated by the
-    # ``_run_repeated_splits`` orchestrator (Day 4); consumed by
-    # ``resolve_fold_random_state`` in split_loader / hyperparameter_tuner /
-    # model_trainer_node (Day 3) and by ``split_enforcer`` /
-    # ``mlflow_logger`` (Day 4) for repeated-mode-aware behavior.
-    evaluation_mode: str  # "single" (default) | "repeated_k10"
-    fold_random_state: int  # Per-fold seed from RepeatedStratifiedSplitter
-    fold_idx: int  # 0..k-1 fold index for the active repeated-mode invocation
-    # Day-5 (cycle-15 I-4): orchestrator sentinel propagated into graph state so
-    # per-fold nodes (notably ``mlflow_logger``) can branch on "called per-fold
-    # inside repeated_k10". Single-mode callers omit this field; default False.
-    _repeated_mode_fold_invocation: bool
+    # repeated train/val/test fold-iteration plumbing. See module docstring
+    # for the ``_repeated_mode_fold_invocation`` sentinel handling.
+    evaluation_mode: Optional[str] = None  # "single" (default) | "repeated_k10"
+    fold_random_state: Optional[int] = None  # Per-fold seed
+    fold_idx: Optional[int] = None  # 0..k-1 fold index
 
     # === INTERMEDIATE FIELDS ===
     # QC Gate
-    qc_gate_passed: bool  # Whether QC gate check passed
-    qc_gate_message: str  # Gate check message
+    qc_gate_passed: Optional[bool] = None
+    qc_gate_message: Optional[str] = None
 
     # Data Splits
-    train_data: Dict[str, Any]  # Training split (X, y, row_count)
-    validation_data: Dict[str, Any]  # Validation split (X, y, row_count)
-    test_data: Dict[str, Any]  # Test split (X, y, row_count)
-    holdout_data: Dict[str, Any]  # Holdout split (X, y, row_count) - LOCKED
+    train_data: Optional[Dict[str, Any]] = None  # (X, y, row_count)
+    validation_data: Optional[Dict[str, Any]] = None
+    test_data: Optional[Dict[str, Any]] = None
+    holdout_data: Optional[Dict[str, Any]] = None  # LOCKED
 
     # Split Validation
-    min_samples_per_split: int  # Minimum viable samples per split (default 10)
-    split_ratios_valid: bool  # Whether splits match expected ratios
-    train_samples: int
-    validation_samples: int
-    test_samples: int
-    holdout_samples: int
-    total_samples: int
-    train_ratio: float  # Actual train ratio (should be ~0.60)
-    validation_ratio: float  # Actual validation ratio (should be ~0.20)
-    test_ratio: float  # Actual test ratio (should be ~0.15)
-    holdout_ratio: float  # Actual holdout ratio (should be ~0.05)
-    split_validation_message: str  # Split validation message
-    split_ratio_checks: List[str]  # Individual ratio check results
-    leakage_warnings: List[str]  # Data leakage warnings
+    min_samples_per_split: Optional[int] = None  # Minimum viable samples per split
+    split_ratios_valid: Optional[bool] = None
+    train_samples: Optional[int] = None
+    validation_samples: Optional[int] = None
+    test_samples: Optional[int] = None
+    holdout_samples: Optional[int] = None
+    total_samples: Optional[int] = None
+    train_ratio: Optional[float] = None  # Should be ~0.60
+    validation_ratio: Optional[float] = None  # Should be ~0.20
+    test_ratio: Optional[float] = None  # Should be ~0.15
+    holdout_ratio: Optional[float] = None  # Should be ~0.05
+    split_validation_message: Optional[str] = None
+    split_ratio_checks: Optional[List[str]] = None
+    leakage_warnings: Optional[List[str]] = None
 
     # Class Imbalance Detection
-    imbalance_detected: bool  # Whether imbalance was detected
-    imbalance_ratio: float  # Majority/minority ratio (e.g., 10.0 means 10:1)
-    minority_ratio: float  # Minority class percentage (e.g., 0.09 for 9%)
-    imbalance_severity: str  # none, moderate, severe, extreme
-    class_distribution: Dict[int, int]  # {0: 800, 1: 77}
-    recommended_strategy: str  # smote, random_oversample, class_weight, etc.
-    strategy_rationale: str  # LLM explanation for strategy choice
+    imbalance_detected: Optional[bool] = None
+    imbalance_ratio: Optional[float] = None  # Majority/minority ratio
+    minority_ratio: Optional[float] = None  # Minority class percentage
+    imbalance_severity: Optional[str] = None  # none, moderate, severe, extreme
+    class_distribution: Optional[Dict[int, int]] = None  # {0: 800, 1: 77}
+    recommended_strategy: Optional[str] = None  # smote, random_oversample, class_weight, etc.
+    strategy_rationale: Optional[str] = None  # LLM explanation
 
     # Resampling Results
-    X_train_resampled: Any  # Resampled training features
-    y_train_resampled: Any  # Resampled training labels
-    resampling_applied: bool  # Whether resampling was actually applied
-    resampling_strategy: str  # Strategy that was applied
-    original_train_shape: tuple  # Shape before resampling
-    resampled_train_shape: tuple  # Shape after resampling
-    original_distribution: Dict[int, int]  # Class counts before
-    resampled_distribution: Dict[int, int]  # Class counts after
+    X_train_resampled: Optional[Any] = None  # Resampled features (np.ndarray / DataFrame)
+    y_train_resampled: Optional[Any] = None  # Resampled labels
+    resampling_applied: Optional[bool] = None
+    resampling_strategy: Optional[str] = None
+    original_train_shape: Optional[Tuple[int, ...]] = None  # Shape before resampling
+    resampled_train_shape: Optional[Tuple[int, ...]] = None  # Shape after resampling
+    original_distribution: Optional[Dict[int, int]] = None  # Class counts before
+    resampled_distribution: Optional[Dict[int, int]] = None  # Class counts after
 
     # Feature Names (preserved from data_preparer)
-    feature_columns: List[str]  # Original feature names from data_preparer
+    feature_columns: Optional[List[str]] = None
 
     # Preprocessing
-    preprocessor: Any  # Fitted preprocessing pipeline (fit on train only)
-    X_train_preprocessed: Any  # Transformed training data
-    X_validation_preprocessed: Any  # Transformed validation data
-    X_test_preprocessed: Any  # Transformed test data
-    preprocessing_statistics: Dict[str, Any]  # Statistics from train split
+    preprocessor: Optional[Any] = None  # Fitted pipeline (fit on train only)
+    X_train_preprocessed: Optional[Any] = None
+    X_validation_preprocessed: Optional[Any] = None
+    X_test_preprocessed: Optional[Any] = None
+    preprocessing_statistics: Optional[Dict[str, Any]] = None  # Stats from train split
 
     # Hyperparameter Tuning
-    hpo_completed: bool  # Whether HPO completed
-    hpo_best_trial: Optional[int]  # Best trial number
-    best_hyperparameters: Dict[str, Any]  # Best hyperparameters found
-    hpo_trials_run: int  # Number of trials actually run
-    hpo_duration_seconds: float  # HPO duration
+    hpo_completed: Optional[bool] = None
+    hpo_best_trial: Optional[int] = None
+    best_hyperparameters: Optional[Dict[str, Any]] = None
+    hpo_trials_run: Optional[int] = None
+    hpo_duration_seconds: Optional[float] = None
 
     # Model Training
-    trained_model: Any  # Trained model object
-    training_duration_seconds: float  # Training duration
-    early_stopped: bool  # Whether training stopped early
-    final_epoch: Optional[int]  # Final epoch number
+    trained_model: Optional[Any] = None  # Trained model (sklearn / xgboost / etc.)
+    training_duration_seconds: Optional[float] = None
+    early_stopped: Optional[bool] = None
+    final_epoch: Optional[int] = None
 
     # Model Evaluation
-    train_metrics: Dict[str, float]  # Training set metrics
-    validation_metrics: Dict[str, float]  # Validation set metrics
-    test_metrics: Dict[str, float]  # Test set metrics (FINAL)
+    train_metrics: Optional[Dict[str, float]] = None
+    validation_metrics: Optional[Dict[str, float]] = None
+    test_metrics: Optional[Dict[str, float]] = None  # FINAL test-set metrics
 
     # Classification Metrics (problem-type specific)
-    auc_roc: Optional[float]  # AUC-ROC
-    precision: Optional[float]  # Precision
-    recall: Optional[float]  # Recall
-    f1_score: Optional[float]  # F1 score
-    pr_auc: Optional[float]  # Precision-Recall AUC
-    confusion_matrix: Optional[Dict[str, int]]  # TP, TN, FP, FN
+    auc_roc: Optional[float] = None
+    precision: Optional[float] = None
+    recall: Optional[float] = None
+    f1_score: Optional[float] = None
+    pr_auc: Optional[float] = None
+    confusion_matrix: Optional[Dict[str, int]] = None  # TP, TN, FP, FN
 
     # Regression Metrics (problem-type specific)
-    rmse: Optional[float]  # Root mean squared error
-    mae: Optional[float]  # Mean absolute error
-    r2: Optional[float]  # R-squared
+    rmse: Optional[float] = None
+    mae: Optional[float] = None
+    r2: Optional[float] = None
 
     # Calibration (classification only)
-    brier_score: Optional[float]  # Brier score
-    calibration_error: Optional[float]  # Expected Calibration Error (ECE)
-    calibrated_ece: Optional[float]  # ECE after post-hoc calibration
-    calibration_analysis: Dict[str, Any]  # Full calibration curve data
-    calibrated_test_metrics: Dict[str, float]  # Metrics after post-hoc calibration
-    post_hoc_calibration: Dict[str, Any]  # Calibration method info
+    brier_score: Optional[float] = None
+    calibration_error: Optional[float] = None  # Expected Calibration Error (ECE)
+    calibrated_ece: Optional[float] = None  # ECE after post-hoc calibration
+    calibration_analysis: Optional[Dict[str, Any]] = None  # Full calibration curve data
+    calibrated_test_metrics: Optional[Dict[str, float]] = None  # Metrics after post-hoc cal
+    post_hoc_calibration: Optional[Dict[str, Any]] = None  # Calibration method info
 
     # Imbalance-Robust Metrics
-    mcc: Optional[float]  # Matthews Correlation Coefficient
+    mcc: Optional[float] = None  # Matthews Correlation Coefficient
 
     # Threshold Analysis
-    optimal_threshold: float  # Optimal classification threshold (Youden's J)
-    f1_threshold_analysis: Dict[str, float]  # F1-optimal threshold + metrics
-    precision_at_k: Dict[int, float]  # {100: 0.35, 500: 0.28}
+    optimal_threshold: Optional[float] = None  # Youden's J
+    f1_threshold_analysis: Optional[Dict[str, float]] = None  # F1-optimal threshold + metrics
+    precision_at_k: Optional[Dict[int, float]] = None  # {100: 0.35, 500: 0.28}
 
     # Imbalance-Aware Evaluation (from evaluator, propagated through agent)
-    precision_constrained: Optional[Dict[str, Any]]  # Precision-constrained threshold info
-    minority_recall: Optional[float]  # Recall on minority class at optimal threshold
-    minority_precision: Optional[float]  # Precision on minority class at optimal threshold
-    test_metrics_at_optimal: Dict[str, float]  # Test metrics at optimal threshold
-    test_metrics_at_05: Dict[str, float]  # Test metrics at standard 0.5 threshold
+    precision_constrained: Optional[Dict[str, Any]] = None  # Precision-constrained threshold info
+    minority_recall: Optional[float] = None  # Recall on minority class at optimal threshold
+    minority_precision: Optional[float] = None  # Precision on minority class at optimal threshold
+    test_metrics_at_optimal: Optional[Dict[str, float]] = None  # At optimal threshold
+    test_metrics_at_05: Optional[Dict[str, float]] = None  # At standard 0.5 threshold
 
     # Permutation Test
-    permutation_test: Dict[str, Any]  # p-value, shuffled AUC stats, verdict
+    permutation_test: Optional[Dict[str, Any]] = None  # p-value, shuffled AUC stats, verdict
 
     # Cross-Validation
-    cv_results: Dict[str, Any]  # Stratified k-fold metrics
+    cv_results: Optional[Dict[str, Any]] = None  # Stratified k-fold metrics
 
     # Split Stratification
-    split_validation: Dict[str, Any]  # Class ratio drift across splits
+    split_validation: Optional[Dict[str, Any]] = None  # Class ratio drift across splits
 
     # Confidence Intervals
-    confidence_interval: Dict[str, tuple]  # {'auc': (0.78, 0.85)}
-    bootstrap_samples: int  # Number of bootstrap samples
+    confidence_interval: Optional[Dict[str, Tuple[float, ...]]] = None  # {'auc': (0.78, 0.85)}
+    bootstrap_samples: Optional[int] = None
 
     # Success Criteria Check
-    success_criteria_met: bool  # Whether all criteria met
-    success_criteria_results: Dict[str, bool]  # Metric -> passed/failed
+    success_criteria_met: Optional[bool] = None
+    success_criteria_results: Optional[Dict[str, bool]] = None  # Metric -> passed/failed
 
     # === OUTPUT FIELDS ===
     # Trained Model
-    training_run_id: str  # Unique training run ID
-    model_id: str  # Model identifier
+    training_run_id: Optional[str] = None
+    model_id: Optional[str] = None
 
     # MLflow Integration (populated by log_to_mlflow node)
-    mlflow_run_id: Optional[str]  # MLflow run ID
-    mlflow_experiment_id: Optional[str]  # MLflow experiment ID
-    mlflow_status: str  # MLflow logging status: success, disabled, skipped, failed
-    mlflow_model_uri: Optional[str]  # MLflow model URI (runs:/<run_id>/model)
-    mlflow_registered: bool  # Whether model was registered in registry
-    mlflow_model_version: Optional[str]  # Registered model version
-    mlflow_model_name: Optional[str]  # Registered model name
-    db_training_run_id: Optional[str]  # Database training run ID (UUID)
+    mlflow_run_id: Optional[str] = None
+    mlflow_experiment_id: Optional[str] = None
+    mlflow_status: Optional[str] = None  # success, disabled, skipped, failed
+    mlflow_model_uri: Optional[str] = None  # runs:/<run_id>/model
+    mlflow_registered: Optional[bool] = None  # Registered in MLflow registry
+    mlflow_model_version: Optional[str] = None
+    mlflow_model_name: Optional[str] = None
+    db_training_run_id: Optional[str] = None  # Database training run ID (UUID-string)
     # Legacy fields (kept for compatibility)
-    model_artifact_uri: str  # MLflow model artifact URI (deprecated, use mlflow_model_uri)
-    preprocessing_artifact_uri: str  # Preprocessing artifact URI
-    registered_model_name: str  # MLflow registered model name (deprecated)
-    model_version: int  # MLflow model version (deprecated)
-    model_stage: str  # MLflow stage (Staging, Production)
+    model_artifact_uri: Optional[str] = None  # Deprecated, use mlflow_model_uri
+    preprocessing_artifact_uri: Optional[str] = None
+    registered_model_name: Optional[str] = None  # Deprecated
+    model_version: Optional[int] = None  # Deprecated
+    model_stage: Optional[str] = None  # MLflow stage (Staging, Production)
 
     # Artifacts
-    model_artifact_path: str  # Local model artifact path
-    preprocessing_artifact_path: str  # Local preprocessing artifact path
+    model_artifact_path: Optional[str] = None  # Local model artifact path
+    preprocessing_artifact_path: Optional[str] = None
 
     # Timing
-    training_started_at: str  # ISO timestamp
-    training_completed_at: str  # ISO timestamp
-    total_training_duration_seconds: float  # Total end-to-end duration
+    training_started_at: Optional[str] = None  # ISO timestamp
+    training_completed_at: Optional[str] = None
+    total_training_duration_seconds: Optional[float] = None  # End-to-end
 
     # Status
-    training_status: str  # running, completed, failed
-    training_error: Optional[str]  # Error message if failed
+    training_status: Optional[str] = None  # running, completed, failed
+    training_error: Optional[str] = None
 
     # Metadata
-    framework: str  # ML framework (econml, xgboost, sklearn, etc.)
-    trained_by: str  # Agent name (model_trainer)
-    created_at: str  # ISO timestamp
+    framework: Optional[str] = None  # ML framework (econml, xgboost, sklearn, etc.)
+    trained_by: Optional[str] = None  # Agent name
+    created_at: Optional[str] = None  # ISO timestamp
 
     # Database
-    persisted_to_db: bool  # Whether saved to ml_training_runs table
+    persisted_to_db: Optional[bool] = None  # Saved to ml_training_runs table
 
     # Leakage Suspicion (post-training)
-    leakage_suspected: bool  # Whether metrics suggest data leakage
-    suspicion_level: str  # "critical" / "high" / "none"
-    suspicion_reasons: List[str]  # Why leakage is suspected
-    investigation_recommendations: List[str]  # Recommended next steps
+    leakage_suspected: Optional[bool] = None  # Metrics suggest data leakage
+    suspicion_level: Optional[str] = None  # "critical" / "high" / "none"
+    suspicion_reasons: Optional[List[str]] = None
+    investigation_recommendations: Optional[List[str]] = None
 
     # Quality Remediation (post-evaluation inner loop)
-    quality_remediation_status: str  # not_needed | enhancing | improved | failed | max_attempts
-    quality_remediation_attempts: int  # counter for inner loop
-    quality_remediation_max_attempts: int  # default 2
-    quality_remediation_history: List[Dict[str, Any]]  # [{strategy, metrics, improved}]
-    enhanced_search_space: Dict[str, Any]  # merged search space with regularization
+    quality_remediation_status: Optional[str] = None  # not_needed | enhancing | improved | failed
+    quality_remediation_attempts: Optional[int] = None  # counter for inner loop
+    quality_remediation_max_attempts: Optional[int] = None  # default 2
+    quality_remediation_history: Optional[List[Dict[str, Any]]] = None
+    enhanced_search_space: Optional[Dict[str, Any]] = None  # Search space + regularization
 
     # Error handling
-    error: Optional[str]
-    error_type: Optional[str]
+    error: Optional[str] = None
+    error_type: Optional[str] = None
 
-    # Audit chain
-    audit_workflow_id: UUID
+    # Audit chain — Decision 7a: typed as UUID with str↔UUID coercion via the
+    # validator factory. ``default_factory=uuid4`` matches scope_definer +
+    # data_preparer convention so existing agent flows that construct
+    # ModelTrainerState as a dict literal without audit_workflow_id keep
+    # working. A future sub-shard tightens to "caller MUST provide".
+    audit_workflow_id: UUID = Field(default_factory=uuid4)
+
+    _validate_audit_id = audit_workflow_id_validator()
