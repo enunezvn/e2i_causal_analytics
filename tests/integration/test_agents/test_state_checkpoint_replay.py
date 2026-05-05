@@ -729,15 +729,14 @@ def test_model_trainer_state_dual_key_payload_canonical_wins() -> None:
     When a malformed checkpoint contains BOTH the canonical and the
     legacy underscore keys, ``AliasChoices`` resolves to the FIRST
     alias listed in the declaration — which we keep as the canonical
-    name. The runner-up key (legacy underscore) lands in
-    ``model_extra`` with its discarded value because ``extra="allow"``
-    is on BaseAgentSchema.
+    name.
 
-    This scenario is extremely unlikely in practice (no real checkpoint
-    writer would emit both forms), but pinning the behavior makes any
-    future regression fire loud — e.g., if someone reorders the
-    AliasChoices and the legacy form starts winning, this test catches
-    it before silent corruption ships.
+    D3 update (2026-05-05): under ``extra="ignore"`` (tightened from
+    ``extra="allow"``) the runner-up key is silently DROPPED rather than
+    landing in ``model_extra``. Both behaviors preserve the canonical-
+    wins precedence; D3 makes the residue invisible (which is OK because
+    no production code path actually inspects model_extra for this key
+    — LangGraph drops model_extra at every channel boundary).
 
     Verified empirically against pydantic 2.12.5: precedence follows
     AliasChoices declaration order, NOT input dict iteration order.
@@ -754,9 +753,10 @@ def test_model_trainer_state_dual_key_payload_canonical_wins() -> None:
     assert s1.repeated_mode_fold_invocation is False, (
         "Canonical alias must win when both keys present (declaration order is load-bearing)"
     )
-    # Runner-up legacy key lands in model_extra with its discarded value.
-    assert s1.model_extra is not None
-    assert s1.model_extra.get("_repeated_mode_fold_invocation") is True
+    # D3 (2026-05-05): runner-up legacy key is silently DROPPED under
+    # ``extra="ignore"``. Pre-D3 it landed in model_extra with its
+    # discarded value.
+    assert s1.model_extra is None or "_repeated_mode_fold_invocation" not in s1.model_extra
 
     payload_canonical_first = {
         "audit_workflow_id": str(audit_id),
@@ -765,8 +765,7 @@ def test_model_trainer_state_dual_key_payload_canonical_wins() -> None:
     }
     s2 = ModelTrainerState.model_validate_json(json.dumps(payload_canonical_first))
     assert s2.repeated_mode_fold_invocation is False
-    assert s2.model_extra is not None
-    assert s2.model_extra.get("_repeated_mode_fold_invocation") is True
+    assert s2.model_extra is None or "_repeated_mode_fold_invocation" not in s2.model_extra
 
 
 def test_model_trainer_state_serializes_with_canonical_name_not_legacy_alias() -> None:
