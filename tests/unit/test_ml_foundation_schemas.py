@@ -1203,3 +1203,137 @@ def test_success_criteria_schema_omitted_v3_fields_default_to_none() -> None:
         "dataset_disease",
     ):
         assert getattr(schema, field) is None
+
+
+# --------------------------------------------------------------------------- #
+# D2.4 — scope_spec wired into DataPreparerState/ModelSelectorState; ScopeSpec
+# Schema gains 24 caller-injected consumer-side fields.
+# --------------------------------------------------------------------------- #
+
+
+def test_scope_spec_schema_declares_data_preparer_consumer_keys() -> None:
+    """D2.4: ScopeSpecSchema declares the 24 consumer keys read across
+    data_preparer nodes (date_column, required_columns, data_source,
+    table_name, etc.). Pre-D2.4 these flowed through model_extra.
+    """
+    schema = ScopeSpecSchema(
+        data_source="patients_v2",
+        table_name="rwd.patients",
+        date_column="event_date",
+        required_columns=["patient_id", "event_date"],
+        target_column="outcome",
+        scaling_method="standard",
+        encoding_method="onehot",
+        imputation_strategy="median",
+        filters={"region": "us"},
+        entity_column="patient_id",
+        split_date="2026-01-01",
+        val_days=30,
+        test_days=60,
+        use_sample_data=True,
+        sample_size=1000,
+        event_date_column="event_date",
+        target_date_column="outcome_date",
+        feature_date_columns=["dx_date", "rx_date"],
+        entity_key="patient",
+        max_staleness_days=14.0,
+        unique_columns=["patient_id"],
+        expected_dtypes={"patient_id": "string"},
+        exclude_columns=["raw_id"],
+        extract_datetime_features=True,
+    )
+    assert schema.data_source == "patients_v2"
+    assert schema.date_column == "event_date"
+    assert schema.target_column == "outcome"
+    assert schema.use_sample_data is True
+    assert schema.feature_date_columns == ["dx_date", "rx_date"]
+
+
+def test_data_preparer_state_scope_spec_validates_typed_schema() -> None:
+    """D2.4: DataPreparerState constructed with scope_spec dict literal
+    validates the dict into a typed ScopeSpecSchema instance.
+    """
+    from src.agents.ml_foundation.data_preparer.state import DataPreparerState
+
+    state = DataPreparerState(
+        scope_spec={
+            "experiment_id": "exp_001",
+            "data_source": "rwd.patients_v2",
+            "table_name": "rwd.patients_v2",
+            "date_column": "event_date",
+            "required_columns": ["patient_id", "event_date"],
+            "split_date": "2026-01-01",
+        }
+    )
+    assert state.scope_spec is not None
+    assert isinstance(state.scope_spec, ScopeSpecSchema)
+    assert state.scope_spec.get("data_source") == "rwd.patients_v2"
+    assert state.scope_spec.get("date_column") == "event_date"
+    assert state.scope_spec.get("split_date") == "2026-01-01"
+
+
+def test_model_selector_state_scope_spec_validates_typed_schema() -> None:
+    """D2.4: same contract on ModelSelectorState (lighter consumer)."""
+    from src.agents.ml_foundation.model_selector.state import ModelSelectorState
+
+    state = ModelSelectorState(
+        scope_spec={
+            "experiment_id": "exp_002",
+            "problem_type": "binary_classification",
+            "technical_constraints": ["interpretability"],
+        }
+    )
+    assert state.scope_spec is not None
+    assert isinstance(state.scope_spec, ScopeSpecSchema)
+    assert state.scope_spec.experiment_id == "exp_002"
+    assert state.scope_spec.problem_type == "binary_classification"
+
+
+def test_scope_spec_schema_omitted_consumer_fields_default_to_none() -> None:
+    """D2.4: all 24 new consumer keys default to None when omitted."""
+    schema = ScopeSpecSchema(experiment_id="e1")
+    for field in (
+        "data_source",
+        "table_name",
+        "date_column",
+        "required_columns",
+        "expected_dtypes",
+        "unique_columns",
+        "max_staleness_days",
+        "target_column",
+        "exclude_columns",
+        "scaling_method",
+        "encoding_method",
+        "imputation_strategy",
+        "extract_datetime_features",
+        "filters",
+        "entity_column",
+        "split_date",
+        "val_days",
+        "test_days",
+        "use_sample_data",
+        "sample_size",
+        "event_date_column",
+        "target_date_column",
+        "feature_date_columns",
+        "entity_key",
+    ):
+        assert getattr(schema, field) is None, f"field {field} should be None"
+
+
+def test_scope_spec_schema_d24_round_trips_through_json() -> None:
+    """D2.4: scope_spec round-trips through JSON with all 24 new fields."""
+    original = ScopeSpecSchema(
+        experiment_id="exp_rt",
+        data_source="src",
+        date_column="evt",
+        target_column="y",
+        filters={"region": "us"},
+        feature_date_columns=["dx", "rx"],
+        val_days=30,
+    )
+    dumped = original.model_dump()
+    restored = ScopeSpecSchema.model_validate(dumped)
+    assert restored.data_source == "src"
+    assert restored.feature_date_columns == ["dx", "rx"]
+    assert restored.val_days == 30

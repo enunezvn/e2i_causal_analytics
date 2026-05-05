@@ -92,6 +92,49 @@ class ScopeSpecSchema(BaseAgentSchema):
     sampling_frame_audit: Optional[Dict[str, Any]] = None  # per-metric threshold overrides
     sampling_frame_max_drift: Optional[float] = None
 
+    # D2.4: 24 caller-injected consumer-side keys read by data_preparer
+    # nodes (and a few by model_selector). Pre-D2.4 these flowed through
+    # ``model_extra`` because the producer at ``scope_builder.py`` does
+    # NOT emit them — they come from the runner / orchestrator merging
+    # them into scope_spec before the data_preparer agent runs. Each
+    # consumer reads via ``scope_spec.get("key", default)``.
+
+    # Schema validation (data_preparer/nodes/schema_validator.py:64-70)
+    data_source: Optional[str] = None
+    table_name: Optional[str] = None
+
+    # Quality checker (data_preparer/nodes/quality_checker.py:54-59)
+    date_column: Optional[str] = None
+    required_columns: Optional[List[str]] = None
+    expected_dtypes: Optional[Dict[str, str]] = None
+    unique_columns: Optional[List[str]] = None
+    max_staleness_days: Optional[float] = None
+
+    # Data transformer (data_preparer/nodes/data_transformer.py:62-80)
+    target_column: Optional[str] = None
+    exclude_columns: Optional[List[str]] = None  # deprecated; use excluded_features
+    scaling_method: Optional[str] = None
+    encoding_method: Optional[str] = None
+    imputation_strategy: Optional[str] = None
+    extract_datetime_features: Optional[bool] = None
+
+    # Data loader (data_preparer/nodes/data_loader.py:50-82)
+    filters: Optional[Dict[str, Any]] = None
+    entity_column: Optional[str] = None
+    split_date: Optional[str] = None  # ISO 8601
+    val_days: Optional[int] = None
+    test_days: Optional[int] = None
+    use_sample_data: Optional[bool] = None
+    sample_size: Optional[int] = None
+
+    # Leakage detector (data_preparer/nodes/leakage_detector.py:110-369)
+    event_date_column: Optional[str] = None
+    target_date_column: Optional[str] = None
+    feature_date_columns: Optional[List[str]] = None
+
+    # Feast registrar (data_preparer/nodes/feast_registrar.py:90-93)
+    entity_key: Optional[str] = None
+
 
 class SuccessCriteriaSchema(BaseAgentSchema):
     """Acceptance thresholds + adaptive overlay for a scope.
