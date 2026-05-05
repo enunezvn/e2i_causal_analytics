@@ -722,6 +722,53 @@ def test_model_trainer_state_replays_legacy_checkpoint_with_underscore_key() -> 
     assert "_repeated_mode_fold_invocation" not in (restored.model_extra or {})
 
 
+def test_model_trainer_state_dual_key_payload_canonical_wins() -> None:
+    """N1 follow-up I1 (codex review of PR #55, 2026-05-05): pin the
+    dual-key precedence behavior of the ``AliasChoices`` declaration.
+
+    When a malformed checkpoint contains BOTH the canonical and the
+    legacy underscore keys, ``AliasChoices`` resolves to the FIRST
+    alias listed in the declaration — which we keep as the canonical
+    name. The runner-up key (legacy underscore) lands in
+    ``model_extra`` with its discarded value because ``extra="allow"``
+    is on BaseAgentSchema.
+
+    This scenario is extremely unlikely in practice (no real checkpoint
+    writer would emit both forms), but pinning the behavior makes any
+    future regression fire loud — e.g., if someone reorders the
+    AliasChoices and the legacy form starts winning, this test catches
+    it before silent corruption ships.
+
+    Verified empirically against pydantic 2.12.5: precedence follows
+    AliasChoices declaration order, NOT input dict iteration order.
+    Both orderings of the input dict produce the same result below.
+    """
+    # Canonical wins regardless of input dict ordering.
+    audit_id = uuid4()
+    payload_legacy_first = {
+        "audit_workflow_id": str(audit_id),
+        "_repeated_mode_fold_invocation": True,  # legacy says True
+        "repeated_mode_fold_invocation": False,  # canonical says False
+    }
+    s1 = ModelTrainerState.model_validate_json(json.dumps(payload_legacy_first))
+    assert s1.repeated_mode_fold_invocation is False, (
+        "Canonical alias must win when both keys present (declaration order is load-bearing)"
+    )
+    # Runner-up legacy key lands in model_extra with its discarded value.
+    assert s1.model_extra is not None
+    assert s1.model_extra.get("_repeated_mode_fold_invocation") is True
+
+    payload_canonical_first = {
+        "audit_workflow_id": str(audit_id),
+        "repeated_mode_fold_invocation": False,
+        "_repeated_mode_fold_invocation": True,
+    }
+    s2 = ModelTrainerState.model_validate_json(json.dumps(payload_canonical_first))
+    assert s2.repeated_mode_fold_invocation is False
+    assert s2.model_extra is not None
+    assert s2.model_extra.get("_repeated_mode_fold_invocation") is True
+
+
 def test_model_trainer_state_serializes_with_canonical_name_not_legacy_alias() -> None:
     """N1 fix: newly-written checkpoints use the canonical python field
     name, NOT the legacy underscore alias.

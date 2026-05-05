@@ -105,11 +105,34 @@ class ModelTrainerState(BaseAgentSchema):
     # need to deserialize cleanly. ``validation_alias=AliasChoices(...)``
     # accepts BOTH the canonical name (post-PR-#53) AND the legacy
     # underscore form (pre-PR-#53) at construction/validation time.
-    # ``populate_by_name=True`` (inherited from BaseAgentSchema) is
-    # automatically implied by ``AliasChoices`` here. Serialization uses
-    # the python field name (``repeated_mode_fold_invocation``) — newly
-    # written checkpoints use the canonical name, NOT the legacy alias.
-    # This is asymmetric on purpose: read-old / write-new.
+    #
+    # ``populate_by_name=True`` (set on BaseAgentSchema model_config — see
+    # ``_pydantic_utils.py``) is what enables construction by the python
+    # field name when a ``validation_alias`` is also present. Without it,
+    # only the alias forms would work at construction (codex review M1,
+    # 2026-05-05; corrected from a prior comment that had the causal
+    # direction inverted).
+    #
+    # Serialization uses the python field name
+    # (``repeated_mode_fold_invocation``) — newly written checkpoints use
+    # the canonical name, NOT the legacy alias. This is asymmetric on
+    # purpose: read-old / write-new.
+    #
+    # Dual-key precedence (codex review I1, 2026-05-05): if a malformed
+    # checkpoint contains BOTH the canonical key AND the legacy underscore
+    # key, ``AliasChoices`` resolves to the FIRST alias in the declaration
+    # order below — i.e., the canonical name ALWAYS wins regardless of
+    # the order in the input dict. The runner-up key lands in
+    # ``model_extra`` with its discarded value (because ``extra="allow"``
+    # is set on BaseAgentSchema). The declaration order below is therefore
+    # load-bearing for the precedence guarantee — keep canonical first.
+    #
+    # This scenario is extremely unlikely in practice (no real checkpoint
+    # writer would emit both forms) but the residue in ``model_extra``
+    # could confuse a future reader debugging a hand-crafted payload.
+    # The unit test
+    # ``test_model_trainer_state_dual_key_payload_canonical_wins``
+    # pins the documented behavior so any future regression fires loud.
     repeated_mode_fold_invocation: Optional[bool] = Field(
         default=None,
         validation_alias=AliasChoices(
