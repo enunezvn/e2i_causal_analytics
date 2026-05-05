@@ -178,7 +178,11 @@ class ModelSelectorAgent:
         initial_state: ModelSelectorState = {
             # D1.2: thread caller-provided audit_workflow_id (see scope_definer
             # for the rationale); falls back to State default_factory when None.
-            "audit_workflow_id": input_data.get("audit_workflow_id"),
+            **(
+                {"audit_workflow_id": input_data["audit_workflow_id"]}
+                if input_data.get("audit_workflow_id") is not None
+                else {}
+            ),
             # Required inputs
             "scope_spec": scope_spec,
             "experiment_id": experiment_id,

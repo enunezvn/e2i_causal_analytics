@@ -37,15 +37,21 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent.parent
 
 
 def test_every_agent_initial_state_threads_audit_workflow_id() -> None:
-    """D1.2 static check: every ml_foundation agent.py contains
-    ``"audit_workflow_id": input_data.get("audit_workflow_id"),`` inside
-    its ``initial_state: <Type> = {...}`` dict literal.
+    """D1.2 static check: every ml_foundation agent.py contains a
+    conditional spread of ``audit_workflow_id`` from input_data into
+    its ``initial_state: <Type> = {...}`` dict literal. The conditional
+    spread is REQUIRED because the State's audit_workflow_id field has
+    a custom validator (``coerce_uuid``) that rejects None — passing
+    ``None`` would raise ValidationError instead of letting
+    ``default_factory=uuid4`` fire. The spread pattern only inserts the
+    key when input_data carries a non-None value, otherwise leaving
+    it absent so the default factory activates.
 
     Regression guard — a refactor that adds a new agent or rewrites the
-    initial_state dict construction without threading audit_workflow_id
-    will fail this test loudly.
+    initial_state dict construction without conditionally spreading
+    audit_workflow_id will fail this test loudly.
     """
-    needle = '"audit_workflow_id": input_data.get("audit_workflow_id")'
+    needle = '{"audit_workflow_id": input_data["audit_workflow_id"]}'
 
     missing: list[str] = []
     for rel in AGENT_FILES:
@@ -57,22 +63,52 @@ def test_every_agent_initial_state_threads_audit_workflow_id() -> None:
 
     assert not missing, (
         "D1.2 regression — these agents do NOT thread audit_workflow_id "
-        f"into initial_state: {missing}. Pattern expected: {needle!r}"
+        f"into initial_state via the conditional-spread pattern: {missing}. "
+        f"Pattern expected: {needle!r}"
     )
 
 
 def test_observability_connector_threads_audit_workflow_id_in_both_run_paths() -> None:
     """D1.2: observability_connector has TWO ``initial_state`` dict literals
     (one in ``get_quality_metrics`` at ~line 317, one in ``run`` at ~line
-    368). Both must thread audit_workflow_id.
+    368). Both must thread audit_workflow_id via the conditional spread.
     """
     path = REPO_ROOT / "src/agents/ml_foundation/observability_connector/agent.py"
     src = path.read_text()
-    occurrences = src.count('"audit_workflow_id": input_data.get("audit_workflow_id")')
+    occurrences = src.count('{"audit_workflow_id": input_data["audit_workflow_id"]}')
     assert occurrences >= 2, (
         "observability_connector has 2 initial_state dict literals; both "
         f"must thread audit_workflow_id (D1.2 regression). Found: {occurrences}"
     )
+
+
+def test_audit_workflow_id_threading_skips_none_to_let_default_factory_fire() -> None:
+    """D1.2 runtime: when input_data lacks audit_workflow_id, the agent's
+    State construction should NOT include the key (so ``default_factory``
+    fires) rather than passing ``None`` (which the ``coerce_uuid``
+    validator rejects).
+
+    This is a regression guard for the bug found in D1.2's first attempt
+    where ``initial_state["audit_workflow_id"] = None`` raised
+    ``ValidationError`` from the audit_workflow_id_validator's
+    ``coerce_uuid`` helper at ``_pydantic_utils.py:216-218``.
+    """
+    # Confirm the validator's None-rejecting contract is still in place.
+    import pytest
+
+    from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState
+
+    with pytest.raises(Exception) as exc_info:
+        ScopeDefinerState(audit_workflow_id=None)  # type: ignore[arg-type]
+    assert "UUID or str" in str(exc_info.value) or "NoneType" in str(exc_info.value), (
+        "audit_workflow_id_validator should reject None to keep the contract "
+        "explicit; if this changes, D1.2's spread pattern can be simplified "
+        "back to ``input_data.get('audit_workflow_id')``."
+    )
+
+    # And confirm the omit-key pattern works (default_factory fires).
+    state = ScopeDefinerState()
+    assert state.audit_workflow_id is not None  # default_factory fired
 
 
 def test_model_trainer_build_fold_input_preserves_audit_workflow_id() -> None:

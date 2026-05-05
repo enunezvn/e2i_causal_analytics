@@ -317,7 +317,11 @@ class ObservabilityConnectorAgent:
         initial_state: ObservabilityConnectorState = {
             # D1.2: thread caller-provided audit_workflow_id (see scope_definer
             # for the rationale); falls back to State default_factory when None.
-            "audit_workflow_id": input_data.get("audit_workflow_id"),
+            **(
+                {"audit_workflow_id": input_data["audit_workflow_id"]}
+                if input_data.get("audit_workflow_id") is not None
+                else {}
+            ),
             "events_to_log": [],  # No events to log, just compute metrics
             "time_window": time_window,
             "agent_name_filter": agent_filter,
@@ -371,7 +375,11 @@ class ObservabilityConnectorAgent:
         initial_state: ObservabilityConnectorState = {
             # D1.2: thread caller-provided audit_workflow_id (see scope_definer
             # for the rationale); falls back to State default_factory when None.
-            "audit_workflow_id": input_data.get("audit_workflow_id"),
+            **(
+                {"audit_workflow_id": input_data["audit_workflow_id"]}
+                if input_data.get("audit_workflow_id") is not None
+                else {}
+            ),
             "events_to_log": input_data.get("events_to_log", []),
             "time_window": input_data.get("time_window", "24h"),
             "agent_name_filter": input_data.get("agent_name_filter"),
