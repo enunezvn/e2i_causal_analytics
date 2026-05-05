@@ -352,10 +352,15 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
         # Record previous stage for version record
         previous_stage = current_stage
 
-        # Get metrics at promotion time
+        # Get metrics at promotion time.
+        # D2.0: read ``roc_auc`` (the canonical key emitted by
+        # model_trainer's evaluator) — pre-D2.0 this used ``auc_roc`` (a
+        # transposed typo) and silently returned the 0.0 default for every
+        # promotion. Surfaced by Phase-1 D2 investigation
+        # (.claude/state/d2_investigation_20260505.md, field #4).
         validation_metrics = state.get("validation_metrics", {})
         metrics_at_promotion = {
-            "test_auc": validation_metrics.get("auc_roc", 0.0),
+            "test_auc": validation_metrics.get("roc_auc", 0.0),
             "test_precision": validation_metrics.get("precision", 0.0),
             "test_recall": validation_metrics.get("recall", 0.0),
             "test_f1": validation_metrics.get("f1_score", 0.0),

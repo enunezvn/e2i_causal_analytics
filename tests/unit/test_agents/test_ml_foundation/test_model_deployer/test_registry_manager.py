@@ -337,3 +337,66 @@ class TestPromoteStage:
 
         assert result["promotion_successful"] is True
         assert result["promotion_reason"] == "Validation tests passed"
+
+    @pytest.mark.asyncio
+    async def test_promote_stage_reads_roc_auc_from_validation_metrics(self):
+        """D2.0 regression guard: ``metrics_at_promotion["test_auc"]`` must
+        read from ``validation_metrics["roc_auc"]`` (the canonical key
+        emitted by model_trainer's ``_compute_split_classification_metrics``),
+        not the transposed ``auc_roc``.
+
+        Pre-D2.0 the lookup at registry_manager.py:358 used ``auc_roc`` and
+        silently returned the 0.0 default for every promotion — every
+        production promotion recorded ``test_auc=0.0`` regardless of the
+        actual model AUC. Surfaced by Phase-1 D2 investigation
+        (.claude/state/d2_investigation_20260505.md, field #4).
+        """
+        state = {
+            "registered_model_name": "test_deployment",
+            "model_version": 1,
+            "current_stage": "Staging",
+            "promotion_target_stage": "Shadow",
+            "validation_metrics": {
+                "roc_auc": 0.85,
+                "precision": 0.78,
+                "recall": 0.72,
+                "f1_score": 0.75,
+            },
+        }
+
+        result = await promote_stage(state)
+
+        assert result["promotion_successful"] is True
+        assert "metrics_at_promotion" in result
+        # The critical assertion — pre-D2.0 this would have been 0.0.
+        assert result["metrics_at_promotion"]["test_auc"] == 0.85, (
+            "metrics_at_promotion['test_auc'] should read from "
+            "validation_metrics['roc_auc'], not the transposed 'auc_roc'"
+        )
+        # Companion assertions that other fields flow correctly (these
+        # were not affected by the bug; pinning them so a future refactor
+        # of metrics_at_promotion's shape doesn't silently regress).
+        assert result["metrics_at_promotion"]["test_precision"] == 0.78
+        assert result["metrics_at_promotion"]["test_recall"] == 0.72
+        assert result["metrics_at_promotion"]["test_f1"] == 0.75
+
+    @pytest.mark.asyncio
+    async def test_promote_stage_returns_zero_test_auc_when_validation_metrics_empty(self):
+        """D2.0: when validation_metrics is missing or has no roc_auc,
+        ``test_auc`` must default to 0.0 (matches the pre-D2.0 behavior
+        for the missing-metrics case; confirms we did not break the
+        default fallback while fixing the typo).
+        """
+        state = {
+            "registered_model_name": "test_deployment",
+            "model_version": 1,
+            "current_stage": "Staging",
+            "promotion_target_stage": "Shadow",
+            "validation_metrics": {"precision": 0.78},  # no roc_auc
+        }
+
+        result = await promote_stage(state)
+
+        assert result["promotion_successful"] is True
+        assert result["metrics_at_promotion"]["test_auc"] == 0.0
+        assert result["metrics_at_promotion"]["test_precision"] == 0.78
