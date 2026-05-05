@@ -1076,3 +1076,130 @@ def test_qc_report_schema_consumer_contract_qc_gate_blocks_when_qc_passed_false(
     # Without qc_passed populated, fail-closed (None coalesces to default).
     qc_report_empty = QCReportSchema()
     assert qc_report_empty.get("qc_passed", False) is False
+
+
+# --------------------------------------------------------------------------- #
+# D2.3 — success_criteria wired into ModelTrainerState; SuccessCriteriaSchema
+# adds 9 missing fields (minimum_mape, 6 v3 adaptive gates, 2 consumer keys).
+# --------------------------------------------------------------------------- #
+
+
+def test_success_criteria_schema_declares_v3_adaptive_gate_fields() -> None:
+    """D2.3: SuccessCriteriaSchema declares the 6 v3 adaptive gate fields
+    that ``adaptive_success_criteria()`` emits at criteria_validator.py
+    lines 118-173. Pre-D2.3 these flowed through ``model_extra`` and the
+    consumer's iteration-driven reads worked by accident.
+    """
+    schema = SuccessCriteriaSchema(
+        minimum_net_benefit_at_p_t=0.05,
+        minimum_mcc=0.30,
+        maximum_calibration_slope_deviation=0.20,
+        maximum_calibration_intercept_magnitude=0.10,
+        maximum_calibration_error=0.05,
+        maximum_train_val_delta=0.10,
+    )
+    assert schema.minimum_net_benefit_at_p_t == 0.05
+    assert schema.minimum_mcc == 0.30
+    assert schema.maximum_calibration_slope_deviation == 0.20
+    assert schema.maximum_calibration_intercept_magnitude == 0.10
+    assert schema.maximum_calibration_error == 0.05
+    assert schema.maximum_train_val_delta == 0.10
+
+
+def test_success_criteria_schema_declares_minimum_mape() -> None:
+    """D2.3: minimum_mape is emitted by all 4 problem-type branches
+    in criteria_validator. Pre-D2.3 it was undeclared.
+    """
+    schema = SuccessCriteriaSchema(minimum_mape=0.15, minimum_rmse=0.5)
+    assert schema.minimum_mape == 0.15
+    assert schema.minimum_rmse == 0.5
+
+
+def test_success_criteria_schema_declares_consumer_injected_fields() -> None:
+    """D2.3: clinical_threshold_range + dataset_disease are caller-injected
+    keys read by ``model_trainer/nodes/evaluator.py``. Pre-D2.3 they
+    flowed through ``model_extra``; declaring them as fields gives static
+    safety + dict-shim get/contains semantics.
+    """
+    schema = SuccessCriteriaSchema(
+        clinical_threshold_range={"low": 0.1, "high": 0.5},
+        dataset_disease="diabetes",
+    )
+    assert schema.clinical_threshold_range == {"low": 0.1, "high": 0.5}
+    assert schema.dataset_disease == "diabetes"
+
+
+def test_success_criteria_schema_underscore_audit_keys_flow_via_model_extra() -> None:
+    """D2.3: ``_adaptive_skipped``/``_adaptive_p_t``/``_adaptive_inputs``
+    cannot be declared as pydantic v2 fields (reserved namespace). They
+    continue to flow through ``model_extra`` via inherited ``extra="allow"``.
+    """
+    schema = SuccessCriteriaSchema.model_validate(
+        {
+            "minimum_auc": 0.75,
+            "_adaptive_skipped": ["mcc", "net_benefit"],
+            "_adaptive_p_t": {"clean": 0.5, "default": 0.6},
+            "_adaptive_inputs": {"n_samples": 1000, "prevalence": 0.05},
+        }
+    )
+    assert schema.minimum_auc == 0.75
+    assert schema.model_extra is not None
+    assert schema.model_extra["_adaptive_skipped"] == ["mcc", "net_benefit"]
+    assert schema["_adaptive_inputs"] == {"n_samples": 1000, "prevalence": 0.05}
+
+
+def test_model_trainer_state_success_criteria_validates_typed_schema() -> None:
+    """D2.3: ModelTrainerState constructed with success_criteria dict
+    literal validates cleanly into SuccessCriteriaSchema.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState(
+        success_criteria={
+            "experiment_id": "exp_001",
+            "minimum_auc": 0.75,
+            "minimum_net_benefit_at_p_t": 0.04,
+            "minimum_mcc": 0.30,
+            "criteria_source": "adaptive",
+        }
+    )
+    assert state.success_criteria is not None
+    assert isinstance(state.success_criteria, SuccessCriteriaSchema)
+    assert state.success_criteria.get("minimum_mcc", 0.0) == 0.30
+
+
+def test_success_criteria_schema_v3_round_trips_through_json() -> None:
+    """D2.3: full v3 SuccessCriteriaSchema round-trips through model_dump
+    → model_validate. Pins LangGraph checkpointer compatibility.
+    """
+    original = SuccessCriteriaSchema(
+        experiment_id="exp_rt",
+        minimum_auc=0.80,
+        minimum_mape=0.12,
+        minimum_mcc=0.35,
+        clinical_threshold_range={"low": 0.2, "high": 0.7},
+        dataset_disease="cancer",
+        criteria_source="adaptive",
+    )
+    dumped = original.model_dump()
+    restored = SuccessCriteriaSchema.model_validate(dumped)
+    assert restored.minimum_auc == 0.80
+    assert restored.minimum_mape == 0.12
+    assert restored.dataset_disease == "cancer"
+
+
+def test_success_criteria_schema_omitted_v3_fields_default_to_none() -> None:
+    """D2.3: all 9 new fields default to None when omitted (Decision 8a)."""
+    schema = SuccessCriteriaSchema(minimum_auc=0.75)
+    for field in (
+        "minimum_mape",
+        "minimum_net_benefit_at_p_t",
+        "minimum_mcc",
+        "maximum_calibration_slope_deviation",
+        "maximum_calibration_intercept_magnitude",
+        "maximum_calibration_error",
+        "maximum_train_val_delta",
+        "clinical_threshold_range",
+        "dataset_disease",
+    ):
+        assert getattr(schema, field) is None
