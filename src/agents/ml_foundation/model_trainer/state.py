@@ -39,6 +39,7 @@ from src.agents.ml_foundation._pydantic_utils import (
 )
 from src.agents.ml_foundation.data_preparer.schemas import QCReportSchema
 from src.agents.ml_foundation.model_trainer.schemas import OptunaDistribution
+from src.agents.ml_foundation.scope_definer.schemas import SuccessCriteriaSchema
 
 
 class ModelTrainerState(BaseAgentSchema):
@@ -71,7 +72,12 @@ class ModelTrainerState(BaseAgentSchema):
     feast_fallback_used: Optional[bool] = None  # data_preparer Feast historical-features fallback
 
     # From scope_definer
-    success_criteria: Optional[Dict[str, Any]] = None  # Performance thresholds to meet
+    # D2.3: typed success criteria. Schema declares all 9 v3 adaptive gate
+    # fields + 2 caller-injected consumer keys (clinical_threshold_range,
+    # dataset_disease). Underscore-prefixed audit keys (_adaptive_skipped,
+    # _adaptive_p_t, _adaptive_inputs) flow through model_extra per pydantic
+    # v2 reserved-name rule (BaseAgentSchema's extra="allow" preserves them).
+    success_criteria: Optional[SuccessCriteriaSchema] = None  # Performance thresholds to meet
     problem_type: Optional[str] = None  # binary_classification, regression, etc.
     # Block 5: optional business cost matrix (tp/fp/fn/tn dollar values).
     # When set, the evaluator computes business_utility from the confusion

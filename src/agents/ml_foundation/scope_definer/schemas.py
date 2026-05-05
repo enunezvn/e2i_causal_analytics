@@ -144,6 +144,32 @@ class SuccessCriteriaSchema(BaseAgentSchema):
     # Regression thresholds
     minimum_rmse: Optional[float] = None
     minimum_r2: Optional[float] = None
+    # D2.3: minimum_mape — emitted by ALL 4 problem-type branches in
+    # ``criteria_validator.py`` (classification fills it as None; regression
+    # fills it as a real value). Pre-D2.3 it flowed through ``model_extra``;
+    # now it's a declared field so consumer reads catch typos.
+    minimum_mape: Optional[float] = None
+
+    # D2.3: v3 adaptive active gates (6 fields). Emitted by
+    # ``adaptive_success_criteria()`` at criteria_validator.py:118-173 when
+    # ``ADAPTIVE_CRITERIA=true``. The model_trainer's evaluator iterates over
+    # criteria.items() and reads each key by name — pre-D2.3 these keys were
+    # undeclared and only worked because the iteration was dict-driven, not
+    # field-access-driven. Wiring them as declared fields catches drift.
+    minimum_net_benefit_at_p_t: Optional[float] = None
+    minimum_mcc: Optional[float] = None
+    maximum_calibration_slope_deviation: Optional[float] = None
+    maximum_calibration_intercept_magnitude: Optional[float] = None
+    maximum_calibration_error: Optional[float] = None
+    maximum_train_val_delta: Optional[float] = None
+
+    # D2.3: caller-injected consumer keys read by
+    # ``model_trainer/nodes/evaluator.py`` at lines 887, 944, 898, 954. These
+    # are NOT emitted by scope_definer's criteria_validator — they flow
+    # through scope_definer's caller (e.g. scripts/run_tier0_test.py) merging
+    # them into success_criteria before model_trainer reads them.
+    clinical_threshold_range: Optional[Dict[str, Any]] = None
+    dataset_disease: Optional[str] = None
 
     # Adaptive overlay (Phase 5; populated by criteria_validator)
     # Aliased with leading underscore in the source dict; pydantic field names
