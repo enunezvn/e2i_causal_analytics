@@ -17,16 +17,13 @@ runtime objects: ``trained_model: Any`` (sklearn/xgboost),
 ``preprocessor: Any`` (fitted Pipeline), ``X_train_resampled``,
 ``X_train_preprocessed`` etc. (numpy arrays / pandas DataFrames).
 
-NOTE on ``_repeated_mode_fold_invocation``: pydantic v2 reserves
-underscore-prefixed names for private attributes — the field cannot
-be declared directly with a leading underscore. The agent code at
-``model_trainer/agent.py:1096`` passes the key as a dict-style update
-(`per_fold["_repeated_mode_fold_invocation"] = True`); under the
-BaseAgentSchema ``extra="allow"`` config + dict-like ``__setitem__``,
-this routes into ``model_extra`` and remains accessible via
-``state.get("_repeated_mode_fold_invocation", False)``. Behavior is
-preserved at runtime; type-level documentation of this sentinel is
-deferred to a follow-up sub-shard that renames the call sites.
+NOTE on ``repeated_mode_fold_invocation`` (sub-shard D4 closure): the
+field is declared without a leading underscore so it can be a proper
+LangGraph channel. The original underscore-prefixed convention was
+incompatible with pydantic v2 (which reserves underscore-prefixed names
+for private attributes) and with LangGraph 1.0 (which only propagates
+declared fields, not ``model_extra``). See the field declaration below
+for the rename rationale.
 """
 
 from __future__ import annotations
@@ -81,11 +78,27 @@ class ModelTrainerState(BaseAgentSchema):
     enable_checkpointing: Optional[bool] = None
 
     # W3-lite Day 3 + Day 4 (shard 17 W3 rows Day 3-4 + shard 21 §A/§B):
-    # repeated train/val/test fold-iteration plumbing. See module docstring
-    # for the ``_repeated_mode_fold_invocation`` sentinel handling.
+    # repeated train/val/test fold-iteration plumbing.
     evaluation_mode: Optional[str] = None  # "single" (default) | "repeated_k10"
     fold_random_state: Optional[int] = None  # Per-fold seed
     fold_idx: Optional[int] = None  # 0..k-1 fold index
+
+    # Day-5 (cycle-15 I-4): orchestrator sentinel — when ``_run_repeated_splits``
+    # invokes ``self.run(per_fold)`` recursively, this is set to True on the
+    # per-fold input. Per-fold nodes (notably ``mlflow_logger``) branch on it
+    # to open NESTED MLflow runs under the parent run instead of new top-level
+    # runs. Single-mode callers omit this field; default None acts as False.
+    #
+    # Sub-shard D4 (PR post-2444fd8): renamed from ``_repeated_mode_fold_invocation``
+    # to drop the underscore prefix. Pydantic v2 reserves underscore-prefixed
+    # names for private attributes, so the original name could not be a
+    # declared model field. Without a declared field, LangGraph 1.0 dropped
+    # the value from channel state on every node coercion (model_extra is NOT
+    # propagated through channels) — `mlflow_logger.py:192` always read False
+    # in repeated_k10 mode, breaking MLflow run nesting (codex review B2,
+    # 2026-05-05). Now that this is a declared field, LangGraph treats it as
+    # a proper channel and propagates the value through node invocations.
+    repeated_mode_fold_invocation: Optional[bool] = None
 
     # === INTERMEDIATE FIELDS ===
     # QC Gate

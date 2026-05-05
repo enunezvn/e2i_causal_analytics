@@ -182,14 +182,14 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # Phase 1 W3-lite Day-5 (cycle-15 I-4): when invoked from the
         # `_run_repeated_splits` orchestrator (per-fold recursion sentinel
-        # `_repeated_mode_fold_invocation=True`), the parent run is already
+        # `repeated_mode_fold_invocation=True`), the parent run is already
         # open at the orchestrator level — open this fold's run as a NESTED
         # child of the parent and tag it with `fold_idx` /
         # `evaluation_mode=repeated_k10` / `fold_seed` so the MLflow UI
         # surfaces the parent ↔ child topology.
         evaluation_mode = state.get("evaluation_mode", "single")
         is_repeated_fold = evaluation_mode == "repeated_k10" and bool(
-            state.get("_repeated_mode_fold_invocation", False)
+            state.get("repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold:
             fold_idx_value = state.get("fold_idx", 0)
