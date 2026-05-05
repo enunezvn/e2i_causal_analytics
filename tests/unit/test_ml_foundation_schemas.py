@@ -1337,3 +1337,136 @@ def test_scope_spec_schema_d24_round_trips_through_json() -> None:
     assert restored.data_source == "src"
     assert restored.feature_date_columns == ["dx", "rx"]
     assert restored.val_days == 30
+
+
+# --------------------------------------------------------------------------- #
+# D2.5 — validation_metrics wired into ModelDeployerState; MetricsSchema
+# accepts roc_auc/auc_roc via AliasChoices and adds 14 runtime-emitted fields.
+# --------------------------------------------------------------------------- #
+
+
+def test_metrics_schema_accepts_roc_auc_alias() -> None:
+    """D2.5: MetricsSchema's auc_roc field accepts both the canonical
+    ``auc_roc`` python name AND the modern producer key ``roc_auc`` via
+    AliasChoices.
+    """
+    via_canonical = MetricsSchema(auc_roc=0.85)
+    via_modern = MetricsSchema.model_validate({"roc_auc": 0.85})
+    assert via_canonical.auc_roc == 0.85
+    assert via_modern.auc_roc == 0.85
+    dumped = via_modern.model_dump(exclude_none=True)
+    assert "auc_roc" in dumped
+    assert dumped["auc_roc"] == 0.85
+
+
+def test_metrics_schema_declares_classification_extras() -> None:
+    """D2.5: per-class + extra metrics emitted by evaluator."""
+    schema = MetricsSchema(
+        f1_macro=0.7,
+        f1_weighted=0.72,
+        precision_class_0=0.65,
+        precision_class_1=0.78,
+        recall_class_0=0.62,
+        recall_class_1=0.81,
+        mcc=0.45,
+        pr_auc=0.6,
+        brier_score=0.18,
+    )
+    assert schema.f1_macro == 0.7
+    assert schema.precision_class_1 == 0.78
+    assert schema.mcc == 0.45
+
+
+def test_metrics_schema_declares_threshold_and_calibration_fields() -> None:
+    """D2.5: threshold metadata + calibration metrics."""
+    schema = MetricsSchema(
+        chosen_threshold=0.42,
+        chosen_threshold_source="f1_optimal",
+        calibration_slope=0.95,
+        calibration_intercept=0.05,
+        calibration_intercept_magnitude=0.05,
+        calibration_slope_deviation=0.05,
+        calibration_error=0.03,
+        net_benefit_grid={"p_t=0.05": 0.45, "p_t=0.10": 0.40},
+    )
+    assert schema.chosen_threshold == 0.42
+    assert schema.chosen_threshold_source == "f1_optimal"
+    assert schema.calibration_slope == 0.95
+    assert schema.net_benefit_grid == {"p_t=0.05": 0.45, "p_t=0.10": 0.40}
+
+
+def test_metrics_schema_declares_lift_baseline_fields() -> None:
+    """D2.5: lift / baseline comparison fields."""
+    schema = MetricsSchema(
+        baseline_test_auc=0.50,
+        train_val_auc_delta=0.05,
+        train_val_delta=0.05,
+    )
+    assert schema.baseline_test_auc == 0.50
+    assert schema.train_val_auc_delta == 0.05
+
+
+def test_model_deployer_state_validation_metrics_validates_typed_schema() -> None:
+    """D2.5: ModelDeployerState validates dict literal into MetricsSchema."""
+    from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
+
+    state = ModelDeployerState(
+        validation_metrics={
+            "accuracy": 0.85,
+            "precision": 0.78,
+            "recall": 0.72,
+            "f1_score": 0.75,
+            "roc_auc": 0.88,
+            "mcc": 0.40,
+            "chosen_threshold": 0.5,
+        }
+    )
+    assert state.validation_metrics is not None
+    assert isinstance(state.validation_metrics, MetricsSchema)
+    assert state.validation_metrics.auc_roc == 0.88
+    assert state.validation_metrics.get("auc_roc", 0.0) == 0.88
+    assert state.validation_metrics.get("mcc", 0.0) == 0.40
+
+
+def test_metrics_schema_d25_round_trips_through_json() -> None:
+    """D2.5: MetricsSchema round-trips through JSON."""
+    original = MetricsSchema(
+        problem_type="binary_classification",
+        auc_roc=0.85,
+        mcc=0.40,
+        chosen_threshold=0.5,
+        net_benefit_grid={"p_t=0.05": 0.45},
+    )
+    dumped = original.model_dump(exclude_none=True)
+    restored = MetricsSchema.model_validate(dumped)
+    assert restored.auc_roc == 0.85
+    assert restored.mcc == 0.40
+    assert restored.net_benefit_grid == {"p_t=0.05": 0.45}
+
+
+def test_metrics_schema_omitted_d25_fields_default_to_none() -> None:
+    """D2.5: all 14+ new fields default to None when omitted."""
+    schema = MetricsSchema(auc_roc=0.85)
+    for field in (
+        "f1_macro",
+        "f1_weighted",
+        "precision_class_0",
+        "precision_class_1",
+        "recall_class_0",
+        "recall_class_1",
+        "mcc",
+        "pr_auc",
+        "brier_score",
+        "chosen_threshold",
+        "chosen_threshold_source",
+        "calibration_slope",
+        "calibration_intercept",
+        "calibration_intercept_magnitude",
+        "calibration_slope_deviation",
+        "calibration_error",
+        "net_benefit_grid",
+        "baseline_test_auc",
+        "train_val_auc_delta",
+        "train_val_delta",
+    ):
+        assert getattr(schema, field) is None, f"{field} should default to None"

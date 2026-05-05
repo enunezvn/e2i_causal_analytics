@@ -22,6 +22,7 @@ from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
     audit_workflow_id_validator,
 )
+from src.agents.ml_foundation.model_trainer.schemas import MetricsSchema
 
 
 class ModelDeployerState(BaseAgentSchema):
@@ -41,7 +42,12 @@ class ModelDeployerState(BaseAgentSchema):
     experiment_id: Optional[str] = None
 
     # Validation metrics (from model_trainer)
-    validation_metrics: Optional[Dict[str, Any]] = None  # ValidationMetrics from training
+    # D2.5: typed metrics contract. MetricsSchema accepts both ``auc_roc``
+    # (canonical/legacy) and ``roc_auc`` (modern producer) via AliasChoices.
+    # Schema declares 12+ extra fields beyond the original chore-PR set
+    # (per-class precision/recall, mcc/pr_auc/brier_score, calibration
+    # metrics, threshold metadata) to match runtime producer output.
+    validation_metrics: Optional[MetricsSchema] = None  # ValidationMetrics from training
     success_criteria_met: Optional[bool] = None  # Whether model met success criteria
 
     # SHAP analysis (from feature_analyzer)
