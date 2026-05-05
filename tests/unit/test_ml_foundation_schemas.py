@@ -103,23 +103,28 @@ def test_audit_workflow_id_validator_rejects_malformed() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# BaseAgentSchema config — extra=allow                                        #
+# BaseAgentSchema config — extra=ignore (D3 tightening, 2026-05-05)            #
 # --------------------------------------------------------------------------- #
 
 
-def test_base_agent_schema_allows_extra_keys() -> None:
-    """``extra="allow"`` keeps unknown keys in ``model_extra``.
+def test_base_agent_schema_drops_extra_keys_at_construction() -> None:
+    """D3 (2026-05-05): ``extra="ignore"`` silently drops unknown keys at
+    construction time. Pre-D3 they flowed through ``model_extra``; under
+    the tightened config they are simply discarded.
 
-    Critical for the migration: a pydantic-shaped agent receiving
-    state from a TypedDict-shaped upstream would otherwise reject
-    keys it does not declare.
+    Note: dict-shim ``__setitem__`` continues to populate
+    ``__pydantic_extra__`` directly (see ``test_dict_setitem_writes_extra_field``)
+    so ``state["foo"] = v`` still works for ad-hoc keys — only construction
+    is tightened.
     """
 
     class _Empty(BaseAgentSchema):
         pass
 
     instance = _Empty(unknown_key="surprise", another=42)
-    assert instance.model_extra == {"unknown_key": "surprise", "another": 42}
+    # Under extra="ignore", model_extra is None (pydantic does not track
+    # dropped keys).
+    assert instance.model_extra is None or instance.model_extra == {}
 
 
 def test_base_agent_schema_arbitrary_types_allowed() -> None:
@@ -156,13 +161,18 @@ def test_dict_access_reads_declared_field() -> None:
     assert schema["minimum_auc"] == 0.75
 
 
-def test_dict_access_reads_extra_field() -> None:
-    """``state["key"]`` returns ``model_extra`` values for unknown keys."""
+def test_dict_access_reads_extra_field_after_setitem() -> None:
+    """D3 (2026-05-05): under ``extra="ignore"`` constructor-time extras
+    are dropped, but the dict-shim ``__setitem__`` still routes unknown
+    keys to ``__pydantic_extra__``. So writing via ``instance["foo"] = v``
+    and reading via ``instance["foo"]`` still round-trips.
+    """
 
     class _Empty(BaseAgentSchema):
         pass
 
-    instance = _Empty(future_key="reserved")
+    instance = _Empty()
+    instance["future_key"] = "reserved"
     assert instance["future_key"] == "reserved"
 
 
@@ -212,13 +222,16 @@ def test_contains_check_for_declared_field() -> None:
     assert "totally_unknown_key" not in schema
 
 
-def test_contains_check_for_extra_field() -> None:
-    """``key in state`` is True for keys in ``model_extra``."""
+def test_contains_check_for_extra_field_after_setitem() -> None:
+    """D3: ``key in state`` is True for keys written via ``__setitem__``
+    after construction, even though constructor-time extras are dropped.
+    """
 
     class _Empty(BaseAgentSchema):
         pass
 
-    instance = _Empty(future_key="reserved")
+    instance = _Empty()
+    instance["future_key"] = "reserved"
     assert "future_key" in instance
 
 
@@ -257,13 +270,16 @@ def test_get_returns_none_for_unset_optional_no_default() -> None:
     assert schema.get("minimum_auc") is None
 
 
-def test_get_returns_value_for_extra_field() -> None:
-    """``state.get("key")`` resolves keys in ``model_extra`` too."""
+def test_get_returns_value_for_extra_field_after_setitem() -> None:
+    """D3: ``state.get("key")`` resolves keys written via ``__setitem__``
+    after construction, even though constructor-time extras are dropped.
+    """
 
     class _Empty(BaseAgentSchema):
         pass
 
-    instance = _Empty(extra_key="present")
+    instance = _Empty()
+    instance["extra_key"] = "present"
     assert instance.get("extra_key") == "present"
 
 
@@ -326,10 +342,13 @@ def test_scope_spec_schema_rejects_invalid_problem_type() -> None:
         ScopeSpecSchema(problem_type="not_a_real_type")  # type: ignore[arg-type]
 
 
-def test_scope_spec_schema_passes_through_unknown_keys() -> None:
-    """Unknown keys are tolerated via ``extra="allow"``."""
+def test_scope_spec_schema_drops_unknown_keys() -> None:
+    """D3: under ``extra="ignore"`` unknown keys are silently dropped at
+    construction. Pre-D3 they flowed through ``model_extra``; under the
+    tightened config they are simply discarded.
+    """
     schema = ScopeSpecSchema(future_field="reserved")  # type: ignore[call-arg]
-    assert schema.model_extra == {"future_field": "reserved"}
+    assert schema.model_extra is None or schema.model_extra == {}
 
 
 # --------------------------------------------------------------------------- #

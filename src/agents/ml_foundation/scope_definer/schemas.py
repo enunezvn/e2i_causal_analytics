@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
+from pydantic import ConfigDict
+
 from src.agents.ml_foundation._pydantic_utils import BaseAgentSchema
 
 
@@ -137,6 +139,22 @@ class ScopeSpecSchema(BaseAgentSchema):
 
 
 class SuccessCriteriaSchema(BaseAgentSchema):
+    # D3 (2026-05-05): override BaseAgentSchema's ``extra="ignore"`` with
+    # ``extra="allow"`` because ``criteria_validator.py:305-326`` writes
+    # underscore-prefixed audit keys (``_adaptive_skipped``, ``_adaptive_p_t``,
+    # ``_adaptive_inputs``) that pydantic v2 cannot declare as model fields
+    # (reserved namespace). The consumer at ``model_trainer/nodes/evaluator.py``
+    # reads them via ``success_criteria.get("_adaptive_inputs", default)`` —
+    # under base ``extra="ignore"`` those keys would be dropped at
+    # construction and the consumer reads return None. Per-class ``allow``
+    # override preserves the underscore-key flow.
+    model_config = ConfigDict(
+        extra="allow",
+        arbitrary_types_allowed=True,
+        populate_by_name=True,
+        validate_assignment=True,
+    )
+
     """Acceptance thresholds + adaptive overlay for a scope.
 
     All metric thresholds are ``Optional[float] = None`` because the

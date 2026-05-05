@@ -48,11 +48,23 @@ from pydantic import BaseModel, ConfigDict, field_validator
 class BaseAgentSchema(BaseModel):
     """Common base for ml_foundation agent state and output schemas.
 
-    Configured for the migration's transition window:
-    - ``extra="allow"``: tolerate undeclared keys flowing in from
-      upstream agents that have not yet migrated. After all 7 agents
-      land in the pydantic world, a follow-up PR can tighten this
-      to ``extra="ignore"`` or ``extra="forbid"``.
+    Configuration:
+    - ``extra="ignore"``: D3 (2026-05-05) tightened from the migration's
+      transition-window ``extra="allow"`` once all 7 ml_foundation
+      agents landed in the pydantic world AND the D2 typed-schema
+      wirings closed every cross-agent ``Dict[str, Any]`` surface.
+      Tightening to ``ignore`` catches typo'd construction kwargs
+      (``ScopeDefinerState(typo_field=...)`` previously stored
+      ``typo_field`` in ``model_extra`` silently; under ``ignore`` the
+      key is dropped — no residue masking the typo for a debugger).
+      Note: LangGraph 1.0 already drops ``model_extra`` at every
+      channel boundary (the same mechanism that motivated D4), so
+      production hot-path runtime behavior is unaffected by this flip.
+      Only test fixtures that explicitly inspect ``model_extra`` see
+      a contract change. The dict-shim ``__setitem__`` continues to
+      populate ``__pydantic_extra__`` directly so ``state["foo"] = v``
+      writes still work for compatibility with the migration's
+      transition test fixtures.
     - ``arbitrary_types_allowed=True``: needed for fields like
       ``trained_model: Any`` (sklearn / xgboost), ``preprocessor: Any``
       (fitted pipeline), and ``shap_values: np.ndarray`` that appear
@@ -80,7 +92,7 @@ class BaseAgentSchema(BaseModel):
     """
 
     model_config = ConfigDict(
-        extra="allow",
+        extra="ignore",  # D3 (2026-05-05): tightened from "allow"; see class docstring.
         arbitrary_types_allowed=True,
         populate_by_name=True,
         # validate_assignment=True is load-bearing per codex review I1
