@@ -174,6 +174,16 @@ class DataPreparerAgent:
                     "row_count": final_state["row_count"],
                     "column_count": final_state["column_count"],
                     "validated_at": final_state["validated_at"],
+                    # D2.2: consumer-contract fields. Pre-D2.2, downstream
+                    # readers (model_trainer/qc_gate_checker.py,
+                    # model_selector/agent.py) read these from a
+                    # runner-patched qc_report at
+                    # scripts/run_tier0_test.py:2295-2300. With D2.2 the
+                    # producer writes them directly so consumers can
+                    # rely on QCReportSchema's typed contract.
+                    "qc_passed": final_state.get("qc_passed", False),
+                    "qc_errors": final_state.get("blocking_issues", []),
+                    "qc_warnings": final_state.get("warnings", []),
                 },
                 "baseline_metrics": {
                     "experiment_id": experiment_id,

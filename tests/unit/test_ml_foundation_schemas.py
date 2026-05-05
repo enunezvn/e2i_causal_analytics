@@ -947,3 +947,132 @@ def test_model_trainer_state_hyperparameter_search_space_round_trips_through_jso
     assert isinstance(space["lr"], OptunaFloatDistribution)
     assert space["lr"].low == 1e-3
     assert space["lr"].log is True
+
+
+# --------------------------------------------------------------------------- #
+# D2.2 — qc_report wired into ModelTrainerState/ModelSelectorState; consumer-
+# contract fields qc_passed/qc_errors/qc_warnings declared on QCReportSchema
+# --------------------------------------------------------------------------- #
+
+
+def test_qc_report_schema_declares_consumer_contract_fields() -> None:
+    """D2.2: qc_passed, qc_errors, qc_warnings are declared schema fields.
+    Pre-D2.2 these were undeclared keys patched in by a runner shim at
+    ``scripts/run_tier0_test.py:2295-2300, 2558+``. Hidden coupling.
+    """
+    schema = QCReportSchema(
+        qc_passed=True,
+        qc_errors=["err1", "err2"],
+        qc_warnings=["warn1"],
+    )
+    assert schema.qc_passed is True
+    assert schema.qc_errors == ["err1", "err2"]
+    assert schema.qc_warnings == ["warn1"]
+    # Dict-shim access (consumer pattern at qc_gate_checker.py:30-46).
+    assert schema["qc_passed"] is True
+    assert schema.get("qc_errors", []) == ["err1", "err2"]
+    assert schema.get("qc_warnings", []) == ["warn1"]
+
+
+def test_qc_report_schema_consumer_fields_default_to_none() -> None:
+    """D2.2: omitted consumer fields default to None per Optional[T] = None.
+    The dict-shim's ``get(key, default)`` coalesces None → default, so
+    ``qc_report.get("qc_passed", False)`` returns False when the producer
+    hasn't populated it. Matches pre-D2.2 missing-key behavior; this test
+    pins the coalescing contract.
+    """
+    schema = QCReportSchema()
+    assert schema.qc_passed is None
+    assert schema.qc_errors is None
+    assert schema.qc_warnings is None
+    # Consumer pattern: get(key, default) returns default for None values.
+    assert schema.get("qc_passed", False) is False
+    assert schema.get("qc_errors", []) == []
+    assert schema.get("qc_warnings", []) == []
+
+
+def test_model_trainer_state_qc_report_validates_typed_schema() -> None:
+    """D2.2: ModelTrainerState constructed with qc_report dict literal
+    validates the dict into a typed QCReportSchema instance. Then consumer
+    code reading ``state.qc_report.get("qc_passed", False)`` works through
+    the dict-shim — same call shape as pre-D2.2 plain-dict reads.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState(
+        qc_report={
+            "report_id": "qc_test_001",
+            "experiment_id": "exp_xyz",
+            "status": "passed",
+            "overall_score": 0.92,
+            "qc_passed": True,
+            "qc_errors": [],
+            "qc_warnings": ["minor_correlation"],
+        }
+    )
+
+    assert state.qc_report is not None
+    assert isinstance(state.qc_report, QCReportSchema)
+    assert state.qc_report.qc_passed is True
+    assert state.qc_report.overall_score == 0.92
+    # Consumer-pattern reads (qc_gate_checker.py:30-46).
+    assert state.qc_report.get("qc_passed", False) is True
+    assert state.qc_report.get("qc_errors", []) == []
+    assert state.qc_report.get("qc_warnings", []) == ["minor_correlation"]
+
+
+def test_model_selector_state_qc_report_validates_typed_schema() -> None:
+    """D2.2: same contract on ModelSelectorState (the other consumer)."""
+    from src.agents.ml_foundation.model_selector.state import ModelSelectorState
+
+    state = ModelSelectorState(
+        qc_report={
+            "report_id": "qc_test_002",
+            "qc_passed": False,
+            "qc_errors": ["leakage_detected:f1"],
+        }
+    )
+
+    assert state.qc_report is not None
+    assert isinstance(state.qc_report, QCReportSchema)
+    assert state.qc_report.get("qc_passed", False) is False
+    assert state.qc_report.get("qc_errors", []) == ["leakage_detected:f1"]
+
+
+def test_qc_report_schema_round_trips_through_json_d22() -> None:
+    """D2.2: typed schema round-trips through model_dump → model_validate
+    so LangGraph checkpointer can serialise/restore qc_report unchanged.
+    """
+    original = QCReportSchema(
+        report_id="qc_rt_001",
+        status="passed",
+        overall_score=0.87,
+        qc_passed=True,
+        qc_errors=[],
+        qc_warnings=["w1"],
+    )
+    dumped = original.model_dump()
+    restored = QCReportSchema.model_validate(dumped)
+    assert restored.qc_passed is True
+    assert restored.qc_warnings == ["w1"]
+
+
+def test_qc_report_schema_consumer_contract_qc_gate_blocks_when_qc_passed_false() -> None:
+    """D2.2: end-to-end consumer pattern. Replicates the QC-gate logic at
+    ``model_trainer/nodes/qc_gate_checker.py:30-46`` against a typed
+    qc_report. Pre-D2.2 the runner shim would default qc_passed=True
+    (fail-open); post-D2.2 if the producer didn't populate qc_passed,
+    the typed schema's None-default + dict-shim coalescing returns False
+    (fail-closed) — a deliberate tightening.
+    """
+    qc_report = QCReportSchema(qc_passed=False, qc_errors=["leak:a", "leak:b"])
+
+    qc_passed = qc_report.get("qc_passed", False)
+    qc_errors = qc_report.get("qc_errors", [])
+
+    assert qc_passed is False
+    assert "leak:a" in qc_errors
+
+    # Without qc_passed populated, fail-closed (None coalesces to default).
+    qc_report_empty = QCReportSchema()
+    assert qc_report_empty.get("qc_passed", False) is False
