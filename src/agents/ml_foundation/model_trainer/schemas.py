@@ -22,9 +22,9 @@ consumer access via ``config["low"]`` works through the dict-shim on
 
 from __future__ import annotations
 
-from typing import Annotated, Any, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, model_validator
 
 from src.agents.ml_foundation._pydantic_utils import BaseAgentSchema
 
@@ -57,12 +57,60 @@ class MetricsSchema(BaseAgentSchema):
     ] = None
 
     # Classification metrics
-    auc_roc: Optional[float] = None
+    # D2.5 (2026-05-05): naming drift fix. The producer at
+    # ``model_trainer/nodes/evaluator.py::_compute_split_classification_metrics``
+    # emits the key ``roc_auc`` (model_trainer convention), but the
+    # original schema declared ``auc_roc`` (transposed). The deployer
+    # at ``registry_manager.py:358`` was reading the schema-name-form
+    # and silently returning 0.0 for every promotion (PR #59 D2.0 fixed
+    # the deployer to read ``roc_auc``).
+    #
+    # AliasChoices accepts BOTH names at construction time per PR #55
+    # precedent. Read-old / write-new asymmetry: the canonical name is
+    # ``auc_roc`` (kept for backward compat with legacy checkpoints),
+    # but the modern producer key ``roc_auc`` resolves to the same field.
+    # Serialization uses the python field name (``auc_roc``).
+    auc_roc: Optional[float] = Field(
+        default=None,
+        validation_alias=AliasChoices("auc_roc", "roc_auc"),
+    )
     f1_score: Optional[float] = None
     precision: Optional[float] = None
     recall: Optional[float] = None
     accuracy: Optional[float] = None
     log_loss: Optional[float] = None
+
+    # D2.5: classification-extras emitted by
+    # ``_compute_split_classification_metrics`` (per Phase-1 D2 audit).
+    f1_macro: Optional[float] = None
+    f1_weighted: Optional[float] = None
+    precision_class_0: Optional[float] = None
+    precision_class_1: Optional[float] = None
+    recall_class_0: Optional[float] = None
+    recall_class_1: Optional[float] = None
+    mcc: Optional[float] = None
+    pr_auc: Optional[float] = None
+    brier_score: Optional[float] = None
+
+    # D2.5: threshold-selection metadata (evaluator post-eval at
+    # ``evaluator.py:1156-1175`` adds these to validation_metrics).
+    chosen_threshold: Optional[float] = None
+    chosen_threshold_source: Optional[str] = None
+
+    # D2.5: calibration metrics (test_metrics adds these from
+    # calibration analysis; emitted by evaluator's calibration step).
+    calibration_slope: Optional[float] = None
+    calibration_intercept: Optional[float] = None
+    calibration_intercept_magnitude: Optional[float] = None
+    calibration_slope_deviation: Optional[float] = None
+    calibration_error: Optional[float] = None
+    net_benefit_grid: Optional[Dict[str, float]] = None
+
+    # D2.5: lift / baseline comparison (test_metrics-only fields per
+    # ``test_lift_metric.py`` references).
+    baseline_test_auc: Optional[float] = None
+    train_val_auc_delta: Optional[float] = None
+    train_val_delta: Optional[float] = None
 
     # Regression metrics
     rmse: Optional[float] = None
