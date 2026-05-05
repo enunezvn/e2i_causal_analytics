@@ -115,8 +115,18 @@ class FeatureAnalyzerState(BaseAgentSchema):
     samples_analyzed: Optional[int] = None  # Number of samples used
 
     # SHAP values (raw) — np.ndarray; arbitrary_types_allowed (inherited
-    # from BaseAgentSchema) covers it. JSON serialization round-trips
-    # through .tolist() — handled by pydantic's default for ndarray.
+    # from BaseAgentSchema) covers in-memory construction. JSON
+    # serialization is NOT supported: pydantic v2 has no default
+    # np.ndarray serializer, so ``model_dump_json()`` raises
+    # ``PydanticSerializationError`` if shap_values is non-None.
+    # Today's persistence path stores SHAP values via the semantic-memory
+    # entries (a separate write), NOT via JSON checkpoints — so the
+    # un-serializable surface is acceptable.
+    # If a future feature requires checkpointing the full FeatureAnalyzerState
+    # with SHAP values intact, see sub-shard D5 in the migration plan
+    # (planned ``@field_serializer("shap_values")`` returning ``.tolist()``).
+    # The unit test ``test_feature_analyzer_state_shap_values_json_dump_raises``
+    # pins this constraint loud (per codex review I4, 2026-05-05).
     shap_values: Optional[np.ndarray] = None  # SHAP values (n_samples, n_features)
     base_value: Optional[float] = None  # Base value (expected value)
 

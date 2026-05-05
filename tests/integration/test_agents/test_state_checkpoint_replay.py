@@ -44,6 +44,7 @@ from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState
 from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
 from src.agents.ml_foundation.model_selector.state import ModelSelectorState
+from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 from src.agents.ml_foundation.observability_connector.state import (
     ObservabilityConnectorState,
 )
@@ -381,3 +382,115 @@ def test_feature_analyzer_state_holds_numpy_shap_values() -> None:
     assert state.shap_values is not None
     assert state.shap_values.shape == (2, 2)
     np.testing.assert_array_equal(state.shap_values, arr)
+
+
+def test_model_trainer_state_replays_checkpoint() -> None:
+    """ModelTrainerState round-trips a representative training-result
+    snapshot through JSON, including mixed-type metric bags.
+
+    Added per codex review I3 (2026-05-05). The migration plan's
+    Hotspot #2 calls out ``validation_metrics`` / ``test_metrics`` as
+    the largest cross-agent contract risk; Shard B caught a
+    ``Dict[str, float]`` strict-validation regression at CI time
+    when the evaluator emitted ``chosen_threshold_source: str`` and
+    ``net_benefit_grid: dict`` values inside the metric bags. This
+    test pins the post-fix contract: mixed-type values (str, dict,
+    float) all round-trip cleanly through ``Dict[str, Any]``-typed
+    metric fields.
+
+    Non-serializable runtime objects (``trained_model``, ``preprocessor``,
+    ``X_train_resampled``) are excluded from the JSON fixture — they
+    do not round-trip through a JSON checkpointer (RedisSaver
+    persistence is JSON-shape) and are reconstructed at runtime from
+    MLflow / artifact stores.
+    """
+    audit_id = uuid4()
+    pre_migration = {
+        "audit_workflow_id": str(audit_id),
+        "experiment_id": "exp_test",
+        "algorithm_name": "LogisticRegression",
+        "algorithm_class": "sklearn.linear_model.LogisticRegression",
+        "default_hyperparameters": {"C": 1.0, "max_iter": 1000},
+        "problem_type": "binary_classification",
+        "qc_gate_passed": True,
+        "qc_gate_message": "QC passed",
+        "evaluation_mode": "single",
+        "fold_random_state": 42,
+        "fold_idx": 0,
+        # Metric bags with MIXED-TYPE values — the post-Shard-B widening to
+        # Dict[str, Any] is what makes this round-trip work.
+        "validation_metrics": {
+            "auc_roc": 0.85,
+            "f1_score": 0.72,
+            "chosen_threshold_source": "validation",  # str inside metric bag
+            "net_benefit_grid": {  # nested dict inside metric bag
+                "p_t=0.05": 0.5228,
+                "p_t=0.50": 0.5333,
+            },
+        },
+        "test_metrics": {
+            "auc_roc": 0.83,
+            "f1_score": 0.70,
+            "chosen_threshold_source": "validation",
+            "net_benefit_grid": {"p_t=0.05": 0.5128, "p_t=0.50": 0.5233},
+        },
+        "test_metrics_at_05": {
+            "auc_roc": 0.83,
+            "net_benefit_grid": {"p_t=0.05": 0.5128, "p_t=0.50": 0.5233},
+        },
+        "success_criteria_met": True,
+        "training_status": "completed",
+        "training_run_id": "run_abc123",
+        "model_id": "model_xyz",
+        "mlflow_run_id": "mlflow_run_001",
+        "mlflow_status": "success",
+    }
+
+    json_payload = json.dumps(pre_migration)
+    restored = ModelTrainerState.model_validate_json(json_payload)
+
+    # audit_workflow_id round-tripped through str → UUID (Decision 7a).
+    assert isinstance(restored.audit_workflow_id, UUID)
+    assert restored.audit_workflow_id == audit_id
+
+    # Top-line training fields preserved.
+    assert restored.algorithm_name == "LogisticRegression"
+    assert restored.problem_type == "binary_classification"
+    assert restored.qc_gate_passed is True
+    assert restored.training_status == "completed"
+    assert restored.success_criteria_met is True
+
+    # Mixed-type validation_metrics preserved (the regression Shard B caught).
+    assert restored.validation_metrics is not None
+    assert restored.validation_metrics["auc_roc"] == 0.85
+    assert restored.validation_metrics["chosen_threshold_source"] == "validation"
+    assert restored.validation_metrics["net_benefit_grid"] == {
+        "p_t=0.05": 0.5228,
+        "p_t=0.50": 0.5333,
+    }
+
+    # Same shape on test_metrics + test_metrics_at_05.
+    assert restored.test_metrics is not None
+    assert restored.test_metrics["chosen_threshold_source"] == "validation"
+    assert restored.test_metrics_at_05 is not None
+    assert isinstance(restored.test_metrics_at_05["net_benefit_grid"], dict)
+
+    # Dict-like access via the BaseAgentSchema shim still works on the
+    # restored instance — node code uses this access pattern.
+    assert restored["algorithm_name"] == "LogisticRegression"
+    assert restored.get("nonexistent_field", "default") == "default"
+
+
+def test_model_trainer_state_minimal_checkpoint_replay() -> None:
+    """ModelTrainerState lower-bound smoke test: minimal-keys checkpoint
+    deserializes — every other field defaults to None per Decision 8a.
+    """
+    audit_id = uuid4()
+    minimal = {"audit_workflow_id": str(audit_id)}
+    restored = ModelTrainerState.model_validate_json(json.dumps(minimal))
+    assert restored.audit_workflow_id == audit_id
+    # Spot-check Decision-8a defaults.
+    assert restored.algorithm_name is None
+    assert restored.validation_metrics is None
+    assert restored.test_metrics is None
+    assert restored.training_status is None

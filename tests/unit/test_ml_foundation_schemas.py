@@ -561,3 +561,137 @@ def test_base_agent_schema_is_pydantic_v2() -> None:
     assert hasattr(BaseAgentSchema, "model_dump_json")
     assert hasattr(BaseAgentSchema, "model_validate_json")
     assert issubclass(BaseAgentSchema, BaseModel)
+
+
+# --------------------------------------------------------------------------- #
+# Codex review fixes — pinning contracts                                      #
+# --------------------------------------------------------------------------- #
+
+
+def test_setitem_validates_assignment_rejects_off_spec_literal() -> None:
+    """I1 fix: ``state["status"] = off_spec_value`` must raise ValidationError.
+
+    Pre-fix: ``BaseAgentSchema.__setitem__`` called ``setattr`` which
+    bypassed pydantic field validation in pydantic v2 (``setattr`` does
+    NOT trigger validators unless ``validate_assignment=True`` is set
+    on ``model_config``). Post-fix: model_config sets validate_assignment
+    so every assignment runs the validator pipeline.
+
+    This test pins the contract — if a future config change drops
+    ``validate_assignment``, off-spec writes would silently corrupt
+    state again.
+    """
+    from src.agents.ml_foundation.data_preparer.state import DataPreparerState
+
+    state = DataPreparerState()
+    with pytest.raises(ValidationError):
+        # qc_status is Optional[Literal["passed","failed","warning","skipped"]]
+        # — "not_a_real_status" must be rejected loud at assignment time.
+        state["qc_status"] = "not_a_real_status"
+
+
+def test_setattr_also_validates_assignment() -> None:
+    """I1 fix: ``state.field = off_spec_value`` (attribute form) is
+    equivalent to ``state["field"] = ...`` for validation purposes.
+
+    Pydantic v2 routes BOTH attribute and __setitem__ assignments
+    through the same validator pipeline when validate_assignment=True.
+    Pinning both forms catches a regression in either path.
+    """
+    from src.agents.ml_foundation.data_preparer.state import DataPreparerState
+
+    state = DataPreparerState()
+    with pytest.raises(ValidationError):
+        state.qc_status = "not_a_real_status"  # type: ignore[assignment]
+
+
+def test_setitem_validates_assignment_accepts_valid_values() -> None:
+    """I1 fix: valid Literal values still pass through assignment."""
+    from src.agents.ml_foundation.data_preparer.state import DataPreparerState
+
+    state = DataPreparerState()
+    state["qc_status"] = "passed"
+    assert state.qc_status == "passed"
+    state["qc_status"] = "failed"
+    assert state.qc_status == "failed"
+
+
+def test_contains_get_asymmetry_for_none_valued_declared_field() -> None:
+    """I2 fix: pin the documented semantic asymmetry between
+    ``key in state`` and ``state.get(key, default)`` for declared
+    fields with value None.
+
+    - ``"minimum_auc" in schema`` returns True (declared field exists).
+    - ``schema.get("minimum_auc", 0.5)`` returns 0.5 (None coalesced).
+
+    This is intentional — see ``BaseAgentSchema.__contains__`` and
+    ``BaseAgentSchema.get`` docstrings. The test pins the contract so
+    a future "change __contains__ to return False on None" edit fires
+    a CI failure rather than silently breaking caller logic.
+    """
+    schema = SuccessCriteriaSchema()  # minimum_auc defaults to None
+    assert "minimum_auc" in schema
+    assert schema.get("minimum_auc", 0.5) == 0.5
+    # The "discriminating" idiom for callers that need to distinguish
+    # "set to None" from "default":
+    assert "minimum_auc" in schema and schema.minimum_auc is None
+
+
+def test_feature_analyzer_state_shap_values_json_dump_raises() -> None:
+    """I4 fix: pin the documented un-serializable surface for
+    ``shap_values: np.ndarray``.
+
+    Pydantic v2 has no built-in serializer for numpy.ndarray. Calling
+    ``model_dump_json()`` on a FeatureAnalyzerState with non-None
+    shap_values must raise PydanticSerializationError. Sub-shard D5
+    is queued to add a ``@field_serializer`` if SHAP needs JSON
+    checkpointing in the future. This test fires loud if anyone
+    inadvertently tries to JSON-checkpoint state with SHAP values.
+    """
+    import numpy as np
+    from pydantic_core import PydanticSerializationError
+
+    from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState
+
+    state = FeatureAnalyzerState(shap_values=np.array([[0.1, 0.2], [0.3, 0.4]]))
+    with pytest.raises(PydanticSerializationError):
+        state.model_dump_json()
+
+
+def test_feature_analyzer_state_json_dump_works_when_shap_values_is_none() -> None:
+    """I4 companion: state without shap_values DOES serialize cleanly.
+
+    Pins the half of the contract where the no-SHAP path works —
+    confirms the serialization failure is specifically the ndarray
+    field, not a structural pydantic regression.
+    """
+    from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState
+
+    state = FeatureAnalyzerState(experiment_id="exp_test", problem_type="classification")
+    # Should NOT raise.
+    json_str = state.model_dump_json()
+    assert "exp_test" in json_str
+
+
+def test_metrics_schema_permits_empty_metrics_for_stated_problem_type() -> None:
+    """M2 fix: pin the documented permissive behavior of
+    ``MetricsSchema._check_metrics_subset_for_problem_type``.
+
+    The validator is intentionally non-enforcing (returns ``self``
+    even when ``problem_type=binary_classification`` and no metrics
+    are set). Documented as a placeholder for future tightening.
+    This test fires if someone changes the validator to raise without
+    coordinating the trainer-side stop point.
+    """
+    # binary_classification with no metrics — should NOT raise.
+    schema = MetricsSchema(problem_type="binary_classification")
+    assert schema.problem_type == "binary_classification"
+    assert all(
+        getattr(schema, m) is None
+        for m in ("auc_roc", "f1_score", "precision", "recall", "accuracy", "log_loss")
+    )
+
+    # regression with no metrics — should NOT raise either.
+    schema_reg = MetricsSchema(problem_type="regression")
+    assert schema_reg.problem_type == "regression"
+    assert all(getattr(schema_reg, m) is None for m in ("rmse", "mae", "r2", "mape"))
