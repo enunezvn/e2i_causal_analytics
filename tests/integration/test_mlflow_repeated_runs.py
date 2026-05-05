@@ -143,7 +143,7 @@ def _fold_invocation_recorder_with_logging(connector: _FakeConnector):
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
         is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
-            state.get("_repeated_mode_fold_invocation", False)
+            state.get("repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold:
             fold_seed = int(state.get("fold_random_state", 0))
@@ -384,7 +384,7 @@ def _fold_invocation_recorder_constant_metric(connector: _FakeConnector):
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
         is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
-            state.get("_repeated_mode_fold_invocation", False)
+            state.get("repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold:
             tags = {
@@ -542,7 +542,7 @@ def _fold_invocation_recorder_with_failure(connector: _FakeConnector, failed_fol
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
         is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
-            state.get("_repeated_mode_fold_invocation", False)
+            state.get("repeated_mode_fold_invocation", False)
         )
         if is_repeated_fold and idx == failed_fold_idx:
             # Simulate a downstream node failure inside the fold's subgraph

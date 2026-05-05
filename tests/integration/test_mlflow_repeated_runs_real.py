@@ -103,7 +103,7 @@ def _build_minimal_graph_recorder(force_fold_failure_idx: int | None = None):
     async def fake_ainvoke(state: Dict[str, Any]) -> Dict[str, Any]:
         idx = int(state.get("fold_idx", 0))
         is_repeated_fold = state.get("evaluation_mode") == "repeated_k10" and bool(
-            state.get("_repeated_mode_fold_invocation", False)
+            state.get("repeated_mode_fold_invocation", False)
         )
 
         # Minimal fitted model (DummyClassifier needs only sample arrays)

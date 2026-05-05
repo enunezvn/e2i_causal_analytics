@@ -494,3 +494,83 @@ def test_model_trainer_state_minimal_checkpoint_replay() -> None:
     assert restored.validation_metrics is None
     assert restored.test_metrics is None
     assert restored.training_status is None
+
+
+def test_model_trainer_state_repeated_mode_fold_invocation_is_declared_field() -> None:
+    """Sub-shard D4 / codex review B2: ``repeated_mode_fold_invocation`` is
+    a declared pydantic field, NOT a ``model_extra`` flow-through.
+
+    The pre-D4 code declared the field with a leading underscore
+    (``_repeated_mode_fold_invocation``) which pydantic v2 treats as a
+    private attribute. The field could not be a model field, so the
+    sentinel flowed through ``model_extra``. LangGraph 1.0 only
+    propagates declared fields through channels, not ``model_extra``,
+    so the sentinel was silently dropped on every node coercion —
+    breaking ``mlflow_logger.py``'s repeated-fold MLflow nesting
+    (codex review B2, 2026-05-05).
+
+    Post-fix: the field is declared without underscore. This test
+    pins the declaration so a future "go back to underscore" edit
+    fires a CI failure.
+    """
+    assert "repeated_mode_fold_invocation" in ModelTrainerState.model_fields
+    assert "_repeated_mode_fold_invocation" not in ModelTrainerState.model_fields
+    field_info = ModelTrainerState.model_fields["repeated_mode_fold_invocation"]
+    # Pydantic 2.x stores the type via .annotation; for Optional[bool]
+    # it resolves to ``Optional[bool]`` aka ``Union[bool, None]``.
+    assert field_info.is_required() is False  # has default of None
+
+
+def test_model_trainer_state_repeated_mode_fold_invocation_propagates_through_langgraph() -> None:
+    """B2 fix verification: a multi-node LangGraph using ModelTrainerState
+    as schema correctly propagates ``repeated_mode_fold_invocation``
+    from initial state through subsequent nodes.
+
+    Pre-D4: model_extra-stored sentinel was dropped after the first
+    node coercion, so node_b.state.get("repeated_mode_fold_invocation")
+    returned False (the get-default coalescing for missing values).
+    Post-D4: declared field → real channel → propagates correctly.
+
+    This is the smoke test that catches the regression if anyone
+    re-introduces underscore-prefixed sentinel handling.
+    """
+    import asyncio
+
+    from langgraph.graph import END, START, StateGraph
+
+    captured_at_node_b: dict = {}
+
+    async def node_a(state: ModelTrainerState) -> dict:
+        # Node A doesn't return repeated_mode_fold_invocation; LangGraph
+        # must preserve it from the channel state established at graph entry.
+        return {"algorithm_name": "LogisticRegression"}
+
+    async def node_b(state: ModelTrainerState) -> dict:
+        # Node B reads the sentinel via the dict-shim path used by
+        # mlflow_logger.py:192 in production code.
+        captured_at_node_b["sentinel"] = state.get("repeated_mode_fold_invocation", False)
+        captured_at_node_b["evaluation_mode"] = state.get("evaluation_mode", "single")
+        return {}
+
+    builder = StateGraph(ModelTrainerState)
+    builder.add_node("a", node_a)
+    builder.add_node("b", node_b)
+    builder.add_edge(START, "a")
+    builder.add_edge("a", "b")
+    builder.add_edge("b", END)
+    graph = builder.compile()
+
+    # Initial state mimics the per-fold invocation pattern from
+    # _run_repeated_splits at agent.py:1096.
+    initial_state = {
+        "evaluation_mode": "repeated_k10",
+        "repeated_mode_fold_invocation": True,
+        "fold_idx": 3,
+    }
+
+    asyncio.run(graph.ainvoke(initial_state))
+
+    # The sentinel MUST reach node B as True. If LangGraph drops it
+    # (the pre-D4 model_extra regression), this assertion fires loud.
+    assert captured_at_node_b["sentinel"] is True
+    assert captured_at_node_b["evaluation_mode"] == "repeated_k10"

@@ -157,7 +157,7 @@ class ModelTrainerAgent:
         """
         # W3-lite Day 4 (shard 21 §B) — `evaluation_mode` dispatch.
         # The orchestrator (`_run_repeated_splits`) recursively calls this method
-        # per fold with `_repeated_mode_fold_invocation=True` set; that sentinel
+        # per fold with `repeated_mode_fold_invocation=True` set; that sentinel
         # short-circuits the dispatch so the inner call falls through to the
         # legacy single-graph path. The per-fold input still carries
         # `evaluation_mode="repeated_k10"` so downstream nodes (split_enforcer,
@@ -168,7 +168,7 @@ class ModelTrainerAgent:
                 f"Unknown evaluation_mode={evaluation_mode!r}; valid: {_VALID_EVALUATION_MODES}"
             )
         if evaluation_mode == "repeated_k10" and not input_data.get(
-            "_repeated_mode_fold_invocation", False
+            "repeated_mode_fold_invocation", False
         ):
             return await self._run_repeated_splits(input_data)
 
@@ -268,8 +268,8 @@ class ModelTrainerAgent:
             # detect "I'm being called per-fold inside repeated_k10" and open
             # a NESTED MLflow run with fold tags. Single-mode callers do not
             # set this field, so it defaults to False.
-            "_repeated_mode_fold_invocation": bool(
-                input_data.get("_repeated_mode_fold_invocation", False)
+            "repeated_mode_fold_invocation": bool(
+                input_data.get("repeated_mode_fold_invocation", False)
             ),
         }
 
@@ -710,7 +710,7 @@ class ModelTrainerAgent:
           1. Parent MLflow run wraps the fold loop (shard 21 §C); per-fold
              nested children are opened by the per-fold ``mlflow_logger`` node
              when it observes ``state["evaluation_mode"]=="repeated_k10"`` AND
-             ``state["_repeated_mode_fold_invocation"]`` (cycle-15 I-4).
+             ``state["repeated_mode_fold_invocation"]`` (cycle-15 I-4).
           2. Try/except per fold — partial-fold contract per cycle-15 I-3.
              Each ``fold_metrics`` entry carries
              ``fold_status: Literal["ok","failed"]``; aggregator skips failed
@@ -1059,7 +1059,7 @@ class ModelTrainerAgent:
           - Preserves ``evaluation_mode = "repeated_k10"`` on the per-fold input
             so downstream nodes (split_enforcer, evaluator, mlflow_logger) apply
             repeated-mode logic. Recursion-termination is the
-            ``_repeated_mode_fold_invocation = True`` sentinel — it is what
+            ``repeated_mode_fold_invocation = True`` sentinel — it is what
             prevents the recursive ``self.run`` invocation from re-entering
             ``_run_repeated_splits``, NOT a switch to ``evaluation_mode="single"``.
           - Sets ``fold_random_state = spec.seed`` on the per-fold input so
@@ -1089,11 +1089,11 @@ class ModelTrainerAgent:
         # `evaluation_mode="repeated_k10"` is preserved on the per-fold input so
         # downstream nodes (split_enforcer, mlflow_logger) can branch on the
         # active mode; the orchestrator-level dispatch is skipped by the
-        # `_repeated_mode_fold_invocation=True` sentinel so the recursive
+        # `repeated_mode_fold_invocation=True` sentinel so the recursive
         # `self.run` call falls through to the legacy single-graph path
         # without re-entering `_run_repeated_splits`.
         per_fold["evaluation_mode"] = "repeated_k10"
-        per_fold["_repeated_mode_fold_invocation"] = True
+        per_fold["repeated_mode_fold_invocation"] = True
         per_fold["fold_random_state"] = spec.seed
         per_fold["fold_idx"] = spec.fold_idx
         per_fold["train_data"] = {
