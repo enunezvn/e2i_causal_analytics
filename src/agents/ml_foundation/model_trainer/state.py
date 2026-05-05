@@ -37,6 +37,7 @@ from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
     audit_workflow_id_validator,
 )
+from src.agents.ml_foundation.model_trainer.schemas import OptunaDistribution
 
 
 class ModelTrainerState(BaseAgentSchema):
@@ -51,7 +52,13 @@ class ModelTrainerState(BaseAgentSchema):
     model_candidate: Optional[Dict[str, Any]] = None  # Complete ModelCandidate
     algorithm_name: Optional[str] = None
     algorithm_class: Optional[str] = None
-    hyperparameter_search_space: Optional[Dict[str, Dict[str, Any]]] = None  # Optuna search space
+    # D2.1: typed encoding of Optuna search space entries. Each value
+    # is a discriminated union by ``type`` field (int|float|categorical),
+    # validated against ``OptunaDistribution`` from model_trainer/schemas.py.
+    # Producer dict literals (e.g., ``{"type": "int", "low": 1, "high": 100}``)
+    # validate cleanly into the right variant; consumer access via
+    # ``config["low"]`` works through the dict-shim on _OptunaDistributionBase.
+    hyperparameter_search_space: Optional[Dict[str, OptunaDistribution]] = None
     default_hyperparameters: Optional[Dict[str, Any]] = None
 
     # From data_preparer

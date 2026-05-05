@@ -780,3 +780,170 @@ def test_metrics_schema_permits_empty_metrics_for_stated_problem_type() -> None:
     schema_reg = MetricsSchema(problem_type="regression")
     assert schema_reg.problem_type == "regression"
     assert all(getattr(schema_reg, m) is None for m in ("rmse", "mae", "r2", "mape"))
+
+
+# --------------------------------------------------------------------------- #
+# D2.1 — hyperparameter_search_space wired into State as Dict[str, OptunaDistribution]
+# --------------------------------------------------------------------------- #
+
+
+def test_optuna_distribution_supports_dict_shim_get_for_low_high() -> None:
+    """D2.1: extending ``BaseAgentSchema`` gives Optuna distribution
+    instances the dict-shim accessors. The hyperparameter_tuner consumer
+    reads ``config["low"]`` / ``config["high"]`` — we pin that the shim
+    returns the declared field values rather than raising TypeError.
+    """
+    int_dist = OptunaIntDistribution(type="int", low=2, high=20, step=2)
+    assert int_dist["low"] == 2
+    assert int_dist["high"] == 20
+    assert int_dist["step"] == 2
+    assert int_dist.get("step") == 2
+    assert int_dist.get("missing", "fallback") == "fallback"
+
+    float_dist = OptunaFloatDistribution(type="float", low=1e-4, high=0.1, log=True)
+    assert float_dist["low"] == 1e-4
+    assert float_dist["high"] == 0.1
+    assert float_dist["log"] is True
+    assert float_dist.get("step") is None  # field declared, value None
+
+    cat_dist = OptunaCategoricalDistribution(type="categorical", choices=["tpe", "random"])
+    assert cat_dist["choices"] == ["tpe", "random"]
+
+
+def test_optuna_distribution_extra_forbid_still_rejects_unknown_keys() -> None:
+    """D2.1: even with BaseAgentSchema parent (which has extra="allow"),
+    the OPTUNA-base override ``model_config = ConfigDict(extra="forbid")``
+    is load-bearing — producer typos in algorithm_registry.py must raise
+    at construction time, not silently route to model_extra.
+
+    Pre-D2.1 this was guaranteed by extending plain BaseModel with
+    extra="forbid". Post-D2.1 we extend BaseAgentSchema (which has
+    extra="allow") and override extra="forbid" via ConfigDict merge.
+    Pin that the merge actually preserves forbid behavior.
+    """
+    with pytest.raises(ValidationError, match="(?i)extra"):
+        OptunaIntDistribution(  # type: ignore[call-arg]
+            type="int",
+            low=1,
+            high=10,
+            unknown_typo_field="should_raise",
+        )
+
+
+def test_model_trainer_state_validates_hyperparameter_search_space_dict_literal() -> None:
+    """D2.1: ModelTrainerState constructed with a dict-of-dicts (today's
+    producer shape from algorithm_registry.py) validates the entries
+    into the OptunaDistribution discriminated union.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState(
+        hyperparameter_search_space={
+            "n_estimators": {"type": "int", "low": 50, "high": 500, "step": 50},
+            "learning_rate": {
+                "type": "float",
+                "low": 1e-4,
+                "high": 0.3,
+                "log": True,
+            },
+            "objective": {
+                "type": "categorical",
+                "choices": ["binary:logistic", "binary:hinge"],
+            },
+        }
+    )
+
+    space = state.hyperparameter_search_space
+    assert space is not None
+    assert isinstance(space["n_estimators"], OptunaIntDistribution)
+    assert isinstance(space["learning_rate"], OptunaFloatDistribution)
+    assert isinstance(space["objective"], OptunaCategoricalDistribution)
+
+    # Consumer-side dict-shim access — what hyperparameter_tuner does today.
+    assert space["n_estimators"]["low"] == 50
+    assert space["learning_rate"]["log"] is True
+    assert space["objective"]["choices"] == ["binary:logistic", "binary:hinge"]
+
+
+def test_model_selector_state_validates_hyperparameter_search_space_dict_literal() -> None:
+    """D2.1: ModelSelectorState (the producer side) accepts the same
+    dict-of-dicts shape and validates into OptunaDistribution. Pins
+    the cross-agent contract: model_selector emits, model_trainer reads,
+    both use the same typed shape.
+    """
+    from src.agents.ml_foundation.model_selector.state import ModelSelectorState
+
+    state = ModelSelectorState(
+        hyperparameter_search_space={
+            "max_depth": {"type": "int", "low": 3, "high": 10},
+            "subsample": {"type": "float", "low": 0.5, "high": 1.0},
+        }
+    )
+    space = state.hyperparameter_search_space
+    assert space is not None
+    assert isinstance(space["max_depth"], OptunaIntDistribution)
+    assert isinstance(space["subsample"], OptunaFloatDistribution)
+
+
+def test_model_trainer_state_rejects_invalid_hyperparameter_search_space() -> None:
+    """D2.1: invalid distribution dicts raise at State construction time.
+    This is the static-safety win — pre-D2.1 a producer typo like
+    ``"type": "ilt"`` (typo'd "int") would silently flow as a plain dict
+    until Optuna ran and probably ignored it. Now it raises immediately.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    # Invalid type discriminator
+    with pytest.raises(ValidationError):
+        ModelTrainerState(
+            hyperparameter_search_space={
+                "x": {"type": "ilt", "low": 1, "high": 10},  # typo
+            }
+        )
+
+    # Missing required field (high)
+    with pytest.raises(ValidationError):
+        ModelTrainerState(
+            hyperparameter_search_space={
+                "x": {"type": "int", "low": 1},  # missing high
+            }
+        )
+
+    # Categorical with empty choices
+    with pytest.raises(ValidationError):
+        ModelTrainerState(
+            hyperparameter_search_space={
+                "x": {"type": "categorical", "choices": []},  # min_length=1
+            }
+        )
+
+
+def test_model_trainer_state_hyperparameter_search_space_none_default() -> None:
+    """D2.1: hyperparameter_search_space remains Optional[Dict[...]] with
+    default None — the typed-schema wiring does not break partial-state
+    construction.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState()
+    assert state.hyperparameter_search_space is None
+
+
+def test_model_trainer_state_hyperparameter_search_space_round_trips_through_json() -> None:
+    """D2.1: typed schema round-trips through model_dump → model_validate.
+    Pins LangGraph checkpointer compatibility — a serialised state JSON
+    round-trips back into the typed shape, not into raw dicts.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState(
+        hyperparameter_search_space={"lr": {"type": "float", "low": 1e-3, "high": 0.5, "log": True}}
+    )
+    dumped = state.model_dump()
+    restored = ModelTrainerState.model_validate(dumped)
+
+    space = restored.hyperparameter_search_space
+    assert space is not None
+    assert isinstance(space["lr"], OptunaFloatDistribution)
+    assert space["lr"].low == 1e-3
+    assert space["lr"].log is True
