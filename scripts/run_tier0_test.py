@@ -2292,16 +2292,14 @@ async def step_4_model_selector(
 
     from src.agents.ml_foundation.model_selector import ModelSelectorAgent
 
-    # Normalize qc_report for compatibility
-    normalized_qc_report = qc_report.copy()
-    if "qc_passed" not in normalized_qc_report:
-        normalized_qc_report["qc_passed"] = normalized_qc_report.get("gate_passed", True)
-    if "qc_errors" not in normalized_qc_report:
-        normalized_qc_report["qc_errors"] = []
-
+    # D2.2 (2026-05-05): runner-side qc_report normalization shim
+    # removed. The data_preparer producer now writes qc_passed/
+    # qc_errors/qc_warnings directly into qc_report (see
+    # data_preparer/agent.py:158-177); the runtime contract is
+    # pinned by QCReportSchema in data_preparer/schemas.py.
     input_data: dict[str, Any] = {
         "scope_spec": scope_spec,
-        "qc_report": normalized_qc_report,
+        "qc_report": qc_report,
         "skip_benchmarks": False,  # Enable benchmarks to evaluate alternatives
     }
     if feature_characteristics:
@@ -2309,7 +2307,7 @@ async def step_4_model_selector(
 
     print_input_section({
         "problem_type": scope_spec.get("problem_type", "binary_classification"),
-        "qc_passed": normalized_qc_report.get("qc_passed"),
+        "qc_passed": qc_report.get("qc_passed"),
         "skip_benchmarks": False,
     })
 
@@ -2554,10 +2552,9 @@ async def step_5_model_trainer(
     if "default_hyperparameters" not in model_candidate:
         model_candidate["default_hyperparameters"] = {"C": 1.0, "max_iter": 200}
 
-    # Normalize qc_report for model_trainer (expects qc_passed)
-    normalized_qc_report = qc_report.copy()
-    if "qc_passed" not in normalized_qc_report:
-        normalized_qc_report["qc_passed"] = normalized_qc_report.get("gate_passed", True)
+    # D2.2 (2026-05-05): runner-side qc_report normalization shim
+    # removed. data_preparer/agent.py:158-177 now writes qc_passed
+    # directly into qc_report; QCReportSchema pins the contract.
 
     # ------------------------------------------------------------------
     # Resolve split strategy
@@ -2867,7 +2864,7 @@ async def step_5_model_trainer(
     input_data = {
         "experiment_id": experiment_id,
         "model_candidate": model_candidate,
-        "qc_report": normalized_qc_report,
+        "qc_report": qc_report,
         "enable_hpo": True,
         "hpo_trials": CONFIG.hpo_trials,
         "problem_type": CONFIG.problem_type,

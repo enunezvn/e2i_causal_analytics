@@ -64,3 +64,21 @@ class QCReportSchema(BaseAgentSchema):
     row_count: Optional[int] = None
     column_count: Optional[int] = None
     validated_at: Optional[str] = None  # ISO 8601 string
+
+    # D2.2: Consumer-contract fields. The QC gate at
+    # ``model_trainer/nodes/qc_gate_checker.py:30-46`` and
+    # ``model_selector/agent.py:162-166`` read these THREE fields specifically
+    # (not the dimension scores or expectation_results above).
+    #
+    # Pre-D2.2 these fields were NOT in the producer's qc_report dict; the
+    # runner ``scripts/run_tier0_test.py:2295-2300, 2558+`` patched them in
+    # before forwarding to model_trainer/model_selector. That hidden coupling
+    # is removed by D2.2 — the producer now writes them directly.
+    #
+    # Semantic mapping at the producer (data_preparer/agent.py:158-177):
+    # - qc_passed   = final_state["qc_passed"]               (already in state)
+    # - qc_errors   = final_state.get("blocking_issues", []) (alias)
+    # - qc_warnings = final_state.get("warnings", [])        (alias of warnings field above)
+    qc_passed: Optional[bool] = None
+    qc_errors: Optional[List[str]] = None
+    qc_warnings: Optional[List[str]] = None

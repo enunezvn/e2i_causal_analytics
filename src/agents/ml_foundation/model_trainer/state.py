@@ -37,6 +37,7 @@ from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
     audit_workflow_id_validator,
 )
+from src.agents.ml_foundation.data_preparer.schemas import QCReportSchema
 from src.agents.ml_foundation.model_trainer.schemas import OptunaDistribution
 
 
@@ -62,7 +63,10 @@ class ModelTrainerState(BaseAgentSchema):
     default_hyperparameters: Optional[Dict[str, Any]] = None
 
     # From data_preparer
-    qc_report: Optional[Dict[str, Any]] = None  # QC validation report
+    # D2.2: typed QC contract; consumer-contract fields qc_passed/qc_errors/
+    # qc_warnings are now declared on QCReportSchema, removing the runner-side
+    # normalization shim that previously patched them in.
+    qc_report: Optional[QCReportSchema] = None  # QC validation report
     experiment_id: Optional[str] = None
     feast_fallback_used: Optional[bool] = None  # data_preparer Feast historical-features fallback
 

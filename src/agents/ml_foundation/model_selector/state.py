@@ -15,6 +15,7 @@ from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
     audit_workflow_id_validator,
 )
+from src.agents.ml_foundation.data_preparer.schemas import QCReportSchema
 from src.agents.ml_foundation.model_trainer.schemas import OptunaDistribution
 
 
@@ -32,7 +33,8 @@ class ModelSelectorState(BaseAgentSchema):
     kpi_category: Optional[str] = None  # KPI category for domain-specific recommendations
 
     # From data_preparer
-    qc_report: Optional[Dict[str, Any]] = None  # Must have passed QC gate
+    # D2.2: typed QC contract; see model_trainer/state.py:58.
+    qc_report: Optional[QCReportSchema] = None  # Must have passed QC gate
     baseline_metrics: Optional[Dict[str, Any]] = None  # Baseline metrics from training data
 
     # Feature characteristics (optional, from tier0 feature discovery)
