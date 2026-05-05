@@ -5,6 +5,8 @@ This module defines the catalog of supported algorithms and filtering logic.
 
 from typing import Any, Dict, List
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 # Algorithm catalog with specifications
 ALGORITHM_REGISTRY = {
     # === CAUSAL ML (DoWhy/EconML) ===
@@ -374,6 +376,7 @@ REGULARIZATION_SEARCH_SPACE: Dict[str, Dict[str, Dict[str, Any]]] = {
 }
 
 
+@preserve_audit_workflow_id
 async def filter_algorithms(state: Dict[str, Any]) -> Dict[str, Any]:
     """Filter algorithms by problem type, constraints, and preferences.
 

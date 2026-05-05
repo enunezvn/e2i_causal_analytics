@@ -8,9 +8,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 logger = logging.getLogger(__name__)
 
 
+@preserve_audit_workflow_id
 async def analyze_historical_performance(state: Dict[str, Any]) -> Dict[str, Any]:
     """Analyze historical performance of algorithms.
 
