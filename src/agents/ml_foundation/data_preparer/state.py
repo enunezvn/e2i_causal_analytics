@@ -35,6 +35,7 @@ from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
     audit_workflow_id_validator,
 )
+from src.agents.ml_foundation.scope_definer.schemas import ScopeSpecSchema
 
 
 class DataPreparerState(BaseAgentSchema):
@@ -47,7 +48,10 @@ class DataPreparerState(BaseAgentSchema):
     # === INPUT FIELDS ===
     # From scope_definer
     experiment_id: Optional[str] = None
-    scope_spec: Optional[Dict[str, Any]] = None  # ScopeSpec from scope_definer
+    # D2.4: typed scope_spec contract. Schema declares 23 producer fields
+    # + 24 caller-injected consumer keys read across data_preparer nodes
+    # (date_column, required_columns, data_source, table_name, etc.).
+    scope_spec: Optional[ScopeSpecSchema] = None  # ScopeSpec from scope_definer
 
     # Data source configuration
     # May be either:

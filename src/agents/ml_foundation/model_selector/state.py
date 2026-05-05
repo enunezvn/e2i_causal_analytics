@@ -17,6 +17,7 @@ from src.agents.ml_foundation._pydantic_utils import (
 )
 from src.agents.ml_foundation.data_preparer.schemas import QCReportSchema
 from src.agents.ml_foundation.model_trainer.schemas import OptunaDistribution
+from src.agents.ml_foundation.scope_definer.schemas import ScopeSpecSchema
 
 
 class ModelSelectorState(BaseAgentSchema):
@@ -28,7 +29,8 @@ class ModelSelectorState(BaseAgentSchema):
 
     # === INPUT FIELDS ===
     # From scope_definer
-    scope_spec: Optional[Dict[str, Any]] = None  # Complete ScopeSpec
+    # D2.4: typed scope_spec contract; see data_preparer/state.py:50.
+    scope_spec: Optional[ScopeSpecSchema] = None  # Complete ScopeSpec
     experiment_id: Optional[str] = None  # Extracted from scope_spec
     kpi_category: Optional[str] = None  # KPI category for domain-specific recommendations
 
