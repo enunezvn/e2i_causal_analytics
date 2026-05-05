@@ -55,7 +55,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState  # noqa: E402,I001
+from src.agents.ml_foundation._pydantic_utils import BaseAgentSchema  # noqa: E402,I001
+from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState  # noqa: E402
 from src.agents.ml_foundation.model_deployer.state import ModelDeployerState  # noqa: E402
 from src.agents.ml_foundation.model_selector.state import ModelSelectorState  # noqa: E402
 from src.agents.ml_foundation.model_trainer.state import ModelTrainerState  # noqa: E402
@@ -63,7 +64,6 @@ from src.agents.ml_foundation.observability_connector.state import (  # noqa: E4
     ObservabilityConnectorState,
 )
 from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState  # noqa: E402
-from src.agents.ml_foundation.state_utils import validate_state  # noqa: E402
 
 # Cross-agent contract: every agent's State class must declare these.
 # Justified at module docstring + codex Decision B (agent ae2d78db4919ac47e).
@@ -89,20 +89,54 @@ ALL_AGENT_STATES = [
 
 
 @pytest.mark.parametrize("agent_name,state_cls", ALL_AGENT_STATES)
-def test_state_class_is_typed_dict_total_false(agent_name: str, state_cls: type) -> None:
-    """Every ml_foundation agent's State is a ``TypedDict(total=False)``.
+def test_state_class_is_partial_update_friendly(agent_name: str, state_cls: type) -> None:
+    """Every ml_foundation agent's State allows partial updates from nodes.
 
-    Total=False is a hard project convention — LangGraph reducers expect
-    partial dict updates from each node. Switching to ``total=True``
-    would break pipeline-level state merges silently. This test pins the
-    convention.
+    Two equivalent shapes are accepted (per the TypedDict→Pydantic v2
+    migration tracked in
+    ``.claude/plans/typeddict_to_pydantic_migration_plan_20260504.md``):
+
+    1. ``TypedDict(total=False)`` — historical pattern. Every field is
+       implicitly absent-or-present, so partial dict updates merge
+       cleanly into LangGraph state.
+    2. ``BaseAgentSchema`` (pydantic v2 ``BaseModel`` subclass with
+       ``extra="allow"`` and Decision-8a ``Optional[T] = None`` defaults
+       on every field) — post-migration pattern. Same partial-update
+       semantics achieved via ``Optional`` defaults plus the dict-like
+       accessors on ``BaseAgentSchema``.
+
+    Switching either shape to its strict variant (``total=True`` for
+    TypedDict, or removing ``Optional`` defaults for pydantic) would
+    break pipeline-level state merges silently. This test pins the
+    convention against either drift.
     """
-    assert hasattr(state_cls, "__total__"), (
-        f"{agent_name}: {state_cls.__name__} is not a TypedDict (missing __total__ attribute)"
-    )
-    assert state_cls.__total__ is False, (
-        f"{agent_name}: {state_cls.__name__} declared with total={state_cls.__total__}; "
-        "must be total=False for LangGraph partial-update semantics"
+    if hasattr(state_cls, "__total__"):
+        # TypedDict path
+        assert state_cls.__total__ is False, (
+            f"{agent_name}: {state_cls.__name__} declared with total={state_cls.__total__}; "
+            "must be total=False for LangGraph partial-update semantics"
+        )
+        return
+    if issubclass(state_cls, BaseAgentSchema):
+        # Pydantic path — BaseAgentSchema enforces extra="allow" and the
+        # subclass should declare every non-audit field as Optional with
+        # a default. Spot-check that audit_workflow_id is the only
+        # required field (no default), matching Decision 7a/8a.
+        required_fields = [
+            name for name, field_info in state_cls.model_fields.items() if field_info.is_required()
+        ]
+        # Allow audit_workflow_id as the documented exception; reject any
+        # other required field (would break partial-update semantics).
+        assert required_fields == ["audit_workflow_id"] or required_fields == [], (
+            f"{agent_name}: {state_cls.__name__} has unexpected required fields "
+            f"{required_fields!r}. Per Decision 8a only audit_workflow_id may be "
+            f"required; everything else must have an Optional[T]=None default for "
+            f"partial-update compatibility."
+        )
+        return
+    raise AssertionError(
+        f"{agent_name}: {state_cls.__name__} is neither TypedDict(total=False) "
+        f"nor a BaseAgentSchema subclass — incompatible with the migration arc"
     )
 
 
@@ -284,15 +318,15 @@ def test_observability_connector_declares_error_details() -> None:
 async def test_scope_definer_classify_problem_runtime_contract() -> None:
     """``classify_problem`` honours its declared output contract at runtime.
 
-    This is the runtime-enforcement counterpart to the shape-only tests
-    above. ``classify_problem`` is the cheapest scope_definer node:
-    pure async logic, no LLM, no external deps (per
-    src/agents/ml_foundation/scope_definer/nodes/problem_classifier.py:10-45).
+    Runtime-enforcement counterpart to the shape-only tests above.
+    ``classify_problem`` is the cheapest scope_definer node: pure async
+    logic, no LLM, no external deps
+    (src/agents/ml_foundation/scope_definer/nodes/problem_classifier.py:10-45).
 
-    Asserts via ``validate_state`` (a runtime helper that bridges
-    TypedDict-declaration vs pydantic-promotion — see
-    src/agents/ml_foundation/state_utils.py for the design rationale)
-    that the node returns its three documented output keys.
+    Post Shard A migration, ``ScopeDefinerState`` is a pydantic v2
+    ``BaseAgentSchema`` subclass — direct ``model_validate`` is the
+    runtime contract check (replaces the obsolete ``validate_state``
+    helper, deleted in Shard A).
     """
     from src.agents.ml_foundation.scope_definer.nodes.problem_classifier import (
         classify_problem,
@@ -307,14 +341,11 @@ async def test_scope_definer_classify_problem_runtime_contract() -> None:
     assert isinstance(result, dict), (
         f"classify_problem must return a dict, got {type(result).__name__}"
     )
-    validate_state(
-        result,
-        ScopeDefinerState,
-        required_keys=[
-            "inferred_problem_type",
-            "inferred_target_variable",
-        ],
-    )
+    # Both required keys must be present in the dict.
+    for key in ("inferred_problem_type", "inferred_target_variable"):
+        assert key in result, (
+            f"classify_problem must return key {key!r}; got keys {sorted(result.keys())!r}"
+        )
     # Type-narrow the inferred problem type — the function's Literal
     # annotation says one of 5 strings; we pin the contract that the
     # binary_classification hint round-trips.
@@ -352,39 +383,39 @@ def test_observability_connector_graph_compiles() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Discriminating-coverage guard (§7) — validate_state helper itself           #
+# Discriminating-coverage guard (§7) — pydantic ValidationError fires loudly  #
 # --------------------------------------------------------------------------- #
 
 
-def test_validate_state_helper_fires_on_missing_keys() -> None:
-    """``validate_state`` raises ValueError when keys are missing.
+def test_pydantic_state_rejects_malformed_audit_workflow_id() -> None:
+    """``ScopeDefinerState`` raises ValidationError on a malformed audit_workflow_id.
 
-    Vacuous-pass guard for the runtime tests: confirms the helper
+    Vacuous-pass guard for the migration: confirms the pydantic
+    validator factory at ``_pydantic_utils.py::audit_workflow_id_validator``
     actually fires under a regression scenario. If a future change
-    silently swallows missing keys, the runtime tests above would
-    silently pass — this guard prevents that.
+    drops the validator, audit-chain integrity could silently break
+    — this guard prevents that.
     """
-    incomplete: dict = {"present_key": "value"}
-    with pytest.raises(ValueError, match="missing required keys"):
-        validate_state(
-            incomplete,
-            ScopeDefinerState,
-            required_keys=["present_key", "absent_key"],
-        )
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ScopeDefinerState(audit_workflow_id="not-a-uuid")
 
 
-def test_validate_state_helper_passes_when_keys_present() -> None:
-    """``validate_state`` is a no-op when all required keys are present.
+def test_pydantic_state_auto_generates_audit_workflow_id() -> None:
+    """``ScopeDefinerState()`` auto-generates a UUID via ``default_factory``.
 
-    Companion to the missing-keys discrimination test: a contract where
-    the state is complete must NOT raise. Otherwise the helper would
-    fire false positives on every runtime-enforcement test.
+    Discrimination guard for Decision 7a/8a's "UUID typed, never None"
+    contract — combined with the pragmatic ``default_factory=uuid4``
+    that keeps existing agent flows working without threading an
+    explicit audit_workflow_id from caller → State.
+
+    A future sub-shard may tighten the contract to "caller MUST provide
+    audit_workflow_id" once all agent flows are updated. At that point
+    this test should be flipped back to expect ``ValidationError``.
     """
-    complete: dict = {"key_a": 1, "key_b": "two", "key_c": [3]}
-    # Should return None (no exception)
-    result = validate_state(
-        complete,
-        ScopeDefinerState,
-        required_keys=["key_a", "key_b"],
+    state = ScopeDefinerState()
+    assert isinstance(state.audit_workflow_id, UUID), (
+        "ScopeDefinerState() must auto-generate a UUID via default_factory; "
+        f"got {type(state.audit_workflow_id).__name__}"
     )
-    assert result is None, f"validate_state must return None on success; got {result!r}"

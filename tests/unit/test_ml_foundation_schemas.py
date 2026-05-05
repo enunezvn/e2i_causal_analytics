@@ -135,6 +135,143 @@ def test_base_agent_schema_arbitrary_types_allowed() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# BaseAgentSchema TypedDict-compat dict-like accessors                        #
+# --------------------------------------------------------------------------- #
+#
+# These accessors are the Shard A enabler: they let the 270+ existing
+# ``state["key"]`` / ``state.get("key")`` call sites across the
+# ml_foundation node files keep working unchanged after the State
+# classes migrate from TypedDict to pydantic BaseModel.
+
+
+def test_dict_access_reads_declared_field() -> None:
+    """``state["key"]`` returns the declared-field value."""
+    schema = SuccessCriteriaSchema(minimum_auc=0.75)
+    assert schema["minimum_auc"] == 0.75
+
+
+def test_dict_access_reads_extra_field() -> None:
+    """``state["key"]`` returns ``model_extra`` values for unknown keys."""
+
+    class _Empty(BaseAgentSchema):
+        pass
+
+    instance = _Empty(future_key="reserved")
+    assert instance["future_key"] == "reserved"
+
+
+def test_dict_access_raises_keyerror_for_unknown_key() -> None:
+    """``state["key"]`` raises ``KeyError`` when key is genuinely absent."""
+    schema = SuccessCriteriaSchema()
+    with pytest.raises(KeyError):
+        _ = schema["totally_unknown_key"]
+
+
+def test_dict_access_returns_none_for_unset_optional() -> None:
+    """``state["key"]`` returns ``None`` for Optional fields that default to None.
+
+    This is a documented semantic shift from TypedDict — the
+    ``Optional[T] = None`` default is materialised at construction
+    time. Use ``key in state`` to discriminate "missing field" from
+    "field set to None" if needed.
+    """
+    schema = SuccessCriteriaSchema()
+    assert schema["minimum_auc"] is None  # not KeyError
+
+
+def test_dict_setitem_writes_declared_field() -> None:
+    """``state["key"] = value`` updates the declared field via attribute set."""
+    schema = SuccessCriteriaSchema()
+    schema["minimum_auc"] = 0.85
+    assert schema.minimum_auc == 0.85
+    assert schema["minimum_auc"] == 0.85
+
+
+def test_dict_setitem_writes_extra_field() -> None:
+    """``state["key"] = value`` writes unknown keys to ``model_extra``."""
+
+    class _Empty(BaseAgentSchema):
+        pass
+
+    instance = _Empty()
+    instance["new_key"] = "value"
+    assert instance.model_extra == {"new_key": "value"}
+    assert instance["new_key"] == "value"
+
+
+def test_contains_check_for_declared_field() -> None:
+    """``key in state`` is True for declared fields (even when value is None)."""
+    schema = SuccessCriteriaSchema()
+    assert "minimum_auc" in schema  # declared, even though None
+    assert "totally_unknown_key" not in schema
+
+
+def test_contains_check_for_extra_field() -> None:
+    """``key in state`` is True for keys in ``model_extra``."""
+
+    class _Empty(BaseAgentSchema):
+        pass
+
+    instance = _Empty(future_key="reserved")
+    assert "future_key" in instance
+
+
+def test_contains_check_rejects_non_string() -> None:
+    """``int in state`` is False (not TypeError); matches dict semantics for foreign types."""
+    schema = SuccessCriteriaSchema()
+    assert (42 in schema) is False
+
+
+def test_get_returns_value_for_declared_field() -> None:
+    """``state.get("key")`` returns the value when set."""
+    schema = SuccessCriteriaSchema(minimum_auc=0.75)
+    assert schema.get("minimum_auc") == 0.75
+
+
+def test_get_returns_default_for_unset_optional() -> None:
+    """``state.get("key", default)`` returns default when value is None.
+
+    This is the Shard A migration shim: pydantic-Optional fields with
+    ``=None`` default look "set to None" but the existing call sites
+    expect ``default`` returned in that case.
+    """
+    schema = SuccessCriteriaSchema()  # minimum_auc defaults to None
+    assert schema.get("minimum_auc", 0.5) == 0.5
+
+
+def test_get_returns_default_for_unknown_key() -> None:
+    """``state.get("key", default)`` returns default when key is genuinely absent."""
+    schema = SuccessCriteriaSchema()
+    assert schema.get("totally_unknown_key", "fallback") == "fallback"
+
+
+def test_get_returns_none_for_unset_optional_no_default() -> None:
+    """``state.get("key")`` (no default) returns None when value is None."""
+    schema = SuccessCriteriaSchema()
+    assert schema.get("minimum_auc") is None
+
+
+def test_get_returns_value_for_extra_field() -> None:
+    """``state.get("key")`` resolves keys in ``model_extra`` too."""
+
+    class _Empty(BaseAgentSchema):
+        pass
+
+    instance = _Empty(extra_key="present")
+    assert instance.get("extra_key") == "present"
+
+
+def test_get_returns_default_when_extra_value_is_none() -> None:
+    """``state.get("key", default)`` returns default when extra-field value is None."""
+
+    class _Empty(BaseAgentSchema):
+        pass
+
+    instance = _Empty(extra_key=None)
+    assert instance.get("extra_key", "fallback") == "fallback"
+
+
+# --------------------------------------------------------------------------- #
 # ScopeSpecSchema                                                             #
 # --------------------------------------------------------------------------- #
 

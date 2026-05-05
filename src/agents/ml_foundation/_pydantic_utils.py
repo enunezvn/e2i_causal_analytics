@@ -60,6 +60,22 @@ class BaseAgentSchema(BaseModel):
       do NOT use arbitrary types pay no runtime cost.
     - ``populate_by_name=True``: lets aliased fields accept either
       the alias or the python attribute name during construction.
+
+    TypedDict-compat dict-like accessors:
+    The ``__getitem__`` / ``__setitem__`` / ``__contains__`` / ``get``
+    methods exist so that the 270+ ``state["key"]`` / ``state.get(...)``
+    call sites across the ml_foundation node files keep working
+    unchanged after their corresponding ``State`` class is migrated
+    from ``TypedDict(total=False)`` to a pydantic v2 ``BaseModel``.
+    Without these methods, every node's state-access call site would
+    need a separate edit, which would explode Shard A/B/C blast radius
+    by ~1000+ call sites.
+
+    Semantics: ``state.get("key", default)`` returns ``default`` when
+    the field is missing OR the value is ``None``. This matches the
+    TypedDict ``total=False`` semantics where unset fields are
+    indistinguishable from ``None`` at a call site that uses
+    ``.get(key, default)``.
     """
 
     model_config = ConfigDict(
@@ -67,6 +83,80 @@ class BaseAgentSchema(BaseModel):
         arbitrary_types_allowed=True,
         populate_by_name=True,
     )
+
+    def __getitem__(self, key: str) -> Any:
+        """Dict-like read access. Raises ``KeyError`` if the key is
+        absent (neither a declared field nor in ``model_extra``).
+
+        Note: returns ``None`` when a declared field exists with value
+        ``None``; ``KeyError`` only fires for genuinely-unknown keys.
+        Existing ``state["key"]`` call sites that previously raised
+        ``KeyError`` on missing-from-TypedDict keys will now return
+        ``None`` for declared-Optional fields. This is the migration's
+        intentional semantic shift — see Decision 8a in the plan.
+        """
+        if key in type(self).model_fields:
+            return getattr(self, key)
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Dict-like write access for partial-state updates.
+
+        Routes declared fields to attribute assignment; routes unknown
+        keys to ``model_extra`` (preserved by ``extra="allow"``). This
+        matches the TypedDict semantic where any string key was a
+        valid update target.
+        """
+        if key in type(self).model_fields:
+            setattr(self, key, value)
+            return
+        if self.model_extra is None:
+            object.__setattr__(self, "__pydantic_extra__", {})
+        # mypy can't see __pydantic_extra__ on BaseModel; runtime is fine.
+        self.__pydantic_extra__[key] = value  # type: ignore[index]
+
+    def __contains__(self, key: object) -> bool:
+        """Dict-like ``key in state`` check.
+
+        Returns ``True`` when ``key`` is a declared field (regardless
+        of value) OR present in ``model_extra``. Note: ``True`` even
+        when the field's value is ``None`` — a declared field is
+        always considered "present" in pydantic semantics.
+        """
+        if not isinstance(key, str):
+            return False
+        if key in type(self).model_fields:
+            return True
+        extra = self.model_extra or {}
+        return key in extra
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-like ``get`` with TypedDict-compat semantics.
+
+        Returns ``default`` when:
+        - The key is genuinely absent (neither declared nor in
+          ``model_extra``), OR
+        - The key resolves to a value of ``None``.
+
+        The "None → default" coalescing is the migration's
+        compatibility shim. Pydantic-Optional fields default to
+        ``None`` (Decision 8a), but the ~232 ``state.get("key", X)``
+        call sites in node code expect ``X`` returned when the field
+        was never set. Conflating absent + None preserves that
+        intent without a per-call-site rewrite.
+
+        For users that need to distinguish "missing field" from
+        "field set to None", use ``key in state`` (which discriminates)
+        followed by attribute access.
+        """
+        try:
+            value = self[key]
+        except KeyError:
+            return default
+        return default if value is None else value
 
 
 def coerce_uuid(value: Any) -> UUID:
