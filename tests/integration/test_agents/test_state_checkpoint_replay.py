@@ -41,6 +41,12 @@ import json
 from uuid import UUID, uuid4
 
 from src.agents.ml_foundation.data_preparer.state import DataPreparerState
+from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState
+from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
+from src.agents.ml_foundation.model_selector.state import ModelSelectorState
+from src.agents.ml_foundation.observability_connector.state import (
+    ObservabilityConnectorState,
+)
 from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState
 
 
@@ -245,3 +251,133 @@ def test_uuid_audit_workflow_id_accepts_both_string_and_uuid() -> None:
     via_uuid = ScopeDefinerState(audit_workflow_id=audit_id)
     via_str = ScopeDefinerState(audit_workflow_id=str(audit_id))
     assert via_uuid.audit_workflow_id == via_str.audit_workflow_id == audit_id
+
+
+# --------------------------------------------------------------------------- #
+# Shard C — leaf agents                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_observability_connector_state_replays_checkpoint() -> None:
+    """ObservabilityConnectorState round-trips a representative metrics snapshot."""
+    audit_id = uuid4()
+    pre_migration = {
+        "audit_workflow_id": str(audit_id),
+        "experiment_id": "exp_test",
+        "events_logged": 42,
+        "emission_successful": True,
+        "latency_by_agent": {"scope_definer": {"p50": 2.1, "p95": 4.5, "p99": 8.2, "avg": 3.2}},
+        "error_rate_by_agent": {"scope_definer": 0.02, "data_preparer": 0.05},
+        "overall_success_rate": 0.97,
+        "quality_score": 0.92,
+    }
+    restored = ObservabilityConnectorState.model_validate_json(json.dumps(pre_migration))
+    assert restored.audit_workflow_id == audit_id
+    assert restored.events_logged == 42
+    assert restored.emission_successful is True
+    assert restored.quality_score == 0.92
+    assert restored["overall_success_rate"] == 0.97
+
+
+def test_model_selector_state_replays_checkpoint() -> None:
+    """ModelSelectorState round-trips a representative selection-result snapshot."""
+    audit_id = uuid4()
+    pre_migration = {
+        "audit_workflow_id": str(audit_id),
+        "experiment_id": "exp_test",
+        "scope_spec": {"problem_type": "binary_classification"},
+        "primary_candidate": {"name": "LogisticRegression", "version": "v1"},
+        "algorithm_name": "LogisticRegression",
+        "algorithm_class": "sklearn.linear_model.LogisticRegression",
+        "default_hyperparameters": {"C": 1.0, "max_iter": 1000},
+        "hyperparameter_search_space": {
+            "C": {"type": "float", "low": 0.01, "high": 10.0, "log": True}
+        },
+        "expected_performance": {"auc_roc": 0.78, "f1_score": 0.65},
+        "interpretability_score": 0.85,
+        "selection_score": 0.82,
+        "stage": "development",
+    }
+    restored = ModelSelectorState.model_validate_json(json.dumps(pre_migration))
+    assert restored.audit_workflow_id == audit_id
+    assert restored.algorithm_name == "LogisticRegression"
+    assert restored.interpretability_score == 0.85
+    assert restored.expected_performance is not None
+    assert restored.expected_performance["auc_roc"] == 0.78
+
+
+def test_model_deployer_state_replays_checkpoint() -> None:
+    """ModelDeployerState round-trips a representative deployment-result snapshot."""
+    audit_id = uuid4()
+    pre_migration = {
+        "audit_workflow_id": str(audit_id),
+        "experiment_id": "exp_test",
+        "model_uri": "runs:/abc123/model",
+        "validation_metrics": {"auc_roc": 0.85, "chosen_threshold_source": "validation"},
+        "success_criteria_met": True,
+        "target_environment": "staging",
+        "deployment_action": "promote",
+        "model_version": 2,
+        "promotion_successful": True,
+        "deployment_status": "healthy",
+        "health_check_passed": True,
+        "deployment_successful": True,
+        "overall_status": "completed",
+    }
+    restored = ModelDeployerState.model_validate_json(json.dumps(pre_migration))
+    assert restored.audit_workflow_id == audit_id
+    assert restored.target_environment == "staging"
+    assert restored.deployment_action == "promote"
+    assert restored.deployment_status == "healthy"
+    assert restored.overall_status == "completed"
+    assert restored.validation_metrics is not None
+    assert restored.validation_metrics["chosen_threshold_source"] == "validation"
+
+
+def test_feature_analyzer_state_replays_checkpoint() -> None:
+    """FeatureAnalyzerState round-trips a representative SHAP-analysis snapshot.
+
+    Note: ``shap_values: np.ndarray`` is excluded from the JSON fixture —
+    np.ndarray serialization to JSON requires explicit handling
+    (``.tolist()``); a follow-up sub-shard adds a ``field_serializer`` if
+    SHAP analysis is checkpointed in production. Today's persistence path
+    stores SHAP via the semantic-memory entries, not JSON checkpoints.
+    """
+    audit_id = uuid4()
+    pre_migration = {
+        "audit_workflow_id": str(audit_id),
+        "experiment_id": "exp_test",
+        "training_run_id": "run_abc",
+        "problem_type": "classification",
+        "feature_columns": ["age", "weight", "history"],
+        "global_importance": {"age": 0.45, "weight": 0.32, "history": 0.23},
+        "top_features": ["age", "weight", "history"],
+        "explainer_type": "TreeExplainer",
+        "shap_analysis_id": "shap_xyz",
+        "interpretation": "Age is the dominant feature.",
+        "status": "completed",
+        "shap_skipped": False,
+    }
+    restored = FeatureAnalyzerState.model_validate_json(json.dumps(pre_migration))
+    assert restored.audit_workflow_id == audit_id
+    assert restored.problem_type == "classification"
+    assert restored.feature_columns == ["age", "weight", "history"]
+    assert restored.shap_analysis_id == "shap_xyz"
+    assert restored.global_importance is not None
+    assert restored.global_importance["age"] == 0.45
+
+
+def test_feature_analyzer_state_holds_numpy_shap_values() -> None:
+    """``shap_values: Optional[np.ndarray]`` works at construction time.
+
+    arbitrary_types_allowed is inherited from BaseAgentSchema. A regression
+    that drops it (or that constrains shap_values to a non-arbitrary type)
+    would break the SHAP-computation node's state writes.
+    """
+    import numpy as np
+
+    arr = np.array([[0.1, 0.2], [0.3, 0.4]])
+    state = FeatureAnalyzerState(shap_values=arr)
+    assert state.shap_values is not None
+    assert state.shap_values.shape == (2, 2)
+    np.testing.assert_array_equal(state.shap_values, arr)

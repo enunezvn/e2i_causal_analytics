@@ -1,13 +1,23 @@
 """State definition for model_selector agent.
 
-This module defines the TypedDict state used by the model_selector LangGraph.
+Migrated from ``TypedDict(total=False)`` to pydantic v2 ``BaseModel``
+in Shard C of the migration. Inherits from ``BaseAgentSchema``.
 """
 
-from typing import Any, Dict, List, Optional, TypedDict
-from uuid import UUID
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
+
+from pydantic import Field
+
+from src.agents.ml_foundation._pydantic_utils import (
+    BaseAgentSchema,
+    audit_workflow_id_validator,
+)
 
 
-class ModelSelectorState(TypedDict, total=False):
+class ModelSelectorState(BaseAgentSchema):
     """State for model_selector agent.
 
     The model_selector evaluates candidate algorithms and recommends the
@@ -16,128 +26,130 @@ class ModelSelectorState(TypedDict, total=False):
 
     # === INPUT FIELDS ===
     # From scope_definer
-    scope_spec: Dict[str, Any]  # Complete ScopeSpec
-    experiment_id: str  # Extracted from scope_spec
-    kpi_category: Optional[str]  # KPI category for domain-specific recommendations
+    scope_spec: Optional[Dict[str, Any]] = None  # Complete ScopeSpec
+    experiment_id: Optional[str] = None  # Extracted from scope_spec
+    kpi_category: Optional[str] = None  # KPI category for domain-specific recommendations
 
     # From data_preparer
-    qc_report: Dict[str, Any]  # Must have passed QC gate
-    baseline_metrics: Dict[str, Any]  # Baseline metrics from training data
+    qc_report: Optional[Dict[str, Any]] = None  # Must have passed QC gate
+    baseline_metrics: Optional[Dict[str, Any]] = None  # Baseline metrics from training data
 
     # Feature characteristics (optional, from tier0 feature discovery)
-    feature_characteristics: Optional[Dict[str, Any]]  # e.g. {"categorical_ratio": 0.6}
+    feature_characteristics: Optional[Dict[str, Any]] = None  # e.g. {"categorical_ratio": 0.6}
 
     # User preferences (optional)
-    algorithm_preferences: Optional[List[str]]  # Preferred algorithms
-    excluded_algorithms: Optional[List[str]]  # Algorithms to exclude
-    interpretability_required: bool  # Whether model must be interpretable
+    algorithm_preferences: Optional[List[str]] = None
+    excluded_algorithms: Optional[List[str]] = None
+    interpretability_required: Optional[bool] = None  # Whether model must be interpretable
 
     # Sample data for benchmarking (optional)
-    X_sample: Any  # Feature matrix for cross-validation
-    y_sample: Any  # Target vector for cross-validation
+    X_sample: Optional[Any] = None  # Feature matrix for cross-validation
+    y_sample: Optional[Any] = None  # Target vector for cross-validation
 
     # Control flags
-    skip_benchmarks: bool  # Skip cross-validation benchmarks
-    skip_mlflow: bool  # Skip MLflow registration
+    skip_benchmarks: Optional[bool] = None  # Skip cross-validation benchmarks
+    skip_mlflow: Optional[bool] = None  # Skip MLflow registration
 
     # === INTERMEDIATE FIELDS ===
     # Problem analysis
-    problem_type: str  # Extracted from scope_spec
-    technical_constraints: List[str]  # Extracted from scope_spec
-    row_count: int  # From qc_report
-    column_count: int  # From qc_report
+    problem_type: Optional[str] = None  # Extracted from scope_spec
+    technical_constraints: Optional[List[str]] = None  # Extracted from scope_spec
+    row_count: Optional[int] = None  # From qc_report
+    column_count: Optional[int] = None  # From qc_report
 
     # Algorithm filtering
-    candidate_algorithms: List[Dict[str, Any]]  # Filtered candidates
-    filtered_by_problem_type: List[Dict[str, Any]]
-    filtered_by_constraints: List[Dict[str, Any]]
-    filtered_by_preferences: List[Dict[str, Any]]
+    candidate_algorithms: Optional[List[Dict[str, Any]]] = None  # Filtered candidates
+    filtered_by_problem_type: Optional[List[Dict[str, Any]]] = None
+    filtered_by_constraints: Optional[List[Dict[str, Any]]] = None
+    filtered_by_preferences: Optional[List[Dict[str, Any]]] = None
 
-    # Historical data
-    historical_success_rates: Dict[str, float]  # Algorithm -> success rate
-    similar_experiments: List[str]  # Similar past experiments
+    # Historical data — widened from Dict[str, float] preemptively per Shard B lesson
+    historical_success_rates: Optional[Dict[str, Any]] = None
+    similar_experiments: Optional[List[str]] = None  # Similar past experiments
 
     # Ranking
-    ranked_candidates: List[Dict[str, Any]]  # Ranked by selection score
-    selection_scores: Dict[str, float]  # Algorithm -> composite score
+    ranked_candidates: Optional[List[Dict[str, Any]]] = None  # Ranked by selection score
+    selection_scores: Optional[Dict[str, Any]] = None  # Algorithm -> composite score
 
     # === OUTPUT FIELDS ===
     # Primary selection
-    primary_candidate: Dict[str, Any]  # Selected ModelCandidate
-    algorithm_name: str  # Selected algorithm name
-    algorithm_class: str  # Python class path
-    algorithm_family: str  # "causal_ml", "gradient_boosting", etc.
+    primary_candidate: Optional[Dict[str, Any]] = None  # Selected ModelCandidate
+    algorithm_name: Optional[str] = None
+    algorithm_class: Optional[str] = None  # Python class path
+    algorithm_family: Optional[str] = None  # "causal_ml", "gradient_boosting", etc.
 
     # Configuration
-    default_hyperparameters: Dict[str, Any]  # Starting hyperparameters
-    hyperparameter_search_space: Dict[str, Dict[str, Any]]  # Optuna search space
+    default_hyperparameters: Optional[Dict[str, Any]] = None  # Starting hyperparameters
+    hyperparameter_search_space: Optional[Dict[str, Dict[str, Any]]] = None  # Optuna search space
 
-    # Performance expectations
-    expected_performance: Dict[str, float]  # Expected metrics
-    training_time_estimate_hours: float  # Estimated training time
-    estimated_inference_latency_ms: int  # Expected latency
-    memory_requirement_gb: float  # Memory requirements
+    # Performance expectations — widened
+    expected_performance: Optional[Dict[str, Any]] = None  # Expected metrics
+    training_time_estimate_hours: Optional[float] = None  # Estimated training time
+    estimated_inference_latency_ms: Optional[int] = None  # Expected latency
+    memory_requirement_gb: Optional[float] = None  # Memory requirements
 
     # Characteristics
-    interpretability_score: float  # 0-1 interpretability score
-    scalability_score: float  # 0-1 scalability score
-    selection_score: float  # Overall selection score
+    interpretability_score: Optional[float] = None  # 0-1 interpretability score
+    scalability_score: Optional[float] = None  # 0-1 scalability score
+    selection_score: Optional[float] = None  # Overall selection score
 
     # Alternative candidates
-    alternative_candidates: List[Dict[str, Any]]  # Top 2-3 alternatives
+    alternative_candidates: Optional[List[Dict[str, Any]]] = None  # Top 2-3 alternatives
 
     # Rationale
-    selection_rationale: str  # Why this algorithm was selected
-    primary_reason: str  # Main selection reason
-    supporting_factors: List[str]  # Supporting factors
-    alternatives_considered: List[Dict[str, Any]]  # Alternatives with reasons
-    constraint_compliance: Dict[str, bool]  # Constraint check results
+    selection_rationale: Optional[str] = None
+    primary_reason: Optional[str] = None  # Main selection reason
+    supporting_factors: Optional[List[str]] = None
+    alternatives_considered: Optional[List[Dict[str, Any]]] = None
+    constraint_compliance: Optional[Dict[str, bool]] = None  # Constraint check results
 
-    # Baseline comparison
-    baseline_to_beat: Dict[str, float]  # Baseline model metrics
-    baseline_candidates: List[str]  # Baseline models for comparison
-    baseline_comparison: Dict[str, Any]  # Full baseline comparison results
+    # Baseline comparison — widened
+    baseline_to_beat: Optional[Dict[str, Any]] = None  # Baseline model metrics
+    baseline_candidates: Optional[List[str]] = None
+    baseline_comparison: Optional[Dict[str, Any]] = None  # Full baseline comparison results
 
     # Benchmarking
-    benchmark_results: Dict[str, Dict[str, Any]]  # Algorithm -> benchmark results
-    benchmark_rankings: List[Dict[str, Any]]  # Candidates ranked by benchmark
-    benchmarks_skipped: bool  # Whether benchmarks were skipped
-    benchmark_skip_reason: Optional[str]  # Reason benchmarks skipped
-    benchmark_time_seconds: float  # Time spent on benchmarks
-    combined_score: Optional[float]  # Combined selection + benchmark score
-    benchmark_score: Optional[float]  # Benchmark-only score
-    max_benchmark_candidates: int  # Max candidates to benchmark
-    cv_folds: int  # Number of CV folds
+    benchmark_results: Optional[Dict[str, Dict[str, Any]]] = None
+    benchmark_rankings: Optional[List[Dict[str, Any]]] = None
+    benchmarks_skipped: Optional[bool] = None
+    benchmark_skip_reason: Optional[str] = None
+    benchmark_time_seconds: Optional[float] = None
+    combined_score: Optional[float] = None
+    benchmark_score: Optional[float] = None
+    max_benchmark_candidates: Optional[int] = None  # Max candidates to benchmark
+    cv_folds: Optional[int] = None  # Number of CV folds
 
     # Historical analysis
-    historical_data_available: bool  # Whether historical data was found
-    historical_experiments_count: int  # Number of historical experiments
-    history_recommended_algorithms: List[str]  # Algorithms recommended by history
-    recommendation_source: str  # "historical" or "prior_knowledge"
-    algorithm_trends: Dict[str, Dict[str, Any]]  # Performance trends
+    historical_data_available: Optional[bool] = None
+    historical_experiments_count: Optional[int] = None
+    history_recommended_algorithms: Optional[List[str]] = None
+    recommendation_source: Optional[str] = None  # "historical" or "prior_knowledge"
+    algorithm_trends: Optional[Dict[str, Dict[str, Any]]] = None  # Performance trends
 
     # MLflow registration
-    registered_in_mlflow: bool  # Whether registered in MLflow
-    model_version_id: str  # MLflow model version ID
-    mlflow_run_id: Optional[str]  # MLflow run ID
-    mlflow_experiment_id: Optional[str]  # MLflow experiment ID
-    mlflow_registration_error: Optional[str]  # Registration error message
-    benchmark_logged: bool  # Whether benchmarks logged to MLflow
-    benchmark_log_error: Optional[str]  # Benchmark logging error
+    registered_in_mlflow: Optional[bool] = None
+    model_version_id: Optional[str] = None  # MLflow model version ID
+    mlflow_run_id: Optional[str] = None
+    mlflow_experiment_id: Optional[str] = None
+    mlflow_registration_error: Optional[str] = None
+    benchmark_logged: Optional[bool] = None  # Whether benchmarks logged to MLflow
+    benchmark_log_error: Optional[str] = None
 
     # Selection summary (for database storage)
-    selection_summary: Dict[str, Any]  # Complete summary for persistence
+    selection_summary: Optional[Dict[str, Any]] = None
 
     # Stage
-    stage: str  # Model stage: "development"
+    stage: Optional[str] = None  # Model stage: "development"
 
     # Metadata
-    created_at: str  # ISO timestamp
-    created_by: str  # "model_selector"
+    created_at: Optional[str] = None  # ISO timestamp
+    created_by: Optional[str] = None  # "model_selector"
 
     # Error handling
-    error: Optional[str]
-    error_type: Optional[str]
+    error: Optional[str] = None
+    error_type: Optional[str] = None
 
     # Audit chain
-    audit_workflow_id: UUID
+    audit_workflow_id: UUID = Field(default_factory=uuid4)
+
+    _validate_audit_id = audit_workflow_id_validator()
