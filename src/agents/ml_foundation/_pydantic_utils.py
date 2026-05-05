@@ -1,23 +1,48 @@
 """Shared pydantic v2 utilities for ml_foundation agent schemas.
 
 This module establishes the base class and helpers that the per-agent
-``schemas.py`` files (and, after Shards A-C land, the per-agent
-``state.py`` modules) consume during the TypedDict → Pydantic v2
-migration tracked in
+``schemas.py`` files and ``state.py`` modules consume after the
+TypedDict → Pydantic v2 migration tracked in
 ``.claude/plans/typeddict_to_pydantic_migration_plan_20260504.md``.
+
+ARC STATUS (post-2026-05-05):
+- Core 4-shard migration arc CLOSED (PRs #48, #49, #50, #51).
+- TypedDict→Pydantic follow-up arc CLOSED across 12 PRs:
+  - PR #57 — D5 (np.ndarray serializer for shap_values: WONT-FIX, documented).
+  - PR #58 — D1.1 (orchestrator audit_workflow_id threading; production fix).
+  - PR #59 — D2.0 (registry_manager auc_roc/roc_auc producer-key fix).
+  - PR #60 — D2.1 (hyperparameter_search_space typed schema wiring).
+  - PR #61 — D2.2 (qc_report typed schema wiring; remove runner shim).
+  - PR #62 — D1.2 (per-agent input_data → State threading).
+  - PR #63 — D2.3 (success_criteria typed schema wiring).
+  - PR #64 — D2.4 (scope_spec typed schema wiring; 24 missing fields).
+  - PR #65 — D1.3 (workflow-level UUID minting + conftest fixture).
+  - PR #66 — D2.5 (validation_metrics typed schema wiring + AliasChoices).
+  - PR #67 — D3 (extra="allow" → extra="ignore" tightening).
+  - PR #68 — D1.4 (this PR; arc-closure documentation).
+
+The base class is in its STEADY-STATE configuration:
+- ``extra="ignore"`` (no longer the transition-window ``allow``).
+- Per-class overrides where needed (e.g., ``SuccessCriteriaSchema``
+  retains ``extra="allow"`` for underscore-prefixed adaptive audit keys).
+- ``audit_workflow_id`` retains ``Field(default_factory=uuid4)`` as a
+  documented transition mechanism — production paths thread caller-
+  provided UUIDs via D1.1 + D1.2; test fixtures may still rely on the
+  default. Strict-required tightening deferred indefinitely (~50+ test
+  sites would need rewriting; not load-bearing for correctness).
 
 The plan keeps schemas per-agent (Decision 1b) so each agent owns its
 output contracts. This module is the *only* shared piece — it captures
 two cross-cutting concerns that EVERY agent needs:
 
 1. ``BaseAgentSchema`` — a common ``BaseModel`` configured for the
-   migration's permissiveness contract. The ``extra="allow"`` setting
-   is load-bearing: during the multi-shard rollout, an agent migrated
-   to pydantic may still receive partial state from a TypedDict-shaped
-   upstream. Without ``extra="allow"`` those un-declared keys would
-   trigger ``ValidationError`` and break the LangGraph reducer's
-   merge-then-reduce semantics. Once all 7 agents are migrated, this
-   permissiveness can be tightened in a follow-up PR.
+   STEADY-STATE permissiveness contract (post-D3, 2026-05-05). The
+   ``extra="ignore"`` setting silently drops undeclared keys at
+   construction time. Production hot-path is unaffected: LangGraph 1.0
+   already drops ``model_extra`` at every channel boundary anyway (the
+   same mechanism that motivated D4). The dict-shim ``__setitem__``
+   continues to populate ``__pydantic_extra__`` directly so
+   ``state["foo"] = v`` writes still work.
 
 2. ``coerce_uuid`` — the field-validator helper that lets every agent
    accept ``audit_workflow_id`` as either a ``UUID`` instance (when
