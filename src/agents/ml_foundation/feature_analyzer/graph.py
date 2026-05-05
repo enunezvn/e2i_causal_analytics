@@ -93,6 +93,13 @@ def create_feature_analyzer_graph() -> CompiledStateGraph:
     # End after interpretation
     workflow.add_edge("narrate_importance", END)
 
+    # GUARD: If you add ``checkpointer=...`` to this ``workflow.compile()``
+    # call, ALSO resolve sub-shard D5 of the TypedDict-to-Pydantic migration:
+    # ``FeatureAnalyzerState.shap_values: Optional[np.ndarray]`` does NOT
+    # round-trip through JSON (no ``@field_serializer``; closed won't-fix
+    # 2026-05-05). Adding a checkpointer here would silently fail or bloat
+    # checkpoints with multi-MB SHAP arrays. See ``state.py`` shap_values
+    # docstring for full rationale.
     return workflow.compile()
 
 
@@ -128,6 +135,13 @@ def create_feature_engineering_graph() -> CompiledStateGraph:
 
     workflow.add_edge("select_features", END)
 
+    # GUARD: If you add ``checkpointer=...`` to this ``workflow.compile()``
+    # call, ALSO resolve sub-shard D5 of the TypedDict-to-Pydantic migration:
+    # ``FeatureAnalyzerState.shap_values: Optional[np.ndarray]`` does NOT
+    # round-trip through JSON (no ``@field_serializer``; closed won't-fix
+    # 2026-05-05). Even though this engineering-only graph never sets
+    # ``shap_values``, the State class is shared across all three
+    # feature_analyzer graphs — a checkpointer here pulls in the constraint.
     return workflow.compile()
 
 
@@ -167,6 +181,13 @@ def create_shap_analysis_graph() -> CompiledStateGraph:
     workflow.add_edge("detect_interactions", "narrate_importance")
     workflow.add_edge("narrate_importance", END)
 
+    # GUARD: If you add ``checkpointer=...`` to this ``workflow.compile()``
+    # call, ALSO resolve sub-shard D5 of the TypedDict-to-Pydantic migration:
+    # ``FeatureAnalyzerState.shap_values: Optional[np.ndarray]`` does NOT
+    # round-trip through JSON (no ``@field_serializer``; closed won't-fix
+    # 2026-05-05). This SHAP-only graph WILL populate ``shap_values`` —
+    # adding a checkpointer here without a serializer raises
+    # ``PydanticSerializationError`` at the first checkpoint write.
     return workflow.compile()
 
 

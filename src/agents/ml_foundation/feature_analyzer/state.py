@@ -116,17 +116,36 @@ class FeatureAnalyzerState(BaseAgentSchema):
 
     # SHAP values (raw) — np.ndarray; arbitrary_types_allowed (inherited
     # from BaseAgentSchema) covers in-memory construction. JSON
-    # serialization is NOT supported: pydantic v2 has no default
-    # np.ndarray serializer, so ``model_dump_json()`` raises
+    # serialization is intentionally NOT supported: pydantic v2 has no
+    # default np.ndarray serializer, so ``model_dump_json()`` raises
     # ``PydanticSerializationError`` if shap_values is non-None.
-    # Today's persistence path stores SHAP values via the semantic-memory
-    # entries (a separate write), NOT via JSON checkpoints — so the
-    # un-serializable surface is acceptable.
-    # If a future feature requires checkpointing the full FeatureAnalyzerState
-    # with SHAP values intact, see sub-shard D5 in the migration plan
-    # (planned ``@field_serializer("shap_values")`` returning ``.tolist()``).
+    #
+    # Sub-shard D5 status: CLOSED — won't-fix (2026-05-05). Persistence
+    # for SHAP values fans out into 5 dedicated stores (Postgres
+    # ``ml_shap_analyses``, MLflow artifacts, working memory cache,
+    # episodic memory, semantic memory) — each storing exactly the
+    # aggregated slice that downstream consumers need. The raw ndarray
+    # is correctly modeled as transient in-process state and is GC'd
+    # at run-end. Zero production callers JSON-serialize this field
+    # (verified: ``feature_analyzer/graph.py`` calls ``workflow.compile()``
+    # without a checkpointer at lines 96, 131, 170; no ml_foundation
+    # agent wires RedisSaver). Implementing a serializer would enable
+    # silent multi-MB JSON checkpoints (~10 MB at tier-0 max SHAP shape)
+    # — a storage-bloat foot-gun worse than today's loud raise.
+    #
+    # Re-evaluate D5 if and only if any of these change:
+    #   (a) a ``checkpointer=`` arg is added to any of the three
+    #       ``workflow.compile()`` calls in ``feature_analyzer/graph.py``;
+    #   (b) a new caller invokes ``state.model_dump_json()`` on
+    #       FeatureAnalyzerState;
+    #   (c) a "resumable feature analysis" or "agent-to-agent SHAP handoff
+    #       via channel state" feature appears in the backlog;
+    #   (d) a consumer needs SHAP values via JSON instead of the existing
+    #       typed Postgres/MLflow stores.
+    #
     # The unit test ``test_feature_analyzer_state_shap_values_json_dump_raises``
-    # pins this constraint loud (per codex review I4, 2026-05-05).
+    # pins this constraint loud (per codex review I4, 2026-05-05). If you
+    # are about to delete that test, see sub-shard D5 first.
     shap_values: Optional[np.ndarray] = None  # SHAP values (n_samples, n_features)
     base_value: Optional[float] = None  # Base value (expected value)
 
