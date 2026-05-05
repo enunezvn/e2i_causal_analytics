@@ -3934,6 +3934,13 @@ async def run_pipeline(
     import time
 
     experiment_id = f"tier0_e2e_{uuid.uuid4().hex[:8]}"
+    # D1.3: mint a workflow-level audit_workflow_id once and thread it
+    # through every agent.run() call below. Pre-D1.3 each agent's State
+    # minted a fresh UUID via Field(default_factory=uuid4), severing the
+    # audit chain across the dev-script's pipeline. After D1.4 drops
+    # the default_factory, this thread becomes the only path that keeps
+    # script-driven pipelines working.
+    audit_workflow_id = uuid.uuid4()
     pipeline_start_time = time.time()
 
     if regime not in _VALID_REGIMES:
