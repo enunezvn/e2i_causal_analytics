@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 
 class DeploymentStrategy(str, Enum):
     """Deployment strategy options."""
@@ -375,6 +377,7 @@ def _create_rollback_config(
     return config
 
 
+@preserve_audit_workflow_id
 async def plan_deployment(state: Dict[str, Any]) -> Dict[str, Any]:
     """Plan deployment based on model requirements and target environment.
 

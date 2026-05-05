@@ -10,6 +10,8 @@ import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 logger = logging.getLogger(__name__)
 
 # Try to import HTTP clients with graceful fallback
@@ -108,6 +110,7 @@ async def _perform_http_health_check(
         return False, None, "No HTTP client available"
 
 
+@preserve_audit_workflow_id
 async def check_health(state: Dict[str, Any]) -> Dict[str, Any]:
     """Perform health check on deployed endpoint.
 

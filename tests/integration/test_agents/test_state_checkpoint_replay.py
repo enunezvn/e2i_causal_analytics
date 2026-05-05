@@ -521,6 +521,69 @@ def test_model_trainer_state_repeated_mode_fold_invocation_is_declared_field() -
     assert field_info.is_required() is False  # has default of None
 
 
+def test_audit_workflow_id_propagates_via_entry_node_decorator() -> None:
+    """B1 fix: with the ``preserve_audit_workflow_id`` decorator on the
+    entry node, ``audit_workflow_id`` propagates correctly across all
+    subsequent nodes — even when the value comes from
+    ``Field(default_factory=uuid4)`` rather than from initial state.
+
+    Pre-fix runtime-verified (codex review B1, 2026-05-05): a 3-node
+    graph with no explicit audit_workflow_id in initial state produces
+    3 distinct UUIDs because pydantic re-fires default_factory on every
+    Schema coercion inside LangGraph.
+
+    Post-fix: the entry node's @preserve_audit_workflow_id decorator
+    explicitly returns audit_workflow_id in its update dict, pinning
+    the value into channel state for all downstream nodes.
+    """
+    import asyncio
+
+    from langgraph.graph import END, START, StateGraph
+
+    from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    captured = []
+
+    @preserve_audit_workflow_id
+    async def entry_node(state: ModelTrainerState) -> dict:
+        # The decorator handles audit_workflow_id propagation.
+        captured.append(("entry", state.audit_workflow_id))
+        return {"algorithm_name": "TestAlgo"}
+
+    async def middle_node(state: ModelTrainerState) -> dict:
+        captured.append(("middle", state.audit_workflow_id))
+        return {}
+
+    async def final_node(state: ModelTrainerState) -> dict:
+        captured.append(("final", state.audit_workflow_id))
+        return {}
+
+    builder = StateGraph(ModelTrainerState)
+    builder.add_node("entry", entry_node)
+    builder.add_node("middle", middle_node)
+    builder.add_node("final", final_node)
+    builder.add_edge(START, "entry")
+    builder.add_edge("entry", "middle")
+    builder.add_edge("middle", "final")
+    builder.add_edge("final", END)
+    graph = builder.compile()
+
+    # NO audit_workflow_id provided in initial state — the State's
+    # default_factory generates one, and the @preserve decorator on
+    # the entry node pins it into channel state for downstream nodes.
+    asyncio.run(graph.ainvoke({"experiment_id": "test_b1"}))
+
+    # All three nodes must see the SAME audit_workflow_id.
+    entry_id = captured[0][1]
+    middle_id = captured[1][1]
+    final_id = captured[2][1]
+    assert entry_id == middle_id == final_id, (
+        f"audit_workflow_id should be stable across nodes; got "
+        f"entry={entry_id}, middle={middle_id}, final={final_id}"
+    )
+
+
 def test_model_trainer_state_repeated_mode_fold_invocation_propagates_through_langgraph() -> None:
     """B2 fix verification: a multi-node LangGraph using ModelTrainerState
     as schema correctly propagates ``repeated_mode_fold_invocation``

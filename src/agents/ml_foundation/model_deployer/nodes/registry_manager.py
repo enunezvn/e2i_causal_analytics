@@ -12,6 +12,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple, cast
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -202,6 +204,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+@preserve_audit_workflow_id
 async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate stage promotion criteria.
 

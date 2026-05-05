@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 # Lazy imports to avoid circular dependencies
 # These are imported inside functions that need them:
 # - OpikConnector from src.mlops.opik_connector
@@ -125,6 +127,7 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
+@preserve_audit_workflow_id
 async def emit_spans(state: Dict[str, Any]) -> Dict[str, Any]:
     """Emit observability spans to Opik and persist to database.
 

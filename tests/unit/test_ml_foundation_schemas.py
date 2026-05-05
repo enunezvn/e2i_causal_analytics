@@ -673,6 +673,91 @@ def test_feature_analyzer_state_json_dump_works_when_shap_values_is_none() -> No
     assert "exp_test" in json_str
 
 
+def test_preserve_audit_workflow_id_decorator_injects_id() -> None:
+    """B1 fix: ``preserve_audit_workflow_id`` decorator merges
+    ``audit_workflow_id`` into the wrapped node's return dict so
+    LangGraph's reducer pins the value into channel state.
+
+    Pre-fix: when caller doesn't provide audit_workflow_id at
+    graph.ainvoke, ``Field(default_factory=uuid4)`` fires fresh on
+    every node coercion (runtime-verified empirically). Audit chain
+    broken WITHIN a single agent graph execution.
+
+    Post-fix: the entry node returns audit_workflow_id explicitly,
+    pinning the value into the channel state for subsequent nodes.
+    """
+    import asyncio
+
+    from src.agents.ml_foundation._pydantic_utils import (
+        preserve_audit_workflow_id,
+    )
+    from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState
+
+    @preserve_audit_workflow_id
+    async def fake_entry_node(state):
+        return {"inferred_problem_type": "binary_classification"}
+
+    audit_id = uuid4()
+    state = ScopeDefinerState(audit_workflow_id=audit_id)
+    result = asyncio.run(fake_entry_node(state))
+
+    # The decorator must have merged audit_workflow_id into the result.
+    assert result["inferred_problem_type"] == "binary_classification"
+    assert result["audit_workflow_id"] == audit_id
+
+
+def test_preserve_audit_workflow_id_does_not_override_explicit_return() -> None:
+    """The decorator must NOT clobber an audit_workflow_id that the
+    wrapped node explicitly returns.
+
+    Defensive: a node that intentionally returns a different
+    audit_workflow_id (e.g., a workflow-bridging shim) must have
+    its return value preserved.
+    """
+    import asyncio
+
+    from src.agents.ml_foundation._pydantic_utils import (
+        preserve_audit_workflow_id,
+    )
+    from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState
+
+    explicit_override = uuid4()
+
+    @preserve_audit_workflow_id
+    async def fake_entry_with_override(state):
+        return {
+            "inferred_problem_type": "regression",
+            "audit_workflow_id": explicit_override,
+        }
+
+    state = ScopeDefinerState(audit_workflow_id=uuid4())
+    result = asyncio.run(fake_entry_with_override(state))
+
+    # The explicit return wins; decorator's setdefault is a no-op.
+    assert result["audit_workflow_id"] == explicit_override
+
+
+def test_preserve_audit_workflow_id_handles_dict_state() -> None:
+    """The decorator works on plain-dict state too (some node signatures
+    annotate Dict[str, Any] rather than the pydantic State class).
+    """
+    import asyncio
+
+    from src.agents.ml_foundation._pydantic_utils import (
+        preserve_audit_workflow_id,
+    )
+
+    @preserve_audit_workflow_id
+    async def fake_node_dict_state(state):
+        return {"some_field": "value"}
+
+    audit_id = uuid4()
+    plain_dict_state = {"audit_workflow_id": audit_id, "experiment_id": "test"}
+    result = asyncio.run(fake_node_dict_state(plain_dict_state))
+
+    assert result["audit_workflow_id"] == audit_id
+
+
 def test_metrics_schema_permits_empty_metrics_for_stated_problem_type() -> None:
     """M2 fix: pin the documented permissive behavior of
     ``MetricsSchema._check_metrics_subset_for_problem_type``.

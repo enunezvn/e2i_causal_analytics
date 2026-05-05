@@ -15,6 +15,8 @@ import numpy as np
 import shap
 from mlflow.exceptions import MlflowException
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -220,6 +222,7 @@ def _normalize_shap_binary(vals: Any, base: Any) -> Tuple[np.ndarray, float]:
     return vals, base
 
 
+@preserve_audit_workflow_id
 async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
     """Compute SHAP values for the trained model.
 

@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
+
 # BentoML integration imports
 try:
     from src.mlops.bentoml_packaging import (
@@ -593,6 +595,7 @@ async def check_rollback_availability(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+@preserve_audit_workflow_id
 async def execute_rollback(state: Dict[str, Any]) -> Dict[str, Any]:
     """Execute rollback to previous deployment.
 
