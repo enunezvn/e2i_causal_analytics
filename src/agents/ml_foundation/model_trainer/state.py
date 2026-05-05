@@ -63,13 +63,13 @@ class ModelTrainerState(BaseAgentSchema):
     feast_fallback_used: Optional[bool] = None  # data_preparer Feast historical-features fallback
 
     # From scope_definer
-    success_criteria: Optional[Dict[str, float]] = None  # Performance thresholds to meet
+    success_criteria: Optional[Dict[str, Any]] = None  # Performance thresholds to meet
     problem_type: Optional[str] = None  # binary_classification, regression, etc.
     # Block 5: optional business cost matrix (tp/fp/fn/tn dollar values).
     # When set, the evaluator computes business_utility from the confusion
     # matrix at the chosen (validation-tuned) threshold and adds it to
     # validation_metrics + test_metrics (#10).
-    cost_matrix: Optional[Dict[str, float]] = None
+    cost_matrix: Optional[Dict[str, Any]] = None
 
     # Training configuration
     enable_hpo: Optional[bool] = None
@@ -157,9 +157,13 @@ class ModelTrainerState(BaseAgentSchema):
     final_epoch: Optional[int] = None
 
     # Model Evaluation
-    train_metrics: Optional[Dict[str, float]] = None
-    validation_metrics: Optional[Dict[str, float]] = None
-    test_metrics: Optional[Dict[str, float]] = None  # FINAL test-set metrics
+    # Metrics dicts hold mixed-type values at runtime (numeric metrics +
+    # string metadata like ``chosen_threshold_source`` + nested dicts like
+    # ``net_benefit_grid``). The TypedDict declaration ``Dict[str, float]``
+    # was aspirational; pydantic strict-validates so we widen to ``Any``.
+    train_metrics: Optional[Dict[str, Any]] = None
+    validation_metrics: Optional[Dict[str, Any]] = None
+    test_metrics: Optional[Dict[str, Any]] = None  # FINAL test-set metrics
 
     # Classification Metrics (problem-type specific)
     auc_roc: Optional[float] = None
@@ -179,7 +183,7 @@ class ModelTrainerState(BaseAgentSchema):
     calibration_error: Optional[float] = None  # Expected Calibration Error (ECE)
     calibrated_ece: Optional[float] = None  # ECE after post-hoc calibration
     calibration_analysis: Optional[Dict[str, Any]] = None  # Full calibration curve data
-    calibrated_test_metrics: Optional[Dict[str, float]] = None  # Metrics after post-hoc cal
+    calibrated_test_metrics: Optional[Dict[str, Any]] = None  # Metrics after post-hoc cal
     post_hoc_calibration: Optional[Dict[str, Any]] = None  # Calibration method info
 
     # Imbalance-Robust Metrics
@@ -187,15 +191,15 @@ class ModelTrainerState(BaseAgentSchema):
 
     # Threshold Analysis
     optimal_threshold: Optional[float] = None  # Youden's J
-    f1_threshold_analysis: Optional[Dict[str, float]] = None  # F1-optimal threshold + metrics
-    precision_at_k: Optional[Dict[int, float]] = None  # {100: 0.35, 500: 0.28}
+    f1_threshold_analysis: Optional[Dict[str, Any]] = None  # F1-optimal threshold + metrics
+    precision_at_k: Optional[Dict[int, float]] = None  # {100: 0.35, 500: 0.28}; numeric-only
 
     # Imbalance-Aware Evaluation (from evaluator, propagated through agent)
     precision_constrained: Optional[Dict[str, Any]] = None  # Precision-constrained threshold info
     minority_recall: Optional[float] = None  # Recall on minority class at optimal threshold
     minority_precision: Optional[float] = None  # Precision on minority class at optimal threshold
-    test_metrics_at_optimal: Optional[Dict[str, float]] = None  # At optimal threshold
-    test_metrics_at_05: Optional[Dict[str, float]] = None  # At standard 0.5 threshold
+    test_metrics_at_optimal: Optional[Dict[str, Any]] = None  # At optimal threshold
+    test_metrics_at_05: Optional[Dict[str, Any]] = None  # At standard 0.5 threshold
 
     # Permutation Test
     permutation_test: Optional[Dict[str, Any]] = None  # p-value, shuffled AUC stats, verdict
