@@ -76,6 +76,17 @@ class MetricsSchema(BaseAgentSchema):
         through. The migration's transition window may need that
         flexibility; once Shard B lands, the trainer always sets
         ``problem_type`` so the invariant becomes load-bearing.
+
+        EXPLICIT NOTE (per codex review M2, 2026-05-05): this validator
+        is currently NON-ENFORCED. Every code path returns ``self``
+        without raising, including the documented "violation" cases
+        below. The body exists as a placeholder for future tightening:
+        when downstream consumers stop tolerating empty metric bags,
+        flip the ``return self`` lines under "no metrics for stated
+        problem_type" to ``raise ValueError(...)``. Until then, the
+        permissive behavior is intentional and pinned by
+        ``test_metrics_schema_permits_empty_metrics_for_stated_problem_type``
+        in the unit-test suite.
         """
         classification_metrics = (
             self.auc_roc,

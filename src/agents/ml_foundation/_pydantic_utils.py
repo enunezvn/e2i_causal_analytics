@@ -82,6 +82,16 @@ class BaseAgentSchema(BaseModel):
         extra="allow",
         arbitrary_types_allowed=True,
         populate_by_name=True,
+        # validate_assignment=True is load-bearing per codex review I1
+        # (2026-05-05): without it, ``state["status"] = "off_spec_value"``
+        # bypasses pydantic field validation via ``setattr`` (see
+        # ``__setitem__`` below), silently storing values that violate
+        # Literal/Annotated/etc. constraints. With it on, every assignment
+        # triggers the full validator pipeline — slightly more expensive
+        # but catches typos and off-spec writes that would otherwise
+        # surface as silent runtime drift. Decision 4b (accept perf cost
+        # in exchange for type safety).
+        validate_assignment=True,
     )
 
     def __getitem__(self, key: str) -> Any:
@@ -125,6 +135,25 @@ class BaseAgentSchema(BaseModel):
         of value) OR present in ``model_extra``. Note: ``True`` even
         when the field's value is ``None`` — a declared field is
         always considered "present" in pydantic semantics.
+
+        SEMANTIC ASYMMETRY warning (per codex review I2, 2026-05-05):
+        ``key in state`` and ``state.get(key, default)`` disagree on
+        declared-but-None fields. Specifically:
+
+        - ``"minimum_auc" in state`` → ``True`` (declared field exists)
+        - ``state.get("minimum_auc", 0.5)`` → ``0.5`` (None coalesced)
+
+        This is intentional — see ``get()`` docstring for the rationale.
+        Code that wants to distinguish "field set" from "field None"
+        should use the contains check, then attribute access:
+
+        .. code-block:: python
+
+            if "minimum_auc" in state and state.minimum_auc is not None:
+                ...
+
+        ``state.get("minimum_auc")`` (no default) returns ``None`` for
+        BOTH "absent" and "set to None" — same shim trade-off.
         """
         if not isinstance(key, str):
             return False

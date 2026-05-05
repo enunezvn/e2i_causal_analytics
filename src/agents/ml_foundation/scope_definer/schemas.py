@@ -102,6 +102,30 @@ class SuccessCriteriaSchema(BaseAgentSchema):
     (Phase 5 work) attaches three private fields under
     ``_adaptive_*`` that the criteria_validator populates when
     ``ADAPTIVE_CRITERIA=true``.
+
+    Underscore-prefixed adaptive keys (per codex review M1, 2026-05-05):
+    ``criteria_validator.py:305-326`` writes three keys into the produced
+    dict that this schema CANNOT declare as pydantic fields because
+    pydantic v2 reserves underscore-prefixed names for private attributes:
+
+    - ``_adaptive_skipped: List[str]`` — names of adaptive criteria that
+      fell back to fixed thresholds because their inputs were missing.
+    - ``_adaptive_p_t: Dict[str, float]`` — per-regime adaptive
+      probability thresholds (e.g. ``{"clean": 0.5, "default": 0.6}``).
+    - ``_adaptive_inputs: Dict[str, Any]`` — the four pre-eval inputs
+      (``n_samples``, ``prevalence``, ``feature_count``, ``regime``) that
+      the evaluator overlay uses alongside ``baseline_test_auc``.
+
+    When this schema is wired (sub-shard D2) and replaces the inline
+    ``Dict[str, Any]`` annotation on ``ScopeDefinerState.success_criteria``,
+    these three keys flow through to ``model_extra`` (via inherited
+    ``extra="allow"``) and stay accessible via:
+
+    .. code-block:: python
+
+        criteria.model_extra["_adaptive_inputs"]
+        # or via the BaseAgentSchema dict-like shim:
+        criteria["_adaptive_inputs"]
     """
 
     # Identification
