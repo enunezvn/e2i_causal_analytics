@@ -7,17 +7,24 @@ migration plan, this module hosts the canonical ``MetricsSchema`` —
 Shard C.
 
 Shard B adds ``OptunaDistributionSchema`` — the typed encoding of
-``hyperparameter_search_space`` entries currently passed as
-``Dict[str, Dict[str, Any]]`` between model_selector and model_trainer.
-The schema is offered for opt-in use; the state.py field stays as
-``Dict[str, Dict[str, Any]]`` until consumer migration is complete.
+``hyperparameter_search_space`` entries passed between model_selector
+and model_trainer.
+
+D2.1 (2026-05-05) wires the typed schema into State annotations:
+- ``ModelTrainerState.hyperparameter_search_space: Optional[Dict[str, OptunaDistribution]]``
+- ``ModelSelectorState.hyperparameter_search_space: Optional[Dict[str, OptunaDistribution]]``
+
+Producer dict literals from ``algorithm_registry.py`` validate cleanly
+into the discriminated union (``int`` | ``float`` | ``categorical``);
+consumer access via ``config["low"]`` works through the dict-shim on
+``_OptunaDistributionBase`` (which now extends ``BaseAgentSchema``).
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Any, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from src.agents.ml_foundation._pydantic_utils import BaseAgentSchema
 
@@ -141,13 +148,30 @@ class MetricsSchema(BaseAgentSchema):
 # After opt-in migration:
 #   OptunaFloatDistribution(type="float", low=1e-4, high=0.1, log=True)
 #
-# The schemas use plain ``BaseModel`` (not ``BaseAgentSchema``) because they
-# are leaf data-shape descriptors, not state nodes — they do not need
-# the dict-like accessor shim or extra="allow" tolerance.
+# D2.1 (2026-05-05): The schemas extend ``BaseAgentSchema`` (rather than
+# plain ``BaseModel``) so the dict-shim ``__getitem__`` / ``get`` /
+# ``__contains__`` is available. The ``hyperparameter_search_space``
+# consumer in ``model_trainer/nodes/hyperparameter_tuner.py`` and
+# ``mlops/optuna_optimizer.py`` reads these as ``config["low"]`` /
+# ``config["high"]`` etc. — the shim makes those reads work transparently.
+#
+# We intentionally OVERRIDE BaseAgentSchema's ``extra="allow"`` with
+# ``extra="forbid"`` (pydantic v2 merges ``model_config`` in subclasses,
+# so this is safe; ``arbitrary_types_allowed``, ``populate_by_name``, and
+# ``validate_assignment`` continue to inherit from BaseAgentSchema). The
+# strict ``forbid`` is load-bearing here: producer dict literals in
+# ``algorithm_registry.py`` could otherwise smuggle typo'd keys into
+# ``model_extra`` silently. Discriminated-union strictness must catch the
+# typo at construction time.
 
 
-class _OptunaDistributionBase(BaseModel):
-    """Common config for Optuna distribution variants."""
+class _OptunaDistributionBase(BaseAgentSchema):
+    """Common config for Optuna distribution variants.
+
+    Extends ``BaseAgentSchema`` for the dict-shim accessors but keeps
+    ``extra="forbid"`` for typed-shape strictness — see module-level
+    comment block above the class for the D2.1 rationale.
+    """
 
     model_config = ConfigDict(extra="forbid")  # strict — typed shape
 

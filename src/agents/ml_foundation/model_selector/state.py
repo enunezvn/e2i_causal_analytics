@@ -15,6 +15,7 @@ from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
     audit_workflow_id_validator,
 )
+from src.agents.ml_foundation.model_trainer.schemas import OptunaDistribution
 
 
 class ModelSelectorState(BaseAgentSchema):
@@ -80,7 +81,8 @@ class ModelSelectorState(BaseAgentSchema):
 
     # Configuration
     default_hyperparameters: Optional[Dict[str, Any]] = None  # Starting hyperparameters
-    hyperparameter_search_space: Optional[Dict[str, Dict[str, Any]]] = None  # Optuna search space
+    # D2.1: see model_trainer/state.py:54 — typed Optuna search space.
+    hyperparameter_search_space: Optional[Dict[str, OptunaDistribution]] = None
 
     # Performance expectations — widened
     expected_performance: Optional[Dict[str, Any]] = None  # Expected metrics
