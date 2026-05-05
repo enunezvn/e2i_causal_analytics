@@ -410,6 +410,18 @@ class MLFoundationPipeline:
             except Exception as e:
                 logger.warning(f"Failed to start audit workflow (non-fatal): {e}")
 
+        # D1.1: Mint a workflow-level UUID even when audit_service is
+        # unavailable so the SAME UUID flows from orchestrator → all agent
+        # states. Closes the audit-chain integrity bug surfaced by Phase-1
+        # D1 investigation: prior to this fix, the orchestrator minted a
+        # UUID via audit_service (line above) but never threaded it into
+        # any *_input dict, so each per-agent State independently minted
+        # a fresh UUID via Field(default_factory=uuid4) and the audit
+        # chain fractured 1:N across the workflow.
+        if audit_workflow_id is None:
+            audit_workflow_id = uuid.uuid4()
+            logger.debug(f"Minted local audit_workflow_id (no audit_service): {audit_workflow_id}")
+
         result = PipelineResult(
             pipeline_run_id=pipeline_run_id,
             status="in_progress",
@@ -527,6 +539,9 @@ class MLFoundationPipeline:
             "problem_type_hint": input_data.get("problem_type_hint"),
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
+            # D1.1: thread workflow-level audit_workflow_id so per-agent
+            # State doesn't mint a fresh UUID via default_factory.
+            "audit_workflow_id": result.audit_workflow_id,
         }
 
         # Execute scope_definer
@@ -621,6 +636,8 @@ class MLFoundationPipeline:
             "split_id": input_data.get("split_id"),
             "validation_suite": input_data.get("validation_suite"),
             "skip_leakage_check": self.config.skip_leakage_check,
+            # D1.1: thread workflow-level audit_workflow_id (see scope_input).
+            "audit_workflow_id": result.audit_workflow_id,
         }
 
         # Add sample data config if enabled
@@ -733,6 +750,8 @@ class MLFoundationPipeline:
             "interpretability_required": self.config.interpretability_required,
             "skip_benchmarks": self.config.skip_benchmarks,
             "skip_mlflow": self.config.skip_mlflow,
+            # D1.1: thread workflow-level audit_workflow_id (see scope_input).
+            "audit_workflow_id": result.audit_workflow_id,
         }
 
         # Execute model_selector
@@ -819,6 +838,8 @@ class MLFoundationPipeline:
             # Feast feature references for reproducibility
             "feature_refs": result.feature_refs_used,
             "feast_enabled": result.feast_enabled,
+            # D1.1: thread workflow-level audit_workflow_id (see scope_input).
+            "audit_workflow_id": result.audit_workflow_id,
         }
 
         # Execute model_trainer
@@ -911,6 +932,8 @@ class MLFoundationPipeline:
             "max_samples": 1000,
             "compute_interactions": True,
             "store_in_semantic_memory": True,
+            # D1.1: thread workflow-level audit_workflow_id (see scope_input).
+            "audit_workflow_id": result.audit_workflow_id,
         }
 
         # Execute feature_analyzer
@@ -984,6 +1007,8 @@ class MLFoundationPipeline:
             "success_criteria_met": training_output.get("success_criteria_met", False),
             "deployment_name": f"{result.experiment_id}_deployment",
             "target_environment": target_env,
+            # D1.1: thread workflow-level audit_workflow_id (see scope_input).
+            "audit_workflow_id": result.audit_workflow_id,
         }
 
         # Add shadow mode metrics if deploying to production
