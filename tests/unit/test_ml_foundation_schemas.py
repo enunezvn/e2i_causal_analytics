@@ -22,7 +22,7 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
@@ -30,7 +30,13 @@ from src.agents.ml_foundation._pydantic_utils import (
     coerce_uuid,
 )
 from src.agents.ml_foundation.data_preparer.schemas import QCReportSchema
-from src.agents.ml_foundation.model_trainer.schemas import MetricsSchema
+from src.agents.ml_foundation.model_trainer.schemas import (
+    MetricsSchema,
+    OptunaCategoricalDistribution,
+    OptunaDistribution,
+    OptunaFloatDistribution,
+    OptunaIntDistribution,
+)
 from src.agents.ml_foundation.scope_definer.schemas import (
     ScopeSpecSchema,
     SuccessCriteriaSchema,
@@ -451,6 +457,83 @@ def test_metrics_schema_rejects_invalid_problem_type() -> None:
     """``problem_type`` is a Literal — unknown values fail."""
     with pytest.raises(ValidationError):
         MetricsSchema(problem_type="not_a_real_type")  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- #
+# OptunaDistribution discriminated union (Shard B deliverable)                #
+# --------------------------------------------------------------------------- #
+
+_OPTUNA_ADAPTER = TypeAdapter(OptunaDistribution)
+
+
+def test_optuna_int_distribution_constructs() -> None:
+    """Int distribution accepts low/high + optional step/log."""
+    dist = OptunaIntDistribution(type="int", low=3, high=10, step=1)
+    assert dist.low == 3
+    assert dist.high == 10
+    assert dist.log is None
+
+
+def test_optuna_float_distribution_constructs() -> None:
+    """Float distribution accepts low/high + log scale."""
+    dist = OptunaFloatDistribution(type="float", low=1e-4, high=0.1, log=True)
+    assert dist.low == 1e-4
+    assert dist.high == 0.1
+    assert dist.log is True
+
+
+def test_optuna_categorical_distribution_requires_choices() -> None:
+    """Categorical distribution rejects empty choices (min_length=1)."""
+    OptunaCategoricalDistribution(type="categorical", choices=["tpe", "random"])
+    with pytest.raises(ValidationError):
+        OptunaCategoricalDistribution(type="categorical", choices=[])
+
+
+def test_optuna_distribution_discriminator_routes_int() -> None:
+    """The discriminated union routes ``{type: "int"}`` to IntDistribution."""
+    dist = _OPTUNA_ADAPTER.validate_python({"type": "int", "low": 3, "high": 10})
+    assert isinstance(dist, OptunaIntDistribution)
+
+
+def test_optuna_distribution_discriminator_routes_float() -> None:
+    """The discriminated union routes ``{type: "float"}`` to FloatDistribution."""
+    dist = _OPTUNA_ADAPTER.validate_python({"type": "float", "low": 1e-4, "high": 0.1, "log": True})
+    assert isinstance(dist, OptunaFloatDistribution)
+
+
+def test_optuna_distribution_discriminator_routes_categorical() -> None:
+    """The discriminated union routes ``{type: "categorical"}`` to CategoricalDistribution."""
+    dist = _OPTUNA_ADAPTER.validate_python({"type": "categorical", "choices": ["a", "b", "c"]})
+    assert isinstance(dist, OptunaCategoricalDistribution)
+
+
+def test_optuna_distribution_rejects_unknown_type() -> None:
+    """The discriminated union rejects unknown ``type`` values."""
+    with pytest.raises(ValidationError):
+        _OPTUNA_ADAPTER.validate_python({"type": "not_real", "low": 0, "high": 1})
+
+
+def test_optuna_distribution_rejects_extra_keys() -> None:
+    """Each variant has ``extra="forbid"`` — unknown keys fail validation.
+
+    Strictness is intentional: a typo in distribution metadata
+    (e.g., 'lwr' instead of 'low') would silently route to the wrong
+    Optuna sampler if extra="allow" let it through.
+    """
+    with pytest.raises(ValidationError):
+        OptunaIntDistribution(  # type: ignore[call-arg]
+            type="int", low=0, high=1, unknown_key="oops"
+        )
+
+
+def test_optuna_distribution_round_trips_through_json() -> None:
+    """Discriminated union round-trips: dict → adapter → JSON → adapter."""
+    original = _OPTUNA_ADAPTER.validate_python(
+        {"type": "float", "low": 0.001, "high": 1.0, "log": True}
+    )
+    json_bytes = _OPTUNA_ADAPTER.dump_json(original)
+    restored = _OPTUNA_ADAPTER.validate_json(json_bytes)
+    assert restored == original
 
 
 # --------------------------------------------------------------------------- #
