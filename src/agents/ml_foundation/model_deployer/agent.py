@@ -109,6 +109,9 @@ class ModelDeployerAgent:
 
         # Prepare initial state
         initial_state: ModelDeployerState = {
+            # D1.2: thread caller-provided audit_workflow_id (see scope_definer
+            # for the rationale); falls back to State default_factory when None.
+            "audit_workflow_id": input_data.get("audit_workflow_id"),
             # Input fields
             "model_uri": input_data["model_uri"],
             "experiment_id": input_data["experiment_id"],

@@ -111,6 +111,9 @@ class DataPreparerAgent:
         # Prepare initial state
         # Note: Data loading is handled by the data_loader node in the graph
         initial_state: DataPreparerState = {
+            # D1.2: thread caller-provided audit_workflow_id (see scope_definer
+            # for the rationale); falls back to State default_factory when None.
+            "audit_workflow_id": input_data.get("audit_workflow_id"),
             "experiment_id": experiment_id,
             "scope_spec": scope_spec,
             "data_source": input_data["data_source"],

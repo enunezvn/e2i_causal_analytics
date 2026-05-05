@@ -144,6 +144,10 @@ class ScopeDefinerAgent:
 
         # Construct initial state
         initial_state: ScopeDefinerState = {
+            # D1.2: thread caller-provided audit_workflow_id; falls back to
+            # State.audit_workflow_id default_factory=uuid4 when None (D1.4
+            # will tighten to required-no-default).
+            "audit_workflow_id": input_data.get("audit_workflow_id"),
             # Required inputs
             "problem_description": input_data["problem_description"],
             "business_objective": input_data["business_objective"],
