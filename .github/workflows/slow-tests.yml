@@ -148,6 +148,7 @@ jobs:
             --ignore=tests/integration/test_feedback_loop_integration.py \
             --ignore=tests/integration/test_agents/test_data_preparer/ \
             --ignore=tests/integration/api/test_rbac_endpoints.py \
+            --ignore=tests/performance/ \
             --junitxml=/tmp/slow-tests-junit.xml \
             -n 2 \
             --dist=loadscope \
@@ -267,17 +268,117 @@ jobs:
           if-no-files-found: warn
 
   # ──────────────────────────────────────────────────────────────────
+  # Job C: memory-heavy performance tests (must-pass, serialized)
+  # tests/performance/test_digital_twin_memory.py and siblings allocate
+  # 2GB peak under tracemalloc. Under `-n 2 --dist=loadscope`, two
+  # concurrent allocations + glibc fragmentation pushed `ubuntu-latest`'s
+  # 7GB ceiling at the first PR-#73-validation run. Serialize at -n 1
+  # in this dedicated job.
+  #
+  # Note: pytest-xdist `--dist=loadscope` does NOT honor `xdist_group`
+  # marks (those need `loadgroup`). Excising the directory and running
+  # at -n 1 here is cleaner than switching dist mode.
+  # ──────────────────────────────────────────────────────────────────
+  memory-perf-tests:
+    name: Memory & Perf Tests (serialized)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      E2I_TESTING_MODE: 'true'
+      SUPABASE_URL: 'http://localhost:54321'
+      SUPABASE_KEY: 'test-key'
+      SUPABASE_ANON_KEY: 'test-key'
+      REDIS_URL: 'redis://localhost:6379'
+      FALKORDB_URL: 'redis://localhost:6380'
+      MLFLOW_TRACKING_URI: 'http://localhost:5000'
+      OPIK_URL: 'http://localhost:5173'
+      ANTHROPIC_API_KEY: 'test-key'
+      OPENAI_API_KEY: 'test-key'
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov pytest-xdist pytest-timeout pytest-asyncio
+
+      - name: Start MLflow tracking server
+        run: |
+          mkdir -p /tmp/mlflow-artifacts
+          mlflow server \
+            --host 0.0.0.0 \
+            --port 5000 \
+            --backend-store-uri sqlite:///mlflow.db \
+            --default-artifact-root /tmp/mlflow-artifacts \
+            > /tmp/mlflow-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5000/ > /dev/null 2>&1; then
+              echo "MLflow server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MLflow server failed to start; tail of log:"
+          tail -50 /tmp/mlflow-server.log
+          exit 1
+
+      - name: Run memory + performance tests serially
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_pytest_args }}
+        run: |
+          pytest tests/performance/ -m slow \
+            --junitxml=/tmp/memory-perf-junit.xml \
+            -n 1 \
+            --timeout=600 \
+            -v --tb=short ${EXTRA_ARGS}
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-perf-tests-debug-${{ github.run_id }}
+          path: |
+            /tmp/mlflow-server.log
+            mlflow.db
+            /tmp/memory-perf-junit.xml
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ──────────────────────────────────────────────────────────────────
   # End-of-run summary in the GH Actions UI.
   # ──────────────────────────────────────────────────────────────────
   summary:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [slow-tests, excluded-heavy-tests]
+    needs: [slow-tests, memory-perf-tests, excluded-heavy-tests]
     if: always()
     steps:
       - name: Write summary
         env:
           JOB_A_RESULT: ${{ needs.slow-tests.result }}
+          JOB_C_RESULT: ${{ needs.memory-perf-tests.result }}
           JOB_B_RESULT: ${{ needs.excluded-heavy-tests.result }}
           EVENT_NAME: ${{ github.event_name }}
           GIT_REF: ${{ github.ref }}
@@ -288,14 +389,15 @@ jobs:
             echo ""
             echo "| Job | Result |"
             echo "|---|---|"
-            echo "| Slow Tests (tracked) | ${JOB_A_RESULT} |"
-            echo "| Excluded Heavy E2E   | ${JOB_B_RESULT} (allowed-to-fail) |"
+            echo "| Slow Tests (tracked)        | ${JOB_A_RESULT} |"
+            echo "| Memory & Perf (serialized)  | ${JOB_C_RESULT} |"
+            echo "| Excluded Heavy E2E          | ${JOB_B_RESULT} (allowed-to-fail) |"
             echo ""
             echo "Trigger: \`${EVENT_NAME}\` on \`${GIT_REF}\` @ \`${GIT_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────────────────────────
-  # Auto-create / update issue on Job A failure.
+  # Auto-create / update issue on Job A or Job C failure.
   # De-dups by `nightly-slow-tests-failure` label: comments on existing
   # open issue if one exists, else creates new.
   # Job B failure does NOT trip this (continue-on-error semantics).
@@ -303,8 +405,8 @@ jobs:
   report-failure:
     name: Report Slow Tests Failure
     runs-on: ubuntu-latest
-    needs: [slow-tests]
-    if: failure() && needs.slow-tests.result == 'failure' && github.event_name == 'schedule'
+    needs: [slow-tests, memory-perf-tests]
+    if: failure() && (needs.slow-tests.result == 'failure' || needs.memory-perf-tests.result == 'failure') && github.event_name == 'schedule'
     permissions:
       issues: write
     steps:
