@@ -189,6 +189,15 @@ jobs:
       OPIK_URL: 'http://localhost:5173'
       ANTHROPIC_API_KEY: 'test-key'
       OPENAI_API_KEY: 'test-key'
+      # Pin BLAS/OpenMP thread counts to 1 so the synthetic baseline e2e
+      # produces deterministic floating-point reductions matching the
+      # local-dev measurement environment that pinned BASELINE in
+      # tests/integration/test_synthetic_baseline_invariant.py. Without
+      # these, multi-core BLAS reorders sums and shifts AUC/brier by ~0.08.
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
