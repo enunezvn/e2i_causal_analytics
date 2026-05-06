@@ -205,6 +205,31 @@ jobs:
           pip install -r requirements.txt
           pip install pytest-cov pytest-xdist pytest-timeout pytest-asyncio
 
+      # Start a local MLflow tracking server so the synthetic baseline
+      # invariant e2e (test_synthetic_baseline_invariant.py) can run with
+      # MLflow enabled — preserving baseline equivalence with local-dev
+      # measurements (docs/results/tier0_pipeline_run_20260428_130229.md).
+      # Backed by SQLite + tmpfs artifact root; lifetime = job duration.
+      - name: Start MLflow tracking server
+        run: |
+          mkdir -p /tmp/mlflow-artifacts
+          mlflow server \
+            --host 0.0.0.0 \
+            --port 5000 \
+            --backend-store-uri sqlite:///mlflow.db \
+            --default-artifact-root /tmp/mlflow-artifacts \
+            > /tmp/mlflow-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5000/ > /dev/null 2>&1; then
+              echo "MLflow server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MLflow server failed to start; tail of log:"
+          tail -50 /tmp/mlflow-server.log
+          exit 1
+
       # Integration test exclusions:
       # - chatbot/RAG/signal_flow/observability/prediction/digital_twin/feedback_loop:
       #     require live LLM/observability/RAG infra not available in CI.
