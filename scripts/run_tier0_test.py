@@ -914,6 +914,53 @@ def print_detailed_summary(
             if "class_" in key and value is not None:
                 print(f"    • {key}: {value:.4f}")
 
+    # Test Metrics Section (added by tier0_quality_remediation_arc Shard D,
+    # 2026-05-06). Per R5 rubric (mlops_data_pipeline_engineering_distilled.md:483-489):
+    # "Train on train / Tune threshold on validation / Evaluate ONCE on test." The
+    # evaluator already computes test_metrics at evaluator.py:1192-1450 and the runner
+    # already wires them into state at run_tier0_test.py:4782 + emits in JSON
+    # artifact at L5531-5535. This printer block surfaces them to stdout for human
+    # consumption (codex review I2 narrowed the gap from "consumers don't see test
+    # numbers" — they do via state — to "human-visible printer block missing").
+    test_metrics = state.get("test_metrics", {})
+    if test_metrics:
+        print(f"\n{'='*70}")
+        print("TEST-SET HOLDOUT PERFORMANCE")
+        print(f"{'='*70}")
+
+        # Key metrics (same set as validation for direct comparison)
+        test_key_metrics = ["roc_auc", "accuracy", "precision", "recall", "f1_score", "pr_auc", "brier_score", "mcc", "business_utility"]
+        print("\n  Primary Metrics (held-out test set):")
+        for metric in test_key_metrics:
+            value = test_metrics.get(metric)
+            if value is not None:
+                if isinstance(value, (int, float)):
+                    print(f"    • {metric}: {value:.4f}")
+                else:
+                    print(f"    • {metric}: {value}")
+
+        # Calibration + threshold provenance
+        cal_metrics = ["ece_pre_isotonic", "ece_post_isotonic", "calibration_slope", "calibration_intercept", "chosen_threshold", "chosen_threshold_source"]
+        print("\n  Calibration + Threshold:")
+        for metric in cal_metrics:
+            value = test_metrics.get(metric)
+            if value is not None:
+                if isinstance(value, (int, float)):
+                    print(f"    • {metric}: {value:.4f}")
+                else:
+                    print(f"    • {metric}: {value}")
+
+        # Train→Val→Test overfit signal (if present)
+        train_val_delta = test_metrics.get("train_val_auc_delta")
+        if train_val_delta is not None:
+            print(f"\n  Overfit (train→val AUC delta): {train_val_delta:.4f}")
+
+        # Per-class metrics
+        print("\n  Per-Class Metrics (test):")
+        for key, value in test_metrics.items():
+            if "class_" in key and value is not None and isinstance(value, (int, float)):
+                print(f"    • {key}: {value:.4f}")
+
     # =========================================================================
     # ENHANCED ACCURACY ANALYSIS SECTION
     # =========================================================================

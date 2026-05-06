@@ -138,6 +138,17 @@ def main() -> int:
             "(default: 10; set to 5 for discontinuation/persistence cohorts at n=47)"
         ),
     )
+    parser.add_argument(
+        "--smoke-test-only",
+        action="store_true",
+        help=(
+            "Skip the full pipeline (Steps 5-7) and run only data-loading + scope-definer "
+            "as a converter smoke test. Recommended for the n=47 discontinuation/persistence "
+            "cohorts per tier0_evaluation_vs_distilled_mlops.md:242,266 ('n=47 is a converter "
+            "smoke test, NOT methodology validation') — added by tier0_quality_remediation_arc "
+            "Shard C 2026-05-06."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -169,7 +180,27 @@ def main() -> int:
     print(f"  AUC threshold: {tier0.CONFIG.min_auc_threshold}")
     print(f"  MLflow: {tier0.CONFIG.enable_mlflow}, Opik: {tier0.CONFIG.enable_opik}")
 
-    asyncio.run(
+    # Tier-2 SMOKE_TEST_ONLY (per tier0_quality_remediation_arc Shard C, 2026-05-06):
+    # n=47 disc/pers cohorts are documented as converter smoke tests, NOT methodology
+    # validation (tier0_evaluation_vs_distilled_mlops.md:242,266). When this flag is
+    # set, validate the data dir is loadable, list cohort files, print summary, exit 0
+    # without invoking model trainer/evaluator/deployer.
+    if args.smoke_test_only:
+        print("\n[OPTUM SMOKE_TEST_ONLY MODE]")
+        print(f"  Cohort: {args.cohort} ({COHORT_DIR[args.cohort]})")
+        cohort_files = sorted(p.name for p in data_dir.glob("*.json")) if data_dir.exists() else []
+        print(f"  Files in cohort dir: {len(cohort_files)}")
+        for fname in cohort_files[:10]:
+            fpath = data_dir / fname
+            print(f"    {fname} ({fpath.stat().st_size} bytes)")
+        if len(cohort_files) > 10:
+            print(f"    ... and {len(cohort_files) - 10} more")
+        print("\nSkipping Steps 5-7 (model training/eval/deploy) per --smoke-test-only.")
+        print("Per tier0_evaluation_vs_distilled_mlops.md:242,266: n=47 cohorts are NOT")
+        print("methodology validation — this run is a converter smoke test only.")
+        return 0
+
+    state = asyncio.run(
         tier0.run_pipeline(
             step=args.step,
             dry_run=args.dry_run,
@@ -178,6 +209,51 @@ def main() -> int:
             data_dir=str(data_dir),
         )
     )
+
+    # Tier-1 Optum Task 5.2 carve-out (per tier0_quality_remediation_arc Shard C,
+    # 2026-05-06): when permutation test is RANDOM at Optum scale (n>=200), invoke
+    # the literal carve-out at tier0_evaluation_vs_distilled_mlops.md:703 — document
+    # the run but flag it as NOT production-grade. This is reframing language only;
+    # no CI-failing exit code (deployer's success_criteria_not_met already handles
+    # the actual gate).
+    if not args.dry_run and not args.step:
+        try:
+            permutation_test = (state or {}).get("permutation_test", {}) or {}
+            signal_genuine = permutation_test.get("signal_genuine")
+            shuffled_auc = permutation_test.get("shuffled_auc")
+            p_value = permutation_test.get("p_value")
+            cohort_size = (state or {}).get("data_quality_metrics", {}).get("cohort_size")
+            if cohort_size is None:
+                training_samples = (state or {}).get("training_samples")
+                cohort_size = training_samples if training_samples is not None else 0
+
+            if signal_genuine is False and (cohort_size or 0) >= 200:
+                print(f"\n{'='*70}")
+                print("[OPTUM TASK 5.2 CARVE-OUT INVOKED]")
+                print(f"{'='*70}")
+                print(
+                    "Per tier0_evaluation_vs_distilled_mlops.md:703 —\n"
+                    '  "If permutation test is RANDOM at Optum scale, document and do\n'
+                    '   not publish as production-grade."'
+                )
+                pct = (
+                    f"{(permutation_test.get('positive_rate') or 0) * 100:.1f}%"
+                    if permutation_test.get("positive_rate") is not None else "?"
+                )
+                print(
+                    f"\nVerdict tag: PENDING — RANDOM at Optum scale "
+                    f"(n={cohort_size}, p={p_value}, shuffled AUC={shuffled_auc}, prevalence={pct})."
+                )
+                print(
+                    "Acceptance criterion (Task 5.2: all R-grades >= B): NOT MET.\n"
+                    "This run is documented but is NOT production-grade.\n"
+                    "Remediation path: Task 5.2 is data-gated on cohort prevalence growth."
+                )
+                print(f"{'='*70}")
+        except Exception as e:
+            # Reframing print is best-effort; never fail the runner over it.
+            print(f"\n[Optum Task 5.2 reframing skipped: {type(e).__name__}: {e}]", file=sys.stderr)
+
     return 0
 
 
