@@ -153,11 +153,12 @@ jobs:
             --ignore=tests/integration/test_agents/test_data_preparer/ \
             --ignore=tests/integration/api/test_rbac_endpoints.py \
             --ignore=tests/performance/ \
+            --ignore=tests/synthetic/test_synthetic_regimes.py \
             --junitxml=/tmp/slow-tests-junit.xml \
             -n 2 \
             --dist=loadscope \
             --timeout=300 \
-            -v --tb=short ${EXTRA_ARGS}
+            --tb=short ${EXTRA_ARGS}
 
       - name: Upload artifacts on failure or cancel
         if: always() && (failure() || cancelled())
@@ -371,18 +372,117 @@ jobs:
           if-no-files-found: warn
 
   # ──────────────────────────────────────────────────────────────────
+  # Job D: synthetic regime e2e tests (must-pass, isolated, -n 1)
+  # tests/synthetic/test_synthetic_regimes.py forks `run_tier0_test.py`
+  # twice (adverse + clean regimes), each ~5 min wall-clock and ~500MB
+  # subprocess heap. Combined with the rest of Job A's slow tests,
+  # the cumulative memory footprint pushed the runner to a hard kill
+  # (3 consecutive runs ended with step 7 stuck in_progress + no
+  # archived output, suggesting external runner termination).
+  # Isolating these into their own -n 1 job gives them a clean
+  # ~7 GB runner with no concurrent slow-test memory pressure.
+  # ──────────────────────────────────────────────────────────────────
+  synthetic-regime-tests:
+    name: Synthetic Regime E2E (isolated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      E2I_TESTING_MODE: 'true'
+      SUPABASE_URL: 'http://localhost:54321'
+      SUPABASE_KEY: 'test-key'
+      SUPABASE_ANON_KEY: 'test-key'
+      REDIS_URL: 'redis://localhost:6379'
+      FALKORDB_URL: 'redis://localhost:6380'
+      MLFLOW_TRACKING_URI: 'http://localhost:5000'
+      OPIK_URL: 'http://localhost:5173'
+      ANTHROPIC_API_KEY: 'test-key'
+      OPENAI_API_KEY: 'test-key'
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov pytest-xdist pytest-timeout pytest-asyncio
+
+      - name: Start MLflow tracking server
+        run: |
+          mkdir -p /tmp/mlflow-artifacts
+          mlflow server \
+            --host 0.0.0.0 \
+            --port 5000 \
+            --backend-store-uri sqlite:///mlflow.db \
+            --default-artifact-root /tmp/mlflow-artifacts \
+            > /tmp/mlflow-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5000/ > /dev/null 2>&1; then
+              echo "MLflow server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MLflow server failed to start; tail of log:"
+          tail -50 /tmp/mlflow-server.log
+          exit 1
+
+      - name: Run synthetic regime e2e tests serially
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_pytest_args }}
+        run: |
+          pytest tests/synthetic/test_synthetic_regimes.py \
+            --junitxml=/tmp/synthetic-regimes-junit.xml \
+            -n 1 \
+            --timeout=900 \
+            --tb=short ${EXTRA_ARGS}
+
+      - name: Upload artifacts on failure or cancel
+        if: always() && (failure() || cancelled())
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-regime-tests-debug-${{ github.run_id }}
+          path: |
+            /tmp/mlflow-server.log
+            mlflow.db
+            /tmp/synthetic-regimes-junit.xml
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ──────────────────────────────────────────────────────────────────
   # End-of-run summary in the GH Actions UI.
   # ──────────────────────────────────────────────────────────────────
   summary:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [slow-tests, memory-perf-tests, excluded-heavy-tests]
+    needs: [slow-tests, memory-perf-tests, synthetic-regime-tests, excluded-heavy-tests]
     if: always()
     steps:
       - name: Write summary
         env:
           JOB_A_RESULT: ${{ needs.slow-tests.result }}
           JOB_C_RESULT: ${{ needs.memory-perf-tests.result }}
+          JOB_D_RESULT: ${{ needs.synthetic-regime-tests.result }}
           JOB_B_RESULT: ${{ needs.excluded-heavy-tests.result }}
           EVENT_NAME: ${{ github.event_name }}
           GIT_REF: ${{ github.ref }}
@@ -395,6 +495,7 @@ jobs:
             echo "|---|---|"
             echo "| Slow Tests (tracked)        | ${JOB_A_RESULT} |"
             echo "| Memory & Perf (serialized)  | ${JOB_C_RESULT} |"
+            echo "| Synthetic Regime E2E        | ${JOB_D_RESULT} |"
             echo "| Excluded Heavy E2E          | ${JOB_B_RESULT} (allowed-to-fail) |"
             echo ""
             echo "Trigger: \`${EVENT_NAME}\` on \`${GIT_REF}\` @ \`${GIT_SHA}\`"
@@ -409,8 +510,8 @@ jobs:
   report-failure:
     name: Report Slow Tests Failure
     runs-on: ubuntu-latest
-    needs: [slow-tests, memory-perf-tests]
-    if: failure() && (needs.slow-tests.result == 'failure' || needs.memory-perf-tests.result == 'failure') && github.event_name == 'schedule'
+    needs: [slow-tests, memory-perf-tests, synthetic-regime-tests]
+    if: failure() && (needs.slow-tests.result == 'failure' || needs.memory-perf-tests.result == 'failure' || needs.synthetic-regime-tests.result == 'failure') && github.event_name == 'schedule'
     permissions:
       issues: write
     steps:
