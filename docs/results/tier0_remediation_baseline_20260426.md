@@ -417,6 +417,35 @@ A default `python scripts/run_tier0_test.py` run on synthetic data
 
 ## Post-PR-#29 rebaseline (2026-05-01)
 
+> **CORRECTION 2026-05-06 — PR #29 attribution is empirically refuted.** The 2026-05-06 tier-0 quality
+> remediation arc (Shard A, see `.claude/state/quality_arc_a_drift_rca_close_20260506.md`) ran a
+> 3-point worktree bisect at `63980a0` (Block 0), `c3fb4a2` (post-Block-1A pre-`e2ada2d`), and
+> `e2ada2d` itself. The bisect produced:
+>
+> | SHA | Date | val_AUC |
+> |---|---|---:|
+> | `63980a0` | 2026-04-26 00:20 | 0.6942 (matches doc anchor) |
+> | `c3fb4a2` | 2026-04-26 02:16 | **0.6384** |
+> | `e2ada2d` | 2026-04-26 14:34 | **0.5585** (stable from here through HEAD `bf0768e` 2026-05-05) |
+>
+> **PR #29 commits (`b7a6fb4`, `e24059f`, `50e16a3`) all merged 2026-04-30 — but `e2ada2d` had already
+> driven val_AUC to 0.5585 ~36 hours earlier on 2026-04-26 14:34**. The `tier0_pipeline_run_20260428_130229.md`
+> file (Generated `2026-04-28T13:02:29`) shows val_AUC=0.5585 ~36 hours BEFORE PR #29's earliest commit.
+> PR #29 cannot be a contributor to a drift fully present before it merged.
+>
+> **Reframed attribution (this section's claims supersede the legacy text below):**
+>
+> 1. **Block 1A commits between `63980a0` and `c3fb4a2`** (`6049d0d`, `a4fd168`, `c3fb4a2` — threshold relocation work) caused **0.6942 → 0.6384** (Δ=−0.0558). This refutes the upstream "Block 1A: Val AUC=0.6942 (unchanged, threshold-free)" claim at line 132 of this same doc — the bisect-measured Block 1A end-state is 0.6384, NOT 0.6942.
+> 2. **`e2ada2d feat(tier0): safer defaults for split, regime, and cache (#7, #8, #12)`** caused **0.6384 → 0.5585** (Δ=−0.0799). The default split-mode change (random → combined entity+temporal) directly affects val partitioning.
+> 3. **PR #29** is REFUTED as a contributor (temporally impossible).
+>
+> The legacy paragraphs below (PR #29 attribution, three-commit list) remain for historical context but
+> are superseded by the bisect above. Per `tier0_quality_remediation_arc_20260506` Shard A's user-authorized
+> verdict (`path 1 then d`, recorded 2026-05-06): the band `[0.62, 0.70]` at
+> `tier0_evaluation_vs_distilled_mlops.md:779,785` is **descriptive** plumbing-stability, not a CI gate;
+> rubric R1-R7 + §8 success criteria contain zero absolute AUC targets. The 0.5585 floor is documented
+> but not a defect.
+
 PR [#29](https://github.com/enunezvn/e2i_causal_analytics/pull/29) (`feat/pre-phase2-unblockers`, MERGED 2026-04-30) shifted the
 default-regime val_auc from `0.6942` → `0.5585`. The shift is intentional drift caused by
 three commits in PR #29 that modified the synthetic generator and the model_trainer
