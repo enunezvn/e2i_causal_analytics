@@ -214,6 +214,7 @@ jobs:
             --ignore-vuln GHSA-fh64-r2vc-xvhr `# mlflow 3.7.0 fix in 3.11.1 — bundle with mlflow upgrade ticket` \
             --ignore-vuln GHSA-95ww-475f-pr4f `# ragas 0.4.1 has no upstream fix as of 2026-04` \
             --ignore-vuln GHSA-69w3-r845-3855 `# transformers 4.57.3 fix only in 5.0.0rc3 (refuse rc); revisit when 5.0 GA lands` \
+            --ignore-vuln GHSA-8mp2-v27r-99xp `# mistune 3.1.4 (CVE-2026-33079; LINK_TITLE_RE ReDoS); transitive dep, no upstream fix as of 2026-05` \
             || true  # Don't fail CI, just report
 
       - name: Check for known vulnerabilities
