@@ -1417,9 +1417,16 @@ class CSUDataConverter:
             n_labs = len(lab_df_w)
             score += min(n_labs * 0.1, 2.0)
 
-        # Continuous enrollment
-        if continuous_enrollment:
-            score += 1.0
+        # Continuous enrollment — REMOVED 2026-05-06 by tier0_quality_remediation_arc Shard B
+        # (Path A-extended). The unwindowed `+1.0 if continuous_enrollment` term made
+        # engagement_score target-equivalent at AUC=0.877 across all 4 lookback windows
+        # {30, 90, 180, 365} (n=9,607 sweep, 2026-05-06). continuous_enrollment is
+        # inversely correlated with treatment_initiated in CSU vendor data (treated mean=0.084,
+        # untreated mean=0.869), and adding +1.0 unwindowed bypasses lookback masking. Removing
+        # this term drops engagement_score AUC to lookback-fixable. Evidence:
+        # `.claude/state/quality_arc_b_csu_close_20260506.md`.
+        # if continuous_enrollment:
+        #     score += 1.0
 
         return float(np.clip(score, 0.0, 10.0))
 
