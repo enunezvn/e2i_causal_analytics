@@ -125,6 +125,10 @@ jobs:
           exit 1
 
       - name: Run slow-marked tests
+        # Pass workflow_dispatch inputs through env vars (NOT direct ${{ }})
+        # to avoid the github_actions.run-shell-injection semgrep finding.
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_pytest_args }}
         run: |
           pytest tests/ -m slow \
             --ignore=tests/integration/test_chatbot_dspy.py \
@@ -148,7 +152,7 @@ jobs:
             -n 2 \
             --dist=loadscope \
             --timeout=300 \
-            -v --tb=short ${{ inputs.extra_pytest_args }}
+            -v --tb=short ${EXTRA_ARGS}
 
       - name: Upload artifacts on failure
         if: failure()
@@ -238,6 +242,8 @@ jobs:
           exit 1
 
       - name: Run excluded heavy e2e tests
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_pytest_args }}
         run: |
           pytest \
             tests/integration/test_tier0_e2e.py \
@@ -246,7 +252,7 @@ jobs:
             --junitxml=/tmp/heavy-tests-junit.xml \
             -n 1 \
             --timeout=600 \
-            -v --tb=short ${{ inputs.extra_pytest_args }}
+            -v --tb=short ${EXTRA_ARGS}
 
       - name: Upload artifacts on failure
         if: failure()
@@ -270,16 +276,22 @@ jobs:
     if: always()
     steps:
       - name: Write summary
+        env:
+          JOB_A_RESULT: ${{ needs.slow-tests.result }}
+          JOB_B_RESULT: ${{ needs.excluded-heavy-tests.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           {
             echo "# Slow Tests Run Summary"
             echo ""
             echo "| Job | Result |"
             echo "|---|---|"
-            echo "| Slow Tests (tracked) | ${{ needs.slow-tests.result }} |"
-            echo "| Excluded Heavy E2E   | ${{ needs.excluded-heavy-tests.result }} (allowed-to-fail) |"
+            echo "| Slow Tests (tracked) | ${JOB_A_RESULT} |"
+            echo "| Excluded Heavy E2E   | ${JOB_B_RESULT} (allowed-to-fail) |"
             echo ""
-            echo "Trigger: \`${{ github.event_name }}\` on \`${{ github.ref }}\` @ \`${{ github.sha }}\`"
+            echo "Trigger: \`${EVENT_NAME}\` on \`${GIT_REF}\` @ \`${GIT_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────────────────────────
@@ -300,10 +312,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           DATE=$(date -u +%Y-%m-%d)
-          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          SHA_SHORT=$(echo "${GIT_SHA}" | cut -c1-7)
           BODY="Nightly slow-tests failed on ${DATE} (commit ${SHA_SHORT}).%0A%0ARun: ${RUN_URL}"
 
           # Look for an existing open tracking issue.
