@@ -43,9 +43,16 @@ async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # Check for critical warnings
+    # Per data_preparer.schemas.QCReportSchema, qc_warnings is List[Dict[str, Any]]
+    # — each item is a Great Expectations result dict (expectation_type, threshold, etc.).
+    # Stringify by the most informative field before joining for the user-facing message.
     qc_warnings = qc_report.get("qc_warnings", [])
     if qc_warnings:
-        warning_message = f"QC warnings present: {', '.join(qc_warnings[:2])}"
+        def _summarize(w):
+            if isinstance(w, dict):
+                return str(w.get("expectation_type", w))
+            return str(w)
+        warning_message = f"QC warnings present: {', '.join(_summarize(w) for w in qc_warnings[:2])}"
     else:
         warning_message = "No QC warnings"
 

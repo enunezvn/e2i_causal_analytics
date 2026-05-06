@@ -90,7 +90,7 @@ class DataPreparerState(BaseAgentSchema):
     # Quality checks
     expectation_results: Optional[List[Dict[str, Any]]] = None  # Great Expectations results
     failed_expectations: Optional[List[str]] = None
-    warnings: Optional[List[str]] = None
+    warnings: Optional[List[Dict[str, Any]]] = None
 
     # Dimension scores
     completeness_score: Optional[float] = None

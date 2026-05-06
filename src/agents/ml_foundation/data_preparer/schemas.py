@@ -54,7 +54,7 @@ class QCReportSchema(BaseAgentSchema):
     # Expectation engine output (Great Expectations)
     expectation_results: Optional[List[Dict[str, Any]]] = None
     failed_expectations: Optional[List[str]] = None
-    warnings: Optional[List[str]] = None
+    warnings: Optional[List[Dict[str, Any]]] = None
 
     # Remediation surface
     remediation_steps: Optional[List[str]] = None
@@ -81,4 +81,4 @@ class QCReportSchema(BaseAgentSchema):
     # - qc_warnings = final_state.get("warnings", [])        (alias of warnings field above)
     qc_passed: Optional[bool] = None
     qc_errors: Optional[List[str]] = None
-    qc_warnings: Optional[List[str]] = None
+    qc_warnings: Optional[List[Dict[str, Any]]] = None
