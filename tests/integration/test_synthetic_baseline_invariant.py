@@ -118,6 +118,13 @@ def test_synthetic_e2e_default_regime_pins_7dim_baseline(tmp_path: Path) -> None
         "--hpo-trials",
         "5",  # 5 trials enough for determinism per Agent D
         "--no-save",
+        # MLflow + BentoML are configured to localhost in the integration-tests
+        # workflow but no server runs there — the pipeline would exit 1 on
+        # the first MLflow API call. Validation metrics are computed and
+        # emitted to TIER0_E2E_JSON_OUT regardless of MLflow status, so the
+        # 7-dim gate is unaffected.
+        "--disable-mlflow",
+        "--no-bentoml",
     ]
 
     result = subprocess.run(
