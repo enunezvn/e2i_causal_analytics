@@ -48,11 +48,15 @@ async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
     # Stringify by the most informative field before joining for the user-facing message.
     qc_warnings = qc_report.get("qc_warnings", [])
     if qc_warnings:
+
         def _summarize(w):
             if isinstance(w, dict):
                 return str(w.get("expectation_type", w))
             return str(w)
-        warning_message = f"QC warnings present: {', '.join(_summarize(w) for w in qc_warnings[:2])}"
+
+        warning_message = (
+            f"QC warnings present: {', '.join(_summarize(w) for w in qc_warnings[:2])}"
+        )
     else:
         warning_message = "No QC warnings"
 
