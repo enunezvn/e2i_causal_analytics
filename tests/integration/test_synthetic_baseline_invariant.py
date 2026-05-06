@@ -44,11 +44,10 @@ seeded runs first, then update.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
-import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -62,10 +61,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #   docs/results/tier0_pipeline_run_20260428_130229.md (validation_metrics block)
 #   logs/tier0_synth_20260505T232512Z.log (line 1620)
 BASELINE = {
-    "roc_auc": 0.5585,           # ±0.01
-    "pr_auc": 0.1958,            # ±0.02
-    "brier_score": 0.2293,       # ±0.01
-    "mcc": 0.1576,               # ±0.03
+    "roc_auc": 0.5585,  # ±0.01
+    "pr_auc": 0.1958,  # ±0.02
+    "brier_score": 0.2293,  # ±0.01
+    "mcc": 0.1576,  # ±0.03
     "business_utility": -8.150,  # ±0.5 (matches rubric §7 target ≈ -8.15)
 }
 
@@ -106,9 +105,12 @@ def test_synthetic_e2e_default_regime_pins_7dim_baseline(tmp_path: Path) -> None
     cmd = [
         sys.executable,
         str(REPO_ROOT / "scripts" / "run_tier0_test.py"),
-        "--regime", "default",
-        "--split", "auto",
-        "--hpo-trials", "5",  # 5 trials enough for determinism per Agent D
+        "--regime",
+        "default",
+        "--split",
+        "auto",
+        "--hpo-trials",
+        "5",  # 5 trials enough for determinism per Agent D
         "--no-save",
     ]
 
@@ -146,17 +148,16 @@ def test_synthetic_e2e_default_regime_pins_7dim_baseline(tmp_path: Path) -> None
                 f"(delta {observed - target:+.4f})"
             )
     assert not failures, (
-        "Synthetic baseline invariant tripped:\n  - " + "\n  - ".join(failures) +
-        "\nIf this is an intentional shift, update BASELINE + TOLERANCE in this file "
+        "Synthetic baseline invariant tripped:\n  - "
+        + "\n  - ".join(failures)
+        + "\nIf this is an intentional shift, update BASELINE + TOLERANCE in this file "
         "in the same commit that lands the code change. Do NOT silently widen tolerance."
     )
 
     # Calibration: rubric §7 demands ECE post-isotonic < 0.10
     test_metrics = artifact.get("test_metrics") or {}
     ece_post = (
-        val.get("ece_post_isotonic")
-        or test_metrics.get("ece_post_isotonic")
-        or val.get("ece_post")
+        val.get("ece_post_isotonic") or test_metrics.get("ece_post_isotonic") or val.get("ece_post")
     )
     if ece_post is not None:
         assert ece_post < ECE_POST_MAX, (
