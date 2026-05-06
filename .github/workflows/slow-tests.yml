@@ -159,8 +159,8 @@ jobs:
             --timeout=300 \
             -v --tb=short ${EXTRA_ARGS}
 
-      - name: Upload artifacts on failure
-        if: failure()
+      - name: Upload artifacts on failure or cancel
+        if: always() && (failure() || cancelled())
         uses: actions/upload-artifact@v4
         with:
           name: slow-tests-debug-${{ github.run_id }}
@@ -259,8 +259,8 @@ jobs:
             --timeout=600 \
             -v --tb=short ${EXTRA_ARGS}
 
-      - name: Upload artifacts on failure
-        if: failure()
+      - name: Upload artifacts on failure or cancel
+        if: always() && (failure() || cancelled())
         uses: actions/upload-artifact@v4
         with:
           name: heavy-tests-debug-${{ github.run_id }}
@@ -358,8 +358,8 @@ jobs:
             --timeout=600 \
             -v --tb=short ${EXTRA_ARGS}
 
-      - name: Upload artifacts on failure
-        if: failure()
+      - name: Upload artifacts on failure or cancel
+        if: always() && (failure() || cancelled())
         uses: actions/upload-artifact@v4
         with:
           name: memory-perf-tests-debug-${{ github.run_id }}

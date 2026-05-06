@@ -3,6 +3,8 @@
 Tests complete end-to-end workflows and input/output validation.
 """
 
+import os
+
 import pytest
 from pydantic import ValidationError
 
@@ -337,6 +339,16 @@ class TestEndToEndWorkflows:
 
     @pytest.mark.asyncio
     @pytest.mark.slow
+    @pytest.mark.skipif(
+        os.getenv("CI") == "true" and not os.getenv("ANTHROPIC_API_KEY_REAL"),
+        reason=(
+            "DriftMonitorAgent.run() makes live LLM calls. With placeholder "
+            "ANTHROPIC_API_KEY=test-key in CI, the Anthropic SDK retries on "
+            "401 for ~6 minutes before giving up, hanging this test past "
+            "pytest --timeout=300 (thread method, non-killing). Skip in CI; "
+            "set ANTHROPIC_API_KEY_REAL=1 to opt back in when keys are real."
+        ),
+    )
     async def test_latency_under_target(self):
         """Test latency is under 30s for 50 features (lenient for CI)."""
         agent = DriftMonitorAgent()
