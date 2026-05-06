@@ -271,6 +271,14 @@ def _define_excluded_features(state: Dict[str, Any]) -> List[str]:
         "prediction_end_date",
         "cohort_entry_date",
         "observation_end_date",
+        # Structural target-correlation by construction (NOT lookback-fixable). Added
+        # 2026-05-06 by tier0_quality_remediation_arc Shard B (B.5 Option 2):
+        # data_quality_score is np.random.uniform-bucketed by archetype in
+        # convert_csu_rwd.py:824-830, and archetype is target-correlated by
+        # construction. Per the n=9,607 lookback sweep (4 windows {30,90,180,365}),
+        # data_quality_score AUC stays at ~0.82 in every window — PARTIAL-COLLAPSE.
+        # See `.claude/state/quality_arc_b_csu_close_20260506.md`.
+        "data_quality_score",
     ]
 
 
