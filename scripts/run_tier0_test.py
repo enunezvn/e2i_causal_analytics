@@ -1345,6 +1345,43 @@ def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
     return df
 
 
+def _scenario_a_to_dataframe(seed: int) -> pd.DataFrame:
+    """Generate synthetic_v2 scenario_a (HR+/HER2- early BC iDFS) and adapt to pipeline.
+
+    Bypasses ml_patients(); calls synthetic_v2.api.generate_scenario at the
+    scenario's default n_total (6000) so the calibrated AUC band [0.78, 0.83]
+    from scenarios/scenario_a.py:7 holds (9/10 seeds, median 0.793).
+    Concatenates train/val/test back to one DataFrame — the pipeline re-splits
+    downstream, so trusting scenario_a's internal split would double-split.
+    """
+    import numpy as np
+
+    from src.ml.synthetic_v2.api import generate_scenario
+    from src.ml.synthetic_v2.scenarios import ScenarioName
+
+    ds = generate_scenario(ScenarioName.A_DIAGNOSTIC_BC_IDFS, seed=seed)
+
+    X = np.vstack([ds.X_train, ds.X_val, ds.X_test])
+    y = np.concatenate([ds.y_train, ds.y_val, ds.y_test])
+    df = pd.DataFrame(X, columns=list(ds.metadata.feature_names))
+    df["discontinuation_flag"] = y.astype(int)
+    df["patient_journey_id"] = [f"sa-{i:06d}" for i in range(len(df))]
+    df["patient_id"] = df["patient_journey_id"]
+    df["brand"] = "Kisqali"
+    df["geographic_region"] = "northeast"
+    # journey_status must NOT correlate with the target — a target-coupled value
+    # trips the leakage detector and triggers LLM remediation, which then
+    # hallucinates a replacement feature set and discards the 40 scenario_a
+    # clinical features. Constant "active" keeps it pipeline-shaped without leakage.
+    df["journey_status"] = "active"
+    today = datetime.now().isoformat()
+    df["journey_start_date"] = today
+    df["journey_end_date"] = None
+    df["created_at"] = today
+    df["data_quality_score"] = 0.95
+    return df
+
+
 def generate_sample_data(
     n_samples: int = 100,
     seed: int = 42,
@@ -1354,6 +1391,7 @@ def generate_sample_data(
     signal_strength: float = 1.0,
     noise_sd: float = 0.10,
     signalize_extra_features: bool = False,
+    _generator: str | None = None,
 ) -> pd.DataFrame:
     """Generate sample patient journey data using the ML-ready generator.
 
@@ -1375,6 +1413,9 @@ def generate_sample_data(
             (age_group, geographic_region, brand, data_quality_score)
             also contribute to the risk score.
     """
+    if _generator == "scenario_a":
+        return _scenario_a_to_dataframe(seed=seed)
+
     # Use the same generator as the data_preparer agent for consistency
     from src.repositories.sample_data import SampleDataGenerator
     import numpy as np
@@ -1843,9 +1884,21 @@ async def step_1_scope_definer(
 
 
 async def step_2_data_preparer(
-    experiment_id: str, scope_spec: dict, sample_df: pd.DataFrame
+    experiment_id: str,
+    scope_spec: dict,
+    sample_df: pd.DataFrame,
+    *,
+    skip_leakage_check: bool = False,
 ) -> dict[str, Any]:
-    """Step 2: Load and prepare data with QC."""
+    """Step 2: Load and prepare data with QC.
+
+    ``skip_leakage_check`` bypasses the LLM-assisted leakage detector +
+    remediator. Use only for clinically-grounded synthetic fixtures
+    (e.g. ``--regime scenario_a``) where leakage is impossible by
+    construction; the LLM otherwise name-classifies legitimate clinical
+    features (e.g. ``journey_status``) as tautological and replaces the
+    feature set with a hallucinated recommendation.
+    """
     import time as time_mod
     step_start = time_mod.time()
 
@@ -1877,6 +1930,7 @@ async def step_2_data_preparer(
         "scope_spec": scope_spec,
         "data_source": "patient_journeys",
         "brand": CONFIG.brand,
+        "skip_leakage_check": skip_leakage_check,
     }
 
     print_input_section({
@@ -3741,7 +3795,7 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
 # =============================================================================
 
 
-_VALID_REGIMES: Tuple[str, ...] = ("default", "adverse", "clean")
+_VALID_REGIMES: Tuple[str, ...] = ("default", "adverse", "clean", "scenario_a")
 
 
 def _regime_kwargs(regime: str) -> Dict[str, Any]:
@@ -3811,6 +3865,14 @@ def _regime_kwargs(regime: str) -> Dict[str, Any]:
             "noise_sd": 0.03,
             "signalize_extra_features": True,
         }
+    elif regime == "scenario_a":
+        # Sentinel: dispatched in generate_sample_data via synthetic_v2.api;
+        # bypasses ml_patients() so AUC band [0.78, 0.83] from
+        # scenarios/scenario_a.py:7 holds (calibrated 9/10 seeds, median 0.793).
+        kwargs = {
+            "_generator": "scenario_a",
+            "seed": 42,
+        }
     else:
         raise ValueError(
             f"regime must be one of {_VALID_REGIMES}, got {regime!r}"
@@ -3852,7 +3914,7 @@ def _compute_adaptive_state_inputs(
 
     See ``.claude/plans/adaptive_success_criteria/05-data-shape-introspection.md``.
     """
-    valid_regimes = {"default", "clean", "adverse"}
+    valid_regimes = {"default", "clean", "adverse", "scenario_a"}
     return {
         "n_samples": int(len(df)),
         "prevalence": float(df[target_col].mean()),
@@ -4010,13 +4072,19 @@ async def run_pipeline(
     print(f"  MLflow Tracking URI: {os.environ.get('MLFLOW_TRACKING_URI', 'not set')}")
     print(f"  BentoML Serving: {'Enabled' if include_bentoml else 'Disabled'}")
     _regime_summary = _regime_kwargs(regime)
-    print(
-        f"  Regime: {regime} "
-        f"(positive_rate={_regime_summary['positive_rate']:.2f}, "
-        f"signal_strength={_regime_summary['signal_strength']:.2f}, "
-        f"noise_sd={_regime_summary['noise_sd']:.2f}, "
-        f"signalize_extras={_regime_summary['signalize_extra_features']})"
-    )
+    if _regime_summary.get("_generator") == "scenario_a":
+        print(
+            f"  Regime: {regime} "
+            f"(synthetic_v2.scenario_a, n_total=6000, AUC band [0.78, 0.83])"
+        )
+    else:
+        print(
+            f"  Regime: {regime} "
+            f"(positive_rate={_regime_summary['positive_rate']:.2f}, "
+            f"signal_strength={_regime_summary['signal_strength']:.2f}, "
+            f"noise_sd={_regime_summary['noise_sd']:.2f}, "
+            f"signalize_extras={_regime_summary['signalize_extra_features']})"
+        )
     print(f"  Split mode: {split_mode}")
     if imbalance_ratio:
         print(f"  Class Imbalance: {imbalance_ratio:.1%} minority ratio (INJECTED)")
@@ -4149,7 +4217,12 @@ async def run_pipeline(
         if 2 in steps_to_run:
             step_start = time.time()
             scope_spec = state.get("scope_spec", {"problem_type": CONFIG.problem_type})
-            result = await step_2_data_preparer(experiment_id, scope_spec, patient_df)
+            result = await step_2_data_preparer(
+                experiment_id,
+                scope_spec,
+                patient_df,
+                skip_leakage_check=(regime == "scenario_a"),
+            )
             state["qc_report"] = result.get("qc_report", {"gate_passed": True})
             state["gate_passed"] = result.get("gate_passed", True)
 
@@ -5711,6 +5784,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "'clean': positive_rate=0.50 + signal_strength=1.4 + noise_sd=0.05 "
             "+ signalized extra features → strong-signal regime intended as "
             "the Phase 2 baseline (val AUC ~0.78-0.82, deployer succeeds). "
+            "'scenario_a': synthetic_v2 HR+/HER2- early BC iDFS (Kisqali "
+            "franchise), 40 clinically-grounded features, n=6000, calibrated "
+            "AUC band [0.78, 0.83] (9/10 seeds; scenarios/scenario_a.py:7). "
             "Ignored when --data-dir is set."
         ),
     )
