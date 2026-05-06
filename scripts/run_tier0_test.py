@@ -5580,6 +5580,22 @@ async def run_pipeline(
                 for k, v in (state.get("test_metrics") or {}).items()
                 if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
             },
+            "train_metrics": {
+                k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+                for k, v in (state.get("train_metrics") or {}).items()
+                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+            },
+            "experiment_id": state.get("experiment_id"),
+            "pipeline_halted": bool(state.get("pipeline_halted", False)),
+            "halt_reason": state.get("halt_reason"),
+            "model_usefulness": state.get("model_usefulness"),
+            "trained_model_present": state.get("trained_model") is not None,
+            "class_imbalance_info": state.get("class_imbalance_info") or {},
+            "split_assignments": {
+                str(k): v
+                for k, v in (state.get("split_assignments") or {}).items()
+                if isinstance(v, str)
+            },
         }
         e2e_path = Path(e2e_out)
         e2e_path.parent.mkdir(parents=True, exist_ok=True)

@@ -21,12 +21,35 @@ its val-AUC and lift assertions.
 
 Pipeline runs gated behind ``@pytest.mark.slow`` because each tier0
 invocation takes ~3-5 minutes; CI selects them via ``-m slow``.
+
+E2E fixture design (subprocess pattern)
+----------------------------------------
+Both ``TestAdverseRegimeE2E`` and ``TestCleanRegimeE2E`` previously called
+``asyncio.run(run_pipeline(...))`` in-process. In CI the LLM API keys are
+placeholder ``test-key`` values; the first agent (ScopeDefinerAgent) makes
+a real Anthropic API call which returns 401, failing the fixture ~340ms
+after collection and causing all 9-10 tests in each class to show
+ERROR-at-setup.
+
+Refactored 2026-05-06 (chore/slow-tests-fixes) to use the subprocess
+pattern proved by PR #69 ``test_synthetic_baseline_invariant.py``:
+  - Fork ``python scripts/run_tier0_test.py --regime <regime> ...``
+  - Set ``TIER0_E2E_JSON_OUT=<tmp_path>/result.json`` in env
+  - Parse the JSON artifact, return dict
+The subprocess inherits the full process environment (including real LLM
+keys when present in CI via GitHub Actions secrets) so the fixture is
+independent of the test-session's in-process Python state.
+
+``trained_model`` is a Python object and is not JSON-serialisable; the
+artifact instead carries ``trained_model_present: bool``. All assertions
+on that field have been updated accordingly.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -34,8 +57,6 @@ from typing import Any
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from src.repositories.sample_data import SampleDataGenerator  # noqa: E402
@@ -114,38 +135,65 @@ class TestAdverseRegimeGenerator:
 # ---------------------------------------------------------------------------
 
 
+def _run_tier0_subprocess(regime: str, tmp_path: Path) -> dict[str, Any]:
+    """Fork run_tier0_test.py for *regime*, return parsed JSON artifact.
+
+    Mirrors the subprocess pattern from PR #69's
+    tests/integration/test_synthetic_baseline_invariant.py.
+    """
+    json_out = tmp_path / f"tier0_{regime}.json"
+    env = os.environ.copy()
+    env["TIER0_E2E_JSON_OUT"] = str(json_out)
+
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "run_tier0_test.py"),
+        "--regime",
+        regime,
+        "--split",
+        "auto",
+        "--hpo-trials",
+        "5",
+        "--no-save",
+        "--no-bentoml",
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=str(PROJECT_ROOT),
+        env=env,
+    )
+
+    assert result.returncode == 0, (
+        f"Tier-0 e2e ({regime}) exited {result.returncode}. "
+        f"stderr (truncated): {result.stderr[-800:]!r}"
+    )
+    assert json_out.exists(), (
+        f"TIER0_E2E_JSON_OUT artifact missing at {json_out}; runner produced no JSON."
+    )
+
+    return json.loads(json_out.read_text())
+
+
 @pytest.mark.slow
 @pytest.mark.timeout(900)  # 15 min ceiling for the full tier0 run
 class TestAdverseRegimeE2E:
-    """Run ``run_pipeline(regime="adverse")`` and assert the imbalance
-    remediation path engages without exceptions."""
+    """Run ``run_tier0_test.py --regime adverse`` and assert the imbalance
+    remediation path engages without exceptions.
+
+    The fixture runs the pipeline in a subprocess (see module docstring for
+    why in-process asyncio.run was dropped).
+    """
 
     @pytest.fixture(scope="class")
-    def pipeline_state(self) -> dict[str, Any]:
+    def pipeline_state(self, tmp_path_factory) -> dict[str, Any]:
         """Run tier0 pipeline once with the adverse regime and reuse the
         output across all assertion methods."""
-        # MLflow off — tests don't need artifact tracking.
-        os.environ.setdefault("MLFLOW_TRACKING_URI", "http://localhost:5000")
-        # Disable BentoML serving — out of scope for this test.
-        from scripts.run_tier0_test import CONFIG, run_pipeline
-
-        CONFIG.enable_mlflow = False
-        CONFIG.enable_opik = False
-
-        async def _run() -> dict[str, Any]:
-            return await run_pipeline(
-                step=None,
-                dry_run=False,
-                imbalance_ratio=None,
-                include_bentoml=False,
-                data_dir=None,
-                regime="adverse",
-                split_mode="auto",
-            )
-
-        result = asyncio.run(_run())
-        assert result is not None, "run_pipeline returned None for adverse run"
-        return result
+        tmp_path = tmp_path_factory.mktemp("adverse_e2e")
+        return _run_tier0_subprocess("adverse", tmp_path)
 
     def test_pipeline_completes_without_exception(self, pipeline_state):
         """The pipeline must finish (the model_deployer step is allowed to
@@ -213,9 +261,9 @@ class TestAdverseRegimeE2E:
             "acceptable",
             "unknown",
         }
-        # Trained model object should exist.
-        assert pipeline_state.get("trained_model") is not None, (
-            "trained_model is None — pipeline degenerated on adverse data"
+        # trained_model is a Python object; artifact carries trained_model_present flag.
+        assert pipeline_state.get("trained_model_present") is True, (
+            "trained_model_present is False — pipeline degenerated on adverse data"
         )
 
 
@@ -336,36 +384,31 @@ class TestCleanRegimeGenerator:
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 class TestCleanRegimeE2E:
-    """``run_pipeline(regime='clean')`` produces a deployable model.
+    """``run_tier0_test.py --regime clean`` produces a deployable model.
 
     Loose val-AUC band [0.75, 0.85] absorbs sklearn / SHAP minor-version
     variance. The lift criterion must produce a numeric lift > 0.10
     (absolute AUC units), and the model deployer must succeed (Section B
     of pre_phase2_unblockers fixes the gap that was blocking it).
+
+    Environment split (CPU ISA)
+    ---------------------------
+    Like test_synthetic_baseline_invariant.py, local (AVX2) and CI
+    (AVX512) can produce different but each bit-deterministic floating-
+    point results. The val-AUC band [0.75, 0.85] is wide enough to
+    absorb the known AVX2-vs-AVX512 delta for the clean regime.  If CI
+    trips the band, update it here with the same env-gate pattern used
+    in test_synthetic_baseline_invariant.py and record the new CI
+    baseline in memory/pr69_e2e_environment_delta_diag_20260506.md.
+
+    The fixture runs the pipeline in a subprocess (see module docstring for
+    why in-process asyncio.run was dropped).
     """
 
     @pytest.fixture(scope="class")
-    def pipeline_state(self) -> dict[str, Any]:
-        os.environ.setdefault("MLFLOW_TRACKING_URI", "http://localhost:5000")
-        from scripts.run_tier0_test import CONFIG, run_pipeline
-
-        CONFIG.enable_mlflow = False
-        CONFIG.enable_opik = False
-
-        async def _run() -> dict[str, Any]:
-            return await run_pipeline(
-                step=None,
-                dry_run=False,
-                imbalance_ratio=None,
-                include_bentoml=False,
-                data_dir=None,
-                regime="clean",
-                split_mode="auto",
-            )
-
-        result = asyncio.run(_run())
-        assert result is not None, "run_pipeline returned None for clean run"
-        return result
+    def pipeline_state(self, tmp_path_factory) -> dict[str, Any]:
+        tmp_path = tmp_path_factory.mktemp("clean_e2e")
+        return _run_tier0_subprocess("clean", tmp_path)
 
     def test_pipeline_completes(self, pipeline_state):
         assert pipeline_state.get("experiment_id"), (
