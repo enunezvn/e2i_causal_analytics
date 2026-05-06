@@ -81,8 +81,14 @@ TOLERANCE = {
 }
 
 
+# 15-min budget overrides the integration-tests workflow's --timeout=60 default.
+# This test forks scripts/run_tier0_test.py (~156s local wall-clock; 3-5 min in CI).
+# Without the marker, pytest-timeout SIGKILLs the worker at 60s
+# ("[gw0] node down: Not properly terminated") and pytest-xdist hangs waiting
+# for the dead worker until the job-level cancel.
 @pytest.mark.slow
 @pytest.mark.integration
+@pytest.mark.timeout(900)
 def test_synthetic_e2e_default_regime_pins_7dim_baseline(tmp_path: Path) -> None:
     """Synthetic e2e --regime default produces metrics in pinned 7-dim bands.
 
