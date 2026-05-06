@@ -337,6 +337,11 @@ Werkzeug==3.1.6
 wheel==0.46.2
 wrapt==1.17.3
 wsproto==1.3.2
+# xgboost is pulled in transitively by causalml; pin to local-dev's tested
+# version so CI doesn't drift to a newer minor that changes tree-split
+# decisions and shifts synthetic-baseline-invariant metrics. See diagnostic
+# at .claude/projects/.../memory/pr69_e2e_environment_delta_diag_20260506.md
+xgboost==3.1.2
 xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
