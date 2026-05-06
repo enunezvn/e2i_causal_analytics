@@ -220,6 +220,10 @@ class TestMemoryLeakDetection:
             result = engine.simulate(email_campaign_config)
             assert result.status == SimulationStatus.COMPLETED
 
+            # Drop the per-iteration result before gc/measure so tracemalloc
+            # doesn't count still-live churn as growth (mirrors the passing
+            # pattern in test_no_leak_engine_recreation below).
+            del result
             gc.collect()
             current = tracemalloc.get_traced_memory()[0] / 1024 / 1024
             memory_readings.append(current)
@@ -255,6 +259,11 @@ class TestMemoryLeakDetection:
             for config in configs:
                 result = engine.simulate(config)
                 assert result.status == SimulationStatus.COMPLETED
+                # Drop the per-iteration result + collect so tracemalloc
+                # measures retained allocations not pinned-but-soon-dead
+                # ones (mirrors test_no_leak_engine_recreation pattern).
+                del result
+                gc.collect()
 
         gc.collect()
         final = tracemalloc.get_traced_memory()[0]
