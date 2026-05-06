@@ -201,6 +201,7 @@ jobs:
             --ignore-vuln GHSA-jjhc-v7c2-5hh6 `# litellm 1.80.10 -> 1.83.0 same upgrade window` \
             --ignore-vuln GHSA-69x8-hrgq-fjj8 `# litellm 1.80.10 -> 1.83.0 same upgrade window` \
             --ignore-vuln GHSA-xqmj-j6mv-4862 `# litellm 1.80.10 -> 1.83.7 same upgrade window` \
+            --ignore-vuln GHSA-v4p8-mg3p-g94g `# litellm 1.80.10 -> 1.83.7 (CVE-2026-42271; PROXY_ADMIN gating fix); same upgrade window` \
             --ignore-vuln GHSA-xch3-2f9x-wh9f `# mlflow 3.7.0 fix only in 3.8.0rc0 (refuse rc); see mlflow 3.11.x upgrade ticket` \
             --ignore-vuln GHSA-gq3w-7jj3-x7gr `# mlflow 3.7.0 same — fix only in 3.8.0rc0` \
             --ignore-vuln GHSA-q2r8-vmq7-fpx2 `# mlflow 3.7.0 same — fix only in 3.8.0rc0` \
