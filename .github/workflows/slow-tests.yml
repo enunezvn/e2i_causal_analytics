@@ -59,7 +59,11 @@ jobs:
   slow-tests:
     name: Slow Tests (tracked)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 90 min budget: this job runs ~3 tier0 e2e pipelines (synthetic
+    # baseline + adverse regime + clean regime) at ~5 min each, plus
+    # other slow-marked tests. The first PR-#74 validation run hit the
+    # original 45-min timeout at the 55-min mark (10-min GH grace).
+    timeout-minutes: 90
     services:
       redis:
         image: redis:7-alpine
