@@ -1,21 +1,24 @@
 """Synthetic e2e baseline regression invariant — 7-dim val-side gate.
 
-Added by tier0_quality_remediation_arc Shard D, 2026-05-06, per
-user-authorized D.7.C scope ("approve all defaults"). Closes the codex
-review's IMPORTANT Q7 finding: ECE / PR-AUC / business_utility / brier /
-MCC / train-val Δ are rubric-tracked dimensions absent from any prior
-regression gate.
+Added by tier0_quality_remediation_arc Shard D, 2026-05-06.
+Re-baselined to ``--regime scenario_a`` 2026-05-06 by the
+synthetic_v2_scenario_a_swap arc — see
+``.claude/plans/synthetic_v2_scenario_a_swap_20260506.md`` (β-prime
+additive). The synthetic_v2.scenario_a generator (HR+/HER2- early BC iDFS,
+Kisqali franchise, 40 clinically-grounded features, n=6000) replaces the
+legacy ``ml_patients()`` fixture for this gate; calibrated AUC band
+[0.78, 0.83] from ``src/ml/synthetic_v2/scenarios/scenario_a.py:7``.
+Existing ``--regime default``/``adverse``/``clean`` regimes remain alive
+for backward compatibility with other tests.
 
 What this test pins
 -------------------
-- Synthetic e2e ``--regime default`` with the canonical Kisqali seed=42
-  fixture is bit-identical run-to-run (research Agent D 2026-05-06,
-  ``quality_arc_research_d_metrics_extraction_20260506.md`` — "Synthetic
-  post-cleanup is BIT-IDENTICAL to the 04-28 stable rubric reference. All
-  12 numeric metrics match to 4 decimals.").
+- Synthetic e2e ``--regime scenario_a`` with seed=42 is bit-identical
+  run-to-run (verified 2026-05-06: 6+ decimal match across two local
+  runs, all metrics).
 - This test runs the synthetic e2e once and asserts that 7 val-side
   metrics fall within tight tolerance bands around the current stable
-  baseline. Any regression in (a) the synthetic generator, (b) HPO
+  baseline. Any regression in (a) the synthetic_v2 generator, (b) HPO
   determinism, (c) evaluator metric computation, or (d) calibration
   pipeline will trip one or more bands.
 
@@ -66,30 +69,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ── LOCAL baseline (Ubuntu local machine, AVX2 CPU, Python 3.12.3) ──────────
-# Anchored to the live evaluator output:
-#   docs/results/tier0_pipeline_run_20260428_130229.md (validation_metrics block)
-#   logs/tier0_synth_20260505T232512Z.log (line 1620)
-# Bit-identical across all local runs since 2026-04-26 14:34 UTC per Agent D.
+# Re-measured 2026-05-06 with --regime scenario_a (synthetic_v2 β-prime swap).
+# Bit-identical across two local runs (≥6 decimal match, all metrics).
 BASELINE_LOCAL = {
-    "roc_auc": 0.5585,  # ±0.01
-    "pr_auc": 0.1958,  # ±0.02
-    "brier_score": 0.2293,  # ±0.01
-    "mcc": 0.1576,  # ±0.03
-    "business_utility": -8.150,  # ±0.5 (matches rubric §7 target ≈ -8.15)
+    "roc_auc": 0.7689,  # ±0.01 — val side; calibrated band [0.78, 0.83] is on test
+    "pr_auc": 0.4734,  # ±0.02
+    "brier_score": 0.1811,  # ±0.01
+    "mcc": 0.3355,  # ±0.03
+    "business_utility": 99.20,  # ±0.5 — sign flipped from default regime (real signal)
 }
 
 # ── CI baseline (GitHub Actions ubuntu-latest, AVX512 CPU, Python 3.12.13) ──
-# Measured 2026-05-06 from PR #69 CI diagnostic run.  Bit-deterministic in CI
-# across all five falsified-hypothesis runs; see diagnostic record at
-# memory/pr69_e2e_environment_delta_diag_20260506.md.
-# mcc: not captured from CI artifact (pipeline exited before MCC was extracted);
-#       skipped in CI assertions below.
+# Pre-measurement placeholder — initialized to LOCAL values. Will be replaced
+# with CI-bit-deterministic measurements from the first slow-tests run on
+# feat/tier0-scenario-a-fixture (PR #TBD). The CPU-ISA divergence (AVX2 local
+# vs AVX512 CI) shifts metrics at the floating-point instruction level; we
+# still expect ≥6-decimal CI determinism per the same mechanism that pinned
+# the default-regime CI baseline (see memory/pr69_e2e_environment_delta_diag_20260506.md).
 BASELINE_CI = {
-    "roc_auc": 0.6416,  # ±0.01
-    "pr_auc": 0.2586,  # ±0.02
-    "brier_score": 0.1659,  # ±0.01
-    "mcc": None,  # not captured from CI run — skipped in CI assertions
-    "business_utility": -2.70,  # ±0.5
+    "roc_auc": 0.7689,  # ±0.01 — placeholder, replace with CI-measured value
+    "pr_auc": 0.4734,  # ±0.02 — placeholder
+    "brier_score": 0.1811,  # ±0.01 — placeholder
+    "mcc": 0.3355,  # ±0.03 — placeholder
+    "business_utility": 99.20,  # ±0.5 — placeholder
 }
 
 # Select the baseline for this environment.
@@ -104,8 +106,8 @@ ECE_POST_MAX = 0.10  # rubric §7: post-isotonic ECE < 0.10 (Agent A research)
 # the 2026-05-06 PR #69 CI runs).  Both are bit-deterministic in their env; tight
 # margins (0.05) above each observed value catch genuine regularization regression
 # without tripping on the inherent env-specific overfit level.
-TRAIN_VAL_DELTA_MAX_LOCAL = 0.20  # current 0.127 ± room
-TRAIN_VAL_DELTA_MAX_CI = 0.28  # current 0.2309 + ~0.05 headroom
+TRAIN_VAL_DELTA_MAX_LOCAL = 0.10  # observed 0.0512 + ~0.05 headroom (scenario_a, 2026-05-06)
+TRAIN_VAL_DELTA_MAX_CI = 0.10  # placeholder — replace with CI-observed + 0.05 after first run
 TRAIN_VAL_DELTA_MAX = TRAIN_VAL_DELTA_MAX_CI if os.getenv("CI") else TRAIN_VAL_DELTA_MAX_LOCAL
 
 # Tolerance per metric. Tight because current run-variance at seed=42 is 0.
@@ -126,8 +128,8 @@ TOLERANCE = {
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.timeout(900)
-def test_synthetic_e2e_default_regime_pins_7dim_baseline(tmp_path: Path) -> None:
-    """Synthetic e2e --regime default produces metrics in pinned 7-dim bands.
+def test_synthetic_e2e_scenario_a_pins_7dim_baseline(tmp_path: Path) -> None:
+    """Synthetic e2e --regime scenario_a produces metrics in pinned 7-dim bands.
 
     Acts as the rubric-tracked regression gate that codex review I7 + D.7.C
     flagged as missing. Any drift in val_AUC / PR-AUC / brier / MCC /
@@ -149,7 +151,7 @@ def test_synthetic_e2e_default_regime_pins_7dim_baseline(tmp_path: Path) -> None
         sys.executable,
         str(REPO_ROOT / "scripts" / "run_tier0_test.py"),
         "--regime",
-        "default",
+        "scenario_a",
         "--split",
         "auto",
         "--hpo-trials",
@@ -168,7 +170,7 @@ def test_synthetic_e2e_default_regime_pins_7dim_baseline(tmp_path: Path) -> None
         cmd,
         capture_output=True,
         text=True,
-        timeout=600,  # 10 min hard cap; e2e is ~3 min wall-clock
+        timeout=1200,  # 20 min hard cap; scenario_a e2e is ~3-4 min local, headroom for CI
         cwd=str(REPO_ROOT),
         env=env,
     )
