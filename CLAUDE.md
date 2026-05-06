@@ -15,6 +15,11 @@ This prevents 403 errors from the Novartis corporate proxy intercepting GitHub t
 - GitHub PAT is stored in `.env` as `GITHUB_PAT`
 - Use HTTPS with credential helper, not SSH
 
+### Merge policy: always preserve, never squash
+- Always preserve commit history when merging PRs. Use `--merge` (merge commit) or `--rebase` (linear); never `--squash`.
+- Applies to all branches regardless of size — single-commit chore/security branches included.
+- If GitHub auto-merge is configured for this repo, set the squash option off before merging.
+
 ## Project Overview
 
 - **Type**: Pharmaceutical analytics platform with causal inference
