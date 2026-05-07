@@ -195,8 +195,28 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             "adaptive_flagged_features": [],
         }
 
+    # Build a per-row target-validity mask. For a binary classification target
+    # we accept ONLY {0, 1}; integer sentinels like -1 (unknown outcome) would
+    # otherwise pass the `pd.isna` check (integers can't be NaN), reach
+    # `roc_auc_score` as a 3-class input, raise ValueError, get caught, and
+    # silently produce severity=info verdicts for every numeric feature —
+    # turning Layer 3 into a complete blind spot.
     target_arr = train_df[target].to_numpy()
-    if len(np.unique(target_arr[~pd.isna(target_arr)])) < 2:
+    target_notna = ~pd.isna(target_arr)
+    binary_label_mask = pd.Series(
+        np.isin(target_arr, [0, 1]) & target_notna,
+        index=train_df.index,
+    )
+    n_invalid = int((~binary_label_mask).sum() - (~target_notna).sum())
+    if n_invalid > 0:
+        logger.warning(
+            "adaptive_validity_check: target %r has %d rows with non-binary "
+            "values (sentinels?); these rows are excluded from Layer 3 scoring",
+            target,
+            n_invalid,
+        )
+    valid_target_values = target_arr[binary_label_mask.to_numpy()]
+    if len(np.unique(valid_target_values)) < 2:
         logger.info("adaptive_validity_check: target has < 2 classes → skipping")
         return {
             "adaptive_verdicts": [],
@@ -230,7 +250,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             continue
 
         col = train_df[feat]
-        mask = col.notna() & pd.notna(train_df[target])
+        mask = col.notna() & binary_label_mask
         if mask.sum() < 30:
             verdicts.append(
                 {
