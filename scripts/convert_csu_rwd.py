@@ -652,10 +652,18 @@ class CSUDataConverter:
             # accumulate post-index events that make journey_duration_days
             # target-correlated (single-feature AUC=0.689 on CSU ON_180 e2e
             # 2026-05-07 — see csu_sub_gap_e2e_rerun_close_20260507.md).
+            #
+            # Phase 2 follow-up (self-review HIGH 2026-05-07): also cap eligend
+            # at (index_date + lookback_days) so post-hoc termination does not
+            # leak. CSU vendor data may use eligend as actual termination date
+            # (post-hoc) rather than contracted end. The cap bounds
+            # journey_duration_days ≤ lookback_days regardless of source.
             window_lo: pd.Timestamp | None = None
             window_hi: pd.Timestamp | None = index_date
+            future_cap: pd.Timestamp | None = None
             if self.lookback_days is not None and index_date is not None:
                 window_lo = index_date - timedelta(days=self.lookback_days)
+                future_cap = index_date + timedelta(days=self.lookback_days)
 
             def _in_window(date: pd.Timestamp) -> bool:
                 if date is None or pd.isna(date):
@@ -672,10 +680,20 @@ class CSUDataConverter:
                     return date
                 return min(date, window_hi)
 
+            def _cap_at_future_window(date: pd.Timestamp) -> pd.Timestamp:
+                """Bound eligend by (index + lookback_days) to prevent post-hoc termination leakage."""
+                if future_cap is None:
+                    return date
+                return min(date, future_cap)
+
             end_date = None
             end_candidates = []
             if demo_row is not None and pd.notna(demo_row.get("eligend")):
-                end_candidates.append(demo_row["eligend"])
+                eligend = demo_row["eligend"]
+                # Phase 2 follow-up: cap by future_cap when lookback is set.
+                end_candidates.append(
+                    _cap_at_future_window(eligend) if self.lookback_days is not None else eligend
+                )
             if patid in self._med_by_pat:
                 med_dates = self._med_by_pat[patid]["medication_date"].dropna()
                 if self.lookback_days is not None and index_date is not None:

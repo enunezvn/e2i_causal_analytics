@@ -183,6 +183,49 @@ def test_journey_duration_days_bounded_by_lookback_window():
     )
 
 
+def test_journey_duration_days_capped_when_eligend_post_hoc():
+    """Phase 2 follow-up: when eligend is far post-index (e.g., 730 days),
+    journey_duration_days must be capped at lookback_days, not at the raw eligend.
+
+    This addresses the HIGH-severity self-review concern that vendor data may
+    encode eligend as actual termination (post-hoc) rather than contracted
+    end. Capping at index + lookback_days bounds the leak deterministically.
+    """
+    converter = _build_converter(lookback_days=180)
+    _populate_minimal_state(converter)
+    # Set eligend to 2 years post-index — far beyond the lookback window
+    converter.sheets["demo"]["eligend"] = pd.Timestamp("2026-01-01")  # +730d
+
+    journeys = converter._build_patient_journeys()
+    treated = next(j for j in journeys if j["patient_id"] == "PAT_000001")
+    untreated = next(j for j in journeys if j["patient_id"] == "PAT_000002")
+
+    # Both patients' duration must be bounded at lookback_days (180), not 730.
+    assert treated["journey_duration_days"] == 180, (
+        f"Expected duration capped at lookback_days=180; "
+        f"got {treated['journey_duration_days']} (eligend was 730 days post-index)"
+    )
+    assert untreated["journey_duration_days"] == 180
+
+
+def test_journey_duration_days_no_cap_off_mode():
+    """OFF mode (lookback_days=None): eligend cap not applied — preserves
+    backward-compatible behavior.
+    """
+    converter = _build_converter(lookback_days=None)
+    _populate_minimal_state(converter)
+    converter.sheets["demo"]["eligend"] = pd.Timestamp("2026-01-01")  # +730d
+
+    journeys = converter._build_patient_journeys()
+    treated = next(j for j in journeys if j["patient_id"] == "PAT_000001")
+    untreated = next(j for j in journeys if j["patient_id"] == "PAT_000002")
+
+    # OFF mode: clinical events extend treated; untreated bounded by raw eligend.
+    # 2024-01-01 to 2026-01-01 = 731 days (2024 is leap year).
+    assert treated["journey_duration_days"] >= 200  # clinical events extend
+    assert untreated["journey_duration_days"] == 731  # raw eligend, no cap
+
+
 def test_journey_duration_days_clinical_only_patient_under_lookback():
     """A patient with NO demo eligend AND clinical events in the window must
     have journey_duration_days = 0 (events collapse to ≤ index_date).
