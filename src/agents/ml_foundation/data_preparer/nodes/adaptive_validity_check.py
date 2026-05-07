@@ -138,13 +138,17 @@ def _select_features(df: pd.DataFrame, target: str, excluded: list[str]) -> list
       categorical handling routes through ``check_categorical_class_separation``
       in the legacy detector. Categorical adaptive scoring is a Layer 5 follow-up.
     """
+    # Use pandas' is_numeric_dtype, not np.issubdtype: the latter raises
+    # `TypeError: Cannot interpret 'Int64Dtype()' as a data type` on pandas
+    # extension dtypes (Int64/Float64/boolean). Any DataFrame ingested from
+    # Supabase/SQLAlchemy with nullable-int schema would crash the node.
     excluded_set = set(excluded or [])
     excluded_set.add(target)
     cols = []
     for c in df.columns:
         if c in excluded_set:
             continue
-        if not np.issubdtype(df[c].dtype, np.number):
+        if not pd.api.types.is_numeric_dtype(df[c]):
             continue
         cols.append(c)
     return cols

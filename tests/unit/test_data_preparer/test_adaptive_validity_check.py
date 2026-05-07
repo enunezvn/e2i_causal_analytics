@@ -353,3 +353,43 @@ def test_layer_1_verdict_includes_contract_metadata():
     js = verdicts_by_feat["journey_status"]
     assert js["layer"] == "1"
     assert js["severity"] == "high"
+
+
+# --- Codex-rescue audit follow-ups (PR #84) ---------------------------------
+
+
+@pytest.mark.parametrize("ext_dtype", ["Int64", "Float64", "boolean"])
+def test_node_handles_pandas_extension_dtypes(ext_dtype: str):
+    """Pandas extension dtypes (Int64/Float64/boolean) must NOT crash the node.
+
+    Regression for codex-rescue Critical #1: ``np.issubdtype`` raises
+    ``TypeError: Cannot interpret 'Int64Dtype()' as a data type`` when given a
+    pandas extension dtype. Anything ingested from Supabase/SQLAlchemy with a
+    nullable-int schema would otherwise crash Layer 5. The fix uses
+    ``pd.api.types.is_numeric_dtype`` which handles extension dtypes correctly.
+    """
+    rng = np.random.default_rng(0)
+    n = 200
+    y = rng.integers(0, 2, n)
+    if ext_dtype == "Int64":
+        col = pd.array(rng.integers(-100, 100, n).astype("int64"), dtype="Int64")
+    elif ext_dtype == "Float64":
+        col = pd.array(rng.standard_normal(n), dtype="Float64")
+    else:  # boolean
+        col = pd.array(rng.choice([True, False], size=n), dtype="boolean")
+
+    df = pd.DataFrame(
+        {
+            "ext_feature": col,
+            "noise_native": rng.standard_normal(n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    # Must not raise — the dtype check itself was the bug.
+    result = _run(state)
+    feature_names_seen = {v["feature"] for v in result["adaptive_verdicts"]}
+    assert "ext_feature" in feature_names_seen, (
+        f"{ext_dtype} column was not evaluated by Layer 3 — likely "
+        "filtered out by the dtype check."
+    )
