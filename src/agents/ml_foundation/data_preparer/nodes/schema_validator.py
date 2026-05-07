@@ -59,20 +59,28 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
             validate_dataframe,
         )
 
-        # Get data source name
+        # Get data source name. When file ingestion is active the runtime
+        # `data_source` is a dict (e.g. {"type": "files", ...}); the schema
+        # registry is keyed by string table name, so fall through to
+        # scope_spec.table_name in that case.
         data_source = state.get("data_source", "")
         scope_spec = state.get("scope_spec", {})
 
-        # Try to infer data source from scope_spec if not set
-        if not data_source:
-            data_source = scope_spec.get("data_source", "")
-            if not data_source:
-                data_source = scope_spec.get("table_name", "")
+        if isinstance(data_source, dict) or not data_source:
+            data_source = (
+                scope_spec.get("data_source")
+                or scope_spec.get("table_name")
+                or ""
+            )
+            if isinstance(data_source, dict):
+                # Final fallback: file ingestion produces patient_journeys
+                # as the primary table (per data_loader._load_from_files).
+                data_source = "patient_journeys"
 
         logger.debug(f"Data source for schema validation: {data_source}")
 
         # Check if we have a schema for this data source
-        schema = get_schema(data_source)
+        schema = get_schema(data_source) if isinstance(data_source, str) else None
 
         if schema is None:
             # No schema defined - skip validation
