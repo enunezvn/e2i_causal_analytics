@@ -449,9 +449,11 @@ def check_target_leakage(
 
             abs_corr = abs(corr) if not np.isnan(corr) else 0
 
-            # Flag at thresholds
-            if abs_corr > 0.85:
-                severity = LeakageSeverity.CRITICAL if abs_corr > 0.95 else LeakageSeverity.HIGH
+            # Phase 1 (ml-leakage-holistic-fix 2026-05-07): tighten thresholds.
+            # Pre-Phase-1: 0.95 CRITICAL / 0.85 HIGH / 0.70+p<0.001 MODERATE.
+            # New: 0.85 CRITICAL / 0.70 HIGH / 0.50+p<0.001 MODERATE.
+            if abs_corr > 0.70:
+                severity = LeakageSeverity.CRITICAL if abs_corr > 0.85 else LeakageSeverity.HIGH
                 findings.append(
                     LeakageFinding(
                         check_name="target_correlation",
@@ -472,9 +474,9 @@ def check_target_leakage(
                 )
                 issues.append(
                     f"Potential target leakage: feature '{feature}' has "
-                    f"correlation {corr:.3f} with target (threshold: 0.85)"
+                    f"correlation {corr:.3f} with target (threshold: 0.70)"
                 )
-            elif abs_corr > 0.70 and p_value is not None and p_value < 0.001:
+            elif abs_corr > 0.50 and p_value is not None and p_value < 0.001:
                 findings.append(
                     LeakageFinding(
                         check_name="target_correlation",
@@ -867,7 +869,10 @@ def check_mutual_information(
             mi_raw = float(mi_scores[i])
             mi_normalized = mi_raw / normalizer if normalizer > 0 else mi_raw
 
-            if mi_normalized > 0.9:
+            # Phase 1 (ml-leakage-holistic-fix 2026-05-07): tighten thresholds.
+            # Pre-Phase-1: 0.9 CRITICAL / 0.7 HIGH.
+            # New: 0.7 CRITICAL / 0.5 HIGH / 0.3 MODERATE.
+            if mi_normalized > 0.7:
                 findings.append(
                     LeakageFinding(
                         check_name="mutual_information",
@@ -878,10 +883,10 @@ def check_mutual_information(
                             f"with target (MI={mi_raw:.4f}, normalized={mi_normalized:.4f})"
                         ),
                         evidence={"mi_raw": mi_raw, "mi_normalized": mi_normalized},
-                        recommendation=f"MI > 0.9 indicates '{feature}' nearly determines the target. Investigate data source.",
+                        recommendation=f"Normalized MI > 0.7 indicates '{feature}' nearly determines the target. Investigate data source.",
                     )
                 )
-            elif mi_normalized > 0.7:
+            elif mi_normalized > 0.5:
                 findings.append(
                     LeakageFinding(
                         check_name="mutual_information",
@@ -893,6 +898,20 @@ def check_mutual_information(
                         ),
                         evidence={"mi_raw": mi_raw, "mi_normalized": mi_normalized},
                         recommendation=f"Review '{feature}' — high MI may indicate target leakage",
+                    )
+                )
+            elif mi_normalized > 0.3:
+                findings.append(
+                    LeakageFinding(
+                        check_name="mutual_information",
+                        severity=LeakageSeverity.MODERATE,
+                        feature=feature,
+                        description=(
+                            f"Feature '{feature}' has moderate mutual information "
+                            f"with target (MI={mi_raw:.4f}, normalized={mi_normalized:.4f})"
+                        ),
+                        evidence={"mi_raw": mi_raw, "mi_normalized": mi_normalized},
+                        recommendation=f"'{feature}' has a moderate MI signal — verify the derivation does not include post-prediction-time information.",
                     )
                 )
 
@@ -1031,10 +1050,15 @@ def check_single_feature_auc(
             auc = roc_auc_score(y, x)
             effective_auc = max(auc, 1 - auc)
 
-            if effective_auc > 0.90:
+            # Phase 1 (ml-leakage-holistic-fix 2026-05-07): tighten thresholds.
+            # Pre-Phase-1: 0.90 CRITICAL / 0.80 HIGH / else skip — missed
+            # journey_duration_days at 0.689 (csu_sub_gap_e2e_rerun_close_20260507).
+            if effective_auc > 0.80:
                 severity = LeakageSeverity.CRITICAL
-            elif effective_auc > 0.80:
+            elif effective_auc > 0.65:
                 severity = LeakageSeverity.HIGH
+            elif effective_auc > 0.55:
+                severity = LeakageSeverity.MODERATE
             else:
                 continue
 
@@ -1046,7 +1070,7 @@ def check_single_feature_auc(
                     description=(
                         f"Feature '{feature}' alone achieves AUC={effective_auc:.3f} "
                         f"against target '{target_variable}'. This indicates the feature "
-                        f"nearly perfectly predicts the target by itself."
+                        f"is unexpectedly predictive of the target."
                     ),
                     evidence={
                         "auc": round(effective_auc, 4),
@@ -1054,8 +1078,8 @@ def check_single_feature_auc(
                         "n_samples": int(mask.sum()),
                     },
                     recommendation=(
-                        f"Feature '{feature}' is likely derived from or tautologically "
-                        f"related to the target. Remove it to prevent leakage."
+                        f"Feature '{feature}' may be derived from or correlated with the "
+                        f"target. Audit the derivation; if event-based, verify lookback windowing."
                     ),
                 )
             )
