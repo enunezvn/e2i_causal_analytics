@@ -480,3 +480,36 @@ def test_default_seed_when_state_omits_field(monkeypatch):
     _ = _run(state)
     assert captured.get("seed") == 7
     assert captured.get("n_permutations") == 200
+
+
+def test_integer_target_with_sentinel_value_does_not_silence_layer_3():
+    """A leaky feature must still be flagged HIGH when the target contains
+    integer sentinel values like -1 (unknown outcome).
+
+    Regression for codex-rescue High #3: ``pd.isna(-1) is False`` (integers
+    cannot be NaN), so the sentinel rows pass the 2-class check, reach
+    ``roc_auc_score`` as a 3-class input, raise ``ValueError``, get caught,
+    and silently produce ``severity=info, remediation=keep`` for every
+    numeric feature. The fix excludes non-binary target rows from the per-
+    feature mask so Layer 3 sees only {0, 1}.
+    """
+    rng = np.random.default_rng(0)
+    n = 600
+    # 1/3 of rows have target=-1 (sentinel for "unknown outcome")
+    base_y = rng.integers(0, 2, n)
+    sentinel_mask = rng.random(n) < 0.33
+    y_with_sentinels = np.where(sentinel_mask, -1, base_y).astype(int)
+    df = pd.DataFrame(
+        {
+            "leak_perfect": base_y.astype(float) + rng.normal(0, 0.01, n),
+            "noise": rng.standard_normal(n),
+            "y": y_with_sentinels,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+    flagged = set(result["adaptive_flagged_features"])
+    assert "leak_perfect" in flagged, (
+        "Sentinel -1 values in the target masked the leak entirely. "
+        f"Flagged set: {flagged}. Verdicts: {result['adaptive_verdicts']}"
+    )
