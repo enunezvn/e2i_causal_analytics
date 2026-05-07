@@ -513,3 +513,54 @@ def test_integer_target_with_sentinel_value_does_not_silence_layer_3():
         "Sentinel -1 values in the target masked the leak entirely. "
         f"Flagged set: {flagged}. Verdicts: {result['adaptive_verdicts']}"
     )
+
+
+def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
+    """Every verdict (Layer 1, Layer 3 normal, Layer 3 short-circuit) must
+    share the same key set so JSON-sidecar consumers can rely on it.
+
+    Regression for codex-rescue Medium #6: ``_build_verdict`` was missing
+    ``contract_source``/``contract_window_days``, and the inline too-few-rows
+    + exception branches were missing several Layer-3 score fields. Sidecar
+    consumers had to special-case which fields might be present. The fix
+    routes every Layer 3 short-circuit through ``_short_circuit_verdict`` and
+    adds the contract-metadata keys to ``_build_verdict``.
+    """
+    rng = np.random.default_rng(0)
+    n = 250
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # Layer 1: manifest catches this CSU post-index column
+            "journey_status": rng.choice([0, 1], size=n).astype(float),
+            # Layer 3 (normal scoring path)
+            "synthetic_unique_zzz": y.astype(float) + rng.normal(0, 0.01, n),
+            # Layer 3 (short-circuit: only 5 non-null rows of 250 → <30)
+            "tiny_feature": [1.0] * 5 + [None] * (n - 5),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+
+    canonical_keys = {
+        "feature",
+        "layer",
+        "z_score",
+        "actual_auc",
+        "null_mean",
+        "null_std",
+        "p_value",
+        "n_permutations",
+        "severity",
+        "remediation",
+        "evidence",
+        "contract_source",
+        "contract_window_days",
+    }
+    for v in result["adaptive_verdicts"]:
+        assert set(v.keys()) == canonical_keys, (
+            f"Verdict for {v.get('feature')!r} has non-uniform keys: "
+            f"missing={canonical_keys - set(v.keys())}, "
+            f"extra={set(v.keys()) - canonical_keys}"
+        )
