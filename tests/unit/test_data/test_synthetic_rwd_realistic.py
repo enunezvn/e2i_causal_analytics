@@ -10,9 +10,6 @@ matching real-world claims data:
 
 from __future__ import annotations
 
-import numpy as np
-import pytest
-
 
 def test_basic_generation_shape():
     """Generator produces correct cohort size and required columns."""
@@ -81,8 +78,12 @@ def test_no_clinical_columns_present():
     config = RwdRealisticConfig(n_patients=200, seed=42)
     df = generate_rwd_realistic(config)
     forbidden = {
-        "lab_value", "disease_severity_score", "ige_level", "d_dimer",
-        "prior_omalizumab", "antihistamine_history",
+        "lab_value",
+        "disease_severity_score",
+        "ige_level",
+        "d_dimer",
+        "prior_omalizumab",
+        "antihistamine_history",
     }
     overlap = set(df.columns) & forbidden
     assert overlap == set(), f"Regime should not include clinical columns: {overlap}"
@@ -95,9 +96,7 @@ def test_pure_noise_leak_pattern_does_not_correlate():
         generate_rwd_realistic,
     )
 
-    config = RwdRealisticConfig(
-        n_patients=2000, leakage_pattern="pure_noise", seed=42
-    )
+    config = RwdRealisticConfig(n_patients=2000, leakage_pattern="pure_noise", seed=42)
     df = generate_rwd_realistic(config)
     assert "random_noise_CONTROL" in df.columns
     # Correlation should be near zero
@@ -115,9 +114,7 @@ def test_post_index_aggregation_leak_is_caught_by_layer_3():
         generate_rwd_realistic,
     )
 
-    config = RwdRealisticConfig(
-        n_patients=2000, leakage_pattern="post_index_aggregation", seed=42
-    )
+    config = RwdRealisticConfig(n_patients=2000, leakage_pattern="post_index_aggregation", seed=42)
     df = generate_rwd_realistic(config)
     leak_col = "post_index_med_count_LEAK"
     assert leak_col in df.columns
@@ -128,9 +125,7 @@ def test_post_index_aggregation_leak_is_caught_by_layer_3():
         n_permutations=200,
         seed=7,
     )
-    assert result["suspicious"], (
-        f"Layer 3 missed post_index_aggregation leak: {result}"
-    )
+    assert result["suspicious"], f"Layer 3 missed post_index_aggregation leak: {result}"
     assert result["z_score"] > 5
 
 
@@ -142,9 +137,7 @@ def test_post_hoc_termination_leak_is_caught_by_layer_3():
         generate_rwd_realistic,
     )
 
-    config = RwdRealisticConfig(
-        n_patients=2000, leakage_pattern="post_hoc_termination", seed=42
-    )
+    config = RwdRealisticConfig(n_patients=2000, leakage_pattern="post_hoc_termination", seed=42)
     df = generate_rwd_realistic(config)
     leak_col = "months_remaining_eligibility_LEAK"
 
@@ -154,9 +147,7 @@ def test_post_hoc_termination_leak_is_caught_by_layer_3():
         n_permutations=200,
         seed=7,
     )
-    assert result["suspicious"], (
-        f"Layer 3 missed post_hoc_termination leak: {result}"
-    )
+    assert result["suspicious"], f"Layer 3 missed post_hoc_termination leak: {result}"
 
 
 def test_treatment_leaked_code_is_caught_by_layer_3():
@@ -167,9 +158,7 @@ def test_treatment_leaked_code_is_caught_by_layer_3():
         generate_rwd_realistic,
     )
 
-    config = RwdRealisticConfig(
-        n_patients=2000, leakage_pattern="treatment_leaked_code", seed=42
-    )
+    config = RwdRealisticConfig(n_patients=2000, leakage_pattern="treatment_leaked_code", seed=42)
     df = generate_rwd_realistic(config)
     leak_col = "has_z79_long_term_drug_LEAK"
 
@@ -190,9 +179,7 @@ def test_pure_noise_control_is_NOT_flagged():
         generate_rwd_realistic,
     )
 
-    config = RwdRealisticConfig(
-        n_patients=2000, leakage_pattern="pure_noise", seed=42
-    )
+    config = RwdRealisticConfig(n_patients=2000, leakage_pattern="pure_noise", seed=42)
     df = generate_rwd_realistic(config)
 
     result = compute_adversarial_score(
@@ -201,9 +188,7 @@ def test_pure_noise_control_is_NOT_flagged():
         n_permutations=200,
         seed=7,
     )
-    assert not result["suspicious"], (
-        f"Control noise falsely flagged as leak: {result}"
-    )
+    assert not result["suspicious"], f"Control noise falsely flagged as leak: {result}"
 
 
 def test_demographic_features_have_realistic_correlations():
@@ -211,6 +196,7 @@ def test_demographic_features_have_realistic_correlations():
     AUC < ~0.65), reflecting the published claims-only ceiling.
     """
     from sklearn.metrics import roc_auc_score
+
     from src.repositories.synthetic_rwd_realistic import (
         RwdRealisticConfig,
         generate_rwd_realistic,
@@ -222,15 +208,11 @@ def test_demographic_features_have_realistic_correlations():
     target = df["treatment_initiated"].values
     # Drop NaN rows for the AUC calculation
     age_mask = df["age"].notna()
-    age_auc = roc_auc_score(
-        target[age_mask], df.loc[age_mask, "age"].values
-    )
+    age_auc = roc_auc_score(target[age_mask], df.loc[age_mask, "age"].values)
     eligibility_auc = roc_auc_score(target, df["eligibility_duration_days"].values)
 
     # Each individual feature should be weak (matches claims-only ceiling)
-    assert max(age_auc, 1 - age_auc) < 0.70, (
-        f"Age single-feature AUC too high: {age_auc:.3f}"
-    )
+    assert max(age_auc, 1 - age_auc) < 0.70, f"Age single-feature AUC too high: {age_auc:.3f}"
     assert max(eligibility_auc, 1 - eligibility_auc) < 0.70, (
         f"Eligibility AUC too high: {eligibility_auc:.3f}"
     )

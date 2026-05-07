@@ -28,11 +28,8 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CSU_JOURNEYS_PATH = (
-    REPO_ROOT / "data" / "rwd" / "csu" / "e2i_ml_v3_patient_journeys.json"
-)
+CSU_JOURNEYS_PATH = REPO_ROOT / "data" / "rwd" / "csu" / "e2i_ml_v3_patient_journeys.json"
 
 
 @pytest.fixture(scope="module")
@@ -145,9 +142,7 @@ def csu_scope_spec() -> dict:
         # safe feature appears in the cohort (e.g., the cohort has no
         # `state` filled in; data_preparer copes with missing required
         # features via missing_required_features tracking).
-        "required_features": [
-            f for f in CSU_SAFE_FEATURES if f != "treatment_initiated"
-        ],
+        "required_features": [f for f in CSU_SAFE_FEATURES if f != "treatment_initiated"],
         # Exclude non-feature metadata columns so transform_data's
         # encoders don't choke on unhashables / all-None columns.
         # Post-index columns are intentionally NOT excluded here — Layer 5
@@ -225,9 +220,7 @@ def test_layer_5_audit_trail_populated(csu_data_source: dict, csu_scope_spec: di
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.timeout(180)
-def test_layer_1_catches_documented_post_index_columns(
-    csu_data_source: dict, csu_scope_spec: dict
-):
+def test_layer_1_catches_documented_post_index_columns(csu_data_source: dict, csu_scope_spec: dict):
     """Every documented CSU post-index incident must be caught by Layer 1
     (manifest-driven, deterministic) — no statistical test required."""
     result = _run_pipeline(csu_scope_spec, csu_data_source)
@@ -260,9 +253,7 @@ def test_layer_1_catches_documented_post_index_columns(
         f"This means the manifest is not being consulted; check "
         f"`src.data.manifests.lookup_feature_contract`."
     )
-    assert missing == [], (
-        f"Layer 1 missed flagging documented post-index columns: {missing}"
-    )
+    assert missing == [], f"Layer 1 missed flagging documented post-index columns: {missing}"
 
 
 @pytest.mark.slow
@@ -306,9 +297,7 @@ def test_leakage_remediation_applied(csu_data_source: dict, csu_scope_spec: dict
     rem_status = result.get("leakage_remediation_status")
     # Either remediation was applied OR the legacy detector also flagged
     # things and the deterministic pre-drop kicked in.
-    assert rem_status in ("applied", "not_needed"), (
-        f"Unexpected remediation status: {rem_status!r}"
-    )
+    assert rem_status in ("applied", "not_needed"), f"Unexpected remediation status: {rem_status!r}"
     if rem_status == "applied":
         dropped = set(result.get("leakage_dropped_features") or [])
         # At least one of the well-known post-index columns should be in

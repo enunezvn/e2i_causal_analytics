@@ -255,9 +255,7 @@ def csu_contract_for(name: str) -> FeatureContract | None:
 
 
 # Convenience views — useful for both tests and pipeline configuration.
-CSU_SAFE_FEATURES: list[str] = [
-    c.name for c in CSU_FEATURES if c.knowable_at.is_pre_or_at_index()
-]
+CSU_SAFE_FEATURES: list[str] = [c.name for c in CSU_FEATURES if c.knowable_at.is_pre_or_at_index()]
 
 CSU_FORBIDDEN_AS_FEATURES: list[str] = [
     c.name for c in CSU_FEATURES if not c.knowable_at.is_pre_or_at_index()

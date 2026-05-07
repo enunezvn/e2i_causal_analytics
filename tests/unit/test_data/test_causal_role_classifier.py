@@ -7,8 +7,6 @@ tested separately in tests/integration/ where API keys / mocks are managed.
 
 from __future__ import annotations
 
-import pytest
-
 
 def test_compile_set_has_diverse_examples():
     """The compile set must cover multiple causal roles, not just one."""
@@ -17,6 +15,9 @@ def test_compile_set_has_diverse_examples():
     examples = build_compile_set()
     summary = get_compile_set_summary()
 
+    assert len(examples) == summary["n_examples"], (
+        f"summary.n_examples ({summary['n_examples']}) must match build_compile_set() len ({len(examples)})"
+    )
     assert summary["n_examples"] >= 8, (
         f"Compile set too small: {summary['n_examples']}; need at least 8"
     )
@@ -28,9 +29,7 @@ def test_compile_set_has_diverse_examples():
     # Must have descendants (the dominant leak pattern) AND non-descendants
     # (legit features) for class balance
     assert summary["role_distribution"].get("descendant", 0) >= 3
-    non_descendant = sum(
-        v for k, v in summary["role_distribution"].items() if k != "descendant"
-    )
+    non_descendant = sum(v for k, v in summary["role_distribution"].items() if k != "descendant")
     assert non_descendant >= 2, (
         f"Compile set must include non-descendant examples for balance; "
         f"got {summary['role_distribution']}"
@@ -56,9 +55,7 @@ def test_each_compile_set_example_has_required_fields():
         for field in required_fields:
             assert hasattr(ex, field), f"Example {i} missing field {field}"
             value = getattr(ex, field)
-            assert value is not None and value != "", (
-                f"Example {i} has empty {field}"
-            )
+            assert value is not None and value != "", f"Example {i} has empty {field}"
 
 
 def test_compile_set_journey_duration_classified_as_mediator():
@@ -70,13 +67,10 @@ def test_compile_set_journey_duration_classified_as_mediator():
     from src.data.causal_role_classifier import build_compile_set
 
     examples = build_compile_set()
-    journey = next(
-        (e for e in examples if e.feature_name == "journey_duration_days"), None
-    )
+    journey = next((e for e in examples if e.feature_name == "journey_duration_days"), None)
     assert journey is not None, "journey_duration_days example missing from compile set"
     assert journey.causal_role == "mediator", (
-        f"Expected journey_duration_days to be classified as 'mediator'; "
-        f"got {journey.causal_role}"
+        f"Expected journey_duration_days to be classified as 'mediator'; got {journey.causal_role}"
     )
     assert journey.recommended_remediation == "window", (
         f"Expected journey_duration_days remediation = 'window'; "

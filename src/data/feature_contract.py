@@ -168,7 +168,7 @@ class FeatureContract:
                     f"aggregation requires event-typed source; got {self.source!r}. "
                     f"Allowed event sources: {sorted(EVENT_SOURCES)}",
                     feature=self.name,
-                    reason=f"aggregation requires event-typed source",
+                    reason="aggregation requires event-typed source",
                 )
             if self.window_days is None and not self._allow_unwindowed_for_test:
                 raise ContractViolation(
@@ -181,7 +181,7 @@ class FeatureContract:
                 raise ContractViolation(
                     f"feature {self.name!r}: window_days must be >= 1; got {self.window_days}",
                     feature=self.name,
-                    reason=f"window_days must be >= 1",
+                    reason="window_days must be >= 1",
                 )
 
         # If knowable_at claims pre-or-at-index, an unwindowed event

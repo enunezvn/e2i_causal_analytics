@@ -30,7 +30,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CSU_JOURNEYS_PATH = PROJECT_ROOT / "data" / "rwd" / "csu" / "e2i_ml_v3_patient_journeys.json"
 
@@ -51,7 +50,7 @@ def test_layer_1_rejects_unwindowed_event_aggregations():
     AT AUTHOR TIME, before any data is touched. This is the cheapest possible
     defense.
     """
-    from src.data.feature_contract import FeatureContract, KnowableAt, ContractViolation
+    from src.data.feature_contract import ContractViolation, FeatureContract, KnowableAt
 
     incidents = [
         # (name, source, derivation_inputs, aggregation, window_days)

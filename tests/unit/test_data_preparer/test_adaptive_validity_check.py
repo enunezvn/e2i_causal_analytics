@@ -390,8 +390,7 @@ def test_node_handles_pandas_extension_dtypes(ext_dtype: str):
     result = _run(state)
     feature_names_seen = {v["feature"] for v in result["adaptive_verdicts"]}
     assert "ext_feature" in feature_names_seen, (
-        f"{ext_dtype} column was not evaluated by Layer 3 — likely "
-        "filtered out by the dtype check."
+        f"{ext_dtype} column was not evaluated by Layer 3 — likely filtered out by the dtype check."
     )
 
 
@@ -435,12 +434,10 @@ def test_explicit_seed_zero_is_honored(monkeypatch):
     state = _make_state(df, "y", adaptive_seed=0, adaptive_n_permutations=0)
     _ = _run(state)
     assert captured.get("seed") == 0, (
-        f"Expected seed=0 to be honored; got {captured.get('seed')!r} "
-        "(falsy-zero bug regression)"
+        f"Expected seed=0 to be honored; got {captured.get('seed')!r} (falsy-zero bug regression)"
     )
     assert captured.get("n_permutations") == 0, (
-        f"Expected n_permutations=0 to be honored; got "
-        f"{captured.get('n_permutations')!r}"
+        f"Expected n_permutations=0 to be honored; got {captured.get('n_permutations')!r}"
     )
 
 

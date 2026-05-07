@@ -40,9 +40,7 @@ def test_chain_validates_no_violations():
 
     contracts = {c.name: c for c in CSU_FEATURES}
     violations = validate_contract_chain(contracts)
-    assert violations == [], (
-        "Chain violations:\n  " + "\n  ".join(v.reason for v in violations)
-    )
+    assert violations == [], "Chain violations:\n  " + "\n  ".join(v.reason for v in violations)
 
 
 def test_safe_view_excludes_forbidden_columns():
@@ -57,9 +55,7 @@ def test_safe_view_excludes_forbidden_columns():
     forbidden = set(CSU_FORBIDDEN_AS_FEATURES)
     all_names = {c.name for c in CSU_FEATURES}
 
-    assert safe & forbidden == set(), (
-        f"SAFE and FORBIDDEN overlap: {safe & forbidden}"
-    )
+    assert safe & forbidden == set(), f"SAFE and FORBIDDEN overlap: {safe & forbidden}"
     assert safe | forbidden == all_names
 
 
