@@ -112,6 +112,21 @@ class MetricsSchema(BaseAgentSchema):
     train_val_auc_delta: Optional[float] = None
     train_val_delta: Optional[float] = None
 
+    # D2.5b: evaluator-injected fields surfaced by codex P1+P5+P8 on
+    # PR #80 review. Binary path: ``minimum_lift_over_baseline``
+    # (evaluator.py:1226, lift gate input) + ``calibrated_ece``
+    # (evaluator.py:347-384, calibration gate input + read at 2432).
+    # Multiclass path: ``precision_macro`` / ``recall_macro`` / ``roc_auc_ovr``
+    # (evaluator.py:1573-1584, _compute_multiclass_metrics output).
+    # Without these declarations, BaseAgentSchema's extra="ignore" silently
+    # drops them on coercion — causing latent data loss on checkpoint
+    # restart and silent gate-pass for the calibration / lift criteria.
+    minimum_lift_over_baseline: Optional[float] = None
+    calibrated_ece: Optional[float] = None
+    precision_macro: Optional[float] = None
+    recall_macro: Optional[float] = None
+    roc_auc_ovr: Optional[float] = None
+
     # Regression metrics
     rmse: Optional[float] = None
     mae: Optional[float] = None
