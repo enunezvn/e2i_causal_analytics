@@ -245,8 +245,11 @@ def _inject_leakage(
     strength = config.leakage_strength
 
     if config.leakage_pattern == "post_index_aggregation":
-        # Feature counts events post-index; deterministic-zero for untreated
-        out["post_index_med_count_LEAK"] = target * rng.integers(1, 10, n) + (1 - target) * 0
+        # Feature counts events post-index; deterministic-zero for untreated.
+        # Multiplying by target gives 1-9 for treated, 0 for untreated; the
+        # ``(1 - target) * 0`` term that used to live here was always 0 by
+        # construction and was removed during the Layer-H audit (item H).
+        out["post_index_med_count_LEAK"] = target * rng.integers(1, 10, n)
 
     elif config.leakage_pattern == "post_hoc_termination":
         # Feature derives from eligend - index, where eligend reflects actual
