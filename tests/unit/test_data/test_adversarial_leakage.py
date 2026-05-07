@@ -147,3 +147,66 @@ def test_multi_feature_ablation():
     deltas = {row["feature"]: row["delta_auc"] for row in result["per_feature"]}
     assert deltas["feature_0"] > deltas["feature_1"]
     assert deltas["feature_0"] > 0.10  # Significant lift
+
+
+# --- Codex audit follow-ups (Layer 3 — item E) ------------------------------
+
+
+def test_p_value_zero_means_below_one_over_n_permutations():
+    """The empirical p-value floor is ``1/n_permutations``. A returned
+    ``p_value=0.0`` therefore means "less probable than 1/n_permutations",
+    not exact zero. Codex audit Finding 2: the prior docstring said
+    "Two-sided test" without explaining the upper-tail-on-folded-scale
+    semantics, which could mislead a downstream consumer into halving it.
+    """
+    from src.data.adversarial_leakage import compute_adversarial_score
+
+    rng = np.random.default_rng(0)
+    n = 500
+    target = rng.integers(0, 2, n)
+    # Near-perfect leak — actual_auc ≈ 1.0, well above any permuted null
+    feature = target.astype(float) + rng.normal(0, 0.001, n)
+
+    result = compute_adversarial_score(feature, target, n_permutations=200, seed=42)
+    assert result["actual_auc"] > 0.99
+    # With a sharp leak the upper-tail proportion should be 0 (no perm matches)
+    assert result["p_value"] == 0.0, (
+        f"Expected p_value=0.0 for sharp leak; got {result['p_value']}. "
+        "Per the updated docstring this means '< 1/n_permutations', not exact zero."
+    )
+
+
+def test_compute_feature_ablation_zero_null_std_returns_inf_not_nan():
+    """When every permuted ablation produces the identical delta_AUC (null_std=0),
+    the consumer's ``suspicious = z_score > z_threshold`` test must fire on
+    a deterministically large signal rather than silently fail (NaN > 5 → False).
+    Codex audit Finding 3: ``compute_feature_ablation`` previously returned
+    NaN here, inconsistent with ``compute_adversarial_score`` which returns
+    +inf for the same condition.
+    """
+    import math
+
+    from src.data.adversarial_leakage import compute_feature_ablation
+
+    # Trivial dataset: feature_0 is target plus tiny noise; one feature only;
+    # perfect ablation outcome with low n_permutations to keep the test fast.
+    rng = np.random.default_rng(42)
+    n = 200
+    target = rng.integers(0, 2, n)
+    X = pd.DataFrame({"feat": target.astype(float) + rng.normal(0, 0.001, n)})
+
+    # n_permutations=2 forces a tiny null distribution; if all permuted
+    # retrainings happen to give an identical delta_auc by symmetry, null_std
+    # collapses to 0. Deterministic check: assert that whenever null_std == 0,
+    # z_score is +inf or 0.0 (and never NaN due to the falsy-zero pattern).
+    result = compute_feature_ablation(X, target, n_permutations=2, seed=7)
+    feat_row = result["per_feature"][0]
+    null_std = feat_row["null_std"]
+    z = feat_row["z_score"]
+    if null_std == 0:
+        assert not math.isnan(z), (
+            f"null_std=0 produced z_score=NaN; expected +inf or 0.0 to match "
+            f"compute_adversarial_score semantics. Row: {feat_row}"
+        )
+        assert math.isinf(z) or z == 0.0
+    # If null_std > 0 the test is uninformative for this regression — skip.

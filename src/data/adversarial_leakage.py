@@ -48,11 +48,17 @@ def compute_adversarial_score(
 
     Returns:
         Dictionary with:
-        - actual_auc: feature's effective AUC (max of auc, 1-auc)
-        - null_mean: mean AUC under permuted labels
-        - null_std: std of permuted AUC distribution
+        - actual_auc: feature's effective AUC (max of auc, 1-auc) — the fold
+          makes the test direction-agnostic, so a feature with raw AUC near 0
+          (perfect anticorrelation with the target) is just as suspicious as
+          one with raw AUC near 1.
+        - null_mean: mean AUC under permuted labels (also folded)
+        - null_std: std of folded permuted AUC distribution
         - z_score: (actual_auc - null_mean) / null_std
-        - p_value: fraction of permuted AUCs >= actual_auc
+        - p_value: empirical upper-tail proportion of the folded null
+          distribution (i.e. ``np.mean(folded_null >= folded_actual)``).
+          Bounded below by ``1 / n_permutations``; ``0.0`` therefore means
+          ``< 1/n_permutations``, NOT exact zero.
         - suspicious: True if z_score > z_threshold
         - n_permutations: actual number of permutations completed
     """
@@ -107,7 +113,14 @@ def compute_adversarial_score(
     else:
         z_score = float("inf") if actual_auc > null_mean else 0.0
 
-    # Two-sided test (permutation AUC is bounded [0.5, 1.0] after effective transform)
+    # Empirical upper-tail p_value on the folded scale. The fold of both
+    # ``actual_auc`` and the null distribution to [0.5, 1.0] makes this an
+    # effectively two-sided test on the underlying raw AUC: a raw AUC of 0.05
+    # (anticorrelation) and 0.95 (correlation) both fold to 0.95 and produce
+    # the same suspicious-leakage signal. The upper-tail comparison on the
+    # folded scale is mathematically equivalent to the two-sided test on the
+    # raw scale, but the formula itself is one-sided. ``p_value=0.0`` means
+    # ``< 1/n_permutations``, not exact zero.
     p_value = float(np.mean(null_arr >= actual_auc))
 
     return {
@@ -206,11 +219,18 @@ def compute_feature_ablation(
 
         null_mean = float(np.mean(null_deltas)) if null_deltas else float("nan")
         null_std = float(np.std(null_deltas)) if null_deltas else float("nan")
-        z_score = (
-            (delta_auc - null_mean) / null_std
-            if null_std and null_std > 0 and not np.isnan(delta_auc)
-            else float("nan")
-        )
+        # Match compute_adversarial_score's null_std=0 semantics: a degenerate
+        # null distribution (every permuted ablation produced the same delta)
+        # means a deterministically known signal — return +inf (or 0) rather
+        # than NaN so a consumer's ``suspicious = z_score > z_threshold``
+        # test fires consistently across the two functions.
+        if np.isnan(delta_auc) or np.isnan(null_std):
+            z_score = float("nan")
+        elif null_std > 0:
+            z_score = (delta_auc - null_mean) / null_std
+        else:
+            # null_std == 0: every permuted delta_auc equals null_mean
+            z_score = float("inf") if delta_auc > null_mean else 0.0
 
         per_feature_results.append(
             {
