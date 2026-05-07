@@ -643,25 +643,62 @@ class CSUDataConverter:
                 if dates:
                     index_date = min(dates)
 
-            # Journey end date: latest clinical event or eligend
+            # Journey end date: latest clinical event or eligend.
+            #
+            # Phase 2 (ml-leakage-holistic-fix 2026-05-07): when lookback_days
+            # is set, restrict clinical end_candidates to events in
+            # [index_date - lookback_days, index_date] and cap medication
+            # supply tails at index_date. Without this, treated patients
+            # accumulate post-index events that make journey_duration_days
+            # target-correlated (single-feature AUC=0.689 on CSU ON_180 e2e
+            # 2026-05-07 — see csu_sub_gap_e2e_rerun_close_20260507.md).
+            window_lo: pd.Timestamp | None = None
+            window_hi: pd.Timestamp | None = index_date
+            if self.lookback_days is not None and index_date is not None:
+                window_lo = index_date - timedelta(days=self.lookback_days)
+
+            def _in_window(date: pd.Timestamp) -> bool:
+                if date is None or pd.isna(date):
+                    return False
+                if window_hi is not None and date > window_hi:
+                    return False
+                if window_lo is not None and date < window_lo:
+                    return False
+                return True
+
+            def _cap_at_index(date: pd.Timestamp) -> pd.Timestamp:
+                """Prevent supply-tail extensions past index_date when windowing."""
+                if window_hi is None:
+                    return date
+                return min(date, window_hi)
+
             end_date = None
             end_candidates = []
             if demo_row is not None and pd.notna(demo_row.get("eligend")):
                 end_candidates.append(demo_row["eligend"])
             if patid in self._med_by_pat:
                 med_dates = self._med_by_pat[patid]["medication_date"].dropna()
+                if self.lookback_days is not None and index_date is not None:
+                    med_dates = med_dates[med_dates.apply(_in_window)]
                 if len(med_dates) > 0:
-                    # Add last fill + days_supply
+                    # Add last (in-window) fill + days_supply, capped at index_date.
                     last_med = self._med_by_pat[patid].loc[med_dates.idxmax()]
                     last_date = last_med["medication_date"]
                     days_sup = _safe_int(last_med.get("days_sup")) or 0
-                    end_candidates.append(last_date + timedelta(days=days_sup))
+                    raw_end = last_date + timedelta(days=days_sup)
+                    end_candidates.append(
+                        _cap_at_index(raw_end) if self.lookback_days is not None else raw_end
+                    )
             if patid in self._proc_by_pat:
                 proc_dates = self._proc_by_pat[patid]["proc_date"].dropna()
+                if self.lookback_days is not None and index_date is not None:
+                    proc_dates = proc_dates[proc_dates.apply(_in_window)]
                 if len(proc_dates) > 0:
                     end_candidates.append(proc_dates.max())
             if patid in self._lab_by_pat:
                 lab_dates = self._lab_by_pat[patid]["fst_dt"].dropna()
+                if self.lookback_days is not None and index_date is not None:
+                    lab_dates = lab_dates[lab_dates.apply(_in_window)]
                 if len(lab_dates) > 0:
                     end_candidates.append(lab_dates.max())
             if end_candidates:
