@@ -165,7 +165,7 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
     },
     "--regime": {
         "default": "default",
-        "choices": ["default", "adverse", "clean"],
+        "choices": ["default", "adverse", "clean", "scenario_a"],
         "nargs": None,
         "type_name": "str",
         "action": "_StoreAction",
