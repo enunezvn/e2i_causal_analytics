@@ -203,8 +203,13 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             "adaptive_flagged_features": [],
         }
 
-    n_perms = int(state.get("adaptive_n_permutations") or DEFAULT_PERMUTATIONS)
-    seed = int(state.get("adaptive_seed") or 7)
+    # Use explicit `is not None` checks: `state.get(...) or DEFAULT` silently
+    # replaces a legitimate 0 with the default (Python's falsy-zero semantics).
+    # `adaptive_seed=0` is a valid seed; the old form returned 7 instead.
+    _n_perms = state.get("adaptive_n_permutations")
+    n_perms = int(_n_perms) if _n_perms is not None else DEFAULT_PERMUTATIONS
+    _seed = state.get("adaptive_seed")
+    seed = int(_seed) if _seed is not None else 7
 
     verdicts: list[dict[str, Any]] = []
     flagged: list[str] = []
