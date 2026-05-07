@@ -1512,7 +1512,7 @@ def test_model_trainer_state_test_metrics_validates_typed_schema() -> None:
 
     state = ModelTrainerState(
         test_metrics={
-            "roc_auc": 0.83,        # producer-modern alias resolves to auc_roc
+            "roc_auc": 0.83,  # producer-modern alias resolves to auc_roc
             "f1_score": 0.70,
             "mcc": 0.38,
             "brier_score": 0.18,
