@@ -275,11 +275,24 @@ def _gather_leakage_context(state: DataPreparerState) -> Dict[str, Any]:
 
 
 def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[str, str]]:
-    """Auto-drop features with unambiguous CRITICAL leakage.
+    """Auto-drop features with HIGH or CRITICAL leakage (deterministic).
 
-    Handles cases where no LLM judgment is needed:
-    - logical_dependency with CRITICAL severity (logically equivalent to target)
-    - perfect_class_separation with overlap == 0.0
+    Phase 6 (ml-leakage-holistic-fix 2026-05-07): Expanded from the prior
+    narrow scope (logical_dependency CRITICAL + perfect_class_separation
+    overlap=0) to ALL HIGH and CRITICAL findings, regardless of check name.
+
+    Why: the previous LLM-driven path proposed feature drops (and
+    replacements) that hallucinated names or kept features with HIGH-severity
+    findings on the basis of LLM confidence. The post-Phase-1 detector is
+    rigorous enough that any HIGH/CRITICAL finding represents a real leak
+    that should be dropped without LLM judgment. The LLM is now consulted
+    only for MODERATE-severity findings where there's genuine ambiguity
+    (e.g., a feature with single-feature AUC=0.58 might be legitimate signal
+    from a clinically important biomarker; a feature at AUC=0.78 is not).
+
+    Each feature is auto-dropped at most once even if it appears in multiple
+    findings; the classification message records the most-severe check that
+    triggered the drop.
 
     Args:
         context: Leakage context from _gather_leakage_context
@@ -289,6 +302,8 @@ def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[st
     """
     auto_drop: List[str] = []
     classifications: Dict[str, str] = {}
+    severity_rank = {"critical": 3, "high": 2, "moderate": 1, "info": 0}
+    seen_severity: Dict[str, int] = {}
 
     for finding in context.get("leakage_findings", []):
         feat = finding.get("feature", "")
@@ -299,25 +314,37 @@ def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[st
         if not feat:
             continue
 
-        # Case 1: logical_dependency with CRITICAL severity
-        if check == "logical_dependency" and severity == "critical":
+        rank = severity_rank.get(severity, 0)
+
+        # Drop ANY HIGH or CRITICAL finding deterministically.
+        if rank >= 2:
             if feat not in auto_drop:
                 auto_drop.append(feat)
+                seen_severity[feat] = rank
+                evidence_summary = ""
+                if "auc" in evidence:
+                    evidence_summary = f" (AUC={evidence['auc']:.3f})"
+                elif "correlation" in evidence:
+                    evidence_summary = f" (r={evidence['correlation']:.3f})"
+                elif "mi_normalized" in evidence:
+                    evidence_summary = f" (MI_norm={evidence['mi_normalized']:.3f})"
+                elif "overlap" in evidence:
+                    evidence_summary = f" (overlap={evidence['overlap']:.4f})"
                 classifications[feat] = (
-                    "tautological — logically equivalent to target (auto-dropped)"
+                    f"{severity} {check}{evidence_summary} (auto-dropped, deterministic)"
                 )
-                logger.info(f"Auto-dropping '{feat}': logical_dependency CRITICAL")
-
-        # Case 2: perfect_class_separation with zero overlap
-        elif check == "perfect_class_separation" and severity == "critical":
-            overlap = evidence.get("overlap", None)
-            if overlap is not None and float(overlap) == 0.0:
-                if feat not in auto_drop:
-                    auto_drop.append(feat)
-                    classifications[feat] = (
-                        "tautological — perfect class separation with zero overlap (auto-dropped)"
-                    )
-                    logger.info(f"Auto-dropping '{feat}': perfect_class_separation overlap=0.0")
+                logger.info(
+                    f"Auto-dropping '{feat}': {severity} {check}{evidence_summary}"
+                )
+            elif rank > seen_severity.get(feat, 0):
+                # Update classification with more-severe finding for same feature.
+                seen_severity[feat] = rank
+                evidence_summary = ""
+                if "auc" in evidence:
+                    evidence_summary = f" (AUC={evidence['auc']:.3f})"
+                classifications[feat] = (
+                    f"{severity} {check}{evidence_summary} (auto-dropped, deterministic)"
+                )
 
     return auto_drop, classifications
 
