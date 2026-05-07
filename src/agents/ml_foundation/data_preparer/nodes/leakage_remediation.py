@@ -172,7 +172,16 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 "validation_df": result["validation_df"],
                 "test_df": result["test_df"],
                 "holdout_df": result["holdout_df"],
-                # Clear previous leakage state so re-check starts fresh
+                # Clear previous leakage state so re-check starts fresh.
+                # Asymmetry note (backlog #11.d): we clear `leakage_findings`
+                # here so detect_leakage's next pass starts from scratch, but
+                # the Layer 5 `adaptive_verdicts` produced by the next
+                # adaptive_validity_check invocation are CUMULATIVE across
+                # re-entries (see adaptive_validity_check.py merge block).
+                # An audit-trail reader correlating the two streams must
+                # account for the fact that a feature in `adaptive_verdicts`
+                # from the first invocation may be absent from
+                # `leakage_findings` after this clear.
                 "leakage_detected": False,
                 "leakage_issues": [],
                 "leakage_findings": [],

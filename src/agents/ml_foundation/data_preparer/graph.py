@@ -43,6 +43,12 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
     the state has at least one verdict. Otherwise no-ops (silently skipped in
     unit tests, which generally do not configure an artifacts dir).
 
+    The serialized verdicts carry an empirical ``p_value`` field whose floor
+    is ``1 / n_permutations`` (default 200). A persisted ``p_value=0.0``
+    therefore means ``< 1/n_permutations``, NOT exact zero (backlog #11.e).
+    Severity routing in the producer uses ``z_score``, so this rounding is
+    purely informational for downstream sidecar consumers.
+
     Args:
         state: DataPreparerState dict-like with adaptive_verdicts.
 
