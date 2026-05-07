@@ -26,10 +26,20 @@ from .csu_feature_manifest import (
     CSU_SAFE_FEATURES,
     csu_contract_for,
 )
+from .optum_feature_manifest import (
+    OPTUM_FEATURES,
+    OPTUM_FORBIDDEN_AS_FEATURES,
+    OPTUM_SAFE_FEATURES,
+    optum_contract_for,
+)
 
 __all__ = [
     "CSU_FEATURES",
     "CSU_FORBIDDEN_AS_FEATURES",
     "CSU_SAFE_FEATURES",
     "csu_contract_for",
+    "OPTUM_FEATURES",
+    "OPTUM_FORBIDDEN_AS_FEATURES",
+    "OPTUM_SAFE_FEATURES",
+    "optum_contract_for",
 ]
