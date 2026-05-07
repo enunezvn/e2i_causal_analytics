@@ -230,13 +230,17 @@ def validate_contract_chain(
 
     # Helper: rank knowable_at on a comparable scale.
     # enrollment < index_date < post_index
+    # Within the same reference, larger offset_days is later: an input claimed
+    # at index_date+30 is later than its parent at index_date+0, even though
+    # both share the index_date reference. Returning a (base, offset) tuple
+    # makes lexicographic comparison enforce that ordering. Without this,
+    # post-index inputs that nominally share a reference with the parent are
+    # silently accepted.
     rank = {"enrollment": 0, "index_date": 1, "post_index": 2}
 
-    def rank_of(k: KnowableAt) -> int:
-        if k.reference in rank:
-            return rank[k.reference]
-        # Unknown reference: assume worst-case post_index
-        return rank["post_index"]
+    def rank_of(k: KnowableAt) -> tuple[int, int]:
+        base = rank.get(k.reference, rank["post_index"])
+        return (base, k.offset_days)
 
     for feat_name, contract in contracts.items():
         # Skip if no inputs declared in the chain
