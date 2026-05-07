@@ -176,9 +176,16 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             "adaptive_flagged_features": [],
         }
 
-    candidates = _select_features(train_df, target, excluded)
-    if not candidates:
-        logger.info("adaptive_validity_check: no numeric features to score → skipping")
+    # Layer 1 (manifest-driven) operates on ALL columns regardless of dtype —
+    # the contract is metadata, not data. Layer 3 (statistical) requires a
+    # numeric AUC, so non-numeric columns can only be caught by Layer 1.
+    excluded_set = set(excluded or [])
+    excluded_set.add(target)
+    all_columns = [c for c in train_df.columns if c not in excluded_set]
+    numeric_candidates = _select_features(train_df, target, excluded)
+
+    if not all_columns:
+        logger.info("adaptive_validity_check: no candidate columns → skipping")
         return {
             "adaptive_verdicts": [],
             "adaptive_flagged_features": [],
@@ -198,15 +205,19 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     verdicts: list[dict[str, Any]] = []
     flagged: list[str] = []
 
-    for feat in candidates:
-        # Layer 1 first: if the manifest declares this feature post-index, the
-        # contract alone is sufficient evidence to drop. Skip Layer 3 (no
-        # permutation test needed; the call is deterministic).
+    # Layer 1 pass — every column, manifest-driven catch for post-index ones.
+    layer_1_caught: set[str] = set()
+    for feat in all_columns:
         contract = lookup_feature_contract(feat)
         if contract is not None and not contract.knowable_at.is_pre_or_at_index():
             verdict = _layer_1_verdict(feat, contract)
             verdicts.append(verdict)
             flagged.append(feat)
+            layer_1_caught.add(feat)
+
+    # Layer 3 pass — numeric columns only, skipping anything Layer 1 already caught.
+    for feat in numeric_candidates:
+        if feat in layer_1_caught:
             continue
 
         col = train_df[feat]
@@ -253,13 +264,28 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         if verdict["severity"] == "high":
             flagged.append(feat)
 
-    # Merge with existing leakage state — augment, don't replace
+    # Merge with existing leakage state — augment, don't replace. The
+    # graph re-enters this node after leakage_remediation drops columns,
+    # so we extend the prior `adaptive_verdicts` and `adaptive_flagged_features`
+    # rather than overwriting them; the audit trail spans every invocation.
     prior_leaked = list(state.get("leaked_features") or [])
     prior_findings = list(state.get("leakage_findings") or [])
     prior_severity = state.get("leakage_severity") or "none"
+    prior_verdicts = list(state.get("adaptive_verdicts") or [])
+    prior_flagged = list(state.get("adaptive_flagged_features") or [])
 
     merged_leaked = sorted(set(prior_leaked) | set(flagged))
     merged_findings = prior_findings + verdicts
+
+    # Dedup verdicts by feature name — first verdict wins (the one from the
+    # initial invocation, before columns were dropped, has the most evidence).
+    seen_features = {v["feature"] for v in prior_verdicts}
+    extended_verdicts = list(prior_verdicts)
+    for v in verdicts:
+        if v["feature"] not in seen_features:
+            extended_verdicts.append(v)
+            seen_features.add(v["feature"])
+    extended_flagged = sorted(set(prior_flagged) | set(flagged))
 
     # Escalate severity if Layer 3 caught something legacy missed. Severity
     # ordering: critical > high > moderate > info > none. Adaptive only escalates
@@ -279,8 +305,8 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     update: dict[str, Any] = {
-        "adaptive_verdicts": verdicts,
-        "adaptive_flagged_features": flagged,
+        "adaptive_verdicts": extended_verdicts,
+        "adaptive_flagged_features": extended_flagged,
         "leaked_features": merged_leaked,
         "leakage_findings": merged_findings,
     }

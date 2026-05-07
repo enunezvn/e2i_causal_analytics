@@ -213,6 +213,44 @@ class TestSchemaValidationSkipped:
         assert result["schema_validation_status"] == "skipped"
         assert result["schema_splits_validated"] == 0
 
+    @pytest.mark.asyncio
+    async def test_validation_handles_dict_data_source(self):
+        """When ``data_source`` is a dict (file ingestion shape), the
+        schema_validator must NOT crash with 'unhashable type: dict'.
+
+        File-ingestion data sources look like
+        ``{"type": "files", "paths": {...}}``. Before the fix, the registry
+        lookup ``PANDERA_SCHEMA_REGISTRY.get(<dict>)`` raised a TypeError.
+        Fix: fall through to scope_spec.table_name and default to
+        ``"patient_journeys"`` when file ingestion is active."""
+        state = {
+            "experiment_id": "exp_001",
+            "data_source": {
+                "type": "files",
+                "paths": {"patient_journeys": "/tmp/example.json"},
+            },
+            "scope_spec": {"table_name": "patient_journeys"},
+            "train_df": pd.DataFrame(
+                {
+                    "patient_journey_id": ["pj1", "pj2", "pj3"],
+                    "patient_id": ["p1", "p2", "p3"],
+                }
+            ),
+            "validation_df": None,
+            "test_df": None,
+            "holdout_df": None,
+            "blocking_issues": [],
+        }
+
+        # Must not raise; status will be "passed" or "failed" depending on
+        # whether the minimal df satisfies the patient_journeys schema, but
+        # the key point is the lookup must not throw.
+        result = await run_schema_validation(state)
+        assert result["schema_validation_status"] in ("passed", "failed", "skipped")
+        assert "error_type" not in result or (
+            result.get("error_type") != "schema_validation_error"
+        ), f"Validator unexpectedly crashed: {result.get('error')}"
+
 
 class TestSchemaValidationError:
     """Test run_schema_validation error handling."""
