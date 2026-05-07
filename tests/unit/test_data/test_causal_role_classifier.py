@@ -101,3 +101,91 @@ def test_classifier_module_constructs():
     assert classifier is not None
     # Has the inner ChainOfThought predictor
     assert hasattr(classifier, "classify")
+
+
+# --- Codex audit follow-ups (Layer 4 — item F) ------------------------------
+
+
+def test_compile_set_role_coverage_is_explicit_subset():
+    """The compile set covers 4 of 6 declared CausalRole values (ancestor,
+    confounder, mediator, descendant). ``collider`` and ``instrument`` are
+    deliberately unrepresented pending domain-expert example construction;
+    the gap is documented in the module docstring and tracked in backlog
+    item #11. This test pins the current state so an unsigned extension to
+    those roles (which would change the LM training signal) fires the test
+    and prompts a deliberate review.
+    """
+    from typing import get_args
+
+    from src.data.causal_role_classifier import CausalRole, get_compile_set_summary
+
+    summary = get_compile_set_summary()
+    declared_roles = set(get_args(CausalRole))
+    covered_roles = set(summary["role_distribution"].keys())
+
+    # Every covered role must be a valid CausalRole Literal value (no typos).
+    drift = covered_roles - declared_roles
+    assert drift == set(), (
+        f"Compile set has roles not in the CausalRole Literal: {drift}. "
+        f"Declared: {declared_roles}; covered: {covered_roles}."
+    )
+
+    # Pin the current 4-role coverage. If extending to collider/instrument,
+    # this test must be updated in the same commit so the docstring claim
+    # ('4 of 6') stays true.
+    expected_covered = {"ancestor", "confounder", "mediator", "descendant"}
+    assert covered_roles == expected_covered, (
+        f"Compile-set role coverage changed: covered={covered_roles}, "
+        f"expected={expected_covered}. If this is intentional, update the "
+        f"module docstring + this assertion together so the documented "
+        f"coverage matches the data."
+    )
+
+
+def test_compile_set_remediation_values_are_valid_literals():
+    """Every example's recommended_remediation must be one of the four declared
+    Remediation Literal values. Otherwise the LLM's compiled output schema
+    has fewer enforced labels than designed.
+    """
+    from typing import get_args
+
+    from src.data.causal_role_classifier import Remediation, build_compile_set
+
+    valid_remediations = set(get_args(Remediation))
+    for i, ex in enumerate(build_compile_set()):
+        assert ex.recommended_remediation in valid_remediations, (
+            f"Example {i} ({ex.feature_name!r}) has remediation "
+            f"{ex.recommended_remediation!r} not in {valid_remediations}."
+        )
+
+
+def test_compile_set_role_remediation_pairs_are_consistent():
+    """Role/remediation pairs should respect causal semantics:
+    - ``descendant`` and ``mediator`` should NOT be ``keep_with_caveat``
+      (they require ``drop`` or ``window`` because their values reflect the
+      target).
+    - ``ancestor`` and ``confounder`` should NOT be ``drop`` (they're
+      legitimate pre-prediction-time signal — dropping discards real signal).
+    - ``collider`` and ``instrument`` are not currently represented; this
+      assertion runs only on the covered subset.
+    """
+    from src.data.causal_role_classifier import build_compile_set
+
+    POST_INDEX_ROLES = {"descendant", "mediator"}
+    PRE_INDEX_ROLES = {"ancestor", "confounder"}
+    POST_INDEX_REMEDIATIONS = {"drop", "window", "transform"}
+    PRE_INDEX_REMEDIATIONS = {"keep_with_caveat", "transform"}
+
+    for ex in build_compile_set():
+        if ex.causal_role in POST_INDEX_ROLES:
+            assert ex.recommended_remediation in POST_INDEX_REMEDIATIONS, (
+                f"{ex.feature_name!r} role={ex.causal_role!r} should not be "
+                f"remediated as {ex.recommended_remediation!r}; post-index roles "
+                f"need one of {POST_INDEX_REMEDIATIONS}."
+            )
+        elif ex.causal_role in PRE_INDEX_ROLES:
+            assert ex.recommended_remediation in PRE_INDEX_REMEDIATIONS, (
+                f"{ex.feature_name!r} role={ex.causal_role!r} should not be "
+                f"remediated as {ex.recommended_remediation!r}; pre-index roles "
+                f"need one of {PRE_INDEX_REMEDIATIONS}."
+            )

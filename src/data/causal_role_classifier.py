@@ -2,8 +2,18 @@
 
 Classifies a proposed feature derivation as ancestor / confounder / mediator /
 collider / descendant / instrument with respect to the prediction target.
-Compiled on a curated set of 18 documented past-leakage incidents from this
-codebase's history (`.claude/state/leakage_compile_set_20260507.md`).
+Compiled on a curated subset (12 of 18) of documented past-leakage incidents
+from this codebase's history (`.claude/state/leakage_compile_set_20260507.md`).
+
+Compile-set coverage gap (known, deferred): the `CausalRole` Literal declares
+six roles, but the current 12-example compile set covers only four —
+``ancestor`` (1), ``confounder`` (2), ``mediator`` (1), ``descendant`` (8).
+``collider`` and ``instrument`` are unrepresented. Adding labeled examples
+for them requires domain-expert review (the framing differs from descendant /
+mediator and a wrong label here corrupts the LM training signal). Tracked
+under backlog item #11 as a data-extension follow-up; pin-tests in
+`test_causal_role_classifier.py` enforce the current coverage so an unsigned
+extension to those two roles fires the test and prompts re-review.
 
 Why DSPy: replace ad-hoc Claude prompts (which hallucinated feature names per
 the documented synthetic_v2 incident) with a STRUCTURED PROGRAM that:
@@ -110,7 +120,17 @@ class CausalRoleClassifier(dspy.Module):
 
 
 def build_compile_set() -> list[dspy.Example]:
-    """Build the DSPy compile set from the 18 documented leakage incidents.
+    """Build the DSPy compile set: 12 curated examples covering 4 of 6 roles.
+
+    Of the 18 incidents catalogued at
+    ``.claude/state/leakage_compile_set_20260507.md``, 12 have been distilled
+    into typed ``dspy.Example`` objects below. The remaining 6 are either
+    duplicates of an already-represented mechanism (e.g., incident 14-17 are
+    collapsed into one ``has_angioedema`` exemplar) or pending domain-expert
+    review for the unrepresented roles ``collider`` and ``instrument``.
+
+    Coverage by role: ancestor=1, confounder=2, mediator=1, descendant=8.
+    See module docstring for the deferral rationale.
 
     Source: .claude/state/leakage_compile_set_20260507.md
     """
