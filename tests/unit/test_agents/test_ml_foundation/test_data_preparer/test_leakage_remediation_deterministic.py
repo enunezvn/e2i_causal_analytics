@@ -28,8 +28,12 @@ def _make_finding(
     }
 
 
-def test_deterministic_drop_catches_high_single_feature_auc():
-    """Pre-Phase-6: HIGH single_feature_auc was sent to LLM. Post-Phase-6: dropped."""
+def test_deterministic_does_not_drop_high_single_feature_auc():
+    """Phase 6 (revised after slow-tests 25498639314): single_feature_auc HIGH
+    is an AMBIGUOUS check — could be legitimate predictor in clean synthetic
+    regime. Only auto-drop at CRITICAL (>0.80). HIGH is sent to LLM/MODERATE
+    handling instead.
+    """
     context = {
         "leakage_findings": [
             _make_finding(
@@ -41,13 +45,30 @@ def test_deterministic_drop_catches_high_single_feature_auc():
         ]
     }
     dropped, classifications = _deterministic_pre_drop(context)
-    assert "journey_duration_days" in dropped
-    assert "deterministic" in classifications["journey_duration_days"]
-    assert "0.689" in classifications["journey_duration_days"]
+    assert "journey_duration_days" not in dropped, (
+        "Phase 6 revised: HIGH single_feature_auc must NOT auto-drop "
+        "(let LLM/downstream judge); only CRITICAL auto-drops"
+    )
 
 
-def test_deterministic_drop_catches_high_target_correlation():
-    """Pre-Phase-6: HIGH target_correlation went to LLM. Post-Phase-6: dropped."""
+def test_deterministic_drops_critical_single_feature_auc():
+    """CRITICAL single_feature_auc (>0.80) is unambiguously a leak — auto-drop."""
+    context = {
+        "leakage_findings": [
+            _make_finding(
+                "engagement_score",
+                "single_feature_auc",
+                "critical",
+                {"auc": 0.999},
+            )
+        ]
+    }
+    dropped, _ = _deterministic_pre_drop(context)
+    assert "engagement_score" in dropped
+
+
+def test_deterministic_does_not_drop_high_target_correlation():
+    """Phase 6 (revised): HIGH target_correlation is ambiguous; LLM judges."""
     context = {
         "leakage_findings": [
             _make_finding(
@@ -58,9 +79,41 @@ def test_deterministic_drop_catches_high_target_correlation():
             )
         ]
     }
-    dropped, classifications = _deterministic_pre_drop(context)
-    assert "leaky_score" in dropped
-    assert "0.780" in classifications["leaky_score"]
+    dropped, _ = _deterministic_pre_drop(context)
+    assert "leaky_score" not in dropped
+
+
+def test_deterministic_drops_high_perfect_class_separation():
+    """High-confidence check: perfect_class_separation HIGH is structural —
+    moderate-strength separation almost certainly indicates leakage."""
+    context = {
+        "leakage_findings": [
+            _make_finding(
+                "structural_leak",
+                "perfect_class_separation",
+                "high",
+                {"overlap": 0.04},
+            )
+        ]
+    }
+    dropped, _ = _deterministic_pre_drop(context)
+    assert "structural_leak" in dropped
+
+
+def test_deterministic_drops_high_logical_dependency():
+    """High-confidence check: logical_dependency HIGH = tautological feature."""
+    context = {
+        "leakage_findings": [
+            _make_finding(
+                "tautology",
+                "logical_dependency",
+                "high",
+                {},
+            )
+        ]
+    }
+    dropped, _ = _deterministic_pre_drop(context)
+    assert "tautology" in dropped
 
 
 def test_deterministic_drop_catches_critical_mi():
@@ -132,12 +185,16 @@ def test_deterministic_dedup_one_drop_per_feature():
 
 
 def test_deterministic_handles_missing_feature_name():
-    """Findings with empty feature names are silently skipped, not raised."""
+    """Findings with empty feature names are silently skipped, not raised.
+
+    Uses perfect_class_separation HIGH (high-confidence check) so the
+    auto-drop fires regardless of single_feature_auc's ambiguous policy.
+    """
     context = {
         "leakage_findings": [
-            _make_finding("", "single_feature_auc", "high", {"auc": 0.85}),
+            _make_finding("", "perfect_class_separation", "high", {"overlap": 0.02}),
             _make_finding(
-                "real_feature", "single_feature_auc", "high", {"auc": 0.85}
+                "real_feature", "perfect_class_separation", "high", {"overlap": 0.03}
             ),
         ]
     }

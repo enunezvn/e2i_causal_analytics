@@ -274,25 +274,58 @@ def _gather_leakage_context(state: DataPreparerState) -> Dict[str, Any]:
 # =============================================================================
 
 
+# Phase 6 (ml-leakage-holistic-fix 2026-05-07): which check_names are
+# high-confidence leaks at HIGH severity vs which require additional
+# evidence to be auto-dropped. Auto-drop high-confidence checks at
+# {HIGH, CRITICAL}; auto-drop ambiguous checks only at CRITICAL.
+#
+# - High-confidence at HIGH: structural patterns where moderate-strength
+#   signal almost certainly indicates leakage (perfect_class_separation,
+#   logical_dependency, train_test_contamination, zero_variance_within_class).
+# - Ambiguous at HIGH: statistical-association checks where moderate signal
+#   could be legitimate predictor (single_feature_auc, target_correlation,
+#   mutual_information, categorical_class_separation). At CRITICAL these
+#   become high-confidence too.
+#
+# Why the split: synthetic clean regime (test_synthetic_regimes.py
+# TestCleanRegimeE2E) has features designed to have moderate predictive
+# power that the strict 0.65-AUC HIGH band catches as suspect. Without
+# this split, the synthetic regime val AUC dropped from 0.87→0.74,
+# breaking the [0.80, 0.92] CI band assertion in slow-tests run 25498639314.
+
+_HIGH_CONFIDENCE_CHECKS = frozenset(
+    {
+        "perfect_class_separation",
+        "logical_dependency",
+        "train_test_contamination",
+        "zero_variance_within_class",
+        "temporal_leakage",
+    }
+)
+
+
 def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[str, str]]:
-    """Auto-drop features with HIGH or CRITICAL leakage (deterministic).
+    """Auto-drop features with high-confidence leakage findings.
 
-    Phase 6 (ml-leakage-holistic-fix 2026-05-07): Expanded from the prior
-    narrow scope (logical_dependency CRITICAL + perfect_class_separation
-    overlap=0) to ALL HIGH and CRITICAL findings, regardless of check name.
+    Phase 6 (ml-leakage-holistic-fix 2026-05-07; revised after slow-tests
+    run 25498639314 caught a synthetic-regime regression):
 
-    Why: the previous LLM-driven path proposed feature drops (and
-    replacements) that hallucinated names or kept features with HIGH-severity
-    findings on the basis of LLM confidence. The post-Phase-1 detector is
-    rigorous enough that any HIGH/CRITICAL finding represents a real leak
-    that should be dropped without LLM judgment. The LLM is now consulted
-    only for MODERATE-severity findings where there's genuine ambiguity
-    (e.g., a feature with single-feature AUC=0.58 might be legitimate signal
-    from a clinically important biomarker; a feature at AUC=0.78 is not).
+    - Drop at HIGH+CRITICAL for high-confidence checks (perfect_separation,
+      logical_dependency, contamination, zero_variance, temporal).
+    - Drop at CRITICAL only for ambiguous checks (single_feature_auc,
+      target_correlation, mutual_information, categorical_separation).
+    - Drop at any severity for findings that explicitly indicate
+      contamination patterns in the description.
 
-    Each feature is auto-dropped at most once even if it appears in multiple
-    findings; the classification message records the most-severe check that
-    triggered the drop.
+    Why: HIGH single_feature_auc (e.g., 0.689) can be a legitimate strong
+    predictor in clean synthetic regimes; auto-dropping such features
+    over-aggressively eliminates real signal. The structural checks
+    (perfect_separation, logical_dependency) at HIGH are nearly always
+    real leaks regardless of context.
+
+    Each feature is auto-dropped at most once even if it appears in
+    multiple findings; the classification message records the most-severe
+    finding that triggered the drop.
 
     Args:
         context: Leakage context from _gather_leakage_context
@@ -316,8 +349,12 @@ def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[st
 
         rank = severity_rank.get(severity, 0)
 
-        # Drop ANY HIGH or CRITICAL finding deterministically.
-        if rank >= 2:
+        # Auto-drop logic: high-confidence checks drop at HIGH+CRITICAL;
+        # ambiguous checks drop only at CRITICAL.
+        is_high_confidence = check in _HIGH_CONFIDENCE_CHECKS
+        threshold_rank = 2 if is_high_confidence else 3  # HIGH or CRITICAL
+
+        if rank >= threshold_rank:
             if feat not in auto_drop:
                 auto_drop.append(feat)
                 seen_severity[feat] = rank
@@ -337,7 +374,6 @@ def _deterministic_pre_drop(context: Dict[str, Any]) -> Tuple[List[str], Dict[st
                     f"Auto-dropping '{feat}': {severity} {check}{evidence_summary}"
                 )
             elif rank > seen_severity.get(feat, 0):
-                # Update classification with more-severe finding for same feature.
                 seen_severity[feat] = rank
                 evidence_summary = ""
                 if "auc" in evidence:
