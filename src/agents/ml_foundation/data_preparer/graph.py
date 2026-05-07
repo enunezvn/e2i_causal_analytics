@@ -3,7 +3,11 @@
 This module assembles the data preparation pipeline using LangGraph.
 """
 
+import json
 import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Literal
 
 from langgraph.graph import END, StateGraph
@@ -30,6 +34,45 @@ logger = logging.getLogger(__name__)
 MAX_REMEDIATION_ATTEMPTS = 2
 
 from .nodes.leakage_remediation import MAX_LEAKAGE_REMEDIATION_ATTEMPTS
+
+
+def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
+    """Write the adaptive-validity audit trail to a JSON sidecar.
+
+    Writes when ADAPTIVE_VALIDITY_ARTIFACTS_DIR is set in the environment AND
+    the state has at least one verdict. Otherwise no-ops (silently skipped in
+    unit tests, which generally do not configure an artifacts dir).
+
+    Args:
+        state: DataPreparerState dict-like with adaptive_verdicts.
+
+    Returns:
+        Path to the written sidecar, or None when no write occurred.
+    """
+    artifacts_dir = os.environ.get("ADAPTIVE_VALIDITY_ARTIFACTS_DIR")
+    verdicts = state.get("adaptive_verdicts") or []
+    if not artifacts_dir or not verdicts:
+        return None
+    try:
+        base = Path(artifacts_dir) / str(state.get("experiment_id") or "anon")
+        base.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        sidecar = base / f"adaptive_verdicts_{ts}.json"
+        payload = {
+            "experiment_id": state.get("experiment_id"),
+            "data_source": state.get("data_source"),
+            "written_at": ts,
+            "leakage_severity": state.get("leakage_severity"),
+            "leaked_features": state.get("leaked_features", []),
+            "adaptive_flagged_features": state.get("adaptive_flagged_features", []),
+            "adaptive_verdicts": verdicts,
+        }
+        sidecar.write_text(json.dumps(payload, indent=2, default=str))
+        logger.info("Wrote adaptive-validity audit trail to %s", sidecar)
+        return sidecar
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to write adaptive-validity sidecar: %s", exc)
+        return None
 
 
 def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
@@ -380,6 +423,10 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
             "blockers": blockers,
             "blocking_issues": blocking_issues,
         }
+
+        # Persist adaptive-validity audit trail to a JSON sidecar so the
+        # per-feature verdicts survive outside the run state.
+        write_adaptive_verdicts_sidecar(state)
 
         logger.info(
             f"Data preparation completed: gate_passed={gate_passed}, "
