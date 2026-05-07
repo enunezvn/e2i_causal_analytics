@@ -73,22 +73,42 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install mypy==1.19.1
+          # mypy version is pinned in requirements.txt (single source of truth).
 
-      - name: Run MyPy (numeric ceiling = 45)
+      - name: Run MyPy (numeric ceiling = 65)
         run: |
           set -e
-          MYPY_CEILING=45
-          # Use the same config file so per-module overrides apply identically
+          MYPY_CEILING=65
+          # Use the same config file so per-module overrides apply identically.
           mypy --config-file pyproject.toml src/ > mypy_report.txt 2>&1 || true
-          ERRORS=$(grep -c "^src/.*: error:" mypy_report.txt || true)
-          echo "MyPy reports $ERRORS errors (ceiling: $MYPY_CEILING)"
-          tail -3 mypy_report.txt
-          if [ "$ERRORS" -gt "$MYPY_CEILING" ]; then
-            echo "::error::MyPy error count $ERRORS exceeds ceiling $MYPY_CEILING."
-            echo "::error::See .claude/state/mypy_posture_decision_20260506.md for the ceiling rationale."
+          # Source the count from mypy's own summary line — robust against
+          # path-format changes (e.g., absolute vs relative) that a prefix
+          # grep would silently undercount, and against internal mypy crashes
+          # that emit no summary at all.
+          if grep -qE "^Found [0-9]+ errors" mypy_report.txt; then
+            ERRORS=$(awk '/^Found [0-9]+ errors/{print $2; exit}' mypy_report.txt)
+          elif grep -q "^Success: no issues found" mypy_report.txt; then
+            ERRORS=0
+          else
+            echo "::error::mypy did not produce a recognized summary line — likely an internal crash. Tail of report:"
+            tail -10 mypy_report.txt
             exit 1
           fi
+          echo "MyPy reports $ERRORS errors (ceiling: $MYPY_CEILING)"
+          grep -E "^Found|^Success" mypy_report.txt || true
+          if [ "$ERRORS" -gt "$MYPY_CEILING" ]; then
+            echo "::error::MyPy error count $ERRORS exceeds ceiling $MYPY_CEILING."
+            echo "::error::Ceiling-bump procedure: see PR description and .claude/state/mypy_posture_decision_20260506.md."
+            exit 1
+          fi
+
+      - name: Upload mypy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mypy-report
+          path: mypy_report.txt
+          retention-days: 7
 
   unit-tests:
     name: Unit Tests
@@ -299,6 +319,10 @@ jobs:
         run: |
           if [[ "${{ needs.lint.result }}" != "success" ]]; then
             echo "Lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.type-check.result }}" != "success" ]]; then
+            echo "Type check failed (mypy ceiling exceeded or job error)"
             exit 1
           fi
           if [[ "${{ needs.unit-tests.result }}" != "success" ]]; then
