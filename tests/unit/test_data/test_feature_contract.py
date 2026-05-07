@@ -289,3 +289,54 @@ def test_validate_chain_pre_index_input_is_not_a_violation():
     assert violations == [], (
         f"Earlier input (negative offset) must NOT be a chain violation; got {violations}"
     )
+
+
+def test_allow_unwindowed_for_test_escape_hatch_requires_post_index():
+    """The ``_allow_unwindowed_for_test`` escape hatch must reject contracts
+    that claim ``knowable_at=index_date`` (or any pre-or-at-index claim).
+    Codex audit Bug 2: the hatch was a footgun — a future author could
+    construct ``knowable_at=index_date, aggregation=count, window_days=None,
+    _allow_unwindowed_for_test=True`` silently, defeating the windowing
+    enforcement that Layer 1 is built to provide.
+    """
+    from src.data.feature_contract import (
+        ContractViolation,
+        FeatureContract,
+        KnowableAt,
+    )
+
+    # The legit use: declare honestly post-index unwindowed aggregation
+    legit = FeatureContract(
+        name="cumulative_post_index_count",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="medication_events",
+        derivation_inputs=["medication_date"],
+        aggregation="count",
+        window_days=None,
+        _allow_unwindowed_for_test=True,
+    )
+    assert legit.knowable_at.reference == "post_index"
+
+    # The footgun: claim knowable_at=index_date while bypassing the window
+    with pytest.raises(ContractViolation, match="_allow_unwindowed_for_test"):
+        FeatureContract(
+            name="footgun",
+            knowable_at=KnowableAt(reference="index_date"),
+            source="medication_events",
+            derivation_inputs=["medication_date"],
+            aggregation="count",
+            window_days=None,
+            _allow_unwindowed_for_test=True,
+        )
+
+    # And claiming enrollment-time
+    with pytest.raises(ContractViolation, match="_allow_unwindowed_for_test"):
+        FeatureContract(
+            name="footgun_enrollment",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="medication_events",
+            derivation_inputs=["medication_date"],
+            aggregation="count",
+            window_days=None,
+            _allow_unwindowed_for_test=True,
+        )

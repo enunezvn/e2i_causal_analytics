@@ -184,17 +184,23 @@ class FeatureContract:
                     reason="window_days must be >= 1",
                 )
 
-        # If knowable_at claims pre-or-at-index, an unwindowed event
-        # aggregation makes that claim impossible to satisfy.
-        if (
-            self.knowable_at.is_pre_or_at_index()
-            and self.aggregation is not None
-            and self.window_days is None
-            and self._allow_unwindowed_for_test
-        ):
-            # Test-mode constructions can declare honest post_index knowable_at
-            # via the test-only escape hatch; that's allowed for chain-tests.
-            pass
+        # The ``_allow_unwindowed_for_test`` escape hatch only makes sense for
+        # contracts that declare ``knowable_at=post_index``. The hatch's intent
+        # is to let chain-validation tests construct contracts whose honest
+        # knowable_at is post_index because the unwindowed aggregation makes
+        # them so. Allowing the hatch on a pre-or-at-index claim would let an
+        # author silently bypass the windowing requirement while pretending the
+        # feature is computable at index time — a footgun the contract layer
+        # is meant to prevent.
+        if self._allow_unwindowed_for_test and self.knowable_at.is_pre_or_at_index():
+            raise ContractViolation(
+                f"feature {self.name!r}: _allow_unwindowed_for_test=True is only valid "
+                f"with knowable_at=post_index (the hatch's purpose is to declare an "
+                f"honestly-post-index unwindowed aggregation for chain-validation tests); "
+                f"got knowable_at={self.knowable_at}.",
+                feature=self.name,
+                reason="_allow_unwindowed_for_test requires post_index knowable_at",
+            )
 
     @property
     def is_aggregation(self) -> bool:
