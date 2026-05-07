@@ -1547,8 +1547,11 @@ def test_model_trainer_state_test_metrics_round_trips_through_json() -> None:
             problem_type="binary_classification",
         ),
     )
-    dumped = original.model_dump(mode="json")
-    restored = ModelTrainerState.model_validate(dumped)
+    # Use the actual checkpoint path (`model_validate_json` on a JSON string,
+    # not the Python-object `model_dump` -> `model_validate` round-trip) per
+    # codex P6 NIT — pins the alias-resolution code path that LangGraph
+    # checkpointers exercise in production.
+    restored = ModelTrainerState.model_validate_json(original.model_dump_json())
     assert restored.test_metrics is not None
     assert isinstance(restored.test_metrics, MetricsSchema)
     assert restored.test_metrics.auc_roc == 0.83
@@ -1575,7 +1578,10 @@ def test_model_trainer_state_test_metrics_accepts_realistic_evaluator_output() -
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
     # Shape mirrored from evaluator.py:1411 + the D2.5-added classification/
-    # calibration/lift fields documented at schemas.py:84-113.
+    # calibration/lift fields documented at schemas.py:84-113 + the D2.5b
+    # evaluator-injected fields (minimum_lift_over_baseline at
+    # evaluator.py:1226, calibrated_ece at evaluator.py:347-384) added per
+    # codex P1+P5 review of PR #80.
     realistic = {
         "roc_auc": 0.83,
         "f1_score": 0.70,
@@ -1600,6 +1606,8 @@ def test_model_trainer_state_test_metrics_accepts_realistic_evaluator_output() -
         "net_benefit_grid": {"p_t=0.05": 0.51, "p_t=0.50": 0.52},
         "baseline_test_auc": 0.50,
         "train_val_auc_delta": 0.05,
+        "minimum_lift_over_baseline": 0.04,  # evaluator.py:1226 (binary path)
+        "calibrated_ece": 0.025,  # evaluator.py:347-384 (binary path)
     }
     state = ModelTrainerState(test_metrics=realistic)
     assert state.test_metrics is not None
