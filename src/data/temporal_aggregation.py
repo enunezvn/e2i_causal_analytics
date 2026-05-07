@@ -93,6 +93,22 @@ def temporal_aggregation(
     if not pd.api.types.is_datetime64_any_dtype(events[event_date_col]):
         raise TypeError(f"events[{event_date_col!r}] must be datetime-like")
 
+    # The contract says "one row per anchor"; duplicate group_col rows would
+    # silently produce duplicated agg rows on the left-join below (line 117),
+    # all carrying the same aggregated value (which is computed once per group
+    # by the groupby on line 111). That's a silent-correctness bug — not what
+    # callers would expect from "one row per anchor". Refuse rather than
+    # producing a misleading result.
+    duplicates = anchors[group_col].duplicated()
+    if duplicates.any():
+        n_dup = int(duplicates.sum())
+        raise ValueError(
+            f"anchors[{group_col!r}] has {n_dup} duplicate value(s); the API "
+            f"contract requires one row per group. If you need per-event "
+            f"anchoring (e.g. multiple time-windowed snapshots per patient), "
+            f"call this function once per snapshot anchor table."
+        )
+
     # Inner-join anchors and events on group_col so each event picks up its
     # entity's anchor; events for entities without anchors are dropped.
     merged = events.merge(anchors[[group_col, anchor_col]], on=group_col, how="inner")

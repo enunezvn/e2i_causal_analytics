@@ -195,3 +195,69 @@ def test_inclusive_at_anchor_exclusive_at_lower_bound():
     # Only the at-anchor event (100) should count; the boundary event (200)
     # is excluded by the half-open semantics.
     assert result["value_sum"].iloc[0] == 100
+
+
+# --- Direct audit follow-ups (Phase 3 — item G) -----------------------------
+
+
+def test_duplicate_anchors_per_group_raises():
+    """The API contract is "one row per anchor". Duplicate group_col rows in
+    anchors would silently produce duplicated output rows with the same agg
+    value (computed once per group on the events groupby). Caught at the
+    API boundary so callers can't silently misuse it.
+    """
+    events = pd.DataFrame(
+        {
+            "patient_id": [1, 1],
+            "event_date": pd.to_datetime(["2024-06-01", "2024-08-01"]),
+            "value": [10, 20],
+        }
+    )
+    # Two anchor rows for patient 1 — silently incorrect under the old code.
+    anchors = pd.DataFrame(
+        {
+            "patient_id": [1, 1],
+            "anchor_date": pd.to_datetime(["2024-08-30", "2024-09-30"]),
+        }
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        temporal_aggregation(
+            events,
+            anchors,
+            anchor_col="anchor_date",
+            event_date_col="event_date",
+            group_col="patient_id",
+            window_days=180,
+            agg={"value": "sum"},
+        )
+
+
+def test_unique_anchor_per_group_passes_after_dedup_check():
+    """Anti-regression: the duplicate-anchors guard must not break the
+    standard one-row-per-group case.
+    """
+    events = pd.DataFrame(
+        {
+            "patient_id": [1, 2, 2],
+            "event_date": pd.to_datetime(["2024-06-01", "2024-07-01", "2024-08-01"]),
+            "value": [10, 20, 30],
+        }
+    )
+    anchors = pd.DataFrame(
+        {
+            "patient_id": [1, 2, 3],
+            "anchor_date": pd.to_datetime(["2024-08-30", "2024-08-30", "2024-08-30"]),
+        }
+    )
+    result = temporal_aggregation(
+        events,
+        anchors,
+        anchor_col="anchor_date",
+        event_date_col="event_date",
+        group_col="patient_id",
+        window_days=180,
+        agg={"value": "sum"},
+    )
+    assert len(result) == 3
+    assert result.loc[result.patient_id == 2, "value_sum"].iloc[0] == 50
+    assert result.loc[result.patient_id == 3, "value_sum"].iloc[0] == 0
