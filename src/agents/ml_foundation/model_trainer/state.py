@@ -38,7 +38,7 @@ from src.agents.ml_foundation._pydantic_utils import (
     audit_workflow_id_validator,
 )
 from src.agents.ml_foundation.data_preparer.schemas import QCReportSchema
-from src.agents.ml_foundation.model_trainer.schemas import OptunaDistribution
+from src.agents.ml_foundation.model_trainer.schemas import MetricsSchema, OptunaDistribution
 from src.agents.ml_foundation.scope_definer.schemas import SuccessCriteriaSchema
 
 
@@ -234,7 +234,13 @@ class ModelTrainerState(BaseAgentSchema):
     # was aspirational; pydantic strict-validates so we widen to ``Any``.
     train_metrics: Optional[Dict[str, Any]] = None
     validation_metrics: Optional[Dict[str, Any]] = None
-    test_metrics: Optional[Dict[str, Any]] = None  # FINAL test-set metrics
+    # D2.5b: typed metrics contract. MetricsSchema accepts both ``auc_roc``
+    # (canonical/legacy) and ``roc_auc`` (modern producer) via AliasChoices,
+    # and declares 14 extra fields beyond the original chore-PR set
+    # (per-class precision/recall, mcc/pr_auc/brier_score, calibration
+    # metrics, threshold metadata, lift/baseline) to match runtime producer
+    # output. See PR #66 D2.5 precedent on model_deployer/state.py:50.
+    test_metrics: Optional[MetricsSchema] = None  # FINAL test-set metrics
 
     # Classification Metrics (problem-type specific)
     auc_roc: Optional[float] = None
