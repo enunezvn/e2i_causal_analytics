@@ -41,6 +41,13 @@ HIGH_Z = 5.0
 MODERATE_Z = 3.0
 DEFAULT_PERMUTATIONS = 200
 
+# Minimum non-null sample count to run Layer 3 scoring on a feature.
+# Below this floor the permutation-baseline z-score is too noisy to be
+# reliable, so the feature gets a short-circuit ``severity=info`` verdict
+# and is left for downstream review. Promoted from a hardcoded `30` per
+# backlog item #11.c so future tightening can change one place.
+MIN_LAYER3_SAMPLES = 30
+
 
 def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
     """Build a Layer 1 verdict from a forbidden-by-contract feature.
@@ -76,7 +83,15 @@ def _build_verdict(
     feature: str,
     score: dict[str, Any],
 ) -> dict[str, Any]:
-    """Translate a Layer-3 score dict into the audit-trail verdict shape."""
+    """Translate a Layer-3 score dict into the audit-trail verdict shape.
+
+    Note on ``p_value``: the value carried through here is the empirical
+    upper-tail proportion from ``compute_adversarial_score``, bounded below
+    by ``1 / n_permutations``. At the default 200 permutations a returned
+    ``p_value=0.0`` therefore means ``< 0.005``, NOT exact zero. Severity
+    routing uses ``z_score`` (not ``p_value``) so this rounding is purely
+    informational for sidecar consumers.
+    """
     z = score.get("z_score", float("nan"))
     auc = score.get("actual_auc", float("nan"))
     null_mean = score.get("null_mean", float("nan"))
@@ -288,11 +303,14 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
 
         col = train_df[feat]
         mask = col.notna() & binary_label_mask
-        if mask.sum() < 30:
+        if mask.sum() < MIN_LAYER3_SAMPLES:
             verdicts.append(
                 _short_circuit_verdict(
                     feat,
-                    evidence=f"Skipped: only {int(mask.sum())} non-null rows (need ≥30)",
+                    evidence=(
+                        f"Skipped: only {int(mask.sum())} non-null rows "
+                        f"(need ≥{MIN_LAYER3_SAMPLES})"
+                    ),
                 )
             )
             continue
@@ -324,6 +342,15 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # graph re-enters this node after leakage_remediation drops columns,
     # so we extend the prior `adaptive_verdicts` and `adaptive_flagged_features`
     # rather than overwriting them; the audit trail spans every invocation.
+    #
+    # Asymmetry note (backlog #11.d): the legacy `leakage_findings` field
+    # is CLEARED on each leakage_remediation re-entry (see leakage_remediation.py
+    # — the legacy detector recomputes from scratch each pass). This node's
+    # `adaptive_verdicts`, in contrast, are CUMULATIVE across re-entries (we
+    # extend, dedup-by-feature-name, first-write-wins). Audit-trail readers
+    # MUST account for this when correlating the two streams: a feature
+    # present in `adaptive_verdicts` from invocation #1 may be absent from
+    # `leakage_findings` after invocation #2 cleared the legacy stream.
     prior_leaked = list(state.get("leaked_features") or [])
     prior_findings = list(state.get("leakage_findings") or [])
     prior_severity = state.get("leakage_severity") or "none"
