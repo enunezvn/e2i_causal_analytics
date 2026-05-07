@@ -31,6 +31,8 @@ import numpy as np
 import pandas as pd
 
 from src.data.adversarial_leakage import compute_adversarial_score
+from src.data.feature_contract import FeatureContract
+from src.data.manifests import lookup_feature_contract
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,36 @@ logger = logging.getLogger(__name__)
 HIGH_Z = 5.0
 MODERATE_Z = 3.0
 DEFAULT_PERMUTATIONS = 200
+
+
+def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
+    """Build a Layer 1 verdict from a forbidden-by-contract feature.
+
+    A feature whose contract declares `knowable_at = post_index` cannot be
+    used as a model input regardless of its statistical properties — the
+    contract is sufficient evidence. This catches things like
+    `journey_duration_days`, `journey_status`, and target columns that may
+    have leaked into the feature surface, BEFORE the permutation-test pass.
+    """
+    return {
+        "feature": feature,
+        "layer": "1",
+        "z_score": None,
+        "actual_auc": None,
+        "null_mean": None,
+        "null_std": None,
+        "p_value": None,
+        "n_permutations": 0,
+        "severity": "high",
+        "remediation": "drop",
+        "evidence": (
+            f"Layer 1 declarative contract: feature.knowable_at="
+            f"{contract.knowable_at} (post_index); the manifest declares this "
+            f"column is not knowable at prediction time → drop"
+        ),
+        "contract_source": contract.source,
+        "contract_window_days": contract.window_days,
+    }
 
 
 def _build_verdict(
@@ -167,6 +199,16 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     flagged: list[str] = []
 
     for feat in candidates:
+        # Layer 1 first: if the manifest declares this feature post-index, the
+        # contract alone is sufficient evidence to drop. Skip Layer 3 (no
+        # permutation test needed; the call is deterministic).
+        contract = lookup_feature_contract(feat)
+        if contract is not None and not contract.knowable_at.is_pre_or_at_index():
+            verdict = _layer_1_verdict(feat, contract)
+            verdicts.append(verdict)
+            flagged.append(feat)
+            continue
+
         col = train_df[feat]
         mask = col.notna() & pd.notna(train_df[target])
         if mask.sum() < 30:

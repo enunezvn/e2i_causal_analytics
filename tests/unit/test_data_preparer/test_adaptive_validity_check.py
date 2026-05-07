@@ -259,3 +259,97 @@ def test_node_skips_features_in_excluded_list():
     # The leak is excluded → should NOT appear in adaptive verdicts
     feature_names_seen = {v["feature"] for v in result["adaptive_verdicts"]}
     assert "obvious_leak" not in feature_names_seen
+
+
+def test_layer_1_catches_forbidden_csu_feature_via_manifest():
+    """When a column from the CSU manifest is post-index (e.g.
+    journey_duration_days), Layer 5 should emit a layer="1" verdict that
+    drops it WITHOUT needing the adversarial discriminator to fire. The
+    contract alone is sufficient evidence.
+    """
+    rng = np.random.default_rng(0)
+    n = 300
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # `journey_duration_days` is forbidden by the CSU manifest.
+            "journey_duration_days": rng.normal(180, 60, n),
+            "noise": rng.standard_normal(n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+
+    flagged = set(result["adaptive_flagged_features"])
+    assert "journey_duration_days" in flagged
+
+    # The verdict should attribute the call to Layer 1, not Layer 3
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    jd = verdicts_by_feat["journey_duration_days"]
+    assert jd["layer"] == "1", f"Expected layer=1; got layer={jd['layer']}"
+    assert jd["severity"] == "high"
+    assert jd["remediation"] == "drop"
+    assert "post_index" in jd["evidence"] or "contract" in jd["evidence"].lower()
+
+
+def test_layer_1_does_not_flag_legitimate_csu_demographic():
+    """`age_continuous` is on the CSU SAFE list (knowable_at=enrollment).
+    The manifest must NOT cause it to be flagged."""
+    rng = np.random.default_rng(0)
+    n = 300
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            "age_continuous": rng.normal(45, 15, n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+    flagged = set(result["adaptive_flagged_features"])
+    assert "age_continuous" not in flagged
+
+
+def test_layer_3_runs_for_unknown_features():
+    """A feature with no manifest contract should still be evaluated by
+    Layer 3 (the existing behavior is preserved for unknown columns)."""
+    rng = np.random.default_rng(0)
+    n = 400
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # Made-up name not in any manifest
+            "synthetic_unique_zzz": y.astype(float) + rng.normal(0, 0.01, n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+    flagged = set(result["adaptive_flagged_features"])
+    assert "synthetic_unique_zzz" in flagged
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    v = verdicts_by_feat["synthetic_unique_zzz"]
+    # Unknown features go through Layer 3 (z-score path)
+    assert v["layer"] == "3"
+
+
+def test_layer_1_verdict_includes_contract_metadata():
+    """When Layer 1 catches a forbidden feature, the verdict's evidence
+    should reference the contract's knowable_at (so a reviewer can trace
+    the decision back to a declared rule)."""
+    rng = np.random.default_rng(0)
+    n = 200
+    df = pd.DataFrame(
+        {
+            "journey_status": rng.choice([0, 1], size=n).astype(float),
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    js = verdicts_by_feat["journey_status"]
+    assert js["layer"] == "1"
+    assert js["severity"] == "high"
