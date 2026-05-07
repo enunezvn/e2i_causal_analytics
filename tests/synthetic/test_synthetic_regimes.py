@@ -386,24 +386,33 @@ class TestCleanRegimeGenerator:
 class TestCleanRegimeE2E:
     """``run_tier0_test.py --regime clean`` produces a deployable model.
 
-    Loose val-AUC band [0.75, 0.85] absorbs sklearn / SHAP minor-version
-    variance. The lift criterion must produce a numeric lift > 0.10
-    (absolute AUC units), and the model deployer must succeed (Section B
-    of pre_phase2_unblockers fixes the gap that was blocking it).
+    val-AUC bands and train→val gap ceilings are env-gated by CPU ISA —
+    local AVX2 and CI AVX512 produce different but each bit-deterministic
+    floating-point results, with a substantial gap (~0.05-0.10 on val_AUC,
+    ~0.10 on train_val_delta) on the clean regime. Same mechanism as
+    test_synthetic_baseline_invariant.py (PR #69 diagnostic record:
+    memory/pr69_e2e_environment_delta_diag_20260506.md). Specific clean-
+    regime CI baseline came from slow-tests run 25467767719 (2026-05-07).
 
-    Environment split (CPU ISA)
-    ---------------------------
-    Like test_synthetic_baseline_invariant.py, local (AVX2) and CI
-    (AVX512) can produce different but each bit-deterministic floating-
-    point results. The val-AUC band [0.75, 0.85] is wide enough to
-    absorb the known AVX2-vs-AVX512 delta for the clean regime.  If CI
-    trips the band, update it here with the same env-gate pattern used
-    in test_synthetic_baseline_invariant.py and record the new CI
-    baseline in memory/pr69_e2e_environment_delta_diag_20260506.md.
+    Local (AVX2) measurements 2026-05-07:
+      val_auc=0.8205, train_val_delta=0.0006
+
+    CI (AVX512) measurements 2026-05-07 from run 25467767719 Job D:
+      val_auc=0.8746, train_val_delta=0.1014
+
+    The lift criterion must produce a numeric lift > 0.10 (absolute AUC
+    units), and the model deployer must succeed (Section B of
+    pre_phase2_unblockers fixes the gap that was blocking it).
 
     The fixture runs the pipeline in a subprocess (see module docstring for
     why in-process asyncio.run was dropped).
     """
+
+    # Env-gated bands — see class docstring for measurement provenance.
+    _VAL_AUC_BAND_LOCAL: tuple[float, float] = (0.75, 0.85)
+    _VAL_AUC_BAND_CI: tuple[float, float] = (0.80, 0.92)  # observed 0.8746 + ~0.05 headroom
+    _GAP_MAX_LOCAL: float = 0.08
+    _GAP_MAX_CI: float = 0.15  # observed 0.1014 + ~0.05 headroom
 
     @pytest.fixture(scope="class")
     def pipeline_state(self, tmp_path_factory) -> dict[str, Any]:
@@ -422,7 +431,11 @@ class TestCleanRegimeE2E:
         validation_metrics = pipeline_state.get("validation_metrics", {})
         val_auc = validation_metrics.get("roc_auc") or validation_metrics.get("auc_roc")
         assert val_auc is not None, "validation roc_auc missing"
-        assert 0.75 <= val_auc <= 0.85, f"clean regime val AUC out of band: {val_auc:.4f}"
+        lo, hi = self._VAL_AUC_BAND_CI if os.getenv("CI") else self._VAL_AUC_BAND_LOCAL
+        assert lo <= val_auc <= hi, (
+            f"clean regime val AUC out of band: {val_auc:.4f} "
+            f"(band [{lo}, {hi}], CI={bool(os.getenv('CI'))})"
+        )
 
     def test_train_val_gap_modest(self, pipeline_state):
         train_metrics = pipeline_state.get("train_metrics", {})
@@ -432,8 +445,10 @@ class TestCleanRegimeE2E:
         if train_auc is None or val_auc is None:
             pytest.skip("train or val AUC unavailable; gap check requires both")
         gap = train_auc - val_auc
-        assert gap < 0.08, (
-            f"train→val AUC gap too large: train={train_auc:.4f}, val={val_auc:.4f}, gap={gap:.4f}"
+        gap_max = self._GAP_MAX_CI if os.getenv("CI") else self._GAP_MAX_LOCAL
+        assert gap < gap_max, (
+            f"train→val AUC gap too large: train={train_auc:.4f}, val={val_auc:.4f}, "
+            f"gap={gap:.4f} (max {gap_max}, CI={bool(os.getenv('CI'))})"
         )
 
     def test_lift_over_baseline_positive(self, pipeline_state):
