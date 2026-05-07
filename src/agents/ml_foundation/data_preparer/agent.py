@@ -245,6 +245,12 @@ class DataPreparerAgent:
                 "leakage_findings": final_state.get("leakage_findings", []),
                 "leakage_severity": final_state.get("leakage_severity", "none"),
                 "leaked_features": final_state.get("leaked_features", []),
+                # Adaptive validity audit trail (Layer 3 + Layer 4 verdicts).
+                # Acceptance criterion #4 of adaptive_temporal_validity_redesign.md:
+                # every feature decision has a structured record with layer,
+                # evidence, confidence, and remediation.
+                "adaptive_verdicts": final_state.get("adaptive_verdicts", []),
+                "adaptive_flagged_features": final_state.get("adaptive_flagged_features", []),
                 # Leakage remediation results
                 "leakage_remediation_status": final_state.get("leakage_remediation_status"),
                 "leakage_remediated_features": final_state.get("leakage_remediated_features", []),

@@ -185,6 +185,62 @@ def test_node_does_not_downgrade_existing_severity():
     assert "leakage_severity" not in result or result["leakage_severity"] == "critical"
 
 
+def test_sidecar_writer_skips_when_env_unset(tmp_path, monkeypatch):
+    """No env var → no write (unit-test default)."""
+    from src.agents.ml_foundation.data_preparer.graph import write_adaptive_verdicts_sidecar
+
+    monkeypatch.delenv("ADAPTIVE_VALIDITY_ARTIFACTS_DIR", raising=False)
+    state = {"experiment_id": "x", "adaptive_verdicts": [{"feature": "a"}]}
+    out = write_adaptive_verdicts_sidecar(state)
+    assert out is None
+
+
+def test_sidecar_writer_skips_when_no_verdicts(tmp_path, monkeypatch):
+    """Empty verdicts list → no write even with env set."""
+    from src.agents.ml_foundation.data_preparer.graph import write_adaptive_verdicts_sidecar
+
+    monkeypatch.setenv("ADAPTIVE_VALIDITY_ARTIFACTS_DIR", str(tmp_path))
+    state = {"experiment_id": "x", "adaptive_verdicts": []}
+    out = write_adaptive_verdicts_sidecar(state)
+    assert out is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_sidecar_writer_persists_verdicts_to_json(tmp_path, monkeypatch):
+    """With env set + verdicts present, JSON sidecar lands at the configured path."""
+    import json as _json
+
+    from src.agents.ml_foundation.data_preparer.graph import write_adaptive_verdicts_sidecar
+
+    monkeypatch.setenv("ADAPTIVE_VALIDITY_ARTIFACTS_DIR", str(tmp_path))
+    state = {
+        "experiment_id": "exp-42",
+        "data_source": "csu",
+        "leakage_severity": "high",
+        "leaked_features": ["leak_perfect"],
+        "adaptive_flagged_features": ["leak_perfect"],
+        "adaptive_verdicts": [
+            {
+                "feature": "leak_perfect",
+                "layer": "3",
+                "z_score": 9.4,
+                "severity": "high",
+                "remediation": "drop",
+                "evidence": "z=9.4σ above null",
+            }
+        ],
+    }
+    sidecar_path = write_adaptive_verdicts_sidecar(state)
+    assert sidecar_path is not None
+    assert sidecar_path.exists()
+    payload = _json.loads(sidecar_path.read_text())
+    assert payload["experiment_id"] == "exp-42"
+    assert payload["leakage_severity"] == "high"
+    assert payload["adaptive_flagged_features"] == ["leak_perfect"]
+    assert len(payload["adaptive_verdicts"]) == 1
+    assert payload["adaptive_verdicts"][0]["feature"] == "leak_perfect"
+
+
 def test_node_skips_features_in_excluded_list():
     """excluded_features (PII, leakage already declared) should be skipped."""
     rng = np.random.default_rng(0)
