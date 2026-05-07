@@ -216,3 +216,55 @@ def test_demographic_features_have_realistic_correlations():
     assert max(eligibility_auc, 1 - eligibility_auc) < 0.70, (
         f"Eligibility AUC too high: {eligibility_auc:.3f}"
     )
+
+
+# --- Direct audit follow-ups (synthetic regime — item H) --------------------
+
+
+def test_spurious_correlation_leak_is_caught_by_layer_3():
+    """The 5th injectable leak pattern (``spurious_correlation``) was missing
+    from coverage despite the state document's "5 tested leak patterns"
+    claim. This test closes that gap by exercising Layer 3 against the
+    spurious-correlation regime: feature ~ N(2, 0.5) for treated, ~ N(0, 0.5)
+    for untreated produces strong AUC, well above any 5σ permutation null.
+    """
+    from src.data.adversarial_leakage import compute_adversarial_score
+    from src.repositories.synthetic_rwd_realistic import (
+        RwdRealisticConfig,
+        generate_rwd_realistic,
+    )
+
+    config = RwdRealisticConfig(n_patients=2000, leakage_pattern="spurious_correlation", seed=42)
+    df = generate_rwd_realistic(config)
+    assert "spurious_score_LEAK" in df.columns
+
+    score = compute_adversarial_score(
+        df["spurious_score_LEAK"].to_numpy(),
+        df["treatment_initiated"].to_numpy(),
+        n_permutations=200,
+        seed=42,
+    )
+    assert score["suspicious"], f"spurious_correlation leak pattern was NOT flagged at 5σ: {score}"
+
+
+def test_post_index_aggregation_leak_is_zero_for_untreated():
+    """Anti-regression for the dead-code cleanup: the ``+ (1 - target) * 0``
+    term was a no-op (always zero), and removing it must not change the
+    untreated-row values. Verifies the leak's deterministic-zero invariant.
+    """
+    from src.repositories.synthetic_rwd_realistic import (
+        RwdRealisticConfig,
+        generate_rwd_realistic,
+    )
+
+    df = generate_rwd_realistic(
+        RwdRealisticConfig(n_patients=1000, leakage_pattern="post_index_aggregation", seed=42)
+    )
+    untreated = df[df["treatment_initiated"] == 0]
+    assert (untreated["post_index_med_count_LEAK"] == 0).all(), (
+        "post_index leak must be deterministically zero for untreated rows; "
+        f"got non-zero values among untreated patients ({len(untreated)} rows)."
+    )
+    treated = df[df["treatment_initiated"] == 1]
+    assert (treated["post_index_med_count_LEAK"] >= 1).all()
+    assert (treated["post_index_med_count_LEAK"] <= 9).all()
