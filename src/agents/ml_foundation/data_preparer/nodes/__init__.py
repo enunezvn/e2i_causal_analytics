@@ -1,5 +1,6 @@
 """Nodes for data_preparer agent."""
 
+from .adaptive_validity_check import adaptive_validity_check
 from .baseline_computer import compute_baseline_metrics
 from .data_loader import load_data
 from .data_transformer import transform_data
@@ -19,6 +20,7 @@ __all__ = [
     "run_quality_checks",
     "run_ge_validation",
     "detect_leakage",
+    "adaptive_validity_check",
     "review_and_remediate_leakage",
     "transform_data",
     "register_features_in_feast",

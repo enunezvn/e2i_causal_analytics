@@ -107,6 +107,13 @@ class DataPreparerState(BaseAgentSchema):
     leakage_severity: Optional[str] = None  # "critical" / "high" / "moderate" / "info" / "none"
     leaked_features: Optional[List[str]] = None  # Feature names flagged at CRITICAL or HIGH
 
+    # Adaptive validity check (Layer 3 + Layer 4 audit trail). Augments
+    # leakage_findings/leaked_features with permutation-baseline-derived verdicts.
+    adaptive_verdicts: Optional[List[Dict[str, Any]]] = None  # one record per scored feature
+    adaptive_flagged_features: Optional[List[str]] = None  # features at z > 5σ above null
+    adaptive_n_permutations: Optional[int] = None  # override default permutation count
+    adaptive_seed: Optional[int] = None  # override default RNG seed
+
     # Leakage remediation (LLM-assisted)
     leakage_remediation_status: Optional[
         Literal[
