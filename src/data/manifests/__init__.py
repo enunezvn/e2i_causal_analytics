@@ -20,6 +20,8 @@ Disease-agnostic by construction: the *vocabulary* (`KnowableAt`, `source`,
 declaration of what features that source emits.
 """
 
+from src.data.feature_contract import FeatureContract
+
 from .csu_feature_manifest import (
     CSU_FEATURES,
     CSU_FORBIDDEN_AS_FEATURES,
@@ -33,6 +35,25 @@ from .optum_feature_manifest import (
     optum_contract_for,
 )
 
+
+def lookup_feature_contract(name: str) -> FeatureContract | None:
+    """Search all registered manifests for the named feature's FeatureContract.
+
+    Returns the first match. Adding a new data source is one line — append the
+    new ``<source>_contract_for`` to the chain below. Disease-agnostic by
+    construction: Layer 5 doesn't need to know whether the data is CSU, Optum,
+    synthetic, or a future indication.
+
+    Returns:
+        The matching FeatureContract, or None if no manifest declares the name.
+    """
+    for fn in (csu_contract_for, optum_contract_for):
+        c = fn(name)
+        if c is not None:
+            return c
+    return None
+
+
 __all__ = [
     "CSU_FEATURES",
     "CSU_FORBIDDEN_AS_FEATURES",
@@ -42,4 +63,5 @@ __all__ = [
     "OPTUM_FORBIDDEN_AS_FEATURES",
     "OPTUM_SAFE_FEATURES",
     "optum_contract_for",
+    "lookup_feature_contract",
 ]
