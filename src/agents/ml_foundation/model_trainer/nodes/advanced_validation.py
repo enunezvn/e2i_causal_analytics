@@ -32,20 +32,35 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+SIGNAL_GENUINE_THRESHOLD = 0.001
+"""p-value cutoff for signal_genuine (Phase 7 of ml-leakage-holistic-fix
+2026-05-07). Lowered from 0.05 to 0.001 because: (a) at n=100 permutations the
+0.05 cutoff allowed up to 5 random shuffles to beat the actual AUC, well within
+flake range for marginal models; (b) Optum init's small-n permutation passed
+p=0.37 (clearly random), but a model at p=0.04 would also have passed the old
+gate — that's not "genuine signal" by any reasonable standard. The new cutoff
+requires 1000 permutations to be informative; n_permutations default raised
+accordingly downstream."""
+
+
 def compute_permutation_test(
     y_true: np.ndarray,
     y_proba: Optional[np.ndarray],
-    n_permutations: int = 100,
+    n_permutations: int = 1000,
 ) -> Dict[str, Any]:
     """Permutation test: shuffle labels, recompute AUC, derive p-value.
 
     If the actual AUC is significantly higher than shuffled AUCs,
     the model has learned a genuine signal (not leakage artifact).
 
+    Phase 7 (2026-05-07): default n_permutations bumped 100→1000 so the
+    p-value resolution (1/n) is fine enough for the SIGNAL_GENUINE_THRESHOLD
+    of 0.001.
+
     Args:
         y_true: True labels
         y_proba: Predicted probabilities (1D or 2D)
-        n_permutations: Number of label shuffles
+        n_permutations: Number of label shuffles (default 1000)
 
     Returns:
         Dictionary with p-value, shuffled AUC stats, and verdict
@@ -80,7 +95,7 @@ def compute_permutation_test(
         "permutation_auc_std": float(np.std(shuffled_aucs)),
         "actual_auc": actual_auc,
         "n_permutations": n_permutations,
-        "signal_genuine": pvalue < 0.05,
+        "signal_genuine": pvalue < SIGNAL_GENUINE_THRESHOLD,
     }
 
 

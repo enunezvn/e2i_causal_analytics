@@ -258,8 +258,11 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
         y_test_proba = predictions.get("y_test_proba")
 
         # 1. Permutation test — confirm signal is genuine
-        logger.info("Running permutation test (100 shuffles)...")
-        permutation_result = compute_permutation_test(y_test_np, y_test_proba, n_permutations=100)
+        # Phase 7 (ml-leakage-holistic-fix 2026-05-07): n_permutations bumped
+        # from 100→1000 so SIGNAL_GENUINE_THRESHOLD=0.001 has a meaningful
+        # p-value resolution.
+        logger.info("Running permutation test (1000 shuffles)...")
+        permutation_result = compute_permutation_test(y_test_np, y_test_proba, n_permutations=1000)
         metrics_result["permutation_test"] = permutation_result
         if permutation_result.get("signal_genuine") is not None:
             logger.info(
