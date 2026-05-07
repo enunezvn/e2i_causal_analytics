@@ -4217,11 +4217,17 @@ async def run_pipeline(
         if 2 in steps_to_run:
             step_start = time.time()
             scope_spec = state.get("scope_spec", {"problem_type": CONFIG.problem_type})
+            # Phase 1 follow-up (ml-leakage-holistic-fix 2026-05-07): the "clean"
+            # regime is a controlled-signal pipeline-validation fixture (positive_rate
+            # 0.30, signal_strength 1.00). Its features are GENERATED to have
+            # moderate predictive power; flagging them as leakage misclassifies the
+            # designed signal as a leak. Like scenario_a, leakage detection is not
+            # this regime's purpose.
             result = await step_2_data_preparer(
                 experiment_id,
                 scope_spec,
                 patient_df,
-                skip_leakage_check=(regime == "scenario_a"),
+                skip_leakage_check=(regime in ("scenario_a", "clean")),
             )
             state["qc_report"] = result.get("qc_report", {"gate_passed": True})
             state["gate_passed"] = result.get("gate_passed", True)
