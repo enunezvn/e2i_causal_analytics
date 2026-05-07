@@ -44,7 +44,6 @@ from src.data.kg.umls_uts import (
     UMLSAuthError,
     UMLSClient,
     UMLSError,
-    UMLSNotFoundError,
 )
 
 logger = logging.getLogger(__name__)
@@ -149,12 +148,14 @@ class EntityLinker:
                 input_system=system,
                 error=f"unsupported system: {system}",
             )
+        # ``code_to_cui`` swallows ``UMLSNotFoundError`` internally and returns
+        # None for "code not in UMLS" — so the only branches we need to guard
+        # against here are auth failure (systemic, surface loudly) and other
+        # ``UMLSError`` (transient, return a degraded link).
         try:
             cui = self.umls.code_to_cui(code, source=source)
         except UMLSAuthError as exc:
             raise EntityLinkerError(f"UMLS auth failed: {exc}") from exc
-        except UMLSNotFoundError:
-            return EntityLink(input_code=code, input_system=system)
         except UMLSError as exc:
             return EntityLink(input_code=code, input_system=system, error=str(exc))
         if not cui:
