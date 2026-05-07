@@ -1489,3 +1489,122 @@ def test_metrics_schema_omitted_d25_fields_default_to_none() -> None:
         "train_val_delta",
     ):
         assert getattr(schema, field) is None, f"{field} should default to None"
+
+
+# --------------------------------------------------------------------------- #
+# D2.5b — test_metrics wired into ModelTrainerState; MetricsSchema            #
+# accepts both auc_roc and roc_auc producer-key forms via AliasChoices.       #
+# --------------------------------------------------------------------------- #
+
+
+def test_model_trainer_state_test_metrics_validates_typed_schema() -> None:
+    """D2.5b: ModelTrainerState validates a producer-shape dict literal
+    into MetricsSchema for the test_metrics field.
+
+    Mirrors the D2.5 precedent
+    (test_model_deployer_state_validation_metrics_validates_typed_schema)
+    but for the test_metrics field, which was deferred from D2.5 to limit
+    blast radius. The producer at evaluator.py:1410 emits the same shape
+    for both validation_metrics and test_metrics, so this test pins that
+    contract on the consumer-state side.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState(
+        test_metrics={
+            "roc_auc": 0.83,        # producer-modern alias resolves to auc_roc
+            "f1_score": 0.70,
+            "mcc": 0.38,
+            "brier_score": 0.18,
+            "chosen_threshold": 0.4,
+            "chosen_threshold_source": "validation",
+        },
+    )
+    assert state.test_metrics is not None
+    assert isinstance(state.test_metrics, MetricsSchema)
+    assert state.test_metrics.auc_roc == 0.83
+    # Dict-shim access still works (load-bearing for ~30 reader sites in
+    # model_trainer/nodes/* and scripts/run_tier0_test.py).
+    assert state.test_metrics.get("auc_roc", 0.0) == 0.83
+    assert state.test_metrics.get("mcc", 0.0) == 0.38
+    assert state.test_metrics.get("nonexistent_key", 0.0) == 0.0
+
+
+def test_model_trainer_state_test_metrics_round_trips_through_json() -> None:
+    """D2.5b: test_metrics survives JSON checkpoint round-trip.
+
+    Cross-references the integration test at
+    tests/integration/test_agents/test_state_checkpoint_replay.py:431-476
+    which exercises the same shape but in a heavier integration context.
+    This unit test is the unit-level pin.
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    original = ModelTrainerState(
+        test_metrics=MetricsSchema(
+            auc_roc=0.83,
+            f1_score=0.70,
+            problem_type="binary_classification",
+        ),
+    )
+    dumped = original.model_dump(mode="json")
+    restored = ModelTrainerState.model_validate(dumped)
+    assert restored.test_metrics is not None
+    assert isinstance(restored.test_metrics, MetricsSchema)
+    assert restored.test_metrics.auc_roc == 0.83
+
+
+def test_model_trainer_state_test_metrics_omitted_defaults_to_none() -> None:
+    """D2.5b: test_metrics omitted in input defaults to None per Decision 8a."""
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState()
+    assert state.test_metrics is None
+
+
+def test_model_trainer_state_test_metrics_accepts_realistic_evaluator_output() -> None:
+    """D2.5b smoke: a realistic producer-shape dict from
+    model_trainer/nodes/evaluator.py:_compute_split_classification_metrics
+    validates cleanly into ModelTrainerState.test_metrics, AND the resulting
+    MetricsSchema has zero model_extra (no key smuggled in unrecognized).
+
+    Mirrors the D2.5 contract test pattern (per d2_investigation_20260505.md
+    Field 4 "Add runtime smoke test: realistic evaluator output -> MetricsSchema,
+    assert len(model_extra) == 0").
+    """
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    # Shape mirrored from evaluator.py:1411 + the D2.5-added classification/
+    # calibration/lift fields documented at schemas.py:84-113.
+    realistic = {
+        "roc_auc": 0.83,
+        "f1_score": 0.70,
+        "f1_macro": 0.69,
+        "f1_weighted": 0.71,
+        "precision": 0.65,
+        "recall": 0.75,
+        "precision_class_0": 0.85,
+        "precision_class_1": 0.65,
+        "recall_class_0": 0.80,
+        "recall_class_1": 0.75,
+        "mcc": 0.38,
+        "pr_auc": 0.72,
+        "brier_score": 0.18,
+        "chosen_threshold": 0.4,
+        "chosen_threshold_source": "validation",
+        "calibration_slope": 1.02,
+        "calibration_intercept": 0.01,
+        "calibration_intercept_magnitude": 0.01,
+        "calibration_slope_deviation": 0.02,
+        "calibration_error": 0.03,
+        "net_benefit_grid": {"p_t=0.05": 0.51, "p_t=0.50": 0.52},
+        "baseline_test_auc": 0.50,
+        "train_val_auc_delta": 0.05,
+    }
+    state = ModelTrainerState(test_metrics=realistic)
+    assert state.test_metrics is not None
+    assert isinstance(state.test_metrics, MetricsSchema)
+    # Zero extra keys: every producer-emitted key was claimed by a declared
+    # MetricsSchema field. If this assertion fires, the producer has drifted
+    # and the schema needs a new field (NOT a `# type: ignore` workaround).
+    assert len(state.test_metrics.model_extra or {}) == 0
