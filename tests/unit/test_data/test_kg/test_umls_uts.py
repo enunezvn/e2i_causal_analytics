@@ -229,6 +229,31 @@ def test_code_to_cui_skips_none_sentinel_row() -> None:
         assert client.code_to_cui("ZZZ", source="ICD10CM") is None
 
 
+def test_code_to_cui_returns_first_when_multiple_cui_rows() -> None:
+    """When multiple valid CUIs are returned, deterministically pick the first.
+
+    UTS occasionally returns >1 CUI for ambiguous source codes (e.g., legacy
+    codes that map to multiple modern concepts). v1 always picks the first;
+    a future revision could rank by atom count or rootSource priority.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "results": [
+                        {"ui": "C1111111", "name": "First", "rootSource": "MTH"},
+                        {"ui": "C2222222", "name": "Second", "rootSource": "SNOMEDCT_US"},
+                    ]
+                }
+            },
+        )
+
+    with _client_with_handler(handler) as client:
+        assert client.code_to_cui("ambiguous", source="ICD10CM") == "C1111111"
+
+
 def test_code_to_cui_picks_first_cui_skipping_non_cui_rows() -> None:
     """Rows must start with 'C' to be CUIs; skip non-CUI rows defensively."""
 

@@ -179,6 +179,28 @@ def test_resolve_drug_name_falls_back_to_umls_search() -> None:
     assert len(search_calls) == 1
 
 
+def test_resolve_drug_name_rxcui_not_in_umls_falls_back_to_search() -> None:
+    """RxNav resolves the name but UMLS has no concept for that RxCUI.
+
+    EntityLinker should fall through to UMLS free-text search rather than
+    return an unresolved link, since the user asked for a drug name and we
+    have a fallback path available.
+    """
+    umls = _StubUMLS(
+        cui_for_codes={},  # RxCUI not in UMLS
+        search_results=[{"ui": "C0011615", "name": "From search", "rootSource": "MTH"}],
+        concepts={"C0011615": KGConcept(cui="C0011615", preferred_name="From search")},
+    )
+    rxnav = _StubRxNav(name_to_rxcui={"obscure-drug": "999999"})
+    link = _linker(umls=umls, rxnav=rxnav).resolve_drug_name("obscure-drug")
+    assert link.resolved
+    assert link.concept is not None
+    assert link.concept.cui == "C0011615"
+    # Should have tried the RxCUI path first, then fallen back to search.
+    assert ("code_to_cui", "999999", "RXNORM") in umls.calls
+    assert any(c[0] == "search" for c in umls.calls)
+
+
 def test_resolve_drug_name_handles_rxnav_exception_gracefully() -> None:
     class _BrokenRxNav(_StubRxNav):
         def rxcui_for_name(self, name: str) -> Optional[str]:
