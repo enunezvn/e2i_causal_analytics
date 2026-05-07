@@ -75,6 +75,29 @@ jobs:
           pip install -r requirements.txt
           # mypy version is pinned in requirements.txt (single source of truth).
 
+      # Closes the P3 codex-flagged ratchet-bypass gap from PR #77 review:
+      # the mypy ceiling absorbs 5 [import-untyped] yaml errors that would
+      # silently return if `types-PyYAML` is dropped from requirements.txt
+      # (54 + 5 = 59 < 60 → gate passes). This step makes the load-bearing
+      # stub explicit so a removal trips CI before mypy even runs. Add new
+      # stubs to the grep pattern when they're added to requirements.txt
+      # for the same reason (i.e. to retire deterministic mypy slices).
+      - name: Verify ceiling-load-bearing stub pins are present
+        run: |
+          set -e
+          missing=0
+          for stub in "types-PyYAML"; do
+            if ! grep -qE "^${stub}==" requirements.txt; then
+              echo "::error::${stub} was removed from requirements.txt."
+              echo "::error::Stub is load-bearing for the mypy ceiling at $(grep -E '^MYPY_CEILING' .github/workflows/backend-tests.yml | head -1 | cut -d= -f2)."
+              echo "::error::Removing it returns 5 [import-untyped] errors that the ceiling absorbs silently."
+              echo "::error::Either (i) restore it, or (ii) follow the bump procedure in .claude/state/mypy_posture_decision_20260506.md Section 4."
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then exit 1; fi
+          echo "All ceiling-load-bearing stubs present."
+
       - name: Run MyPy (numeric ceiling = 60)
         run: |
           set -e
