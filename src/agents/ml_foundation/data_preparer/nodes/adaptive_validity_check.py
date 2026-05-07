@@ -85,8 +85,7 @@ def _build_verdict(
         severity = "info"
         remediation = "keep"
         evidence = (
-            f"Adversarial score undefined (degenerate; "
-            f"actual_auc={auc}, null_mean={null_mean})"
+            f"Adversarial score undefined (degenerate; actual_auc={auc}, null_mean={null_mean})"
         )
     elif z > HIGH_Z:
         severity = "high"
@@ -280,10 +279,12 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         col = train_df[feat]
         mask = col.notna() & binary_label_mask
         if mask.sum() < 30:
-            verdicts.append(_short_circuit_verdict(
-                feat,
-                evidence=f"Skipped: only {int(mask.sum())} non-null rows (need ≥30)",
-            ))
+            verdicts.append(
+                _short_circuit_verdict(
+                    feat,
+                    evidence=f"Skipped: only {int(mask.sum())} non-null rows (need ≥30)",
+                )
+            )
             continue
 
         try:
@@ -296,10 +297,12 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             )
         except Exception as exc:
             logger.warning("adaptive_validity_check: scoring failed for %s: %s", feat, exc)
-            verdicts.append(_short_circuit_verdict(
-                feat,
-                evidence=f"Adversarial scoring error: {exc}",
-            ))
+            verdicts.append(
+                _short_circuit_verdict(
+                    feat,
+                    evidence=f"Adversarial scoring error: {exc}",
+                )
+            )
             continue
 
         verdict = _build_verdict(feat, score)
@@ -339,8 +342,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         new_severity = "high"
 
     logger.info(
-        "adaptive_validity_check: scored=%d flagged=%d (high) "
-        "prior_severity=%s new_severity=%s",
+        "adaptive_validity_check: scored=%d flagged=%d (high) prior_severity=%s new_severity=%s",
         len(verdicts),
         len(flagged),
         prior_severity,

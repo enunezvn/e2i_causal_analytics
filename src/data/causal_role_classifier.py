@@ -53,9 +53,7 @@ class CausalRoleSignature(dspy.Signature):
     forbidden.
     """
 
-    feature_name: str = dspy.InputField(
-        desc="Name of the feature being classified."
-    )
+    feature_name: str = dspy.InputField(desc="Name of the feature being classified.")
     derivation_pseudocode: str = dspy.InputField(
         desc="Plain-English or pseudo-code description of how the feature is derived. "
         "Must specify the SOURCE TABLE (e.g., medication_events, lab_events, demo) "

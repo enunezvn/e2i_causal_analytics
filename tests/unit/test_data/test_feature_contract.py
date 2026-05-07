@@ -38,7 +38,7 @@ def test_feature_contract_rejects_post_index_aggregation_without_window():
     journey_duration_days mechanism: max(eligend, last_med_date+supply, ...)
     where the events table extends past index.
     """
-    from src.data.feature_contract import FeatureContract, KnowableAt, ContractViolation
+    from src.data.feature_contract import ContractViolation, FeatureContract, KnowableAt
 
     with pytest.raises(ContractViolation, match="aggregation without window_days"):
         FeatureContract(
@@ -111,8 +111,7 @@ def test_contract_validates_knowable_at_propagation():
     # Should detect that journey_duration_days CLAIMS knowable_at=index_date
     # but its input end_date has knowable_at=post_index → claim is false
     assert any(
-        v.feature == "journey_duration_days" and "knowable_at" in v.reason
-        for v in violations
+        v.feature == "journey_duration_days" and "knowable_at" in v.reason for v in violations
     ), f"Expected violation on journey_duration_days; got {violations}"
 
 
@@ -152,7 +151,7 @@ def test_contract_chain_passes_for_legitimate_feature():
 
 def test_aggregation_must_specify_event_source():
     """A feature with `aggregation` must declare a `source` that's an event table."""
-    from src.data.feature_contract import FeatureContract, KnowableAt, ContractViolation
+    from src.data.feature_contract import ContractViolation, FeatureContract, KnowableAt
 
     with pytest.raises(ContractViolation, match="aggregation requires event-typed source"):
         FeatureContract(
@@ -167,7 +166,7 @@ def test_aggregation_must_specify_event_source():
 
 def test_window_days_must_be_positive():
     """window_days < 1 is invalid."""
-    from src.data.feature_contract import FeatureContract, KnowableAt, ContractViolation
+    from src.data.feature_contract import ContractViolation, FeatureContract, KnowableAt
 
     with pytest.raises(ContractViolation, match="window_days must be >= 1"):
         FeatureContract(
@@ -191,7 +190,7 @@ def test_compile_set_18_incidents_caught_by_layer_1():
     (b) requires misrepresenting the knowable_at to pass — which Layer 2's
         causal-DAG check would then catch.
     """
-    from src.data.feature_contract import FeatureContract, KnowableAt, ContractViolation
+    from src.data.feature_contract import ContractViolation, FeatureContract, KnowableAt
 
     # Incident 1: disease_severity — sums med_fill events without window
     with pytest.raises(ContractViolation):

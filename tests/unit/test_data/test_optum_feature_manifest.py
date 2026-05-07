@@ -25,9 +25,7 @@ def test_chain_validates_no_violations():
 
     contracts = {c.name: c for c in OPTUM_FEATURES}
     violations = validate_contract_chain(contracts)
-    assert violations == [], (
-        "Chain violations:\n  " + "\n  ".join(v.reason for v in violations)
-    )
+    assert violations == [], "Chain violations:\n  " + "\n  ".join(v.reason for v in violations)
 
 
 def test_safe_view_excludes_forbidden_columns():
@@ -126,20 +124,14 @@ def test_manifest_covers_all_optum_feature_columns(cohort: str):
     """Every column in the Optum parquet for each cohort that COULD be a model
     input must have a contract in the manifest. Cohort-specific extras are
     targets that already live in OPTUM_FORBIDDEN_AS_FEATURES."""
-    import pandas as pd
     from pathlib import Path
+
+    import pandas as pd
 
     from src.data.manifests.optum_feature_manifest import OPTUM_FEATURES
 
     repo_root = Path(__file__).resolve().parents[3]
-    pq_path = (
-        repo_root
-        / "data"
-        / "rwd"
-        / "optum"
-        / cohort
-        / "e2i_ml_v3_patient_journeys.parquet"
-    )
+    pq_path = repo_root / "data" / "rwd" / "optum" / cohort / "e2i_ml_v3_patient_journeys.parquet"
     if not pq_path.exists():
         pytest.skip(f"Optum {cohort} parquet not present at {pq_path}")
 

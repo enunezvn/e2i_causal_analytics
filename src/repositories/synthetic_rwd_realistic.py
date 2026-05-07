@@ -44,7 +44,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -77,15 +77,17 @@ class RwdRealisticConfig:
 def _generate_demographics(rng: np.random.Generator, n: int) -> pd.DataFrame:
     """Demographics matching CSU-shape distributions (codex research)."""
     # Age: bimodal (CSU has both pediatric-onset and adult cohorts)
-    age = np.where(
-        rng.random(n) < 0.30,
-        rng.normal(35, 12, n),  # Adult-onset
-        rng.normal(55, 15, n),  # Mature
-    ).clip(18, 90).astype(int)
+    age = (
+        np.where(
+            rng.random(n) < 0.30,
+            rng.normal(35, 12, n),  # Adult-onset
+            rng.normal(55, 15, n),  # Mature
+        )
+        .clip(18, 90)
+        .astype(int)
+    )
 
-    age_group = pd.cut(
-        age, bins=[0, 50, 65, 200], labels=["<50", "50-65", ">65"]
-    ).astype(str)
+    age_group = pd.cut(age, bins=[0, 50, 65, 200], labels=["<50", "50-65", ">65"]).astype(str)
 
     gender = rng.choice(["F", "M"], n, p=[0.65, 0.35])  # CSU is female-skewed
     geographic_region = rng.choice(
@@ -94,8 +96,15 @@ def _generate_demographics(rng: np.random.Generator, n: int) -> pd.DataFrame:
 
     # Insurance products (matches ConcertAI bus categories)
     insurance_product = rng.choice(
-        ["commercial_PPO", "commercial_HMO", "medicare_advantage",
-         "medicaid_managed", "self_insured", "exchange", "other"],
+        [
+            "commercial_PPO",
+            "commercial_HMO",
+            "medicare_advantage",
+            "medicaid_managed",
+            "self_insured",
+            "exchange",
+            "other",
+        ],
         n,
         p=[0.30, 0.20, 0.15, 0.15, 0.10, 0.05, 0.05],
     )
@@ -152,13 +161,12 @@ def _generate_eligibility(
         rng.integers(6, 18, n),  # Standard: 6-18 months
     )
     index_date = [
-        e + timedelta(days=int(m * 30))
-        for e, m in zip(eligeff, months_to_index)
+        e + timedelta(days=int(m * 30)) for e, m in zip(eligeff, months_to_index, strict=True)
     ]
 
     # Eligibility duration as known at INDEX time (pre-prediction-time)
     eligibility_duration_days = [
-        max((idx - e).days, 0) for e, idx in zip(eligeff, index_date)
+        max((idx - e).days, 0) for e, idx in zip(eligeff, index_date, strict=True)
     ]
 
     # Total observation months (pre + post index combined)
@@ -172,7 +180,7 @@ def _generate_eligibility(
     # (a vendor-encoding pattern that creates the post_hoc_termination leak).
     eligend = [
         idx + timedelta(days=int((obs - m) * 30))
-        for idx, obs, m in zip(index_date, observation_months, months_to_index)
+        for idx, obs, m in zip(index_date, observation_months, months_to_index, strict=True)
     ]
 
     out = demographics.copy()
@@ -200,8 +208,8 @@ def _generate_target(
     age_norm = (df["age"].values - 50) / 20  # Normalized age centered at 50
     icd_severe = (df["primary_diagnosis_code"].isin(["L50.1", "L50.8"])).astype(int).values
     insurance_premium = (
-        df["insurance_product"].isin(["commercial_PPO", "self_insured"])
-    ).astype(int).values
+        (df["insurance_product"].isin(["commercial_PPO", "self_insured"])).astype(int).values
+    )
     long_eligibility = (df["eligibility_duration_days"].values > 365).astype(int)
 
     # Logit linear combination — coefficients tuned for AUC 0.62-0.68
@@ -238,9 +246,7 @@ def _inject_leakage(
 
     if config.leakage_pattern == "post_index_aggregation":
         # Feature counts events post-index; deterministic-zero for untreated
-        out["post_index_med_count_LEAK"] = (
-            target * rng.integers(1, 10, n) + (1 - target) * 0
-        )
+        out["post_index_med_count_LEAK"] = target * rng.integers(1, 10, n) + (1 - target) * 0
 
     elif config.leakage_pattern == "post_hoc_termination":
         # Feature derives from eligend - index, where eligend reflects actual
@@ -253,15 +259,14 @@ def _inject_leakage(
 
     elif config.leakage_pattern == "treatment_leaked_code":
         # ICD code assigned post-treatment (treatment_leaked_code='Z79.899' = encounter for long-term drug therapy)
-        out["has_z79_long_term_drug_LEAK"] = (
-            target * (rng.random(n) < 0.85 * strength).astype(int)
-            + (1 - target) * (rng.random(n) < 0.05).astype(int)
-        )
+        out["has_z79_long_term_drug_LEAK"] = target * (rng.random(n) < 0.85 * strength).astype(
+            int
+        ) + (1 - target) * (rng.random(n) < 0.05).astype(int)
 
     elif config.leakage_pattern == "spurious_correlation":
         # High single-feature AUC, no causal path (deliberately chosen wrong feature)
-        out["spurious_score_LEAK"] = (
-            target * rng.normal(2, 0.5, n) + (1 - target) * rng.normal(0, 0.5, n)
+        out["spurious_score_LEAK"] = target * rng.normal(2, 0.5, n) + (1 - target) * rng.normal(
+            0, 0.5, n
         )
 
     elif config.leakage_pattern == "pure_noise":
@@ -280,9 +285,7 @@ def _apply_missing_data(
 
     # Insurance-tied missingness: medicaid + exchange more likely to have
     # missing demographic fields (matches access-driven RWD patterns)
-    high_miss_insurance = out["insurance_product"].isin(
-        ["medicaid_managed", "exchange", "other"]
-    )
+    high_miss_insurance = out["insurance_product"].isin(["medicaid_managed", "exchange", "other"])
     miss_mask = (rng.random(n) < config.missing_demo_rate) & high_miss_insurance.values
     # Apply missingness to age (selectively)
     out.loc[miss_mask, "age"] = np.nan

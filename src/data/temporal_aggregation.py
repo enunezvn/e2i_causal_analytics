@@ -23,7 +23,6 @@ Contract:
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Dict, Literal, Mapping
 
 import pandas as pd
@@ -96,9 +95,7 @@ def temporal_aggregation(
 
     # Inner-join anchors and events on group_col so each event picks up its
     # entity's anchor; events for entities without anchors are dropped.
-    merged = events.merge(
-        anchors[[group_col, anchor_col]], on=group_col, how="inner"
-    )
+    merged = events.merge(anchors[[group_col, anchor_col]], on=group_col, how="inner")
     delta_days = (merged[anchor_col] - merged[event_date_col]).dt.days
     in_window = (delta_days >= 0) & (delta_days < window_days)
     windowed = merged.loc[in_window]

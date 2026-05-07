@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -36,9 +35,7 @@ def basic_events_and_anchors():
     anchors = pd.DataFrame(
         {
             "patient_id": [1, 2, 3],
-            "anchor_date": pd.to_datetime(
-                ["2024-08-30", "2024-08-30", "2024-08-30"]
-            ),
+            "anchor_date": pd.to_datetime(["2024-08-30", "2024-08-30", "2024-08-30"]),
         }
     )
     return events, anchors
@@ -141,12 +138,8 @@ def test_window_days_required_keyword(basic_events_and_anchors):
 
 
 def test_missing_required_column_raises():
-    events = pd.DataFrame(
-        {"patient_id": [1], "event_date": pd.to_datetime(["2024-01-01"])}
-    )
-    anchors = pd.DataFrame(
-        {"patient_id": [1], "anchor_date": pd.to_datetime(["2024-08-30"])}
-    )
+    events = pd.DataFrame({"patient_id": [1], "event_date": pd.to_datetime(["2024-01-01"])})
+    anchors = pd.DataFrame({"patient_id": [1], "anchor_date": pd.to_datetime(["2024-08-30"])})
     with pytest.raises(ValueError, match="agg references column not in events"):
         temporal_aggregation(
             events,
@@ -160,12 +153,8 @@ def test_missing_required_column_raises():
 
 
 def test_non_datetime_columns_raise():
-    events = pd.DataFrame(
-        {"patient_id": [1], "event_date": ["2024-01-01"], "value": [1]}
-    )
-    anchors = pd.DataFrame(
-        {"patient_id": [1], "anchor_date": pd.to_datetime(["2024-08-30"])}
-    )
+    events = pd.DataFrame({"patient_id": [1], "event_date": ["2024-01-01"], "value": [1]})
+    anchors = pd.DataFrame({"patient_id": [1], "anchor_date": pd.to_datetime(["2024-08-30"])})
     with pytest.raises(TypeError, match="must be datetime-like"):
         temporal_aggregation(
             events,

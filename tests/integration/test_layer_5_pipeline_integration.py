@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pandas as pd
 import pytest
 
 
@@ -59,9 +58,7 @@ def test_rwd_realistic_post_index_leak_caught_by_layer_5_pipeline():
     # so detect_leakage's structural checks can run; this matches what the
     # real pipeline does after schema_validator narrows the surface.
     numeric_cols = [
-        c
-        for c in df.columns
-        if df[c].dtype.kind in "biufc" and c != "treatment_initiated"
+        c for c in df.columns if df[c].dtype.kind in "biufc" and c != "treatment_initiated"
     ]
     train_df = df[numeric_cols + ["treatment_initiated"]].copy()
 
@@ -89,7 +86,6 @@ def test_rwd_realistic_post_index_leak_caught_by_layer_5_pipeline():
     state.update(adp_result)
 
     final_severity = state.get("leakage_severity", "none")
-    final_leaked = set(state.get("leaked_features") or [])
     flagged = set(state.get("adaptive_flagged_features") or [])
 
     # The injected leak column
@@ -150,9 +146,7 @@ def test_rwd_realistic_no_leak_injection_does_not_falsely_flag():
     )
 
     numeric_cols = [
-        c
-        for c in df.columns
-        if df[c].dtype.kind in "biufc" and c != "treatment_initiated"
+        c for c in df.columns if df[c].dtype.kind in "biufc" and c != "treatment_initiated"
     ]
     train_df = df[numeric_cols + ["treatment_initiated"]].copy()
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 
 def test_clean_noise_is_not_suspicious():
@@ -136,8 +135,7 @@ def test_multi_feature_ablation():
     X = pd.DataFrame(
         {
             f"feature_{i}": (
-                target.astype(float) + rng.normal(0, 1, n) if i == 0
-                else rng.normal(0, 1, n)
+                target.astype(float) + rng.normal(0, 1, n) if i == 0 else rng.normal(0, 1, n)
             )
             for i in range(n_features)
         }

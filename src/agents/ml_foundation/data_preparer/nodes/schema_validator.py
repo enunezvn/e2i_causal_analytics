@@ -67,11 +67,7 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
         scope_spec = state.get("scope_spec", {})
 
         if isinstance(data_source, dict) or not data_source:
-            data_source = (
-                scope_spec.get("data_source")
-                or scope_spec.get("table_name")
-                or ""
-            )
+            data_source = scope_spec.get("data_source") or scope_spec.get("table_name") or ""
             if isinstance(data_source, dict):
                 # Final fallback: file ingestion produces patient_journeys
                 # as the primary table (per data_loader._load_from_files).
