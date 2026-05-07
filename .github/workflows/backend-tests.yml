@@ -73,10 +73,22 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install mypy==1.15.0
+          pip install mypy==1.19.1
 
-      - name: Run MyPy
-        run: mypy src/ --ignore-missing-imports --no-error-summary || true
+      - name: Run MyPy (numeric ceiling = 45)
+        run: |
+          set -e
+          MYPY_CEILING=45
+          # Use the same config file so per-module overrides apply identically
+          mypy --config-file pyproject.toml src/ > mypy_report.txt 2>&1 || true
+          ERRORS=$(grep -c "^src/.*: error:" mypy_report.txt || true)
+          echo "MyPy reports $ERRORS errors (ceiling: $MYPY_CEILING)"
+          tail -3 mypy_report.txt
+          if [ "$ERRORS" -gt "$MYPY_CEILING" ]; then
+            echo "::error::MyPy error count $ERRORS exceeds ceiling $MYPY_CEILING."
+            echo "::error::See .claude/state/mypy_posture_decision_20260506.md for the ceiling rationale."
+            exit 1
+          fi
 
   unit-tests:
     name: Unit Tests
