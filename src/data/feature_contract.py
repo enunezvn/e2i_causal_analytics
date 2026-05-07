@@ -183,6 +183,20 @@ class FeatureContract:
                     feature=self.name,
                     reason="window_days must be >= 1",
                 )
+        elif self.window_days is not None:
+            # ``window_days`` describes the temporal scope of an aggregation;
+            # without ``aggregation`` it has no defined semantics. Silently
+            # accepting it would let a contract claim a pre-index window over
+            # data the consumer never actually filters — misleading both the
+            # ``_layer_1_verdict`` audit trail and any downstream tooling
+            # that reads ``contract.window_days`` to scope its lookback.
+            raise ContractViolation(
+                f"feature {self.name!r}: window_days={self.window_days} requires "
+                f"aggregation to be set (window without aggregation has no "
+                f"defined semantics).",
+                feature=self.name,
+                reason="window_days without aggregation",
+            )
 
         # The ``_allow_unwindowed_for_test`` escape hatch only makes sense for
         # contracts that declare ``knowable_at=post_index``. The hatch's intent

@@ -340,3 +340,38 @@ def test_allow_unwindowed_for_test_escape_hatch_requires_post_index():
             window_days=None,
             _allow_unwindowed_for_test=True,
         )
+
+
+def test_window_days_without_aggregation_is_rejected():
+    """A contract with ``window_days`` set but ``aggregation=None`` has no
+    defined semantics — windows describe the temporal scope of an aggregation,
+    so a window without one is meaningless. Codex audit design gap: the old
+    validator silently accepted this combination, letting a contract claim a
+    180-day window over a feature that never aggregates anything.
+    """
+    from src.data.feature_contract import (
+        ContractViolation,
+        FeatureContract,
+        KnowableAt,
+    )
+
+    with pytest.raises(ContractViolation, match="window_days.*aggregation"):
+        FeatureContract(
+            name="meaningless_window",
+            knowable_at=KnowableAt(reference="index_date"),
+            source="demo",
+            window_days=180,
+            aggregation=None,
+        )
+
+    # Sanity: window_days WITH aggregation is still valid (regression check)
+    legit = FeatureContract(
+        name="legit_windowed",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="medication_events",
+        derivation_inputs=["medication_date"],
+        aggregation="count",
+        window_days=180,
+    )
+    assert legit.window_days == 180
+    assert legit.aggregation == "count"
