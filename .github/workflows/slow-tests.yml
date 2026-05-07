@@ -157,6 +157,7 @@ jobs:
             --junitxml=/tmp/slow-tests-junit.xml \
             -n 2 \
             --dist=loadscope \
+            --max-worker-restart=2 \
             --timeout=300 \
             --tb=short ${EXTRA_ARGS}
 
