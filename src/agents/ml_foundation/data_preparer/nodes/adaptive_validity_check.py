@@ -126,6 +126,34 @@ def _build_verdict(
         "severity": severity,
         "remediation": remediation,
         "evidence": evidence,
+        # Layer 3 verdicts have no manifest contract; emit None so the audit-
+        # trail JSON sidecar has a uniform schema with Layer 1 verdicts.
+        "contract_source": None,
+        "contract_window_days": None,
+    }
+
+
+def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
+    """Build a Layer 3 verdict for a feature that bypassed the scoring path.
+
+    Used for the too-few-rows and scoring-error cases. Schema matches both
+    ``_build_verdict`` and ``_layer_1_verdict`` so the audit-trail JSON sidecar
+    is uniform across all verdict shapes.
+    """
+    return {
+        "feature": feature,
+        "layer": "3",
+        "z_score": None,
+        "actual_auc": None,
+        "null_mean": None,
+        "null_std": None,
+        "p_value": None,
+        "n_permutations": None,
+        "severity": "info",
+        "remediation": "keep",
+        "evidence": evidence,
+        "contract_source": None,
+        "contract_window_days": None,
     }
 
 
@@ -252,17 +280,10 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         col = train_df[feat]
         mask = col.notna() & binary_label_mask
         if mask.sum() < 30:
-            verdicts.append(
-                {
-                    "feature": feat,
-                    "layer": "3",
-                    "severity": "info",
-                    "remediation": "keep",
-                    "evidence": f"Skipped: only {int(mask.sum())} non-null rows (need ≥30)",
-                    "z_score": None,
-                    "actual_auc": None,
-                }
-            )
+            verdicts.append(_short_circuit_verdict(
+                feat,
+                evidence=f"Skipped: only {int(mask.sum())} non-null rows (need ≥30)",
+            ))
             continue
 
         try:
@@ -275,17 +296,10 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             )
         except Exception as exc:
             logger.warning("adaptive_validity_check: scoring failed for %s: %s", feat, exc)
-            verdicts.append(
-                {
-                    "feature": feat,
-                    "layer": "3",
-                    "severity": "info",
-                    "remediation": "keep",
-                    "evidence": f"Adversarial scoring error: {exc}",
-                    "z_score": None,
-                    "actual_auc": None,
-                }
-            )
+            verdicts.append(_short_circuit_verdict(
+                feat,
+                evidence=f"Adversarial scoring error: {exc}",
+            ))
             continue
 
         verdict = _build_verdict(feat, score)
