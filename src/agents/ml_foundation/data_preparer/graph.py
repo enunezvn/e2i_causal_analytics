@@ -9,6 +9,7 @@ from typing import Any, Dict, Literal
 from langgraph.graph import END, StateGraph
 
 from .nodes import (
+    adaptive_validity_check,
     audit_sampling_frame,
     compute_baseline_metrics,
     detect_leakage,
@@ -77,6 +78,7 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_node("run_quality_checks", run_quality_checks)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("run_ge_validation", run_ge_validation)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("detect_leakage", detect_leakage)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("adaptive_validity_check", adaptive_validity_check)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("leakage_remediation", review_and_remediate_leakage)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("transform_data", transform_data)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("register_features_in_feast", register_features_in_feast)  # type: ignore[type-var,arg-type,call-overload]
@@ -92,9 +94,16 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_edge("run_quality_checks", "run_ge_validation")
     graph.add_edge("run_ge_validation", "detect_leakage")
 
+    # Layer 5 wiring: detect_leakage emits hardcoded findings; adaptive_validity_check
+    # then runs Layer 3 (data-derived adversarial discriminator) on every numeric
+    # feature, augmenting leaked_features and (only) escalating leakage_severity.
+    # Routing decisions read the merged severity, so any adaptive escalation feeds
+    # the existing leakage_remediation flow.
+    graph.add_edge("detect_leakage", "adaptive_validity_check")
+
     # Conditional edge: route to remediation if critical/high leakage detected
     graph.add_conditional_edges(
-        "detect_leakage",
+        "adaptive_validity_check",
         _route_after_leakage_detection,
         {
             "remediate": "leakage_remediation",
