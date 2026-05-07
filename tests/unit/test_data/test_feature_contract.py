@@ -224,3 +224,68 @@ def test_compile_set_18_incidents_caught_by_layer_1():
             aggregation="count",
             window_days=None,
         )
+
+
+# --- Codex audit follow-ups (Layer 1 — item D) ------------------------------
+
+
+def test_validate_chain_catches_post_index_offset_input():
+    """A feature claiming knowable_at=index_date+0 with an input at
+    index_date+30 is a chain violation: the input is 30 days post-index even
+    though it nominally shares the ``index_date`` reference. Codex audit
+    Bug 1: ``rank_of`` ignored ``offset_days``, returning equal ranks for
+    both, so the violation slipped through.
+    """
+    from src.data.feature_contract import (
+        FeatureContract,
+        KnowableAt,
+        validate_contract_chain,
+    )
+
+    parent = FeatureContract(
+        name="parent_at_index",
+        knowable_at=KnowableAt(reference="index_date", offset_days=0),
+        source="derived",
+        derivation_inputs=["future_input"],
+    )
+    future_input = FeatureContract(
+        name="future_input",
+        knowable_at=KnowableAt(reference="index_date", offset_days=30),
+        source="derived",
+    )
+    violations = validate_contract_chain({"parent_at_index": parent, "future_input": future_input})
+    assert len(violations) == 1, (
+        f"Expected exactly one chain violation; got {violations}. "
+        f"rank_of must include offset_days so input(index_date+30) > parent(index_date+0)."
+    )
+    assert violations[0].feature == "parent_at_index"
+    assert "future_input" in violations[0].inputs_implicated
+
+
+def test_validate_chain_pre_index_input_is_not_a_violation():
+    """The fix to rank_of must not flip directionality: an input that is
+    earlier than its parent (negative offset / earlier reference) is fine.
+    """
+    from src.data.feature_contract import (
+        FeatureContract,
+        KnowableAt,
+        validate_contract_chain,
+    )
+
+    parent = FeatureContract(
+        name="parent_at_index",
+        knowable_at=KnowableAt(reference="index_date", offset_days=0),
+        source="derived",
+        derivation_inputs=["earlier_input"],
+    )
+    earlier_input = FeatureContract(
+        name="earlier_input",
+        knowable_at=KnowableAt(reference="index_date", offset_days=-180),
+        source="derived",
+    )
+    violations = validate_contract_chain(
+        {"parent_at_index": parent, "earlier_input": earlier_input}
+    )
+    assert violations == [], (
+        f"Earlier input (negative offset) must NOT be a chain violation; got {violations}"
+    )
