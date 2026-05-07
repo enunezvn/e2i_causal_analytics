@@ -17,8 +17,20 @@ import pandas as pd
 import pytest
 
 
-def _make_state(train_df: pd.DataFrame, target: str, **overrides: Any) -> dict:
-    """Build a minimal DataPreparerState dict for the node."""
+def _make_state(
+    train_df: pd.DataFrame,
+    target: str,
+    feature_manifest_source: str | None = "csu",
+    **overrides: Any,
+) -> dict:
+    """Build a minimal DataPreparerState dict for the node.
+
+    Defaults to ``feature_manifest_source="csu"`` because the bulk of the
+    pre-existing tests in this file exercise Layer 1 against CSU-canonical
+    column names (``journey_duration_days``, ``brand``, etc.). Tests that
+    exercise the synthetic / no-manifest code path should pass
+    ``feature_manifest_source=None`` explicitly.
+    """
     state: dict = {
         "experiment_id": "test-exp",
         "train_df": train_df,
@@ -28,6 +40,7 @@ def _make_state(train_df: pd.DataFrame, target: str, **overrides: Any) -> dict:
             "prediction_target": target,
             "required_features": [c for c in train_df.columns if c != target],
             "excluded_features": [],
+            "feature_manifest_source": feature_manifest_source,
         },
         "leakage_findings": [],
         "leaked_features": [],
@@ -560,4 +573,106 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
             f"Verdict for {v.get('feature')!r} has non-uniform keys: "
             f"missing={canonical_keys - set(v.keys())}, "
             f"extra={set(v.keys()) - canonical_keys}"
+        )
+
+
+# --- Cross-cohort manifest false-positive regression (item M) ---------------
+
+
+def test_synthetic_run_with_no_manifest_source_does_not_layer_1_flag_brand():
+    """Scenario_a / synthetic regimes leave ``feature_manifest_source`` unset.
+    A constant column named ``brand`` (e.g. ``df["brand"] = "Kisqali"`` from
+    run_tier0_test.py) must NOT match the CSU manifest's post-index ``brand``
+    contract. Otherwise scenario_a halts before training and the
+    test_synthetic_e2e_scenario_a_pins_7dim_baseline regression test trips.
+
+    Regression guard for the cross-cohort false-positive bug introduced by
+    PR #84 commit 33fd376 (manifest wiring) and fixed in this commit by
+    making Layer 1 opt-in via scope_spec.feature_manifest_source.
+    """
+    rng = np.random.default_rng(0)
+    n = 400
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # CSU-manifest-canonical column name, but as a constant (RCT brand
+            # assignment) rather than the post-index event the CSU contract
+            # describes. Without the opt-in guard, the manifest matches by
+            # name alone and flags this as a Layer 1 leak.
+            "brand": ["Kisqali"] * n,
+            "noise": rng.standard_normal(n),
+            "y": y,
+        }
+    )
+    # Explicitly simulate a synthetic run by passing manifest_source=None.
+    state = _make_state(df, "y", feature_manifest_source=None)
+    result = _run(state)
+
+    flagged = set(result["adaptive_flagged_features"])
+    assert "brand" not in flagged, (
+        f"Layer 1 manifest fired on a constant `brand` column in a synthetic "
+        f"context (no manifest source set). flagged={flagged}. "
+        f"This is the PR #84 cross-cohort regression."
+    )
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    if "brand" in verdicts_by_feat:
+        # If brand got a verdict at all (Layer 3 short-circuit since constant),
+        # it must be Layer 3, not Layer 1.
+        assert verdicts_by_feat["brand"]["layer"] == "3", (
+            f"`brand` got a Layer 1 verdict in a synthetic context: {verdicts_by_feat['brand']!r}"
+        )
+
+
+def test_csu_manifest_source_still_catches_brand():
+    """The CSU opt-in (``feature_manifest_source="csu"``) must continue to
+    catch the post-index ``brand`` column. Anti-regression for the fix in
+    the test above — ensure we didn't accidentally disable the CSU path.
+    """
+    rng = np.random.default_rng(0)
+    n = 300
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # CSU contract: brand="competitor" if treatment_initiated else None
+            "brand": rng.choice(["competitor", "novartis"], size=n),
+            "noise": rng.standard_normal(n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y", feature_manifest_source="csu")
+    result = _run(state)
+
+    flagged = set(result["adaptive_flagged_features"])
+    assert "brand" in flagged, (
+        f"CSU manifest opt-in failed to catch `brand` post-index column. flagged={flagged}"
+    )
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    assert verdicts_by_feat["brand"]["layer"] == "1"
+
+
+def test_unknown_manifest_source_falls_through_to_layer_3():
+    """An unrecognized ``feature_manifest_source`` (typo, future cohort, etc.)
+    must NOT silently apply CSU or Optum contracts. Layer 1 should be a
+    no-op; Layer 3 still runs on numeric features.
+    """
+    rng = np.random.default_rng(0)
+    n = 400
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # CSU-canonical name; would be Layer-1-flagged under "csu" but the
+            # cohort here is a hypothetical "future_indication" not in
+            # MANIFEST_SOURCES.
+            "journey_duration_days": rng.normal(180, 60, n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y", feature_manifest_source="future_indication")
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    if "journey_duration_days" in verdicts_by_feat:
+        assert verdicts_by_feat["journey_duration_days"]["layer"] == "3", (
+            f"Unknown manifest source incorrectly routed through CSU manifest. "
+            f"Verdict: {verdicts_by_feat['journey_duration_days']!r}"
         )

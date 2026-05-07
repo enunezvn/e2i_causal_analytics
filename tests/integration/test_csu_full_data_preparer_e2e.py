@@ -138,6 +138,11 @@ def csu_scope_spec() -> dict:
         "use_sample_data": False,
         "prediction_target": "treatment_initiated",
         "problem_type": "binary_classification",
+        # Opt this run into the CSU feature manifest so Layer 5 consults
+        # the CSU contracts (post-index columns get layer="1" verdicts).
+        # Without this opt-in the manifest is skipped — preserving the
+        # synthetic-data default of "no false positives across cohorts".
+        "feature_manifest_source": "csu",
         # Pass the manifest-declared SAFE feature names. Note: not every
         # safe feature appears in the cohort (e.g., the cohort has no
         # `state` filled in; data_preparer copes with missing required

@@ -198,6 +198,14 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     scope_spec = state.get("scope_spec") or {}
     target = scope_spec.get("prediction_target")
     excluded = scope_spec.get("excluded_features", []) or []
+    # Layer 1 (manifest-driven contracts) is opt-in per cohort. Scenario_a
+    # and other synthetic regimes leave this unset; CSU/Optum runners set
+    # ``feature_manifest_source`` in scope_spec so only the matching manifest
+    # is consulted. Without this guard the manifest matches any column that
+    # happens to share a name across cohorts (e.g., scenario_a's constant
+    # ``brand="Kisqali"`` would hit the CSU manifest's post-index contract
+    # and halt the pipeline).
+    manifest_source = scope_spec.get("feature_manifest_source")
 
     # Graceful no-op cases
     if train_df is None or target is None or target not in getattr(train_df, "columns", []):
@@ -262,9 +270,11 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     flagged: list[str] = []
 
     # Layer 1 pass — every column, manifest-driven catch for post-index ones.
+    # Skipped entirely when ``feature_manifest_source`` is unset (e.g.,
+    # synthetic regimes); see scope_spec read at the top of this function.
     layer_1_caught: set[str] = set()
     for feat in all_columns:
-        contract = lookup_feature_contract(feat)
+        contract = lookup_feature_contract(feat, data_source=manifest_source)
         if contract is not None and not contract.knowable_at.is_pre_or_at_index():
             verdict = _layer_1_verdict(feat, contract)
             verdicts.append(verdict)
