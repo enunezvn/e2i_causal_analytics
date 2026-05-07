@@ -393,3 +393,90 @@ def test_node_handles_pandas_extension_dtypes(ext_dtype: str):
         f"{ext_dtype} column was not evaluated by Layer 3 — likely "
         "filtered out by the dtype check."
     )
+
+
+def test_explicit_seed_zero_is_honored(monkeypatch):
+    """Passing ``adaptive_seed=0`` must NOT be replaced by the default seed=7.
+
+    Regression for codex-rescue High #2: ``int(state.get(...) or 7)`` evaluates
+    to 7 for state value 0 because 0 is falsy in Python. Same falsy-zero pattern
+    applied to ``adaptive_n_permutations``. The fix uses explicit
+    ``is not None`` checks.
+    """
+    captured: dict = {}
+
+    def _fake_score(values, target, *, n_permutations, seed, z_threshold):
+        captured["seed"] = seed
+        captured["n_permutations"] = n_permutations
+        return {
+            "actual_auc": 0.5,
+            "z_score": 0.0,
+            "null_mean": 0.5,
+            "null_std": 0.05,
+            "p_value": 0.5,
+            "n_permutations": n_permutations,
+        }
+
+    import importlib
+
+    avc_mod = importlib.import_module(
+        "src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check"
+    )
+    monkeypatch.setattr(avc_mod, "compute_adversarial_score", _fake_score)
+
+    rng = np.random.default_rng(0)
+    n = 200
+    df = pd.DataFrame(
+        {
+            "feature_a": rng.standard_normal(n),
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    state = _make_state(df, "y", adaptive_seed=0, adaptive_n_permutations=0)
+    _ = _run(state)
+    assert captured.get("seed") == 0, (
+        f"Expected seed=0 to be honored; got {captured.get('seed')!r} "
+        "(falsy-zero bug regression)"
+    )
+    assert captured.get("n_permutations") == 0, (
+        f"Expected n_permutations=0 to be honored; got "
+        f"{captured.get('n_permutations')!r}"
+    )
+
+
+def test_default_seed_when_state_omits_field(monkeypatch):
+    """When state does NOT include ``adaptive_seed``, the default (7) is used."""
+    captured: dict = {}
+
+    def _fake_score(values, target, *, n_permutations, seed, z_threshold):
+        captured["seed"] = seed
+        captured["n_permutations"] = n_permutations
+        return {
+            "actual_auc": 0.5,
+            "z_score": 0.0,
+            "null_mean": 0.5,
+            "null_std": 0.05,
+            "p_value": 0.5,
+            "n_permutations": n_permutations,
+        }
+
+    import importlib
+
+    avc_mod = importlib.import_module(
+        "src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check"
+    )
+    monkeypatch.setattr(avc_mod, "compute_adversarial_score", _fake_score)
+
+    rng = np.random.default_rng(0)
+    n = 200
+    df = pd.DataFrame(
+        {
+            "feature_a": rng.standard_normal(n),
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    # No adaptive_seed / adaptive_n_permutations in state → defaults apply.
+    state = _make_state(df, "y")
+    _ = _run(state)
+    assert captured.get("seed") == 7
+    assert captured.get("n_permutations") == 200
