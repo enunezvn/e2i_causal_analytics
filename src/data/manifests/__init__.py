@@ -17,8 +17,15 @@ consumed by:
 
 Disease-agnostic by construction: the *vocabulary* (`KnowableAt`, `source`,
 `aggregation`, `window_days`) is universal. The *registry* per source is the
-declaration of what features that source emits.
+declaration of what features that source emits. Manifest application at
+runtime is gated by an explicit ``data_source`` argument — callers that pass
+``None`` (or a value not in MANIFEST_SOURCES) get no Layer 1 contracts back.
+This prevents cross-cohort false positives where a synthetic run that happens
+to use a CSU-canonical column name (e.g., ``brand``) is incorrectly flagged
+under the CSU manifest.
 """
+
+from typing import Callable, Mapping
 
 from src.data.feature_contract import FeatureContract
 
@@ -35,23 +42,40 @@ from .optum_feature_manifest import (
     optum_contract_for,
 )
 
+# Tag each registered manifest with the canonical data_source string the
+# pipeline runner uses to opt in. Adding a new data source is two lines:
+# import its ``<source>_contract_for`` above and add the entry below.
+MANIFEST_SOURCES: Mapping[str, Callable[[str], FeatureContract | None]] = {
+    "csu": csu_contract_for,
+    "optum": optum_contract_for,
+}
 
-def lookup_feature_contract(name: str) -> FeatureContract | None:
-    """Search all registered manifests for the named feature's FeatureContract.
 
-    Returns the first match. Adding a new data source is one line — append the
-    new ``<source>_contract_for`` to the chain below. Disease-agnostic by
-    construction: Layer 5 doesn't need to know whether the data is CSU, Optum,
-    synthetic, or a future indication.
+def lookup_feature_contract(
+    name: str,
+    data_source: str | None = None,
+) -> FeatureContract | None:
+    """Search registered manifests for the named feature's FeatureContract.
+
+    Args:
+        name: Feature/column name to look up.
+        data_source: Which manifest to consult. Required to apply Layer 1.
+            Callers that don't know their cohort (e.g., synthetic runs that
+            never registered a manifest) MUST leave this as ``None``; the
+            lookup will return None so Layer 5 falls through to Layer 3
+            statistical scoring rather than emit a false-positive Layer 1
+            verdict against an unrelated cohort's contract.
 
     Returns:
-        The matching FeatureContract, or None if no manifest declares the name.
+        The matching FeatureContract, or None if (a) ``data_source`` is None
+        or unknown, or (b) the matching manifest doesn't declare ``name``.
     """
-    for fn in (csu_contract_for, optum_contract_for):
-        c = fn(name)
-        if c is not None:
-            return c
-    return None
+    if data_source is None:
+        return None
+    fn = MANIFEST_SOURCES.get(data_source)
+    if fn is None:
+        return None
+    return fn(name)
 
 
 __all__ = [
@@ -59,6 +83,7 @@ __all__ = [
     "CSU_FORBIDDEN_AS_FEATURES",
     "CSU_SAFE_FEATURES",
     "csu_contract_for",
+    "MANIFEST_SOURCES",
     "OPTUM_FEATURES",
     "OPTUM_FORBIDDEN_AS_FEATURES",
     "OPTUM_SAFE_FEATURES",

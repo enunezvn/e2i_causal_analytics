@@ -105,6 +105,13 @@ class ScopeSpecSchema(BaseAgentSchema):
     data_source: Optional[str] = None
     table_name: Optional[str] = None
 
+    # Layer 5 manifest opt-in (adaptive_validity_check.py).
+    # Names which feature manifest the pipeline should consult (e.g. "csu",
+    # "optum"). Unset → Layer 1 manifest pass is skipped, so synthetic /
+    # research regimes don't get cross-cohort false positives when their
+    # column names happen to overlap with a registered manifest's vocabulary.
+    feature_manifest_source: Optional[str] = None
+
     # Quality checker (data_preparer/nodes/quality_checker.py:54-59)
     date_column: Optional[str] = None
     required_columns: Optional[List[str]] = None
