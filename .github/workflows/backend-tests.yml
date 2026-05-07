@@ -75,10 +75,10 @@ jobs:
           pip install -r requirements.txt
           # mypy version is pinned in requirements.txt (single source of truth).
 
-      - name: Run MyPy (numeric ceiling = 65)
+      - name: Run MyPy (numeric ceiling = 60)
         run: |
           set -e
-          MYPY_CEILING=65
+          MYPY_CEILING=60
           # Use the same config file so per-module overrides apply identically.
           mypy --config-file pyproject.toml src/ > mypy_report.txt 2>&1 || true
           # Source the count from mypy's own summary line — robust against

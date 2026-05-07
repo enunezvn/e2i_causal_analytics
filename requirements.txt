@@ -316,6 +316,7 @@ ty==0.0.4
 typeguard==4.4.4
 typer==0.20.1
 types-awscrt==0.30.0
+types-PyYAML==6.0.12.20250915
 types-s3transfer==0.16.0
 typing-inspect==0.9.0
 typing-inspection==0.4.2
