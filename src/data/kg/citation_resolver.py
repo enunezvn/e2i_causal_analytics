@@ -189,9 +189,13 @@ class CitationResolver:
             aggregated confidence.
         """
         if identifier_kind not in ("pmid", "doi"):
+            # Codex review MEDIUM (2026-05-08): preserve the original input
+            # in the error verdict rather than hard-coding "pmid". A verdict
+            # that pretends an invalid input was a PMID would mislead
+            # Phase 2.7 EnsembleVoter diagnostics and aggregation buckets.
             return CitationVerdict(
                 identifier=identifier,
-                identifier_kind="pmid",
+                identifier_kind=identifier_kind,
                 abstract_resolved=False,
                 error=f"unsupported identifier_kind: {identifier_kind}",
             )
