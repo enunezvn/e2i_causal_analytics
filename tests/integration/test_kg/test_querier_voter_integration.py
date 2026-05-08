@@ -27,8 +27,6 @@ from typing import Any, Optional
 
 from src.data.kg.ensemble_voter import classify_kg_signal
 from src.data.kg.kg_querier import KnowledgeGraphQuerier
-from src.data.kg.open_targets import OpenTargetsError
-from src.data.kg.umls_uts import UMLSError
 
 
 class _StubUMLS:

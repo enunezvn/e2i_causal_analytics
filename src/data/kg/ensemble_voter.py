@@ -123,6 +123,22 @@ VALID_LLM_ROLES: frozenset[str] = LEAK_ROLES | ACCEPT_ROLES
 # KG predicates we recognise as drug→disease "treats" evidence
 # (Open Targets) and as taxonomic isa (UMLS relations). Stored as
 # lowercase for case-insensitive matching at classification time.
+#
+# These predicate sets are INDICATION-NEUTRAL (verified 2026-05-08
+# disease-domain audit; see docs/superpowers/specs/2026-05-08-kg-
+# predicate-reconciliation-design.md §"Disease-domain coupling
+# assessment"). A CDK4/6 inhibitor "treats" breast cancer with the
+# same vocabulary as a biologic "treats" CSU. The Open Targets
+# ``datatypeId="known_drug"`` taxonomy applies across diseases (PR-0
+# maps that datatypeId → predicate="treats" at the querier boundary,
+# regardless of indication); UMLS taxonomic relations
+# (isa/par/chd/etc.) are universal medical-ontology vocabulary.
+#
+# When a future cohort introduces a non-immunology indication, expand
+# these sets ONLY if Open Targets adds new datatypes that carry
+# therapeutic semantics (currently ``known_drug`` is the sole one) or
+# UMLS adds taxonomic relations the project relies on. Externalising
+# to per-domain config is YAGNI until that pressure arrives.
 TREATS_PREDICATES: frozenset[str] = frozenset({"treats", "indicated_for", "treats_indicates"})
 TAXONOMIC_PREDICATES: frozenset[str] = frozenset({"isa", "inverse_isa", "par", "chd", "rb", "rn"})
 
