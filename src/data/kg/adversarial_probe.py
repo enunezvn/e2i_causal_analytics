@@ -236,9 +236,9 @@ class AdversarialProbe:
                 feature_name=feature_name,
                 outcome="error",
                 error=(
-                    f"could not compare {event_date_col!r} to anchor: {exc}. "
-                    "Confirm both are the same comparable dtype "
-                    "(both tz-naive or both tz-aware in the same timezone)."
+                    f"could not compare {event_date_col!r} to anchor values: {exc}. "
+                    "The most common causes are dtype mismatch and tz-aware vs "
+                    "tz-naive datetimes; confirm both columns are aligned."
                 ),
                 notes=tuple(notes),
             )
