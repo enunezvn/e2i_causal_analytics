@@ -56,6 +56,16 @@ NON_EVENT_SOURCES = frozenset(
 
 AggregationFunc = Literal["sum", "mean", "max", "min", "count", "nunique"]
 
+# CodeSystem values accepted in FeatureContract.kg_entity_codes. Mirrors
+# the literal at src/data/kg/types.py:103 (which is purely for KG-side
+# typing); duplicated here as a frozenset so feature_contract has no
+# dependency on the kg subpackage. ``UMLS`` is included alongside the
+# source vocabularies because a manifest can declare a UMLS CUI directly
+# when the source code is unknown.
+_KG_KNOWN_SYSTEMS: frozenset[str] = frozenset(
+    {"ICD10CM", "ICD10", "RXNORM", "LOINC", "CPT", "HCPCS", "SNOMEDCT_US", "MESH", "UMLS"}
+)
+
 
 class ContractViolation(Exception):
     """Raised when a feature contract is internally inconsistent OR
@@ -145,6 +155,15 @@ class FeatureContract:
     derivation_inputs: tuple[str, ...] = ()
     aggregation: Optional[AggregationFunc] = None
     window_days: Optional[int] = None
+    # KG entity codes — Phase 2.9 Stage 2. Each tuple is
+    # ``(CodeSystem, code)`` where CodeSystem is in
+    # {ICD10CM, ICD10, RXNORM, LOINC, CPT, HCPCS, SNOMEDCT_US, MESH, UMLS}.
+    # Default ``()`` makes this backward-compatible — manifests without
+    # entity codes work unchanged. The cache builder validates every code
+    # resolves via EntityLinker before querying KG; this field is the
+    # source of truth for which entities a feature represents in the KG.
+    # See docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-design.md.
+    kg_entity_codes: tuple[tuple[str, str], ...] = ()
     # Test-only escape hatch: allows constructing a contract that DECLARES
     # itself unwindowed (so its honest knowable_at is post_index). Used in
     # validate_contract_chain tests to verify propagation. Never set in
@@ -155,6 +174,15 @@ class FeatureContract:
         # Normalize derivation_inputs to tuple (frozen dataclass mutability)
         if not isinstance(self.derivation_inputs, tuple):
             object.__setattr__(self, "derivation_inputs", tuple(self.derivation_inputs))
+
+        # Normalize kg_entity_codes to tuple of tuples (frozen dataclass).
+        # Callers may pass list-of-lists (JSON-friendly); store as
+        # immutable tuple-of-tuples so the frozen dataclass invariant holds.
+        if self.kg_entity_codes:
+            normalized = tuple(
+                tuple(t) if not isinstance(t, tuple) else t for t in self.kg_entity_codes
+            )
+            object.__setattr__(self, "kg_entity_codes", normalized)
 
         self._validate()
 
@@ -215,6 +243,35 @@ class FeatureContract:
                 feature=self.name,
                 reason="_allow_unwindowed_for_test requires post_index knowable_at",
             )
+
+        # KG entity codes validation (Phase 2.9 Stage 2). Each tuple must
+        # be (CodeSystem, code) with non-empty code and CodeSystem in the
+        # known set. ``UMLS`` is included alongside the source vocabularies
+        # because manifests can declare a UMLS CUI directly when the source
+        # code is unknown or ambiguous.
+        for entry in self.kg_entity_codes:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                raise ContractViolation(
+                    f"feature {self.name!r}: kg_entity_codes entries must be 2-tuples; "
+                    f"got {entry!r}",
+                    feature=self.name,
+                    reason="kg_entity_codes must be 2-tuples",
+                )
+            system, code = entry
+            if not code or not isinstance(code, str):
+                raise ContractViolation(
+                    f"feature {self.name!r}: kg_entity_codes code must be a non-empty "
+                    f"string; got {code!r} (in entry {entry!r})",
+                    feature=self.name,
+                    reason="kg_entity_codes code empty",
+                )
+            if system not in _KG_KNOWN_SYSTEMS:
+                raise ContractViolation(
+                    f"feature {self.name!r}: kg_entity_codes system {system!r} unknown; "
+                    f"must be one of {sorted(_KG_KNOWN_SYSTEMS)}",
+                    feature=self.name,
+                    reason="kg_entity_codes unknown system",
+                )
 
     @property
     def is_aggregation(self) -> bool:
