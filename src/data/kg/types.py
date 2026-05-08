@@ -5,6 +5,35 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
+CausalRole = Literal[
+    "ancestor",
+    "confounder",
+    "instrument",
+    "mediator",
+    "collider",
+    "descendant",
+]
+
+Remediation = Literal[
+    "drop",
+    "window",
+    "transform",
+    "keep_with_caveat",
+    "keep",
+    "review",
+]
+
+EnsembleSeverity = Literal["high", "moderate", "info", "abstain"]
+
+EnsembleDecidedBy = Literal["layer_1", "adversarial", "kg", "llm", "abstain"]
+
+KGSignal = Literal[
+    "leak_drug_treats_disease",
+    "taxonomic_descendant",
+    "no_signal",
+    "contradictory",
+]
+
 EvidenceSource = Literal[
     "open_targets",
     "umls_relations",
@@ -171,3 +200,105 @@ class KGEdge:
     pmids: tuple[str, ...] = ()
     datasource: Optional[str] = None
     raw: Optional[dict] = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class LLMVerdict:
+    """Minimal mirror of `CausalRoleClassifier`'s prediction.
+
+    The DSPy-produced `dspy.Prediction` object carries `causal_role`,
+    `mechanism`, and `recommended_remediation` fields. Phase 2.7
+    `EnsembleVoter` accepts this lightweight dataclass instead so unit
+    tests can construct verdicts without instantiating an LM, and so the
+    voter has no `dspy` import.
+
+    Callers that already have a `dspy.Prediction` should adapt at the
+    call site:
+
+        verdict = LLMVerdict(
+            causal_role=prediction.causal_role,
+            mechanism=prediction.mechanism,
+            recommended_remediation=prediction.recommended_remediation,
+            cited_pmids=tuple(extract_pmids(prediction.mechanism)),
+        )
+
+    `cited_pmids` is whichever PMIDs the caller chose to extract from
+    `mechanism` for citation verification by `CitationResolver`. The
+    voter does not parse `mechanism` itself; it consumes the
+    pre-extracted tuple alongside the matching `CitationVerdict`s.
+    """
+
+    causal_role: CausalRole
+    mechanism: str
+    recommended_remediation: Remediation
+    cited_pmids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EnsembleVerdict:
+    """Phase 2.7 final verdict for one feature.
+
+    Composed by `EnsembleVoter.vote` from up to four upstream verdicts
+    (Layer 1 manifest contract, Layer 3 adversarial probe, Layer 2 KG
+    edges, Layer 4 LLM classification) plus citation verification.
+    Carries the full audit trail required by acceptance criterion #4 of
+    the adaptive temporal-validity redesign: every feature decision must
+    have a structured record naming the deciding layer, the evidence,
+    and the upstream verdicts considered.
+
+    Attributes:
+        feature_name: The feature this verdict pertains to.
+        severity: ``"high"`` / ``"moderate"`` / ``"info"`` / ``"abstain"``.
+            ``"high"`` means the feature must not enter the model.
+            ``"abstain"`` means the voter could not reach a verdict and
+            the feature is queued for human-in-the-loop adjudication.
+        remediation: Recommended action: ``"drop"``, ``"window"``,
+            ``"transform"``, ``"keep_with_caveat"``, ``"keep"``, or
+            ``"review"`` (used with ``severity="abstain"``).
+        decided_by: Which upstream layer drove the verdict. ``"abstain"``
+            when no layer produced a confident signal.
+        final_role: The causal role this feature played (only when an
+            upstream layer determined one — Layer 1/Adversarial vetoes
+            do not assign a role beyond "this is a leak"; the voter
+            populates ``"descendant"`` as the conventional role for
+            those cases). ``None`` when abstaining.
+        confidence: Aggregate 0–1 confidence in the verdict. Layer 1
+            deterministic vetoes carry confidence 1.0; adversarial
+            vetoes 0.95; LLM-driven verdicts modulated by KG agreement
+            and citation verification (see module docstring for the
+            exact weights). 0.0 on abstain.
+        kg_signal: Coarse classification of the KG edges considered.
+        kg_edges_considered: The subset of KG edges relevant to the
+            feature/target pair (filtered by `_classify_kg_signal`).
+        verified_citations: Citation verdicts whose abstract resolved
+            AND found both entities AND found a causal cue (i.e.,
+            `overall_confidence` >= the both-entities + cue threshold).
+        unverified_citations: Citation verdicts that failed any of the
+            above checks (resolution failure, missing entities, or
+            missing causal cue).
+        disagreements: Free-text log of contradictions across upstream
+            verdicts. Empty tuple when sources agreed (or when only one
+            source spoke).
+        evidence: Free-text log of corroborating evidence. Always
+            populated — even abstain verdicts record why the voter
+            couldn't decide.
+        layer_1_input: Raw Layer 1 verdict dict (or None).
+        adversarial_input: Raw adversarial verdict dict (or None).
+        llm_input: Raw LLM verdict (or None).
+    """
+
+    feature_name: str
+    severity: EnsembleSeverity
+    remediation: Remediation
+    decided_by: EnsembleDecidedBy
+    confidence: float
+    final_role: Optional[CausalRole] = None
+    kg_signal: KGSignal = "no_signal"
+    kg_edges_considered: tuple[KGEdge, ...] = ()
+    verified_citations: tuple[CitationVerdict, ...] = ()
+    unverified_citations: tuple[CitationVerdict, ...] = ()
+    disagreements: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+    layer_1_input: Optional[dict] = field(default=None, repr=False)
+    adversarial_input: Optional[dict] = field(default=None, repr=False)
+    llm_input: Optional[LLMVerdict] = field(default=None, repr=False)

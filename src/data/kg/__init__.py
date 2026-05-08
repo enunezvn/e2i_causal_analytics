@@ -20,6 +20,11 @@ from src.data.kg.citation_resolver import (
     CitationResolverError,
 )
 from src.data.kg.crossref import CrossrefClient, CrossrefError
+from src.data.kg.ensemble_voter import (
+    EnsembleVoter,
+    classify_kg_signal,
+    is_citation_verified,
+)
 from src.data.kg.entity_linker import EntityLinker, EntityLinkerError
 from src.data.kg.europe_pmc import EuropePMCClient, EuropePMCError
 from src.data.kg.kg_querier import KnowledgeGraphQuerier
@@ -27,10 +32,17 @@ from src.data.kg.open_targets import OpenTargetsClient, OpenTargetsError
 from src.data.kg.rxnav import RxCUIMatch, RxNavClient, RxNavError
 from src.data.kg.types import (
     AbstractRecord,
+    CausalRole,
     CitationVerdict,
+    EnsembleDecidedBy,
+    EnsembleSeverity,
+    EnsembleVerdict,
     EntityLink,
     KGConcept,
     KGEdge,
+    KGSignal,
+    LLMVerdict,
+    Remediation,
 )
 from src.data.kg.umls_uts import (
     UMLSAuthError,
@@ -42,11 +54,16 @@ from src.data.kg.umls_uts import (
 __all__ = [
     "AbstractRecord",
     "CAUSAL_CUE_VERBS",
+    "CausalRole",
     "CitationResolver",
     "CitationResolverError",
     "CitationVerdict",
     "CrossrefClient",
     "CrossrefError",
+    "EnsembleDecidedBy",
+    "EnsembleSeverity",
+    "EnsembleVerdict",
+    "EnsembleVoter",
     "EntityLink",
     "EntityLinker",
     "EntityLinkerError",
@@ -54,9 +71,12 @@ __all__ = [
     "EuropePMCError",
     "KGConcept",
     "KGEdge",
+    "KGSignal",
     "KnowledgeGraphQuerier",
+    "LLMVerdict",
     "OpenTargetsClient",
     "OpenTargetsError",
+    "Remediation",
     "RxCUIMatch",
     "RxNavClient",
     "RxNavError",
@@ -64,4 +84,6 @@ __all__ = [
     "UMLSClient",
     "UMLSError",
     "UMLSNotFoundError",
+    "classify_kg_signal",
+    "is_citation_verified",
 ]
