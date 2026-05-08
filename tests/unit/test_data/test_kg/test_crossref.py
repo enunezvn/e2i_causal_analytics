@@ -67,6 +67,62 @@ def test_fetch_doi_metadata_strips_nested_jats_tags() -> None:
         assert record.abstract.strip() == "X reduces Y."
 
 
+def test_fetch_doi_metadata_strips_non_jats_xhtml_and_mathml() -> None:
+    """Codex review MEDIUM (2026-05-08): non-JATS markup (XHTML, MathML,
+    plain XML) was leaking through the old ``jats:`` -only regex."""
+    abstract_raw = (
+        "<jats:p>Aspirin <i>inhibits</i> COX-2 via "
+        "<mml:math><mml:mi>k</mml:mi></mml:math> in <p>vivo</p>.</jats:p>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_sample_message(abstract=abstract_raw))
+
+    with _client_with_handler(handler) as client:
+        record = client.fetch_doi_metadata("10.1234/abc")
+    assert record is not None
+    # No tag artifacts at all.
+    assert "<" not in record.abstract
+    assert ">" not in record.abstract
+    assert "Aspirin inhibits COX-2 via k in vivo." in record.abstract
+
+
+def test_fetch_doi_metadata_unescapes_html_entities() -> None:
+    """``&amp;``, ``&lt;``, ``&#x2014;`` (em-dash) etc. must be decoded so
+    entity matching can find their natural-text forms."""
+    abstract_raw = (
+        "<jats:p>"
+        "Aspirin &amp; ibuprofen reduce inflammation &mdash; "
+        "100&#x25; effective in &lt;some&gt; patients."
+        "</jats:p>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_sample_message(abstract=abstract_raw))
+
+    with _client_with_handler(handler) as client:
+        record = client.fetch_doi_metadata("10.1234/abc")
+    assert record is not None
+    assert "Aspirin & ibuprofen" in record.abstract
+    assert "—" in record.abstract  # em-dash decoded
+    assert "100%" in record.abstract
+    assert "<some>" in record.abstract
+
+
+def test_fetch_doi_metadata_collapses_whitespace_runs() -> None:
+    """After tag removal, multiple newlines/spaces left behind must collapse."""
+    abstract_raw = "<jats:p>Aspirin\n\n   <i>treats</i>\n   inflammation.</jats:p>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_sample_message(abstract=abstract_raw))
+
+    with _client_with_handler(handler) as client:
+        record = client.fetch_doi_metadata("10.1234/abc")
+    assert record is not None
+    # Collapsed to single spaces.
+    assert record.abstract == "Aspirin treats inflammation."
+
+
 def test_fetch_doi_metadata_returns_none_on_404() -> None:
     """Crossref 404 is the standard "DOI not found" path; degrade to None."""
 

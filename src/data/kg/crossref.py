@@ -18,6 +18,7 @@ References:
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from functools import lru_cache
@@ -34,9 +35,16 @@ CROSSREF_BASE = "https://api.crossref.org"
 DEFAULT_TIMEOUT = 15.0
 _LRU_MAXSIZE = 4096
 
-# Many publishers deposit JATS-XML wrapped abstracts (``<jats:p>`` tags);
-# strip simple tags so CitationResolver's substring matcher works.
-_JATS_TAG = re.compile(r"</?jats:[^>]+>", re.IGNORECASE)
+# Many publishers deposit JATS-XML wrapped abstracts; some publishers also
+# include nested non-JATS markup (XHTML, MathML, plain XML). Strip ALL
+# tags, not just the JATS-namespaced ones, then unescape HTML entities so
+# CitationResolver's substring matcher sees clean text.
+#
+# Codex review MEDIUM (2026-05-08): the prior ``</?jats:[^>]+>`` only
+# matched ``jats:`` tags, leaking ``<p>``, ``<i>``, ``<sub>``, ``<mml:math>``,
+# and ``&amp;`` / ``&#x2014;`` artifacts into the abstract text. Those
+# leaks would prevent entity matches and confuse downstream consumers.
+_ALL_TAGS = re.compile(r"<[^>]+>")
 
 
 class CrossrefError(Exception):
@@ -101,9 +109,14 @@ class CrossrefClient:
         if not isinstance(message, dict):
             return None
         abstract_raw = message.get("abstract")
-        # Crossref ``abstract`` is JATS-XML wrapped; strip jats: tags so a
-        # simple substring matcher can find entity names.
-        abstract = _JATS_TAG.sub("", abstract_raw or "").strip()
+        # Crossref ``abstract`` is JATS-XML wrapped (sometimes nested with
+        # XHTML or MathML). Strip ALL tags + unescape HTML entities so a
+        # simple substring matcher can find entity names. Multiple
+        # consecutive whitespace runs (left over after tag removal) are
+        # collapsed to a single space so word-boundary matching works.
+        abstract_stripped = _ALL_TAGS.sub("", abstract_raw or "")
+        abstract_unescaped = html.unescape(abstract_stripped)
+        abstract = re.sub(r"\s+", " ", abstract_unescaped).strip()
         if not abstract:
             # Many publishers don't deposit abstracts; degrade to None so
             # CitationResolver records "abstract not retrieved".
