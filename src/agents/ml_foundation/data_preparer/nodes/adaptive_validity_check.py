@@ -572,6 +572,24 @@ def _select_features(
         forbidden = _MANIFEST_FORBIDDEN_BY_SOURCE.get(manifest_source)
         if forbidden:
             excluded_set.update(forbidden)
+        else:
+            # Codex M1 (PR #92 review): a typo or future-cohort value
+            # would silently fall through to legacy behaviour, defeating
+            # the defense-in-depth objective with no operator signal.
+            # Warn once per call so an operator who misspelt
+            # ``feature_manifest_source`` in scope_spec can spot the issue
+            # before the run completes. The reactive Layer 1 audit still
+            # catches forbidden columns downstream — this warning is the
+            # only signal the proactive layer was bypassed.
+            logger.warning(
+                "_select_features: unknown manifest_source %r — no "
+                "manifest forbidden-list applied (known sources: %s). "
+                "Layer 1 audit downstream will still catch contract "
+                "violations, but the proactive defense-in-depth pass "
+                "was skipped for this run.",
+                manifest_source,
+                sorted(_MANIFEST_FORBIDDEN_BY_SOURCE.keys()),
+            )
     cols = []
     for c in df.columns:
         if c in excluded_set:

@@ -1196,11 +1196,18 @@ def test_select_features_no_manifest_source_falls_through():
     assert "journey_duration_days" in cols  # not excluded without manifest
 
 
-def test_select_features_unknown_manifest_source_falls_through():
+def test_select_features_unknown_manifest_source_falls_through(caplog):
     """An unknown ``manifest_source`` value (typo, future cohort not yet
     registered) must NOT raise and must NOT apply any forbidden list —
     fail open for unknown manifests, not closed.
+
+    Codex M1 (PR #92): the function emits a logger.warning so an operator
+    who typoed ``feature_manifest_source`` in scope_spec can spot that
+    the proactive defense-in-depth pass was skipped. Confirm the warning
+    fires and names the unknown source.
     """
+    import logging
+
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         _select_features,
     )
@@ -1212,8 +1219,42 @@ def test_select_features_unknown_manifest_source_falls_through():
             "y": [0, 1, 0, 1],
         }
     )
-    cols = _select_features(df, target="y", excluded=[], manifest_source="cohort_does_not_exist")
+    with caplog.at_level(logging.WARNING):
+        cols = _select_features(
+            df, target="y", excluded=[], manifest_source="cohort_does_not_exist"
+        )
     assert "journey_duration_days" in cols
+    # Operator-facing warning fired with the unknown source name.
+    assert any(
+        "cohort_does_not_exist" in rec.message and "unknown manifest_source" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_select_features_empty_string_manifest_source_falls_through(caplog):
+    """Codex N1 (PR #92): an empty-string ``manifest_source`` enters the
+    ``is not None`` branch but produces no forbidden list — must fall
+    through harmlessly. Useful documentation test for the contract.
+    """
+    import logging
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+
+    df = pd.DataFrame(
+        {
+            "age": [25, 35, 45, 55],
+            "journey_duration_days": [10, 20, 30, 40],
+            "y": [0, 1, 0, 1],
+        }
+    )
+    with caplog.at_level(logging.WARNING):
+        cols = _select_features(df, target="y", excluded=[], manifest_source="")
+    assert "journey_duration_days" in cols
+    # Warning fires for empty-string the same way it does for any
+    # other unknown value.
+    assert any("unknown manifest_source" in rec.message for rec in caplog.records)
 
 
 def test_select_features_manifest_layered_with_scope_excluded():
