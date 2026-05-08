@@ -478,11 +478,18 @@ def test_kgedge_immutability() -> None:
 @pytest.mark.parametrize(
     "datatype_id, datasource_id, expected_predicate",
     [
+        # known_drug (the ONLY treats-bearing datatype per Ochoa 2021):
         ("known_drug", "chembl", "treats"),
         ("known_drug", "clinical_trials", "treats"),
+        # All six other canonical Open Targets datatypeIds (Ochoa 2021,
+        # NAR Table 1) — every one must produce associated_with, not
+        # treats. Codex PR-0 review L6: cover the full taxonomy so a
+        # future code change that drifts the partition is caught.
         ("literature", "europepmc", "associated_with"),
         ("genetic_association", "eva", "associated_with"),
         ("affected_pathway", "progeny", "associated_with"),
+        ("rna_expression", "expression_atlas", "associated_with"),
+        ("somatic_mutation", "cancer_biomarkers", "associated_with"),
         ("animal_model", "phenodigm", "associated_with"),
     ],
 )
