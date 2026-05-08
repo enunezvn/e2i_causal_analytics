@@ -238,6 +238,7 @@ _DISEASE = [
         knowable_at=KnowableAt(reference="index_date"),
         source="derived",
         derivation_inputs=("dx_l50_1_count", "dx_l50_8_count", "dx_l50_9_count"),
+        kg_entity_codes=(("UMLS", "C0042109"),),
     ),
     FeatureContract(
         name="dx_angioedema_count",
