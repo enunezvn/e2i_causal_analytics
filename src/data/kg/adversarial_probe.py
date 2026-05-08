@@ -327,6 +327,24 @@ class AdversarialProbe:
 
         notes: list[str] = list(extra_notes)
 
+        # Reject duplicate-index inputs up front: ``.loc[common_index]`` on
+        # a non-unique index expands rows on duplicate-label match and can
+        # make ``n_rows_changed > n_rows_compared`` and ``fraction_changed
+        # > 1.0`` — a violation of the ``AdversarialProbeResult`` audit
+        # invariants and a silent path to bogus drift counts.
+        for label, values in (("baseline", baseline_values), ("prefix", prefix_values)):
+            if not values.index.is_unique:
+                return AdversarialProbeResult(
+                    feature_name=feature_name,
+                    outcome="error",
+                    error=(
+                        f"{label}_values has a non-unique index — duplicate "
+                        "labels would corrupt per-patient comparison via "
+                        "label-expanding `.loc` lookups."
+                    ),
+                    notes=tuple(notes),
+                )
+
         common_index = baseline_values.index.intersection(prefix_values.index)
         only_baseline = baseline_values.index.difference(prefix_values.index)
         only_prefix = prefix_values.index.difference(baseline_values.index)
