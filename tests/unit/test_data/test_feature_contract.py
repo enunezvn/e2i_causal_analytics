@@ -493,3 +493,21 @@ def test_feature_contract_rejects_malformed_tuple_shape():
             derivation_inputs=("a",),
             kg_entity_codes=(("ICD10CM",),),  # missing code
         )
+
+
+def test_feature_contract_empty_list_normalized_to_tuple():
+    """Codex H1: an empty list ``[]`` for kg_entity_codes was passing the
+    falsy guard and storing a mutable list inside a frozen dataclass.
+    Verify normalization happens unconditionally and the field is always
+    a tuple, never a list."""
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="x",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("a",),
+        kg_entity_codes=[],  # empty list — must normalize to ()
+    )
+    assert isinstance(fc.kg_entity_codes, tuple)
+    assert fc.kg_entity_codes == ()
