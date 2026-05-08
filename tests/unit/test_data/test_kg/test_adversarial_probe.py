@@ -240,6 +240,36 @@ class TestEdgeCases:
         assert result.outcome == "inapplicable"
         assert any("no events" in n for n in result.notes)
 
+    def test_patient_id_dtype_mismatch_surfaced_in_notes(self) -> None:
+        # Codex L5: when events.patient_id has dtype int but anchors.index
+        # has dtype str (or vice versa), pandas does NOT coerce, so .isin()
+        # silently drops every row. The operator should see the dtype info
+        # in the notes so they can spot the cross-type alias case without
+        # having to inspect inputs.
+        events = pd.DataFrame(
+            {
+                "patient_id": [1, 2],  # int dtype
+                "event_date": pd.to_datetime(["2024-01-01", "2024-01-05"]),
+            }
+        )
+        anchors = pd.Series(
+            pd.to_datetime(["2024-01-15", "2024-01-20"]),
+            index=["1", "2"],  # str dtype — different from events.patient_id
+        )
+        probe = AdversarialProbe()
+        result = probe.probe(
+            feature_name="x",
+            derivation=_unwindowed_count,
+            events=events,
+            anchors=anchors,
+        )
+        assert result.outcome == "inapplicable"
+        # Both dtype labels surfaced for diagnosis.
+        joined_notes = " ".join(result.notes)
+        assert "patient_id" in joined_notes
+        assert "anchors.index.dtype" in joined_notes
+        assert "coerce" in joined_notes
+
     def test_all_nan_anchors_inapplicable(self) -> None:
         anchors = pd.Series([pd.NaT, pd.NaT], index=["p1", "p2"], dtype="datetime64[ns]")
         events = pd.DataFrame(
