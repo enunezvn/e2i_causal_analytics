@@ -49,7 +49,7 @@ abstain on these inputs, which would change the downstream contract.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -58,17 +58,15 @@ from src.data.adversarial_leakage import compute_adversarial_score
 from src.data.feature_contract import FeatureContract
 from src.data.manifests import lookup_feature_contract
 
-# Lazy-imported below to avoid triggering ``src.data.kg.__init__`` at
-# module-import time. The kg package transitively imports ``httpx``
-# (via UMLSClient / EuropePMCClient / CrossrefClient), and pulling
-# ``httpx`` into modules that LangGraph nodes import at collection
-# time has produced asyncio-loop interactions in xdist-parallelised
-# integration tests on CI (``RuntimeError: Event loop is closed``).
-# The voter + verdict types are pure-Python; deferring the import to
-# helper-call time keeps adaptive_validity_check.py's import surface
-# free of httpx.
-from typing import TYPE_CHECKING
-
+# ``EnsembleVoter`` and ``EnsembleVerdict`` are LAZY-imported below to
+# avoid triggering ``src.data.kg.__init__`` at module-import time. The
+# kg package transitively imports ``httpx`` (via UMLSClient /
+# EuropePMCClient / CrossrefClient), and pulling ``httpx`` into modules
+# that LangGraph nodes import at pytest-collection time has produced
+# asyncio-loop interactions in xdist-parallelised integration tests on
+# CI (``RuntimeError: Event loop is closed``). The voter + verdict
+# types are pure-Python; deferring the import to helper-call time
+# keeps adaptive_validity_check.py's import surface free of httpx.
 if TYPE_CHECKING:
     from src.data.kg.ensemble_voter import EnsembleVoter
     from src.data.kg.types import EnsembleVerdict
