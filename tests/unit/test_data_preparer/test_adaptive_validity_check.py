@@ -1431,7 +1431,9 @@ def test_phase29_stage2_load_kg_cache_loads_records_to_dict(tmp_path):
     cache_path = tmp_path / "cache.json"
     save_cache([record], cache_path)
 
-    loaded = _load_kg_cache({"kg_cache_path": str(cache_path)})
+    # kg_mode must be set to load the cache (PR-E gate: default 'off'
+    # preserves Stage 1 behavior). Either 'shadow' or 'promoted' loads.
+    loaded = _load_kg_cache({"kg_cache_path": str(cache_path), "kg_mode": "shadow"})
     assert loaded is not None
     assert "primary_diagnosis_code" in loaded
     assert len(loaded["primary_diagnosis_code"]) == 1
@@ -1760,10 +1762,9 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_low_coverage():
         compute_promotion_eligibility,
     )
 
-    verdicts = (
-        [{"decided_by": "kg", "disagreements": []}] * 50
-        + [{"decided_by": "abstain", "disagreements": []}] * 50
-    )
+    verdicts = [{"decided_by": "kg", "disagreements": []}] * 50 + [
+        {"decided_by": "abstain", "disagreements": []}
+    ] * 50
     metrics = compute_promotion_eligibility(verdicts)
     assert metrics["non_abstain_pct"] == pytest.approx(0.50)
     assert metrics["passes"] is False
@@ -1775,9 +1776,9 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_high_disagreemen
         compute_promotion_eligibility,
     )
 
-    verdicts = [
-        {"decided_by": "kg", "disagreements": ["adversarial=high but kg=accept"]}
-    ] * 10 + [{"decided_by": "kg", "disagreements": []}] * 90
+    verdicts = [{"decided_by": "kg", "disagreements": ["adversarial=high but kg=accept"]}] * 10 + [
+        {"decided_by": "kg", "disagreements": []}
+    ] * 90
     metrics = compute_promotion_eligibility(verdicts)
     assert metrics["kg_adversarial_disagreement_rate"] == pytest.approx(0.10)
     assert metrics["passes"] is False

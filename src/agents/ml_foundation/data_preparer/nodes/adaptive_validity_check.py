@@ -461,6 +461,7 @@ def _compose_legacy_verdict(
     kg_edges: Iterable["KGEdge"] = (),
     feature_entity_ids: Iterable[str] = (),
     target_entity_ids: Iterable[str] = (),
+    kg_mode: Optional[str] = None,
 ) -> dict[str, Any]:
     """Compose one legacy verdict dict from the per-source inputs.
 
@@ -530,25 +531,47 @@ def _compose_legacy_verdict(
         feature_entity_ids=feature_ids_tuple,
         target_entity_ids=target_ids_tuple,
     )
-    return _ensemble_to_legacy_dict(verdict, adversarial_input=adversarial_input)
+    legacy = _ensemble_to_legacy_dict(verdict, adversarial_input=adversarial_input)
+
+    # Stage 2 PR-E shadow-mode gate: when KG decided this verdict but
+    # the operator hasn't promoted KG to drop authority, cap severity
+    # to "info" and remediation to "keep". The audit fields
+    # (decided_by="kg", kg_signal=...) stay intact so divergence
+    # measurements (compute_promotion_eligibility) can compare KG vs
+    # adversarial outcomes BEFORE promotion.
+    if kg_mode == "shadow" and legacy.get("decided_by") == "kg":
+        legacy["severity"] = "info"
+        legacy["remediation"] = "keep"
+
+    return legacy
 
 
 def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdge"]]]:
     """Read the KG cache file pointed at by ``scope_spec['kg_cache_path']``.
 
     Returns a dict mapping ``feature_name -> list[KGEdge]``. Returns
-    ``None`` when no cache path is configured or the configured path
-    doesn't exist (Stage 1 behavior preserved). PR-E adds the
-    shadow-vs-promoted policy gate that distinguishes "missing cache
-    is fine" from "missing cache is fatal" by mode.
+    ``None`` when:
+    - ``kg_mode`` is ``"off"`` (or unset, the default) — the cache is
+      never opened so KG verdicts never carry a signal (Stage 1 behavior)
+    - no ``kg_cache_path`` is configured
+    - the configured path does not exist (warn-and-skip)
+
+    Loaded otherwise (``kg_mode`` in {``"shadow"``, ``"promoted"``}). The
+    severity cap that distinguishes shadow from promoted is applied
+    later in ``_compose_legacy_verdict``, not here — the cache is
+    identical content in both modes; the difference is what the
+    pipeline does with the resulting verdict.
 
     KNOWN GAP: this loader does NOT validate the cache's
     ``manifest_fingerprint_sha8`` / ``target_codes_fingerprint_sha8``
     against the current pipeline state. An operator who rebuilds the
     manifest but not the cache silently feeds stale edges. Fingerprint
-    validation lands in PR-E together with the shadow-mode policy gate
-    so the failure mode (warn vs fail) can be selected by mode.
+    validation is a separate follow-up (gated on cache-staleness
+    failure mode policy).
     """
+    kg_mode = scope_spec.get("kg_mode") or "off"
+    if kg_mode == "off":
+        return None
     path_str = scope_spec.get("kg_cache_path")
     if not path_str:
         return None
@@ -563,6 +586,59 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
 
     records = load_cache(path)
     return {r.feature_name: list(r.edges) for r in records}
+
+
+def compute_promotion_eligibility(
+    verdicts: Iterable[dict[str, Any]],
+    *,
+    min_non_abstain_pct: float = 0.95,
+    max_disagreement_rate: float = 0.05,
+) -> dict[str, Any]:
+    """Compute KG promotion-readiness metrics over a verdict list.
+
+    Returns a dict with:
+    - ``n_features``: total verdicts considered
+    - ``non_abstain_pct``: fraction with ``decided_by != "abstain"``
+    - ``kg_adversarial_disagreement_rate``: fraction with non-empty
+      ``disagreements`` among KG-decided verdicts (proxy for "KG and
+      adversarial conflicted on this feature")
+    - ``passes``: True iff ``non_abstain_pct >= min_non_abstain_pct`` AND
+      ``kg_adversarial_disagreement_rate <= max_disagreement_rate``
+
+    This is a governance tool — it does not auto-promote. Operators
+    review the metrics on a shadow-mode run, then update the cohort's
+    ``scope_spec.kg_mode`` from ``"shadow"`` to ``"promoted"`` when the
+    rates are satisfactory.
+
+    Empty input returns ``passes=False`` (no evidence ⇒ cannot promote).
+    """
+    verdicts_list = list(verdicts)
+    n = len(verdicts_list)
+    if n == 0:
+        return {
+            "n_features": 0,
+            "non_abstain_pct": 0.0,
+            "kg_adversarial_disagreement_rate": 0.0,
+            "passes": False,
+        }
+
+    non_abstain = sum(1 for v in verdicts_list if v.get("decided_by") != "abstain")
+    non_abstain_pct = non_abstain / n
+
+    # Disagreement is measured as "the audit trail recorded any
+    # cross-source contradiction". The voter populates `disagreements`
+    # whenever it flags an LLM/KG/adversarial mismatch.
+    disagreements_count = sum(1 for v in verdicts_list if (v.get("disagreements") or []))
+    disagreement_rate = disagreements_count / n
+
+    passes = non_abstain_pct >= min_non_abstain_pct and disagreement_rate <= max_disagreement_rate
+
+    return {
+        "n_features": n,
+        "non_abstain_pct": non_abstain_pct,
+        "kg_adversarial_disagreement_rate": disagreement_rate,
+        "passes": passes,
+    }
 
 
 def _parse_target_entity_codes(raw: Any) -> tuple[str, ...]:
@@ -786,9 +862,11 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
 
     # Stage 2 KG wiring (Phase 2.9 PR-D): load offline KG cache once at
     # node entry, reuse the per-feature lookup across both passes.
-    # ``None`` means no cache configured / file missing → kg_edges
-    # default of ``()`` flows through to the voter (Stage 1 behavior).
+    # ``None`` means no cache configured / file missing / kg_mode='off'
+    # → kg_edges default of ``()`` flows through to the voter (Stage 1
+    # behavior).
     kg_cache = _load_kg_cache(scope_spec)
+    kg_mode = scope_spec.get("kg_mode") or "off"
     target_ids = _parse_target_entity_codes(scope_spec.get("target_entity_codes") or [])
 
     def _kg_inputs(
@@ -819,6 +897,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 kg_edges=edges,
                 feature_entity_ids=feat_ids,
                 target_entity_ids=target_ids,
+                kg_mode=kg_mode,
             )
             verdicts.append(verdict)
             flagged.append(feat)
@@ -872,6 +951,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             kg_edges=edges,
             feature_entity_ids=feat_ids,
             target_entity_ids=target_ids,
+            kg_mode=kg_mode,
         )
         verdicts.append(verdict)
         if verdict["severity"] == "high":

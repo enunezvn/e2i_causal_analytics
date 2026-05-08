@@ -134,6 +134,24 @@ class ScopeSpecSchema(BaseAgentSchema):
     target_entity_codes: Optional[List[Tuple[str, str]]] = None
     kg_cache_path: Optional[str] = None
 
+    # Phase 2.9 Stage 2 PR-E: shadow-mode promotion gate.
+    #
+    # ``kg_mode`` controls how Layer 2 KG verdicts influence the final
+    # decision:
+    #   - ``"off"`` (default): Stage 1 behavior. KG cache is not loaded;
+    #     verdicts never carry a KG signal. Backward-compatible with
+    #     pre-Stage-2 cohorts.
+    #   - ``"shadow"``: KG cache IS loaded and ``decided_by="kg"`` /
+    #     ``kg_signal`` are recorded for audit, but the verdict severity
+    #     is capped to ``"info"`` so KG cannot drop a feature. Used to
+    #     observe KG signal quality on a cohort before promotion.
+    #   - ``"promoted"``: KG signal participates in voter precedence
+    #     normally; KG can drive ``severity="high"`` and drop features.
+    #
+    # Promotion is operator-driven (see ``compute_promotion_eligibility``)
+    # — there is no auto-promote.
+    kg_mode: Optional[Literal["off", "shadow", "promoted"]] = None
+
     # Quality checker (data_preparer/nodes/quality_checker.py:54-59)
     date_column: Optional[str] = None
     required_columns: Optional[List[str]] = None
