@@ -730,6 +730,24 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     flagged: list[str] = []
     voter = _get_ensemble_voter_class()()
 
+    # Stage 2 KG wiring (Phase 2.9 PR-D): load offline KG cache once at
+    # node entry, reuse the per-feature lookup across both passes.
+    # ``None`` means no cache configured / file missing → kg_edges
+    # default of ``()`` flows through to the voter (Stage 1 behavior).
+    kg_cache = _load_kg_cache(scope_spec)
+    target_codes = scope_spec.get("target_entity_codes") or []
+    target_ids = tuple(code for _system, code in target_codes)
+
+    def _kg_inputs(
+        feat: str, contract: Optional[FeatureContract]
+    ) -> tuple[tuple[Any, ...], tuple[str, ...]]:
+        """Per-feature KG edges + entity IDs for the voter."""
+        edges = tuple((kg_cache or {}).get(feat, ()))
+        if contract is None:
+            return edges, ()
+        feat_ids = tuple(code for _system, code in contract.kg_entity_codes)
+        return edges, feat_ids
+
     # Layer 1 pass — every column, manifest-driven catch for post-index ones.
     # Skipped entirely when ``feature_manifest_source`` is unset (e.g.,
     # synthetic regimes); see scope_spec read at the top of this function.
@@ -740,10 +758,14 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     for feat in all_columns:
         contract = lookup_feature_contract(feat, data_source=manifest_source)
         if contract is not None and not contract.knowable_at.is_pre_or_at_index():
+            edges, feat_ids = _kg_inputs(feat, contract)
             verdict = _compose_legacy_verdict(
                 feat,
                 voter=voter,
                 layer_1_input=_layer_1_input(feat, contract),
+                kg_edges=edges,
+                feature_entity_ids=feat_ids,
+                target_entity_ids=target_ids,
             )
             verdicts.append(verdict)
             flagged.append(feat)
@@ -788,10 +810,15 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             )
             continue
 
+        contract = lookup_feature_contract(feat, data_source=manifest_source)
+        edges, feat_ids = _kg_inputs(feat, contract)
         verdict = _compose_legacy_verdict(
             feat,
             voter=voter,
             adversarial_input=_adversarial_input(score),
+            kg_edges=edges,
+            feature_entity_ids=feat_ids,
+            target_entity_ids=target_ids,
         )
         verdicts.append(verdict)
         if verdict["severity"] == "high":
