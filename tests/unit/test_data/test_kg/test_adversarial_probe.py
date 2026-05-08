@@ -429,6 +429,64 @@ class TestDerivationErrors:
         assert result.outcome == "error"
         assert "patient_99" in (result.error or "")
 
+    def test_derivation_returns_strict_subset_of_anchors_is_allowed(
+        self, events_with_post_anchor: pd.DataFrame, anchors: pd.Series
+    ) -> None:
+        # The H1 guard rejects index VALUES not in anchors.index. A strict
+        # subset (derivation returns fewer patients than anchors has) must
+        # NOT be rejected — it falls through to compare() which logs a
+        # "only in baseline / only in prefix" note and probes the common
+        # subset. Regression test for the fix's success case.
+        def _subset(_events: pd.DataFrame, _a: pd.Series) -> pd.Series:
+            return pd.Series([1, 2], index=["patient_1", "patient_3"])
+
+        probe = AdversarialProbe()
+        result = probe.probe(
+            feature_name="x",
+            derivation=_subset,
+            events=events_with_post_anchor,
+            anchors=anchors,
+        )
+        # Both baseline and prefix produce the same subset → unchanged on
+        # the 2 common patients.
+        assert result.outcome == "unchanged"
+        assert result.n_rows_compared == 2
+
+    def test_rangeindex_anchors_with_rangeindex_derivation_documented_limitation(
+        self,
+    ) -> None:
+        # When anchors.index is itself a RangeIndex AND the derivation
+        # returns the same RangeIndex, the H1 subset check passes
+        # trivially. This is a documented limitation — production callers
+        # are advised to use stable patient IDs (strings or non-RangeIndex
+        # integers). Pin the current behavior so any future tightening
+        # explicitly considers this case.
+        events = pd.DataFrame(
+            {
+                "patient_id": [0, 0, 1, 2],
+                "event_date": pd.to_datetime(
+                    ["2024-01-01", "2024-02-15", "2024-01-10", "2024-01-20"]
+                ),
+            }
+        )
+        anchors = pd.Series(
+            pd.to_datetime(["2024-01-15", "2024-02-01", "2024-02-10"]),
+            index=pd.RangeIndex(0, 3),
+        )
+
+        probe = AdversarialProbe()
+        result = probe.probe(
+            feature_name="x",
+            derivation=_unwindowed_count,
+            events=events,
+            anchors=anchors,
+        )
+        # The probe still completes — patient 0 has a post-anchor event,
+        # so the leak signal is correctly produced. But this works only
+        # because patient IDs happen to coincide with positional indexes.
+        assert result.outcome == "changed"
+        assert result.n_rows_compared == 3
+
 
 # ---------------------------------------------------------------------------
 # Argument-shape validation
@@ -765,6 +823,23 @@ class TestCompare:
         assert result.outcome == "changed"
         assert result.n_rows_changed == 1
         assert result.max_abs_change is None  # not 1.0
+
+    def test_compare_nullable_boolean_dtype_no_max_abs_change(self) -> None:
+        # Pandas BooleanDtype (nullable bool) also passes is_bool_dtype
+        # and must follow the equality path. Regression coverage for the
+        # codex second-pass M3 finding.
+        probe = AdversarialProbe()
+        baseline = pd.Series([True, False, pd.NA], index=["a", "b", "c"], dtype="boolean")
+        prefix = pd.Series([True, True, pd.NA], index=["a", "b", "c"], dtype="boolean")
+        result = probe.compare(
+            feature_name="has_med_fill",
+            baseline_values=baseline,
+            prefix_values=prefix,
+        )
+        assert result.outcome == "changed"
+        # 'a' matches; 'b' flipped; 'c' is NA on both sides → equal.
+        assert result.n_rows_changed == 1
+        assert result.max_abs_change is None
 
     def test_compare_int_dtype_works(self) -> None:
         probe = AdversarialProbe()
