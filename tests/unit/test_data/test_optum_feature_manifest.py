@@ -206,3 +206,63 @@ def test_primary_diagnosis_code_has_kg_entity_codes():
     assert by_name["primary_diagnosis_code"].kg_entity_codes, (
         "primary_diagnosis_code must declare kg_entity_codes"
     )
+
+
+def test_all_entity_bearing_optum_features_have_kg_entity_codes():
+    """Comprehensive coverage: every comorbidity / drug-class / lab variant.
+
+    The previous tests only check the representative variant per family
+    (has_*, _ever_filled, _tested). This test catches regressions where a
+    future refactor adds a variant without threading kg_entity_codes
+    through the loop body.
+    """
+    from src.data.manifests.optum_feature_manifest import (
+        COMORBIDITY_NAMES,
+        DRUG_CLASS_NAMES,
+        LAB_NAMES,
+        OPTUM_FEATURES,
+    )
+
+    by_name = {c.name: c for c in OPTUM_FEATURES}
+    expected = (
+        [
+            "primary_diagnosis_code",
+            "dx_l50_1_count",
+            "dx_l50_8_count",
+            "dx_l50_9_count",
+            "dx_total_csu",
+            "dx_angioedema_count",
+        ]
+        + [f"has_{n}" for n in COMORBIDITY_NAMES]
+        + [f"{n}_claim_count" for n in COMORBIDITY_NAMES]
+        + [f"{cls}_ever_filled" for cls in DRUG_CLASS_NAMES]
+        + [f"{cls}_fill_count" for cls in DRUG_CLASS_NAMES]
+        + [f"{cls}_days_supply_total" for cls in DRUG_CLASS_NAMES]
+        + [f"{cls}_days_since_last_fill" for cls in DRUG_CLASS_NAMES]
+        + [f"{lab}_tested" for lab in LAB_NAMES]
+        + [f"{lab}_result_last" for lab in LAB_NAMES]
+        + [f"{lab}_abnormal_flag" for lab in LAB_NAMES]
+    )
+    missing = [n for n in expected if not by_name.get(n) or not by_name[n].kg_entity_codes]
+    assert missing == [], f"Entity-bearing features missing kg_entity_codes: {missing}"
+
+
+def test_all_optum_kg_entity_codes_use_known_systems():
+    """CodeSystem round-trip guard: every declared system is recognised.
+
+    The FeatureContract __post_init__ validator already rejects unknown
+    systems at import time, but this test makes the regression explicit:
+    if a typo or new system is introduced in the manifest constants, the
+    diagnosis surfaces here with an actionable list of (feature, system)
+    pairs rather than a single import-time exception.
+    """
+    from src.data.feature_contract import _KG_KNOWN_SYSTEMS
+    from src.data.manifests.optum_feature_manifest import OPTUM_FEATURES
+
+    bad = [
+        (f.name, system)
+        for f in OPTUM_FEATURES
+        for (system, _code) in f.kg_entity_codes
+        if system not in _KG_KNOWN_SYSTEMS
+    ]
+    assert bad == [], f"Unknown CodeSystem(s) on these features: {bad}"
