@@ -53,6 +53,10 @@ EXPECTED_TIER0_CLI_ARGS: FrozenSet[str] = frozenset(
         "--brand",
         "--target",
         "--indication",
+        # Added by Item A1 of the engineering-actionable arc (PR #100):
+        # opts the run into a cohort-specific feature manifest so Layer 5
+        # consults the matching FeatureContract registry.
+        "--feature-manifest-source",
         "--regime",
         "--split",
         "--no-demo-cost-matrix",
@@ -159,6 +163,13 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
     "--indication": {
         "default": None,
         "choices": None,
+        "nargs": None,
+        "type_name": "str",
+        "action": "_StoreAction",
+    },
+    "--feature-manifest-source": {
+        "default": None,
+        "choices": ["csu", "optum"],
         "nargs": None,
         "type_name": "str",
         "action": "_StoreAction",
