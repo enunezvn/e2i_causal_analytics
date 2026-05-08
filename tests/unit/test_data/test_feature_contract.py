@@ -375,3 +375,121 @@ def test_window_days_without_aggregation_is_rejected():
     )
     assert legit.window_days == 180
     assert legit.aggregation == "count"
+
+
+# ---------------------------------------------------------------------------
+# PR-A: kg_entity_codes field (Phase 2.9 Stage 2)
+# ---------------------------------------------------------------------------
+
+
+def test_feature_contract_default_kg_entity_codes_is_empty_tuple():
+    """Existing manifests without kg_entity_codes get the default ()."""
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="age",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("age",),
+    )
+    assert fc.kg_entity_codes == ()
+
+
+def test_feature_contract_accepts_single_kg_entity_code():
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("ICD10CM", "L20.9"),),
+    )
+    assert fc.kg_entity_codes == (("ICD10CM", "L20.9"),)
+
+
+def test_feature_contract_accepts_multiple_kg_entity_codes():
+    """A feature can carry several entity codes (cross-walks)."""
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="has_atopic_dermatitis",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="diagnosis_events",
+        derivation_inputs=("admit_date", "diag1"),
+        aggregation="max",
+        window_days=180,
+        kg_entity_codes=(
+            ("ICD10CM", "L20.9"),
+            ("UMLS", "C0011615"),
+        ),
+    )
+    assert len(fc.kg_entity_codes) == 2
+
+
+def test_feature_contract_rejects_empty_code_string():
+    """Validation: every (system, code) tuple needs a non-empty code."""
+    from src.data.feature_contract import (
+        ContractViolation,
+        FeatureContract,
+        KnowableAt,
+    )
+
+    with pytest.raises(ContractViolation, match="kg_entity_codes"):
+        FeatureContract(
+            name="x",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("a",),
+            kg_entity_codes=(("ICD10CM", ""),),
+        )
+
+
+def test_feature_contract_rejects_unknown_code_system():
+    from src.data.feature_contract import (
+        ContractViolation,
+        FeatureContract,
+        KnowableAt,
+    )
+
+    with pytest.raises(ContractViolation, match="kg_entity_codes"):
+        FeatureContract(
+            name="x",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("a",),
+            kg_entity_codes=(("NOT_A_VOCAB", "L20.9"),),
+        )
+
+
+def test_feature_contract_normalizes_kg_entity_codes_to_tuple_of_tuples():
+    """Caller may pass list-of-lists; stored as tuple-of-tuples (frozen)."""
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="x",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("a",),
+        kg_entity_codes=[["ICD10CM", "L20.9"], ["UMLS", "C0011615"]],
+    )
+    assert isinstance(fc.kg_entity_codes, tuple)
+    assert all(isinstance(t, tuple) for t in fc.kg_entity_codes)
+
+
+def test_feature_contract_rejects_malformed_tuple_shape():
+    """Each entry must be a 2-tuple."""
+    from src.data.feature_contract import (
+        ContractViolation,
+        FeatureContract,
+        KnowableAt,
+    )
+
+    with pytest.raises(ContractViolation, match="2-tuples"):
+        FeatureContract(
+            name="x",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("a",),
+            kg_entity_codes=(("ICD10CM",),),  # missing code
+        )
