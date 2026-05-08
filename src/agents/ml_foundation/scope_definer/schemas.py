@@ -25,7 +25,7 @@ problem type has one).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import ConfigDict
 
@@ -111,6 +111,28 @@ class ScopeSpecSchema(BaseAgentSchema):
     # research regimes don't get cross-cohort false positives when their
     # column names happen to overlap with a registered manifest's vocabulary.
     feature_manifest_source: Optional[str] = None
+
+    # Phase 2.9 Stage 2 KG entity-mapping (Stage 2 PR-A scaffold; Stage 2 PR-D
+    # wires the consumer in adaptive_validity_check.py). Cohort runner sets
+    # these per cohort.
+    #
+    # ``target_entity_codes``: list of ``(CodeSystem, code)`` tuples
+    # representing the prediction target's KG entities. Examples:
+    #   - CSU bio_initiation target → [("RXNORM", "479158"),
+    #     ("RXNORM", "1011295"), ...] (omalizumab + dupilumab + future biologics)
+    #   - Optum bio_initiation target → similar RxCUIs
+    #   - A future Dupixent-specific brand-prediction target →
+    #     [("RXNORM", "1011295")] (dupilumab only — narrower target)
+    # Empty list (or unset) means "no KG-mappable target representation"
+    # — typical for synthetic regimes. The voter's classify_kg_signal uses
+    # these IDs to filter which kg_edges are relevant.
+    #
+    # ``kg_cache_path``: path to the offline KG cache file built by
+    # ``scripts/build_kg_cache.py`` (PR-C). Pipeline reads the cache at
+    # data_preparer node entry; cache miss policy depends on ``kg_mode``
+    # (PR-E adds the mode field).
+    target_entity_codes: Optional[List[Tuple[str, str]]] = None
+    kg_cache_path: Optional[str] = None
 
     # Quality checker (data_preparer/nodes/quality_checker.py:54-59)
     date_column: Optional[str] = None

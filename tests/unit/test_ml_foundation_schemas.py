@@ -342,6 +342,40 @@ def test_scope_spec_schema_rejects_invalid_problem_type() -> None:
         ScopeSpecSchema(problem_type="not_a_real_type")  # type: ignore[arg-type]
 
 
+def test_scope_spec_schema_default_target_entity_codes_is_none() -> None:
+    """Phase 2.9 Stage 2 PR-A: target_entity_codes is optional;
+    cohort runner sets per cohort. Default None means no KG-mappable
+    target representation (typical for synthetic regimes)."""
+    schema = ScopeSpecSchema()
+    assert schema.target_entity_codes is None
+    assert schema.kg_cache_path is None
+
+
+def test_scope_spec_schema_accepts_target_entity_codes() -> None:
+    """Cohort runner populates target_entity_codes with the prediction
+    target's KG entities (e.g., RxCUIs for bio_initiation target class)."""
+    schema = ScopeSpecSchema(
+        prediction_target="bio_initiation",
+        target_entity_codes=[("RXNORM", "479158"), ("RXNORM", "1011295")],
+        kg_cache_path="data/kg_cache/abc123__def456.json",
+    )
+    assert schema.target_entity_codes == [("RXNORM", "479158"), ("RXNORM", "1011295")]
+    assert schema.kg_cache_path == "data/kg_cache/abc123__def456.json"
+
+
+def test_scope_spec_schema_target_entity_codes_round_trips() -> None:
+    """JSON round-trip preserves target_entity_codes shape (list of tuples
+    becomes list of lists in JSON; Pydantic restores as tuples)."""
+    original = ScopeSpecSchema(
+        prediction_target="dupixent_init",
+        target_entity_codes=[("RXNORM", "1011295")],
+        kg_cache_path="/tmp/cache.json",
+    )
+    restored = ScopeSpecSchema.model_validate_json(original.model_dump_json())
+    assert restored.target_entity_codes == original.target_entity_codes
+    assert restored.kg_cache_path == original.kg_cache_path
+
+
 def test_scope_spec_schema_drops_unknown_keys() -> None:
     """D3: under ``extra="ignore"`` unknown keys are silently dropped at
     construction. Pre-D3 they flowed through ``model_extra``; under the
