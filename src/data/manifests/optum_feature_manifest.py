@@ -691,3 +691,29 @@ OPTUM_SAFE_FEATURES: list[str] = [
 OPTUM_FORBIDDEN_AS_FEATURES: list[str] = [
     c.name for c in OPTUM_FEATURES if not c.knowable_at.is_pre_or_at_index()
 ]
+
+# Targets across all three Optum cohorts (initiation / discontinuation /
+# persistence). These are FORBIDDEN as features (post-index labels) but
+# MUST NOT be dropped at cohort-build time so the downstream pipeline can
+# extract the supervised signal via ``scope_spec.prediction_target``.
+# Cohort-builder gates filter forbidden columns while explicitly
+# preserving everything in this set.
+#
+# Maintenance: add to this set when introducing a new prediction target;
+# the test ``test_targets_subset_of_forbidden`` enforces that every entry
+# is also in ``OPTUM_FORBIDDEN_AS_FEATURES``.
+OPTUM_TARGETS: frozenset[str] = frozenset(
+    {
+        "treatment_initiated",
+        "initiated_biologic_180d",
+        "discontinuation_flag",
+        "discontinued_180d",
+        "persistent_at_180d",
+    }
+)
+
+# Forbidden columns that are NOT targets — the safe-to-drop set for the
+# cohort-builder gate.
+OPTUM_FORBIDDEN_NON_TARGET: list[str] = [
+    f for f in OPTUM_FORBIDDEN_AS_FEATURES if f not in OPTUM_TARGETS
+]

@@ -43,6 +43,43 @@ def test_safe_view_excludes_forbidden_columns():
     assert safe | forbidden == all_names
 
 
+def test_targets_are_subset_of_forbidden():
+    """``OPTUM_TARGETS`` must be a subset of ``OPTUM_FORBIDDEN_AS_FEATURES``.
+
+    Targets across the three Optum cohorts (initiation, discontinuation,
+    persistence) are post-index labels — the cohort-builder gate uses
+    ``OPTUM_FORBIDDEN_NON_TARGET`` which excludes ``OPTUM_TARGETS`` so
+    the supervised signal survives the boundary filter."""
+    from src.data.manifests.optum_feature_manifest import (
+        OPTUM_FORBIDDEN_AS_FEATURES,
+        OPTUM_TARGETS,
+    )
+
+    forbidden = set(OPTUM_FORBIDDEN_AS_FEATURES)
+    extra_targets = OPTUM_TARGETS - forbidden
+    assert not extra_targets, (
+        f"OPTUM_TARGETS contains entries not in OPTUM_FORBIDDEN_AS_FEATURES: "
+        f"{sorted(extra_targets)}. Either add them to the manifest as "
+        f"post_index FeatureContracts, or remove them from OPTUM_TARGETS."
+    )
+
+
+def test_forbidden_non_target_is_complement():
+    """``OPTUM_FORBIDDEN_NON_TARGET`` must equal ``FORBIDDEN_AS_FEATURES - TARGETS``."""
+    from src.data.manifests.optum_feature_manifest import (
+        OPTUM_FORBIDDEN_AS_FEATURES,
+        OPTUM_FORBIDDEN_NON_TARGET,
+        OPTUM_TARGETS,
+    )
+
+    expected = set(OPTUM_FORBIDDEN_AS_FEATURES) - OPTUM_TARGETS
+    assert set(OPTUM_FORBIDDEN_NON_TARGET) == expected, (
+        f"OPTUM_FORBIDDEN_NON_TARGET drift:\n"
+        f"  expected (FORBIDDEN - TARGETS): {sorted(expected)}\n"
+        f"  actual: {sorted(OPTUM_FORBIDDEN_NON_TARGET)}"
+    )
+
+
 def test_documented_optum_targets_are_forbidden():
     """All Optum targets must be marked post_index/forbidden."""
     from src.data.manifests.optum_feature_manifest import (

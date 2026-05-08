@@ -261,3 +261,25 @@ CSU_SAFE_FEATURES: list[str] = [c.name for c in CSU_FEATURES if c.knowable_at.is
 CSU_FORBIDDEN_AS_FEATURES: list[str] = [
     c.name for c in CSU_FEATURES if not c.knowable_at.is_pre_or_at_index()
 ]
+
+# Targets — features whose ``knowable_at`` is post-index AND whose role
+# is "predict me". These are FORBIDDEN as features (since they are the
+# label) but MUST NOT be dropped at cohort-build time, because the
+# downstream pipeline reads ``scope_spec.prediction_target`` to extract
+# the supervised signal. Cohort-builder gates filter forbidden columns
+# but explicitly preserve everything in this set.
+#
+# Maintenance: add to this set when introducing a new prediction target;
+# the test ``test_targets_subset_of_forbidden`` enforces that every entry
+# is also in ``CSU_FORBIDDEN_AS_FEATURES``.
+CSU_TARGETS: frozenset[str] = frozenset(
+    {
+        "treatment_initiated",
+        "discontinuation_flag",
+    }
+)
+
+# Forbidden columns that are NOT targets — the safe-to-drop set for the
+# cohort-builder gate. Computed once at import time so the gate doesn't
+# re-derive it per record.
+CSU_FORBIDDEN_NON_TARGET: list[str] = [f for f in CSU_FORBIDDEN_AS_FEATURES if f not in CSU_TARGETS]
