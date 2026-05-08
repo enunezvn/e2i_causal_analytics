@@ -167,17 +167,53 @@ def _fsync_directory(directory: Path) -> None:
 
 
 def load_cache(path: Path) -> list[CacheRecord]:
-    """Read a cache file and reconstruct its records."""
+    """Read a cache file and reconstruct its records.
+
+    Raises ``FileNotFoundError`` if the cache is missing — callers that
+    treat absence as a normal pipeline state (e.g. KG mode = ``shadow``)
+    should use :func:`try_load_cache` instead.
+    """
     payload = json.loads(path.read_text())
     return [CacheRecord.from_json(entry) for entry in payload]
+
+
+def try_load_cache(path: Path) -> list[CacheRecord] | None:
+    """Soft-fail variant of :func:`load_cache`.
+
+    Returns ``None`` when the file does not exist. Other I/O / parse
+    errors still propagate, so a malformed cache is treated as a real
+    error rather than absence (codex L3).
+    """
+    if not path.exists():
+        return None
+    return load_cache(path)
+
+
+# Fields enumerated below are the ENTIRE input to the manifest
+# fingerprint. A new field on FeatureContract that affects KG queries
+# (e.g. a future kg_exclude_predicates filter) MUST be added here too —
+# otherwise downstream cache readers will accept a stale cache that no
+# longer matches the manifest's KG-query contract. Excluded by design:
+# label, description, dtype (presentation only), validation_* (catches
+# data quality, not KG semantics).
+_MANIFEST_FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "name",
+    "knowable_at.reference",
+    "knowable_at.offset_days",
+    "source",
+    "derivation_inputs",
+    "aggregation",
+    "window_days",
+    "kg_entity_codes",
+)
 
 
 def compute_manifest_fingerprint(features: Iterable[FeatureContract]) -> str:
     """SHA-256 over a deterministic serialization of the manifest.
 
     The serialization captures every contract field that affects KG
-    queries: name, knowable_at, source, derivation_inputs, aggregation,
-    window_days, kg_entity_codes. Returns the first 8 hex chars (sha8).
+    queries (see ``_MANIFEST_FINGERPRINT_FIELDS``). Returns the first
+    8 hex chars (sha8).
     """
     rows: list[tuple[Any, ...]] = []
     for fc in features:
