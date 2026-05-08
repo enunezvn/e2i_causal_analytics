@@ -1771,7 +1771,7 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_low_coverage():
 
 
 def test_phase29_stage2_pre_compute_promotion_eligibility_fails_high_disagreement():
-    """When kg-vs-adversarial disagreement > 5%, passes=False."""
+    """When cross-source disagreement > 5%, passes=False."""
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         compute_promotion_eligibility,
     )
@@ -1780,7 +1780,7 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_high_disagreemen
         {"decided_by": "kg", "disagreements": []}
     ] * 90
     metrics = compute_promotion_eligibility(verdicts)
-    assert metrics["kg_adversarial_disagreement_rate"] == pytest.approx(0.10)
+    assert metrics["cross_source_disagreement_rate"] == pytest.approx(0.10)
     assert metrics["passes"] is False
 
 
@@ -1793,5 +1793,25 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_zero_features():
     metrics = compute_promotion_eligibility([])
     assert metrics["n_features"] == 0
     assert metrics["non_abstain_pct"] == 0.0
-    assert metrics["kg_adversarial_disagreement_rate"] == 0.0
+    assert metrics["kg_decided_count"] == 0
+    assert metrics["cross_source_disagreement_rate"] == 0.0
+    assert metrics["passes"] is False
+
+
+def test_phase29_stage2_pre_compute_promotion_eligibility_fails_no_kg_decided():
+    """Codex H2: passes=False when KG never fired (all decided by adversarial),
+    even with high non_abstain_pct and zero disagreement.
+
+    Promoting in this state is meaningless — there is no KG signal to
+    promote.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    verdicts = [{"decided_by": "adversarial", "disagreements": []}] * 100
+    metrics = compute_promotion_eligibility(verdicts)
+    assert metrics["n_features"] == 100
+    assert metrics["non_abstain_pct"] == pytest.approx(1.0)
+    assert metrics["kg_decided_count"] == 0
     assert metrics["passes"] is False
