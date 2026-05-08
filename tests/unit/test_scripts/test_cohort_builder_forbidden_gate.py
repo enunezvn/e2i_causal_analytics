@@ -129,3 +129,63 @@ def test_csu_drop_handles_missing_forbidden_key_in_record():
 
     [out] = _drop_forbidden_columns([{"a": 1}], ["nonexistent"])
     assert out == {"a": 1}
+
+
+# Codex Q9 — explicit coverage assertion: every column the gate is
+# INTENDED to drop must appear in the corresponding FORBIDDEN_NON_TARGET
+# list. Without this, a future converter change that introduces a new
+# post-index column would silently bypass the gate (the manifest
+# wouldn't list it; the gate's drop set wouldn't include it).
+
+CSU_INTENDED_DROP = {
+    "journey_start_date",
+    "journey_end_date",
+    "journey_duration_days",
+    "journey_stage",
+    "journey_status",
+    "brand",
+}
+
+OPTUM_INTENDED_DROP = {
+    "prediction_end_date",
+    "journey_start_date",
+    "journey_end_date",
+    "journey_duration_days",
+    "journey_stage",
+    "journey_status",
+    "brand",
+}
+
+
+def test_csu_intended_drop_columns_all_in_non_target():
+    """Every column the CSU converter is supposed to drop at the
+    boundary must appear in CSU_FORBIDDEN_NON_TARGET. A new post-index
+    column added to ``_build_patient_journeys`` MUST be added to the
+    manifest's ``_POST_INDEX_FORBIDDEN`` list (which feeds
+    ``CSU_FORBIDDEN_AS_FEATURES`` and thus ``CSU_FORBIDDEN_NON_TARGET``)
+    — otherwise the gate becomes a no-op on that new column."""
+    from src.data.manifests import CSU_FORBIDDEN_NON_TARGET
+
+    forbidden = set(CSU_FORBIDDEN_NON_TARGET)
+    missing = CSU_INTENDED_DROP - forbidden
+    assert not missing, (
+        f"Columns the gate intends to drop are not in CSU_FORBIDDEN_NON_TARGET: "
+        f"{sorted(missing)}. Add them to CSU manifest's _POST_INDEX_FORBIDDEN "
+        f"FeatureContract list, or remove them from CSU_INTENDED_DROP if no "
+        f"longer applicable."
+    )
+
+
+def test_optum_intended_drop_columns_all_in_non_target():
+    """Every column the Optum converter is supposed to drop at the
+    boundary must appear in OPTUM_FORBIDDEN_NON_TARGET."""
+    from src.data.manifests import OPTUM_FORBIDDEN_NON_TARGET
+
+    forbidden = set(OPTUM_FORBIDDEN_NON_TARGET)
+    missing = OPTUM_INTENDED_DROP - forbidden
+    assert not missing, (
+        f"Columns the gate intends to drop are not in OPTUM_FORBIDDEN_NON_TARGET: "
+        f"{sorted(missing)}. Add them to Optum manifest's _POST_INDEX_FORBIDDEN "
+        f"FeatureContract list, or remove them from OPTUM_INTENDED_DROP if no "
+        f"longer applicable."
+    )
