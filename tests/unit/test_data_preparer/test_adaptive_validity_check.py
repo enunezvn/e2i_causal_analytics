@@ -1598,3 +1598,199 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "kg_signal",
     }
     assert set(verdict.keys()) == expected_keys
+
+
+# =============================================================================
+# Stage 2 PR-E: shadow-mode promotion gate
+# =============================================================================
+
+
+def test_phase29_stage2_pre_kg_mode_off_skips_cache_load(tmp_path):
+    """kg_mode='off' preserves Stage 1: cache not loaded even when
+    kg_cache_path is configured AND the file exists.
+    """
+    from datetime import datetime, timezone
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.kg.cache import CacheRecord, save_cache
+
+    # File EXISTS — make sure the kg_mode check fires before file IO.
+    record = CacheRecord(
+        feature_name="x",
+        manifest_fingerprint_sha8="a",
+        target_codes_fingerprint_sha8="b",
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(),
+        target_entity_codes=(),
+        sources_attempted=(),
+        status="ok",
+        edges=(),
+        errors=(),
+    )
+    cache_path = tmp_path / "cache.json"
+    save_cache([record], cache_path)
+
+    result = _load_kg_cache({"kg_cache_path": str(cache_path), "kg_mode": "off"})
+    assert result is None
+
+
+def test_phase29_stage2_pre_kg_mode_shadow_loads_cache(tmp_path):
+    """kg_mode='shadow' loads the cache like 'promoted'; severity cap
+    happens at compose time, not load time.
+    """
+    from datetime import datetime, timezone
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.kg.cache import CacheRecord, save_cache
+
+    record = CacheRecord(
+        feature_name="x",
+        manifest_fingerprint_sha8="a",
+        target_codes_fingerprint_sha8="b",
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(),
+        target_entity_codes=(),
+        sources_attempted=(),
+        status="ok",
+        edges=(),
+        errors=(),
+    )
+    cache_path = tmp_path / "cache.json"
+    save_cache([record], cache_path)
+
+    loaded = _load_kg_cache({"kg_cache_path": str(cache_path), "kg_mode": "shadow"})
+    assert loaded is not None
+    assert "x" in loaded
+
+
+def test_phase29_stage2_pre_shadow_mode_caps_kg_severity_to_info():
+    """Shadow mode: a KG-decided 'high' severity verdict is capped to 'info'
+    so leakage_remediation cannot drop the feature on KG signal alone.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import KGEdge
+
+    voter = EnsembleVoter()
+    edge = KGEdge(
+        subject_id="CHEMBL1234",
+        predicate="treats",
+        object_id="EFO_0000270",
+        evidence_source="open_targets",
+        score=0.85,
+    )
+    verdict = _compose_legacy_verdict(
+        "x",
+        voter=voter,
+        kg_edges=(edge,),
+        feature_entity_ids=("CHEMBL1234",),
+        target_entity_ids=("EFO_0000270",),
+        kg_mode="shadow",
+    )
+    # decided_by + kg_signal still recorded (audit)
+    assert verdict["decided_by"] == "kg"
+    assert verdict["kg_signal"] == "leak_drug_treats_disease"
+    # severity capped to info (cannot drop the feature)
+    assert verdict["severity"] == "info"
+    # remediation softened to keep — nothing should be dropped on KG alone in shadow
+    assert verdict["remediation"] == "keep"
+
+
+def test_phase29_stage2_pre_promoted_mode_kg_drives_high_severity():
+    """Promoted mode: KG-decided verdict keeps voter's full severity output
+    (severity='high', remediation='drop' for leak_drug_treats_disease).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import KGEdge
+
+    voter = EnsembleVoter()
+    edge = KGEdge(
+        subject_id="CHEMBL1234",
+        predicate="treats",
+        object_id="EFO_0000270",
+        evidence_source="open_targets",
+        score=0.85,
+    )
+    verdict = _compose_legacy_verdict(
+        "x",
+        voter=voter,
+        kg_edges=(edge,),
+        feature_entity_ids=("CHEMBL1234",),
+        target_entity_ids=("EFO_0000270",),
+        kg_mode="promoted",
+    )
+    assert verdict["decided_by"] == "kg"
+    assert verdict["kg_signal"] == "leak_drug_treats_disease"
+    assert verdict["severity"] == "high"
+    assert verdict["remediation"] == "drop"
+
+
+def test_phase29_stage2_pre_compute_promotion_eligibility_passes_threshold():
+    """Promotion eligibility metrics: 95% non-abstain AND ≤5% disagreement
+    → passes=True.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    # 100 verdicts, 97 non-abstain, 3 with adv vs kg disagreement
+    verdicts = (
+        [{"decided_by": "kg", "disagreements": []}] * 80
+        + [{"decided_by": "adversarial", "disagreements": []}] * 17
+        + [{"decided_by": "abstain", "disagreements": []}] * 3
+    )
+    metrics = compute_promotion_eligibility(verdicts)
+    assert metrics["n_features"] == 100
+    assert metrics["non_abstain_pct"] == pytest.approx(0.97)
+    assert metrics["passes"] is True
+
+
+def test_phase29_stage2_pre_compute_promotion_eligibility_fails_low_coverage():
+    """When non-abstain < 95%, passes=False."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    verdicts = (
+        [{"decided_by": "kg", "disagreements": []}] * 50
+        + [{"decided_by": "abstain", "disagreements": []}] * 50
+    )
+    metrics = compute_promotion_eligibility(verdicts)
+    assert metrics["non_abstain_pct"] == pytest.approx(0.50)
+    assert metrics["passes"] is False
+
+
+def test_phase29_stage2_pre_compute_promotion_eligibility_fails_high_disagreement():
+    """When kg-vs-adversarial disagreement > 5%, passes=False."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    verdicts = [
+        {"decided_by": "kg", "disagreements": ["adversarial=high but kg=accept"]}
+    ] * 10 + [{"decided_by": "kg", "disagreements": []}] * 90
+    metrics = compute_promotion_eligibility(verdicts)
+    assert metrics["kg_adversarial_disagreement_rate"] == pytest.approx(0.10)
+    assert metrics["passes"] is False
+
+
+def test_phase29_stage2_pre_compute_promotion_eligibility_zero_features():
+    """Empty verdict list: well-formed metrics, passes=False (no evidence)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    metrics = compute_promotion_eligibility([])
+    assert metrics["n_features"] == 0
+    assert metrics["non_abstain_pct"] == 0.0
+    assert metrics["kg_adversarial_disagreement_rate"] == 0.0
+    assert metrics["passes"] is False
