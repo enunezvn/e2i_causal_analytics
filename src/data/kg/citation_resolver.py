@@ -43,14 +43,28 @@ from src.data.kg.umls_uts import UMLSAuthError, UMLSClient, UMLSError
 logger = logging.getLogger(__name__)
 
 
-# Causal cue verbs covered: a curated list of verbs and stock phrases that
-# claim causal direction in scientific abstracts. The list is intentionally
-# narrow — false positives (e.g., "X has been associated with Y") would
-# defeat the whole point of this filter. Common patterns to add later:
-# "leads to", "results in", "responsible for", "mechanism of action".
+# Causal cue list: verbs and stock phrases that claim a causal mechanism
+# in scientific abstracts. The list is intentionally narrow — false
+# positives (e.g., "X is associated with Y", "patients treated with X")
+# would defeat the whole point of this filter.
+#
+# Codex review MEDIUM (2026-05-08) pruned ambiguous verbs:
+#   - "treated" — non-causal in "patients treated with X" passive observational shape.
+#   - "improved" — "patient improved" can mean "got better" with no causal attribution.
+#   - "reduced" — "reduced model" / "reduced sample" are common non-causal usages.
+#   - "blocks", "blocked" — high false-positive in non-pharma contexts.
+#   - "prevents", "prevented" — "prevented from enrolling" is non-causal.
+# Their active-voice counterparts ("treats", "improves", "reduces",
+# "prevents") are kept but only when they appear with both entities AND
+# co-occurrence is enforced upstream by the both-entities gate.
+#
+# Multi-word phrases added per codex flag — these were called out as
+# common in causal abstracts but absent from v1. Multi-word phrases are
+# matched as literal substrings (with word boundaries) so they don't
+# false-positive against partial matches.
 CAUSAL_CUE_VERBS: tuple[str, ...] = (
+    # Single-word verbs (active voice; passive forms removed by codex review).
     "treats",
-    "treated",
     "causes",
     "caused",
     "induces",
@@ -58,17 +72,23 @@ CAUSAL_CUE_VERBS: tuple[str, ...] = (
     "ameliorates",
     "ameliorated",
     "improves",
-    "improved",
     "reduces",
-    "reduced",
     "inhibits",
     "inhibited",
-    "blocks",
-    "blocked",
-    "prevents",
-    "prevented",
     "alleviates",
     "alleviated",
+    "mediates",
+    "mediated",
+    "triggers",
+    "triggered",
+    # Multi-word causal phrases (codex review addition).
+    "leads to",
+    "led to",
+    "results in",
+    "resulted in",
+    "responsible for",
+    "mechanism of action",
+    "due to",
 )
 
 

@@ -372,5 +372,28 @@ def test_resolve_pmid_swallows_europe_pmc_error() -> None:
 
 def test_causal_cue_verbs_list_has_expected_terms() -> None:
     """Sanity: the curated cue list covers the high-frequency verbs."""
-    for verb in ("treats", "causes", "induces", "inhibits", "prevents"):
+    for verb in ("treats", "causes", "induces", "inhibits"):
         assert verb in CAUSAL_CUE_VERBS
+
+
+def test_causal_cue_verbs_includes_multi_word_phrases() -> None:
+    """Codex review MEDIUM (2026-05-08): multi-word causal phrases were
+    flagged as commonly missing. Verify they're now present."""
+    for phrase in ("leads to", "results in", "responsible for", "due to"):
+        assert phrase in CAUSAL_CUE_VERBS
+
+
+def test_causal_cue_verbs_excludes_ambiguous_passives() -> None:
+    """Codex review pruned ``treated`` (passive observational shape:
+    'patients treated with X' is not causal), ``blocked``, and
+    ``prevented`` (non-causal in 'prevented from enrolling')."""
+    assert "treated" not in CAUSAL_CUE_VERBS
+    assert "blocked" not in CAUSAL_CUE_VERBS
+    assert "prevented" not in CAUSAL_CUE_VERBS
+
+
+def test_find_causal_cue_finds_multi_word_phrase() -> None:
+    """The whole-word boundaries on multi-word phrases must still find
+    them in natural-language abstracts."""
+    haystack = "ibuprofen treatment leads to improved outcomes".lower()
+    assert _find_causal_cue(haystack) == "leads to"
