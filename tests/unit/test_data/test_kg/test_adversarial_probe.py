@@ -658,6 +658,45 @@ class TestCompare:
         assert result.outcome == "error"
         assert "prefix" in (result.error or "")
 
+    def test_compare_inf_vs_finite_max_abs_change_is_inf(self) -> None:
+        # Codex M3: a real unbounded drift (one side inf, the other finite)
+        # is the most extreme leak the probe can detect. It must surface as
+        # max_abs_change=inf, not silently filter to None.
+        probe = AdversarialProbe()
+        baseline = pd.Series([float("inf")], index=["p1"])
+        prefix = pd.Series([0.0], index=["p1"])
+        result = probe.compare(
+            feature_name="x",
+            baseline_values=baseline,
+            prefix_values=prefix,
+        )
+        assert result.outcome == "changed"
+        assert result.max_abs_change == float("inf")
+
+    def test_compare_inf_vs_neg_inf_max_abs_change_is_inf(self) -> None:
+        probe = AdversarialProbe()
+        baseline = pd.Series([float("inf")], index=["p1"])
+        prefix = pd.Series([float("-inf")], index=["p1"])
+        result = probe.compare(
+            feature_name="x",
+            baseline_values=baseline,
+            prefix_values=prefix,
+        )
+        assert result.outcome == "changed"
+        assert result.max_abs_change == float("inf")
+
+    def test_compare_same_sign_inf_unchanged(self) -> None:
+        # np.isclose(equal_nan=True) treats inf==inf (same sign) as close.
+        probe = AdversarialProbe()
+        baseline = pd.Series([float("inf"), float("-inf")], index=["p1", "p2"])
+        prefix = pd.Series([float("inf"), float("-inf")], index=["p1", "p2"])
+        result = probe.compare(
+            feature_name="x",
+            baseline_values=baseline,
+            prefix_values=prefix,
+        )
+        assert result.outcome == "unchanged"
+
     def test_compare_int_dtype_works(self) -> None:
         probe = AdversarialProbe()
         baseline = pd.Series([1, 2, 3], index=["a", "b", "c"], dtype="int64")
