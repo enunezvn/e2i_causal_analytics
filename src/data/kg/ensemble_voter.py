@@ -502,9 +502,7 @@ class EnsembleVoter:
             # high verdicts so the voter falls through to the
             # LLM/KG/abstain path; the malformed input is logged so
             # operators see the misconfiguration.
-            if raw_adv_severity == ADV_SEVERITY_HIGH and not _is_finite_number(
-                adv_z_score
-            ):
+            if raw_adv_severity == ADV_SEVERITY_HIGH and not _is_finite_number(adv_z_score):
                 evidence.append(
                     f"Adversarial verdict claims severity=high but z_score is "
                     f"{adv_z_score!r} (missing or non-finite); cannot honour "
@@ -545,12 +543,9 @@ class EnsembleVoter:
         # trail. Require `contract_source` to honour the high veto;
         # malformed verdicts fall through to LLM/KG/abstain.
         layer_1_high = (
-            layer_1_verdict is not None
-            and layer_1_verdict.get("severity") == LAYER_1_SEVERITY_HIGH
+            layer_1_verdict is not None and layer_1_verdict.get("severity") == LAYER_1_SEVERITY_HIGH
         )
-        layer_1_has_source = bool(
-            layer_1_verdict and layer_1_verdict.get("contract_source")
-        )
+        layer_1_has_source = bool(layer_1_verdict and layer_1_verdict.get("contract_source"))
         if layer_1_high and not layer_1_has_source:
             evidence.append(
                 f"Layer 1 verdict claims severity=high but contract_source is "
@@ -564,6 +559,7 @@ class EnsembleVoter:
             )
             layer_1_high = False
         if layer_1_high:
+            assert layer_1_verdict is not None  # narrows for mypy; layer_1_high implies non-None
             evidence.append(
                 f"Layer 1 manifest contract veto: severity=high, "
                 f"contract_source={layer_1_verdict.get('contract_source')}"
