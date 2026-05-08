@@ -1484,3 +1484,117 @@ def test_phase29_stage2_adv_moderate_alone_with_unrelated_kg_edges_preserves_leg
     # Bypass triggered → legacy contract preserved (severity=moderate, remediation=ambiguous)
     assert verdict["severity"] == "moderate"
     assert verdict["remediation"] == "ambiguous"
+
+
+def test_phase29_stage2_parse_target_entity_codes_skips_malformed():
+    """Codex H5: malformed scope_spec target_entity_codes warn-and-skip,
+    not crash.
+
+    Bare ``code for _, code in target_codes`` would raise ValueError on
+    1- or 3-element entries, killing the pipeline. Helper guards with a
+    log warning and accepts only well-formed 2-tuples.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _parse_target_entity_codes,
+    )
+
+    # Empty / None
+    assert _parse_target_entity_codes(None) == ()
+    assert _parse_target_entity_codes([]) == ()
+
+    # Well-formed mixed with malformed → only well-formed survive
+    raw = [
+        ("RXNORM", "479158"),
+        ["RXNORM"],  # 1-element — would crash
+        ["RXNORM", "1011295"],  # 2-element list (JSON-deserialized)
+        ["RXNORM", "extra", "third"],  # 3-element — would crash
+    ]
+    out = _parse_target_entity_codes(raw)
+    assert out == ("479158", "1011295")
+
+
+@pytest.mark.asyncio
+async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monkeypatch):
+    """Codex M6a: end-to-end test of the async main loop with a populated
+    KG cache pointing at a real file.
+
+    Constructs a minimal state: train_df with one numeric feature and a
+    binary target; scope_spec with kg_cache_path. Asserts a verdict is
+    emitted and (where edges connect) routes through the voter.
+    """
+    from datetime import datetime, timezone
+
+    import pandas as pd
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        adaptive_validity_check,
+    )
+    from src.data.kg.cache import CacheRecord, save_cache
+    from src.data.kg.types import KGEdge
+
+    # Build a cache with one record for the feature we'll check
+    edge = KGEdge(
+        subject_id="CHEMBL2107858",
+        predicate="treats",
+        object_id="MONDO_0011918",
+        evidence_source="open_targets",
+        score=0.9,
+    )
+    record = CacheRecord(
+        feature_name="age",
+        manifest_fingerprint_sha8="aaaaaaaa",
+        target_codes_fingerprint_sha8="bbbbbbbb",
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(("UMLS", "C0001779"),),
+        target_entity_codes=(("UMLS", "C0042109"),),
+        sources_attempted=("umls_uts", "open_targets"),
+        status="ok",
+        edges=(edge,),
+        errors=(),
+    )
+    cache_path = tmp_path / "cache.json"
+    save_cache([record], cache_path)
+
+    # Train_df must have ≥30 non-null rows for Layer 3 to run
+    df = pd.DataFrame(
+        {
+            "age": list(range(60)),
+            "y": [0, 1] * 30,
+        }
+    )
+    state = {
+        "train_df": df,
+        "scope_spec": {
+            "prediction_target": "y",
+            "kg_cache_path": str(cache_path),
+            # No target_entity_codes — KG signal won't fire (no_signal),
+            # but the loader and the main-loop wiring still execute.
+        },
+    }
+    result = await adaptive_validity_check(state)
+
+    # Main loop ran end-to-end — at least one verdict emitted for the
+    # numeric "age" column.
+    assert "adaptive_verdicts" in result
+    assert len(result["adaptive_verdicts"]) >= 1
+    # Verdict carries the canonical 16-field shape (regression guard).
+    verdict = next(v for v in result["adaptive_verdicts"] if v["feature"] == "age")
+    expected_keys = {
+        "feature",
+        "layer",
+        "z_score",
+        "actual_auc",
+        "null_mean",
+        "null_std",
+        "p_value",
+        "n_permutations",
+        "severity",
+        "remediation",
+        "evidence",
+        "contract_source",
+        "contract_window_days",
+        "decided_by",
+        "disagreements",
+        "kg_signal",
+    }
+    assert set(verdict.keys()) == expected_keys
