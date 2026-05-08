@@ -168,11 +168,37 @@ def test_pipeline_runs_to_completion(csu_artifact: dict) -> None:
 @pytest.mark.timeout(2000)
 def test_feature_manifest_source_threaded(csu_artifact: dict) -> None:
     """Item A1 sanity check: the runner threaded ``feature_manifest_source``
-    through to scope_spec. Without this, Layer 5 silently no-ops on RWD."""
+    through to scope_spec AND Layer 5 actually consumed it.
+
+    Two-step assertion (codex L4): echoing the field is necessary but not
+    sufficient — Layer 5 might have received the field and skipped the
+    manifest pass for any reason (e.g., a future regression in
+    ``lookup_feature_contract``). The downstream proof is that at least
+    one Layer 1 manifest-driven verdict appears in ``adaptive_verdicts``,
+    since the CSU patient_journeys.json on disk is known to contain
+    post-index columns the manifest declares forbidden (journey_*, brand,
+    etc.). If Layer 5 consulted the registry, it MUST emit at least one
+    layer="1" verdict on this cohort."""
     assert csu_artifact.get("feature_manifest_source") == "csu", (
         f"feature_manifest_source not threaded; got "
         f"{csu_artifact.get('feature_manifest_source')!r}. Layer 5 manifest "
         f"verdicts will not have fired — re-check the CLI flag plumbing."
+    )
+
+    verdicts = csu_artifact.get("adaptive_verdicts") or []
+    layer_1_verdicts = [
+        v for v in verdicts if isinstance(v, dict) and v.get("layer") == "1"
+    ]
+    assert len(layer_1_verdicts) > 0, (
+        f"feature_manifest_source='csu' was set but Layer 5 produced no "
+        f"layer='1' verdicts (total verdicts: {len(verdicts)}). The CSU "
+        f"patient_journeys.json contains post-index columns (journey_*, "
+        f"brand, treatment_initiated) that the manifest declares forbidden "
+        f"— at least one MUST land as a layer='1' verdict if the registry "
+        f"is being consulted. Possible causes: (a) the manifest registry "
+        f"lookup is broken; (b) the data ingestion path stripped the "
+        f"forbidden columns before Layer 5 ran; (c) feature_manifest_source "
+        f"was set on scope_spec but not read by adaptive_validity_check."
     )
 
 
@@ -238,6 +264,11 @@ def test_no_high_z_score_on_kept_features(csu_artifact: dict) -> None:
     skip them too. The remaining Layer 3 verdicts are on the surviving
     feature set, which the plan demands all sit below 5σ.
 
+    Robustness contract (codex H1): a passing test must prove that Layer 3
+    actually inspected at least one kept feature; otherwise the assertion
+    is vacuously true and a regression that suppresses adversarial output
+    would slip through silently.
+
     z_score is a TOP-LEVEL key on the legacy verdict dict per
     ``adaptive_validity_check._build_verdict`` (severity-tagged Layer 3
     output). The ``evidence`` field is a descriptive STRING, not a nested
@@ -247,24 +278,51 @@ def test_no_high_z_score_on_kept_features(csu_artifact: dict) -> None:
     verdicts = csu_artifact.get("adaptive_verdicts") or []
     dropped = set(csu_artifact.get("leakage_dropped_features") or [])
 
+    assert len(verdicts) > 0, (
+        "adaptive_verdicts is empty — Layer 5 produced no audit trail. "
+        "Either the data_preparer pipeline halted before adaptive_validity_check, "
+        "or the runner failed to propagate the field into the artifact "
+        "(see scripts/run_tier0_test.py state[adaptive_verdicts] = ...)."
+    )
+
+    layer_3_verdicts = [
+        v for v in verdicts if isinstance(v, dict) and v.get("layer") == "3"
+    ]
+    layer_3_kept: list[dict] = [
+        v for v in layer_3_verdicts if v.get("feature") not in dropped
+    ]
+    assert len(layer_3_kept) > 0, (
+        f"No Layer 3 verdicts were inspected on kept features — assertion "
+        f"would be vacuously true. Total verdicts: {len(verdicts)}, "
+        f"layer='3': {len(layer_3_verdicts)}, of which kept: "
+        f"{len(layer_3_kept)}. If this is intentional (e.g., Layer 1 "
+        f"caught everything before Layer 3 ran), the test should be "
+        f"adjusted to surface that explicitly rather than silent-pass."
+    )
+
     high_z_kept: list[tuple[str, float]] = []
-    for v in verdicts:
-        if not isinstance(v, dict):
-            continue
-        if v.get("layer") != "3":
-            continue
-        feature = v.get("feature")
-        if feature in dropped:
-            continue
+    parse_failures: list[tuple[str, str]] = []
+    for v in layer_3_kept:
+        feature = v.get("feature") or "<unnamed>"
         z = v.get("z_score")
         if z is None:
+            # Layer 3 'info' / 'too-few-rows' / 'scoring-error' short-circuits
+            # legitimately have z_score=None per _short_circuit_verdict; skip.
             continue
         try:
             z_val = float(z)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            parse_failures.append((feature, f"{type(z).__name__}: {exc!s}"))
             continue
         if z_val >= ADVERSARIAL_Z_MAX:
-            high_z_kept.append((feature or "<unnamed>", z_val))
+            high_z_kept.append((feature, z_val))
+
+    assert not parse_failures, (
+        f"Layer 3 verdicts on kept features had unparseable z_score:\n  - "
+        + "\n  - ".join(f"{name}: {err}" for name, err in parse_failures)
+        + "\nThe verdict schema may have shifted or the artifact serializer "
+        f"corrupted the value. Re-audit `_build_verdict` callsites."
+    )
 
     assert not high_z_kept, (
         f"Layer 3 found z_score ≥ {ADVERSARIAL_Z_MAX} on kept features:\n  - "
