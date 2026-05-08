@@ -227,6 +227,74 @@ def test_query_drug_disease_edges_swallows_open_targets_error() -> None:
     assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
 
 
+def test_query_drug_disease_edges_rejects_nan_score() -> None:
+    """NaN scores must collapse to None so ranking logic isn't poisoned."""
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "rows": [
+                    {
+                        "score": float("nan"),
+                        "datasourceId": "europepmc",
+                        "literature": [],
+                        "drug": {"id": "X", "name": "X"},
+                        "disease": {"id": "Y", "name": "Y"},
+                    }
+                ]
+            }
+        }
+    )
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
+    assert len(edges) == 1
+    assert edges[0].score is None
+
+
+def test_query_drug_disease_edges_rejects_inf_score() -> None:
+    """+/-inf scores must also collapse to None."""
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "rows": [
+                    {
+                        "score": float("inf"),
+                        "datasourceId": "europepmc",
+                        "literature": [],
+                        "drug": {"id": "X"},
+                        "disease": {"id": "Y"},
+                    }
+                ]
+            }
+        }
+    )
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
+    assert len(edges) == 1
+    assert edges[0].score is None
+
+
+def test_query_drug_disease_edges_handles_missing_score_key() -> None:
+    """If the row simply has no 'score' key, edge.score must be None."""
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "rows": [
+                    {
+                        "datasourceId": "europepmc",
+                        "literature": [],
+                        "drug": {"id": "X"},
+                        "disease": {"id": "Y"},
+                    }
+                ]
+            }
+        }
+    )
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
+    assert len(edges) == 1
+    assert edges[0].score is None
+
+
 def test_query_disease_hierarchy_filters_to_taxonomic_predicates() -> None:
     umls = _StubUMLS(
         relations=[
