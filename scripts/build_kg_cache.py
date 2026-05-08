@@ -148,16 +148,32 @@ def _query_edges_for_cui(
 ) -> tuple[tuple[KGEdge, ...], list[str]]:
     """Query KG for taxonomic edges anchored on ``cui``.
 
-    Returns ``(edges, errors)``. Errors are non-fatal — the caller may
-    have multiple entities per feature, and a partial failure on one
-    should not poison the whole record. Logs a warning when the response
-    hits the pagination ceiling so build operators can spot silently
-    truncated results (codex B4).
+    Returns ``(edges, errors)``. Errors are non-fatal at this layer —
+    the caller may have multiple entities per feature, and a partial
+    failure on one should not poison the whole record. Logs a warning
+    when the response hits the pagination ceiling so build operators
+    can spot silently truncated results (codex B4).
+
+    Catches ``UMLSError`` (transport / request-level UMLS failures) but
+    NOT ``UMLSAuthError`` — auth failures are fatal across the entire
+    UMLS surface, so we let them propagate up to abort the build with
+    an unambiguous error rather than masquerade as per-feature
+    ``source_error``. This narrowing (vs the prior ``except Exception``)
+    is part of the codex H1 follow-up from PR #102: typed-error
+    propagation lets ``status=source_error`` mean "transport failed",
+    and a programming bug elsewhere now bubbles up as the bug it is.
     """
+    from src.data.kg.open_targets import OpenTargetsError
+    from src.data.kg.umls_uts import UMLSAuthError, UMLSError
+
     errors: list[str] = []
     try:
         edges = tuple(kg_querier.query_disease_hierarchy(cui))
-    except Exception as exc:  # noqa: BLE001
+    except UMLSAuthError:
+        # Fatal — auth failure on one CUI implies auth is broken for
+        # every CUI in this build. Surface to abort the whole run.
+        raise
+    except (UMLSError, OpenTargetsError) as exc:
         return (), [f"query_disease_hierarchy({cui!r}) raised: {exc}"]
     if len(edges) >= PAGINATION_WARNING_THRESHOLD:
         logger.warning(

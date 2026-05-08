@@ -566,11 +566,15 @@ def test_build_record_live_aggregates_edges_across_distinct_cuis():
 
 def test_build_record_live_partial_failure_preserved_via_errors_field():
     """codex M3: when ONE entity resolves+queries successfully but
-    ANOTHER hits a transport error, status remains ``ok`` (we got
+    ANOTHER hits a typed transport error, status remains ``ok`` (we got
     edges) and the error is recorded in the ``errors`` field for
-    audit. Operators must check BOTH status AND errors."""
+    audit. Operators must check BOTH status AND errors. After D1
+    (PR #102 H1 follow-up) the catch in ``_query_edges_for_cui``
+    narrowed to ``UMLSError`` / ``OpenTargetsError`` so the partial-
+    failure error must originate from a typed transport class."""
     from scripts.build_kg_cache import _build_record_live
     from src.data.feature_contract import FeatureContract, KnowableAt
+    from src.data.kg.umls_uts import UMLSError
 
     fc = FeatureContract(
         name="primary_diagnosis_code",
@@ -587,7 +591,7 @@ def test_build_record_live_partial_failure_preserved_via_errors_field():
     class _PartialFailQuerier:
         def query_disease_hierarchy(self, cui: str):
             if cui == "C0033578":
-                raise RuntimeError("transport boom")
+                raise UMLSError("transport boom")
             return [_make_kg_edge(cui, "X")]
 
     record = _build_record_live(
@@ -608,9 +612,14 @@ def test_build_record_live_partial_failure_preserved_via_errors_field():
 
 def test_build_record_live_all_queries_failed_yields_source_error():
     """codex M2: when every successfully-resolved entity's KG query
-    raises, status MUST be 'source_error' (not 'queried_no_edges')."""
+    raises a typed transport error, status MUST be 'source_error' (not
+    'queried_no_edges'). After D1 (PR #102 H1 follow-up) the catch in
+    ``_query_edges_for_cui`` narrowed to ``UMLSError`` / ``OpenTargetsError``
+    so transport failures and programming bugs are no longer
+    indistinguishable; this test pins the typed-transport-failure path."""
     from scripts.build_kg_cache import _build_record_live
     from src.data.feature_contract import FeatureContract, KnowableAt
+    from src.data.kg.umls_uts import UMLSError
 
     fc = FeatureContract(
         name="primary_diagnosis_code",
@@ -623,7 +632,7 @@ def test_build_record_live_all_queries_failed_yields_source_error():
 
     class _AlwaysFailQuerier:
         def query_disease_hierarchy(self, cui: str):
-            raise RuntimeError("transport boom")
+            raise UMLSError("transport boom")
 
     record = _build_record_live(
         fc,
@@ -638,6 +647,81 @@ def test_build_record_live_all_queries_failed_yields_source_error():
         f"Expected source_error when all queries failed post-resolution; got {record.status}"
     )
     assert any("transport boom" in e for e in record.errors)
+
+
+def test_build_record_live_propagates_umls_auth_error():
+    """Typed-error follow-up (D1 / PR #102 H1): ``UMLSAuthError`` is fatal
+    across the entire UMLS surface; ``_query_edges_for_cui`` MUST NOT
+    swallow it as ``status=source_error`` because auth failure on one
+    CUI implies it's broken for every CUI in the build. The cache builder
+    should surface the error so the operator can fix credentials before
+    rebuilding."""
+    import pytest as _pytest
+
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+    from src.data.kg.umls_uts import UMLSAuthError
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+
+    class _AuthFailQuerier:
+        def query_disease_hierarchy(self, cui: str):
+            raise UMLSAuthError("invalid api key")
+
+    with _pytest.raises(UMLSAuthError):
+        _build_record_live(
+            fc,
+            manifest_fp="aaaa",
+            target_fp="bbbb",
+            target_entity_codes=[],
+            sources_attempted=("umls_uts",),
+            entity_linker=linker,  # type: ignore[arg-type]
+            kg_querier=_AuthFailQuerier(),  # type: ignore[arg-type]
+        )
+
+
+def test_build_record_live_programming_bug_not_swallowed_as_source_error():
+    """Typed-error follow-up (D1 / PR #102 H1): a generic ``RuntimeError``
+    (a programming bug elsewhere — e.g., a malformed FeatureContract)
+    must NOT be caught and recorded as ``status=source_error``. After
+    narrowing the catch to typed transport errors, programming bugs
+    propagate as bugs and surface in CI immediately rather than
+    silently producing degenerate cache entries."""
+    import pytest as _pytest
+
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+
+    class _BugQuerier:
+        def query_disease_hierarchy(self, cui: str):
+            raise RuntimeError("programmer-induced bug, not a transport failure")
+
+    with _pytest.raises(RuntimeError, match="programmer-induced bug"):
+        _build_record_live(
+            fc,
+            manifest_fp="aaaa",
+            target_fp="bbbb",
+            target_entity_codes=[],
+            sources_attempted=("umls_uts",),
+            entity_linker=linker,  # type: ignore[arg-type]
+            kg_querier=_BugQuerier(),  # type: ignore[arg-type]
+        )
 
 
 def test_build_record_live_pagination_warning_at_threshold(caplog):
