@@ -381,13 +381,16 @@ class AdversarialProbe:
             )
             if (~close).any():
                 diffs = np.abs(baseline_arr - prefix_arr)
-                # Restrict to changed AND finite differences. NaN→non-NaN
-                # mismatches show up as changed but produce NaN diffs that
-                # would mask the real numeric drift in `max_abs_change`.
                 changed_diffs = diffs[~close]
-                finite_diffs = changed_diffs[np.isfinite(changed_diffs)]
-                if finite_diffs.size > 0:
-                    max_abs_change = float(finite_diffs.max())
+                # Drop NaN diffs (NaN-vs-value pairs produce them) so they
+                # can't pollute the reported max. KEEP inf diffs: a real
+                # unbounded drift (baseline=inf vs prefix=0, or +inf vs
+                # -inf) should surface as max_abs_change=inf rather than
+                # be silently filtered to None — that would hide the most
+                # extreme leak the probe can detect.
+                non_nan_diffs = changed_diffs[~np.isnan(changed_diffs)]
+                if non_nan_diffs.size > 0:
+                    max_abs_change = float(non_nan_diffs.max())
         else:
             both_nan = (baseline_aligned.isna() & prefix_aligned.isna()).to_numpy()
             equal_or_na = baseline_aligned.eq(prefix_aligned).fillna(False).to_numpy()
