@@ -535,6 +535,11 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
     consumers had to special-case which fields might be present. The fix
     routes every Layer 3 short-circuit through ``_short_circuit_verdict`` and
     adds the contract-metadata keys to ``_build_verdict``.
+
+    Phase 2.9 Stage 1 (2026-05-08) extended the schema with three new
+    optional audit fields: ``decided_by``, ``disagreements``, ``kg_signal``.
+    These are populated by every verdict path (legacy + ensemble) so
+    sidecar consumers continue to see a uniform schema.
     """
     rng = np.random.default_rng(0)
     n = 250
@@ -567,6 +572,10 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         "evidence",
         "contract_source",
         "contract_window_days",
+        # Phase 2.9 Stage 1 audit fields:
+        "decided_by",
+        "disagreements",
+        "kg_signal",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -676,3 +685,431 @@ def test_unknown_manifest_source_falls_through_to_layer_3():
             f"Unknown manifest source incorrectly routed through CSU manifest. "
             f"Verdict: {verdicts_by_feat['journey_duration_days']!r}"
         )
+
+
+# =============================================================================
+# Phase 2.9 Stage 1 — EnsembleVoter wiring (2026-05-08)
+# =============================================================================
+
+
+def test_phase29_layer_1_verdict_carries_decided_by_layer_1():
+    """Manifest-caught features expose ``decided_by="layer_1"`` so the
+    audit trail names the deciding source."""
+    rng = np.random.default_rng(0)
+    n = 200
+    df = pd.DataFrame(
+        {
+            "journey_status": rng.choice([0, 1], size=n).astype(float),
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    assert "journey_status" in verdicts_by_feat
+    v = verdicts_by_feat["journey_status"]
+    assert v["layer"] == "1"
+    assert v["decided_by"] == "layer_1"
+    assert v["severity"] == "high"
+    assert v["remediation"] == "drop"
+    assert v["disagreements"] == []  # no other source spoke
+    assert v["kg_signal"] == "no_signal"  # KG inputs are None in Stage 1
+
+
+def test_phase29_layer_3_high_verdict_carries_decided_by_adversarial():
+    """Adversarial high (z>5σ) verdicts expose ``decided_by="adversarial"``."""
+    rng = np.random.default_rng(0)
+    n = 400
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            "leak_feature": y.astype(float) + rng.normal(0, 0.01, n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y", feature_manifest_source=None)
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    assert "leak_feature" in verdicts_by_feat
+    v = verdicts_by_feat["leak_feature"]
+    assert v["layer"] == "3"
+    assert v["decided_by"] == "adversarial"
+    assert v["severity"] == "high"
+
+
+def test_phase29_layer_3_info_verdict_bypasses_voter_keeps_legacy_severity():
+    """Pure-noise features still get ``severity=info, remediation=keep``
+    even though the voter would abstain on adv=info-alone signals.
+
+    The bypass path in ``_compose_legacy_verdict`` preserves the legacy
+    contract that downstream consumers rely on.
+    """
+    rng = np.random.default_rng(42)
+    n = 400
+    df = pd.DataFrame(
+        {
+            "noise": rng.standard_normal(n),
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    state = _make_state(df, "y", feature_manifest_source=None)
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    v = verdicts_by_feat["noise"]
+    assert v["layer"] == "3"
+    assert v["severity"] == "info"
+    assert v["remediation"] == "keep"
+    assert v["decided_by"] == "adversarial"  # not "abstain"
+    assert v["kg_signal"] == "no_signal"
+
+
+def test_phase29_short_circuit_verdict_carries_audit_fields():
+    """Short-circuit verdicts (too-few-rows) still carry the new audit fields."""
+    rng = np.random.default_rng(0)
+    n = 250
+    df = pd.DataFrame(
+        {
+            "tiny_feature": [1.0] * 5 + [None] * (n - 5),
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    state = _make_state(df, "y", feature_manifest_source=None)
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    v = verdicts_by_feat["tiny_feature"]
+    assert v["layer"] == "3"
+    assert v["severity"] == "info"
+    assert v["decided_by"] == "adversarial"
+    assert v["disagreements"] == []
+    assert v["kg_signal"] == "no_signal"
+    assert v["z_score"] is None  # short-circuit: probe didn't run
+    assert "Skipped" in v["evidence"]
+
+
+def test_phase29_disagreements_field_defaults_to_empty_list():
+    """Until Stage 2 (KG) and Stage 3 (LLM) are wired, no source can
+    contradict another; ``disagreements`` is always empty."""
+    rng = np.random.default_rng(0)
+    n = 400
+    df = pd.DataFrame(
+        {
+            "noise": rng.standard_normal(n),
+            "y": rng.integers(0, 2, n),
+        }
+    )
+    state = _make_state(df, "y", feature_manifest_source=None)
+    result = _run(state)
+
+    for v in result["adaptive_verdicts"]:
+        assert v["disagreements"] == []
+
+
+def test_phase29_ensemble_to_legacy_dict_helper_directly():
+    """Unit-test the adapter helper without running the full node."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _ensemble_to_legacy_dict,
+    )
+    from src.data.kg.types import EnsembleVerdict
+
+    verdict = EnsembleVerdict(
+        feature_name="test_feat",
+        severity="high",
+        remediation="drop",
+        decided_by="layer_1",
+        final_role="descendant",
+        confidence=1.0,
+        evidence=("Manifest contract: post_index",),
+        layer_1_input={
+            "feature": "test_feat",
+            "severity": "high",
+            "contract_source": "csu",
+            "contract_window_days": None,
+        },
+    )
+    legacy = _ensemble_to_legacy_dict(verdict, adversarial_input=None)
+    assert legacy["feature"] == "test_feat"
+    assert legacy["layer"] == "1"
+    assert legacy["severity"] == "high"
+    assert legacy["remediation"] == "drop"
+    assert legacy["decided_by"] == "layer_1"
+    assert legacy["contract_source"] == "csu"
+    assert legacy["contract_window_days"] is None
+    assert legacy["evidence"] == "Manifest contract: post_index"
+    assert legacy["disagreements"] == []
+    assert legacy["kg_signal"] == "no_signal"
+
+
+def test_phase29_decided_by_to_layer_mapping_covers_all_cases():
+    """Pin the decided_by → layer mapping so future EnsembleVoter
+    additions (kg, llm) get caught if not wired here."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _DECIDED_BY_TO_LAYER,
+    )
+
+    assert _DECIDED_BY_TO_LAYER == {
+        "layer_1": "1",
+        "adversarial": "3",
+        "kg": "2",
+        "llm": "4",
+        "abstain": "abstain",
+    }
+
+
+def test_phase29_mixed_severities_in_single_run_no_voter_cross_feature_state():
+    """Codex review LOW (L9-1, 2026-05-08): the shared ``EnsembleVoter``
+    instance is reused across all features in one node invocation.
+    Verify it has no cross-feature state by running a mix of severities
+    (Layer 1 high, Layer 3 high, moderate, info, short-circuit) and
+    asserting each verdict matches its own input only.
+    """
+    rng = np.random.default_rng(0)
+    n = 400
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # Layer 1 high (CSU-forbidden post_index column)
+            "journey_status": rng.choice([0, 1], size=n).astype(float),
+            # Layer 3 high (perfect leak — z >> 5σ)
+            "leak": y.astype(float) + rng.normal(0, 0.01, n),
+            # Layer 3 moderate (weak signal — z ≈ 4σ)
+            # Constructed to be statistically present but below the high threshold
+            "moderate_signal": (y * 0.3 + rng.standard_normal(n)).astype(float),
+            # Layer 3 info (pure noise)
+            "noise": rng.standard_normal(n),
+            # Layer 3 short-circuit (only 5 non-null rows)
+            "tiny": [1.0] * 5 + [None] * (n - 5),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+
+    # Layer 1 high
+    assert verdicts_by_feat["journey_status"]["decided_by"] == "layer_1"
+    assert verdicts_by_feat["journey_status"]["severity"] == "high"
+
+    # Layer 3 high
+    assert verdicts_by_feat["leak"]["decided_by"] == "adversarial"
+    assert verdicts_by_feat["leak"]["severity"] == "high"
+    assert verdicts_by_feat["leak"]["remediation"] == "drop"
+
+    # Layer 3 noise
+    assert verdicts_by_feat["noise"]["decided_by"] == "adversarial"
+    assert verdicts_by_feat["noise"]["severity"] == "info"
+    assert verdicts_by_feat["noise"]["remediation"] == "keep"
+
+    # Layer 3 short-circuit
+    assert verdicts_by_feat["tiny"]["decided_by"] == "adversarial"
+    assert verdicts_by_feat["tiny"]["severity"] == "info"
+    assert verdicts_by_feat["tiny"]["z_score"] is None
+    assert "Skipped" in verdicts_by_feat["tiny"]["evidence"]
+
+
+def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
+    """Codex review LOW (L9-4, 2026-05-08): when ``_compose_legacy_verdict``
+    is called with no signals at all (caller misuse), it falls through
+    to ``voter.vote()`` with all-None inputs → voter returns abstain
+    → adapter produces the abstain dict shape.
+
+    Pin this behaviour so caller-misuse paths produce well-formed
+    audit records (not crashes or silent skips).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+
+    voter = EnsembleVoter()
+    verdict = _compose_legacy_verdict("orphan_feat", voter=voter)
+    assert verdict["feature"] == "orphan_feat"
+    assert verdict["decided_by"] == "abstain"
+    assert verdict["layer"] == "abstain"
+    assert verdict["severity"] == "abstain"
+    assert verdict["remediation"] == "review"
+    # Schema invariant: all 16 canonical fields present
+    expected_keys = {
+        "feature",
+        "layer",
+        "z_score",
+        "actual_auc",
+        "null_mean",
+        "null_std",
+        "p_value",
+        "n_permutations",
+        "severity",
+        "remediation",
+        "evidence",
+        "contract_source",
+        "contract_window_days",
+        "decided_by",
+        "disagreements",
+        "kg_signal",
+    }
+    assert set(verdict.keys()) == expected_keys
+
+
+def test_phase29_m2_layer_1_verdict_wrapper_routes_through_voter():
+    """Codex review MEDIUM (M2, 2026-05-08): the legacy ``_layer_1_verdict``
+    wrapper used to bypass the voter, missing M4's malformed-contract
+    guard. The fix routes the wrapper through ``_compose_legacy_verdict``
+    so all Layer 1 verdict construction sites apply the same guards.
+
+    Pin: a properly-constructed FeatureContract still produces the
+    expected severity=high/drop verdict.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _layer_1_verdict,
+    )
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    contract = FeatureContract(
+        name="some_post_index_field",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="csu",
+        derivation_inputs=("foo",),
+    )
+    verdict = _layer_1_verdict("some_post_index_field", contract)
+    assert verdict["layer"] == "1"
+    assert verdict["severity"] == "high"
+    assert verdict["remediation"] == "drop"
+    assert verdict["decided_by"] == "layer_1"
+    assert verdict["contract_source"] == "csu"
+
+
+def test_phase29_h5_moderate_adversarial_alone_keeps_ambiguous_remediation():
+    """Codex review HIGH (H5, 2026-05-08): adv-moderate-alone used to
+    flow through the voter which rewrote remediation from the legacy
+    ``ambiguous`` to ``review``. Downstream consumers branching on
+    remediation strings would see inconsistent values for equivalent
+    risk levels depending on whether Layer 1 happened to fire.
+
+    The fix bypasses the voter for adv-alone of ANY severity so the
+    legacy remediation (info→keep, moderate→ambiguous, high→drop) is
+    preserved.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {
+            "z_score": 4.0,  # > 3σ but < 5σ → moderate
+            "actual_auc": 0.75,
+            "null_mean": 0.5,
+            "null_std": 0.05,
+            "p_value": 0.01,
+            "n_permutations": 200,
+        },
+    )
+    assert verdict["severity"] == "moderate"
+    assert verdict["remediation"] == "ambiguous"  # NOT "review"
+    assert verdict["decided_by"] == "adversarial"
+
+
+def test_phase29_h5_high_adversarial_alone_keeps_legacy_drop():
+    """Sanity: adv-high-alone still produces drop via the bypass path."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {
+            "z_score": 7.5,
+            "actual_auc": 0.95,
+            "null_mean": 0.5,
+            "null_std": 0.05,
+            "p_value": 0.0,
+            "n_permutations": 200,
+        },
+    )
+    assert verdict["severity"] == "high"
+    assert verdict["remediation"] == "drop"
+    assert verdict["decided_by"] == "adversarial"
+
+
+def test_phase29_h3_adversarial_input_handles_explicit_none_z_score():
+    """Codex review HIGH (H3, 2026-05-08): an explicit ``z_score=None``
+    (e.g., from a custom scorer or malformed payload) used to crash
+    ``_adversarial_input`` with a TypeError on the ``z > HIGH_Z``
+    comparison. ``dict.get(default=NaN)`` only catches the *missing*
+    case; a None VALUE bypasses the default. The fix treats any
+    non-numeric z as degenerate.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    # Should not raise — emits the legacy degenerate-info verdict
+    verdict = _build_verdict(
+        "feat_x",
+        {
+            "z_score": None,
+            "actual_auc": 0.5,
+            "null_mean": 0.5,
+            "null_std": 0.0,
+            "p_value": None,
+            "n_permutations": 10,
+        },
+    )
+    assert verdict["severity"] == "info"
+    assert verdict["remediation"] == "keep"
+    assert verdict["z_score"] is None
+    assert verdict["decided_by"] == "adversarial"
+
+
+def test_phase29_h3_adversarial_input_handles_string_z_score():
+    """A string value in ``z_score`` is also malformed; should not crash."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {"z_score": "not_a_number", "actual_auc": 0.5, "null_mean": 0.5, "null_std": 0.0},
+    )
+    assert verdict["severity"] == "info"
+    assert verdict["remediation"] == "keep"
+
+
+def test_phase29_h3_adversarial_input_handles_bool_z_score():
+    """A bool value (Python's ``True`` would otherwise pass ``isinstance(int)``)
+    is also malformed; reject."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {"z_score": True, "actual_auc": 0.5, "null_mean": 0.5, "null_std": 0.0},
+    )
+    assert verdict["severity"] == "info"
+
+
+def test_phase29_voter_decides_when_layer_1_and_adversarial_both_high():
+    """When Layer 1 contract AND adversarial both fire high, the voter
+    rule (Layer 1 > adversarial) wins. ``decided_by="layer_1"``."""
+    rng = np.random.default_rng(0)
+    n = 400
+    y = rng.integers(0, 2, n)
+    # journey_duration_days is CSU-forbidden + leaky-correlated
+    df = pd.DataFrame(
+        {
+            "journey_duration_days": y.astype(float) * 100 + rng.normal(0, 1, n),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+    v = verdicts_by_feat["journey_duration_days"]
+    assert v["decided_by"] == "layer_1"  # Layer 1 wins per voter precedence
+    assert v["layer"] == "1"

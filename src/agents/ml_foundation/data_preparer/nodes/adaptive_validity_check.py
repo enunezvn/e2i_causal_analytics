@@ -20,12 +20,36 @@ governance review. This implementation focuses on Layers 1+3 wiring; Layer
 Acceptance criterion #4 of ``adaptive_temporal_validity_redesign.md``:
 every feature decision produces a structured record with layer, evidence,
 confidence, and remediation.
+
+Phase 2.9 Stage 1 wiring (2026-05-08): per-feature decisions for cases
+that combine Layer 1 + Layer 3 signals route through the
+``EnsembleVoter`` from ``src/data/kg/ensemble_voter.py``. This is the
+single canonical decision path the redesign plan calls for. The voter
+output is adapted back to the legacy dict shape so downstream consumers
+(``leakage_remediation`` node + ``write_adaptive_verdicts_sidecar``)
+continue to work unchanged. Three new optional fields are added to each
+verdict for the Phase 2.7+ audit trail:
+
+- ``decided_by``: ``"layer_1"`` / ``"adversarial"`` / ``"kg"`` /
+  ``"llm"`` / ``"abstain"`` (where Phase 2.9 Stage 1 only emits the
+  first two; KG and LLM stay ``None`` until Stage 2/3 follow-ups land).
+- ``disagreements``: tuple of strings describing cross-source
+  contradictions (always empty in Stage 1 since only one source is
+  active per feature).
+- ``kg_signal``: KG signal classification (always ``"no_signal"`` in
+  Stage 1 since ``kg_edges`` is empty).
+
+Cases the voter cannot decide are routed through bypass paths to
+preserve the legacy ``severity=info, remediation=keep`` semantics for
+"tested and passed" (adv=info alone) and "could not test"
+(too-few-rows / scoring-error) verdicts. The voter would otherwise
+abstain on these inputs, which would change the downstream contract.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -33,6 +57,34 @@ import pandas as pd
 from src.data.adversarial_leakage import compute_adversarial_score
 from src.data.feature_contract import FeatureContract
 from src.data.manifests import lookup_feature_contract
+
+# ``EnsembleVoter`` and ``EnsembleVerdict`` are LAZY-imported below to
+# avoid triggering ``src.data.kg.__init__`` at module-import time. The
+# kg package transitively imports ``httpx`` (via UMLSClient /
+# EuropePMCClient / CrossrefClient), and pulling ``httpx`` into modules
+# that LangGraph nodes import at pytest-collection time has produced
+# asyncio-loop interactions in xdist-parallelised integration tests on
+# CI (``RuntimeError: Event loop is closed``). The voter + verdict
+# types are pure-Python; deferring the import to helper-call time
+# keeps adaptive_validity_check.py's import surface free of httpx.
+if TYPE_CHECKING:
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import EnsembleVerdict
+
+
+def _get_ensemble_voter_class() -> type:
+    """Return the ``EnsembleVoter`` class via lazy import.
+
+    Centralises the lazy import so all runtime call sites share a single
+    point of side-effect. Per the docstring at the top of this module,
+    ``src.data.kg.__init__`` transitively imports ``httpx``; deferring
+    until first use keeps ``adaptive_validity_check.py``'s import-time
+    surface free of httpx.
+    """
+    from src.data.kg.ensemble_voter import EnsembleVoter as _EnsembleVoter
+
+    return _EnsembleVoter
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,24 +101,41 @@ DEFAULT_PERMUTATIONS = 200
 MIN_LAYER3_SAMPLES = 30
 
 
-def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
-    """Build a Layer 1 verdict from a forbidden-by-contract feature.
+# =============================================================================
+# Verdict building — Phase 2.9 Stage 1 wiring.
+#
+# Three layers of helpers participate in producing the legacy verdict dict
+# that downstream nodes consume:
+#
+# 1. ``_layer_1_input`` and ``_adversarial_input`` build the per-source
+#    "input verdict" dicts that ``EnsembleVoter.vote`` accepts. They are
+#    pure data — no flow control.
+# 2. ``EnsembleVoter.vote`` composes those inputs into a single
+#    ``EnsembleVerdict`` with documented precedence rules.
+# 3. ``_ensemble_to_legacy_dict`` adapts the ``EnsembleVerdict`` back to
+#    the legacy ``LeakageVerdict`` shape this node has emitted since PR
+#    #84, with three new optional fields for the Phase 2.7+ audit trail.
+#
+# The ``_legacy_*`` helpers handle bypass cases the voter would otherwise
+# abstain on (info-severity adversarial alone, short-circuited adversarial
+# probes). They emit the legacy dict directly so downstream consumers see
+# the same ``severity=info, remediation=keep`` contract they have always
+# seen.
+# =============================================================================
 
-    A feature whose contract declares `knowable_at = post_index` cannot be
-    used as a model input regardless of its statistical properties — the
-    contract is sufficient evidence. This catches things like
-    `journey_duration_days`, `journey_status`, and target columns that may
-    have leaked into the feature surface, BEFORE the permutation-test pass.
+
+def _layer_1_input(feature: str, contract: FeatureContract) -> dict[str, Any]:
+    """Build a Layer 1 ``EnsembleVoter.vote`` input dict.
+
+    Mirrors what ``EnsembleVoter`` documents as the Layer 1 verdict shape
+    (severity + contract_source + contract_window_days). The voter uses
+    contract_source as the M4 audit-integrity guard; we always populate
+    it from the manifest contract so the guard's "missing or empty"
+    branch never fires for our own input.
     """
     return {
         "feature": feature,
         "layer": "1",
-        "z_score": None,
-        "actual_auc": None,
-        "null_mean": None,
-        "null_std": None,
-        "p_value": None,
-        "n_permutations": 0,
         "severity": "high",
         "remediation": "drop",
         "evidence": (
@@ -79,29 +148,78 @@ def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
     }
 
 
-def _build_verdict(
-    feature: str,
-    score: dict[str, Any],
-) -> dict[str, Any]:
-    """Translate a Layer-3 score dict into the audit-trail verdict shape.
+def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
+    """Legacy Layer 1 verdict producer — kept for backward compatibility.
 
-    Note on ``p_value``: the value carried through here is the empirical
-    upper-tail proportion from ``compute_adversarial_score``, bounded below
-    by ``1 / n_permutations``. At the default 200 permutations a returned
-    ``p_value=0.0`` therefore means ``< 0.005``, NOT exact zero. Severity
-    routing uses ``z_score`` (not ``p_value``) so this rounding is purely
-    informational for sidecar consumers.
+    Used by external test importers that construct verdicts directly.
+    The internal decision flow routes through ``_layer_1_input`` +
+    ``_compose_legacy_verdict`` + ``EnsembleVoter`` + adapter; this
+    wrapper does the same so the voter's audit-integrity guards (M4
+    malformed contract_source check, etc.) apply uniformly to all
+    Layer 1 verdict-construction call sites.
+
+    Codex review MEDIUM (M2, 2026-05-08): the prior implementation
+    constructed the ``EnsembleVerdict`` directly and called the
+    adapter without involving the voter, bypassing M4's malformed-
+    contract guard. While ``FeatureContract.source`` is typed ``str``
+    (always populated in production), defense in depth routes this
+    helper through the voter so external callers / future code paths
+    that pass synthetic contracts see consistent guard behaviour.
+    """
+    return _compose_legacy_verdict(
+        feature,
+        voter=_get_ensemble_voter_class()(),
+        layer_1_input=_layer_1_input(feature, contract),
+    )
+
+
+def _adversarial_input(score: dict[str, Any]) -> dict[str, Any]:
+    """Build a Layer 3 ``EnsembleVoter.vote`` input dict from a raw score.
+
+    Maps the score dict produced by ``compute_adversarial_score`` (z_score,
+    actual_auc, null_mean, null_std, p_value, n_permutations) into the
+    severity-tagged shape the voter expects. Always populates ``z_score``
+    so the voter's M3 audit-integrity guard never fires on our own input.
+
+    Severity routing (matches the legacy ``_build_verdict`` thresholds):
+
+        z > 5σ above null  → severity=high
+        3σ < z ≤ 5σ        → severity=moderate
+        z ≤ 3σ             → severity=info
+
+    Returns None for the degenerate-score case (z is NaN); callers should
+    treat that as "no adversarial signal" and let the voter abstain or the
+    bypass paths emit a legacy info verdict.
     """
     z = score.get("z_score", float("nan"))
     auc = score.get("actual_auc", float("nan"))
     null_mean = score.get("null_mean", float("nan"))
 
-    if isinstance(z, float) and np.isnan(z):
+    # Codex review HIGH (H3, 2026-05-08): explicit ``z_score=None`` (or
+    # any non-numeric value) used to crash on the ``z > HIGH_Z``
+    # comparison with TypeError. The dict.get(default=NaN) only catches
+    # the *missing* case — a None VALUE bypasses the default. Treat any
+    # non-finite/non-numeric z as the degenerate-score case so the
+    # bypass path emits a severity=info verdict instead of crashing
+    # the whole node.
+    z_is_degenerate = (
+        z is None
+        or not isinstance(z, (int, float))
+        or isinstance(z, bool)
+        or (isinstance(z, float) and np.isnan(z))
+    )
+
+    if z_is_degenerate:
+        # Degenerate score (e.g., constant feature → identical AUC under
+        # all permutations, or malformed input from a custom scorer).
+        # The voter has no signal to act on; the bypass path emits a
+        # severity=info verdict matching legacy behaviour.
         severity = "info"
         remediation = "keep"
         evidence = (
             f"Adversarial score undefined (degenerate; actual_auc={auc}, null_mean={null_mean})"
         )
+        z_input: Optional[float] = None
     elif z > HIGH_Z:
         severity = "high"
         remediation = "drop"
@@ -110,6 +228,7 @@ def _build_verdict(
             f"(actual_auc={auc:.4f}, null_mean={null_mean:.4f}); "
             f"{HIGH_Z}σ governance threshold exceeded → drop"
         )
+        z_input = float(z)
     elif z > MODERATE_Z:
         severity = "moderate"
         remediation = "ambiguous"
@@ -118,6 +237,7 @@ def _build_verdict(
             f"(between {MODERATE_Z}σ and {HIGH_Z}σ); ambiguous → "
             f"queued for Layer 4 causal-role classification"
         )
+        z_input = float(z)
     else:
         severity = "info"
         remediation = "keep"
@@ -125,11 +245,14 @@ def _build_verdict(
             f"Layer 3 adversarial discriminator: z={z:.2f}σ "
             f"(below {MODERATE_Z}σ noise floor); legitimate weak signal"
         )
+        z_input = float(z)
 
     return {
-        "feature": feature,
         "layer": "3",
-        "z_score": float(z) if not (isinstance(z, float) and np.isnan(z)) else None,
+        "severity": severity,
+        "remediation": remediation,
+        "evidence": evidence,
+        "z_score": z_input,
         "actual_auc": float(auc) if not (isinstance(auc, float) and np.isnan(auc)) else None,
         "null_mean": float(null_mean)
         if not (isinstance(null_mean, float) and np.isnan(null_mean))
@@ -137,22 +260,164 @@ def _build_verdict(
         "null_std": score.get("null_std"),
         "p_value": score.get("p_value"),
         "n_permutations": score.get("n_permutations"),
-        "severity": severity,
-        "remediation": remediation,
-        "evidence": evidence,
-        # Layer 3 verdicts have no manifest contract; emit None so the audit-
-        # trail JSON sidecar has a uniform schema with Layer 1 verdicts.
-        "contract_source": None,
-        "contract_window_days": None,
     }
 
 
-def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
-    """Build a Layer 3 verdict for a feature that bypassed the scoring path.
+# Map ``EnsembleVerdict.decided_by`` → legacy ``layer`` field for the
+# audit-trail JSON sidecar. Phase 2.9 Stage 1 only emits "layer_1" and
+# "adversarial"; Stage 2 will add "kg" → "2", Stage 3 will add "llm" → "4".
+_DECIDED_BY_TO_LAYER: dict[str, str] = {
+    "layer_1": "1",
+    "adversarial": "3",
+    "kg": "2",
+    "llm": "4",
+    "abstain": "abstain",
+}
 
-    Used for the too-few-rows and scoring-error cases. Schema matches both
-    ``_build_verdict`` and ``_layer_1_verdict`` so the audit-trail JSON sidecar
-    is uniform across all verdict shapes.
+
+def _ensemble_to_legacy_dict(
+    verdict: EnsembleVerdict,
+    *,
+    adversarial_input: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Adapt a Phase 2.7 ``EnsembleVerdict`` to the legacy verdict dict.
+
+    Preserves every field the existing downstream consumers
+    (``leakage_remediation`` and ``write_adaptive_verdicts_sidecar``) read
+    from a Layer 5 verdict, AND appends three new optional fields for the
+    Phase 2.7+ audit trail (``decided_by``, ``disagreements``,
+    ``kg_signal``).
+
+    Numeric fields (``z_score``, ``actual_auc``, ``null_mean``,
+    ``null_std``, ``p_value``, ``n_permutations``) are pulled from
+    ``adversarial_input`` when present (the voter doesn't carry them
+    through), so the audit JSON sidecar still records the underlying
+    permutation-test numbers.
+
+    The ``contract_source`` / ``contract_window_days`` fields are pulled
+    from ``verdict.layer_1_input`` (the snapshot the voter took at
+    vote-time) — if Layer 1 was the deciding source.
+    """
+    layer_1 = verdict.layer_1_input or {}
+    adv = adversarial_input or {}
+
+    layer_str = _DECIDED_BY_TO_LAYER.get(verdict.decided_by, "abstain")
+
+    # ``EnsembleVerdict.evidence`` is a tuple of lines; the legacy schema
+    # carries a single string. Join with "; " so the join is greppable.
+    evidence_str = "; ".join(verdict.evidence) if verdict.evidence else ""
+
+    return {
+        "feature": verdict.feature_name,
+        "layer": layer_str,
+        # Numeric fields from the adversarial probe (None when no
+        # adversarial input was supplied or it was malformed).
+        "z_score": adv.get("z_score"),
+        "actual_auc": adv.get("actual_auc"),
+        "null_mean": adv.get("null_mean"),
+        "null_std": adv.get("null_std"),
+        "p_value": adv.get("p_value"),
+        "n_permutations": adv.get("n_permutations"),
+        # Severity / remediation routed through the voter (or set
+        # directly by the bypass paths for short-circuit / info-only).
+        "severity": verdict.severity,
+        "remediation": verdict.remediation,
+        "evidence": evidence_str,
+        # Layer 1 contract metadata (None when Layer 1 didn't fire).
+        "contract_source": layer_1.get("contract_source"),
+        "contract_window_days": layer_1.get("contract_window_days"),
+        # Phase 2.7+ audit fields. Always populated.
+        "decided_by": verdict.decided_by,
+        "disagreements": list(verdict.disagreements),
+        "kg_signal": verdict.kg_signal,
+    }
+
+
+def _legacy_adversarial_alone_verdict(
+    feature: str,
+    adversarial_input: dict[str, Any],
+) -> dict[str, Any]:
+    """Emit a legacy verdict from adversarial-only inputs, bypassing the voter.
+
+    Used when adversarial is the only signal (no Layer 1 contract, no
+    KG/LLM). Preserves the legacy ``severity`` / ``remediation`` /
+    ``evidence`` exactly as ``_adversarial_input`` produced them — for
+    ``info`` severity that's ``keep``, for ``moderate`` it's
+    ``ambiguous`` (codex H5 fix: the voter would have rewritten this
+    to ``review``, diverging from the legacy contract downstream
+    consumers branch on), for ``high`` it's ``drop``.
+
+    Tags ``decided_by="adversarial"`` and the empty-signal KG/disagree
+    audit fields. The voter's value-add (cross-source precedence,
+    contradiction detection, confidence scoring) is irrelevant when
+    adversarial is the only source — the verdict is purely a function
+    of the z-score thresholds.
+    """
+    return {
+        "feature": feature,
+        "layer": "3",
+        "z_score": adversarial_input.get("z_score"),
+        "actual_auc": adversarial_input.get("actual_auc"),
+        "null_mean": adversarial_input.get("null_mean"),
+        "null_std": adversarial_input.get("null_std"),
+        "p_value": adversarial_input.get("p_value"),
+        "n_permutations": adversarial_input.get("n_permutations"),
+        "severity": adversarial_input.get("severity", "info"),
+        "remediation": adversarial_input.get("remediation", "keep"),
+        "evidence": adversarial_input.get("evidence", ""),
+        "contract_source": None,
+        "contract_window_days": None,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "kg_signal": "no_signal",
+    }
+
+
+def _legacy_info_verdict(
+    feature: str,
+    *,
+    adversarial_input: Optional[dict[str, Any]],
+    evidence: str,
+) -> dict[str, Any]:
+    """Emit a legacy info verdict — backward-compat wrapper for callers
+    that still construct degenerate-score verdicts directly.
+
+    For the adv-alone path, prefer ``_legacy_adversarial_alone_verdict``;
+    that helper preserves whatever severity / remediation
+    ``_adversarial_input`` computed (so moderate stays ``ambiguous``,
+    not the voter's ``review``). This wrapper is kept for the
+    explicit-None-z-score and degenerate-score callers that always
+    want ``severity=info, remediation=keep`` regardless of the input
+    severity field.
+    """
+    adv = adversarial_input or {}
+    return {
+        "feature": feature,
+        "layer": "3",
+        "z_score": adv.get("z_score"),
+        "actual_auc": adv.get("actual_auc"),
+        "null_mean": adv.get("null_mean"),
+        "null_std": adv.get("null_std"),
+        "p_value": adv.get("p_value"),
+        "n_permutations": adv.get("n_permutations"),
+        "severity": "info",
+        "remediation": "keep",
+        "evidence": evidence,
+        "contract_source": None,
+        "contract_window_days": None,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "kg_signal": "no_signal",
+    }
+
+
+def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
+    """Emit a legacy short-circuit verdict (too-few-rows / scoring-error).
+
+    Same shape as ``_legacy_info_verdict`` but with all numeric fields
+    set to None — the adversarial probe did not run. ``decided_by`` is
+    still tagged ``"adversarial"`` because the *intended* path was
+    Layer 3; the audit trail records that the test couldn't fire.
     """
     return {
         "feature": feature,
@@ -168,7 +433,93 @@ def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
         "evidence": evidence,
         "contract_source": None,
         "contract_window_days": None,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "kg_signal": "no_signal",
     }
+
+
+def _compose_legacy_verdict(
+    feature: str,
+    *,
+    voter: EnsembleVoter,
+    layer_1_input: Optional[dict[str, Any]] = None,
+    adversarial_input: Optional[dict[str, Any]] = None,
+    short_circuit_evidence: Optional[str] = None,
+) -> dict[str, Any]:
+    """Compose one legacy verdict dict from the per-source inputs.
+
+    Routes through ``EnsembleVoter`` for cases that involve a real
+    precedence decision (Layer 1 contract present, or adversarial
+    severity high/moderate). Bypasses the voter for two cases the
+    voter would otherwise abstain on:
+
+    1. ``short_circuit_evidence`` is set (too-few-rows, scoring-error)
+       → emit ``_legacy_short_circuit_verdict``.
+    2. Only signal is adversarial=info → emit ``_legacy_info_verdict``
+       so the audit trail records "tested and passed", not "abstain".
+
+    The voter is the authority on every other case.
+    """
+    if short_circuit_evidence is not None:
+        return _legacy_short_circuit_verdict(feature, evidence=short_circuit_evidence)
+
+    # Codex H5 fix: bypass when adversarial is the ONLY signal —
+    # for ANY severity (info, moderate, high). The voter would
+    # otherwise rewrite ``moderate`` remediation from the legacy
+    # ``ambiguous`` to ``review``, diverging from the contract
+    # downstream JSON consumers branch on. The voter only adds value
+    # when there's a real cross-source precedence decision to make
+    # (Layer 1 contract present, or KG / LLM signals — the latter
+    # arrive in Stage 2/3).
+    if layer_1_input is None and adversarial_input is not None:
+        return _legacy_adversarial_alone_verdict(feature, adversarial_input)
+
+    # Real cross-source decision needed → route through the voter so
+    # the ``EnsembleVerdict`` audit fields (decided_by, disagreements,
+    # kg_signal) reflect the precedence rule that fired.
+    verdict = voter.vote(
+        feature,
+        layer_1_verdict=layer_1_input,
+        adversarial_verdict=adversarial_input,
+    )
+    return _ensemble_to_legacy_dict(verdict, adversarial_input=adversarial_input)
+
+
+def _build_verdict(
+    feature: str,
+    score: dict[str, Any],
+    *,
+    voter: Optional["EnsembleVoter"] = None,
+) -> dict[str, Any]:
+    """Backward-compat wrapper for the legacy Layer 3 verdict builder.
+
+    Now flows through ``_compose_legacy_verdict`` so both call sites
+    (this node's main loop AND any remaining external test importers)
+    produce the same shape, including the new audit fields.
+    """
+    voter = voter or _get_ensemble_voter_class()()
+    adv = _adversarial_input(score)
+    # Degenerate-score case: ``_adversarial_input`` returns severity=info
+    # with z_score=None. Route via the bypass info path so the legacy
+    # "Adversarial score undefined" evidence is preserved exactly.
+    if adv.get("z_score") is None and adv.get("severity") == "info":
+        return _legacy_info_verdict(
+            feature,
+            adversarial_input=adv,
+            evidence=adv.get("evidence", ""),
+        )
+    return _compose_legacy_verdict(
+        feature,
+        voter=voter,
+        layer_1_input=None,
+        adversarial_input=adv,
+    )
+
+
+def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
+    """Backward-compat wrapper for the short-circuit emission path."""
+    return _legacy_short_circuit_verdict(feature, evidence=evidence)
 
 
 def _select_features(df: pd.DataFrame, target: str, excluded: list[str]) -> list[str]:
@@ -283,15 +634,23 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
 
     verdicts: list[dict[str, Any]] = []
     flagged: list[str] = []
+    voter = _get_ensemble_voter_class()()
 
     # Layer 1 pass — every column, manifest-driven catch for post-index ones.
     # Skipped entirely when ``feature_manifest_source`` is unset (e.g.,
     # synthetic regimes); see scope_spec read at the top of this function.
+    # Layer 1 verdicts route through ``_compose_legacy_verdict`` which
+    # consults ``EnsembleVoter`` so the audit trail records ``decided_by``
+    # consistently with Layer 3.
     layer_1_caught: set[str] = set()
     for feat in all_columns:
         contract = lookup_feature_contract(feat, data_source=manifest_source)
         if contract is not None and not contract.knowable_at.is_pre_or_at_index():
-            verdict = _layer_1_verdict(feat, contract)
+            verdict = _compose_legacy_verdict(
+                feat,
+                voter=voter,
+                layer_1_input=_layer_1_input(feat, contract),
+            )
             verdicts.append(verdict)
             flagged.append(feat)
             layer_1_caught.add(feat)
@@ -305,9 +664,10 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         mask = col.notna() & binary_label_mask
         if mask.sum() < MIN_LAYER3_SAMPLES:
             verdicts.append(
-                _short_circuit_verdict(
+                _compose_legacy_verdict(
                     feat,
-                    evidence=(
+                    voter=voter,
+                    short_circuit_evidence=(
                         f"Skipped: only {int(mask.sum())} non-null rows "
                         f"(need ≥{MIN_LAYER3_SAMPLES})"
                     ),
@@ -326,14 +686,19 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("adaptive_validity_check: scoring failed for %s: %s", feat, exc)
             verdicts.append(
-                _short_circuit_verdict(
+                _compose_legacy_verdict(
                     feat,
-                    evidence=f"Adversarial scoring error: {exc}",
+                    voter=voter,
+                    short_circuit_evidence=f"Adversarial scoring error: {exc}",
                 )
             )
             continue
 
-        verdict = _build_verdict(feat, score)
+        verdict = _compose_legacy_verdict(
+            feat,
+            voter=voter,
+            adversarial_input=_adversarial_input(score),
+        )
         verdicts.append(verdict)
         if verdict["severity"] == "high":
             flagged.append(feat)
