@@ -182,9 +182,61 @@ def test_valid_statuses_derived_from_literal_no_drift():
     """
     from typing import get_args
 
-    from src.data.kg.cache import CacheRecordStatus, _VALID_STATUSES
+    from src.data.kg.cache import _VALID_STATUSES, CacheRecordStatus
 
     assert _VALID_STATUSES == frozenset(get_args(CacheRecordStatus))
+
+
+def test_try_load_cache_returns_none_for_missing_file(tmp_path: Path):
+    """Soft-fail variant: absent file → None instead of FileNotFoundError."""
+    from src.data.kg.cache import try_load_cache
+
+    assert try_load_cache(tmp_path / "does_not_exist.json") is None
+
+
+def test_try_load_cache_loads_existing_file(tmp_path: Path):
+    """try_load_cache returns the records when the file exists."""
+    from src.data.kg.cache import CacheRecord, save_cache, try_load_cache
+
+    record = CacheRecord(
+        feature_name="x",
+        manifest_fingerprint_sha8="a",
+        target_codes_fingerprint_sha8="b",
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(),
+        target_entity_codes=(),
+        sources_attempted=(),
+        status="ok",
+        edges=(),
+        errors=(),
+    )
+    path = tmp_path / "cache.json"
+    save_cache([record], path)
+    loaded = try_load_cache(path)
+    assert loaded is not None
+    assert len(loaded) == 1
+
+
+def test_manifest_fingerprint_fields_explicit_allowlist():
+    """Fingerprint allowlist is documented + matches what's hashed.
+
+    A future field added to FeatureContract that affects KG queries
+    must be added to _MANIFEST_FINGERPRINT_FIELDS or this test fails
+    (loud regression vs silently skipping the field).
+    """
+    from src.data.kg.cache import _MANIFEST_FINGERPRINT_FIELDS
+
+    expected = (
+        "name",
+        "knowable_at.reference",
+        "knowable_at.offset_days",
+        "source",
+        "derivation_inputs",
+        "aggregation",
+        "window_days",
+        "kg_entity_codes",
+    )
+    assert _MANIFEST_FINGERPRINT_FIELDS == expected
 
 
 def test_kg_edge_serialization_round_trip(tmp_path: Path):
