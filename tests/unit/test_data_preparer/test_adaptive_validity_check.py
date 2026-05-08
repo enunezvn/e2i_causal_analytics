@@ -1440,6 +1440,333 @@ def test_phase29_stage2_load_kg_cache_loads_records_to_dict(tmp_path):
     assert loaded["primary_diagnosis_code"][0].subject_id == "CHEMBL2107858"
 
 
+# ---------------------------------------------------------------------------
+# Plan task #6 — KG cache fingerprint validation (D2)
+# ---------------------------------------------------------------------------
+
+
+def _build_cache_with_fingerprints(
+    tmp_path,
+    *,
+    manifest_fp: str,
+    target_fp: str,
+    feature_name: str = "primary_diagnosis_code",
+):
+    """Helper: write a single-record cache file with the given fingerprints."""
+    from datetime import datetime, timezone
+
+    from src.data.kg.cache import CacheRecord, save_cache
+    from src.data.kg.types import KGEdge
+
+    edge = KGEdge(
+        subject_id="C0042109",
+        predicate="isa",
+        object_id="C0011615",
+        evidence_source="umls_relations",
+    )
+    record = CacheRecord(
+        feature_name=feature_name,
+        manifest_fingerprint_sha8=manifest_fp,
+        target_codes_fingerprint_sha8=target_fp,
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(("ICD10CM", "L50.9"), ("UMLS", "C0042109")),
+        target_entity_codes=(("RXNORM", "479158"),),
+        sources_attempted=("umls_uts",),
+        status="ok",
+        edges=(edge,),
+        errors=(),
+    )
+    cache_path = tmp_path / "cache.json"
+    save_cache([record], cache_path)
+    return cache_path
+
+
+def _current_csu_fingerprints(target_codes):
+    """Compute the fingerprints the cache reader will recompute for CSU."""
+    from src.data.kg.cache import (
+        compute_manifest_fingerprint,
+        compute_target_codes_fingerprint,
+    )
+    from src.data.manifests import CSU_FEATURES
+
+    entity_features = [fc for fc in CSU_FEATURES if fc.kg_entity_codes]
+    return (
+        compute_manifest_fingerprint(entity_features),
+        compute_target_codes_fingerprint(target_codes),
+    )
+
+
+def test_phase29_stage2_load_kg_cache_validates_fingerprints_happy_path(tmp_path):
+    """When ``feature_manifest_source`` is set AND the cache's fingerprints
+    match the current manifest + target_entity_codes, ``_load_kg_cache``
+    returns the dict (validation passes silently)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+
+    target_codes = [("RXNORM", "479158")]
+    manifest_fp, target_fp = _current_csu_fingerprints(target_codes)
+    cache_path = _build_cache_with_fingerprints(
+        tmp_path, manifest_fp=manifest_fp, target_fp=target_fp
+    )
+
+    loaded = _load_kg_cache(
+        {
+            "kg_cache_path": str(cache_path),
+            "kg_mode": "shadow",
+            "feature_manifest_source": "csu",
+            "target_entity_codes": target_codes,
+        }
+    )
+    assert loaded is not None
+    assert "primary_diagnosis_code" in loaded
+
+
+def test_phase29_stage2_load_kg_cache_shadow_warns_and_returns_none_on_mismatch(tmp_path, caplog):
+    """In ``kg_mode=shadow`` a stale fingerprint logs a warning naming
+    the offending feature(s) and returns None — the run proceeds without
+    KG verdicts. Audit-only path tolerates staleness."""
+    import logging
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+
+    target_codes = [("RXNORM", "479158")]
+    cache_path = _build_cache_with_fingerprints(
+        tmp_path,
+        manifest_fp="deadbeef",  # intentionally wrong
+        target_fp="cafebabe",  # intentionally wrong
+        feature_name="primary_diagnosis_code",
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check",
+    ):
+        result = _load_kg_cache(
+            {
+                "kg_cache_path": str(cache_path),
+                "kg_mode": "shadow",
+                "feature_manifest_source": "csu",
+                "target_entity_codes": target_codes,
+            }
+        )
+    assert result is None
+    assert any(
+        "fingerprint mismatch" in rec.message
+        and "primary_diagnosis_code" in rec.message
+        and "scripts/build_kg_cache.py" in rec.message
+        for rec in caplog.records
+    ), f"Expected fingerprint-mismatch warning; got {[r.message for r in caplog.records]}"
+
+
+def test_phase29_stage2_load_kg_cache_promoted_raises_on_mismatch(tmp_path):
+    """In ``kg_mode=promoted`` a stale fingerprint MUST raise
+    ``KGCacheStaleError`` — promoted mode lets KG verdicts DROP features,
+    and a silent mismatch could drop the wrong ones. The pipeline halts
+    until the operator rebuilds the cache."""
+    import pytest as _pytest
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.kg.cache import KGCacheStaleError
+
+    target_codes = [("RXNORM", "479158")]
+    cache_path = _build_cache_with_fingerprints(
+        tmp_path,
+        manifest_fp="deadbeef",
+        target_fp="cafebabe",
+    )
+
+    with _pytest.raises(KGCacheStaleError, match="fingerprint mismatch"):
+        _load_kg_cache(
+            {
+                "kg_cache_path": str(cache_path),
+                "kg_mode": "promoted",
+                "feature_manifest_source": "csu",
+                "target_entity_codes": target_codes,
+            }
+        )
+
+
+def test_phase29_stage2_load_kg_cache_bypasses_validation_when_manifest_source_unset(
+    tmp_path,
+):
+    """Legacy compatibility: when ``feature_manifest_source`` is not set
+    in scope_spec (synthetic regimes, custom-runner paths), fingerprint
+    validation is skipped entirely. Cache loads even with arbitrary
+    fingerprint strings — the surrounding Layer 1 manifest contracts
+    also no-op without a manifest source, so cache-vs-manifest
+    consistency is moot."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+
+    cache_path = _build_cache_with_fingerprints(
+        tmp_path,
+        manifest_fp="placeholder",
+        target_fp="placeholder",
+    )
+
+    loaded = _load_kg_cache(
+        {
+            "kg_cache_path": str(cache_path),
+            "kg_mode": "shadow",
+            # NO feature_manifest_source key
+        }
+    )
+    assert loaded is not None
+    assert "primary_diagnosis_code" in loaded
+
+
+def test_phase29_stage2_load_kg_cache_bypasses_validation_for_unknown_manifest_source(
+    tmp_path,
+):
+    """Unknown manifest source → bypass validation (forward-compat for
+    custom manifests not yet in MANIFEST_SOURCES). The cache reader has
+    no way to resolve the manifest and treats the cache as
+    'trusted upstream'."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+
+    cache_path = _build_cache_with_fingerprints(
+        tmp_path,
+        manifest_fp="placeholder",
+        target_fp="placeholder",
+    )
+
+    loaded = _load_kg_cache(
+        {
+            "kg_cache_path": str(cache_path),
+            "kg_mode": "shadow",
+            "feature_manifest_source": "future_v3_cohort",  # unknown
+        }
+    )
+    assert loaded is not None
+    assert "primary_diagnosis_code" in loaded
+
+
+def test_phase29_stage2_load_kg_cache_partial_mismatch_in_promoted_raises_naming_features(
+    tmp_path,
+):
+    """Even ONE mismatched record triggers fail-fast in promoted mode;
+    the error message names the offending feature(s) so the operator
+    can identify which manifest change caused the staleness."""
+    from datetime import datetime, timezone
+
+    import pytest as _pytest
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.kg.cache import (
+        CacheRecord,
+        KGCacheStaleError,
+        save_cache,
+    )
+
+    target_codes = [("RXNORM", "479158")]
+    manifest_fp_good, target_fp_good = _current_csu_fingerprints(target_codes)
+
+    rec_ok = CacheRecord(
+        feature_name="rec_ok_feature",
+        manifest_fingerprint_sha8=manifest_fp_good,
+        target_codes_fingerprint_sha8=target_fp_good,
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(("ICD10CM", "L50.9"),),
+        target_entity_codes=(("RXNORM", "479158"),),
+        sources_attempted=("umls_uts",),
+        status="queried_no_edges",
+        edges=(),
+        errors=(),
+    )
+    rec_stale = CacheRecord(
+        feature_name="rec_stale_feature",
+        manifest_fingerprint_sha8="deadbeef",
+        target_codes_fingerprint_sha8=target_fp_good,
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(("ICD10CM", "L50.9"),),
+        target_entity_codes=(("RXNORM", "479158"),),
+        sources_attempted=("umls_uts",),
+        status="queried_no_edges",
+        edges=(),
+        errors=(),
+    )
+    cache_path = tmp_path / "mixed_cache.json"
+    save_cache([rec_ok, rec_stale], cache_path)
+
+    with _pytest.raises(KGCacheStaleError) as excinfo:
+        _load_kg_cache(
+            {
+                "kg_cache_path": str(cache_path),
+                "kg_mode": "promoted",
+                "feature_manifest_source": "csu",
+                "target_entity_codes": target_codes,
+            }
+        )
+    assert "rec_stale_feature" in str(excinfo.value)
+    # The good record should NOT appear in the mismatch preview.
+    assert "rec_ok_feature" not in str(excinfo.value)
+
+
+def test_phase29_stage2_load_kg_cache_validates_target_codes_fingerprint(tmp_path):
+    """A cache built against one set of target_entity_codes must trip
+    fingerprint validation when reloaded under a different set —
+    promotion across cohorts with divergent target sets is unsafe."""
+    import pytest as _pytest
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.kg.cache import KGCacheStaleError
+
+    # Cache was written with target=(RXNORM, 479158)
+    original_target_codes = [("RXNORM", "479158")]
+    manifest_fp, target_fp_original = _current_csu_fingerprints(original_target_codes)
+    cache_path = _build_cache_with_fingerprints(
+        tmp_path, manifest_fp=manifest_fp, target_fp=target_fp_original
+    )
+
+    # Reader supplies a DIFFERENT target set → mismatch.
+    different_target_codes = [("RXNORM", "1011295")]
+    with _pytest.raises(KGCacheStaleError, match="target_fp"):
+        _load_kg_cache(
+            {
+                "kg_cache_path": str(cache_path),
+                "kg_mode": "promoted",
+                "feature_manifest_source": "csu",
+                "target_entity_codes": different_target_codes,
+            }
+        )
+
+
+def test_phase29_stage2_load_kg_cache_empty_records_skips_validation(tmp_path):
+    """An empty cache file (zero records) has nothing to validate.
+    Callers who configured ``kg_cache_path`` to an empty cache are
+    treated as a no-op (legacy preservation; previously this loaded as
+    an empty dict, and the validation gate must NOT raise on it)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.kg.cache import save_cache
+
+    cache_path = tmp_path / "empty_cache.json"
+    save_cache([], cache_path)
+
+    loaded = _load_kg_cache(
+        {
+            "kg_cache_path": str(cache_path),
+            "kg_mode": "promoted",  # even strict mode shouldn't trip
+            "feature_manifest_source": "csu",
+            "target_entity_codes": [("RXNORM", "479158")],
+        }
+    )
+    assert loaded == {}
+
+
 def test_phase29_stage2_adv_moderate_alone_with_unrelated_kg_edges_preserves_legacy_contract():
     """Bug guard: kg_edges that produce no_signal must NOT change adv-moderate-alone
     remediation. Voter rule #6 emits remediation='review'; Stage 1 contract is
