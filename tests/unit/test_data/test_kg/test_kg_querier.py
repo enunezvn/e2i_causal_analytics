@@ -468,3 +468,63 @@ def test_kgedge_immutability() -> None:
     )
     with pytest.raises(Exception):  # FrozenInstanceError is a dataclass-specific subclass
         edge.score = 0.5  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# PR-0: predicate-by-datatypeId contract test (Phase 2.9 Stage 2 prerequisite)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "datatype_id, datasource_id, expected_predicate",
+    [
+        ("known_drug", "chembl", "treats"),
+        ("known_drug", "clinical_trials", "treats"),
+        ("literature", "europepmc", "associated_with"),
+        ("genetic_association", "eva", "associated_with"),
+        ("affected_pathway", "progeny", "associated_with"),
+        ("animal_model", "phenodigm", "associated_with"),
+    ],
+)
+def test_query_drug_disease_edges_predicate_by_datatype(
+    datatype_id: str, datasource_id: str, expected_predicate: str
+) -> None:
+    """Each Open Targets datatypeId maps to one semantic predicate.
+
+    The Open Targets data model (Ochoa 2021, NAR) defines seven canonical
+    ``datatypeId`` values. Only ``known_drug`` carries drug-treats-disease
+    semantics; all others are gene/target-disease association, literature,
+    or pathway evidence. PR-0 maps ``datatypeId == "known_drug"`` →
+    ``predicate="treats"`` at the querier boundary so the
+    ``EnsembleVoter.classify_kg_signal`` treats path comes alive.
+
+    Pre-fix the querier emitted ``predicate="associated_with"`` for ALL
+    rows; the ``known_drug`` parametrize cases would fail under pre-fix
+    code (proving the dead-signal bug existed). Post-fix the ``known_drug``
+    rows produce ``"treats"``; the rest stay ``"associated_with"``.
+
+    Reference: docs/superpowers/specs/2026-05-08-kg-predicate-reconciliation-design.md
+    """
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "count": 1,
+                "rows": [
+                    {
+                        "score": 0.85,
+                        "datatypeId": datatype_id,
+                        "datasourceId": datasource_id,
+                        "literature": [],
+                        "drug": {"id": "CHEMBL1234", "name": "drug-x"},
+                        "disease": {"id": "EFO_0000270", "name": "disease-y"},
+                    }
+                ],
+            }
+        }
+    )
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL1234", "EFO_0000270")
+    assert len(edges) == 1
+    assert edges[0].predicate == expected_predicate
+    assert edges[0].evidence_source == "open_targets"
+    assert edges[0].datasource == datasource_id
