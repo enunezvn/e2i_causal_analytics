@@ -983,6 +983,56 @@ def test_invalid_llm_role_falls_through_to_kg_only():
     assert v.severity == "high"
 
 
+def test_self_loop_edge_does_not_count_as_relation():
+    """Codex review MEDIUM (M2, 2026-05-08): a self-loop edge
+    (subject_id == object_id) used to drive a `taxonomic_descendant`
+    KG signal whenever the same CUI was both feature and target. The
+    edge encodes "X is_a X", not "feature is descendant of target".
+    """
+    self_loop = KGEdge(
+        subject_id="C1",
+        predicate="isa",
+        object_id="C1",
+        evidence_source="umls_relations",
+    )
+    signal, edges = classify_kg_signal(
+        [self_loop],
+        feature_entity_ids=["C1"],
+        target_entity_ids=["C1"],
+    )
+    assert signal == "no_signal"
+    assert edges == ()
+
+
+def test_self_loop_treats_edge_also_excluded():
+    """Same defensive check for treats-style self-loops."""
+    edge = KGEdge(
+        subject_id="C1",
+        predicate="treats",
+        object_id="C1",
+        evidence_source="open_targets",
+    )
+    signal, _ = classify_kg_signal(
+        [edge],
+        feature_entity_ids=["C1"],
+        target_entity_ids=["C1"],
+    )
+    assert signal == "no_signal"
+
+
+def test_overlapping_feature_target_sets_with_real_edge_still_works():
+    """Defensive case: when feature/target sets share a CUI (C1) but
+    the actual edge is between two distinct CUIs (C2 → C3), the edge
+    should still classify normally."""
+    edge = _kg_isa_edge(child_id="C2", parent_id="C3")
+    signal, _ = classify_kg_signal(
+        [edge],
+        feature_entity_ids=["C1", "C2"],
+        target_entity_ids=["C1", "C3"],
+    )
+    assert signal == "taxonomic_descendant"
+
+
 def test_contradictory_kg_with_accept_llm_abstains():
     """Codex review MEDIUM (M1, 2026-05-08): contradictory KG (mixed
     treats + taxonomic edges) + LLM=ancestor used to silently trust
