@@ -63,6 +63,70 @@ DRUG_CLASS_NAMES = (
 
 
 # =============================================================================
+# KG entity-code lookups (Phase 2.9 Stage 2 PR-B)
+# =============================================================================
+#
+# Each table maps a feature family name to its canonical KG entity codes:
+# the most-specific source-vocab code (ICD10CM / RxNORM / LOINC) AND a UMLS
+# CUI cross-walk. The KG querier resolves either to drug-disease evidence
+# (Open Targets) or taxonomic relations (UMLS); UMLS CUI is the canonical
+# joiner.
+#
+# Drug classes intentionally use UMLS class CUIs (not RxCUIs): RxNorm
+# class-level membership is fuzzy at the active-ingredient level, but UMLS
+# captures the pharmacologic class as a single concept that the
+# KGQuerier.query_concept_relations call can navigate.
+
+PRIMARY_DX_KG_CODES: tuple[tuple[str, str], ...] = (
+    ("ICD10CM", "L50.9"),
+    ("UMLS", "C0042109"),
+)
+
+DX_SPECIFIC_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
+    "dx_l50_1_count": (("ICD10CM", "L50.1"), ("UMLS", "C0042109")),
+    "dx_l50_8_count": (("ICD10CM", "L50.8"), ("UMLS", "C0042109")),
+    "dx_l50_9_count": (("ICD10CM", "L50.9"), ("UMLS", "C0042109")),
+}
+
+DX_ANGIOEDEMA_KG_CODES: tuple[tuple[str, str], ...] = (
+    ("ICD10CM", "T78.3"),
+    ("UMLS", "C0002994"),
+)
+
+COMORBIDITY_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
+    "atopic_dermatitis": (("ICD10CM", "L20.9"), ("UMLS", "C0011615")),
+    "asthma": (("ICD10CM", "J45.909"), ("UMLS", "C0004096")),
+    "allergic_rhinitis": (("ICD10CM", "J30.9"), ("UMLS", "C0018621")),
+    "anxiety": (("ICD10CM", "F41.9"), ("UMLS", "C0003467")),
+    "depression": (("ICD10CM", "F33.9"), ("UMLS", "C0011581")),
+    "thyroid_autoimmune": (("ICD10CM", "E06.3"), ("UMLS", "C0856243")),
+    "nsaid_hypersensitivity": (("UMLS", "C2266824"),),
+    "angioedema": (("ICD10CM", "T78.3"), ("UMLS", "C0002994")),
+}
+
+DRUG_CLASS_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
+    "h1_1g": (("UMLS", "C0066896"),),
+    "h1_2g": (("UMLS", "C2718076"),),
+    "h2": (("UMLS", "C0019613"),),
+    "ltra": (("UMLS", "C0876129"),),
+    "sys_steroid": (("UMLS", "C2825472"),),
+    "top_steroid": (("UMLS", "C0001617"),),
+    "immunosupp": (("UMLS", "C0021081"),),
+}
+
+LAB_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
+    "ige_total": (("LOINC", "6106-9"), ("UMLS", "C0922951")),
+    "eosinophil": (("LOINC", "711-2"),),
+    "crp": (("LOINC", "1988-5"),),
+    "tpo_ab": (("LOINC", "9362-4"),),
+    "free_t4": (("LOINC", "3024-7"),),
+    "tsh": (("LOINC", "3016-3"),),
+    "ana": (("LOINC", "5048-4"),),
+    "cbc": (("LOINC", "58410-2"),),
+}
+
+
+# =============================================================================
 # Demographics — knowable at enrollment
 # =============================================================================
 
@@ -132,6 +196,7 @@ _DEMO = [
         knowable_at=KnowableAt(reference="enrollment"),
         source="demo",
         derivation_inputs=("diagcode_raw",),
+        kg_entity_codes=PRIMARY_DX_KG_CODES,
     ),
 ]
 
@@ -148,6 +213,7 @@ _DISEASE = [
         derivation_inputs=("admit_date", "diag1", "diag2", "diag3", "diag4", "diag5"),
         aggregation="count",
         window_days=OPTUM_LOOKBACK_DAYS,
+        kg_entity_codes=DX_SPECIFIC_KG_CODES["dx_l50_1_count"],
     ),
     FeatureContract(
         name="dx_l50_8_count",
@@ -156,6 +222,7 @@ _DISEASE = [
         derivation_inputs=("admit_date", "diag1", "diag2", "diag3", "diag4", "diag5"),
         aggregation="count",
         window_days=OPTUM_LOOKBACK_DAYS,
+        kg_entity_codes=DX_SPECIFIC_KG_CODES["dx_l50_8_count"],
     ),
     FeatureContract(
         name="dx_l50_9_count",
@@ -164,6 +231,7 @@ _DISEASE = [
         derivation_inputs=("admit_date", "diag1", "diag2", "diag3", "diag4", "diag5"),
         aggregation="count",
         window_days=OPTUM_LOOKBACK_DAYS,
+        kg_entity_codes=DX_SPECIFIC_KG_CODES["dx_l50_9_count"],
     ),
     FeatureContract(
         name="dx_total_csu",
@@ -178,6 +246,7 @@ _DISEASE = [
         derivation_inputs=("admit_date", "diag1", "diag2", "diag3", "diag4", "diag5"),
         aggregation="count",
         window_days=OPTUM_LOOKBACK_DAYS,
+        kg_entity_codes=DX_ANGIOEDEMA_KG_CODES,
     ),
     FeatureContract(
         name="months_since_first_dx",
@@ -200,6 +269,7 @@ _DISEASE = [
 
 _COMORBIDITIES: list[FeatureContract] = []
 for name in COMORBIDITY_NAMES:
+    _kg_codes = COMORBIDITY_KG_CODES[name]
     _COMORBIDITIES.append(
         FeatureContract(
             name=f"has_{name}",
@@ -208,6 +278,7 @@ for name in COMORBIDITY_NAMES:
             derivation_inputs=("admit_date", "diag1", "diag2", "diag3", "diag4", "diag5"),
             aggregation="max",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_kg_codes,
         )
     )
     _COMORBIDITIES.append(
@@ -218,6 +289,7 @@ for name in COMORBIDITY_NAMES:
             derivation_inputs=("admit_date", "diag1", "diag2", "diag3", "diag4", "diag5"),
             aggregation="count",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_kg_codes,
         )
     )
 
@@ -331,6 +403,7 @@ _UTILIZATION = [
 
 _DRUG_CLASS: list[FeatureContract] = []
 for cls in DRUG_CLASS_NAMES:
+    _drug_codes = DRUG_CLASS_KG_CODES[cls]
     _DRUG_CLASS.append(
         FeatureContract(
             name=f"{cls}_ever_filled",
@@ -339,6 +412,7 @@ for cls in DRUG_CLASS_NAMES:
             derivation_inputs=("medication_date", "drug_name"),
             aggregation="max",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_drug_codes,
         )
     )
     _DRUG_CLASS.append(
@@ -349,6 +423,7 @@ for cls in DRUG_CLASS_NAMES:
             derivation_inputs=("medication_date", "drug_name"),
             aggregation="count",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_drug_codes,
         )
     )
     _DRUG_CLASS.append(
@@ -359,6 +434,7 @@ for cls in DRUG_CLASS_NAMES:
             derivation_inputs=("medication_date", "drug_name", "days_sup"),
             aggregation="sum",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_drug_codes,
         )
     )
     _DRUG_CLASS.append(
@@ -369,6 +445,7 @@ for cls in DRUG_CLASS_NAMES:
             derivation_inputs=("medication_date", "drug_name"),
             aggregation="max",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_drug_codes,
         )
     )
 
@@ -379,6 +456,7 @@ for cls in DRUG_CLASS_NAMES:
 
 _LABS: list[FeatureContract] = []
 for lab in LAB_NAMES:
+    _lab_codes = LAB_KG_CODES[lab]
     _LABS.append(
         FeatureContract(
             name=f"{lab}_tested",
@@ -387,6 +465,7 @@ for lab in LAB_NAMES:
             derivation_inputs=("fst_dt", "loinc_cd"),
             aggregation="max",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_lab_codes,
         )
     )
     _LABS.append(
@@ -397,6 +476,7 @@ for lab in LAB_NAMES:
             derivation_inputs=("fst_dt", "loinc_cd", "result"),
             aggregation="max",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_lab_codes,
         )
     )
     _LABS.append(
@@ -407,6 +487,7 @@ for lab in LAB_NAMES:
             derivation_inputs=("fst_dt", "loinc_cd", "abnl_cd"),
             aggregation="max",
             window_days=OPTUM_LOOKBACK_DAYS,
+            kg_entity_codes=_lab_codes,
         )
     )
 

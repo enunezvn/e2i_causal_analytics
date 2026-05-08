@@ -78,6 +78,7 @@ _DEMO_ENROLLMENT = [
         knowable_at=KnowableAt(reference="enrollment"),
         source="demo",
         derivation_inputs=("diagcode",),
+        kg_entity_codes=(("ICD10CM", "L50.9"), ("UMLS", "C0042109")),
     ),
 ]
 

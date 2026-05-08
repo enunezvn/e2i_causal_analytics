@@ -209,3 +209,13 @@ def test_manifest_covers_all_csu_feature_columns():
         f"This means the manifest has drifted from the converter; either remove the entry "
         f"or fix the converter."
     )
+
+
+def test_csu_primary_diagnosis_code_has_kg_entity_codes():
+    """primary_diagnosis_code anchors the CSU cohort and must declare codes."""
+    from src.data.manifests.csu_feature_manifest import CSU_FEATURES
+
+    by_name = {c.name: c for c in CSU_FEATURES}
+    assert by_name["primary_diagnosis_code"].kg_entity_codes, (
+        "primary_diagnosis_code must declare kg_entity_codes"
+    )
