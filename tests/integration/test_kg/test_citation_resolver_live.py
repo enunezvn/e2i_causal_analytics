@@ -13,12 +13,14 @@ would only verify the Europe PMC happy-path which is already covered by
 the mock-transport unit tests).
 
 PMID choice:
-    ``20051597`` — "Atopic dermatitis: a review of the evidence for guidelines
-    development and implementation" (a 2010 review). Chosen because it's a
-    stable, freely-indexed Europe PMC record that mentions atopic dermatitis
-    repeatedly. The test asserts the abstract resolves and that the entity
-    is found; the causal-cue assertion is loose because review abstracts may
-    not contain the curated cue verbs.
+    ``28846349`` — "Atopic Dermatitis" (StatPearls, 2025 revision). Chosen
+    because it's a stable Europe PMC record with a 540-char abstract that
+    repeatedly mentions atopic dermatitis. Initial v1 picked PMID
+    ``20051597`` but Europe PMC's record for that PMID has no
+    ``abstractText`` — fine for the prior auto-pass test, breaks the
+    strengthened v2 hard-assert. The test asserts the abstract resolves
+    and the entity is found; the causal-cue assertion is loose because
+    review abstracts may not contain the curated cue verbs.
 """
 
 from __future__ import annotations
@@ -54,49 +56,50 @@ def _clear_caches() -> None:
 
 
 def test_resolve_pmid_returns_real_abstract() -> None:
-    """A well-known atopic-dermatitis PMID must produce a non-empty abstract."""
+    """A well-known atopic-dermatitis PMID must produce a non-empty abstract.
+
+    Codex review LOW (2026-05-08): the previous version had an
+    ``_allow_unresolved`` helper that always returned True, making the
+    test pass even when Europe PMC silently broke. v2 hard-asserts the
+    record is fetched and the abstract is non-empty; transient Europe
+    PMC outages will surface as test failures rather than silently
+    slipping through. The slow-tests workflow re-runs are the right
+    place to absorb genuine transient unavailability.
+    """
     with CitationResolver() as resolver:
-        record = resolver.resolve_pmid("20051597")
-    # Europe PMC may occasionally return a stripped record; if so, the
-    # downstream verification step would correctly mark abstract_resolved
-    # as False. Don't fail the test on that — only fail if both records
-    # come back empty.
-    assert record is not None or _allow_unresolved(), (
-        "Europe PMC unexpectedly returned no record for PMID 20051597; "
-        "this either indicates a regression in the client or transient API "
-        "unavailability."
+        record = resolver.resolve_pmid("28846349")
+    assert record is not None, (
+        "Europe PMC returned no record for PMID 28846349 — either a "
+        "regression in EuropePMCClient validation logic or a transient "
+        "Europe PMC outage. Re-run on the slow-tests workflow before "
+        "declaring a hard regression."
     )
-    if record is not None:
-        assert record.identifier_kind == "pmid"
-        assert record.source == "europe_pmc"
-        assert len(record.abstract) > 0
+    assert record.identifier == "28846349"
+    assert record.identifier_kind == "pmid"
+    assert record.source == "europe_pmc"
+    assert len(record.abstract) > 0
+    # The atopic-dermatitis review's abstract must mention the topic.
+    assert "dermatitis" in record.abstract.lower()
 
 
 def test_verify_citation_finds_atopic_dermatitis_entity() -> None:
     """Verify a known atopic-dermatitis review actually mentions the term."""
     with CitationResolver() as resolver:
         verdict = resolver.verify_citation(
-            "20051597",
+            "28846349",
             identifier_kind="pmid",
             subject_name="atopic dermatitis",
             object_name="treatment",
             subject_cui="C0011615",  # UMLS preferred-name fan-out
         )
-    assert verdict.identifier == "20051597"
+    assert verdict.identifier == "28846349"
     assert verdict.identifier_kind == "pmid"
-    if verdict.abstract_resolved:
-        # When the abstract resolves, the subject term must appear (it's the
-        # paper's topic). The object term ("treatment") may or may not appear.
-        assert any("dermatitis" in term.lower() for term in verdict.entities_found), (
-            f"Expected an atopic-dermatitis match in entities_found; got {verdict.entities_found!r}"
-        )
-
-
-def _allow_unresolved() -> bool:
-    """Permit transient Europe PMC unavailability without failing CI.
-
-    The test is checking pipeline plumbing, not Europe PMC uptime. If a
-    transient outage causes the record to come back as None, we accept
-    that; the unit tests already cover the happy path.
-    """
-    return True
+    assert verdict.abstract_resolved, (
+        "verify_citation must resolve the abstract for a well-known PMID; "
+        "if this fails, EuropePMCClient is broken upstream."
+    )
+    # When the abstract resolves, the subject term must appear (it's the
+    # paper's topic). The object term ("treatment") may or may not appear.
+    assert any("dermatitis" in term.lower() for term in verdict.entities_found), (
+        f"Expected an atopic-dermatitis match in entities_found; got {verdict.entities_found!r}"
+    )
