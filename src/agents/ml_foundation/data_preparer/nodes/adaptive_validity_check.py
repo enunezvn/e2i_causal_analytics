@@ -190,6 +190,13 @@ def _adversarial_input(score: dict[str, Any]) -> dict[str, Any]:
     Returns None for the degenerate-score case (z is NaN); callers should
     treat that as "no adversarial signal" and let the voter abstain or the
     bypass paths emit a legacy info verdict.
+
+    The ``p_value`` propagated into the verdict dict is the empirical
+    upper-tail proportion from ``compute_adversarial_score``; it is bounded
+    below by ``1 / n_permutations`` (default 200 → floor 0.005), so a
+    persisted ``p_value=0.0`` means ``< 1/n_permutations``, NOT exact zero
+    (backlog #11.b). Severity routing here uses ``z_score`` only, so this
+    rounding is purely informational for downstream consumers.
     """
     z = score.get("z_score", float("nan"))
     auc = score.get("actual_auc", float("nan"))
