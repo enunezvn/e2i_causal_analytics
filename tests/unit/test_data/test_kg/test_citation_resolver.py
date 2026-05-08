@@ -341,7 +341,11 @@ def test_verify_citation_swallows_umls_transient_error() -> None:
 
 
 def test_verify_citation_unsupported_identifier_kind() -> None:
-    """Bogus identifier_kind → error CitationVerdict, not raise."""
+    """Bogus identifier_kind → error CitationVerdict, not raise.
+
+    Codex review MEDIUM (2026-05-08): the verdict must preserve the
+    original (invalid) identifier_kind value, NOT pretend it was a PMID.
+    """
 
     verdict = _resolver().verify_citation(
         "12345",
@@ -352,6 +356,8 @@ def test_verify_citation_unsupported_identifier_kind() -> None:
     assert not verdict.abstract_resolved
     assert verdict.error is not None
     assert "unsupported" in verdict.error
+    # The invalid kind is preserved, not masked as "pmid".
+    assert verdict.identifier_kind == "orcid"
 
 
 def test_resolve_pmid_swallows_europe_pmc_error() -> None:

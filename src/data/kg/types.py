@@ -54,10 +54,16 @@ class CitationVerdict:
     ``overall_confidence`` is a 0-1 score that aggregates the three factors;
     callers should treat it as a relative ranking signal, not an absolute
     threshold.
+
+    ``identifier_kind`` widened to ``str`` (was ``Literal["pmid", "doi"]``)
+    so that error verdicts produced when the caller supplies an unsupported
+    kind preserve the original input rather than masquerading as a PMID.
+    Successful verdicts still always carry ``"pmid"`` or ``"doi"``;
+    consumers should check ``error is None`` before trusting the kind.
     """
 
     identifier: str
-    identifier_kind: Literal["pmid", "doi"]
+    identifier_kind: str
     abstract_resolved: bool
     entities_found: tuple[str, ...] = ()
     causal_cue_found: Optional[str] = None
