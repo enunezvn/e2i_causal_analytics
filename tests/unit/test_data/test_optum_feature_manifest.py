@@ -146,3 +146,69 @@ def test_manifest_covers_all_optum_feature_columns(cohort: str):
         f"{sorted(uncovered)}. Either add a FeatureContract or extend "
         f"_NON_FEATURE_OPTUM if the column is metadata."
     )
+
+
+def test_every_disease_specific_dx_feature_has_kg_entity_codes():
+    """The 3 dx_l50_*_count features must declare their ICD-10 codes."""
+    from src.data.manifests.optum_feature_manifest import OPTUM_FEATURES
+
+    by_name = {c.name: c for c in OPTUM_FEATURES}
+    for fname in ("dx_l50_1_count", "dx_l50_8_count", "dx_l50_9_count"):
+        assert by_name[fname].kg_entity_codes, (
+            f"{fname} must declare kg_entity_codes for KG querying"
+        )
+
+
+def test_every_comorbidity_has_feature_has_kg_entity_codes():
+    """All 8 has_<comorbidity> features must declare entity codes."""
+    from src.data.manifests.optum_feature_manifest import (
+        COMORBIDITY_NAMES,
+        OPTUM_FEATURES,
+    )
+
+    by_name = {c.name: c for c in OPTUM_FEATURES}
+    for name in COMORBIDITY_NAMES:
+        feat_name = f"has_{name}"
+        assert by_name[feat_name].kg_entity_codes, (
+            f"{feat_name} must declare kg_entity_codes"
+        )
+
+
+def test_every_drug_class_ever_filled_feature_has_kg_entity_codes():
+    """All 7 <drug_class>_ever_filled features must declare entity codes."""
+    from src.data.manifests.optum_feature_manifest import (
+        DRUG_CLASS_NAMES,
+        OPTUM_FEATURES,
+    )
+
+    by_name = {c.name: c for c in OPTUM_FEATURES}
+    for cls in DRUG_CLASS_NAMES:
+        feat_name = f"{cls}_ever_filled"
+        assert by_name[feat_name].kg_entity_codes, (
+            f"{feat_name} must declare kg_entity_codes"
+        )
+
+
+def test_every_lab_tested_feature_has_kg_entity_codes():
+    """All 8 <lab>_tested features must declare entity codes."""
+    from src.data.manifests.optum_feature_manifest import (
+        LAB_NAMES,
+        OPTUM_FEATURES,
+    )
+
+    by_name = {c.name: c for c in OPTUM_FEATURES}
+    for lab in LAB_NAMES:
+        feat_name = f"{lab}_tested"
+        assert by_name[feat_name].kg_entity_codes, (
+            f"{feat_name} must declare kg_entity_codes"
+        )
+
+
+def test_primary_diagnosis_code_has_kg_entity_codes():
+    """primary_diagnosis_code anchors the cohort and must declare codes."""
+    from src.data.manifests.optum_feature_manifest import OPTUM_FEATURES
+
+    by_name = {c.name: c for c in OPTUM_FEATURES}
+    assert by_name["primary_diagnosis_code"].kg_entity_codes, (
+        "primary_diagnosis_code must declare kg_entity_codes"
+    )
