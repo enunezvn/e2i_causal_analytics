@@ -1672,6 +1672,9 @@ def test_phase29_stage2_pre_kg_mode_shadow_loads_cache(tmp_path):
 def test_phase29_stage2_pre_shadow_mode_caps_kg_severity_to_info():
     """Shadow mode: a KG-decided 'high' severity verdict is capped to 'info'
     so leakage_remediation cannot drop the feature on KG signal alone.
+    Evidence string carries a shadow-mode annotation so audit readers
+    aren't confused by voter.evidence saying "drop" while severity says
+    "info" / remediation says "keep" (codex M1).
     """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         _compose_legacy_verdict,
@@ -1702,6 +1705,8 @@ def test_phase29_stage2_pre_shadow_mode_caps_kg_severity_to_info():
     assert verdict["severity"] == "info"
     # remediation softened to keep — nothing should be dropped on KG alone in shadow
     assert verdict["remediation"] == "keep"
+    # evidence carries the shadow-mode annotation
+    assert "[shadow-mode" in verdict["evidence"]
 
 
 def test_phase29_stage2_pre_promoted_mode_kg_drives_high_severity():

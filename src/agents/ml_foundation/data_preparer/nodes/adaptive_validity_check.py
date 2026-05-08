@@ -538,10 +538,20 @@ def _compose_legacy_verdict(
     # to "info" and remediation to "keep". The audit fields
     # (decided_by="kg", kg_signal=...) stay intact so divergence
     # measurements (compute_promotion_eligibility) can compare KG vs
-    # adversarial outcomes BEFORE promotion.
+    # adversarial outcomes BEFORE promotion. Codex M1: annotate the
+    # ``evidence`` text so audit readers see the cap explicitly —
+    # otherwise voter.evidence still says "drop" while the legacy
+    # severity/remediation say "info"/"keep" (operator confusion).
     if kg_mode == "shadow" and legacy.get("decided_by") == "kg":
         legacy["severity"] = "info"
         legacy["remediation"] = "keep"
+        existing_evidence = legacy.get("evidence", "") or ""
+        annotation = "[shadow-mode: verdict capped to info/keep; KG not yet promoted]"
+        legacy["evidence"] = (
+            f"{existing_evidence} {annotation}".strip()
+            if existing_evidence
+            else annotation
+        )
 
     return legacy
 
