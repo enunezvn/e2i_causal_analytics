@@ -523,7 +523,33 @@ class EnsembleVoter:
             sanitised_llm = None
 
         # 1. Layer 1 deterministic veto (manifest contract).
-        if layer_1_verdict is not None and layer_1_verdict.get("severity") == LAYER_1_SEVERITY_HIGH:
+        # Codex review MEDIUM (M4, 2026-05-08): a Layer 1 verdict
+        # with severity=high but `contract_source=None` used to drive
+        # a confidence=1.0 deterministic veto with no manifest
+        # provenance recorded. That makes a malformed verdict
+        # indistinguishable from a verified contract veto in the audit
+        # trail. Require `contract_source` to honour the high veto;
+        # malformed verdicts fall through to LLM/KG/abstain.
+        layer_1_high = (
+            layer_1_verdict is not None
+            and layer_1_verdict.get("severity") == LAYER_1_SEVERITY_HIGH
+        )
+        layer_1_has_source = bool(
+            layer_1_verdict and layer_1_verdict.get("contract_source")
+        )
+        if layer_1_high and not layer_1_has_source:
+            evidence.append(
+                f"Layer 1 verdict claims severity=high but contract_source is "
+                f"{layer_1_verdict.get('contract_source') if layer_1_verdict else None!r} "
+                f"(missing or empty); cannot honour as deterministic veto"
+            )
+            logger.warning(
+                "EnsembleVoter: malformed Layer 1 high verdict for %s; "
+                "contract_source is missing — downgrading to no signal",
+                feature_name,
+            )
+            layer_1_high = False
+        if layer_1_high:
             evidence.append(
                 f"Layer 1 manifest contract veto: severity=high, "
                 f"contract_source={layer_1_verdict.get('contract_source')}"

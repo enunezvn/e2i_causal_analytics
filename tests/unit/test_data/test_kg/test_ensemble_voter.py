@@ -983,6 +983,67 @@ def test_invalid_llm_role_falls_through_to_kg_only():
     assert v.severity == "high"
 
 
+def test_malformed_layer_1_high_without_contract_source_downgrades(caplog):
+    """Codex review MEDIUM (M4, 2026-05-08): a Layer 1 verdict with
+    severity=high but contract_source=None used to drive a confidence=1.0
+    deterministic veto with no manifest provenance — making a malformed
+    verdict indistinguishable from a verified contract veto in the audit
+    trail.
+
+    The fix downgrades it to "no signal" so the voter falls through to
+    LLM/KG/abstain.
+    """
+    voter = EnsembleVoter()
+    bad = {
+        "feature": "feat_x",
+        "layer": "1",
+        "severity": "high",
+        "contract_source": None,
+        "contract_window_days": None,
+    }
+    import logging as _logging  # noqa: PLC0415
+
+    with caplog.at_level(_logging.WARNING):
+        v = voter.vote("feat_x", layer_1_verdict=bad)
+    assert v.decided_by != "layer_1"
+    assert v.decided_by == "abstain"
+    assert v.layer_1_input is bad
+    assert any(
+        "missing or empty" in e or "cannot honour" in e for e in v.evidence
+    )
+    assert any("malformed Layer 1" in rec.message for rec in caplog.records)
+
+
+def test_malformed_layer_1_high_empty_string_contract_source_downgrades():
+    """An empty-string `contract_source` is also malformed input."""
+    voter = EnsembleVoter()
+    bad = {"severity": "high", "contract_source": ""}
+    v = voter.vote("feat_x", layer_1_verdict=bad)
+    assert v.decided_by == "abstain"
+
+
+def test_malformed_layer_1_high_missing_key_downgrades():
+    """Missing `contract_source` key entirely → downgrade."""
+    voter = EnsembleVoter()
+    bad = {"severity": "high"}
+    v = voter.vote("feat_x", layer_1_verdict=bad)
+    assert v.decided_by == "abstain"
+
+
+def test_well_formed_layer_1_high_still_drives_drop():
+    """Sanity: a well-formed Layer 1 high verdict still vetoes."""
+    voter = EnsembleVoter()
+    good = {
+        "severity": "high",
+        "contract_source": "csu",
+        "contract_window_days": None,
+    }
+    v = voter.vote("feat_x", layer_1_verdict=good)
+    assert v.decided_by == "layer_1"
+    assert v.severity == "high"
+    assert v.confidence == LAYER_1_CONFIDENCE
+
+
 def test_malformed_adversarial_high_without_z_score_downgrades(caplog):
     """Codex review MEDIUM (M3, 2026-05-08): adversarial verdict with
     severity=high but no z_score used to silently drive a confidence=0.95
