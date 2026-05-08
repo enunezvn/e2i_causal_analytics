@@ -181,26 +181,64 @@ def _build_record_live(
     kg_querier: "KnowledgeGraphQuerier",
 ) -> CacheRecord:
     """Per-feature live-query path. Aggregates edges + errors across each
-    of the feature's ``kg_entity_codes``."""
+    of the feature's ``kg_entity_codes``.
+
+    De-duplication contract (codex L4): a feature with multiple entity
+    codes that all resolve to the same CUI (e.g., ``("ICD10CM", "L50.9")``
+    + ``("UMLS", "C0042109")`` where C0042109 IS the CUI for L50.9) only
+    queries the upstream KG ONCE per unique CUI. Without this, repeated
+    queries produce duplicate edges in the cache, and downstream
+    EnsembleVoter logic would double-count them.
+
+    Mixed-failure reporting contract (codex M3): when ANY entity's query
+    returns edges, the record's status is ``ok``, and any errors from
+    OTHER entities (failed to resolve, transport raise) are surfaced via
+    the ``errors`` field — NOT via a downgraded status. Operators must
+    check both ``status`` and ``errors`` to spot partial failures. This
+    is a deliberate design choice: a feature with ANY edge should be
+    actionable for KG signal, and the partial-resolution audit trail
+    lives in errors.
+
+    Status precedence (codex M2 fix):
+    - ``ok`` — at least one edge returned
+    - ``queried_no_edges`` — entity(ies) resolved AND every query
+      succeeded with empty result (legitimate "no taxonomic relations")
+    - ``source_error`` — entity(ies) resolved BUT every successful-
+      resolution's query raised; the KG layer's silent transport
+      degradation hits this branch
+    - ``entity_unresolved`` — every entity failed to resolve at all
+    """
     aggregated_edges: list[KGEdge] = []
     errors: list[str] = []
-    resolved_any = False
+    resolved_cuis: set[str] = set()
+    queries_attempted = 0
+    queries_failed = 0
     for system, code in fc.kg_entity_codes:
         cui, err = _resolve_entity_to_cui(system, code, entity_linker)
         if err is not None or cui is None:
             errors.append(err or f"({system}, {code}) returned no CUI")
             continue
-        resolved_any = True
+        if cui in resolved_cuis:
+            # codex L4: a second entity code that maps to an already-
+            # queried CUI does not re-query (would produce duplicate
+            # edges) — but we still record the resolution so audit
+            # logs see all entity codes were processed.
+            continue
+        resolved_cuis.add(cui)
         edges, edge_errors = _query_edges_for_cui(cui, kg_querier)
+        queries_attempted += 1
+        if edge_errors:
+            queries_failed += 1
         aggregated_edges.extend(edges)
         errors.extend(edge_errors)
 
-    # Status precedence: ok (any edges) > queried_no_edges (resolved
-    # entities but no edges) > entity_unresolved (no entity resolved at
-    # all) > source_error (all attempts hit transport failures).
     if aggregated_edges:
         status: Any = "ok"
-    elif resolved_any:
+    elif resolved_cuis and queries_attempted > 0 and queries_failed == queries_attempted:
+        # codex M2: every query for resolved entities raised; this is a
+        # transport failure, not a legitimate empty result.
+        status = "source_error"
+    elif resolved_cuis:
         status = "queried_no_edges"
     elif errors:
         unresolved_signals = ("not found", "failed to resolve", "no CUI")
@@ -386,11 +424,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--live",
         action="store_true",
         help=(
-            "Run live KG querying via UMLS UTS + Open Targets (Item B). "
-            "Requires UMLS_UTS_API_KEY env var. Without this flag the "
-            "build emits the schema-and-IO smoke records "
-            "(status='queried_no_edges', empty edges) — useful for "
-            "verifying the manifest plumbing without burning API calls."
+            "Run live UMLS UTS KG querying (Item B). Requires "
+            "UMLS_UTS_API_KEY env var. The cache currently records edges "
+            "from query_disease_hierarchy(cui) only — drug-disease "
+            "evidence via Open Targets is wired through KGQuerier but "
+            "NOT yet queried at build time (requires ChEMBL/EFO cross-"
+            "walks not yet present in EntityLinker; v2 punt). "
+            "sources_attempted in the cache will show 'umls_uts' only. "
+            "Without this flag the build emits schema-and-IO smoke "
+            "records (status='queried_no_edges', empty edges)."
         ),
     )
     args = parser.parse_args(argv)
