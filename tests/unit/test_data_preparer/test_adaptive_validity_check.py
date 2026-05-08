@@ -1305,3 +1305,134 @@ def test_select_features_manifest_does_not_drop_target_or_non_numeric():
     # y: target → out
     # age_continuous: kept
     assert cols == ["age_continuous"]
+
+
+# =============================================================================
+# Stage 2 PR-D: KG edges plumbed through _compose_legacy_verdict
+# =============================================================================
+
+
+def test_phase29_stage2_compose_legacy_verdict_passes_kg_edges_to_voter():
+    """Stage 2 wiring: kg_edges + entity_ids flow into voter.vote() and the
+    voter returns a kg-decided verdict (decided_by='kg', layer='2',
+    kg_signal='leak_drug_treats_disease'). With no Layer 1 contract and no
+    adversarial verdict, the kg edge is the sole signal.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import KGEdge
+
+    voter = EnsembleVoter()
+    edge = KGEdge(
+        subject_id="CHEMBL1234",
+        predicate="treats",
+        object_id="EFO_0000270",
+        evidence_source="open_targets",
+        score=0.85,
+    )
+    verdict = _compose_legacy_verdict(
+        "x",
+        voter=voter,
+        layer_1_input=None,
+        adversarial_input=None,
+        kg_edges=(edge,),
+        feature_entity_ids=("CHEMBL1234",),
+        target_entity_ids=("EFO_0000270",),
+    )
+
+    assert verdict["decided_by"] == "kg"
+    assert verdict["kg_signal"] == "leak_drug_treats_disease"
+    assert verdict["layer"] == "2"
+
+
+def test_phase29_stage2_compose_legacy_verdict_empty_kg_preserves_stage1_behavior():
+    """Empty kg_edges preserves Stage 1 behavior — no regression.
+
+    Layer 1 high contract still produces decided_by='layer_1' / layer='1'
+    when kg_edges is empty (the default).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+
+    voter = EnsembleVoter()
+    layer_1 = {
+        "feature": "x",
+        "layer": "1",
+        "severity": "high",
+        "remediation": "drop",
+        "evidence": "post_index",
+        "contract_source": "csu",
+        "contract_window_days": None,
+    }
+    verdict = _compose_legacy_verdict(
+        "x",
+        voter=voter,
+        layer_1_input=layer_1,
+        adversarial_input=None,
+    )
+    assert verdict["decided_by"] == "layer_1"
+    assert verdict["layer"] == "1"
+
+
+def test_phase29_stage2_load_kg_cache_returns_none_without_path(tmp_path):
+    """No scope_spec['kg_cache_path'] → loader returns None (Stage 1 path)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+
+    assert _load_kg_cache({}) is None
+    assert _load_kg_cache({"kg_cache_path": ""}) is None
+
+
+def test_phase29_stage2_load_kg_cache_warns_and_returns_none_when_missing(tmp_path):
+    """Configured path that doesn't exist → warn + None (shadow-mode-friendly)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+
+    missing = tmp_path / "nope.json"
+    result = _load_kg_cache({"kg_cache_path": str(missing)})
+    assert result is None
+
+
+def test_phase29_stage2_load_kg_cache_loads_records_to_dict(tmp_path):
+    """Cache file → dict feature_name -> list of KGEdge."""
+    from datetime import datetime, timezone
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.kg.cache import CacheRecord, save_cache
+    from src.data.kg.types import KGEdge
+
+    edge = KGEdge(
+        subject_id="CHEMBL2107858",
+        predicate="treats",
+        object_id="MONDO_0011918",
+        evidence_source="open_targets",
+        score=0.9,
+    )
+    record = CacheRecord(
+        feature_name="primary_diagnosis_code",
+        manifest_fingerprint_sha8="a",
+        target_codes_fingerprint_sha8="b",
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=(("ICD10CM", "L50.9"),),
+        target_entity_codes=(("RXNORM", "479158"),),
+        sources_attempted=("umls_uts", "open_targets"),
+        status="ok",
+        edges=(edge,),
+        errors=(),
+    )
+    cache_path = tmp_path / "cache.json"
+    save_cache([record], cache_path)
+
+    loaded = _load_kg_cache({"kg_cache_path": str(cache_path)})
+    assert loaded is not None
+    assert "primary_diagnosis_code" in loaded
+    assert len(loaded["primary_diagnosis_code"]) == 1
+    assert loaded["primary_diagnosis_code"][0].subject_id == "CHEMBL2107858"
