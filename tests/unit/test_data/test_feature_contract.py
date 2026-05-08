@@ -532,3 +532,37 @@ def test_feature_contract_rejects_whitespace_only_code():
             derivation_inputs=("a",),
             kg_entity_codes=(("ICD10CM", "   "),),
         )
+
+
+def test_kg_known_systems_derived_from_canonical_codesystem_literal():
+    """Codex M2: _KG_KNOWN_SYSTEMS must stay in sync with the canonical
+    CodeSystem literal at src/data/kg/types.py. The derivation via
+    typing.get_args + a {"UMLS"} addition prevents drift when types.py
+    adds a new vocabulary."""
+    from typing import get_args
+
+    from src.data.feature_contract import _KG_KNOWN_SYSTEMS
+    from src.data.kg.types import CodeSystem
+
+    canonical = set(get_args(CodeSystem))
+    expected = canonical | {"UMLS"}
+    assert _KG_KNOWN_SYSTEMS == expected, (
+        f"_KG_KNOWN_SYSTEMS ({_KG_KNOWN_SYSTEMS}) drifted from "
+        f"CodeSystem | {{UMLS}} ({expected})"
+    )
+
+
+def test_feature_contract_accepts_umls_system():
+    """UMLS is a meta-system not in CodeSystem (which lists source
+    vocabularies). _KG_KNOWN_SYSTEMS adds it back for manifests that
+    declare a UMLS CUI directly."""
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="x",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("a",),
+        kg_entity_codes=(("UMLS", "C0011615"),),
+    )
+    assert fc.kg_entity_codes == (("UMLS", "C0011615"),)

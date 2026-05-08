@@ -56,15 +56,30 @@ NON_EVENT_SOURCES = frozenset(
 
 AggregationFunc = Literal["sum", "mean", "max", "min", "count", "nunique"]
 
-# CodeSystem values accepted in FeatureContract.kg_entity_codes. Mirrors
-# the literal at src/data/kg/types.py:103 (which is purely for KG-side
-# typing); duplicated here as a frozenset so feature_contract has no
-# dependency on the kg subpackage. ``UMLS`` is included alongside the
-# source vocabularies because a manifest can declare a UMLS CUI directly
-# when the source code is unknown.
-_KG_KNOWN_SYSTEMS: frozenset[str] = frozenset(
-    {"ICD10CM", "ICD10", "RXNORM", "LOINC", "CPT", "HCPCS", "SNOMEDCT_US", "MESH", "UMLS"}
-)
+
+def _compute_kg_known_systems() -> frozenset[str]:
+    """Derive the accepted kg_entity_codes systems from the canonical
+    ``CodeSystem`` literal at ``src/data/kg/types.py``, plus ``UMLS``.
+
+    Codex PR-A review M2: hardcoding a parallel frozenset risks drift
+    when ``types.py`` adds a new vocabulary (e.g., ``SNOMEDCT_UK``).
+    Importing at module-load via ``typing.get_args`` keeps the two in
+    sync automatically. ``UMLS`` is included because manifests can
+    declare a UMLS CUI directly when the source code is unknown — it
+    is a meta-system not present in ``CodeSystem`` (which only lists
+    source vocabularies).
+
+    The import is deferred to function scope so ``feature_contract``
+    has no module-load-time dependency on ``src.data.kg.types``.
+    """
+    from typing import get_args
+
+    from src.data.kg.types import CodeSystem
+
+    return frozenset(get_args(CodeSystem)) | {"UMLS"}
+
+
+_KG_KNOWN_SYSTEMS: frozenset[str] = _compute_kg_known_systems()
 
 
 class ContractViolation(Exception):
