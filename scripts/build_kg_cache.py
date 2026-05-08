@@ -162,6 +162,15 @@ def _query_edges_for_cui(
     is part of the codex H1 follow-up from PR #102: typed-error
     propagation lets ``status=source_error`` mean "transport failed",
     and a programming bug elsewhere now bubbles up as the bug it is.
+
+    ``OpenTargetsError`` is a defensive guard, not currently reachable
+    via ``query_disease_hierarchy`` (which only delegates to UMLS's
+    ``cui_relations``). It's listed in the catch tuple so a future
+    change wiring ``query_drug_disease_edges`` (Open Targets) into this
+    helper path won't silently regress to broad-Exception behavior; the
+    guard keeps the same typed-transport-failure semantics. Codex
+    LOW-1 review on PR #103 flagged the catch as currently unreachable;
+    this comment documents why we keep it.
     """
     from src.data.kg.open_targets import OpenTargetsError
     from src.data.kg.umls_uts import UMLSAuthError, UMLSError
