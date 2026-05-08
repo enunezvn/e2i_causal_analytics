@@ -117,6 +117,7 @@ LAYER_1_SEVERITY_HIGH = "high"
 # the role and a remediation of `keep_with_caveat`.
 LEAK_ROLES: frozenset[str] = frozenset({"mediator", "collider", "descendant"})
 ACCEPT_ROLES: frozenset[str] = frozenset({"ancestor", "confounder", "instrument"})
+VALID_LLM_ROLES: frozenset[str] = LEAK_ROLES | ACCEPT_ROLES
 
 # KG predicates we recognise as drug→disease "treats" evidence
 # (Open Targets) and as taxonomic isa (UMLS relations). Stored as
@@ -440,6 +441,22 @@ class EnsembleVoter:
         if adversarial_verdict is not None:
             adv_severity = adversarial_verdict.get("severity")
 
+        # Codex review HIGH (H1, 2026-05-08): LLMVerdict.causal_role is
+        # a `Literal` annotation only, not validated at construction.
+        # An untrusted upstream classifier can pass through a value
+        # outside the 6-role vocabulary; without this guard the LLM
+        # branch eventually crashes inside `_role_to_remediation` with
+        # a KeyError. Treat it as "no LLM input" — the verdict is
+        # garbage and should be discarded, not crashed on. Recorded in
+        # `evidence` so the audit trail names the offending role.
+        sanitised_llm = llm_verdict
+        if llm_verdict is not None and llm_verdict.causal_role not in VALID_LLM_ROLES:
+            evidence.append(
+                f"LLM verdict ignored: causal_role={llm_verdict.causal_role!r} "
+                f"is outside the supported vocabulary {sorted(VALID_LLM_ROLES)}"
+            )
+            sanitised_llm = None
+
         # 1. Layer 1 deterministic veto (manifest contract).
         if layer_1_verdict is not None and layer_1_verdict.get("severity") == LAYER_1_SEVERITY_HIGH:
             evidence.append(
@@ -450,7 +467,7 @@ class EnsembleVoter:
                 winner="layer_1",
                 kg_signal=kg_signal,
                 adversarial_verdict=adversarial_verdict,
-                llm_verdict=llm_verdict,
+                llm_verdict=sanitised_llm,
                 disagreements=disagreements,
             )
             return EnsembleVerdict(
@@ -479,7 +496,7 @@ class EnsembleVoter:
                 winner="adversarial",
                 kg_signal=kg_signal,
                 adversarial_verdict=adversarial_verdict,
-                llm_verdict=llm_verdict,
+                llm_verdict=sanitised_llm,
                 disagreements=disagreements,
             )
             return EnsembleVerdict(
@@ -503,8 +520,10 @@ class EnsembleVoter:
         # 3. KG self-contradiction is an automatic abstain only when no
         # LLM is available to break the tie. A self-contradictory KG +
         # confident LLM should still let the LLM decide (with the
-        # contradiction recorded in evidence).
-        if kg_signal == "contradictory" and llm_verdict is None:
+        # contradiction recorded in evidence). An LLM with an invalid
+        # role was sanitised to ``None`` above, so it counts as
+        # "no LLM" here for the abstain trigger.
+        if kg_signal == "contradictory" and sanitised_llm is None:
             evidence.append(
                 "KG returned contradictory edges (treats + taxonomic) "
                 "and no LLM verdict available to arbitrate"
@@ -527,14 +546,20 @@ class EnsembleVoter:
                 llm_input=llm_verdict,
             )
 
-        # 4. LLM verdict path (with KG cross-check).
-        if llm_verdict is not None:
-            if _kg_contradicts_llm(kg_signal, llm_verdict.causal_role):
+        # 4. LLM verdict path (with KG cross-check). `sanitised_llm` is
+        # `llm_verdict` for valid roles, or None if the role was outside
+        # the supported vocabulary; the original `llm_verdict` is still
+        # carried into ``llm_input`` so the audit trail records what
+        # was actually passed in.
+        if sanitised_llm is not None:
+            if _kg_contradicts_llm(kg_signal, sanitised_llm.causal_role):
                 evidence.append(
                     f"KG signal {kg_signal!r} contradicts LLM role "
-                    f"{llm_verdict.causal_role!r}: abstaining"
+                    f"{sanitised_llm.causal_role!r}: abstaining"
                 )
-                disagreements.append(f"kg={kg_signal} disagrees with llm={llm_verdict.causal_role}")
+                disagreements.append(
+                    f"kg={kg_signal} disagrees with llm={sanitised_llm.causal_role}"
+                )
                 return EnsembleVerdict(
                     feature_name=feature_name,
                     severity="abstain",
@@ -554,25 +579,25 @@ class EnsembleVoter:
                 )
 
             confidence, llm_evidence = _score_llm_verdict(
-                role=llm_verdict.causal_role,
+                role=sanitised_llm.causal_role,
                 kg_signal=kg_signal,
-                cited_pmid_count=len(llm_verdict.cited_pmids),
+                cited_pmid_count=len(sanitised_llm.cited_pmids),
                 verified_count=len(verified),
                 unverified_count=len(unverified),
                 adversarial_severity=adv_severity,
             )
             evidence.extend(llm_evidence)
 
-            severity = _llm_severity(llm_verdict.causal_role)
+            severity = _llm_severity(sanitised_llm.causal_role)
             remediation = _role_to_remediation(
-                llm_verdict.causal_role,
-                llm_verdict.recommended_remediation,
+                sanitised_llm.causal_role,
+                sanitised_llm.recommended_remediation,
             )
             # Layer 1 was None or info-severity — record any soft
             # disagreement (e.g., adversarial=moderate while LLM says
             # accept) for the audit trail.
             if adv_severity == ADV_SEVERITY_MODERATE and not _llm_role_is_leak(
-                llm_verdict.causal_role
+                sanitised_llm.causal_role
             ):
                 disagreements.append("adversarial=moderate but llm says accept-role")
             return EnsembleVerdict(
@@ -580,7 +605,7 @@ class EnsembleVoter:
                 severity=severity,  # type: ignore[arg-type]
                 remediation=remediation,
                 decided_by="llm",
-                final_role=llm_verdict.causal_role,
+                final_role=sanitised_llm.causal_role,
                 confidence=confidence,
                 kg_signal=kg_signal,
                 kg_edges_considered=considered_edges,
