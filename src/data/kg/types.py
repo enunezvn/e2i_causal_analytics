@@ -43,6 +43,76 @@ EvidenceSource = Literal[
     "manual",
 ]
 
+ProbeOutcome = Literal[
+    "unchanged",
+    "changed",
+    "error",
+    "inapplicable",
+]
+
+
+@dataclass(frozen=True)
+class AdversarialProbeResult:
+    """Phase 2.4 adversarial-probe verdict for one feature.
+
+    Produced by ``AdversarialProbe.probe`` (`src/data/kg/adversarial_probe.py`),
+    which re-derives a feature using only events with ``event_date`` at or
+    before each row's anchor (the prediction time). When the re-derived value
+    differs from the value the pipeline actually emitted, the original
+    derivation pulled post-prediction-time data — a temporal leak the
+    declarative ``FeatureContract`` audit (Layer 1) and the KG-grounded LLM
+    (Layer 2/4) cannot detect on their own because both reason on metadata,
+    not on the raw event stream.
+
+    Outcomes:
+        - ``"unchanged"``: every comparable row matched within tolerance.
+          The feature does not depend on post-prefix data.
+        - ``"changed"``: at least one comparable row differed beyond
+          tolerance. ``fraction_changed`` and ``max_abs_change`` quantify the
+          drift; ``fraction_changed >= suspicion_threshold`` callers may
+          escalate this to a leakage signal.
+        - ``"error"``: the derivation callable raised on either the full or
+          the prefix-censored input. ``error`` carries the message; the
+          caller decides whether a partial verdict is meaningful.
+        - ``"inapplicable"``: the probe could not run — typically because
+          ``anchors`` was empty, the dataset had no ``event_date`` rows that
+          fell at or before any anchor, or the observed values were entirely
+          absent. ``notes`` carries the specific reason.
+
+    Attributes:
+        feature_name: The feature this probe pertains to.
+        outcome: One of ``ProbeOutcome``.
+        n_rows_compared: Number of anchor rows the probe could compare. May
+            be smaller than ``len(anchors)`` if some anchors had no observed
+            value or no recomputed value.
+        n_rows_changed: Number of compared rows whose recomputed value
+            differed from the observed value beyond tolerance.
+        fraction_changed: ``n_rows_changed / n_rows_compared`` when
+            ``n_rows_compared > 0``; 0.0 otherwise.
+        max_abs_change: For numeric features, the maximum absolute
+            difference between observed and recomputed across compared rows.
+            ``None`` for non-numeric features or when no rows were comparable.
+        error: Exception message when ``outcome == "error"``; ``None``
+            otherwise. The string is operator-facing — do not parse it.
+        notes: Free-text diagnostic strings (e.g., "censoring left N anchors
+            with empty event slices"). Always populated for ``"inapplicable"``.
+
+    Audit invariants enforced by ``AdversarialProbe.probe``:
+        - ``outcome == "unchanged"``  ⇒  ``n_rows_changed == 0``
+        - ``outcome == "changed"``    ⇒  ``n_rows_changed >= 1``
+        - ``outcome == "inapplicable"`` ⇒ ``n_rows_compared == 0``
+        - ``outcome == "error"``      ⇒  ``error is not None``
+    """
+
+    feature_name: str
+    outcome: ProbeOutcome
+    n_rows_compared: int = 0
+    n_rows_changed: int = 0
+    fraction_changed: float = 0.0
+    max_abs_change: Optional[float] = None
+    error: Optional[str] = None
+    notes: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True)
 class AbstractRecord:

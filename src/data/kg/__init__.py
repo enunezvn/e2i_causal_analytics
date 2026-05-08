@@ -14,6 +14,10 @@ the rest of Layer 2 (``CausalRoleClassifier``, ``CitationResolver``,
 ``EnsembleVoter``) consumes: code → ``EntityLink`` records.
 """
 
+from src.data.kg.adversarial_probe import (
+    AdversarialProbe,
+    AdversarialProbeError,
+)
 from src.data.kg.citation_resolver import (
     CAUSAL_CUE_VERBS,
     CitationResolver,
@@ -32,6 +36,7 @@ from src.data.kg.open_targets import OpenTargetsClient, OpenTargetsError
 from src.data.kg.rxnav import RxCUIMatch, RxNavClient, RxNavError
 from src.data.kg.types import (
     AbstractRecord,
+    AdversarialProbeResult,
     CausalRole,
     CitationVerdict,
     EnsembleDecidedBy,
@@ -42,6 +47,7 @@ from src.data.kg.types import (
     KGEdge,
     KGSignal,
     LLMVerdict,
+    ProbeOutcome,
     Remediation,
 )
 from src.data.kg.umls_uts import (
@@ -53,6 +59,9 @@ from src.data.kg.umls_uts import (
 
 __all__ = [
     "AbstractRecord",
+    "AdversarialProbe",
+    "AdversarialProbeError",
+    "AdversarialProbeResult",
     "CAUSAL_CUE_VERBS",
     "CausalRole",
     "CitationResolver",
@@ -76,6 +85,7 @@ __all__ = [
     "LLMVerdict",
     "OpenTargetsClient",
     "OpenTargetsError",
+    "ProbeOutcome",
     "Remediation",
     "RxCUIMatch",
     "RxNavClient",
