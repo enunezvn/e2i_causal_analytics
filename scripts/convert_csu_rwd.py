@@ -233,6 +233,26 @@ def _safe_float(val: Any) -> float | None:
         return None
 
 
+def _drop_forbidden_columns(
+    records: list[dict[str, Any]], forbidden: list[str]
+) -> list[dict[str, Any]]:
+    """Drop ``forbidden`` keys from each record before writing to disk.
+
+    Item C of the engineering-actionable arc (2026-05-08). Without this
+    gate, post-index columns (journey_*, brand) reached the data_preparer
+    state and relied on Layer 5's manifest pass to catch them. Filtering
+    at the converter boundary makes the leakage-impossibility property
+    structural rather than runtime-dependent.
+
+    Returns a NEW list with NEW dicts; the input is not mutated. Targets
+    (e.g. ``treatment_initiated``) are NOT in ``forbidden`` because they
+    are the supervised signal — see ``CSU_FORBIDDEN_NON_TARGET`` in
+    ``src/data/manifests/csu_feature_manifest.py`` for the derivation.
+    """
+    forbidden_set = set(forbidden)
+    return [{k: v for k, v in r.items() if k not in forbidden_set} for r in records]
+
+
 # ---------------------------------------------------------------------------
 # CSUDataConverter
 # ---------------------------------------------------------------------------
@@ -331,7 +351,21 @@ class CSUDataConverter:
         """Write all JSON output files."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._write_json("e2i_ml_v3_hcp_profiles", self.hcp_profiles)
-        self._write_json("e2i_ml_v3_patient_journeys", self.patient_journeys)
+
+        # Item C of the engineering-actionable arc: gate forbidden columns
+        # at the cohort-builder boundary so post-index leakage cannot reach
+        # the data_preparer state. Targets (treatment_initiated, etc.) are
+        # explicitly preserved — see CSU_TARGETS in csu_feature_manifest.py.
+        # The gate is on the OUTPUT records only; the in-memory
+        # ``self.patient_journeys`` is left intact in case other write
+        # paths need post-index data for ground-truth construction (none
+        # currently do, but the read-modify-write contract is local).
+        from src.data.manifests.csu_feature_manifest import CSU_FORBIDDEN_NON_TARGET
+
+        gated_journeys = _drop_forbidden_columns(
+            self.patient_journeys, CSU_FORBIDDEN_NON_TARGET
+        )
+        self._write_json("e2i_ml_v3_patient_journeys", gated_journeys)
         self._write_json("e2i_ml_v3_treatment_events", self.treatment_events)
         self._write_json("e2i_ml_v3_split_registry", self.split_registry)
 

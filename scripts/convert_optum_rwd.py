@@ -302,7 +302,20 @@ class OptumDataConverter:
         _normalise_journeys_for_parquet(journeys)
         _normalise_hcps_for_parquet(hcps)
 
-        rwdc.write_records(cohort_dir, "e2i_ml_v3_patient_journeys", journeys, fmt="parquet")
+        # Item C of the engineering-actionable arc: gate forbidden columns
+        # at the cohort-builder boundary so post-index leakage cannot reach
+        # the data_preparer state. Targets (treatment_initiated,
+        # initiated_biologic_180d, etc.) are explicitly preserved — see
+        # OPTUM_TARGETS in optum_feature_manifest.py. The gate filters the
+        # journeys list in-place before parquet serialisation.
+        from src.data.manifests.optum_feature_manifest import (
+            OPTUM_FORBIDDEN_NON_TARGET,
+        )
+
+        gated_journeys = _drop_forbidden_columns(journeys, OPTUM_FORBIDDEN_NON_TARGET)
+        rwdc.write_records(
+            cohort_dir, "e2i_ml_v3_patient_journeys", gated_journeys, fmt="parquet"
+        )
         rwdc.write_records(cohort_dir, "e2i_ml_v3_treatment_events", events, fmt="parquet")
         rwdc.write_records(cohort_dir, "e2i_ml_v3_hcp_profiles", hcps, fmt="parquet")
         rwdc.write_records(cohort_dir, "e2i_ml_v3_split_registry", split_registry, fmt="json")
@@ -1520,6 +1533,24 @@ class OptumDataConverter:
 # --------------------------------------------------------------------------- #
 # Parquet-safe normalisation                                                  #
 # --------------------------------------------------------------------------- #
+
+
+def _drop_forbidden_columns(
+    records: list[dict[str, Any]], forbidden: list[str]
+) -> list[dict[str, Any]]:
+    """Drop ``forbidden`` keys from each record before writing to disk.
+
+    Item C of the engineering-actionable arc (2026-05-08). Mirrors the
+    same-named helper in ``scripts/convert_csu_rwd.py`` so both
+    converters share the boundary-filter contract. Returns a NEW list
+    with NEW dicts; the input is not mutated. Targets (e.g.
+    ``treatment_initiated``, ``initiated_biologic_180d``) are NOT in
+    ``forbidden`` because they are the supervised signal — see
+    ``OPTUM_FORBIDDEN_NON_TARGET`` in
+    ``src/data/manifests/optum_feature_manifest.py``.
+    """
+    forbidden_set = set(forbidden)
+    return [{k: v for k, v in r.items() if k not in forbidden_set} for r in records]
 
 
 def _normalise_events_for_parquet(events: list[dict[str, Any]]) -> None:
