@@ -1,5 +1,14 @@
 # Phase 2.9 Stage 2 Entity-Mapping Implementation Plan
 
+> **STATUS: COMPLETE 2026-05-08.** All 5 PRs merged via `--rebase`:
+> - **PR-A → PR #95** (`feat/feature-contract-kg-entity-codes`) — 3 codex fixes (H1+M1+M2)
+> - **PR-B → PR #96** (`feat/optum-manifest-kg-entity-codes`) — 5 codex fixes (H1+M1+M2/M3/L1/L2+L3/L4)
+> - **PR-C → PR #97** (`feat/kg-cache-builder`) — 9 codex fixes (5 MEDIUM + 4 LOW)
+> - **PR-D → PR #98** (`feat/kg-cache-pipeline-integration`) — 4 codex fixes (concern #2 preemptive + H5+M6a+M7)
+> - **PR-E → PR #99** (`feat/kg-shadow-mode-promotion`) — 9 codex fixes (H1+H2+M1+M2+M3+L1+L2+N1+N2)
+>
+> See [`phase29_stage2_arc_close_20260508.md`](../../../../.claude/projects/-home-enunez-Projects-e2i-causal-analytics/memory/phase29_stage2_arc_close_20260508.md) for the full arc closure record (28 codex commits, 15/15 CI green per PR, 0 regressions).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Wire `KnowledgeGraphQuerier` output into Layer 5's `adaptive_validity_check` via the `EnsembleVoter` so per-feature verdicts carry `layer="2"` KG signals, with disease-agnostic infrastructure (universal pipeline, no cohort string in code) + disease-specific declarative content (manifests + scope_spec target codes).
@@ -48,20 +57,20 @@
 **Files:**
 - Modify: `tests/unit/test_data/test_feature_contract.py`
 
-- [ ] **Step 1: Branch**
+- [x] **Step 1: Branch**
 
 ```bash
 git checkout main && git pull --ff-only origin main
 git checkout -b feat/feature-contract-kg-entity-codes
 ```
 
-- [ ] **Step 2: Read the existing FeatureContract test file**
+- [x] **Step 2: Read the existing FeatureContract test file**
 
 Run: `head -100 tests/unit/test_data/test_feature_contract.py`
 
 Look for: how `FeatureContract(...)` is instantiated; how `ContractViolation` is asserted; existing field validation tests.
 
-- [ ] **Step 3: Append new failing tests**
+- [x] **Step 3: Append new failing tests**
 
 Add to `tests/unit/test_data/test_feature_contract.py`:
 
@@ -165,13 +174,13 @@ def test_feature_contract_normalizes_kg_entity_codes_to_tuple_of_tuples():
     assert all(isinstance(t, tuple) for t in fc.kg_entity_codes)
 ```
 
-- [ ] **Step 4: Run failing tests**
+- [x] **Step 4: Run failing tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_feature_contract.py -v -k "kg_entity_codes"`
 
 Expected: 6 tests FAIL with `TypeError: ... got an unexpected keyword argument 'kg_entity_codes'` (the field doesn't exist yet).
 
-- [ ] **Step 5: Commit failing tests**
+- [x] **Step 5: Commit failing tests**
 
 ```bash
 git add tests/unit/test_data/test_feature_contract.py
@@ -191,13 +200,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/data/feature_contract.py`
 
-- [ ] **Step 1: Read the existing FeatureContract dataclass**
+- [x] **Step 1: Read the existing FeatureContract dataclass**
 
 Run: `sed -n '107,222p' src/data/feature_contract.py`
 
 Identify: the field declaration block, the `__post_init__` method, and the existing validation pattern in `_validate`.
 
-- [ ] **Step 2: Add the field + validation**
+- [x] **Step 2: Add the field + validation**
 
 Edit `src/data/feature_contract.py`. After line 152 (the `_allow_unwindowed_for_test` field), add:
 
@@ -265,25 +274,25 @@ In `_validate` (before the existing aggregation block), add:
                 )
 ```
 
-- [ ] **Step 3: Run the new tests to verify they pass**
+- [x] **Step 3: Run the new tests to verify they pass**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_feature_contract.py -v -k "kg_entity_codes"`
 
 Expected: all 6 PASS.
 
-- [ ] **Step 4: Run the full feature_contract test file to confirm no regressions**
+- [x] **Step 4: Run the full feature_contract test file to confirm no regressions**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_feature_contract.py --no-header -q`
 
 Expected: all pass (existing tests + 6 new).
 
-- [ ] **Step 5: Run mypy + ruff on the modified file**
+- [x] **Step 5: Run mypy + ruff on the modified file**
 
 Run: `. .venv/bin/activate && mypy --config-file pyproject.toml src/data/feature_contract.py && ruff check src/data/feature_contract.py && ruff format --check src/data/feature_contract.py`
 
 Expected: clean. If format diff, run `ruff format src/data/feature_contract.py`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/data/feature_contract.py
@@ -308,13 +317,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Locate the scope_spec definition (run `grep -rn "TypedDict.*[Ss]cope[Ss]pec\|class.*ScopeSpec" src/`)
 
-- [ ] **Step 1: Find the scope_spec source-of-truth**
+- [x] **Step 1: Find the scope_spec source-of-truth**
 
 Run: `grep -rn "feature_manifest_source" src/ --include='*.py' | head -5`
 
 Identify where scope_spec is declared (likely a TypedDict or pydantic model).
 
-- [ ] **Step 2: Add `target_entity_codes` field**
+- [x] **Step 2: Add `target_entity_codes` field**
 
 If scope_spec is a TypedDict, add (with `total=False` parents):
 
@@ -341,7 +350,7 @@ Add a `kg_cache_path: NotRequired[str]` field too:
 kg_cache_path: NotRequired[str]  # Path to the offline KG cache file built by scripts/build_kg_cache.py
 ```
 
-- [ ] **Step 3: Add tests in `tests/unit/test_data/test_scope_spec.py` (create if absent)**
+- [x] **Step 3: Add tests in `tests/unit/test_data/test_scope_spec.py` (create if absent)**
 
 ```python
 """Tests for scope_spec target_entity_codes + kg_cache_path fields."""
@@ -372,19 +381,19 @@ def test_scope_spec_accepts_target_entity_codes():
 
 If scope_spec is a pydantic Model, port the test to the Model API (`ScopeSpec(prediction_target="...", target_entity_codes=[...])`).
 
-- [ ] **Step 4: Run scope_spec tests**
+- [x] **Step 4: Run scope_spec tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_scope_spec.py -v`
 
 Expected: pass.
 
-- [ ] **Step 5: Run mypy + ruff**
+- [x] **Step 5: Run mypy + ruff**
 
 Run: `. .venv/bin/activate && mypy --config-file pyproject.toml src/data/scope_spec.py 2>/dev/null || mypy --config-file pyproject.toml src/`
 
 (Path may differ depending on where scope_spec lives.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -u
@@ -404,13 +413,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ### Task A4: PR-A push + codex review + merge
 
-- [ ] **Step 1: Quality gates**
+- [x] **Step 1: Quality gates**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/ --no-header -q && mypy --config-file pyproject.toml src/data/ && ruff check src/data/ tests/unit/test_data/ && ruff format --check src/data/ tests/unit/test_data/`
 
 Expected: all clean.
 
-- [ ] **Step 2: Push + open PR**
+- [x] **Step 2: Push + open PR**
 
 ```bash
 git push -u origin feat/feature-contract-kg-entity-codes
@@ -445,7 +454,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 3: Codex adversarial review**
+- [x] **Step 3: Codex adversarial review**
 
 Dispatch codex (Agent tool, `subagent_type=codex:codex-rescue`, `mode=bypassPermissions`). Prompt should include:
 
@@ -453,11 +462,11 @@ Dispatch codex (Agent tool, `subagent_type=codex:codex-rescue`, `mode=bypassPerm
 - The PR's diff scope (~150 LOC)
 - Specific pressure points: validation completeness (what about `code` containing whitespace? leading/trailing? case?), backward-compat (does any existing manifest call `FeatureContract(kg_entity_codes=...)` with the old shape — no, since it didn't exist), code-system literal coverage (did we miss any vocabulary the project will need?).
 
-- [ ] **Step 4: Address codex findings per-fix per-commit (project pattern)**
+- [x] **Step 4: Address codex findings per-fix per-commit (project pattern)**
 
 For each BLOCKER/HIGH: write a regression test + fix + commit + push. Repeat until codex reports clean.
 
-- [ ] **Step 5: Wait for CI green; merge**
+- [x] **Step 5: Wait for CI green; merge**
 
 ```bash
 gh pr checks <pr-number>
@@ -474,14 +483,14 @@ git checkout main && git pull --ff-only origin main
 **Files:**
 - Create: `scripts/research_optum_entities.py` (one-time research helper, may not need to commit)
 
-- [ ] **Step 1: Branch from updated main**
+- [x] **Step 1: Branch from updated main**
 
 ```bash
 git checkout main && git pull --ff-only origin main
 git checkout -b feat/optum-manifest-kg-entity-codes
 ```
 
-- [ ] **Step 2: List Optum entity-bearing features**
+- [x] **Step 2: List Optum entity-bearing features**
 
 Run: `grep -E "name=\"" src/data/manifests/optum_feature_manifest.py | head -100`
 
@@ -494,7 +503,7 @@ Categorize:
 
 Total: ~71 features needing entity codes.
 
-- [ ] **Step 3: Build the entity-code reference table**
+- [x] **Step 3: Build the entity-code reference table**
 
 Use a one-shot research subagent (general-purpose) prompted to map each Optum entity-bearing feature to its canonical UMLS CUI / RxCUI / LOINC code.
 
@@ -542,7 +551,7 @@ Example mappings (extend via subagent research):
 
 For each feature, the entity-code tuple should include the most specific code AND a UMLS CUI. The UMLS CUI is the canonical cross-walk; the source-vocab code lets the EntityLinker validate via UTS source endpoints.
 
-- [ ] **Step 4: Commit a research note (optional but recommended)**
+- [x] **Step 4: Commit a research note (optional but recommended)**
 
 If the entity mapping is non-trivial, persist the research as `docs/superpowers/specs/2026-05-08-optum-entity-codes.md` (a small reference doc):
 
@@ -563,11 +572,11 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `tests/unit/test_data/test_optum_feature_manifest.py`
 
-- [ ] **Step 1: Read current test file**
+- [x] **Step 1: Read current test file**
 
 Run: `head -80 tests/unit/test_data/test_optum_feature_manifest.py`
 
-- [ ] **Step 2: Add coverage assertions**
+- [x] **Step 2: Add coverage assertions**
 
 Append:
 
@@ -628,13 +637,13 @@ def test_every_lab_tested_feature_has_kg_entity_codes():
         )
 ```
 
-- [ ] **Step 3: Run failing tests**
+- [x] **Step 3: Run failing tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_optum_feature_manifest.py -v -k "kg_entity_codes"`
 
 Expected: 4 FAIL because the manifest doesn't yet declare codes.
 
-- [ ] **Step 4: Commit failing tests**
+- [x] **Step 4: Commit failing tests**
 
 ```bash
 git add tests/unit/test_data/test_optum_feature_manifest.py
@@ -658,7 +667,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/data/manifests/optum_feature_manifest.py`
 
-- [ ] **Step 1: Add a constants section**
+- [x] **Step 1: Add a constants section**
 
 At the top of `optum_feature_manifest.py`, after the existing `COMORBIDITY_NAMES` etc. constants, add:
 
@@ -731,7 +740,7 @@ _LAB_UMLS: dict[str, str] = {
 }
 ```
 
-- [ ] **Step 2: Update the `_DISEASE` block**
+- [x] **Step 2: Update the `_DISEASE` block**
 
 For each existing `FeatureContract(name="dx_l50_*", ...)` in the `_DISEASE` list, add `kg_entity_codes=_DX_ENTITY_CODES[<feature_name>]`. Same for `dx_total_csu`, `dx_angioedema_count`.
 
@@ -749,7 +758,7 @@ Example diff for `dx_l50_1_count`:
     ),
 ```
 
-- [ ] **Step 3: Update the `_COMORBIDITIES` helper-expansion loop**
+- [x] **Step 3: Update the `_COMORBIDITIES` helper-expansion loop**
 
 Replace the existing loop:
 
@@ -786,11 +795,11 @@ for name in COMORBIDITY_NAMES:
     )
 ```
 
-- [ ] **Step 4: Update the `_DRUG_CLASS` helper-expansion loop**
+- [x] **Step 4: Update the `_DRUG_CLASS` helper-expansion loop**
 
 Each `<class>_ever` / `<class>_count` / `<class>_days` / `<class>_days_since_last` gets `kg_entity_codes=(("UMLS", _DRUG_CLASS_UMLS[cls]),)`.
 
-- [ ] **Step 5: Update the `_LABS` helper-expansion loop**
+- [x] **Step 5: Update the `_LABS` helper-expansion loop**
 
 Each `<lab>_tested` / `<lab>_result_last` / `<lab>_abnormal_flag` gets:
 
@@ -801,7 +810,7 @@ kg_entity_codes=(
 ),
 ```
 
-- [ ] **Step 6: Update `primary_diagnosis_code` (in `_DEMO`)**
+- [x] **Step 6: Update `primary_diagnosis_code` (in `_DEMO`)**
 
 ```python
 FeatureContract(
@@ -813,19 +822,19 @@ FeatureContract(
 ),
 ```
 
-- [ ] **Step 7: Run the coverage tests**
+- [x] **Step 7: Run the coverage tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_optum_feature_manifest.py -v`
 
 Expected: all pass (the 4 new + existing).
 
-- [ ] **Step 8: Run mypy + ruff**
+- [x] **Step 8: Run mypy + ruff**
 
 Run: `. .venv/bin/activate && mypy --config-file pyproject.toml src/data/manifests/optum_feature_manifest.py && ruff check src/data/manifests/ && ruff format --check src/data/manifests/`
 
 If format diffs, run `ruff format src/data/manifests/`.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/data/manifests/optum_feature_manifest.py tests/unit/test_data/test_optum_feature_manifest.py
@@ -848,18 +857,18 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ### Task B4: PR-B push + codex review + merge
 
-- [ ] **Step 1: Quality gates**
+- [x] **Step 1: Quality gates**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_optum_feature_manifest.py tests/unit/test_data/test_csu_feature_manifest.py tests/unit/test_data/test_feature_contract.py --no-header -q && mypy --config-file pyproject.toml src/data/ && ruff check src/data/ && ruff format --check src/data/`
 
-- [ ] **Step 2: Push + open PR**
+- [x] **Step 2: Push + open PR**
 
 ```bash
 git push -u origin feat/optum-manifest-kg-entity-codes
 gh pr create --title "feat(layer1): populate Optum manifest kg_entity_codes (~70 features) — PR-B" --body "..."
 ```
 
-- [ ] **Step 3: Dispatch codex review**
+- [x] **Step 3: Dispatch codex review**
 
 Pressure points to include in the prompt:
 - Are the UMLS CUIs accurate? Specifically: did we cross-walk every comorbidity/lab/drug-class to the right CUI per UMLS 2026AA release?
@@ -867,9 +876,9 @@ Pressure points to include in the prompt:
 - ICD-10 specificity: `J45.909` for asthma is "unspecified" — is that the right anchor, or should it be `J45.x` family-level via SNOMEDCT_US?
 - Cross-cohort reuse: does the CSU `primary_diagnosis_code` UMLS anchor (`C0042109`) match the Optum one?
 
-- [ ] **Step 4: Address codex findings per-fix per-commit**
+- [x] **Step 4: Address codex findings per-fix per-commit**
 
-- [ ] **Step 5: Merge with `--rebase` after CI green**
+- [x] **Step 5: Merge with `--rebase` after CI green**
 
 ---
 
@@ -880,14 +889,14 @@ Pressure points to include in the prompt:
 **Files:**
 - Create: `tests/unit/test_data/test_kg/test_cache.py`
 
-- [ ] **Step 1: Branch**
+- [x] **Step 1: Branch**
 
 ```bash
 git checkout main && git pull --ff-only origin main
 git checkout -b feat/kg-cache-builder
 ```
 
-- [ ] **Step 2: Write the failing tests for the cache schema**
+- [x] **Step 2: Write the failing tests for the cache schema**
 
 Create `tests/unit/test_data/test_kg/test_cache.py`:
 
@@ -1058,13 +1067,13 @@ def test_compute_target_codes_fingerprint_order_independent():
     assert compute_target_codes_fingerprint(a) == compute_target_codes_fingerprint(b)
 ```
 
-- [ ] **Step 3: Run failing tests**
+- [x] **Step 3: Run failing tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/test_cache.py -v`
 
 Expected: all FAIL (`src/data/kg/cache.py` doesn't exist).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/unit/test_data/test_kg/test_cache.py
@@ -1084,7 +1093,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Create: `src/data/kg/cache.py`
 
-- [ ] **Step 1: Write the cache module**
+- [x] **Step 1: Write the cache module**
 
 Create `src/data/kg/cache.py`:
 
@@ -1282,17 +1291,17 @@ def compose_cache_filename(manifest_fp: str, target_fp: str) -> str:
 CACHE_TIMESTAMP_NOW: datetime = datetime.now(timezone.utc)
 ```
 
-- [ ] **Step 2: Run cache tests**
+- [x] **Step 2: Run cache tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/test_cache.py -v`
 
 Expected: all 7 tests PASS.
 
-- [ ] **Step 3: mypy + ruff**
+- [x] **Step 3: mypy + ruff**
 
 Run: `. .venv/bin/activate && mypy --config-file pyproject.toml src/data/kg/cache.py && ruff check src/data/kg/cache.py && ruff format --check src/data/kg/cache.py`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/data/kg/cache.py
@@ -1315,7 +1324,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - Create: `scripts/build_kg_cache.py`
 - Create: `tests/unit/test_scripts/test_build_kg_cache.py`
 
-- [ ] **Step 1: Write smoke test for the CLI**
+- [x] **Step 1: Write smoke test for the CLI**
 
 Create `tests/unit/test_scripts/test_build_kg_cache.py`:
 
@@ -1379,7 +1388,7 @@ def test_build_with_no_entity_features_writes_empty_cache(tmp_path: Path, monkey
     assert payload == []
 ```
 
-- [ ] **Step 2: Write the CLI script**
+- [x] **Step 2: Write the CLI script**
 
 Create `scripts/build_kg_cache.py`:
 
@@ -1566,13 +1575,13 @@ if __name__ == "__main__":
 
 Note: full KG querying logic (Open Targets calls, EntityLinker validation, error handling) is left as a follow-up sub-task within this PR if the reviewer wants integration-level validation. The skeleton above is sufficient for the smoke test to pass.
 
-- [ ] **Step 3: Run smoke test**
+- [x] **Step 3: Run smoke test**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_scripts/test_build_kg_cache.py -v`
 
 Expected: 2 PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/build_kg_cache.py tests/unit/test_scripts/test_build_kg_cache.py
@@ -1598,19 +1607,19 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ### Task C4: PR-C push + codex + merge
 
-- [ ] **Step 1: Quality gates**
+- [x] **Step 1: Quality gates**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/ tests/unit/test_scripts/ --no-header -q && mypy --config-file pyproject.toml src/data/kg/ scripts/ && ruff check src/data/kg/ scripts/`
 
-- [ ] **Step 2: Push + open PR**
+- [x] **Step 2: Push + open PR**
 
 Title: `feat(layer2): KG cache builder script + cache schema (Stage 2 PR-C)`
 
-- [ ] **Step 3: Codex review**
+- [x] **Step 3: Codex review**
 
 Pressure points: atomic-write correctness, fingerprint stability across Python releases (sha256 is stable), CLI argument parsing edge cases, the "queried_no_edges" status placeholder being a real call vs a stub.
 
-- [ ] **Step 4: Address findings; merge after CI**
+- [x] **Step 4: Address findings; merge after CI**
 
 ---
 
@@ -1621,18 +1630,18 @@ Pressure points: atomic-write correctness, fingerprint stability across Python r
 **Files:**
 - Modify: `src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py`
 
-- [ ] **Step 1: Branch**
+- [x] **Step 1: Branch**
 
 ```bash
 git checkout main && git pull --ff-only origin main
 git checkout -b feat/stage2-pipeline-integration
 ```
 
-- [ ] **Step 2: Read the current `_compose_legacy_verdict` signature**
+- [x] **Step 2: Read the current `_compose_legacy_verdict` signature**
 
 Run: `sed -n '449,495p' src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py`
 
-- [ ] **Step 3: Write tests for the extended orchestrator (TDD red)**
+- [x] **Step 3: Write tests for the extended orchestrator (TDD red)**
 
 Append to `tests/unit/test_data_preparer/test_adaptive_validity_check.py`:
 
@@ -1697,13 +1706,13 @@ def test_compose_legacy_verdict_no_kg_edges_falls_through_to_existing_logic():
     assert verdict["layer"] == "1"
 ```
 
-- [ ] **Step 4: Run failing tests**
+- [x] **Step 4: Run failing tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data_preparer/test_adaptive_validity_check.py -v -k "compose_legacy_verdict and (kg_edges or fall_through)"`
 
 Expected: 1 FAIL (the kg_edges parameter doesn't exist on `_compose_legacy_verdict`); 1 may pass (fall-through case if defaults match).
 
-- [ ] **Step 5: Commit failing tests**
+- [x] **Step 5: Commit failing tests**
 
 ```bash
 git add tests/unit/test_data_preparer/test_adaptive_validity_check.py
@@ -1717,7 +1726,7 @@ Reference: docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-desig
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6: Extend `_compose_legacy_verdict`**
+- [x] **Step 6: Extend `_compose_legacy_verdict`**
 
 Edit `src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py`. Update the function signature and body:
 
@@ -1758,13 +1767,13 @@ def _compose_legacy_verdict(
 
 Note: imports of `KGEdge` and `Iterable` may need updating at the top of the file.
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data_preparer/test_adaptive_validity_check.py --no-header -q`
 
 Expected: all pass (the 2 new + existing 41+ since PR #92).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py
@@ -1784,7 +1793,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py`
 
-- [ ] **Step 1: Add a cache-loader helper**
+- [x] **Step 1: Add a cache-loader helper**
 
 In `adaptive_validity_check.py`, near the top of the module, add:
 
@@ -1814,7 +1823,7 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> dict[str, list[KGEdge]] | None
     return {r.feature_name: list(r.edges) for r in records}
 ```
 
-- [ ] **Step 2: Wire the loader into `adaptive_validity_check`**
+- [x] **Step 2: Wire the loader into `adaptive_validity_check`**
 
 In the main loop where `_compose_legacy_verdict` is called per feature, add:
 
@@ -1844,11 +1853,11 @@ In the main loop where `_compose_legacy_verdict` is called per feature, add:
 
 (Adjust to match the actual call site shape; the diff is conceptual.)
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data_preparer/test_adaptive_validity_check.py --no-header -q`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -u
@@ -1867,19 +1876,19 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ### Task D3: PR-D push + codex + merge
 
-- [ ] **Step 1: Quality gates**
+- [x] **Step 1: Quality gates**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data_preparer/ tests/unit/test_data/test_kg/ --no-header -q && mypy --config-file pyproject.toml src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py src/data/kg/cache.py && ruff check`
 
-- [ ] **Step 2: Push + open PR**
+- [x] **Step 2: Push + open PR**
 
 Title: `feat(layer5): wire KG cache into _compose_legacy_verdict (Stage 2 PR-D)`
 
-- [ ] **Step 3: Codex review**
+- [x] **Step 3: Codex review**
 
 Pressure points: cache-miss policy (loud fail vs warn-and-skip — current behavior is warn-and-skip, PR-E will gate by mode), per-feature lookup correctness, regression risk on Stage 1 behavior (empty cache must not change anything), the manifest_source vs kg_cache_path coupling (does the cache fingerprint actually match the manifest in use?).
 
-- [ ] **Step 4: Address; merge**
+- [x] **Step 4: Address; merge**
 
 ---
 
@@ -1891,18 +1900,18 @@ Pressure points: cache-miss policy (loud fail vs warn-and-skip — current behav
 - Modify: `src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py`
 - Modify: scope_spec definition (TypedDict / pydantic)
 
-- [ ] **Step 1: Branch**
+- [x] **Step 1: Branch**
 
 ```bash
 git checkout main && git pull --ff-only origin main
 git checkout -b feat/stage2-shadow-mode-gate
 ```
 
-- [ ] **Step 2: Add `kg_mode` field to scope_spec**
+- [x] **Step 2: Add `kg_mode` field to scope_spec**
 
 Values: `"off"`, `"shadow"`, `"promoted"`. Default: `"off"` (Stage 1 behavior).
 
-- [ ] **Step 3: Implement gate logic in `_compose_legacy_verdict`**
+- [x] **Step 3: Implement gate logic in `_compose_legacy_verdict`**
 
 When `kg_mode == "shadow"`:
 - KG verdicts emitted with `severity="info"` regardless of voter's classification.
@@ -1915,7 +1924,7 @@ When `kg_mode == "promoted"`:
 When `kg_mode == "off"`:
 - Stage 1 behavior. KG cache NOT loaded.
 
-- [ ] **Step 4: Add promotion-criteria check**
+- [x] **Step 4: Add promotion-criteria check**
 
 A separate function `compute_promotion_eligibility(state) -> dict` that returns:
 
@@ -1930,7 +1939,7 @@ A separate function `compute_promotion_eligibility(state) -> dict` that returns:
 
 Called externally (not auto-promoting); intended for governance review.
 
-- [ ] **Step 5: Tests**
+- [x] **Step 5: Tests**
 
 Add to `tests/unit/test_data_preparer/test_adaptive_validity_check.py`:
 
@@ -1961,7 +1970,7 @@ def test_promotion_eligibility_metrics():
 
 Implement the tests (full code at impl time).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -u
@@ -1982,15 +1991,15 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ### Task E2: PR-E push + codex + merge
 
-- [ ] **Step 1: Quality gates + push + PR**
+- [x] **Step 1: Quality gates + push + PR**
 
 Title: `feat(layer5): shadow-mode + promotion gate for Stage 2 KG verdicts (PR-E)`
 
-- [ ] **Step 2: Codex review**
+- [x] **Step 2: Codex review**
 
 Pressure points: shadow-mode severity cap correctness (does it preserve all audit fields except severity?), promotion metric validity (small-n protection, edge cases like 0 entity-bearing features), kg_mode default to "off" (Stage 1 backward compat).
 
-- [ ] **Step 3: Address; merge**
+- [x] **Step 3: Address; merge**
 
 ---
 

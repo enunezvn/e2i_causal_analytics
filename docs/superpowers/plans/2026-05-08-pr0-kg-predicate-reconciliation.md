@@ -1,5 +1,7 @@
 # PR-0 — KG Predicate Reconciliation Implementation Plan
 
+> **STATUS: COMPLETE 2026-05-08.** Merged as **PR #94** via `--rebase`. All steps `[x]`. See [`phase29_stage2_arc_close_20260508.md`](../../../../.claude/projects/-home-enunez-Projects-e2i-causal-analytics/memory/phase29_stage2_arc_close_20260508.md) for the full arc closure record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Map Open Targets `datatypeId="known_drug"` rows to `predicate="treats"` at the `KGQuerier` boundary so the dead `EnsembleVoter.classify_kg_signal` treats path comes alive on real Open Targets data.
@@ -28,7 +30,7 @@
 **Files:**
 - Modify: `tests/unit/test_data/test_kg/test_kg_querier.py`
 
-- [ ] **Step 1: Set up branch with proxy bypass**
+- [x] **Step 1: Set up branch with proxy bypass**
 
 ```bash
 git config --global http.https://github.com.proxy ""
@@ -37,13 +39,13 @@ git pull --ff-only origin main
 git checkout -b fix/kg-predicate-reconciliation
 ```
 
-- [ ] **Step 2: Read existing querier test file to understand fixture pattern**
+- [x] **Step 2: Read existing querier test file to understand fixture pattern**
 
 Run: `head -200 tests/unit/test_data/test_kg/test_kg_querier.py`
 
 Look for: how `httpx.MockTransport` is used; how `_make_handler` constructs Open Targets responses; the existing `test_query_drug_disease_edges_happy_path` at ~line 187.
 
-- [ ] **Step 3: Write the failing parameterized contract test**
+- [x] **Step 3: Write the failing parameterized contract test**
 
 Append to `tests/unit/test_data/test_kg/test_kg_querier.py`:
 
@@ -106,7 +108,7 @@ def test_query_drug_disease_edges_predicate_by_datatype(
 
 If the file's existing imports don't include `httpx`, `pytest`, `OpenTargetsClient`, `KnowledgeGraphQuerier`, add them. Reuse the existing `_stub_umls()` helper if present; otherwise use the simplest stub that returns no edges.
 
-- [ ] **Step 4: Run the new test to verify it fails (datatype_id="known_drug" cases)**
+- [x] **Step 4: Run the new test to verify it fails (datatype_id="known_drug" cases)**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/test_kg_querier.py::test_query_drug_disease_edges_predicate_by_datatype -v`
 
@@ -114,7 +116,7 @@ Expected: 4 PASS (the `associated_with` parametrize cases) + 2 FAIL (the `treats
 
 If ALL pass before the fix, something is wrong with the fixture wiring.
 
-- [ ] **Step 5: Commit the failing test**
+- [x] **Step 5: Commit the failing test**
 
 ```bash
 git add tests/unit/test_data/test_kg/test_kg_querier.py
@@ -137,13 +139,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/data/kg/kg_querier.py:147-189`
 
-- [ ] **Step 1: Read the current emission site**
+- [x] **Step 1: Read the current emission site**
 
 Run: `sed -n '147,189p' src/data/kg/kg_querier.py`
 
 Verify the loop iterates `evidences.rows` and emits `KGEdge(predicate="associated_with", ...)` at line ~180.
 
-- [ ] **Step 2: Replace the hardcoded predicate**
+- [x] **Step 2: Replace the hardcoded predicate**
 
 Edit `src/data/kg/kg_querier.py`. Find:
 
@@ -191,7 +193,7 @@ Replace with:
             )
 ```
 
-- [ ] **Step 3: Update the `query_drug_disease_edges` docstring**
+- [x] **Step 3: Update the `query_drug_disease_edges` docstring**
 
 In the same file, find the docstring section listing edge attributes (around line 122-131). Replace:
 
@@ -213,19 +215,19 @@ with:
                              classification.
 ```
 
-- [ ] **Step 4: Run the parameterized test to verify it passes**
+- [x] **Step 4: Run the parameterized test to verify it passes**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/test_kg_querier.py::test_query_drug_disease_edges_predicate_by_datatype -v`
 
 Expected: ALL 6 parametrize cases PASS.
 
-- [ ] **Step 5: Run the full kg test suite to confirm no regressions**
+- [x] **Step 5: Run the full kg test suite to confirm no regressions**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/ --no-header -q`
 
 Expected: all tests pass (was 249 on main pre-Stage 2; +1 new parameterized test = 250+ now). No regressions.
 
-- [ ] **Step 6: Commit the fix**
+- [x] **Step 6: Commit the fix**
 
 ```bash
 git add src/data/kg/kg_querier.py
@@ -260,13 +262,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Create: `tests/integration/test_kg/test_querier_voter_integration.py`
 
-- [ ] **Step 1: Verify the integration test directory exists**
+- [x] **Step 1: Verify the integration test directory exists**
 
 Run: `ls tests/integration/test_kg/`
 
 Expected: existing files like `test_kg_querier_live.py`. Confirm `__init__.py` is present.
 
-- [ ] **Step 2: Create the new integration test file**
+- [x] **Step 2: Create the new integration test file**
 
 Write `tests/integration/test_kg/test_querier_voter_integration.py`:
 
@@ -439,13 +441,13 @@ def test_empty_evidence_rows_produce_no_signal() -> None:
     assert considered == ()
 ```
 
-- [ ] **Step 3: Run the integration tests**
+- [x] **Step 3: Run the integration tests**
 
 Run: `. .venv/bin/activate && pytest tests/integration/test_kg/test_querier_voter_integration.py -v`
 
 Expected: 3 PASS.
 
-- [ ] **Step 4: Commit the integration test**
+- [x] **Step 4: Commit the integration test**
 
 ```bash
 git add tests/integration/test_kg/test_querier_voter_integration.py
@@ -470,7 +472,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/data/kg/ensemble_voter.py:123-127`
 
-- [ ] **Step 1: Replace the comment block**
+- [x] **Step 1: Replace the comment block**
 
 In `src/data/kg/ensemble_voter.py`, find:
 
@@ -506,13 +508,13 @@ TREATS_PREDICATES: frozenset[str] = frozenset({"treats", "indicated_for", "treat
 TAXONOMIC_PREDICATES: frozenset[str] = frozenset({"isa", "inverse_isa", "par", "chd", "rb", "rn"})
 ```
 
-- [ ] **Step 2: Verify no logic change**
+- [x] **Step 2: Verify no logic change**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/test_ensemble_voter.py --no-header -q`
 
 Expected: all voter tests pass (no behavioral change — comment only).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/data/kg/ensemble_voter.py
@@ -534,13 +536,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 **Files:** none (verification + git ops)
 
-- [ ] **Step 1: Run mypy on touched files**
+- [x] **Step 1: Run mypy on touched files**
 
 Run: `. .venv/bin/activate && mypy --config-file pyproject.toml src/data/kg/kg_querier.py src/data/kg/ensemble_voter.py`
 
 Expected: no issues.
 
-- [ ] **Step 2: Run ruff check + format**
+- [x] **Step 2: Run ruff check + format**
 
 Run: `. .venv/bin/activate && ruff check src/data/kg/ tests/unit/test_data/test_kg/ tests/integration/test_kg/ && ruff format --check src/data/kg/ tests/unit/test_data/test_kg/ tests/integration/test_kg/`
 
@@ -548,17 +550,17 @@ Expected: all checks passed; no format-needed.
 
 If `ruff format --check` reports differences, run `ruff format <files>` and amend the relevant commit (`git add -u && git commit --amend --no-edit`).
 
-- [ ] **Step 3: Run full kg unit suite**
+- [x] **Step 3: Run full kg unit suite**
 
 Run: `. .venv/bin/activate && pytest tests/unit/test_data/test_kg/ --no-header -q`
 
 Expected: all pass (was 249 on main; +6 parameterized = 255).
 
-- [ ] **Step 4: Push the branch**
+- [x] **Step 4: Push the branch**
 
 Run: `git push -u origin fix/kg-predicate-reconciliation`
 
-- [ ] **Step 5: Open the PR**
+- [x] **Step 5: Open the PR**
 
 Run:
 
@@ -599,7 +601,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 6: Wait for CI green; merge with `--rebase`**
+- [x] **Step 6: Wait for CI green; merge with `--rebase`**
 
 Watch: `gh pr checks <pr-number>`
 
