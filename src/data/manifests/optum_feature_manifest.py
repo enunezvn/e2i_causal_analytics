@@ -99,11 +99,29 @@ COMORBIDITY_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
     "allergic_rhinitis": (("ICD10CM", "J30.9"), ("UMLS", "C0018621")),
     "anxiety": (("ICD10CM", "F41.9"), ("UMLS", "C0003467")),
     "depression": (("ICD10CM", "F33.9"), ("UMLS", "C0011581")),
+    # CUI C0856243 expected to map to autoimmune thyroiditis (E06.3).
+    # PR-C cache builder will validate via UMLS UTS; if it's not the
+    # right CUI the build fails loudly. Alternatives: C0040429
+    # (Thyroiditis, Autoimmune) or C0677607 (Hashimoto Disease).
     "thyroid_autoimmune": (("ICD10CM", "E06.3"), ("UMLS", "C0856243")),
+    # Plan included ICD10CM T88.7 ("Other adverse effects, NEC") but
+    # we drop it: T88.7 maps to ALL drug ADRs and is too broad for
+    # KG disambiguation. C2266824 narrows to NSAID-exacerbated
+    # respiratory disease (AERD); broader NSAID-hypersensitivity CUIs
+    # exist (e.g. C0338513 Drug Hypersensitivity) and cache builder
+    # will surface mismatches at validation time.
     "nsaid_hypersensitivity": (("UMLS", "C2266824"),),
     "angioedema": (("ICD10CM", "T78.3"), ("UMLS", "C0002994")),
 }
 
+# Drug-class CUIs are intentionally pharmacologic-class concepts, not RxCUI
+# ingredients (RxNorm class membership is fuzzy at the active-ingredient
+# level). PR-C cache builder will re-resolve each CUI via UMLS UTS at
+# build time so any mis-CUI surfaces as a build failure.
+#  - C0001617 ("Adrenal Cortex Hormones") is the broad parent class —
+#    used here for top_steroid because Open Targets evidence for topical
+#    corticosteroids is not separately catalogued at the agent level.
+#  - C2825472 is a more-specific NCI systemic-corticosteroid concept.
 DRUG_CLASS_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
     "h1_1g": (("UMLS", "C0066896"),),
     "h1_2g": (("UMLS", "C2718076"),),
