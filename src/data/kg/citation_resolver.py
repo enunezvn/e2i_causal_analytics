@@ -1,0 +1,271 @@
+"""Phase 2.6 — CitationResolver.
+
+Verifies that a PMID/DOI cited as evidence for a subject-object relation
+actually contains both entities and a causal cue verb in its abstract.
+This is the verification rail of Layer 2's ensemble: Open Targets supplies
+PMIDs in evidence rows, but those PMIDs are uncurated — many cite
+correlation studies, comorbidity registries, or population-level
+associations that say "X is associated with Y" without claiming a causal
+mechanism. CitationResolver filters those out before Phase 2.5
+(CausalRoleClassifier) consumes the evidence.
+
+Verification logic (per ``verify_citation``):
+    1. Fetch the abstract from Europe PMC (PMID) or Crossref (DOI).
+    2. Look for either entity name OR any of its UMLS synonyms in the
+       abstract text (case-insensitive substring match). Both subject and
+       object must appear.
+    3. Look for any causal cue verb in ``CAUSAL_CUE_VERBS`` in the
+       abstract.
+    4. Score: 0.5 if both entities found, +0.3 if a causal cue is found,
+       +0.2 if both found AND the cue and entities co-occur within a
+       short window (currently document-level, sentence-level co-occurrence
+       deferred to v2). Returned as ``CitationVerdict.overall_confidence``.
+
+Synonym lookup uses ``UMLSClient.cui_lookup`` to fetch the preferred name
+and (when available) the atom list. v1 uses the preferred name only;
+the atom-list fan-out is a v2 punt because each atom-list call is an
+extra UTS round trip per CUI.
+
+Reference: ``.claude/plans/adaptive_temporal_validity_redesign.md`` Phase 2.6.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import Iterable, Optional
+
+from src.data.kg.crossref import CrossrefClient, CrossrefError
+from src.data.kg.europe_pmc import EuropePMCClient, EuropePMCError
+from src.data.kg.types import AbstractRecord, CitationVerdict, KGConcept
+from src.data.kg.umls_uts import UMLSAuthError, UMLSClient, UMLSError
+
+logger = logging.getLogger(__name__)
+
+
+# Causal cue verbs covered: a curated list of verbs and stock phrases that
+# claim causal direction in scientific abstracts. The list is intentionally
+# narrow — false positives (e.g., "X has been associated with Y") would
+# defeat the whole point of this filter. Common patterns to add later:
+# "leads to", "results in", "responsible for", "mechanism of action".
+CAUSAL_CUE_VERBS: tuple[str, ...] = (
+    "treats",
+    "treated",
+    "causes",
+    "caused",
+    "induces",
+    "induced",
+    "ameliorates",
+    "ameliorated",
+    "improves",
+    "improved",
+    "reduces",
+    "reduced",
+    "inhibits",
+    "inhibited",
+    "blocks",
+    "blocked",
+    "prevents",
+    "prevented",
+    "alleviates",
+    "alleviated",
+)
+
+
+# Confidence weights for the score aggregation. Keep these as named
+# constants so future calibration (Phase 4 active learning) can tune
+# them against labeled data.
+WEIGHT_BOTH_ENTITIES = 0.5
+WEIGHT_CAUSAL_CUE = 0.3
+WEIGHT_COOCCURRENCE = 0.2
+
+
+class CitationResolverError(Exception):
+    """Raised on CitationResolver-fatal failures (e.g., UMLS auth dead)."""
+
+
+class CitationResolver:
+    """Compose Europe PMC + Crossref + UMLS clients into citation verification.
+
+    Args:
+        europe_pmc: Optional pre-constructed Europe PMC client.
+        crossref: Optional pre-constructed Crossref client.
+        umls: Optional pre-constructed UMLS client (used for synonym
+            expansion). If None, citation verification will only match the
+            ``preferred_name`` of each entity (no synonyms), which is a
+            weaker check.
+    """
+
+    def __init__(
+        self,
+        *,
+        europe_pmc: Optional[EuropePMCClient] = None,
+        crossref: Optional[CrossrefClient] = None,
+        umls: Optional[UMLSClient] = None,
+    ) -> None:
+        self._owns_europe_pmc = europe_pmc is None
+        self._owns_crossref = crossref is None
+        self._owns_umls = umls is None
+        self.europe_pmc = europe_pmc if europe_pmc is not None else EuropePMCClient()
+        self.crossref = crossref if crossref is not None else CrossrefClient()
+        self.umls = umls if umls is not None else UMLSClient()
+
+    def __enter__(self) -> "CitationResolver":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._owns_europe_pmc:
+            self.europe_pmc.close()
+        if self._owns_crossref:
+            self.crossref.close()
+        if self._owns_umls:
+            self.umls.close()
+
+    def resolve_pmid(self, pmid: str) -> Optional[AbstractRecord]:
+        """Fetch the abstract for a PMID. Returns None when unavailable."""
+        try:
+            return self.europe_pmc.fetch_abstract(pmid)
+        except EuropePMCError as exc:
+            logger.warning("Europe PMC fetch failed for PMID %s: %s", pmid, exc)
+            return None
+
+    def resolve_doi(self, doi: str) -> Optional[AbstractRecord]:
+        """Fetch metadata + abstract for a DOI. Returns None when unavailable."""
+        try:
+            return self.crossref.fetch_doi_metadata(doi)
+        except CrossrefError as exc:
+            logger.warning("Crossref fetch failed for DOI %s: %s", doi, exc)
+            return None
+
+    def verify_citation(
+        self,
+        identifier: str,
+        *,
+        identifier_kind: str = "pmid",
+        subject_name: str,
+        object_name: str,
+        subject_cui: Optional[str] = None,
+        object_cui: Optional[str] = None,
+    ) -> CitationVerdict:
+        """Verify that a PMID/DOI's abstract co-mentions the entities + a causal cue.
+
+        Args:
+            identifier: PMID (e.g., ``"12345678"``) or DOI (e.g.,
+                ``"10.1234/abc.2024.001"``).
+            identifier_kind: ``"pmid"`` or ``"doi"``. Selects the resolution
+                client.
+            subject_name: Preferred name of the subject entity.
+            object_name: Preferred name of the object entity.
+            subject_cui: Optional UMLS CUI for the subject; when provided, the
+                preferred name from UMLS is used in addition to ``subject_name``.
+            object_cui: Optional UMLS CUI for the object; same role.
+
+        Returns:
+            ``CitationVerdict`` with the abstract-resolved flag, the
+            entities found, the causal cue found (if any), and the
+            aggregated confidence.
+        """
+        if identifier_kind not in ("pmid", "doi"):
+            return CitationVerdict(
+                identifier=identifier,
+                identifier_kind="pmid",
+                abstract_resolved=False,
+                error=f"unsupported identifier_kind: {identifier_kind}",
+            )
+        record = (
+            self.resolve_pmid(identifier)
+            if identifier_kind == "pmid"
+            else self.resolve_doi(identifier)
+        )
+        if record is None:
+            return CitationVerdict(
+                identifier=identifier,
+                identifier_kind=identifier_kind,  # type: ignore[arg-type]
+                abstract_resolved=False,
+                overall_confidence=0.0,
+            )
+        # Build the candidate term lists for each entity. The preferred
+        # name supplied by the caller is always included; UMLS preferred
+        # names (when CUI given) are added as synonyms.
+        subject_terms = self._candidate_terms(subject_name, subject_cui)
+        object_terms = self._candidate_terms(object_name, object_cui)
+        haystack_lower = record.abstract.lower()
+        subject_match = _first_match(subject_terms, haystack_lower)
+        object_match = _first_match(object_terms, haystack_lower)
+        causal_cue = _find_causal_cue(haystack_lower)
+        entities_found: list[str] = []
+        if subject_match:
+            entities_found.append(subject_match)
+        if object_match:
+            entities_found.append(object_match)
+        confidence = 0.0
+        if subject_match and object_match:
+            confidence += WEIGHT_BOTH_ENTITIES
+        if causal_cue:
+            confidence += WEIGHT_CAUSAL_CUE
+        if subject_match and object_match and causal_cue:
+            confidence += WEIGHT_COOCCURRENCE
+        return CitationVerdict(
+            identifier=identifier,
+            identifier_kind=identifier_kind,  # type: ignore[arg-type]
+            abstract_resolved=True,
+            entities_found=tuple(entities_found),
+            causal_cue_found=causal_cue,
+            overall_confidence=confidence,
+        )
+
+    def _candidate_terms(
+        self,
+        primary_name: str,
+        cui: Optional[str],
+    ) -> list[str]:
+        """Build the list of names to match in an abstract.
+
+        Includes ``primary_name`` always, plus the UMLS preferred name when
+        a CUI is supplied (and UMLS auth doesn't fail). v1 stops there;
+        atom-list synonym fanout is a v2 enhancement.
+        """
+        terms: list[str] = []
+        if primary_name:
+            terms.append(primary_name)
+        if cui:
+            try:
+                concept: KGConcept = self.umls.cui_lookup(cui)
+            except UMLSAuthError as exc:
+                raise CitationResolverError(f"UMLS auth failed: {exc}") from exc
+            except UMLSError as exc:
+                logger.warning("UMLS cui_lookup failed for synonym expansion of %s: %s", cui, exc)
+            else:
+                if concept.preferred_name and concept.preferred_name not in terms:
+                    terms.append(concept.preferred_name)
+        return terms
+
+
+def _first_match(terms: Iterable[str], haystack_lower: str) -> Optional[str]:
+    """Return the first term whose lowercase form appears in ``haystack_lower``.
+
+    Returns the original-cased term so the caller can surface it back to
+    the user; case-insensitive matching is done against the pre-lowered
+    ``haystack_lower`` to avoid repeating the lower() per term.
+    """
+    for term in terms:
+        if not term:
+            continue
+        if term.lower() in haystack_lower:
+            return term
+    return None
+
+
+def _find_causal_cue(haystack_lower: str) -> Optional[str]:
+    """Return the first causal cue verb that appears in ``haystack_lower``.
+
+    Match is whole-word (``\\b`` boundaries) so substrings of unrelated
+    words don't false-positive (e.g., "induced" inside "reproduced").
+    """
+    for cue in CAUSAL_CUE_VERBS:
+        if re.search(rf"\b{re.escape(cue)}\b", haystack_lower):
+            return cue
+    return None
