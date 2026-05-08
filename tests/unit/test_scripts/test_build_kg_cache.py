@@ -46,8 +46,6 @@ def test_build_with_no_entity_features_writes_empty_cache(tmp_path: Path):
         features=features,
         target_entity_codes=[("RXNORM", "479158")],
         out_dir=out,
-        umls_client=None,
-        open_targets_client=None,
     )
 
     assert cache_path.exists()
@@ -80,8 +78,6 @@ def test_build_with_entity_feature_emits_record(tmp_path: Path):
         features=features,
         target_entity_codes=[],
         out_dir=out,
-        umls_client=None,
-        open_targets_client=None,
     )
 
     payload = json.loads(cache_path.read_text())
@@ -163,8 +159,6 @@ def test_cache_filename_omits_cohort(tmp_path: Path):
         features=features,
         target_entity_codes=[],
         out_dir=out,
-        umls_client=None,
-        open_targets_client=None,
     )
 
     # Cache filename pattern: {manifest_fp}__{target_fp}.json
@@ -174,8 +168,11 @@ def test_cache_filename_omits_cohort(tmp_path: Path):
     assert "optum" not in cache_path.name
 
 
-def test_build_with_live_client_not_implemented(tmp_path: Path):
-    """Supplying a non-None client raises NotImplementedError until PR-D."""
+def test_build_rejects_partial_live_args(tmp_path: Path):
+    """Item B / PR-C: supplying exactly one of (entity_linker, kg_querier)
+    is ambiguous (live mode requires both, smoke mode requires neither)
+    → raises ValueError. Replaces the prior NotImplementedError gate.
+    """
     import pytest
 
     from scripts.build_kg_cache import build_cache_for_manifest
@@ -192,13 +189,21 @@ def test_build_with_live_client_not_implemented(tmp_path: Path):
     out = tmp_path / "kg_cache"
 
     sentinel = object()  # any non-None stand-in
-    with pytest.raises(NotImplementedError, match="PR-D"):
+    with pytest.raises(ValueError, match="entity_linker AND.*kg_querier"):
         build_cache_for_manifest(
             features=features,
             target_entity_codes=[],
             out_dir=out,
-            umls_client=sentinel,  # type: ignore[arg-type]
-            open_targets_client=None,
+            entity_linker=sentinel,  # type: ignore[arg-type]
+            kg_querier=None,
+        )
+    with pytest.raises(ValueError, match="entity_linker AND.*kg_querier"):
+        build_cache_for_manifest(
+            features=features,
+            target_entity_codes=[],
+            out_dir=out,
+            entity_linker=None,
+            kg_querier=sentinel,  # type: ignore[arg-type]
         )
 
 
@@ -223,8 +228,6 @@ def test_build_with_no_clients_records_empty_sources(tmp_path: Path):
         features=features,
         target_entity_codes=[],
         out_dir=out,
-        umls_client=None,
-        open_targets_client=None,
     )
     payload = json.loads(cache_path.read_text())
     assert len(payload) == 1
@@ -272,3 +275,353 @@ def test_summary_report_with_explicit_timestamp_includes_it(tmp_path: Path):
     text = path.read_text()
     assert "Generated:" in text
     assert "2026-05-08T12:00:00+00:00" in text
+
+
+# =============================================================================
+# Item B (PR-C live KG querying) — dispatcher + helper tests
+# =============================================================================
+#
+# These tests exercise the per-entity dispatch + status-precedence logic
+# WITHOUT making real HTTP calls. The EntityLinker / KGQuerier collaborators
+# are stubbed via simple namespace classes so the test asserts on the
+# in-memory dispatch decisions rather than network behavior. Live tests
+# (gated on UMLS_UTS_API_KEY) live in the kg integration suite.
+
+
+class _StubUMLS:
+    """Minimal stand-in for ``UMLSClient`` covering only ``cui_lookup``.
+
+    ``known`` is the set of CUIs the stub recognises; lookups outside the
+    set raise ``UMLSNotFoundError``."""
+
+    def __init__(self, known: set[str]):
+        self.known = known
+        self.lookup_calls: list[str] = []
+
+    def cui_lookup(self, cui: str):
+        from src.data.kg.types import KGConcept
+        from src.data.kg.umls_uts import UMLSNotFoundError
+
+        self.lookup_calls.append(cui)
+        if cui not in self.known:
+            raise UMLSNotFoundError(f"Unknown CUI: {cui!r}")
+        return KGConcept(
+            cui=cui, preferred_name=f"name-{cui}", semantic_types=("Disease",), atom_count=1
+        )
+
+
+class _StubEntityLinker:
+    """EntityLinker stub: ``resolve(code, system)`` returns a kept set or
+    a degenerate EntityLink with ``concept=None`` for misses. The ``umls``
+    attribute exposes a ``_StubUMLS`` instance."""
+
+    def __init__(self, *, code_to_cui: dict, umls_known: set[str]):
+        self.code_to_cui = code_to_cui  # (system, code) → cui
+        self.umls = _StubUMLS(umls_known)
+        self.resolve_calls: list = []
+
+    def resolve(self, code: str, system: str):
+        from src.data.kg.types import EntityLink, KGConcept
+
+        self.resolve_calls.append((system, code))
+        cui = self.code_to_cui.get((system, code))
+        if cui is None:
+            return EntityLink(input_code=code, input_system=system, error="not found")
+        return EntityLink(
+            input_code=code,
+            input_system=system,
+            concept=KGConcept(
+                cui=cui,
+                preferred_name=f"name-{cui}",
+                semantic_types=("Disease",),
+                atom_count=1,
+            ),
+        )
+
+
+class _StubKGQuerier:
+    """KGQuerier stub returning a fixed list of edges per CUI."""
+
+    def __init__(self, edges_by_cui: dict):
+        self.edges_by_cui = edges_by_cui  # cui → list[KGEdge]
+        self.query_calls: list[str] = []
+
+    def query_disease_hierarchy(self, cui: str):
+        self.query_calls.append(cui)
+        return list(self.edges_by_cui.get(cui, []))
+
+
+def _make_kg_edge(subject_id: str, object_id: str, predicate: str = "isa"):
+    from src.data.kg.types import KGEdge
+
+    return KGEdge(
+        subject_id=subject_id,
+        subject_name="",
+        predicate=predicate,
+        object_id=object_id,
+        object_name="",
+        evidence_source="umls_uts",
+        score=None,
+        pmids=(),
+        datasource=None,
+    )
+
+
+def test_resolve_entity_to_cui_umls_passthrough():
+    """``("UMLS", <CUI>)`` skips EntityLinker.resolve and validates via cui_lookup."""
+    from scripts.build_kg_cache import _resolve_entity_to_cui
+
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+    cui, err = _resolve_entity_to_cui("UMLS", "C0042109", linker)  # type: ignore[arg-type]
+    assert cui == "C0042109"
+    assert err is None
+    # Critical: resolve was NOT called for UMLS entries (codex B1)
+    assert linker.resolve_calls == []
+    # cui_lookup was called for validation (codex B3)
+    assert linker.umls.lookup_calls == ["C0042109"]
+
+
+def test_resolve_entity_to_cui_umls_unknown_cui_returns_error():
+    """``("UMLS", <bogus>)`` returns an error string, no exception raised."""
+    from scripts.build_kg_cache import _resolve_entity_to_cui
+
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+    cui, err = _resolve_entity_to_cui("UMLS", "C9999999", linker)  # type: ignore[arg-type]
+    assert cui is None
+    assert err is not None and "C9999999" in err and "not found" in err
+
+
+def test_resolve_entity_to_cui_source_vocab_via_entitylinker():
+    """ICD10CM / RXNORM / etc. route through EntityLinker.resolve."""
+    from scripts.build_kg_cache import _resolve_entity_to_cui
+
+    linker = _StubEntityLinker(
+        code_to_cui={("ICD10CM", "L50.9"): "C0042109"},
+        umls_known=set(),
+    )
+    cui, err = _resolve_entity_to_cui("ICD10CM", "L50.9", linker)  # type: ignore[arg-type]
+    assert cui == "C0042109"
+    assert err is None
+    assert ("ICD10CM", "L50.9") in linker.resolve_calls
+
+
+def test_build_record_live_status_ok_when_edges_returned():
+    """At least one edge → status='ok'."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+    querier = _StubKGQuerier(edges_by_cui={"C0042109": [_make_kg_edge("C0042109", "C0033578")]})
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=querier,  # type: ignore[arg-type]
+    )
+    assert record.status == "ok"
+    assert len(record.edges) == 1
+    assert record.errors == ()
+
+
+def test_build_record_live_status_queried_no_edges_when_resolved_but_no_edges():
+    """Entity resolved → kg_querier returned [] → status='queried_no_edges'."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+    querier = _StubKGQuerier(edges_by_cui={"C0042109": []})
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=querier,  # type: ignore[arg-type]
+    )
+    assert record.status == "queried_no_edges"
+    assert record.edges == ()
+
+
+def test_build_record_live_status_entity_unresolved_when_all_unknown():
+    """All entities fail to resolve → status='entity_unresolved'."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C9999999"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known=set())  # CUI unknown
+    querier = _StubKGQuerier(edges_by_cui={})
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=querier,  # type: ignore[arg-type]
+    )
+    assert record.status == "entity_unresolved"
+    assert len(record.errors) >= 1
+    assert record.edges == ()
+
+
+def test_build_record_live_aggregates_edges_across_entities():
+    """A feature with multiple entity codes aggregates edges from all of them."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("ICD10CM", "L50.9"), ("UMLS", "C0042109")),
+    )
+    linker = _StubEntityLinker(
+        code_to_cui={("ICD10CM", "L50.9"): "C0042109"},
+        umls_known={"C0042109"},
+    )
+    querier = _StubKGQuerier(
+        edges_by_cui={"C0042109": [_make_kg_edge("C0042109", f"P{i}") for i in range(3)]}
+    )
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=querier,  # type: ignore[arg-type]
+    )
+    assert record.status == "ok"
+    # Both entities resolve to the same CUI; query is invoked once per
+    # entity, so we expect 6 edges total (3 per query, 2 entities).
+    assert len(record.edges) == 6
+    assert querier.query_calls == ["C0042109", "C0042109"]
+
+
+def test_build_record_live_pagination_warning_at_threshold(caplog):
+    """A query returning ≥50 edges should log a WARNING about truncation."""
+    import logging
+
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+    edges = [_make_kg_edge("C0042109", f"P{i}") for i in range(50)]
+    querier = _StubKGQuerier(edges_by_cui={"C0042109": edges})
+
+    with caplog.at_level(logging.WARNING, logger="scripts.build_kg_cache"):
+        _build_record_live(
+            fc,
+            manifest_fp="aaaa",
+            target_fp="bbbb",
+            target_entity_codes=[],
+            sources_attempted=("umls_uts",),
+            entity_linker=linker,  # type: ignore[arg-type]
+            kg_querier=querier,  # type: ignore[arg-type]
+        )
+    assert any("pagination ceiling" in rec.message for rec in caplog.records), (
+        f"Pagination warning not emitted; records: {[r.message for r in caplog.records]}"
+    )
+
+
+def test_build_record_live_query_exception_treated_as_source_error():
+    """If kg_querier raises, the error is caught + recorded; status reflects."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+
+    class _RaisingQuerier:
+        def query_disease_hierarchy(self, cui: str):
+            raise RuntimeError("transport boom")
+
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=_RaisingQuerier(),  # type: ignore[arg-type]
+    )
+    # The entity DID resolve (cui_lookup succeeded), so this is not
+    # entity_unresolved. The query failure is recorded as a source_error
+    # via the empty-edges-with-errors path → "queried_no_edges" because
+    # resolved_any=True. The error appears in record.errors for audit.
+    assert record.status == "queried_no_edges"
+    assert any("transport boom" in e for e in record.errors)
+
+
+def test_build_cache_for_manifest_live_path_produces_records(tmp_path: Path):
+    """End-to-end live path on stub clients: cache file written, records
+    have status='ok'/'queried_no_edges' as appropriate, sources_attempted
+    includes 'umls_uts'."""
+    import json
+
+    from scripts.build_kg_cache import build_cache_for_manifest
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    features = [
+        FeatureContract(
+            name="primary_diagnosis_code",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("diagcode",),
+            kg_entity_codes=(("UMLS", "C0042109"),),
+        ),
+    ]
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+    querier = _StubKGQuerier(edges_by_cui={"C0042109": [_make_kg_edge("C0042109", "C0033578")]})
+
+    out = tmp_path / "kg_cache"
+    cache_path = build_cache_for_manifest(
+        features=features,
+        target_entity_codes=[("RXNORM", "479158")],
+        out_dir=out,
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=querier,  # type: ignore[arg-type]
+    )
+    payload = json.loads(cache_path.read_text())
+    assert len(payload) == 1
+    assert payload[0]["status"] == "ok"
+    assert payload[0]["sources_attempted"] == ["umls_uts"]
+    assert len(payload[0]["edges"]) == 1

@@ -15,11 +15,25 @@ The cache filename has no cohort name — two cohorts with identical
 
 Usage::
 
+    # Schema-and-IO smoke (no clients; emits queried_no_edges records):
     python scripts/build_kg_cache.py \
         --manifest-module src.data.manifests.optum_feature_manifest \
         --features-attr OPTUM_FEATURES \
         --target-entity-codes RXNORM:479158,RXNORM:1011295 \
         --out data/kg_cache
+
+    # Live KG querying (instantiates UMLSClient + OpenTargetsClient via
+    # EntityLinker + KnowledgeGraphQuerier; UMLS_UTS_API_KEY required):
+    python scripts/build_kg_cache.py --live ... (other args)
+
+Item B of the engineering-actionable arc (PR-C live KG querying loop):
+the ``--live`` mode replaces the prior NotImplementedError. Per-entity
+dispatch handles ``("UMLS", <CUI>)`` entries directly via
+``UMLSClient.cui_lookup`` (validate) + ``KGQuerier.query_disease_hierarchy``
+(query) — bypassing ``EntityLinker.resolve``, which only knows the
+source-vocab cross-walk systems (ICD10CM/LOINC/CPT/HCPCS/RXNORM and
+friends) per ``_UTS_SOURCE_BY_SYSTEM``. Without this dispatch the ~30
+UMLS-CUI entries in the Optum manifest would silently degrade to no_signal.
 
 Reference: docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-design.md
 """
@@ -47,12 +61,20 @@ from src.data.kg.cache import (  # noqa: E402
     compute_target_codes_fingerprint,
     save_cache,
 )
+from src.data.kg.types import KGEdge  # noqa: E402
 
 if TYPE_CHECKING:
-    from src.data.kg.open_targets import OpenTargetsClient
-    from src.data.kg.umls_uts import UMLSClient
+    from src.data.kg.entity_linker import EntityLinker
+    from src.data.kg.kg_querier import KnowledgeGraphQuerier
 
 logger = logging.getLogger(__name__)
+
+# Pagination ceiling for individual UMLS / Open Targets queries — beyond
+# this row count the response is likely truncated by the upstream API
+# (see PR #86 record on cui_relations returning first 50 rows). Live
+# querying logs a warning at this threshold so build operators can spot
+# silent truncation in the cache build.
+PAGINATION_WARNING_THRESHOLD = 50
 
 
 def _parse_target_codes(arg: str) -> list[tuple[str, str]]:
@@ -82,69 +104,212 @@ def _parse_target_codes(arg: str) -> list[tuple[str, str]]:
     return out
 
 
+def _resolve_entity_to_cui(
+    system: str,
+    code: str,
+    entity_linker: "EntityLinker",
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve a ``(system, code)`` entity to a UMLS CUI.
+
+    Per the Item B / PR-B handoff comment in
+    ``optum_feature_manifest.py``: ``EntityLinker.resolve`` accepts only
+    the source-vocab cross-walk systems (ICD10CM / LOINC / CPT / HCPCS /
+    RXNORM / SNOMEDCT_US / MESH); ``"UMLS"`` is NOT in
+    ``_UTS_SOURCE_BY_SYSTEM`` so passing a CUI through ``resolve`` would
+    silently degrade. UMLS entries are dispatched directly to
+    ``UMLSClient.cui_lookup`` for validation and the bare CUI is used
+    for downstream KG queries.
+
+    Returns ``(cui, error)``: exactly one is non-None.
+    """
+    from src.data.kg.umls_uts import UMLSError, UMLSNotFoundError
+
+    if system == "UMLS":
+        try:
+            entity_linker.umls.cui_lookup(code)
+        except UMLSNotFoundError as exc:
+            return None, f"UMLS CUI {code!r} not found: {exc}"
+        except UMLSError as exc:
+            return None, f"UMLS lookup failed for {code!r}: {exc}"
+        return code, None
+
+    try:
+        link = entity_linker.resolve(code, system)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001 — boundary error → cache record
+        return None, f"EntityLinker.resolve({system}, {code}) raised: {exc}"
+    if link.concept is None:
+        return None, f"({system}, {code}) failed to resolve: {link.error or 'no concept'}"
+    return link.concept.cui, None
+
+
+def _query_edges_for_cui(
+    cui: str,
+    kg_querier: "KnowledgeGraphQuerier",
+) -> tuple[tuple[KGEdge, ...], list[str]]:
+    """Query KG for taxonomic edges anchored on ``cui``.
+
+    Returns ``(edges, errors)``. Errors are non-fatal — the caller may
+    have multiple entities per feature, and a partial failure on one
+    should not poison the whole record. Logs a warning when the response
+    hits the pagination ceiling so build operators can spot silently
+    truncated results (codex B4).
+    """
+    errors: list[str] = []
+    try:
+        edges = tuple(kg_querier.query_disease_hierarchy(cui))
+    except Exception as exc:  # noqa: BLE001
+        return (), [f"query_disease_hierarchy({cui!r}) raised: {exc}"]
+    if len(edges) >= PAGINATION_WARNING_THRESHOLD:
+        logger.warning(
+            "KG query for CUI %s returned %d edges (>= pagination ceiling %d); "
+            "result may be truncated",
+            cui,
+            len(edges),
+            PAGINATION_WARNING_THRESHOLD,
+        )
+    return edges, errors
+
+
+def _build_record_live(
+    fc: FeatureContract,
+    *,
+    manifest_fp: str,
+    target_fp: str,
+    target_entity_codes: list[tuple[str, str]],
+    sources_attempted: tuple[str, ...],
+    entity_linker: "EntityLinker",
+    kg_querier: "KnowledgeGraphQuerier",
+) -> CacheRecord:
+    """Per-feature live-query path. Aggregates edges + errors across each
+    of the feature's ``kg_entity_codes``."""
+    aggregated_edges: list[KGEdge] = []
+    errors: list[str] = []
+    resolved_any = False
+    for system, code in fc.kg_entity_codes:
+        cui, err = _resolve_entity_to_cui(system, code, entity_linker)
+        if err is not None or cui is None:
+            errors.append(err or f"({system}, {code}) returned no CUI")
+            continue
+        resolved_any = True
+        edges, edge_errors = _query_edges_for_cui(cui, kg_querier)
+        aggregated_edges.extend(edges)
+        errors.extend(edge_errors)
+
+    # Status precedence: ok (any edges) > queried_no_edges (resolved
+    # entities but no edges) > entity_unresolved (no entity resolved at
+    # all) > source_error (all attempts hit transport failures).
+    if aggregated_edges:
+        status: Any = "ok"
+    elif resolved_any:
+        status = "queried_no_edges"
+    elif errors:
+        unresolved_signals = ("not found", "failed to resolve", "no CUI")
+        unresolved = any(any(s in e for s in unresolved_signals) for e in errors)
+        status = "entity_unresolved" if unresolved else "source_error"
+    else:
+        status = "queried_no_edges"
+
+    return CacheRecord(
+        feature_name=fc.name,
+        manifest_fingerprint_sha8=manifest_fp,
+        target_codes_fingerprint_sha8=target_fp,
+        queried_at=datetime.now(timezone.utc),
+        feature_entity_codes=tuple((t[0], t[1]) for t in fc.kg_entity_codes),
+        target_entity_codes=tuple((t[0], t[1]) for t in target_entity_codes),
+        sources_attempted=sources_attempted,
+        status=status,
+        edges=tuple(aggregated_edges),
+        errors=tuple(errors),
+    )
+
+
 def build_cache_for_manifest(
     *,
     features: Iterable[FeatureContract],
     target_entity_codes: list[tuple[str, str]],
     out_dir: Path,
-    umls_client: Optional["UMLSClient"] = None,
-    open_targets_client: Optional["OpenTargetsClient"] = None,
+    entity_linker: Optional["EntityLinker"] = None,
+    kg_querier: Optional["KnowledgeGraphQuerier"] = None,
 ) -> Path:
     """Build the cache file for a manifest's entity-bearing features.
 
     Records are emitted only for features with non-empty
-    ``kg_entity_codes``. The skeleton in this PR records a
-    ``queried_no_edges`` status with empty edge list when no clients
-    are supplied (the no-op path used by CI smoke tests). Live KG
-    querying via ``UMLSClient`` + ``OpenTargetsClient`` is wired in
-    PR-D; supplying a non-None client here raises NotImplementedError
-    so callers don't get silently-empty caches that look successful.
+    ``kg_entity_codes``.
 
-    ``sources_attempted`` reflects what was *actually* attempted, not
-    what could be — passing both clients as None records an empty
-    tuple, which lets downstream audit logic distinguish "no source
-    available" from "source returned no edges."
+    Two paths:
+
+    - **Smoke path** (default; ``entity_linker`` and ``kg_querier`` both
+      None): emits records with ``status="queried_no_edges"`` and an
+      empty edge tuple. Used by CI smoke tests and by operators who want
+      to verify the manifest fingerprint plumbing without burning UMLS
+      API calls.
+
+    - **Live path** (Item B of the engineering-actionable arc; both
+      ``entity_linker`` AND ``kg_querier`` non-None): per-entity dispatch
+      validates UMLS CUIs via ``UMLSClient.cui_lookup`` and resolves
+      source-vocab codes via ``EntityLinker.resolve``, then queries
+      ``KGQuerier.query_disease_hierarchy`` for taxonomic edges. Drug-
+      disease evidence via Open Targets is a v2 punt (requires
+      ChEMBL/EFO cross-walks not yet wired through the EntityLinker).
+
+    ``sources_attempted`` reflects what was *actually* attempted: empty
+    tuple in smoke mode; ``("umls_uts",)`` in live mode (we don't yet
+    hit Open Targets so it's not in the attempted set — silent
+    inclusion would mislead downstream audit logic).
 
     Returns the path of the written cache file.
+
+    Raises ``ValueError`` if exactly one of (entity_linker, kg_querier)
+    is supplied — the live path requires both, the smoke path requires
+    neither.
     """
-    if umls_client is not None or open_targets_client is not None:
-        raise NotImplementedError(
-            "Live KG cache querying lands in PR-D; pass umls_client=None and "
-            "open_targets_client=None for the schema-and-IO smoke path"
+    if (entity_linker is None) != (kg_querier is None):
+        raise ValueError(
+            "build_cache_for_manifest requires BOTH entity_linker AND "
+            "kg_querier (live mode) or NEITHER (smoke mode); supplying "
+            "exactly one is ambiguous and rejected."
         )
+
+    live_mode = entity_linker is not None and kg_querier is not None
+    sources_attempted: tuple[str, ...] = ("umls_uts",) if live_mode else ()
 
     features = list(features)
     manifest_fp = compute_manifest_fingerprint(features)
     target_fp = compute_target_codes_fingerprint(target_entity_codes)
     cache_path = out_dir / compose_cache_filename(manifest_fp, target_fp)
 
-    sources_attempted = tuple(
-        source
-        for source, client in (
-            ("umls_uts", umls_client),
-            ("open_targets", open_targets_client),
-        )
-        if client is not None
-    )
-
     records: list[CacheRecord] = []
     for fc in features:
         if not fc.kg_entity_codes:
             continue
-        records.append(
-            CacheRecord(
-                feature_name=fc.name,
-                manifest_fingerprint_sha8=manifest_fp,
-                target_codes_fingerprint_sha8=target_fp,
-                queried_at=datetime.now(timezone.utc),
-                feature_entity_codes=tuple((t[0], t[1]) for t in fc.kg_entity_codes),
-                target_entity_codes=tuple((t[0], t[1]) for t in target_entity_codes),
-                sources_attempted=sources_attempted,
-                status="queried_no_edges",
-                edges=(),
-                errors=(),
+        if live_mode:
+            assert entity_linker is not None and kg_querier is not None
+            records.append(
+                _build_record_live(
+                    fc,
+                    manifest_fp=manifest_fp,
+                    target_fp=target_fp,
+                    target_entity_codes=target_entity_codes,
+                    sources_attempted=sources_attempted,
+                    entity_linker=entity_linker,
+                    kg_querier=kg_querier,
+                )
             )
-        )
+        else:
+            records.append(
+                CacheRecord(
+                    feature_name=fc.name,
+                    manifest_fingerprint_sha8=manifest_fp,
+                    target_codes_fingerprint_sha8=target_fp,
+                    queried_at=datetime.now(timezone.utc),
+                    feature_entity_codes=tuple((t[0], t[1]) for t in fc.kg_entity_codes),
+                    target_entity_codes=tuple((t[0], t[1]) for t in target_entity_codes),
+                    sources_attempted=sources_attempted,
+                    status="queried_no_edges",
+                    edges=(),
+                    errors=(),
+                )
+            )
 
     save_cache(records, cache_path)
 
@@ -217,17 +382,46 @@ def main(argv: Optional[list[str]] = None) -> int:
         required=True,
         help="Output directory for the cache file",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help=(
+            "Run live KG querying via UMLS UTS + Open Targets (Item B). "
+            "Requires UMLS_UTS_API_KEY env var. Without this flag the "
+            "build emits the schema-and-IO smoke records "
+            "(status='queried_no_edges', empty edges) — useful for "
+            "verifying the manifest plumbing without burning API calls."
+        ),
+    )
     args = parser.parse_args(argv)
 
     module = importlib.import_module(args.manifest_module)
     features: Any = getattr(module, args.features_attr)
     target_codes = _parse_target_codes(args.target_entity_codes)
 
-    cache_path = build_cache_for_manifest(
-        features=features,
-        target_entity_codes=target_codes,
-        out_dir=args.out,
-    )
+    if args.live:
+        # Lazy import: only pay the httpx import cost when actually live.
+        from src.data.kg.entity_linker import EntityLinker
+        from src.data.kg.kg_querier import KnowledgeGraphQuerier
+
+        with EntityLinker() as linker:
+            kg_querier = KnowledgeGraphQuerier(entity_linker=linker)
+            try:
+                cache_path = build_cache_for_manifest(
+                    features=features,
+                    target_entity_codes=target_codes,
+                    out_dir=args.out,
+                    entity_linker=linker,
+                    kg_querier=kg_querier,
+                )
+            finally:
+                kg_querier.close()
+    else:
+        cache_path = build_cache_for_manifest(
+            features=features,
+            target_entity_codes=target_codes,
+            out_dir=args.out,
+        )
     print(f"Wrote cache to {cache_path}", file=sys.stderr)
     return 0
 
