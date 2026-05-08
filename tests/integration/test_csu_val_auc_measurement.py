@@ -236,16 +236,24 @@ def test_permutation_p_value_significant(csu_artifact: dict) -> None:
 
     Key name in the evaluator's payload is ``permutation_pvalue`` (with
     a fallback to ``p_value`` for forward-compat with any future schema
-    rename). See ``advanced_validation.compute_permutation_test``."""
+    rename). See ``advanced_validation.compute_permutation_test``.
+
+    Hard-fail (codex M7) rather than skip: the permutation gate is part
+    of plan acceptance criterion #1, so a missing payload means we
+    failed to verify the criterion, not that the test is inapplicable.
+    A genuine impossibility (e.g., evaluator skips permutation under a
+    documented sample-size gate) should be surfaced as an explicit
+    XFAIL by a maintainer, not silently absorbed."""
     perm = csu_artifact.get("permutation_test") or {}
     p_value = perm.get("permutation_pvalue", perm.get("p_value"))
-    if p_value is None:
-        pytest.skip(
-            f"permutation_test.permutation_pvalue missing from artifact. "
-            f"Keys present: {list(perm.keys())!r}. This is best-effort — "
-            f"model_trainer may have skipped permutation if class imbalance "
-            f"/ sample-size gate refused."
-        )
+    assert p_value is not None, (
+        f"permutation_test.permutation_pvalue missing from artifact. "
+        f"Keys present: {sorted(perm.keys())!r}. The permutation test is "
+        f"part of plan acceptance #1 — a missing payload means the "
+        f"evaluator's compute_permutation_test never ran, OR the runner "
+        f"failed to propagate the field. Both are regressions worth "
+        f"failing on."
+    )
     assert p_value <= PERMUTATION_P_MAX, (
         f"Permutation p_value = {p_value:.4f} exceeds ceiling "
         f"{PERMUTATION_P_MAX} (plan demands < 0.001; 100-perm null floor is 0.01)."
@@ -302,6 +310,7 @@ def test_no_high_z_score_on_kept_features(csu_artifact: dict) -> None:
 
     high_z_kept: list[tuple[str, float]] = []
     parse_failures: list[tuple[str, str]] = []
+    numeric_z_count = 0
     for v in layer_3_kept:
         feature = v.get("feature") or "<unnamed>"
         z = v.get("z_score")
@@ -314,14 +323,27 @@ def test_no_high_z_score_on_kept_features(csu_artifact: dict) -> None:
         except (TypeError, ValueError) as exc:
             parse_failures.append((feature, f"{type(z).__name__}: {exc!s}"))
             continue
+        numeric_z_count += 1
         if z_val >= ADVERSARIAL_Z_MAX:
             high_z_kept.append((feature, z_val))
 
     assert not parse_failures, (
-        f"Layer 3 verdicts on kept features had unparseable z_score:\n  - "
+        "Layer 3 verdicts on kept features had unparseable z_score:\n  - "
         + "\n  - ".join(f"{name}: {err}" for name, err in parse_failures)
         + "\nThe verdict schema may have shifted or the artifact serializer "
-        f"corrupted the value. Re-audit `_build_verdict` callsites."
+        "corrupted the value. Re-audit `_build_verdict` callsites."
+    )
+
+    # Codex M6: at least ONE kept Layer 3 verdict must carry a numeric
+    # z_score. A regression that nullified z_score on every verdict (e.g.,
+    # an exception path that defaults to None) would otherwise let the
+    # 5σ assertion vacuously pass.
+    assert numeric_z_count > 0, (
+        f"Layer 3 emitted {len(layer_3_kept)} verdicts on kept features "
+        f"but NONE had a numeric z_score. Possible causes: every feature "
+        f"hit a short-circuit path (too-few-rows / scoring-error) — "
+        f"unusual; OR the z_score field migrated to a different location "
+        f"in the verdict shape and v.get('z_score') no longer reaches it."
     )
 
     assert not high_z_kept, (
