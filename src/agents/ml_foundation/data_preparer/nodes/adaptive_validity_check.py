@@ -484,18 +484,38 @@ def _compose_legacy_verdict(
     if short_circuit_evidence is not None:
         return _legacy_short_circuit_verdict(feature, evidence=short_circuit_evidence)
 
-    # Materialize kg_edges once so we can both check truthiness and
-    # forward without re-iterating an exhausted generator.
+    # Materialize once so we can both check truthiness and forward without
+    # re-iterating an exhausted generator.
     kg_edges_tuple = tuple(kg_edges)
+    feature_ids_tuple = tuple(feature_entity_ids)
+    target_ids_tuple = tuple(target_entity_ids)
+
+    # When KG edges are present but they don't connect feature ↔ target
+    # (kg_signal would be ``no_signal``), forwarding to the voter still
+    # triggers rule #6 (adv-moderate-alone → remediation=review) which
+    # diverges from the Stage 1 contract downstream JSON consumers branch
+    # on (``ambiguous``). Treating no-signal KG as equivalent to "no KG
+    # input" preserves the bypass and Stage 1 semantics.
+    if kg_edges_tuple:
+        from src.data.kg.ensemble_voter import (
+            classify_kg_signal as _classify_kg_signal,
+        )
+
+        preview, _considered = _classify_kg_signal(
+            kg_edges_tuple,
+            feature_entity_ids=feature_ids_tuple,
+            target_entity_ids=target_ids_tuple,
+        )
+        if preview == "no_signal":
+            kg_edges_tuple = ()
 
     # Codex H5 fix (Stage 1): bypass when adversarial is the ONLY signal —
     # for ANY severity (info, moderate, high). The voter would otherwise
     # rewrite ``moderate`` remediation from the legacy ``ambiguous`` to
     # ``review``, diverging from the contract downstream JSON consumers
-    # branch on. Stage 2 narrows the bypass: when KG edges are present,
-    # the voter sees a real cross-source decision (KG vs adversarial)
-    # so we route through the voter; the bypass only fires when the
-    # adversarial verdict is genuinely the only available signal.
+    # branch on. Stage 2: bypass is preserved when KG produces no_signal
+    # (the kg_edges_tuple zero-out above) — the voter only adds value when
+    # KG produces a real signal.
     if layer_1_input is None and adversarial_input is not None and not kg_edges_tuple:
         return _legacy_adversarial_alone_verdict(feature, adversarial_input)
 
@@ -507,8 +527,8 @@ def _compose_legacy_verdict(
         layer_1_verdict=layer_1_input,
         adversarial_verdict=adversarial_input,
         kg_edges=kg_edges_tuple,
-        feature_entity_ids=tuple(feature_entity_ids),
-        target_entity_ids=tuple(target_entity_ids),
+        feature_entity_ids=feature_ids_tuple,
+        target_entity_ids=target_ids_tuple,
     )
     return _ensemble_to_legacy_dict(verdict, adversarial_input=adversarial_input)
 

@@ -1436,3 +1436,51 @@ def test_phase29_stage2_load_kg_cache_loads_records_to_dict(tmp_path):
     assert "primary_diagnosis_code" in loaded
     assert len(loaded["primary_diagnosis_code"]) == 1
     assert loaded["primary_diagnosis_code"][0].subject_id == "CHEMBL2107858"
+
+
+def test_phase29_stage2_adv_moderate_alone_with_unrelated_kg_edges_preserves_legacy_contract():
+    """Bug guard: kg_edges that produce no_signal must NOT change adv-moderate-alone
+    remediation. Voter rule #6 emits remediation='review'; Stage 1 contract is
+    'ambiguous'. The bypass is preserved when classify_kg_signal returns no_signal.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import KGEdge
+
+    voter = EnsembleVoter()
+    # KG edge connecting OTHER drug to OTHER disease — no relation to
+    # this feature's entities or the target's.
+    unrelated_edge = KGEdge(
+        subject_id="CHEMBL999",
+        predicate="treats",
+        object_id="EFO_999999",
+        evidence_source="open_targets",
+        score=0.85,
+    )
+    adv = {
+        "feature": "x",
+        "layer": "3",
+        "severity": "moderate",
+        "remediation": "ambiguous",  # legacy contract
+        "evidence": "z=4.0",
+        "z_score": 4.0,
+        "actual_auc": 0.65,
+        "null_mean": 0.50,
+        "null_std": 0.04,
+        "p_value": 0.001,
+        "n_permutations": 200,
+    }
+    verdict = _compose_legacy_verdict(
+        "x",
+        voter=voter,
+        layer_1_input=None,
+        adversarial_input=adv,
+        kg_edges=(unrelated_edge,),
+        feature_entity_ids=("CHEMBL_FEATURE",),
+        target_entity_ids=("EFO_TARGET",),
+    )
+    # Bypass triggered → legacy contract preserved (severity=moderate, remediation=ambiguous)
+    assert verdict["severity"] == "moderate"
+    assert verdict["remediation"] == "ambiguous"
