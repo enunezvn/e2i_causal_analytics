@@ -111,8 +111,38 @@ def test_parse_target_codes_rejects_malformed():
 
     from scripts.build_kg_cache import _parse_target_codes
 
-    with pytest.raises(ValueError, match="expected SYSTEM:code"):
+    with pytest.raises(ValueError, match="exactly SYSTEM:code"):
         _parse_target_codes("RXNORM_no_colon_479158")
+
+
+def test_parse_target_codes_rejects_empty_system():
+    """':479158' (no system) → ValueError."""
+    import pytest
+
+    from scripts.build_kg_cache import _parse_target_codes
+
+    with pytest.raises(ValueError, match="non-empty SYSTEM:code"):
+        _parse_target_codes(":479158")
+
+
+def test_parse_target_codes_rejects_empty_code():
+    """'RXNORM:' (no code) → ValueError."""
+    import pytest
+
+    from scripts.build_kg_cache import _parse_target_codes
+
+    with pytest.raises(ValueError, match="non-empty SYSTEM:code"):
+        _parse_target_codes("RXNORM:")
+
+
+def test_parse_target_codes_rejects_extra_colon():
+    """'RXNORM:479158:extra' (>1 colon) → ValueError, not split-on-first."""
+    import pytest
+
+    from scripts.build_kg_cache import _parse_target_codes
+
+    with pytest.raises(ValueError, match="exactly SYSTEM:code"):
+        _parse_target_codes("RXNORM:479158:extra")
 
 
 def test_cache_filename_omits_cohort(tmp_path: Path):

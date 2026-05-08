@@ -58,7 +58,11 @@ logger = logging.getLogger(__name__)
 def _parse_target_codes(arg: str) -> list[tuple[str, str]]:
     """Parse ``RXNORM:479158,RXNORM:1011295`` into ``[(RXNORM, 479158), ...]``.
 
-    Empty / whitespace-only input parses to an empty list.
+    Empty / whitespace-only input parses to an empty list. Each piece must
+    contain exactly one colon; both system and code must be non-empty
+    after stripping (target codes bypass FeatureContract's ``__post_init__``
+    code-validation, so the parser is the only gate against malformed
+    input entering the cache fingerprint).
     """
     if not arg or not arg.strip():
         return []
@@ -67,10 +71,16 @@ def _parse_target_codes(arg: str) -> list[tuple[str, str]]:
         piece = piece.strip()
         if not piece:
             continue
-        if ":" not in piece:
-            raise ValueError(f"Bad target code {piece!r}; expected SYSTEM:code")
-        system, code = piece.split(":", 1)
-        out.append((system.strip(), code.strip()))
+        if piece.count(":") != 1:
+            raise ValueError(
+                f"Bad target code {piece!r}; expected exactly SYSTEM:code with one colon"
+            )
+        system, code = (part.strip() for part in piece.split(":", 1))
+        if not system or not code:
+            raise ValueError(
+                f"Bad target code {piece!r}; expected non-empty SYSTEM:code"
+            )
+        out.append((system, code))
     return out
 
 
