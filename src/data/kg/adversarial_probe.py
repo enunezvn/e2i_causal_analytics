@@ -211,16 +211,21 @@ class AdversarialProbe:
 
         try:
             prefix_mask = events_anchored[event_date_col] <= events_anchored[_PROBE_ANCHOR_COL]
-        except TypeError as exc:
+        except (TypeError, ValueError) as exc:
             # Mismatched event_date / anchor dtypes (e.g., one is timestamp,
-            # the other is string). The caller must align dtypes; we surface
-            # this as an error rather than as a silent miscomparison.
+            # the other is string; or one is tz-aware and the other is
+            # tz-naive). Different pandas versions raise TypeError vs
+            # ValueError for these comparisons — catch both so the error
+            # surface is deterministic and version-independent. The caller
+            # must align dtypes; we report this as a probe-time error
+            # rather than as a silent miscomparison.
             return AdversarialProbeResult(
                 feature_name=feature_name,
                 outcome="error",
                 error=(
                     f"could not compare {event_date_col!r} to anchor: {exc}. "
-                    "Confirm both are the same comparable dtype."
+                    "Confirm both are the same comparable dtype "
+                    "(both tz-naive or both tz-aware in the same timezone)."
                 ),
                 notes=tuple(notes),
             )
