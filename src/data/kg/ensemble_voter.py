@@ -476,6 +476,20 @@ class EnsembleVoter:
         verified, unverified = _split_citations(citation_verdicts)
         evidence: list[str] = []
         disagreements: list[str] = []
+        # Codex review MEDIUM (M5, 2026-05-08): EnsembleVerdict is
+        # frozen, but its `layer_1_input` and `adversarial_input` fields
+        # held caller-owned dicts by reference. A caller mutating the
+        # dict post-vote would change `v.layer_1_input["severity"]`
+        # while `v.severity` stayed pinned — contradictory audit
+        # evidence inside a frozen verdict. Shallow `dict(...)` copies
+        # suffice because Layer 5's producers (`_layer_1_verdict`,
+        # `_build_verdict`) only emit primitive scalar values; if a
+        # nested mutable ever lands in those producers this snapshot
+        # approach must change to a deepcopy.
+        layer_1_snapshot = dict(layer_1_verdict) if layer_1_verdict is not None else None
+        adversarial_snapshot = (
+            dict(adversarial_verdict) if adversarial_verdict is not None else None
+        )
         adv_severity: Optional[str] = None
         if adversarial_verdict is not None:
             raw_adv_severity = adversarial_verdict.get("severity")
@@ -574,8 +588,8 @@ class EnsembleVoter:
                 unverified_citations=unverified,
                 disagreements=tuple(disagreements),
                 evidence=tuple(evidence),
-                layer_1_input=layer_1_verdict,
-                adversarial_input=adversarial_verdict,
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
                 llm_input=llm_verdict,
             )
 
@@ -603,8 +617,8 @@ class EnsembleVoter:
                 unverified_citations=unverified,
                 disagreements=tuple(disagreements),
                 evidence=tuple(evidence),
-                layer_1_input=layer_1_verdict,
-                adversarial_input=adversarial_verdict,
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
                 llm_input=llm_verdict,
             )
 
@@ -632,8 +646,8 @@ class EnsembleVoter:
                 unverified_citations=unverified,
                 disagreements=tuple(disagreements),
                 evidence=tuple(evidence),
-                layer_1_input=layer_1_verdict,
-                adversarial_input=adversarial_verdict,
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
                 llm_input=llm_verdict,
             )
 
@@ -664,8 +678,8 @@ class EnsembleVoter:
                     unverified_citations=unverified,
                     disagreements=tuple(disagreements),
                     evidence=tuple(evidence),
-                    layer_1_input=layer_1_verdict,
-                    adversarial_input=adversarial_verdict,
+                    layer_1_input=layer_1_snapshot,
+                    adversarial_input=adversarial_snapshot,
                     llm_input=llm_verdict,
                 )
 
@@ -704,8 +718,8 @@ class EnsembleVoter:
                 unverified_citations=unverified,
                 disagreements=tuple(disagreements),
                 evidence=tuple(evidence),
-                layer_1_input=layer_1_verdict,
-                adversarial_input=adversarial_verdict,
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
                 llm_input=llm_verdict,
             )
 
@@ -730,8 +744,8 @@ class EnsembleVoter:
                 unverified_citations=unverified,
                 disagreements=tuple(disagreements),
                 evidence=tuple(evidence),
-                layer_1_input=layer_1_verdict,
-                adversarial_input=adversarial_verdict,
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
                 llm_input=llm_verdict,
             )
 
@@ -752,8 +766,8 @@ class EnsembleVoter:
                 unverified_citations=unverified,
                 disagreements=tuple(disagreements),
                 evidence=tuple(evidence),
-                layer_1_input=layer_1_verdict,
-                adversarial_input=adversarial_verdict,
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
                 llm_input=llm_verdict,
             )
 
@@ -772,8 +786,8 @@ class EnsembleVoter:
             unverified_citations=unverified,
             disagreements=tuple(disagreements),
             evidence=tuple(evidence),
-            layer_1_input=layer_1_verdict,
-            adversarial_input=adversarial_verdict,
+            layer_1_input=layer_1_snapshot,
+            adversarial_input=adversarial_snapshot,
             llm_input=llm_verdict,
         )
 
