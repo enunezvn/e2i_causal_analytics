@@ -264,11 +264,12 @@ class TestEdgeCases:
             anchors=anchors,
         )
         assert result.outcome == "inapplicable"
-        # Both dtype labels surfaced for diagnosis.
+        # Both dtype labels surfaced for diagnosis. Note phrasing is
+        # neutral — it lists dtypes without prescribing dtype-mismatch as
+        # the cause (codex L5 second-pass).
         joined_notes = " ".join(result.notes)
         assert "patient_id" in joined_notes
         assert "anchors.index.dtype" in joined_notes
-        assert "coerce" in joined_notes
 
     def test_all_nan_anchors_inapplicable(self) -> None:
         anchors = pd.Series([pd.NaT, pd.NaT], index=["p1", "p2"], dtype="datetime64[ns]")
