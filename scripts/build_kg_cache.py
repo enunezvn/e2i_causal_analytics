@@ -157,19 +157,36 @@ def build_cache_for_manifest(
 
 
 def _write_summary_report(
-    path: Path, records: list[CacheRecord], manifest_fp: str, target_fp: str
+    path: Path,
+    records: list[CacheRecord],
+    manifest_fp: str,
+    target_fp: str,
+    generated_at: Optional[datetime] = None,
 ) -> None:
+    """Write the companion .summary.md report.
+
+    ``generated_at`` is optional. When omitted, the report does NOT
+    embed a timestamp — the summary file is byte-stable across
+    regenerations (the cache JSON stays byte-stable already via
+    deterministic record sort + sort_keys=True). Callers that want a
+    timestamp must pass one explicitly so it remains pinnable.
+    """
     lines: list[str] = [
         "# KG Cache Summary",
         "",
         f"**Manifest fingerprint:** `{manifest_fp}`",
         f"**Target codes fingerprint:** `{target_fp}`",
-        f"**Generated:** {datetime.now(timezone.utc).isoformat()}",
-        f"**Records:** {len(records)}",
-        "",
-        "| Feature | Status | Edges | Sources |",
-        "|---|---|---|---|",
     ]
+    if generated_at is not None:
+        lines.append(f"**Generated:** {generated_at.isoformat()}")
+    lines.extend(
+        [
+            f"**Records:** {len(records)}",
+            "",
+            "| Feature | Status | Edges | Sources |",
+            "|---|---|---|---|",
+        ]
+    )
     for r in sorted(records, key=lambda r: r.feature_name):
         lines.append(
             f"| `{r.feature_name}` | {r.status} | {len(r.edges)} | "

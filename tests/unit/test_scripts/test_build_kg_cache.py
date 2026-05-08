@@ -229,3 +229,50 @@ def test_build_with_no_clients_records_empty_sources(tmp_path: Path):
     payload = json.loads(cache_path.read_text())
     assert len(payload) == 1
     assert payload[0]["sources_attempted"] == []
+
+
+def test_summary_report_is_byte_stable_without_timestamp(tmp_path: Path):
+    """Two regenerations produce byte-identical .summary.md (no timestamp)."""
+    from scripts.build_kg_cache import build_cache_for_manifest
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    features = [
+        FeatureContract(
+            name="age",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("age",),
+        )
+    ]
+
+    out1 = tmp_path / "kg_cache_1"
+    out2 = tmp_path / "kg_cache_2"
+    p1 = build_cache_for_manifest(
+        features=features, target_entity_codes=[], out_dir=out1
+    )
+    p2 = build_cache_for_manifest(
+        features=features, target_entity_codes=[], out_dir=out2
+    )
+
+    summary1 = p1.with_suffix(".summary.md").read_bytes()
+    summary2 = p2.with_suffix(".summary.md").read_bytes()
+    assert summary1 == summary2
+
+
+def test_summary_report_with_explicit_timestamp_includes_it(tmp_path: Path):
+    """Passing a generated_at timestamp embeds it in the summary."""
+    from datetime import datetime, timezone
+
+    from scripts.build_kg_cache import _write_summary_report
+
+    path = tmp_path / "x.summary.md"
+    _write_summary_report(
+        path,
+        records=[],
+        manifest_fp="aaaaaaaa",
+        target_fp="bbbbbbbb",
+        generated_at=datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    text = path.read_text()
+    assert "Generated:" in text
+    assert "2026-05-08T12:00:00+00:00" in text
