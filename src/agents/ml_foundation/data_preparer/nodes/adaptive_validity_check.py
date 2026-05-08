@@ -170,11 +170,25 @@ def _adversarial_input(score: dict[str, Any]) -> dict[str, Any]:
     auc = score.get("actual_auc", float("nan"))
     null_mean = score.get("null_mean", float("nan"))
 
-    if isinstance(z, float) and np.isnan(z):
+    # Codex review HIGH (H3, 2026-05-08): explicit ``z_score=None`` (or
+    # any non-numeric value) used to crash on the ``z > HIGH_Z``
+    # comparison with TypeError. The dict.get(default=NaN) only catches
+    # the *missing* case — a None VALUE bypasses the default. Treat any
+    # non-finite/non-numeric z as the degenerate-score case so the
+    # bypass path emits a severity=info verdict instead of crashing
+    # the whole node.
+    z_is_degenerate = (
+        z is None
+        or not isinstance(z, (int, float))
+        or isinstance(z, bool)
+        or (isinstance(z, float) and np.isnan(z))
+    )
+
+    if z_is_degenerate:
         # Degenerate score (e.g., constant feature → identical AUC under
-        # all permutations). The voter has no signal to act on; the
-        # bypass path emits a severity=info verdict matching legacy
-        # behaviour.
+        # all permutations, or malformed input from a custom scorer).
+        # The voter has no signal to act on; the bypass path emits a
+        # severity=info verdict matching legacy behaviour.
         severity = "info"
         remediation = "keep"
         evidence = (

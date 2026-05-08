@@ -859,6 +859,64 @@ def test_phase29_decided_by_to_layer_mapping_covers_all_cases():
     }
 
 
+def test_phase29_h3_adversarial_input_handles_explicit_none_z_score():
+    """Codex review HIGH (H3, 2026-05-08): an explicit ``z_score=None``
+    (e.g., from a custom scorer or malformed payload) used to crash
+    ``_adversarial_input`` with a TypeError on the ``z > HIGH_Z``
+    comparison. ``dict.get(default=NaN)`` only catches the *missing*
+    case; a None VALUE bypasses the default. The fix treats any
+    non-numeric z as degenerate.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    # Should not raise — emits the legacy degenerate-info verdict
+    verdict = _build_verdict(
+        "feat_x",
+        {
+            "z_score": None,
+            "actual_auc": 0.5,
+            "null_mean": 0.5,
+            "null_std": 0.0,
+            "p_value": None,
+            "n_permutations": 10,
+        },
+    )
+    assert verdict["severity"] == "info"
+    assert verdict["remediation"] == "keep"
+    assert verdict["z_score"] is None
+    assert verdict["decided_by"] == "adversarial"
+
+
+def test_phase29_h3_adversarial_input_handles_string_z_score():
+    """A string value in ``z_score`` is also malformed; should not crash."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {"z_score": "not_a_number", "actual_auc": 0.5, "null_mean": 0.5, "null_std": 0.0},
+    )
+    assert verdict["severity"] == "info"
+    assert verdict["remediation"] == "keep"
+
+
+def test_phase29_h3_adversarial_input_handles_bool_z_score():
+    """A bool value (Python's ``True`` would otherwise pass ``isinstance(int)``)
+    is also malformed; reject."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {"z_score": True, "actual_auc": 0.5, "null_mean": 0.5, "null_std": 0.0},
+    )
+    assert verdict["severity"] == "info"
+
+
 def test_phase29_voter_decides_when_layer_1_and_adversarial_both_high():
     """When Layer 1 contract AND adversarial both fire high, the voter
     rule (Layer 1 > adversarial) wins. ``decided_by="layer_1"``."""
