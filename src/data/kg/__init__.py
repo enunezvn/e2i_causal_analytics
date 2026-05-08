@@ -15,9 +15,10 @@ the rest of Layer 2 (``CausalRoleClassifier``, ``CitationResolver``,
 """
 
 from src.data.kg.entity_linker import EntityLinker, EntityLinkerError
+from src.data.kg.kg_querier import KnowledgeGraphQuerier
 from src.data.kg.open_targets import OpenTargetsClient, OpenTargetsError
 from src.data.kg.rxnav import RxNavClient, RxNavError
-from src.data.kg.types import EntityLink, KGConcept
+from src.data.kg.types import EntityLink, KGConcept, KGEdge
 from src.data.kg.umls_uts import (
     UMLSAuthError,
     UMLSClient,
@@ -30,6 +31,8 @@ __all__ = [
     "EntityLinker",
     "EntityLinkerError",
     "KGConcept",
+    "KGEdge",
+    "KnowledgeGraphQuerier",
     "OpenTargetsClient",
     "OpenTargetsError",
     "RxNavClient",
