@@ -269,6 +269,31 @@ class AdversarialProbe:
                 notes=tuple(notes),
             )
 
+        # The contract requires the returned Series be indexed by patient ID
+        # (i.e., a subset of ``anchors.index``). A derivation that returns a
+        # default ``RangeIndex(0..n)`` would otherwise positionally align in
+        # ``compare()`` — silently comparing patient-A's full value to
+        # patient-B's prefix value, which is a wrong-by-construction probe
+        # result that can falsely PASS or FAIL the leak check depending on
+        # group ordering. Verify both Series before calling ``compare()``.
+        for label, returned in (("full", baseline), ("prefix", recomputed)):
+            extra = returned.index.difference(anchors.index)
+            if len(extra) > 0:
+                return AdversarialProbeResult(
+                    feature_name=feature_name,
+                    outcome="error",
+                    error=(
+                        f"derivation on {label} events returned a Series whose "
+                        f"index has {len(extra)} value(s) not present in anchors.index "
+                        f"(first 3: {list(extra[:3])}). The probe contract requires "
+                        "the returned Series to be indexed by patient ID drawn from "
+                        "anchors.index — a default RangeIndex would silently align "
+                        "positionally. Reindex via "
+                        "`.reindex(anchors.index, fill_value=...)`."
+                    ),
+                    notes=tuple(notes),
+                )
+
         return self.compare(
             feature_name=feature_name,
             baseline_values=baseline,
