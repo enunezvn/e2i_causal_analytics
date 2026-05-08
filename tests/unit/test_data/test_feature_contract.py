@@ -547,8 +547,7 @@ def test_kg_known_systems_derived_from_canonical_codesystem_literal():
     canonical = set(get_args(CodeSystem))
     expected = canonical | {"UMLS"}
     assert _KG_KNOWN_SYSTEMS == expected, (
-        f"_KG_KNOWN_SYSTEMS ({_KG_KNOWN_SYSTEMS}) drifted from "
-        f"CodeSystem | {{UMLS}} ({expected})"
+        f"_KG_KNOWN_SYSTEMS ({_KG_KNOWN_SYSTEMS}) drifted from CodeSystem | {{UMLS}} ({expected})"
     )
 
 
