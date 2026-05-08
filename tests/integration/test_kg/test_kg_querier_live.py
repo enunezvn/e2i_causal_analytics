@@ -50,9 +50,7 @@ def test_query_disease_hierarchy_returns_taxonomic_edges() -> None:
     """C0011615 (atopic dermatitis) has known parents/children in UMLS."""
     querier = KnowledgeGraphQuerier()
     edges = querier.query_disease_hierarchy("C0011615")
-    assert len(edges) >= 1, (
-        "C0011615 should produce at least one taxonomic edge in UMLS; got 0"
-    )
+    assert len(edges) >= 1, "C0011615 should produce at least one taxonomic edge in UMLS; got 0"
     for edge in edges:
         assert edge.subject_id == "C0011615"
         assert edge.evidence_source == "umls_relations"

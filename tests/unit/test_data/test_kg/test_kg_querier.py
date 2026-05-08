@@ -429,6 +429,15 @@ def test_query_concept_relations_swallows_generic_umls_error() -> None:
     assert _querier(umls=umls, ot=ot).query_concept_relations("C0011615") == []
 
 
+def test_query_disease_hierarchy_propagates_auth_error() -> None:
+    """Auth failures must surface through the public hierarchy method too,
+    even though it delegates to query_concept_relations internally."""
+    umls = _StubUMLS(raise_auth=True)
+    ot = _StubOT()
+    with pytest.raises(UMLSAuthError):
+        _querier(umls=umls, ot=ot).query_disease_hierarchy("C0011615")
+
+
 def test_querier_borrows_clients_from_entity_linker() -> None:
     """When constructed with an EntityLinker, KGQuerier reuses its clients."""
     from src.data.kg.entity_linker import EntityLinker
