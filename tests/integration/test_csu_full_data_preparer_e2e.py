@@ -35,11 +35,26 @@ CSU_JOURNEYS_PATH = REPO_ROOT / "data" / "rwd" / "csu" / "e2i_ml_v3_patient_jour
 @pytest.fixture(scope="module")
 def csu_data_source(tmp_path_factory: pytest.TempPathFactory) -> dict:
     """Build a cleaned CSU patient_journeys file scoped to the columns the
-    test cares about: SAFE features + post-index columns (for Layer 5 to
-    catch) + Pandera-required identifiers + the target. Strips everything
-    else (list-typed metadata, always-null placeholders, audit timestamps)
-    so QC + schema_validator + transformer nodes don't choke on edge-case
-    types unrelated to the leakage-layer behavior under test."""
+    test cares about: SAFE features + Pandera-required identifiers + the
+    target + synthetically-injected post-index columns (so Layer 5 has
+    something to catch). Strips everything else (list-typed metadata,
+    always-null placeholders, audit timestamps) so QC + schema_validator
+    + transformer nodes don't choke on edge-case types unrelated to the
+    leakage-layer behavior under test.
+
+    Synthetic post-index injection (Item C of the engineering-actionable
+    arc, 2026-05-08): the cohort-builder gate added by Item C drops
+    forbidden post-index columns (journey_*, brand) from
+    ``patient_journeys.json`` at the converter boundary. Once that gate
+    landed, this test's premise — "Layer 5 catches these forbidden
+    columns when present in the loaded data" — required either:
+      (a) injecting the columns synthetically here, OR
+      (b) bypassing the converter gate (would fail to validate the
+          actual production-path leakage defense).
+    Option (a) preserves the Layer 5 → remediation chain validation on
+    real CSU data with minimal disturbance. Synthetic values are derived
+    deterministically from the existing record fields so the test stays
+    reproducible across runs."""
     import json
 
     if not CSU_JOURNEYS_PATH.exists():
@@ -67,21 +82,41 @@ def csu_data_source(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "prior_treatments",
         "disease_severity",
         "engagement_score",
-        # Post-index columns (Layer 5 should catch these)
-        "journey_start_date",
-        "journey_end_date",
-        "journey_duration_days",
-        "journey_stage",
-        "journey_status",
-        "brand",
-        "discontinuation_flag",
         # Target
         "treatment_initiated",
         # Split column (consumed by data_loader)
         "data_split",
     }
+    # Post-index columns the Item C cohort-builder gate strips at the
+    # converter boundary. We RE-INJECT them synthetically here so Layer 5
+    # has something to catch. Values are derived from the kept fields so
+    # the test stays deterministic.
+    post_index_to_inject = {
+        "journey_start_date": "2024-01-01",
+        "journey_end_date": "2024-12-31",
+        # journey_duration_days = 365 (a constant per record is fine —
+        # Layer 1 doesn't care about value distribution; it cares that
+        # the column exists and has a post_index contract).
+        "journey_duration_days": 365,
+        "journey_stage": "treatment_optimization",
+        "journey_status": "lookback_masked",
+        # brand is target-coupled in the manifest; mirror that pattern
+        # in the synthetic injection so the leakage-detection layer sees
+        # a realistic cue.
+        "brand": "competitor",
+        "discontinuation_flag": 0,
+    }
+
     records = json.loads(CSU_JOURNEYS_PATH.read_text())
-    cleaned = [{k: v for k, v in r.items() if k in keep_columns} for r in records]
+    cleaned: list[dict] = []
+    for r in records:
+        kept = {k: v for k, v in r.items() if k in keep_columns}
+        # Inject post-index columns; brand mirrors the converter rule
+        # (`competitor` if treatment_initiated else None).
+        injected = dict(post_index_to_inject)
+        injected["brand"] = "competitor" if r.get("treatment_initiated") else None
+        kept.update(injected)
+        cleaned.append(kept)
     tmp = tmp_path_factory.mktemp("csu") / "patient_journeys.json"
     tmp.write_text(json.dumps(cleaned))
     return {
