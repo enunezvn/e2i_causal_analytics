@@ -59,6 +59,45 @@ def test_safe_view_excludes_forbidden_columns():
     assert safe | forbidden == all_names
 
 
+def test_targets_are_subset_of_forbidden():
+    """``CSU_TARGETS`` must be a subset of ``CSU_FORBIDDEN_AS_FEATURES``.
+
+    Targets are post-index by definition (you cannot use the label as a
+    feature) and therefore appear in the manifest's forbidden set. The
+    cohort-builder gate uses ``CSU_FORBIDDEN_NON_TARGET`` which excludes
+    ``CSU_TARGETS`` so the supervised signal survives the boundary
+    filter.
+    """
+    from src.data.manifests.csu_feature_manifest import (
+        CSU_FORBIDDEN_AS_FEATURES,
+        CSU_TARGETS,
+    )
+
+    forbidden = set(CSU_FORBIDDEN_AS_FEATURES)
+    extra_targets = CSU_TARGETS - forbidden
+    assert not extra_targets, (
+        f"CSU_TARGETS contains entries not in CSU_FORBIDDEN_AS_FEATURES: "
+        f"{sorted(extra_targets)}. Either add them to the manifest as "
+        f"post_index FeatureContracts, or remove them from CSU_TARGETS."
+    )
+
+
+def test_forbidden_non_target_is_complement():
+    """``CSU_FORBIDDEN_NON_TARGET`` must equal ``FORBIDDEN_AS_FEATURES - TARGETS``."""
+    from src.data.manifests.csu_feature_manifest import (
+        CSU_FORBIDDEN_AS_FEATURES,
+        CSU_FORBIDDEN_NON_TARGET,
+        CSU_TARGETS,
+    )
+
+    expected = set(CSU_FORBIDDEN_AS_FEATURES) - CSU_TARGETS
+    assert set(CSU_FORBIDDEN_NON_TARGET) == expected, (
+        f"CSU_FORBIDDEN_NON_TARGET drift:\n"
+        f"  expected (FORBIDDEN - TARGETS): {sorted(expected)}\n"
+        f"  actual: {sorted(CSU_FORBIDDEN_NON_TARGET)}"
+    )
+
+
 def test_known_leak_incidents_are_covered_correctly():
     """Every documented leakage incident from the compile set must appear
     in the manifest, and the entry must correctly reflect whether it is

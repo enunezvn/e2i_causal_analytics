@@ -32,13 +32,17 @@ from src.data.feature_contract import FeatureContract
 from .csu_feature_manifest import (
     CSU_FEATURES,
     CSU_FORBIDDEN_AS_FEATURES,
+    CSU_FORBIDDEN_NON_TARGET,
     CSU_SAFE_FEATURES,
+    CSU_TARGETS,
     csu_contract_for,
 )
 from .optum_feature_manifest import (
     OPTUM_FEATURES,
     OPTUM_FORBIDDEN_AS_FEATURES,
+    OPTUM_FORBIDDEN_NON_TARGET,
     OPTUM_SAFE_FEATURES,
+    OPTUM_TARGETS,
     optum_contract_for,
 )
 
@@ -81,12 +85,16 @@ def lookup_feature_contract(
 __all__ = [
     "CSU_FEATURES",
     "CSU_FORBIDDEN_AS_FEATURES",
+    "CSU_FORBIDDEN_NON_TARGET",
     "CSU_SAFE_FEATURES",
+    "CSU_TARGETS",
     "csu_contract_for",
     "MANIFEST_SOURCES",
     "OPTUM_FEATURES",
     "OPTUM_FORBIDDEN_AS_FEATURES",
+    "OPTUM_FORBIDDEN_NON_TARGET",
     "OPTUM_SAFE_FEATURES",
+    "OPTUM_TARGETS",
     "optum_contract_for",
     "lookup_feature_contract",
 ]
