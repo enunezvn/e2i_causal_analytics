@@ -294,6 +294,12 @@ class AdversarialProbe:
         # patient-B's prefix value, which is a wrong-by-construction probe
         # result that can falsely PASS or FAIL the leak check depending on
         # group ordering. Verify both Series before calling ``compare()``.
+        #
+        # Known limitation: when ``anchors.index`` is itself a ``RangeIndex``
+        # AND the derivation returns the same RangeIndex, the subset check
+        # passes trivially. Production callers SHOULD use stable patient
+        # IDs (strings or non-RangeIndex integer indexes) so positional
+        # vs. label-based alignment cannot be conflated.
         for label, returned in (("full", baseline), ("prefix", recomputed)):
             extra = returned.index.difference(anchors.index)
             if len(extra) > 0:
