@@ -593,22 +593,36 @@ def compute_promotion_eligibility(
     *,
     min_non_abstain_pct: float = 0.95,
     max_disagreement_rate: float = 0.05,
+    min_kg_decided_count: int = 1,
 ) -> dict[str, Any]:
     """Compute KG promotion-readiness metrics over a verdict list.
 
     Returns a dict with:
     - ``n_features``: total verdicts considered
     - ``non_abstain_pct``: fraction with ``decided_by != "abstain"``
-    - ``kg_adversarial_disagreement_rate``: fraction with non-empty
-      ``disagreements`` among KG-decided verdicts (proxy for "KG and
-      adversarial conflicted on this feature")
-    - ``passes``: True iff ``non_abstain_pct >= min_non_abstain_pct`` AND
-      ``kg_adversarial_disagreement_rate <= max_disagreement_rate``
+    - ``kg_decided_count``: count of verdicts with ``decided_by == "kg"``
+      (codex H2: gate against promoting when KG never fired)
+    - ``cross_source_disagreement_rate``: fraction of verdicts with a
+      non-empty ``disagreements`` audit list. This counts ALL voter-
+      recorded conflicts (Layer 1 vs adversarial, LLM vs adversarial,
+      etc.) — NOT specifically KG-vs-adversarial. The voter does not
+      track KG-vs-adversarial as a "disagreement" by design (KG cannot
+      contradict a deterministic veto), so the broader cross-source
+      rate is the closest available proxy. (codex H1 rename.)
+    - ``passes``: True iff all of:
+      * ``non_abstain_pct >= min_non_abstain_pct``
+      * ``cross_source_disagreement_rate <= max_disagreement_rate``
+      * ``kg_decided_count >= min_kg_decided_count``
 
     This is a governance tool — it does not auto-promote. Operators
     review the metrics on a shadow-mode run, then update the cohort's
     ``scope_spec.kg_mode`` from ``"shadow"`` to ``"promoted"`` when the
     rates are satisfactory.
+
+    Note: this function measures per-feature verdict metrics only. The
+    design spec requires N ≥ 200 patients in the cohort before
+    promotion is meaningful — that patient-count guard is the caller's
+    responsibility (codex N2).
 
     Empty input returns ``passes=False`` (no evidence ⇒ cannot promote).
     """
@@ -618,25 +632,32 @@ def compute_promotion_eligibility(
         return {
             "n_features": 0,
             "non_abstain_pct": 0.0,
-            "kg_adversarial_disagreement_rate": 0.0,
+            "kg_decided_count": 0,
+            "cross_source_disagreement_rate": 0.0,
             "passes": False,
         }
 
     non_abstain = sum(1 for v in verdicts_list if v.get("decided_by") != "abstain")
     non_abstain_pct = non_abstain / n
 
-    # Disagreement is measured as "the audit trail recorded any
-    # cross-source contradiction". The voter populates `disagreements`
-    # whenever it flags an LLM/KG/adversarial mismatch.
+    kg_decided_count = sum(1 for v in verdicts_list if v.get("decided_by") == "kg")
+
+    # See ``cross_source_disagreement_rate`` field docstring above for
+    # what this captures (and what it does NOT capture).
     disagreements_count = sum(1 for v in verdicts_list if (v.get("disagreements") or []))
     disagreement_rate = disagreements_count / n
 
-    passes = non_abstain_pct >= min_non_abstain_pct and disagreement_rate <= max_disagreement_rate
+    passes = (
+        non_abstain_pct >= min_non_abstain_pct
+        and disagreement_rate <= max_disagreement_rate
+        and kg_decided_count >= min_kg_decided_count
+    )
 
     return {
         "n_features": n,
         "non_abstain_pct": non_abstain_pct,
-        "kg_adversarial_disagreement_rate": disagreement_rate,
+        "kg_decided_count": kg_decided_count,
+        "cross_source_disagreement_rate": disagreement_rate,
         "passes": passes,
     }
 
