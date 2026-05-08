@@ -160,8 +160,14 @@ def test_verify_citation_entities_only_no_cue() -> None:
     assert verdict.overall_confidence == pytest.approx(WEIGHT_BOTH_ENTITIES)
 
 
-def test_verify_citation_cue_only_one_entity() -> None:
-    """Only one entity present + cue → 0.3 score (cue weight only)."""
+def test_verify_citation_cue_only_no_entities_yields_zero_confidence() -> None:
+    """Codex review HIGH (2026-05-08): cue-only without entities → 0.0.
+
+    A causal cue verb alone does not evidence a citation; the abstract
+    could be about an unrelated relation. Without this guard, unrelated
+    abstracts containing common cue verbs would silently rank above
+    unresolved citations.
+    """
 
     europe_pmc = _StubEuropePMC(
         abstracts={"12345": _record("Aspirin treats inflammation in many patients.")}
@@ -174,8 +180,34 @@ def test_verify_citation_cue_only_one_entity() -> None:
     )
     assert verdict.abstract_resolved
     assert verdict.entities_found == ()
+    # Cue is still surfaced for diagnostics, but confidence is zero
+    # because no entity matched.
     assert verdict.causal_cue_found == "treats"
-    assert verdict.overall_confidence == pytest.approx(WEIGHT_CAUSAL_CUE)
+    assert verdict.overall_confidence == 0.0
+
+
+def test_verify_citation_one_entity_plus_cue_no_credit() -> None:
+    """Only ONE of the two entities present + cue → still 0.0.
+
+    Verifies the both-entities gate guards the cue-credit path even when
+    one entity matches.
+    """
+
+    europe_pmc = _StubEuropePMC(
+        abstracts={"12345": _record("Ibuprofen treats inflammation in many patients.")}
+    )
+    verdict = _resolver(europe_pmc=europe_pmc).verify_citation(
+        "12345",
+        identifier_kind="pmid",
+        subject_name="ibuprofen",
+        object_name="atopic dermatitis",  # not in the abstract
+    )
+    assert verdict.abstract_resolved
+    # ``_first_match`` returns the candidate term as supplied (not the
+    # cased form from the abstract); the match is case-insensitive.
+    assert "ibuprofen" in verdict.entities_found
+    # Subject match alone — both-entities gate fails → 0.0.
+    assert verdict.overall_confidence == 0.0
 
 
 def test_verify_citation_zero_when_unresolved() -> None:

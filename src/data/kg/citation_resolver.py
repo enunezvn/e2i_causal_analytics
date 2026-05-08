@@ -201,13 +201,20 @@ class CitationResolver:
             entities_found.append(subject_match)
         if object_match:
             entities_found.append(object_match)
+        # Codex review HIGH (2026-05-08): cue-verb credit is only awarded
+        # when BOTH entities are also present. A causal cue alone, without
+        # the subject/object pair, doesn't constitute evidence — the
+        # abstract could be about an entirely different relation (e.g.,
+        # "ibuprofen treats inflammation" doesn't verify a citation for
+        # "ibuprofen treats atopic dermatitis"). Without this guard,
+        # unrelated abstracts containing common cue verbs would silently
+        # rank above unresolved citations in Phase 2.7's aggregation.
         confidence = 0.0
         if subject_match and object_match:
             confidence += WEIGHT_BOTH_ENTITIES
-        if causal_cue:
-            confidence += WEIGHT_CAUSAL_CUE
-        if subject_match and object_match and causal_cue:
-            confidence += WEIGHT_COOCCURRENCE
+            if causal_cue:
+                confidence += WEIGHT_CAUSAL_CUE
+                confidence += WEIGHT_COOCCURRENCE
         return CitationVerdict(
             identifier=identifier,
             identifier_kind=identifier_kind,  # type: ignore[arg-type]
