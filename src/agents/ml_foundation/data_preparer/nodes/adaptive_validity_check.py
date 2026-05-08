@@ -56,7 +56,11 @@ import pandas as pd
 
 from src.data.adversarial_leakage import compute_adversarial_score
 from src.data.feature_contract import FeatureContract
-from src.data.manifests import lookup_feature_contract
+from src.data.manifests import (
+    CSU_FORBIDDEN_AS_FEATURES,
+    OPTUM_FORBIDDEN_AS_FEATURES,
+    lookup_feature_contract,
+)
 
 # ``EnsembleVoter`` and ``EnsembleVerdict`` are LAZY-imported below to
 # avoid triggering ``src.data.kg.__init__`` at module-import time. The
@@ -529,11 +533,31 @@ def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
     return _legacy_short_circuit_verdict(feature, evidence=evidence)
 
 
-def _select_features(df: pd.DataFrame, target: str, excluded: list[str]) -> list[str]:
+_MANIFEST_FORBIDDEN_BY_SOURCE: dict[str, list[str]] = {
+    "csu": CSU_FORBIDDEN_AS_FEATURES,
+    "optum": OPTUM_FORBIDDEN_AS_FEATURES,
+}
+
+
+def _select_features(
+    df: pd.DataFrame,
+    target: str,
+    excluded: list[str],
+    manifest_source: Optional[str] = None,
+) -> list[str]:
     """Return the feature columns Layer 3 should evaluate.
 
     - Excludes the target itself.
     - Excludes columns the scope spec already declared excluded (PII, declared leakage).
+    - Excludes manifest-declared post-index / target-coupled columns when
+      a known ``manifest_source`` is supplied. This is the proactive
+      counterpart to the Layer 1 contract audit downstream: forbidden
+      columns no longer reach Layer 3 scoring at all, saving compute and
+      providing defense-in-depth so a Layer 1 verdict bug cannot let a
+      forbidden column through to model training. Unknown / None
+      ``manifest_source`` values fall through to the legacy behaviour
+      (no manifest-based exclusion) so synthetic regimes that share
+      column names with CSU/Optum are not penalised.
     - Excludes non-numeric columns: Layer 3 needs a continuous score for AUC, and
       categorical handling routes through ``check_categorical_class_separation``
       in the legacy detector. Categorical adaptive scoring is a Layer 5 follow-up.
@@ -544,6 +568,10 @@ def _select_features(df: pd.DataFrame, target: str, excluded: list[str]) -> list
     # Supabase/SQLAlchemy with nullable-int schema would crash the node.
     excluded_set = set(excluded or [])
     excluded_set.add(target)
+    if manifest_source is not None:
+        forbidden = _MANIFEST_FORBIDDEN_BY_SOURCE.get(manifest_source)
+        if forbidden:
+            excluded_set.update(forbidden)
     cols = []
     for c in df.columns:
         if c in excluded_set:
@@ -594,7 +622,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     excluded_set = set(excluded or [])
     excluded_set.add(target)
     all_columns = [c for c in train_df.columns if c not in excluded_set]
-    numeric_candidates = _select_features(train_df, target, excluded)
+    numeric_candidates = _select_features(train_df, target, excluded, manifest_source)
 
     if not all_columns:
         logger.info("adaptive_validity_check: no candidate columns → skipping")
