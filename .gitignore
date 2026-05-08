@@ -203,3 +203,7 @@ docker/e2i_docker_volume_strategy.html
 # Stale deploy artifacts (BentoML now runs in Docker)
 deploy/
 backups/
+
+# Phase 2.9 Stage 2 KG cache (raw caches gitignored; .summary.md committed)
+data/kg_cache/*.json
+!data/kg_cache/.gitkeep
