@@ -136,9 +136,10 @@ class KnowledgeGraphQuerier:
             - pmids        = literature list (Europe PMC IDs)
             - datasource   = the row's ``datasourceId``
 
-        Returns an empty list if Open Targets has no evidence or the request
-        fails (with a logged warning). Drug and disease names are populated
-        from the response when available.
+        Returns an empty list if Open Targets has no evidence. ``OpenTargetsError``
+        is logged and re-raised so callers can distinguish "no evidence" from
+        a transport / GraphQL failure (codex H1 from PR #102 review). Drug and
+        disease names are populated from the response when available.
         """
         try:
             data = self.open_targets.drug_disease_evidence(drug_id, disease_id, size=size)
@@ -149,7 +150,7 @@ class KnowledgeGraphQuerier:
                 disease_id,
                 exc,
             )
-            return []
+            raise
         evidences = data.get("evidences", {})
         # ``evidences.rows`` is a GraphQL nullable-list field (`[Evidence!]`,
         # not `[Evidence!]!`), so the resolver may legitimately return null
@@ -270,15 +271,20 @@ class KnowledgeGraphQuerier:
             CUI extracted from ``relatedId``, predicate = the
             ``additionalRelationLabel`` (or coarse ``relationLabel`` when
             the additional one is empty). UMLS does not score relations, so
-            ``score`` and ``pmids`` are always None / empty here.
+            ``score`` and ``pmids`` are always None / empty here. ``UMLSError``
+            (any UMLS subclass — auth, transport, request) is logged and
+            re-raised so callers can distinguish "no relations" from a
+            transport failure (codex H1 from PR #102 review).
         """
         try:
             rows = self.umls.cui_relations(cui)
-        except UMLSAuthError:
-            raise
         except UMLSError as exc:
-            logger.warning("UMLS cui_relations failed for %s: %s", cui, exc)
-            return []
+            # ``UMLSAuthError`` is a UMLSError subclass and stays in this
+            # branch; both surface to the caller. Logging at warning level
+            # preserves the prior observability contract.
+            if not isinstance(exc, UMLSAuthError):
+                logger.warning("UMLS cui_relations failed for %s: %s", cui, exc)
+            raise
         predicate_set = {p.lower() for p in predicates} if predicates else None
         coarse_set = {c.upper() for c in include_coarse_labels} if include_coarse_labels else None
         edges: list[KGEdge] = []

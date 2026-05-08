@@ -220,11 +220,16 @@ def test_query_drug_disease_edges_handles_null_evidences_object() -> None:
     assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
 
 
-def test_query_drug_disease_edges_swallows_open_targets_error() -> None:
-    """Transport failures degrade gracefully — KGQuerier returns []."""
+def test_query_drug_disease_edges_propagates_open_targets_error() -> None:
+    """Transport failures must surface so callers can distinguish "no
+    edges" from "GraphQL/transport failure" (codex H1 from PR #102 review).
+    Cache builders, EnsembleVoter, and operator-facing pipelines need
+    typed errors to record ``status=source_error`` instead of
+    ``status=queried_no_edges``."""
     umls = _StubUMLS()
     ot = _StubOT(raise_error=True)
-    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
+    with pytest.raises(OpenTargetsError):
+        _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y")
 
 
 def test_query_drug_disease_edges_rejects_nan_score() -> None:
@@ -422,11 +427,27 @@ def test_query_concept_relations_propagates_auth_error() -> None:
         _querier(umls=umls, ot=ot).query_concept_relations("C0011615")
 
 
-def test_query_concept_relations_swallows_generic_umls_error() -> None:
-    """Transport-level UMLS failures degrade gracefully."""
+def test_query_concept_relations_propagates_generic_umls_error() -> None:
+    """Transport-level UMLS failures must surface so callers can
+    distinguish "no relations" from a transport failure (codex H1 from
+    PR #102 review). Cache record producers downstream need this signal
+    to set ``status=source_error`` instead of misclassifying as
+    ``status=queried_no_edges``."""
     umls = _StubUMLS(raise_error=True)
     ot = _StubOT()
-    assert _querier(umls=umls, ot=ot).query_concept_relations("C0011615") == []
+    with pytest.raises(UMLSError):
+        _querier(umls=umls, ot=ot).query_concept_relations("C0011615")
+
+
+def test_query_disease_hierarchy_propagates_generic_umls_error() -> None:
+    """``query_disease_hierarchy`` delegates to ``query_concept_relations``;
+    the same propagation contract must hold there so cache builders can
+    surface transport failures even when the upstream method is the
+    taxonomic one."""
+    umls = _StubUMLS(raise_error=True)
+    ot = _StubOT()
+    with pytest.raises(UMLSError):
+        _querier(umls=umls, ot=ot).query_disease_hierarchy("C0011615")
 
 
 def test_query_disease_hierarchy_propagates_auth_error() -> None:
