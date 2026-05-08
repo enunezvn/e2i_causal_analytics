@@ -983,6 +983,69 @@ def test_invalid_llm_role_falls_through_to_kg_only():
     assert v.severity == "high"
 
 
+def test_malformed_adversarial_high_without_z_score_downgrades(caplog):
+    """Codex review MEDIUM (M3, 2026-05-08): adversarial verdict with
+    severity=high but no z_score used to silently drive a confidence=0.95
+    deterministic veto with `z_score=None` in the audit record. That
+    breaks audit integrity (a high-confidence drop with no evidence).
+
+    The fix downgrades the malformed verdict to "no signal" so the voter
+    falls through to LLM/KG/abstain.
+    """
+    voter = EnsembleVoter()
+    bad = {
+        "feature": "feat_x",
+        "layer": "3",
+        "severity": "high",
+        # z_score deliberately missing
+    }
+    import logging as _logging  # noqa: PLC0415
+
+    with caplog.at_level(_logging.WARNING):
+        v = voter.vote("feat_x", adversarial_verdict=bad)
+    # The adversarial high veto should NOT have fired (z_score missing)
+    assert v.decided_by != "adversarial"
+    assert v.decided_by == "abstain"
+    # But the malformed input is still preserved in the audit trail
+    assert v.adversarial_input is bad
+    # Evidence names the malformed-veto downgrade
+    assert any(
+        "missing or non-finite" in e or "cannot honour" in e for e in v.evidence
+    )
+    # Operator-visible warning logged
+    assert any("malformed adversarial" in rec.message for rec in caplog.records)
+
+
+def test_malformed_adversarial_high_nan_z_score_also_downgrades():
+    """NaN z_score is also non-finite and should not honour the veto."""
+    voter = EnsembleVoter()
+    bad = {
+        "severity": "high",
+        "z_score": float("nan"),
+    }
+    v = voter.vote("feat_x", adversarial_verdict=bad)
+    assert v.decided_by == "abstain"
+
+
+def test_malformed_adversarial_high_string_z_score_downgrades():
+    """A string in `z_score` is malformed input — downgrade."""
+    voter = EnsembleVoter()
+    bad = {
+        "severity": "high",
+        "z_score": "not_a_number",
+    }
+    v = voter.vote("feat_x", adversarial_verdict=bad)
+    assert v.decided_by == "abstain"
+
+
+def test_malformed_adversarial_high_bool_z_score_downgrades():
+    """`z_score=True` is the bool-as-int Python footgun; reject."""
+    voter = EnsembleVoter()
+    bad = {"severity": "high", "z_score": True}
+    v = voter.vote("feat_x", adversarial_verdict=bad)
+    assert v.decided_by == "abstain"
+
+
 def test_self_loop_edge_does_not_count_as_relation():
     """Codex review MEDIUM (M2, 2026-05-08): a self-loop edge
     (subject_id == object_id) used to drive a `taxonomic_descendant`
