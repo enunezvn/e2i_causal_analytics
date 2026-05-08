@@ -252,16 +252,33 @@ class CitationResolver:
 
 
 def _first_match(terms: Iterable[str], haystack_lower: str) -> Optional[str]:
-    """Return the first term whose lowercase form appears in ``haystack_lower``.
+    """Return the first term that appears in ``haystack_lower`` as a
+    whole-word match.
 
-    Returns the original-cased term so the caller can surface it back to
-    the user; case-insensitive matching is done against the pre-lowered
-    ``haystack_lower`` to avoid repeating the lower() per term.
+    Codex review HIGH (2026-05-08): naive substring matching produced
+    false positives like "asthma" matching inside "asthmatic", "RA"
+    matching ordinary text, and short drug names matching unrelated
+    fragments. Boundary handling:
+
+    - When the term's first/last character is alphanumeric, use ``\\b``
+      to enforce word boundaries. This catches the asthma/asthmatic case.
+    - When the first/last character is NON-alphanumeric (e.g., the
+      trailing ``)`` in "C-reactive protein (CRP)"), skip the boundary
+      anchor on that side — ``\\b`` is defined as a transition between
+      word and non-word, so two non-word chars in a row don't form one,
+      and including the anchor would silently miss the match.
+
+    Returns the original-cased term so the caller can surface it back
+    (case-insensitive matching against the pre-lowered haystack).
     """
     for term in terms:
         if not term:
             continue
-        if term.lower() in haystack_lower:
+        term_lower = term.lower()
+        left = r"\b" if term_lower[0].isalnum() else ""
+        right = r"\b" if term_lower[-1].isalnum() else ""
+        pattern = f"{left}{re.escape(term_lower)}{right}"
+        if re.search(pattern, haystack_lower):
             return term
     return None
 
