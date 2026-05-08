@@ -933,3 +933,71 @@ def test_realistic_kg_disagrees_with_llm_abstains():
     assert v.decided_by == "abstain"
     assert v.severity == "abstain"
     assert v.remediation == "review"
+
+
+# ---------------------------------------------------------------------------
+# Codex review HIGH (H1, 2026-05-08): invalid LLM role
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_llm_role_does_not_crash_returns_abstain():
+    """LLMVerdict.causal_role outside the 6-role vocabulary used to crash
+    `_role_to_remediation` with KeyError (codex review H1).
+
+    The voter should treat the verdict as if the LLM hadn't run and the
+    audit trail should record what the LLM actually said.
+    """
+    voter = EnsembleVoter()
+    bad = LLMVerdict(
+        causal_role="unknown",  # type: ignore[arg-type]
+        mechanism="bad classifier output",
+        recommended_remediation="review",
+        cited_pmids=(),
+    )
+    v = voter.vote("feat_x", llm_verdict=bad)
+    assert v.decided_by == "abstain"
+    assert v.severity == "abstain"
+    assert v.confidence == 0.0
+    # Audit trail still carries the original (invalid) LLM verdict
+    assert v.llm_input is bad
+    assert any("unknown" in e and "vocabulary" in e for e in v.evidence)
+
+
+def test_invalid_llm_role_falls_through_to_kg_only():
+    """When LLM is invalid AND a strong KG signal exists, the voter
+    should fall through to the KG-only path rather than crashing."""
+    voter = EnsembleVoter()
+    bad = LLMVerdict(
+        causal_role="garbage_role",  # type: ignore[arg-type]
+        mechanism="m",
+        recommended_remediation="review",
+    )
+    v = voter.vote(
+        "feat_x",
+        kg_edges=[_kg_treats_edge(drug_id="A", disease_id="B")],
+        feature_entity_ids=["A"],
+        target_entity_ids=["B"],
+        llm_verdict=bad,
+    )
+    assert v.decided_by == "kg"
+    assert v.severity == "high"
+
+
+def test_invalid_llm_role_does_not_block_layer_1_veto():
+    """Layer 1 deterministic veto wins even with an invalid LLM verdict."""
+    voter = EnsembleVoter()
+    bad = LLMVerdict(
+        causal_role="not_a_role",  # type: ignore[arg-type]
+        mechanism="m",
+        recommended_remediation="review",
+    )
+    v = voter.vote(
+        "feat_x",
+        layer_1_verdict=_layer_1_high(),
+        llm_verdict=bad,
+    )
+    assert v.decided_by == "layer_1"
+    # Disagreements should not include the invalid LLM (sanitised away)
+    assert all("not_a_role" not in d for d in v.disagreements)
+    # But the audit trail still records what the LLM said
+    assert v.llm_input is bad
