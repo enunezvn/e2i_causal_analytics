@@ -35,6 +35,7 @@ Reference: `.claude/plans/adaptive_temporal_validity_redesign.md` Phase 2.3.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Iterable, Optional
 
 from src.data.kg.entity_linker import EntityLinker
@@ -159,7 +160,19 @@ class KnowledgeGraphQuerier:
             literature = row.get("literature") or []
             pmids = tuple(str(p) for p in literature if p)
             score_raw = row.get("score")
-            score = float(score_raw) if isinstance(score_raw, (int, float)) else None
+            # ``isinstance(float('nan'), (int, float))`` is True, so a NaN
+            # score (possible from numpy-backed JSON parsers or upstream
+            # numeric corruption) would silently propagate into KGEdge.score.
+            # NaN comparisons return False for all orderings, which would
+            # poison Phase 2.5/2.6 selection logic (max/sort/threshold) by
+            # making the broken edge invisible to ranking. ``math.isfinite``
+            # rejects NaN and ±inf; both belong as ``None`` in the public
+            # KGEdge contract.
+            score = (
+                float(score_raw)
+                if isinstance(score_raw, (int, float)) and math.isfinite(score_raw)
+                else None
+            )
             edges.append(
                 KGEdge(
                     subject_id=str(drug.get("id") or drug_id),
