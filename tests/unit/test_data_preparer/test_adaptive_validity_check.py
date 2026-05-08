@@ -1113,3 +1113,154 @@ def test_phase29_voter_decides_when_layer_1_and_adversarial_both_high():
     v = verdicts_by_feat["journey_duration_days"]
     assert v["decided_by"] == "layer_1"  # Layer 1 wins per voter precedence
     assert v["layer"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# Manifest enforcement at _select_features (defense-in-depth)
+# ---------------------------------------------------------------------------
+
+
+def test_select_features_excludes_csu_forbidden_when_manifest_csu():
+    """`_select_features` consults the manifest's FORBIDDEN list and drops
+    target-coupled / post-index columns proactively.
+
+    Defense-in-depth: complements the Layer 1 contract audit downstream
+    (which would catch these columns in the verdict pass and route them
+    through leakage_remediation). With the proactive exclusion, forbidden
+    columns never reach Layer 3 scoring at all — saving compute AND
+    closing the gap if a Layer 1 manifest lookup ever silently failed.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+    from src.data.manifests import CSU_FORBIDDEN_AS_FEATURES
+
+    df = pd.DataFrame(
+        {
+            "age_continuous": [30, 40, 50, 60],
+            "journey_duration_days": [10, 20, 30, 40],  # CSU forbidden
+            "brand": [1.0, 2.0, 3.0, 4.0],  # CSU forbidden (numeric encoded)
+            "y": [0, 1, 0, 1],
+        }
+    )
+    cols = _select_features(df, target="y", excluded=[], manifest_source="csu")
+    assert "age_continuous" in cols
+    assert "journey_duration_days" not in cols
+    assert "brand" not in cols
+    # Sanity: the excluded names must be in the manifest's forbidden set.
+    assert "journey_duration_days" in CSU_FORBIDDEN_AS_FEATURES
+    assert "brand" in CSU_FORBIDDEN_AS_FEATURES
+
+
+def test_select_features_excludes_optum_forbidden_when_manifest_optum():
+    """Same defense-in-depth check for the Optum manifest."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+    from src.data.manifests import OPTUM_FORBIDDEN_AS_FEATURES
+
+    if not OPTUM_FORBIDDEN_AS_FEATURES:
+        pytest.skip("OPTUM_FORBIDDEN_AS_FEATURES is empty")
+
+    forbidden_sample = OPTUM_FORBIDDEN_AS_FEATURES[0]
+    df = pd.DataFrame(
+        {
+            "age": [25, 35, 45, 55],
+            forbidden_sample: [1.0, 2.0, 3.0, 4.0],
+            "y": [0, 1, 0, 1],
+        }
+    )
+    cols = _select_features(df, target="y", excluded=[], manifest_source="optum")
+    assert "age" in cols
+    assert forbidden_sample not in cols
+
+
+def test_select_features_no_manifest_source_falls_through():
+    """Synthetic regimes (and any cohort that doesn't opt into a manifest)
+    must NOT have CSU / Optum forbidden lists applied — that would
+    cross-cohort-pollute (e.g., synthetic's `brand` column would be
+    falsely excluded under the CSU manifest).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+
+    df = pd.DataFrame(
+        {
+            "age": [25, 35, 45, 55],
+            "journey_duration_days": [10, 20, 30, 40],
+            "y": [0, 1, 0, 1],
+        }
+    )
+    cols = _select_features(df, target="y", excluded=[], manifest_source=None)
+    assert "journey_duration_days" in cols  # not excluded without manifest
+
+
+def test_select_features_unknown_manifest_source_falls_through():
+    """An unknown ``manifest_source`` value (typo, future cohort not yet
+    registered) must NOT raise and must NOT apply any forbidden list —
+    fail open for unknown manifests, not closed.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+
+    df = pd.DataFrame(
+        {
+            "age": [25, 35, 45, 55],
+            "journey_duration_days": [10, 20, 30, 40],
+            "y": [0, 1, 0, 1],
+        }
+    )
+    cols = _select_features(df, target="y", excluded=[], manifest_source="cohort_does_not_exist")
+    assert "journey_duration_days" in cols
+
+
+def test_select_features_manifest_layered_with_scope_excluded():
+    """``excluded`` (scope_spec) and the manifest forbidden list compose
+    additively — both apply.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+
+    df = pd.DataFrame(
+        {
+            "age_continuous": [30, 40, 50, 60],
+            "patient_id_hash": [1.1, 2.2, 3.3, 4.4],  # scope-excluded (PII)
+            "journey_duration_days": [10, 20, 30, 40],  # manifest-excluded
+            "y": [0, 1, 0, 1],
+        }
+    )
+    cols = _select_features(df, target="y", excluded=["patient_id_hash"], manifest_source="csu")
+    assert cols == ["age_continuous"]
+
+
+def test_select_features_manifest_does_not_drop_target_or_non_numeric():
+    """Manifest-excluded columns are dropped, but the existing target /
+    non-numeric exclusions are preserved. Order of exclusion shouldn't
+    matter for the final result.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+
+    df = pd.DataFrame(
+        {
+            "age_continuous": [30, 40, 50, 60],
+            "journey_status": [
+                "active",
+                "active",
+                "complete",
+                "complete",
+            ],  # non-numeric AND CSU-forbidden
+            "journey_duration_days": [10, 20, 30, 40],  # CSU-forbidden
+            "y": [0, 1, 0, 1],
+        }
+    )
+    cols = _select_features(df, target="y", excluded=[], manifest_source="csu")
+    # journey_status: non-numeric → out (would be out anyway)
+    # journey_duration_days: manifest-forbidden → out
+    # y: target → out
+    # age_continuous: kept
+    assert cols == ["age_continuous"]
