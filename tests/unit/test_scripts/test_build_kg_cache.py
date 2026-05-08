@@ -247,12 +247,8 @@ def test_summary_report_is_byte_stable_without_timestamp(tmp_path: Path):
 
     out1 = tmp_path / "kg_cache_1"
     out2 = tmp_path / "kg_cache_2"
-    p1 = build_cache_for_manifest(
-        features=features, target_entity_codes=[], out_dir=out1
-    )
-    p2 = build_cache_for_manifest(
-        features=features, target_entity_codes=[], out_dir=out2
-    )
+    p1 = build_cache_for_manifest(features=features, target_entity_codes=[], out_dir=out1)
+    p2 = build_cache_for_manifest(features=features, target_entity_codes=[], out_dir=out2)
 
     summary1 = p1.with_suffix(".summary.md").read_bytes()
     summary2 = p2.with_suffix(".summary.md").read_bytes()

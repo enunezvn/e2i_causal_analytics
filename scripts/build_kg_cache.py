@@ -77,9 +77,7 @@ def _parse_target_codes(arg: str) -> list[tuple[str, str]]:
             )
         system, code = (part.strip() for part in piece.split(":", 1))
         if not system or not code:
-            raise ValueError(
-                f"Bad target code {piece!r}; expected non-empty SYSTEM:code"
-            )
+            raise ValueError(f"Bad target code {piece!r}; expected non-empty SYSTEM:code")
         out.append((system, code))
     return out
 
