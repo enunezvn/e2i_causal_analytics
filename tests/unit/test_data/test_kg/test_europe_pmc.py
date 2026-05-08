@@ -141,7 +141,17 @@ def test_fetch_abstract_year_falls_back_when_pubyear_invalid() -> None:
             200,
             json={
                 "resultList": {
-                    "result": [{"abstractText": "x", "title": "y", "pubYear": "in press"}]
+                    "result": [
+                        {
+                            "abstractText": "x",
+                            "title": "y",
+                            "pubYear": "in press",
+                            # Defensive validation requires the pmid + source
+                            # to match the request.
+                            "pmid": "12345678",
+                            "source": "MED",
+                        }
+                    ]
                 }
             },
         )
@@ -150,3 +160,78 @@ def test_fetch_abstract_year_falls_back_when_pubyear_invalid() -> None:
         record = client.fetch_abstract("12345678")
         assert record is not None
         assert record.year is None
+
+
+def test_fetch_abstract_rejects_record_with_mismatched_pmid() -> None:
+    """Codex review MEDIUM (2026-05-08): defensive validation. If Europe PMC
+    ever returns a record whose pmid doesn't match the request, reject it
+    rather than silently verifying the wrong abstract."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "resultList": {
+                    "result": [
+                        {
+                            "abstractText": "Wrong record!",
+                            "pmid": "99999999",  # Not what we asked for.
+                            "source": "MED",
+                        }
+                    ]
+                }
+            },
+        )
+
+    with _client_with_handler(handler) as client:
+        assert client.fetch_abstract("12345678") is None
+
+
+def test_fetch_abstract_rejects_record_with_non_med_source() -> None:
+    """Records from other Europe PMC sources (e.g., AGR, PMC) shouldn't be
+    treated as PubMed equivalents."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "resultList": {
+                    "result": [
+                        {
+                            "abstractText": "Wrong source!",
+                            "pmid": "12345678",
+                            "source": "AGR",
+                        }
+                    ]
+                }
+            },
+        )
+
+    with _client_with_handler(handler) as client:
+        assert client.fetch_abstract("12345678") is None
+
+
+def test_fetch_abstract_accepts_record_with_id_field_when_pmid_absent() -> None:
+    """Some records use ``id`` instead of ``pmid``; the validation should
+    fall back to that field."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "resultList": {
+                    "result": [
+                        {
+                            "abstractText": "Right abstract!",
+                            "id": "12345678",  # No pmid field; use id.
+                            "source": "MED",
+                        }
+                    ]
+                }
+            },
+        )
+
+    with _client_with_handler(handler) as client:
+        record = client.fetch_abstract("12345678")
+        assert record is not None
+        assert record.abstract == "Right abstract!"

@@ -99,8 +99,24 @@ class EuropePMCClient:
         results = result_list.get("result") if isinstance(result_list, dict) else None
         if not isinstance(results, list) or not results:
             return None
-        record = results[0]
-        if not isinstance(record, dict):
+        # Codex review MEDIUM (2026-05-08): defensive validation. The
+        # query ``ext_id:{pmid} AND src:MED`` should only ever return
+        # records matching that exact PMID + MED source, but if Europe
+        # PMC's relevance ranker ever changes (or returns a normalized
+        # variant first) we'd silently verify the wrong abstract. Reject
+        # any record whose ``id``/``pmid`` doesn't match the request and
+        # whose ``source`` isn't ``MED``.
+        record = next(
+            (
+                r
+                for r in results
+                if isinstance(r, dict)
+                and (str(r.get("pmid") or r.get("id") or "") == str(pmid))
+                and (r.get("source") in (None, "MED"))
+            ),
+            None,
+        )
+        if record is None:
             return None
         abstract_text = record.get("abstractText") or ""
         if not abstract_text:
