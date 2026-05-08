@@ -548,12 +548,37 @@ def _compose_legacy_verdict(
         existing_evidence = legacy.get("evidence", "") or ""
         annotation = "[shadow-mode: verdict capped to info/keep; KG not yet promoted]"
         legacy["evidence"] = (
-            f"{existing_evidence} {annotation}".strip()
-            if existing_evidence
-            else annotation
+            f"{existing_evidence} {annotation}".strip() if existing_evidence else annotation
         )
 
     return legacy
+
+
+_VALID_KG_MODES: frozenset[str] = frozenset({"off", "shadow", "promoted"})
+
+
+def _resolve_kg_mode(raw: Any) -> str:
+    """Coerce a raw scope_spec ``kg_mode`` value to one of the valid modes.
+
+    None / unset → ``"off"``. An unknown but truthy value (e.g. typo
+    ``"shadowmode"``) falls back to ``"off"`` with a warning so a
+    misconfiguration surfaces as a log line rather than silent
+    promotion bypass (codex L1, L2).
+    """
+    if raw is None:
+        return "off"
+    if raw in _VALID_KG_MODES:
+        return raw  # type: ignore[no-any-return]
+    if raw == "":
+        # Empty-string is its own special case — treat as 'off' silently
+        # (most likely an unset YAML field). No warning to avoid noise.
+        return "off"
+    logger.warning(
+        "kg_mode=%r is not in %s; defaulting to 'off'",
+        raw,
+        sorted(_VALID_KG_MODES),
+    )
+    return "off"
 
 
 def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdge"]]]:
@@ -579,7 +604,7 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
     validation is a separate follow-up (gated on cache-staleness
     failure mode policy).
     """
-    kg_mode = scope_spec.get("kg_mode") or "off"
+    kg_mode = _resolve_kg_mode(scope_spec.get("kg_mode"))
     if kg_mode == "off":
         return None
     path_str = scope_spec.get("kg_cache_path")
@@ -897,7 +922,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # → kg_edges default of ``()`` flows through to the voter (Stage 1
     # behavior).
     kg_cache = _load_kg_cache(scope_spec)
-    kg_mode = scope_spec.get("kg_mode") or "off"
+    kg_mode = _resolve_kg_mode(scope_spec.get("kg_mode"))
     target_ids = _parse_target_entity_codes(scope_spec.get("target_entity_codes") or [])
 
     def _kg_inputs(
