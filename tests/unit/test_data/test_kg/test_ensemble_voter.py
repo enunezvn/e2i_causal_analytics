@@ -1043,9 +1043,7 @@ def test_malformed_layer_1_high_without_contract_source_downgrades(caplog):
     assert v.decided_by != "layer_1"
     assert v.decided_by == "abstain"
     assert v.layer_1_input == bad
-    assert any(
-        "missing or empty" in e or "cannot honour" in e for e in v.evidence
-    )
+    assert any("missing or empty" in e or "cannot honour" in e for e in v.evidence)
     assert any("malformed Layer 1" in rec.message for rec in caplog.records)
 
 
@@ -1105,9 +1103,7 @@ def test_malformed_adversarial_high_without_z_score_downgrades(caplog):
     # But the malformed input is still preserved in the audit trail
     assert v.adversarial_input == bad
     # Evidence names the malformed-veto downgrade
-    assert any(
-        "missing or non-finite" in e or "cannot honour" in e for e in v.evidence
-    )
+    assert any("missing or non-finite" in e or "cannot honour" in e for e in v.evidence)
     # Operator-visible warning logged
     assert any("malformed adversarial" in rec.message for rec in caplog.records)
 
