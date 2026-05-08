@@ -178,7 +178,15 @@ class FeatureContract:
         # Normalize kg_entity_codes to tuple of tuples (frozen dataclass).
         # Callers may pass list-of-lists (JSON-friendly); store as
         # immutable tuple-of-tuples so the frozen dataclass invariant holds.
-        if self.kg_entity_codes:
+        # Codex H1: normalize unconditionally — an empty list ``[]`` is
+        # falsy so the prior ``if self.kg_entity_codes`` guard let the
+        # mutable list pass through, breaking the frozen invariant
+        # (``fc.kg_entity_codes.append(...)`` would succeed on an empty
+        # list-defaulted contract). Always cast to tuple.
+        if not isinstance(self.kg_entity_codes, tuple):
+            object.__setattr__(self, "kg_entity_codes", tuple(self.kg_entity_codes))
+        # Inner items may still be lists when the caller passed list-of-lists.
+        if self.kg_entity_codes and any(not isinstance(t, tuple) for t in self.kg_entity_codes):
             normalized = tuple(
                 tuple(t) if not isinstance(t, tuple) else t for t in self.kg_entity_codes
             )
