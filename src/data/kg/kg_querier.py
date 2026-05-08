@@ -190,6 +190,25 @@ class KnowledgeGraphQuerier:
             # future-proof: new sources Open Targets adds with
             # ``datatypeId="known_drug"`` (e.g., ``fda_label``,
             # ``clinical_trials_v2``) are picked up automatically.
+            #
+            # DEFERRED — phase-gating refinement (codex PR-0 review M1,
+            # 2026-05-08). A ``known_drug`` row's
+            # ``drug.indications.maxPhaseForIndication`` (already pulled
+            # by the GraphQL query at ``open_targets.py:53``) ranges from
+            # 0 (preclinical) to 4 (regulatory-approved indication). This
+            # implementation emits ``predicate="treats"`` for ANY
+            # known_drug row regardless of phase — so a Phase I
+            # exploratory trial is treated identically to an FDA-
+            # approved label. The voter's ``classify_kg_signal`` will
+            # therefore promote a Phase I row to
+            # ``leak_drug_treats_disease`` if it connects feature/target,
+            # which can produce false-positive leak verdicts for
+            # exploratory drug-disease pairings. A future PR should gate
+            # ``predicate="treats"`` on
+            # ``maxPhaseForIndication >= 4`` (or surface phase as a
+            # KGEdge field for the voter to weight). Tracked in spec
+            # ``docs/superpowers/specs/2026-05-08-kg-predicate-
+            # reconciliation-design.md`` §"Out of scope (future work)".
             datatype_id = str(row.get("datatypeId") or "")
             predicate = "treats" if datatype_id == "known_drug" else "associated_with"
             edges.append(
