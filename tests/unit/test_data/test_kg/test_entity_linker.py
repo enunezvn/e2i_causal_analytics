@@ -12,7 +12,14 @@ from typing import Optional
 
 import pytest
 
-from src.data.kg.entity_linker import EntityLinker, EntityLinkerError
+from src.data.kg.entity_linker import (
+    CONFIDENCE_APPROXIMATE,
+    CONFIDENCE_EXACT_MATCH,
+    CONFIDENCE_SEARCH,
+    EntityLinker,
+    EntityLinkerError,
+)
+from src.data.kg.rxnav import RxCUIMatch
 from src.data.kg.types import KGConcept
 from src.data.kg.umls_uts import UMLSAuthError, UMLSError
 
@@ -64,13 +71,28 @@ class _StubUMLS:
 
 
 class _StubRxNav:
-    def __init__(self, *, name_to_rxcui: Optional[dict[str, str]] = None) -> None:
-        self._name_to_rxcui = name_to_rxcui or {}
+    def __init__(
+        self,
+        *,
+        name_to_match: Optional[dict[str, "RxCUIMatch"]] = None,
+        name_to_rxcui: Optional[dict[str, str]] = None,
+    ) -> None:
+        # Accept either the new ``RxCUIMatch`` form or the legacy
+        # ``str`` form so older tests still compile while we migrate.
+        if name_to_match is not None:
+            self._name_to_match: dict[str, "RxCUIMatch"] = dict(name_to_match)
+        elif name_to_rxcui is not None:
+            self._name_to_match = {
+                name: RxCUIMatch(rxcui=rxcui, approximate=False)
+                for name, rxcui in name_to_rxcui.items()
+            }
+        else:
+            self._name_to_match = {}
         self.calls: list[tuple[str, ...]] = []
 
-    def rxcui_for_name(self, name: str) -> Optional[str]:
+    def rxcui_for_name(self, name: str) -> Optional["RxCUIMatch"]:
         self.calls.append(("rxcui_for_name", name))
-        return self._name_to_rxcui.get(name)
+        return self._name_to_match.get(name)
 
     def close(self) -> None:
         pass
@@ -199,6 +221,53 @@ def test_resolve_drug_name_rxcui_not_in_umls_falls_back_to_search() -> None:
     # Should have tried the RxCUI path first, then fallen back to search.
     assert ("code_to_cui", "999999", "RXNORM") in umls.calls
     assert any(c[0] == "search" for c in umls.calls)
+
+
+def test_resolve_drug_name_propagates_exact_match_confidence() -> None:
+    """RxNav exact match → EntityLink.confidence == CONFIDENCE_EXACT_MATCH."""
+    umls = _StubUMLS(
+        cui_for_codes={("5640", "RXNORM"): "C0020740"},
+        concepts={"C0020740": KGConcept(cui="C0020740", preferred_name="Ibuprofen")},
+    )
+    rxnav = _StubRxNav(name_to_match={"ibuprofen": RxCUIMatch(rxcui="5640", approximate=False)})
+    link = _linker(umls=umls, rxnav=rxnav).resolve_drug_name("ibuprofen")
+    assert link.resolved
+    assert link.confidence == CONFIDENCE_EXACT_MATCH
+
+
+def test_resolve_drug_name_propagates_approximate_match_confidence() -> None:
+    """RxNav approximate match → EntityLink.confidence == CONFIDENCE_APPROXIMATE."""
+    umls = _StubUMLS(
+        cui_for_codes={("5640", "RXNORM"): "C0020740"},
+        concepts={"C0020740": KGConcept(cui="C0020740", preferred_name="Ibuprofen")},
+    )
+    rxnav = _StubRxNav(name_to_match={"ibuporfen": RxCUIMatch(rxcui="5640", approximate=True)})
+    link = _linker(umls=umls, rxnav=rxnav).resolve_drug_name("ibuporfen")
+    assert link.resolved
+    assert link.confidence == CONFIDENCE_APPROXIMATE
+
+
+def test_resolve_drug_name_search_fallback_confidence() -> None:
+    """UMLS free-text fallback → EntityLink.confidence == CONFIDENCE_SEARCH."""
+    umls = _StubUMLS(
+        search_results=[{"ui": "C0011111", "name": "FreeText", "rootSource": "MTH"}],
+        concepts={"C0011111": KGConcept(cui="C0011111", preferred_name="FreeText match")},
+    )
+    rxnav = _StubRxNav(name_to_match={})  # RxNav has no match → fall back to search
+    link = _linker(umls=umls, rxnav=rxnav).resolve_drug_name("obscure-drug")
+    assert link.resolved
+    assert link.confidence == CONFIDENCE_SEARCH
+
+
+def test_resolve_icd10_propagates_exact_confidence() -> None:
+    """Direct UTS cross-walk → CONFIDENCE_EXACT_MATCH."""
+    umls = _StubUMLS(
+        cui_for_codes={("L20.9", "ICD10CM"): "C0011615"},
+        concepts={"C0011615": KGConcept(cui="C0011615", preferred_name="Atopic Dermatitis")},
+    )
+    link = _linker(umls=umls).resolve_icd10("L20.9")
+    assert link.resolved
+    assert link.confidence == CONFIDENCE_EXACT_MATCH
 
 
 def test_resolve_drug_name_handles_rxnav_exception_gracefully() -> None:

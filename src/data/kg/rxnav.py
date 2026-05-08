@@ -6,9 +6,16 @@ offline Docker variant (``RxNav-in-a-Box``) is the v2 target — it's a 12 GB
 RAM / 100 GB disk install gated on procurement and not implementable today.
 
 Surface used by EntityLinker:
-    - ``rxcui_for_name(name)`` — drug name → RxCUI (canonical ID)
+    - ``rxcui_for_name(name)`` — drug name → ``RxCUIMatch(rxcui, approximate)``
     - ``rxcui_for_ndc(ndc)``    — NDC → RxCUI
     - ``properties(rxcui)``      — fetch the canonical name + TTY for an RxCUI
+
+``RxCUIMatch`` distinguishes exact matches (canonical RxCUI for the name)
+from approximate matches (RxNav's normalized-match fallback that silently
+corrects typos). EntityLinker propagates the ``approximate`` flag into
+``EntityLink.confidence`` so downstream consumers (Phase 2.6
+CitationResolver, Phase 2.7 EnsembleVoter) can treat approximate matches
+as lower-trust evidence.
 
 References:
     - REST docs: https://lhncbc.nlm.nih.gov/RxNav/APIs/RxNormAPIREST.html
@@ -18,6 +25,7 @@ References:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -28,6 +36,22 @@ logger = logging.getLogger(__name__)
 RXNAV_BASE = "https://rxnav.nlm.nih.gov/REST"
 DEFAULT_TIMEOUT = 10.0
 _LRU_MAXSIZE = 4096
+
+
+@dataclass(frozen=True)
+class RxCUIMatch:
+    """Result of a drug-name → RxCUI lookup with match-quality metadata.
+
+    Attributes:
+        rxcui: The resolved RxNorm Concept Unique Identifier.
+        approximate: True if the lookup fell through to RxNav's
+            approximate-match path (after exact match returned no hits).
+            ``False`` indicates the input string matched an RxNorm
+            canonical name or synonym verbatim.
+    """
+
+    rxcui: str
+    approximate: bool
 
 
 class RxNavError(Exception):
@@ -76,21 +100,37 @@ class RxNavClient:
             raise RxNavError(f"RxNav non-JSON body: {response.text[:200]!r}") from exc
         return payload
 
-    def rxcui_for_name(self, name: str) -> Optional[str]:
-        """Return the canonical RxCUI for a drug name, or None.
+    def rxcui_for_name(self, name: str) -> Optional[RxCUIMatch]:
+        """Return ``RxCUIMatch(rxcui, approximate)`` for a drug name, or None.
 
-        Uses ``/rxcui.json?name=...&search=2`` (search=2 enables approximate
-        match if exact fails).
+        Two-stage lookup:
+            1. Exact match via ``/rxcui.json?name=...&search=0`` (matches
+               canonical RxNorm names + synonyms verbatim). If hit,
+               ``approximate=False``.
+            2. If no exact hit, retry with ``/rxcui.json?name=...&search=2``
+               which enables RxNav's normalized-match fallback (silently
+               corrects typos and casing). If hit, ``approximate=True``.
+
+        Surfacing the exact-vs-approximate distinction lets EntityLinker
+        propagate match quality into ``EntityLink.confidence`` so
+        downstream consumers (CitationResolver, EnsembleVoter) can weight
+        approximate matches lower.
         """
         return _rxcui_for_name_cached(self, name)
 
-    def _rxcui_for_name_uncached(self, name: str) -> Optional[str]:
+    def _rxcui_for_name_uncached(self, name: str) -> Optional[RxCUIMatch]:
         if not name:
             return None
+        # Stage 1: exact match only (search=0).
+        payload = self._get("/rxcui.json", {"name": name, "search": 0})
+        ids = payload.get("idGroup", {}).get("rxnormId") or []
+        if isinstance(ids, list) and ids:
+            return RxCUIMatch(rxcui=str(ids[0]), approximate=False)
+        # Stage 2: fall back to normalized match (search=2).
         payload = self._get("/rxcui.json", {"name": name, "search": 2})
         ids = payload.get("idGroup", {}).get("rxnormId") or []
         if isinstance(ids, list) and ids:
-            return str(ids[0])
+            return RxCUIMatch(rxcui=str(ids[0]), approximate=True)
         return None
 
     def rxcui_for_ndc(self, ndc: str) -> Optional[str]:
@@ -122,7 +162,7 @@ class RxNavClient:
 
 
 @lru_cache(maxsize=_LRU_MAXSIZE)
-def _rxcui_for_name_cached(client: RxNavClient, name: str) -> Optional[str]:
+def _rxcui_for_name_cached(client: RxNavClient, name: str) -> Optional[RxCUIMatch]:
     return client._rxcui_for_name_uncached(name)
 
 

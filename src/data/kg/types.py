@@ -10,8 +10,60 @@ EvidenceSource = Literal[
     "umls_relations",
     "rxnav",
     "europe_pmc",
+    "crossref",
     "manual",
 ]
+
+
+@dataclass(frozen=True)
+class AbstractRecord:
+    """A retrieved scientific publication abstract.
+
+    Returned by ``EuropePMCClient.fetch_abstract`` and
+    ``CrossrefClient.fetch_doi_metadata``. ``CitationResolver`` then runs
+    entity-presence and causal-cue verification over the ``abstract``
+    text.
+
+    The ``identifier`` field is whichever of (PMID, DOI) the caller used to
+    fetch the record; ``identifier_kind`` records which.
+    """
+
+    identifier: str
+    identifier_kind: Literal["pmid", "doi"]
+    title: str
+    abstract: str
+    source: Literal["europe_pmc", "crossref"]
+    journal: Optional[str] = None
+    year: Optional[int] = None
+    raw: Optional[dict] = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class CitationVerdict:
+    """Verification record for a single PMID/DOI cited as evidence for a
+    subject-object relation.
+
+    A citation passes when:
+        1. The abstract was successfully resolved (``abstract_resolved``).
+        2. Both the subject and object entities (or any of their UMLS
+           synonyms) appear in the abstract text (``entities_found`` carries
+           the matched terms).
+        3. At least one causal cue verb from ``CAUSAL_CUE_VERBS`` appears in
+           the abstract (``causal_cue_found`` is the first matched verb).
+
+    ``overall_confidence`` is a 0-1 score that aggregates the three factors;
+    callers should treat it as a relative ranking signal, not an absolute
+    threshold.
+    """
+
+    identifier: str
+    identifier_kind: Literal["pmid", "doi"]
+    abstract_resolved: bool
+    entities_found: tuple[str, ...] = ()
+    causal_cue_found: Optional[str] = None
+    overall_confidence: float = 0.0
+    error: Optional[str] = None
+
 
 CodeSystem = Literal[
     "ICD10CM",
@@ -52,6 +104,15 @@ class EntityLink:
     distinction between "no result" (``concept is None`` and ``error is None``)
     and "API error" (``error`` populated) lets the caller decide whether to
     retry or accept the absence.
+
+    ``confidence`` is a 0-1 score capturing how much we trust the resolution.
+    Sources of uncertainty:
+        - RxNav approximate-match fallback for drug names (e.g., typos
+          getting silently corrected) → confidence < 1.0.
+        - UMLS free-text search results past the first hit → confidence < 1.0.
+        - Direct source-code → CUI cross-walks via UTS exact match → 1.0.
+    Phase 2.6 ``CitationResolver`` consumes this when ranking competing
+    EntityLinks; values of None mean "exact match" (full confidence).
     """
 
     input_code: str
@@ -59,6 +120,7 @@ class EntityLink:
     concept: Optional[KGConcept] = None
     sources: tuple[str, ...] = ()
     error: Optional[str] = None
+    confidence: Optional[float] = None
     raw: Optional[dict] = field(default=None, repr=False)
 
     @property
