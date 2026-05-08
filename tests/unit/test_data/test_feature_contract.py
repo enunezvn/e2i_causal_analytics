@@ -511,3 +511,24 @@ def test_feature_contract_empty_list_normalized_to_tuple():
     )
     assert isinstance(fc.kg_entity_codes, tuple)
     assert fc.kg_entity_codes == ()
+
+
+def test_feature_contract_rejects_whitespace_only_code():
+    """Codex M1: a whitespace-only code (e.g., `"   "`) was passing the
+    `not code` check because non-empty strings are truthy. EntityLinker
+    would then receive whitespace as a real code and confuse downstream
+    diagnostics. Strip + reject at construction time."""
+    from src.data.feature_contract import (
+        ContractViolation,
+        FeatureContract,
+        KnowableAt,
+    )
+
+    with pytest.raises(ContractViolation, match="non-whitespace"):
+        FeatureContract(
+            name="x",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("a",),
+            kg_entity_codes=(("ICD10CM", "   "),),
+        )

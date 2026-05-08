@@ -266,10 +266,15 @@ class FeatureContract:
                     reason="kg_entity_codes must be 2-tuples",
                 )
             system, code = entry
-            if not code or not isinstance(code, str):
+            # Codex M1: whitespace-only code (e.g., `"   "`) was passing
+            # the prior `not code` check because non-empty strings are
+            # truthy. The EntityLinker would receive `"   "` as a real
+            # code and produce a confusing error at query time instead
+            # of at contract-construction time. Strip + check non-empty.
+            if not isinstance(code, str) or not code.strip():
                 raise ContractViolation(
                     f"feature {self.name!r}: kg_entity_codes code must be a non-empty "
-                    f"string; got {code!r} (in entry {entry!r})",
+                    f"non-whitespace string; got {code!r} (in entry {entry!r})",
                     feature=self.name,
                     reason="kg_entity_codes code empty",
                 )
