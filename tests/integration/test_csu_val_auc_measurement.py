@@ -141,8 +141,7 @@ def csu_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
     )
 
     assert result.returncode == 0, (
-        f"CSU tier0 e2e exited {result.returncode}. stderr (truncated): "
-        f"{result.stderr[-1500:]!r}"
+        f"CSU tier0 e2e exited {result.returncode}. stderr (truncated): {result.stderr[-1500:]!r}"
     )
     assert json_out.exists(), (
         f"TIER0_E2E_JSON_OUT artifact missing at {json_out}; runner produced no JSON."
