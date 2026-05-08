@@ -794,6 +794,13 @@ def test_verdict_is_frozen_dataclass():
 
 
 def test_verdict_carries_all_inputs_in_audit_trail():
+    """Audit trail preserves the upstream verdict CONTENTS.
+
+    Per codex M5 (2026-05-08), `layer_1_input` and `adversarial_input`
+    are now shallow `dict(...)` snapshots — equal in content but not
+    identity. `llm_input` is a frozen dataclass and is preserved by
+    identity.
+    """
     voter = EnsembleVoter()
     layer_1 = _layer_1_high()
     adv = _adversarial("info", z_score=1.0)
@@ -804,9 +811,37 @@ def test_verdict_carries_all_inputs_in_audit_trail():
         adversarial_verdict=adv,
         llm_verdict=llm,
     )
-    assert v.layer_1_input is layer_1
-    assert v.adversarial_input is adv
-    assert v.llm_input is llm
+    assert v.layer_1_input == layer_1
+    assert v.adversarial_input == adv
+    assert v.llm_input is llm  # frozen dataclass: identity preserved
+
+
+def test_verdict_layer_1_input_isolated_from_caller_mutation():
+    """Codex review MEDIUM (M5, 2026-05-08): post-vote mutation of the
+    caller-owned dict must not corrupt the frozen verdict's audit trail.
+    """
+    voter = EnsembleVoter()
+    layer_1 = _layer_1_high()
+    v = voter.vote("feat_x", layer_1_verdict=layer_1)
+    # Caller mutates their dict after voting
+    layer_1["severity"] = "MUTATED"
+    layer_1["new_key"] = "injected"
+    # Verdict's snapshot is unaffected
+    assert v.layer_1_input is not None
+    assert v.layer_1_input["severity"] == "high"
+    assert "new_key" not in v.layer_1_input
+
+
+def test_verdict_adversarial_input_isolated_from_caller_mutation():
+    """Same isolation guarantee for adversarial input dict."""
+    voter = EnsembleVoter()
+    adv = _adversarial("high", z_score=8.0)
+    v = voter.vote("feat_x", adversarial_verdict=adv)
+    adv["z_score"] = 0.0
+    adv["severity"] = "info"
+    assert v.adversarial_input is not None
+    assert v.adversarial_input["z_score"] == 8.0
+    assert v.adversarial_input["severity"] == "high"
 
 
 def test_verdict_evidence_always_populated():
@@ -1007,7 +1042,7 @@ def test_malformed_layer_1_high_without_contract_source_downgrades(caplog):
         v = voter.vote("feat_x", layer_1_verdict=bad)
     assert v.decided_by != "layer_1"
     assert v.decided_by == "abstain"
-    assert v.layer_1_input is bad
+    assert v.layer_1_input == bad
     assert any(
         "missing or empty" in e or "cannot honour" in e for e in v.evidence
     )
@@ -1068,7 +1103,7 @@ def test_malformed_adversarial_high_without_z_score_downgrades(caplog):
     assert v.decided_by != "adversarial"
     assert v.decided_by == "abstain"
     # But the malformed input is still preserved in the audit trail
-    assert v.adversarial_input is bad
+    assert v.adversarial_input == bad
     # Evidence names the malformed-veto downgrade
     assert any(
         "missing or non-finite" in e or "cannot honour" in e for e in v.evidence
