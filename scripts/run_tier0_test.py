@@ -4280,6 +4280,15 @@ async def run_pipeline(
             state["leakage_severity"] = result.get("leakage_severity", "none")
             state["leaked_features"] = result.get("leaked_features", [])
             state["leakage_findings"] = result.get("leakage_findings", [])
+            # Propagate Layer 5 adaptive-validity audit trail (PR #84+) so
+            # the TIER0_E2E_JSON_OUT artifact captures per-feature verdicts
+            # for the CSU val_AUC measurement test (Item A2). Without this
+            # the data_preparer's adaptive_verdicts list never reaches the
+            # tier0 state dict that ``run_pipeline`` returns.
+            state["adaptive_verdicts"] = result.get("adaptive_verdicts", [])
+            state["leakage_dropped_features"] = result.get(
+                "leakage_dropped_features", []
+            )
 
             # Propagate leakage remediation state (from LLM-assisted remediation node)
             if result.get("leakage_remediation_status"):
@@ -5708,6 +5717,21 @@ async def run_pipeline(
             "model_usefulness": state.get("model_usefulness"),
             "trained_model_present": state.get("trained_model") is not None,
             "class_imbalance_info": state.get("class_imbalance_info") or {},
+            # Layer 3 / Layer 5 audit surface used by the CSU val_AUC
+            # measurement test (Item A2 of the engineering-actionable arc).
+            # ``permutation_test`` carries the model_trainer's permutation
+            # null p_value; ``adaptive_verdicts`` carries per-feature Layer 1
+            # / Layer 3 verdicts (with adversarial z_score in the evidence
+            # field for layer="3"). Best-effort: cast nested dicts via
+            # ``default=str`` at write time.
+            "permutation_test": dict(state.get("permutation_test") or {}),
+            "adaptive_verdicts": list(state.get("adaptive_verdicts") or []),
+            "leakage_dropped_features": list(
+                state.get("leakage_dropped_features") or []
+            ),
+            "feature_manifest_source": (
+                (state.get("scope_spec") or {}).get("feature_manifest_source")
+            ),
             "split_assignments": {
                 str(k): v
                 for k, v in (state.get("split_assignments") or {}).items()
