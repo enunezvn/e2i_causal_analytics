@@ -58,7 +58,9 @@ import pandas as pd
 from src.data.adversarial_leakage import compute_adversarial_score
 from src.data.feature_contract import FeatureContract
 from src.data.manifests import (
+    CSU_FEATURES,
     CSU_FORBIDDEN_AS_FEATURES,
+    OPTUM_FEATURES,
     OPTUM_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
 )
@@ -590,6 +592,9 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
       never opened so KG verdicts never carry a signal (Stage 1 behavior)
     - no ``kg_cache_path`` is configured
     - the configured path does not exist (warn-and-skip)
+    - ``kg_mode == "shadow"`` AND any record's manifest/target fingerprint
+      does not match the current pipeline state (warn + return None;
+      audit-only path tolerates staleness)
 
     Loaded otherwise (``kg_mode`` in {``"shadow"``, ``"promoted"``}). The
     severity cap that distinguishes shadow from promoted is applied
@@ -597,12 +602,22 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
     identical content in both modes; the difference is what the
     pipeline does with the resulting verdict.
 
-    KNOWN GAP: this loader does NOT validate the cache's
-    ``manifest_fingerprint_sha8`` / ``target_codes_fingerprint_sha8``
-    against the current pipeline state. An operator who rebuilds the
-    manifest but not the cache silently feeds stale edges. Fingerprint
-    validation is a separate follow-up (gated on cache-staleness
-    failure mode policy).
+    Fingerprint validation policy (closes the KNOWN GAP that previously
+    lived here, plan task #6):
+
+    - ``kg_mode == "shadow"`` AND mismatch → log a warning naming the
+      offending feature(s) and return ``None`` so the run proceeds
+      without KG verdicts. Shadow mode is operator-audit-only; verdicts
+      are advisory and a stale cache must not silently feed the
+      promotion-readiness metrics.
+    - ``kg_mode == "promoted"`` AND mismatch → raise ``KGCacheStaleError``.
+      Promoted mode lets KG verdicts DROP features; silently mismatched
+      fingerprints could drop the wrong features. The pipeline must
+      halt and force an explicit rebuild.
+    - Validation is GATED on ``feature_manifest_source`` being set in
+      scope_spec. Legacy runs (no manifest source) bypass validation;
+      Layer 1 manifest contracts also no-op on those runs, so there's
+      no Layer 1 / KG mismatch to catch.
     """
     kg_mode = _resolve_kg_mode(scope_spec.get("kg_mode"))
     if kg_mode == "off":
@@ -617,10 +632,104 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
             path_str,
         )
         return None
-    from src.data.kg.cache import load_cache  # lazy: keep httpx out of import surface
+    # Lazy import — keeps httpx and the manifest registry out of the
+    # adaptive_validity_check.py import surface (the EnsembleVoter
+    # lazy-import workaround in this module's docstring uses the same
+    # rationale; CI's Event-loop-is-closed flake was tracked back to
+    # eager httpx imports in the kg package's __init__).
+    from src.data.kg.cache import (
+        KGCacheStaleError,
+        compute_manifest_fingerprint,
+        compute_target_codes_fingerprint,
+        load_cache,
+    )
 
     records = load_cache(path)
+
+    manifest_source = scope_spec.get("feature_manifest_source")
+    if manifest_source and records:
+        features = _resolve_manifest_features(manifest_source)
+        if features is not None:
+            # Cache builder only emits records for features with non-empty
+            # ``kg_entity_codes`` (per ``build_cache_for_manifest``) so
+            # the fingerprint must be computed over that same subset
+            # for parity with the writer.
+            entity_features = [fc for fc in features if fc.kg_entity_codes]
+            current_manifest_fp = compute_manifest_fingerprint(entity_features)
+            target_codes = _coerce_target_codes_for_fingerprint(
+                scope_spec.get("target_entity_codes") or []
+            )
+            current_target_fp = compute_target_codes_fingerprint(target_codes)
+            mismatches: list[str] = [
+                rec.feature_name
+                for rec in records
+                if rec.manifest_fingerprint_sha8 != current_manifest_fp
+                or rec.target_codes_fingerprint_sha8 != current_target_fp
+            ]
+            if mismatches:
+                preview = mismatches[:5]
+                more = "..." if len(mismatches) > 5 else ""
+                msg = (
+                    f"KG cache fingerprint mismatch in {len(mismatches)} of "
+                    f"{len(records)} record(s) at {path_str!r} (features: "
+                    f"{preview}{more}). Current manifest_fp="
+                    f"{current_manifest_fp}, target_fp={current_target_fp}. "
+                    f"Rebuild the cache via scripts/build_kg_cache.py."
+                )
+                if kg_mode == "promoted":
+                    raise KGCacheStaleError(msg)
+                logger.warning("%s — kg_mode=shadow → skipping cache for this run", msg)
+                return None
+
     return {r.feature_name: list(r.edges) for r in records}
+
+
+def _coerce_target_codes_for_fingerprint(raw: Any) -> list[tuple[str, str]]:
+    """Normalize ``scope_spec['target_entity_codes']`` into the
+    ``list[tuple[str, str]]`` shape the cache builder uses.
+
+    Tolerates both list-of-list and list-of-tuple inputs (JSON config
+    serializes tuples as lists). Malformed entries are skipped with a
+    warning so a typo at orchestration time surfaces as a stale-
+    fingerprint warning rather than a TypeError. The fingerprint
+    function ignores nothing — it sorts and hashes whatever is fed in,
+    so an entry missing here will produce a stable mismatch against
+    the cache writer's fingerprint.
+    """
+    if not raw:
+        return []
+    out: list[tuple[str, str]] = []
+    for entry in raw:
+        if isinstance(entry, (list, tuple)) and len(entry) == 2:
+            system, code = entry
+            out.append((str(system), str(code)))
+        else:
+            logger.warning(
+                "target_entity_codes (fingerprint): malformed entry %r — "
+                "skipped (expected (system, code))",
+                entry,
+            )
+    return out
+
+
+def _resolve_manifest_features(
+    manifest_source: str,
+) -> Optional[list["FeatureContract"]]:
+    """Resolve a manifest source string ("csu", "optum", ...) to its
+    FeatureContract registry list.
+
+    Returns ``None`` when ``manifest_source`` is unknown so the caller
+    can bypass fingerprint validation (legacy compatibility for runs
+    that point at a custom manifest module not in
+    ``MANIFEST_SOURCES``). Cache-staleness in that case is impossible
+    to detect from this surface; the caller treats the cache as
+    "trusted upstream".
+    """
+    registries: dict[str, list[FeatureContract]] = {
+        "csu": list(CSU_FEATURES),
+        "optum": list(OPTUM_FEATURES),
+    }
+    return registries.get(manifest_source)
 
 
 def compute_promotion_eligibility(

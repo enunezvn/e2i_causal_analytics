@@ -38,6 +38,18 @@ class CacheRecordValidationError(ValueError):
     pass
 
 
+class KGCacheStaleError(RuntimeError):
+    """Raised when the KG cache's per-record fingerprints don't match
+    the current manifest + target_entity_codes fingerprints.
+
+    Pipeline reader (``adaptive_validity_check._load_kg_cache``) raises
+    this in ``kg_mode="promoted"`` so the operator must rebuild the
+    cache before the build can proceed. ``kg_mode="shadow"`` warns and
+    falls through to no-cache (audit-only mode tolerates a stale cache
+    because verdicts are advisory in that mode).
+    """
+
+
 @dataclass(frozen=True)
 class CacheRecord:
     """One per-feature provenance entry in the KG cache file."""
