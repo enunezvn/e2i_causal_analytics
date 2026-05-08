@@ -56,9 +56,37 @@ import pandas as pd
 
 from src.data.adversarial_leakage import compute_adversarial_score
 from src.data.feature_contract import FeatureContract
-from src.data.kg.ensemble_voter import EnsembleVoter
-from src.data.kg.types import EnsembleVerdict
 from src.data.manifests import lookup_feature_contract
+
+# Lazy-imported below to avoid triggering ``src.data.kg.__init__`` at
+# module-import time. The kg package transitively imports ``httpx``
+# (via UMLSClient / EuropePMCClient / CrossrefClient), and pulling
+# ``httpx`` into modules that LangGraph nodes import at collection
+# time has produced asyncio-loop interactions in xdist-parallelised
+# integration tests on CI (``RuntimeError: Event loop is closed``).
+# The voter + verdict types are pure-Python; deferring the import to
+# helper-call time keeps adaptive_validity_check.py's import surface
+# free of httpx.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import EnsembleVerdict
+
+
+def _get_ensemble_voter_class() -> type:
+    """Return the ``EnsembleVoter`` class via lazy import.
+
+    Centralises the lazy import so all runtime call sites share a single
+    point of side-effect. Per the docstring at the top of this module,
+    ``src.data.kg.__init__`` transitively imports ``httpx``; deferring
+    until first use keeps ``adaptive_validity_check.py``'s import-time
+    surface free of httpx.
+    """
+    from src.data.kg.ensemble_voter import EnsembleVoter as _EnsembleVoter
+
+    return _EnsembleVoter
+
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +170,7 @@ def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
     """
     return _compose_legacy_verdict(
         feature,
-        voter=EnsembleVoter(),
+        voter=_get_ensemble_voter_class()(),
         layer_1_input=_layer_1_input(feature, contract),
     )
 
@@ -464,7 +492,7 @@ def _build_verdict(
     feature: str,
     score: dict[str, Any],
     *,
-    voter: Optional[EnsembleVoter] = None,
+    voter: Optional["EnsembleVoter"] = None,
 ) -> dict[str, Any]:
     """Backward-compat wrapper for the legacy Layer 3 verdict builder.
 
@@ -472,7 +500,7 @@ def _build_verdict(
     (this node's main loop AND any remaining external test importers)
     produce the same shape, including the new audit fields.
     """
-    voter = voter or EnsembleVoter()
+    voter = voter or _get_ensemble_voter_class()()
     adv = _adversarial_input(score)
     # Degenerate-score case: ``_adversarial_input`` returns severity=info
     # with z_score=None. Route via the bypass info path so the legacy
@@ -608,7 +636,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
 
     verdicts: list[dict[str, Any]] = []
     flagged: list[str] = []
-    voter = EnsembleVoter()
+    voter = _get_ensemble_voter_class()()
 
     # Layer 1 pass — every column, manifest-driven catch for post-index ones.
     # Skipped entirely when ``feature_manifest_source`` is unset (e.g.,
