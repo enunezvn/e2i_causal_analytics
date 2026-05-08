@@ -687,6 +687,55 @@ def test_build_record_live_propagates_umls_auth_error():
         )
 
 
+def test_query_edges_for_cui_propagates_umls_auth_error_at_helper_layer(caplog):
+    """Codex LOW-3 follow-up: pin the ordering of ``except UMLSAuthError``
+    BEFORE ``except (UMLSError, OpenTargetsError)`` directly at the
+    ``_query_edges_for_cui`` boundary. ``UMLSAuthError`` is a UMLSError
+    subclass, so without the explicit-first-arm ``except UMLSAuthError``
+    the second arm would silently catch auth failures and surface them
+    as ``status=source_error`` instead of aborting the build."""
+    import logging
+
+    import pytest as _pytest
+
+    from scripts.build_kg_cache import _query_edges_for_cui
+    from src.data.kg.umls_uts import UMLSAuthError
+
+    class _AuthRaiseQuerier:
+        def query_disease_hierarchy(self, cui: str):
+            raise UMLSAuthError("invalid api key")
+
+    with caplog.at_level(logging.WARNING, logger="scripts.build_kg_cache"):
+        with _pytest.raises(UMLSAuthError):
+            _query_edges_for_cui("C0042109", _AuthRaiseQuerier())  # type: ignore[arg-type]
+    # The helper does not log on the auth-fatal path — the propagation
+    # itself is the audit signal; no transport-failure-style warning
+    # should masquerade as recoverable.
+    assert not any("query_disease_hierarchy" in rec.message for rec in caplog.records), (
+        f"Auth path should not emit a transport-style warning; got {[r.message for r in caplog.records]}"
+    )
+
+
+def test_query_edges_for_cui_returns_error_for_non_auth_umls_error():
+    """Codex LOW-3 follow-up: pin the second-arm catch at the helper
+    boundary. A non-auth ``UMLSError`` returns ``([], [error_message])``
+    rather than raising. Combined with the auth test above, this proves
+    the ordering takes effect (UMLSAuthError raises while UMLSError
+    yields error)."""
+    from scripts.build_kg_cache import _query_edges_for_cui
+    from src.data.kg.umls_uts import UMLSError
+
+    class _TransportRaiseQuerier:
+        def query_disease_hierarchy(self, cui: str):
+            raise UMLSError("transport boom")
+
+    edges, errors = _query_edges_for_cui("C0042109", _TransportRaiseQuerier())  # type: ignore[arg-type]
+    assert edges == ()
+    assert len(errors) == 1
+    assert "transport boom" in errors[0]
+    assert "C0042109" in errors[0]
+
+
 def test_build_record_live_programming_bug_not_swallowed_as_source_error():
     """Typed-error follow-up (D1 / PR #102 H1): a generic ``RuntimeError``
     (a programming bug elsewhere — e.g., a malformed FeatureContract)
