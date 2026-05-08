@@ -491,6 +491,30 @@ class TestArgumentValidation:
         assert result.outcome == "error"
         assert "dtype" in (result.error or "").lower()
 
+    def test_tz_aware_vs_naive_returns_error(self) -> None:
+        # Codex L4: pandas across versions raises TypeError vs ValueError
+        # for tz-aware vs tz-naive datetime comparisons. The probe must
+        # surface either as outcome=error rather than letting the
+        # exception propagate.
+        events = pd.DataFrame(
+            {
+                "patient_id": ["p1"],
+                "event_date": pd.to_datetime(["2024-01-01"], utc=True),  # tz-aware
+            }
+        )
+        anchors = pd.Series(
+            pd.to_datetime(["2024-01-15"]), index=["p1"]
+        )  # tz-naive
+        probe = AdversarialProbe()
+        result = probe.probe(
+            feature_name="x",
+            derivation=_unwindowed_count,
+            events=events,
+            anchors=anchors,
+        )
+        assert result.outcome == "error"
+        assert "compare" in (result.error or "").lower()
+
 
 # ---------------------------------------------------------------------------
 # Compare entry point
