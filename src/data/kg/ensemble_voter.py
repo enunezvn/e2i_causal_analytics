@@ -228,6 +228,16 @@ def _connects(
     (``isa`` vs ``inverse_isa``); the voter doesn't need direction at
     edge-relevance time.
     """
+    # Codex review MEDIUM (M2, 2026-05-08): self-loop edges
+    # (subject_id == object_id) trivially pass any membership check
+    # whenever the same CUI is registered as both feature and target.
+    # That can happen when a feature concept is the disease itself
+    # (e.g., a `target_disease_count` feature where the cohort's
+    # target CUI cross-walks to the feature concept). Treat self-loops
+    # as no information about the feature/target relation — they
+    # encode "X is_a X", not "feature is descendant of target".
+    if edge.subject_id == edge.object_id:
+        return False
     return (edge.subject_id in feature_set and edge.object_id in target_set) or (
         edge.subject_id in target_set and edge.object_id in feature_set
     )
