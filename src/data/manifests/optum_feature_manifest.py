@@ -76,6 +76,19 @@ DRUG_CLASS_NAMES = (
 # class-level membership is fuzzy at the active-ingredient level, but UMLS
 # captures the pharmacologic class as a single concept that the
 # KGQuerier.query_concept_relations call can navigate.
+#
+# *** PR-C handoff note ***
+# Several entries here use ``("UMLS", <CUI>)`` rather than a source-vocab
+# code. ``EntityLinker.resolve(code, system)`` does NOT accept "UMLS" as a
+# system (its `_UTS_SOURCE_BY_SYSTEM` only knows ICD10CM / RXNORM / LNC /
+# CPT / HCPCS — it cross-walks source codes to CUIs, not CUIs to CUIs).
+# PR-C's cache builder must special-case "UMLS" entries: skip the
+# code-to-CUI cross-walk and call ``UMLSUTSClient.cui_lookup`` (or pass
+# the CUI directly through to KGQuerier.query_drug_disease_edges /
+# query_disease_hierarchy whose `cui` arguments accept bare CUIs). If
+# PR-C uses EntityLinker.resolve indiscriminately, all 28 drug-class
+# features + nsaid_hypersensitivity + IgE companion entries would
+# silently degrade to no_signal.
 
 PRIMARY_DX_KG_CODES: tuple[tuple[str, str], ...] = (
     ("ICD10CM", "L50.9"),
