@@ -49,7 +49,8 @@ abstain on these inputs, which would change the downstream contract.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 import numpy as np
 import pandas as pd
@@ -73,7 +74,7 @@ from src.data.manifests import (
 # keeps adaptive_validity_check.py's import surface free of httpx.
 if TYPE_CHECKING:
     from src.data.kg.ensemble_voter import EnsembleVoter
-    from src.data.kg.types import EnsembleVerdict
+    from src.data.kg.types import EnsembleVerdict, KGEdge
 
 
 def _get_ensemble_voter_class() -> type:
@@ -457,13 +458,16 @@ def _compose_legacy_verdict(
     layer_1_input: Optional[dict[str, Any]] = None,
     adversarial_input: Optional[dict[str, Any]] = None,
     short_circuit_evidence: Optional[str] = None,
+    kg_edges: Iterable["KGEdge"] = (),
+    feature_entity_ids: Iterable[str] = (),
+    target_entity_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Compose one legacy verdict dict from the per-source inputs.
 
     Routes through ``EnsembleVoter`` for cases that involve a real
-    precedence decision (Layer 1 contract present, or adversarial
-    severity high/moderate). Bypasses the voter for two cases the
-    voter would otherwise abstain on:
+    precedence decision (Layer 1 contract present, or KG signal
+    available, or adversarial severity high/moderate). Bypasses the
+    voter for two cases the voter would otherwise abstain on:
 
     1. ``short_circuit_evidence`` is set (too-few-rows, scoring-error)
        → emit ``_legacy_short_circuit_verdict``.
@@ -471,19 +475,28 @@ def _compose_legacy_verdict(
        so the audit trail records "tested and passed", not "abstain".
 
     The voter is the authority on every other case.
+
+    Stage 2 update: ``kg_edges`` + ``feature_entity_ids`` +
+    ``target_entity_ids`` are forwarded to ``voter.vote(...)``. Empty
+    defaults preserve Stage 1 behavior — the voter's KG path is a
+    no-op.
     """
     if short_circuit_evidence is not None:
         return _legacy_short_circuit_verdict(feature, evidence=short_circuit_evidence)
 
-    # Codex H5 fix: bypass when adversarial is the ONLY signal —
-    # for ANY severity (info, moderate, high). The voter would
-    # otherwise rewrite ``moderate`` remediation from the legacy
-    # ``ambiguous`` to ``review``, diverging from the contract
-    # downstream JSON consumers branch on. The voter only adds value
-    # when there's a real cross-source precedence decision to make
-    # (Layer 1 contract present, or KG / LLM signals — the latter
-    # arrive in Stage 2/3).
-    if layer_1_input is None and adversarial_input is not None:
+    # Materialize kg_edges once so we can both check truthiness and
+    # forward without re-iterating an exhausted generator.
+    kg_edges_tuple = tuple(kg_edges)
+
+    # Codex H5 fix (Stage 1): bypass when adversarial is the ONLY signal —
+    # for ANY severity (info, moderate, high). The voter would otherwise
+    # rewrite ``moderate`` remediation from the legacy ``ambiguous`` to
+    # ``review``, diverging from the contract downstream JSON consumers
+    # branch on. Stage 2 narrows the bypass: when KG edges are present,
+    # the voter sees a real cross-source decision (KG vs adversarial)
+    # so we route through the voter; the bypass only fires when the
+    # adversarial verdict is genuinely the only available signal.
+    if layer_1_input is None and adversarial_input is not None and not kg_edges_tuple:
         return _legacy_adversarial_alone_verdict(feature, adversarial_input)
 
     # Real cross-source decision needed → route through the voter so
@@ -493,8 +506,36 @@ def _compose_legacy_verdict(
         feature,
         layer_1_verdict=layer_1_input,
         adversarial_verdict=adversarial_input,
+        kg_edges=kg_edges_tuple,
+        feature_entity_ids=tuple(feature_entity_ids),
+        target_entity_ids=tuple(target_entity_ids),
     )
     return _ensemble_to_legacy_dict(verdict, adversarial_input=adversarial_input)
+
+
+def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdge"]]]:
+    """Read the KG cache file pointed at by ``scope_spec['kg_cache_path']``.
+
+    Returns a dict mapping ``feature_name -> list[KGEdge]``. Returns
+    ``None`` when no cache path is configured or the configured path
+    doesn't exist (Stage 1 behavior preserved). PR-E adds the
+    shadow-vs-promoted policy gate that distinguishes "missing cache
+    is fine" from "missing cache is fatal" by mode.
+    """
+    path_str = scope_spec.get("kg_cache_path")
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if not path.exists():
+        logger.warning(
+            "kg_cache_path %r does not exist — KG verdicts will be skipped this run",
+            path_str,
+        )
+        return None
+    from src.data.kg.cache import load_cache  # lazy: keep httpx out of import surface
+
+    records = load_cache(path)
+    return {r.feature_name: list(r.edges) for r in records}
 
 
 def _build_verdict(
