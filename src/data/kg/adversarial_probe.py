@@ -182,7 +182,20 @@ class AdversarialProbe:
         anchored_mask = events[event_patient_col].isin(anchors.index)
         events_anchored = events.loc[anchored_mask].copy()
         if events_anchored.empty:
-            notes.append("no events for anchored patients")
+            # When ``isin`` matches NOTHING, the most common operator-
+            # facing cause is a dtype mismatch between event patient IDs
+            # and anchor index labels — pandas does not coerce ``"1"``
+            # against ``1``, ``np.int64(1)`` against ``"1"``, etc. Surface
+            # the dtypes alongside the inapplicable verdict so the operator
+            # can spot the cross-type alias case immediately.
+            event_dtype = events[event_patient_col].dtype
+            anchor_dtype = anchors.index.dtype
+            notes.append(
+                "no events for anchored patients "
+                f"(events.{event_patient_col!r}.dtype={event_dtype!r}, "
+                f"anchors.index.dtype={anchor_dtype!r}; "
+                "pandas does not implicitly coerce across patient-id dtypes)"
+            )
             return AdversarialProbeResult(
                 feature_name=feature_name,
                 outcome="inapplicable",
