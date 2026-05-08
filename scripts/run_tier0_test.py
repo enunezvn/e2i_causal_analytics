@@ -3987,6 +3987,61 @@ def _should_inject_demo_cost_matrix(
     return not scope_spec.get("cost_matrix")
 
 
+def _to_jsonable(value: Any) -> Any:
+    """Recursively coerce ``value`` to JSON-native Python types.
+
+    ``json.dumps(..., default=str)`` happens at write time, but ``str``-
+    coercing a numpy scalar or datetime hides the actual type — readers
+    parsing the artifact back would see ``"0.5"`` rather than ``0.5``,
+    and assertions like ``perm["permutation_pvalue"] <= 0.01`` silently
+    pass against a string. ``_to_jsonable`` walks the tree once and
+    converts known non-native types to their JSON equivalents:
+
+    - dict / list / tuple / set: recurse into elements
+    - bool, int, float, str, None: passthrough
+    - numpy scalars: ``.item()`` to get the native Python value
+    - datetime / date: ``.isoformat()`` so they remain string-typed but
+      machine-parseable
+    - Pydantic models: ``.model_dump()`` if available
+    - Anything else: fall back to ``str()`` (matches the existing
+      ``default=str`` contract at write time)
+
+    Codex review M4 (2026-05-08): introduced because the artifact
+    extension's shallow ``dict()`` / ``list()`` coercion stopped at the
+    top level and let opaque types reach the json encoder.
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(k): _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_to_jsonable(v) for v in value]
+    # numpy scalar
+    item_attr = getattr(value, "item", None)
+    if callable(item_attr):
+        try:
+            inner = item_attr()
+        except Exception:  # noqa: BLE001 — defensive normalization
+            inner = None
+        if isinstance(inner, (str, int, float, bool)) or inner is None:
+            return inner
+    # Pydantic model (v1 .dict() or v2 .model_dump())
+    dump = getattr(value, "model_dump", None) or getattr(value, "dict", None)
+    if callable(dump):
+        try:
+            return _to_jsonable(dump())
+        except Exception:  # noqa: BLE001
+            pass
+    # datetime / date / time
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        try:
+            return iso()
+        except Exception:  # noqa: BLE001
+            pass
+    return str(value)
+
+
 _FEATURE_MANIFEST_SOURCES: tuple[str, ...] = ("csu", "optum")
 
 
@@ -5779,11 +5834,13 @@ async def run_pipeline(
             # measurement test (Item A2 of the engineering-actionable arc).
             # ``permutation_test`` carries the model_trainer's permutation
             # null p_value; ``adaptive_verdicts`` carries per-feature Layer 1
-            # / Layer 3 verdicts (with adversarial z_score in the evidence
-            # field for layer="3"). Best-effort: cast nested dicts via
-            # ``default=str`` at write time.
-            "permutation_test": dict(state.get("permutation_test") or {}),
-            "adaptive_verdicts": list(state.get("adaptive_verdicts") or []),
+            # / Layer 3 verdicts (with adversarial z_score top-level for
+            # layer="3"). Recursively normalised via ``_to_jsonable`` (codex
+            # M4) so numpy scalars / Pydantic models / datetimes round-trip
+            # through ``json.dumps`` as JSON-native types instead of
+            # opaque str() coercions that would defeat downstream readers.
+            "permutation_test": _to_jsonable(state.get("permutation_test") or {}),
+            "adaptive_verdicts": _to_jsonable(state.get("adaptive_verdicts") or []),
             "leakage_dropped_features": list(
                 state.get("leakage_dropped_features") or []
             ),
