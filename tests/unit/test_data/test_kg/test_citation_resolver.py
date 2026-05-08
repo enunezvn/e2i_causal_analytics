@@ -106,6 +106,41 @@ def test_first_match_skips_empty_terms() -> None:
     assert _first_match(["", " "], "abc") is None
 
 
+def test_first_match_uses_whole_word_boundaries() -> None:
+    """Codex review HIGH (2026-05-08): "asthma" must NOT match inside
+    "asthmatic", "ra" must NOT match in random lowercased text, and
+    short names must not produce false positives.
+
+    All callers of ``_first_match`` pre-lowercase the haystack — the
+    function name documents that contract.
+    """
+    # "asthma" should NOT match because "asthmatic" extends past the term.
+    assert _first_match(["asthma"], "asthmatic patients in the cohort") is None
+    # ... but it should still match when there's a real word boundary.
+    assert _first_match(["asthma"], "patients with asthma in the cohort") == "asthma"
+    # Short token must NOT match in unrelated text.
+    assert _first_match(["ra"], "ratio of treated patients") is None
+    # ... but does match as a whole token (haystack pre-lowered, so "RA" → "ra").
+    assert _first_match(["RA"], "patients with ra showed improvement") == "RA"
+
+
+def test_first_match_handles_multi_word_terms() -> None:
+    """Multi-word terms still match — boundary is around the term as a whole."""
+    assert (
+        _first_match(["atopic dermatitis"], "patients with atopic dermatitis improved")
+        == "atopic dermatitis"
+    )
+
+
+def test_first_match_handles_terms_with_non_word_edges() -> None:
+    """Terms ending in punctuation (``)``) need the boundary anchor SKIPPED
+    on that side — ``\\b`` requires word/non-word transition, which fails
+    when both the term's last char and the haystack's next char are non-word."""
+    haystack = "elevated c-reactive protein (crp) was observed"
+    # Should match the whole bracketed form.
+    assert _first_match(["C-reactive protein (CRP)"], haystack) == "C-reactive protein (CRP)"
+
+
 def test_find_causal_cue_returns_first_present() -> None:
     """Whole-word match — 'reproduced' shouldn't false-positive 'induced'."""
     assert _find_causal_cue("the drug treats the disease".lower()) == "treats"
