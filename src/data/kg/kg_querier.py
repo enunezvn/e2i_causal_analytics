@@ -122,9 +122,15 @@ class KnowledgeGraphQuerier:
         Each evidence row produces ONE edge whose:
             - subject_id   = drug ChEMBL ID
             - object_id    = disease EFO/MONDO ID
-            - predicate    = ``"associated_with"`` (Open Targets does not
-                             distinguish causal direction; that is Layer 4's
-                             job)
+            - predicate    = ``"treats"`` when the row's
+                             ``datatypeId == "known_drug"`` (Open Targets'
+                             unique drug-indication datatype, Ochoa 2021
+                             NAR), else ``"associated_with"``. The voter's
+                             ``classify_kg_signal`` consumes the predicate
+                             to drive the ``leak_drug_treats_disease``
+                             classification — see PR-0 reconciliation
+                             design (docs/superpowers/specs/2026-05-08-
+                             kg-predicate-reconciliation-design.md).
             - evidence_source = ``"open_targets"``
             - score        = the evidence row's ``score`` (0–1)
             - pmids        = literature list (Europe PMC IDs)
@@ -173,11 +179,24 @@ class KnowledgeGraphQuerier:
                 if isinstance(score_raw, (int, float)) and math.isfinite(score_raw)
                 else None
             )
+            # Open Targets datatypeId taxonomy (Ochoa 2021, NAR): the
+            # ONLY datatype carrying drug-treats-disease semantics is
+            # ``known_drug``. All other datatypes (literature,
+            # genetic_association, affected_pathway, rna_expression,
+            # somatic_mutation, animal_model) are gene/target-disease
+            # association, not therapeutic claim. Keying on
+            # ``datatypeId`` (the data-model invariant) rather than
+            # ``datasourceId`` (a contributing-pipeline detail) is
+            # future-proof: new sources Open Targets adds with
+            # ``datatypeId="known_drug"`` (e.g., ``fda_label``,
+            # ``clinical_trials_v2``) are picked up automatically.
+            datatype_id = str(row.get("datatypeId") or "")
+            predicate = "treats" if datatype_id == "known_drug" else "associated_with"
             edges.append(
                 KGEdge(
                     subject_id=str(drug.get("id") or drug_id),
                     subject_name=str(drug.get("name") or ""),
-                    predicate="associated_with",
+                    predicate=predicate,
                     object_id=str(disease.get("id") or disease_id),
                     object_name=str(disease.get("name") or ""),
                     evidence_source="open_targets",
