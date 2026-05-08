@@ -859,6 +859,101 @@ def test_phase29_decided_by_to_layer_mapping_covers_all_cases():
     }
 
 
+def test_phase29_mixed_severities_in_single_run_no_voter_cross_feature_state():
+    """Codex review LOW (L9-1, 2026-05-08): the shared ``EnsembleVoter``
+    instance is reused across all features in one node invocation.
+    Verify it has no cross-feature state by running a mix of severities
+    (Layer 1 high, Layer 3 high, moderate, info, short-circuit) and
+    asserting each verdict matches its own input only.
+    """
+    rng = np.random.default_rng(0)
+    n = 400
+    y = rng.integers(0, 2, n)
+    df = pd.DataFrame(
+        {
+            # Layer 1 high (CSU-forbidden post_index column)
+            "journey_status": rng.choice([0, 1], size=n).astype(float),
+            # Layer 3 high (perfect leak — z >> 5σ)
+            "leak": y.astype(float) + rng.normal(0, 0.01, n),
+            # Layer 3 moderate (weak signal — z ≈ 4σ)
+            # Constructed to be statistically present but below the high threshold
+            "moderate_signal": (y * 0.3 + rng.standard_normal(n)).astype(float),
+            # Layer 3 info (pure noise)
+            "noise": rng.standard_normal(n),
+            # Layer 3 short-circuit (only 5 non-null rows)
+            "tiny": [1.0] * 5 + [None] * (n - 5),
+            "y": y,
+        }
+    )
+    state = _make_state(df, "y")
+    result = _run(state)
+
+    verdicts_by_feat = {v["feature"]: v for v in result["adaptive_verdicts"]}
+
+    # Layer 1 high
+    assert verdicts_by_feat["journey_status"]["decided_by"] == "layer_1"
+    assert verdicts_by_feat["journey_status"]["severity"] == "high"
+
+    # Layer 3 high
+    assert verdicts_by_feat["leak"]["decided_by"] == "adversarial"
+    assert verdicts_by_feat["leak"]["severity"] == "high"
+    assert verdicts_by_feat["leak"]["remediation"] == "drop"
+
+    # Layer 3 noise
+    assert verdicts_by_feat["noise"]["decided_by"] == "adversarial"
+    assert verdicts_by_feat["noise"]["severity"] == "info"
+    assert verdicts_by_feat["noise"]["remediation"] == "keep"
+
+    # Layer 3 short-circuit
+    assert verdicts_by_feat["tiny"]["decided_by"] == "adversarial"
+    assert verdicts_by_feat["tiny"]["severity"] == "info"
+    assert verdicts_by_feat["tiny"]["z_score"] is None
+    assert "Skipped" in verdicts_by_feat["tiny"]["evidence"]
+
+
+def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
+    """Codex review LOW (L9-4, 2026-05-08): when ``_compose_legacy_verdict``
+    is called with no signals at all (caller misuse), it falls through
+    to ``voter.vote()`` with all-None inputs → voter returns abstain
+    → adapter produces the abstain dict shape.
+
+    Pin this behaviour so caller-misuse paths produce well-formed
+    audit records (not crashes or silent skips).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+
+    voter = EnsembleVoter()
+    verdict = _compose_legacy_verdict("orphan_feat", voter=voter)
+    assert verdict["feature"] == "orphan_feat"
+    assert verdict["decided_by"] == "abstain"
+    assert verdict["layer"] == "abstain"
+    assert verdict["severity"] == "abstain"
+    assert verdict["remediation"] == "review"
+    # Schema invariant: all 16 canonical fields present
+    expected_keys = {
+        "feature",
+        "layer",
+        "z_score",
+        "actual_auc",
+        "null_mean",
+        "null_std",
+        "p_value",
+        "n_permutations",
+        "severity",
+        "remediation",
+        "evidence",
+        "contract_source",
+        "contract_window_days",
+        "decided_by",
+        "disagreements",
+        "kg_signal",
+    }
+    assert set(verdict.keys()) == expected_keys
+
+
 def test_phase29_m2_layer_1_verdict_wrapper_routes_through_voter():
     """Codex review MEDIUM (M2, 2026-05-08): the legacy ``_layer_1_verdict``
     wrapper used to bypass the voter, missing M4's malformed-contract
