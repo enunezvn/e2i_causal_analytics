@@ -541,6 +541,13 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
     doesn't exist (Stage 1 behavior preserved). PR-E adds the
     shadow-vs-promoted policy gate that distinguishes "missing cache
     is fine" from "missing cache is fatal" by mode.
+
+    KNOWN GAP: this loader does NOT validate the cache's
+    ``manifest_fingerprint_sha8`` / ``target_codes_fingerprint_sha8``
+    against the current pipeline state. An operator who rebuilds the
+    manifest but not the cache silently feeds stale edges. Fingerprint
+    validation lands in PR-E together with the shadow-mode policy gate
+    so the failure mode (warn vs fail) can be selected by mode.
     """
     path_str = scope_spec.get("kg_cache_path")
     if not path_str:
@@ -556,6 +563,33 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
 
     records = load_cache(path)
     return {r.feature_name: list(r.edges) for r in records}
+
+
+def _parse_target_entity_codes(raw: Any) -> tuple[str, ...]:
+    """Extract target CUI/ID strings from raw scope_spec input.
+
+    ``scope_spec['target_entity_codes']`` arrives as a list of
+    ``(system, code)`` pairs but is *not* validated by
+    ``FeatureContract.__post_init__`` (it's runner-injected, not contract
+    metadata). Bare ``code for _, code in target_codes`` would raise
+    ``ValueError`` on malformed entries (1- or 3-element lists), crashing
+    the node. This helper walks the raw input, accepts only well-formed
+    2-tuples, and warns on the rest so a typo at orchestration time
+    surfaces as a log warning rather than a pipeline crash.
+    """
+    if not raw:
+        return ()
+    out: list[str] = []
+    for entry in raw:
+        if isinstance(entry, (list, tuple)) and len(entry) == 2:
+            _system, code = entry
+            out.append(str(code))
+        else:
+            logger.warning(
+                "target_entity_codes: malformed entry %r — skipped (expected (system, code))",
+                entry,
+            )
+    return tuple(out)
 
 
 def _build_verdict(
@@ -755,8 +789,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # ``None`` means no cache configured / file missing → kg_edges
     # default of ``()`` flows through to the voter (Stage 1 behavior).
     kg_cache = _load_kg_cache(scope_spec)
-    target_codes = scope_spec.get("target_entity_codes") or []
-    target_ids = tuple(code for _system, code in target_codes)
+    target_ids = _parse_target_entity_codes(scope_spec.get("target_entity_codes") or [])
 
     def _kg_inputs(
         feat: str, contract: Optional[FeatureContract]
