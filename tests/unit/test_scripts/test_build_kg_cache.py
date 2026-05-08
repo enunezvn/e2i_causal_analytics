@@ -142,3 +142,60 @@ def test_cache_filename_omits_cohort(tmp_path: Path):
     assert "__" in cache_path.name
     assert "csu" not in cache_path.name
     assert "optum" not in cache_path.name
+
+
+def test_build_with_live_client_not_implemented(tmp_path: Path):
+    """Supplying a non-None client raises NotImplementedError until PR-D."""
+    import pytest
+
+    from scripts.build_kg_cache import build_cache_for_manifest
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    features = [
+        FeatureContract(
+            name="age",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("age",),
+        )
+    ]
+    out = tmp_path / "kg_cache"
+
+    sentinel = object()  # any non-None stand-in
+    with pytest.raises(NotImplementedError, match="PR-D"):
+        build_cache_for_manifest(
+            features=features,
+            target_entity_codes=[],
+            out_dir=out,
+            umls_client=sentinel,  # type: ignore[arg-type]
+            open_targets_client=None,
+        )
+
+
+def test_build_with_no_clients_records_empty_sources(tmp_path: Path):
+    """No clients → sources_attempted is empty (provenance honesty)."""
+    import json
+
+    from scripts.build_kg_cache import build_cache_for_manifest
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    features = [
+        FeatureContract(
+            name="primary_diagnosis_code",
+            knowable_at=KnowableAt(reference="enrollment"),
+            source="demo",
+            derivation_inputs=("diagcode",),
+            kg_entity_codes=(("ICD10CM", "L50.9"),),
+        )
+    ]
+    out = tmp_path / "kg_cache"
+    cache_path = build_cache_for_manifest(
+        features=features,
+        target_entity_codes=[],
+        out_dir=out,
+        umls_client=None,
+        open_targets_client=None,
+    )
+    payload = json.loads(cache_path.read_text())
+    assert len(payload) == 1
+    assert payload[0]["sources_attempted"] == []

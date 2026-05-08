@@ -85,19 +85,39 @@ def build_cache_for_manifest(
     """Build the cache file for a manifest's entity-bearing features.
 
     Records are emitted only for features with non-empty
-    ``kg_entity_codes``. The skeleton implementation in this PR records
-    a ``queried_no_edges`` provenance status with empty edge list when
-    no clients are supplied (the no-op path used by CI). With live
-    clients, the loop below is the integration point for KG querying;
-    the v1 cut keeps the querying logic stubbed so the schema and IO
-    contracts can land independently.
+    ``kg_entity_codes``. The skeleton in this PR records a
+    ``queried_no_edges`` status with empty edge list when no clients
+    are supplied (the no-op path used by CI smoke tests). Live KG
+    querying via ``UMLSClient`` + ``OpenTargetsClient`` is wired in
+    PR-D; supplying a non-None client here raises NotImplementedError
+    so callers don't get silently-empty caches that look successful.
+
+    ``sources_attempted`` reflects what was *actually* attempted, not
+    what could be — passing both clients as None records an empty
+    tuple, which lets downstream audit logic distinguish "no source
+    available" from "source returned no edges."
 
     Returns the path of the written cache file.
     """
+    if umls_client is not None or open_targets_client is not None:
+        raise NotImplementedError(
+            "Live KG cache querying lands in PR-D; pass umls_client=None and "
+            "open_targets_client=None for the schema-and-IO smoke path"
+        )
+
     features = list(features)
     manifest_fp = compute_manifest_fingerprint(features)
     target_fp = compute_target_codes_fingerprint(target_entity_codes)
     cache_path = out_dir / compose_cache_filename(manifest_fp, target_fp)
+
+    sources_attempted = tuple(
+        source
+        for source, client in (
+            ("umls_uts", umls_client),
+            ("open_targets", open_targets_client),
+        )
+        if client is not None
+    )
 
     records: list[CacheRecord] = []
     for fc in features:
@@ -111,7 +131,7 @@ def build_cache_for_manifest(
                 queried_at=datetime.now(timezone.utc),
                 feature_entity_codes=tuple((t[0], t[1]) for t in fc.kg_entity_codes),
                 target_entity_codes=tuple((t[0], t[1]) for t in target_entity_codes),
-                sources_attempted=("umls_uts", "open_targets"),
+                sources_attempted=sources_attempted,
                 status="queried_no_edges",
                 edges=(),
                 errors=(),
