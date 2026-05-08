@@ -3987,6 +3987,41 @@ def _should_inject_demo_cost_matrix(
     return not scope_spec.get("cost_matrix")
 
 
+_FEATURE_MANIFEST_SOURCES: tuple[str, ...] = ("csu", "optum")
+
+
+def _resolve_feature_manifest_source(
+    data_dir: str | None,
+    override: str | None,
+) -> str | None:
+    """Resolve which cohort manifest Layer 5 should consult on this run.
+
+    Priority: explicit ``override`` (the ``--feature-manifest-source`` CLI
+    flag) > auto-detection from ``data_dir`` > unset.
+
+    The auto-detect rule is intentionally simple: if a known cohort name
+    (``csu``, ``optum``) appears as a path segment in ``data_dir``, that
+    becomes the manifest source. Anything else returns None — synthetic
+    runs leave the manifest source unset so Layer 5's cross-cohort
+    no-false-positive default is preserved.
+
+    Without this resolution, ``feature_manifest_source`` was never
+    threaded into ``scope_spec`` for RWD runs and Layer 5's
+    manifest-driven Layer 1 verdicts silently no-op'd; forbidden columns
+    fell through to Layer 3 (statistical-only), undercutting the
+    deterministic post-index leak catch the manifests provide.
+    """
+    if override is not None:
+        return override
+    if not data_dir:
+        return None
+    parts = {p.lower() for p in Path(data_dir).parts}
+    for source in _FEATURE_MANIFEST_SOURCES:
+        if source in parts:
+            return source
+    return None
+
+
 async def run_pipeline(
     step: int | None = None,
     dry_run: bool = False,
@@ -3998,6 +4033,7 @@ async def run_pipeline(
     split_mode: str = "auto",
     pre_assigned_splits: Dict[Any, str] | None = None,
     inject_demo_cost_matrix: bool = True,
+    feature_manifest_source: str | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline or a specific step.
 
@@ -4148,6 +4184,14 @@ async def run_pipeline(
             result = await step_1_scope_definer(experiment_id, adaptive_inputs=adaptive_inputs)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
             state["scope_spec"]["experiment_id"] = experiment_id
+            # Layer 5 manifest opt-in: thread the resolved cohort manifest
+            # source so adaptive_validity_check consults the matching
+            # FeatureContract registry (CSU / Optum) for layer="1" verdicts.
+            # Pre-fix this was never set on RWD runs, so post-index columns
+            # fell through to Layer 3 (statistical) instead of being caught
+            # deterministically by Layer 1 manifest contracts.
+            if feature_manifest_source is not None:
+                state["scope_spec"]["feature_manifest_source"] = feature_manifest_source
             # Block 5B (#10): auto-inject the unit-shape placeholder cost
             # matrix when the caller has not explicitly opted out via
             # ``--no-demo-cost-matrix``. This closes Block 5's verification
@@ -5772,6 +5816,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override CONFIG.indication (e.g. 'Chronic Spontaneous Urticaria (CSU)')"
     )
     parser.add_argument(
+        "--feature-manifest-source",
+        type=str,
+        choices=("csu", "optum"),
+        default=None,
+        help=(
+            "Opt this run into a cohort-specific feature manifest so Layer 5 "
+            "(adaptive_validity_check) consults the matching FeatureContract "
+            "registry for layer='1' verdicts. When omitted the value is "
+            "auto-detected from --data-dir ('data/rwd/csu' → 'csu', "
+            "'data/rwd/optum' → 'optum'); pass explicitly to override the "
+            "auto-detection. Synthetic runs (no --data-dir) leave this unset, "
+            "preserving the cross-cohort no-false-positive default."
+        ),
+    )
+    parser.add_argument(
         "--regime",
         type=str,
         choices=_VALID_REGIMES,
@@ -5882,6 +5941,9 @@ def main():
             regime=args.regime,
             split_mode=args.split,
             inject_demo_cost_matrix=not args.no_demo_cost_matrix,
+            feature_manifest_source=_resolve_feature_manifest_source(
+                args.data_dir, args.feature_manifest_source
+            ),
         ))
     finally:
         # Restore stdout
