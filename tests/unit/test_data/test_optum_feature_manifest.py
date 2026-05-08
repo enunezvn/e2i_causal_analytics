@@ -169,9 +169,7 @@ def test_every_comorbidity_has_feature_has_kg_entity_codes():
     by_name = {c.name: c for c in OPTUM_FEATURES}
     for name in COMORBIDITY_NAMES:
         feat_name = f"has_{name}"
-        assert by_name[feat_name].kg_entity_codes, (
-            f"{feat_name} must declare kg_entity_codes"
-        )
+        assert by_name[feat_name].kg_entity_codes, f"{feat_name} must declare kg_entity_codes"
 
 
 def test_every_drug_class_ever_filled_feature_has_kg_entity_codes():
@@ -184,9 +182,7 @@ def test_every_drug_class_ever_filled_feature_has_kg_entity_codes():
     by_name = {c.name: c for c in OPTUM_FEATURES}
     for cls in DRUG_CLASS_NAMES:
         feat_name = f"{cls}_ever_filled"
-        assert by_name[feat_name].kg_entity_codes, (
-            f"{feat_name} must declare kg_entity_codes"
-        )
+        assert by_name[feat_name].kg_entity_codes, f"{feat_name} must declare kg_entity_codes"
 
 
 def test_every_lab_tested_feature_has_kg_entity_codes():
@@ -199,9 +195,7 @@ def test_every_lab_tested_feature_has_kg_entity_codes():
     by_name = {c.name: c for c in OPTUM_FEATURES}
     for lab in LAB_NAMES:
         feat_name = f"{lab}_tested"
-        assert by_name[feat_name].kg_entity_codes, (
-            f"{feat_name} must declare kg_entity_codes"
-        )
+        assert by_name[feat_name].kg_entity_codes, f"{feat_name} must declare kg_entity_codes"
 
 
 def test_primary_diagnosis_code_has_kg_entity_codes():
