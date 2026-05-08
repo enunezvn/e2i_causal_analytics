@@ -205,6 +205,21 @@ def test_query_drug_disease_edges_empty_when_no_evidence() -> None:
     assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
 
 
+def test_query_drug_disease_edges_handles_null_rows() -> None:
+    """GraphQL ``[Evidence!]`` (nullable list) returns null on resolver error;
+    must collapse to [] without raising TypeError."""
+    umls = _StubUMLS()
+    ot = _StubOT(evidence={"evidences": {"rows": None}})
+    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
+
+
+def test_query_drug_disease_edges_handles_null_evidences_object() -> None:
+    """If the entire ``evidences`` block is null, still degrade to []."""
+    umls = _StubUMLS()
+    ot = _StubOT(evidence={"evidences": None})
+    assert _querier(umls=umls, ot=ot).query_drug_disease_edges("X", "Y") == []
+
+
 def test_query_drug_disease_edges_swallows_open_targets_error() -> None:
     """Transport failures degrade gracefully — KGQuerier returns []."""
     umls = _StubUMLS()
@@ -306,9 +321,7 @@ def test_query_concept_relations_filters_by_predicate() -> None:
         ]
     )
     ot = _StubOT()
-    edges = _querier(umls=umls, ot=ot).query_concept_relations(
-        "C0020740", predicates={"may_treat"}
-    )
+    edges = _querier(umls=umls, ot=ot).query_concept_relations("C0020740", predicates={"may_treat"})
     assert len(edges) == 1
     assert edges[0].object_id == "C0011615"
 

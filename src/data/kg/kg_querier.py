@@ -134,9 +134,7 @@ class KnowledgeGraphQuerier:
         from the response when available.
         """
         try:
-            data = self.open_targets.drug_disease_evidence(
-                drug_id, disease_id, size=size
-            )
+            data = self.open_targets.drug_disease_evidence(drug_id, disease_id, size=size)
         except OpenTargetsError as exc:
             logger.warning(
                 "Open Targets drug-disease query failed for %s/%s: %s",
@@ -146,7 +144,14 @@ class KnowledgeGraphQuerier:
             )
             return []
         evidences = data.get("evidences", {})
-        rows = evidences.get("rows", []) if isinstance(evidences, dict) else []
+        # ``evidences.rows`` is a GraphQL nullable-list field (`[Evidence!]`,
+        # not `[Evidence!]!`), so the resolver may legitimately return null
+        # on partial failure. ``dict.get("rows", [])`` returns the explicit
+        # null value rather than the default ``[]``; ``or []`` collapses both
+        # the absent-key AND null-value cases to an empty list. Without
+        # this, ``for row in rows`` would raise ``TypeError: 'NoneType' is
+        # not iterable``, propagating to downstream Phase 2.5 callers.
+        rows = (evidences.get("rows") or []) if isinstance(evidences, dict) else []
         edges: list[KGEdge] = []
         for row in rows:
             drug = row.get("drug") or {}
@@ -236,9 +241,7 @@ class KnowledgeGraphQuerier:
             # Three accepted shapes: fine-grained predicate match,
             # coarse-label match when fine is empty, or no filter at all.
             match_fine = predicate_set is not None and additional in predicate_set
-            match_coarse = (
-                coarse_set is not None and coarse in coarse_set and not additional
-            )
+            match_coarse = coarse_set is not None and coarse in coarse_set and not additional
             no_filter = predicate_set is None and coarse_set is None
             if not (match_fine or match_coarse or no_filter):
                 continue
