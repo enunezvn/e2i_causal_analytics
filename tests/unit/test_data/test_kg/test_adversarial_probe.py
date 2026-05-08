@@ -359,6 +359,46 @@ class TestDerivationErrors:
         assert result.outcome == "error"
         assert "Series" in (result.error or "")
 
+    def test_derivation_returns_series_with_unrecognized_index(
+        self, events_with_post_anchor: pd.DataFrame, anchors: pd.Series
+    ) -> None:
+        # Derivation returns a Series whose index is NOT drawn from
+        # anchors.index — e.g., a default RangeIndex from a missing
+        # ``.reindex(anchors.index)``. Must produce outcome=error so a
+        # positional-alignment silent-misprobe can't slip through.
+        def _bad_index(events: pd.DataFrame, _a: pd.Series) -> pd.Series:
+            return events.groupby("patient_id").size().reset_index(drop=True)
+
+        probe = AdversarialProbe()
+        result = probe.probe(
+            feature_name="x",
+            derivation=_bad_index,
+            events=events_with_post_anchor,
+            anchors=anchors,
+        )
+        assert result.outcome == "error"
+        assert "anchors.index" in (result.error or "")
+        assert "RangeIndex" in (result.error or "")
+
+    def test_derivation_returns_series_with_extra_patients(
+        self, events_with_post_anchor: pd.DataFrame, anchors: pd.Series
+    ) -> None:
+        def _too_many(_events: pd.DataFrame, _a: pd.Series) -> pd.Series:
+            return pd.Series(
+                [1, 2, 3, 4],
+                index=["patient_1", "patient_2", "patient_3", "patient_99"],
+            )
+
+        probe = AdversarialProbe()
+        result = probe.probe(
+            feature_name="x",
+            derivation=_too_many,
+            events=events_with_post_anchor,
+            anchors=anchors,
+        )
+        assert result.outcome == "error"
+        assert "patient_99" in (result.error or "")
+
 
 # ---------------------------------------------------------------------------
 # Argument-shape validation
