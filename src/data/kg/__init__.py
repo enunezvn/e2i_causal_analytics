@@ -14,11 +14,24 @@ the rest of Layer 2 (``CausalRoleClassifier``, ``CitationResolver``,
 ``EnsembleVoter``) consumes: code → ``EntityLink`` records.
 """
 
+from src.data.kg.citation_resolver import (
+    CAUSAL_CUE_VERBS,
+    CitationResolver,
+    CitationResolverError,
+)
+from src.data.kg.crossref import CrossrefClient, CrossrefError
 from src.data.kg.entity_linker import EntityLinker, EntityLinkerError
+from src.data.kg.europe_pmc import EuropePMCClient, EuropePMCError
 from src.data.kg.kg_querier import KnowledgeGraphQuerier
 from src.data.kg.open_targets import OpenTargetsClient, OpenTargetsError
-from src.data.kg.rxnav import RxNavClient, RxNavError
-from src.data.kg.types import EntityLink, KGConcept, KGEdge
+from src.data.kg.rxnav import RxCUIMatch, RxNavClient, RxNavError
+from src.data.kg.types import (
+    AbstractRecord,
+    CitationVerdict,
+    EntityLink,
+    KGConcept,
+    KGEdge,
+)
 from src.data.kg.umls_uts import (
     UMLSAuthError,
     UMLSClient,
@@ -27,14 +40,24 @@ from src.data.kg.umls_uts import (
 )
 
 __all__ = [
+    "AbstractRecord",
+    "CAUSAL_CUE_VERBS",
+    "CitationResolver",
+    "CitationResolverError",
+    "CitationVerdict",
+    "CrossrefClient",
+    "CrossrefError",
     "EntityLink",
     "EntityLinker",
     "EntityLinkerError",
+    "EuropePMCClient",
+    "EuropePMCError",
     "KGConcept",
     "KGEdge",
     "KnowledgeGraphQuerier",
     "OpenTargetsClient",
     "OpenTargetsError",
+    "RxCUIMatch",
     "RxNavClient",
     "RxNavError",
     "UMLSAuthError",
