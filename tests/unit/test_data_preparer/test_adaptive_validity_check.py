@@ -1820,3 +1820,95 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_no_kg_decided():
     assert metrics["non_abstain_pct"] == pytest.approx(1.0)
     assert metrics["kg_decided_count"] == 0
     assert metrics["passes"] is False
+
+
+def test_phase29_stage2_pre_shadow_mode_does_not_cap_adversarial_high():
+    """Codex M2: shadow mode must NOT suppress adversarial-driven high severity.
+
+    When adversarial z>5σ wins precedence (decided_by='adversarial'),
+    shadow's decided_by=='kg' check doesn't fire → severity stays 'high'.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import KGEdge
+
+    voter = EnsembleVoter()
+    edge = KGEdge(
+        subject_id="CHEMBL1234",
+        predicate="treats",
+        object_id="EFO_0000270",
+        evidence_source="open_targets",
+        score=0.85,
+    )
+    adv_input = {
+        "feature": "drug_exposure_days",
+        "layer": "3",
+        "severity": "high",
+        "z_score": 6.0,
+        "actual_auc": 0.82,
+        "null_mean": 0.51,
+        "null_std": 0.03,
+        "p_value": 0.0,
+        "n_permutations": 200,
+        "remediation": "drop",
+        "evidence": "z=6.0 > 5σ",
+    }
+    verdict = _compose_legacy_verdict(
+        "drug_exposure_days",
+        voter=voter,
+        adversarial_input=adv_input,
+        kg_edges=(edge,),
+        feature_entity_ids=("CHEMBL1234",),
+        target_entity_ids=("EFO_0000270",),
+        kg_mode="shadow",
+    )
+    # Adversarial wins precedence; shadow cap MUST NOT fire
+    assert verdict["decided_by"] == "adversarial"
+    assert verdict["severity"] == "high"
+    assert verdict["remediation"] == "drop"
+
+
+def test_phase29_stage2_pre_shadow_mode_does_not_cap_layer_1_high():
+    """Codex M3: shadow mode must NOT suppress Layer 1-driven high severity.
+
+    When Layer 1 contract fires (decided_by='layer_1'), shadow's
+    decided_by=='kg' check doesn't fire → severity stays 'high'.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import KGEdge
+
+    voter = EnsembleVoter()
+    edge = KGEdge(
+        subject_id="CHEMBL1234",
+        predicate="treats",
+        object_id="EFO_0000270",
+        evidence_source="open_targets",
+        score=0.85,
+    )
+    layer_1_input = {
+        "feature": "drug_exposure_days",
+        "layer": "1",
+        "severity": "high",
+        "remediation": "drop",
+        "evidence": "post_index feature",
+        "contract_source": "Optum",
+        "contract_window_days": 30,
+    }
+    verdict = _compose_legacy_verdict(
+        "drug_exposure_days",
+        voter=voter,
+        layer_1_input=layer_1_input,
+        kg_edges=(edge,),
+        feature_entity_ids=("CHEMBL1234",),
+        target_entity_ids=("EFO_0000270",),
+        kg_mode="shadow",
+    )
+    # Layer 1 wins precedence; shadow cap MUST NOT fire
+    assert verdict["decided_by"] == "layer_1"
+    assert verdict["severity"] == "high"
+    assert verdict["remediation"] == "drop"
