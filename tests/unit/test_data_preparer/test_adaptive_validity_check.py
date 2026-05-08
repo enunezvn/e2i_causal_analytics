@@ -1912,3 +1912,57 @@ def test_phase29_stage2_pre_shadow_mode_does_not_cap_layer_1_high():
     assert verdict["decided_by"] == "layer_1"
     assert verdict["severity"] == "high"
     assert verdict["remediation"] == "drop"
+
+
+def test_phase29_stage2_pre_kg_mode_unknown_value_defaults_to_off_with_warning(caplog):
+    """Codex L1/L2: a typo like 'shadowmode' or 'Shadow' falls back to 'off'
+    with a warning log so misconfiguration surfaces clearly.
+    """
+    import logging
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_kg_mode,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert _resolve_kg_mode("shadowmode") == "off"
+        assert _resolve_kg_mode("Shadow") == "off"
+    # Both invalid values triggered warnings
+    assert sum("kg_mode=" in record.message for record in caplog.records) >= 2
+
+
+def test_phase29_stage2_pre_kg_mode_none_defaults_to_off_silently(caplog):
+    """None → 'off' without a warning (default-unset, not misconfiguration)."""
+    import logging
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_kg_mode,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert _resolve_kg_mode(None) == "off"
+    assert all("kg_mode=" not in record.message for record in caplog.records)
+
+
+def test_phase29_stage2_pre_kg_mode_empty_string_defaults_to_off_silently(caplog):
+    """Empty string (likely YAML default) → 'off' without a warning."""
+    import logging
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_kg_mode,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert _resolve_kg_mode("") == "off"
+    assert all("kg_mode=" not in record.message for record in caplog.records)
+
+
+def test_phase29_stage2_pre_kg_mode_valid_modes_pass_through():
+    """Valid modes: off, shadow, promoted — all pass through unchanged."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_kg_mode,
+    )
+
+    assert _resolve_kg_mode("off") == "off"
+    assert _resolve_kg_mode("shadow") == "shadow"
+    assert _resolve_kg_mode("promoted") == "promoted"
