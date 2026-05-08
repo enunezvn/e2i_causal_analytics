@@ -630,6 +630,34 @@ class TestCompare:
         )
         assert "upstream filtered 12 patients" in result.notes
 
+    def test_compare_duplicate_baseline_index_returns_error(self) -> None:
+        # Codex H2: non-unique baseline index would expand `.loc[common_index]`
+        # lookups and corrupt n_rows_changed / fraction_changed. Reject up
+        # front rather than silently produce nonsense audit fields.
+        probe = AdversarialProbe()
+        baseline = pd.Series([1.0, 2.0], index=["p1", "p1"])  # duplicate
+        prefix = pd.Series([1.0], index=["p1"])
+        result = probe.compare(
+            feature_name="x",
+            baseline_values=baseline,
+            prefix_values=prefix,
+        )
+        assert result.outcome == "error"
+        assert "non-unique" in (result.error or "").lower()
+        assert "baseline" in (result.error or "")
+
+    def test_compare_duplicate_prefix_index_returns_error(self) -> None:
+        probe = AdversarialProbe()
+        baseline = pd.Series([1.0], index=["p1"])
+        prefix = pd.Series([1.0, 2.0], index=["p1", "p1"])  # duplicate
+        result = probe.compare(
+            feature_name="x",
+            baseline_values=baseline,
+            prefix_values=prefix,
+        )
+        assert result.outcome == "error"
+        assert "prefix" in (result.error or "")
+
     def test_compare_int_dtype_works(self) -> None:
         probe = AdversarialProbe()
         baseline = pd.Series([1, 2, 3], index=["a", "b", "c"], dtype="int64")
