@@ -3990,6 +3990,20 @@ def _should_inject_demo_cost_matrix(
 _FEATURE_MANIFEST_SOURCES: tuple[str, ...] = ("csu", "optum")
 
 
+def _autodetect_manifest_source(data_dir: str | None) -> set[str]:
+    """Return the set of known manifest sources that appear as path
+    segments in ``data_dir`` (case-insensitive).
+
+    Pulled out of ``_resolve_feature_manifest_source`` so the resolver
+    can detect ambiguity (multiple matches) rather than silently picking
+    the first by iteration order.
+    """
+    if not data_dir:
+        return set()
+    parts = {p.lower() for p in Path(data_dir).parts}
+    return {s for s in _FEATURE_MANIFEST_SOURCES if s in parts}
+
+
 def _resolve_feature_manifest_source(
     data_dir: str | None,
     override: str | None,
@@ -3999,11 +4013,22 @@ def _resolve_feature_manifest_source(
     Priority: explicit ``override`` (the ``--feature-manifest-source`` CLI
     flag) > auto-detection from ``data_dir`` > unset.
 
-    The auto-detect rule is intentionally simple: if a known cohort name
-    (``csu``, ``optum``) appears as a path segment in ``data_dir``, that
-    becomes the manifest source. Anything else returns None — synthetic
-    runs leave the manifest source unset so Layer 5's cross-cohort
-    no-false-positive default is preserved.
+    Strictness contract (codex M1/M2/M3, 2026-05-08): the resolver fails
+    fast on:
+
+    - **M1 ambiguous data_dir**: a path that contains BOTH ``csu`` and
+      ``optum`` segments (e.g., ``data/rwd/csu/optum_baseline``) raises
+      ``ValueError`` rather than silently picking ``csu`` by iteration
+      order. The caller must disambiguate via explicit
+      ``--feature-manifest-source``.
+    - **M2 override conflict**: if both ``override`` and ``data_dir`` are
+      supplied AND the data_dir's auto-detect would yield a DIFFERENT
+      source, raises ``ValueError`` to prevent a silent CSU-data-against-
+      Optum-manifest mismatch.
+    - **M3 unmatched RWD path**: not enforced here — see CLI guidance:
+      a ``data/rwd/<unknown>`` path returns None and emits a stderr
+      warning so the user can decide whether to set the override
+      explicitly.
 
     Without this resolution, ``feature_manifest_source`` was never
     threaded into ``scope_spec`` for RWD runs and Layer 5's
@@ -4011,14 +4036,47 @@ def _resolve_feature_manifest_source(
     fell through to Layer 3 (statistical-only), undercutting the
     deterministic post-index leak catch the manifests provide.
     """
+    detected = _autodetect_manifest_source(data_dir)
+
+    if len(detected) > 1:
+        raise ValueError(
+            f"data_dir={data_dir!r} contains multiple known manifest "
+            f"sources {sorted(detected)} as path segments — auto-detection "
+            f"is ambiguous. Pass --feature-manifest-source explicitly to "
+            f"disambiguate."
+        )
+
     if override is not None:
+        if detected and override not in detected:
+            raise ValueError(
+                f"--feature-manifest-source={override!r} conflicts with "
+                f"data_dir={data_dir!r} which auto-detects to "
+                f"{sorted(detected)}. The conflict suggests the wrong "
+                f"manifest is being applied (e.g., Optum data measured "
+                f"against CSU contracts). If this is intentional, rename "
+                f"the data_dir to remove the misleading segment, or run "
+                f"the data through the matching converter first."
+            )
         return override
-    if not data_dir:
-        return None
-    parts = {p.lower() for p in Path(data_dir).parts}
-    for source in _FEATURE_MANIFEST_SOURCES:
-        if source in parts:
-            return source
+
+    if len(detected) == 1:
+        return next(iter(detected))
+
+    # data_dir provided but no known segment matched — emit a warning
+    # so the operator can decide whether to set --feature-manifest-source
+    # explicitly. We do NOT fail here because synthetic runs (no
+    # data_dir) and ad-hoc paths must remain frictionless.
+    if data_dir:
+        import sys as _sys
+
+        print(
+            f"WARNING: data_dir={data_dir!r} does not contain a known "
+            f"manifest source segment ({_FEATURE_MANIFEST_SOURCES}); "
+            f"Layer 5 manifest verdicts will not fire for this run. Pass "
+            f"--feature-manifest-source explicitly if a registry should "
+            f"be consulted.",
+            file=_sys.stderr,
+        )
     return None
 
 
