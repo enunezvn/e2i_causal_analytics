@@ -72,7 +72,8 @@ Phase 2.7. Architectural diagram §Layer 2 (lines 110-138).
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional
+import math
+from typing import Any, Iterable, Optional
 
 from src.data.kg.types import (
     CausalRole,
@@ -142,6 +143,21 @@ def is_citation_verified(verdict: CitationVerdict) -> bool:
     return bool(
         verdict.abstract_resolved and len(verdict.entities_found) >= 2 and verdict.causal_cue_found
     )
+
+
+def _is_finite_number(value: Any) -> bool:
+    """True when ``value`` is a real number (not bool) with a finite value.
+
+    Used by the M3/M4 audit-integrity guards to verify that
+    deterministic vetoes carry the numeric evidence they claim.
+    Booleans are explicitly rejected even though `isinstance(True, int)`
+    is True in Python — a bool in a numeric field is a bug, not data.
+    """
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
 
 
 def _split_citations(
@@ -462,7 +478,33 @@ class EnsembleVoter:
         disagreements: list[str] = []
         adv_severity: Optional[str] = None
         if adversarial_verdict is not None:
-            adv_severity = adversarial_verdict.get("severity")
+            raw_adv_severity = adversarial_verdict.get("severity")
+            adv_z_score = adversarial_verdict.get("z_score")
+            # Codex review MEDIUM (M3, 2026-05-08): a `severity=high`
+            # adversarial verdict drives a confidence=0.95 deterministic
+            # veto. Without a numeric `z_score` the audit trail records
+            # a high-confidence drop with no underlying evidence —
+            # that's an audit-integrity failure. Downgrade malformed
+            # high verdicts so the voter falls through to the
+            # LLM/KG/abstain path; the malformed input is logged so
+            # operators see the misconfiguration.
+            if raw_adv_severity == ADV_SEVERITY_HIGH and not _is_finite_number(
+                adv_z_score
+            ):
+                evidence.append(
+                    f"Adversarial verdict claims severity=high but z_score is "
+                    f"{adv_z_score!r} (missing or non-finite); cannot honour "
+                    f"as deterministic veto"
+                )
+                logger.warning(
+                    "EnsembleVoter: malformed adversarial high verdict for %s; "
+                    "z_score=%r — downgrading to no signal",
+                    feature_name,
+                    adv_z_score,
+                )
+                adv_severity = None
+            else:
+                adv_severity = raw_adv_severity
 
         # Codex review HIGH (H1, 2026-05-08): LLMVerdict.causal_role is
         # a `Literal` annotation only, not validated at construction.
