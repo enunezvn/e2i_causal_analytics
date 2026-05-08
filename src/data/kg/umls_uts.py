@@ -261,6 +261,54 @@ class UMLSClient:
                 return ui
         return None
 
+    def cui_relations(
+        self,
+        cui: str,
+        *,
+        page_size: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return the relations rows for a CUI from ``/content/CUI/{cui}/relations``.
+
+        Each row carries:
+            - ``relationLabel``: coarse relation type (e.g., ``"RB"`` related
+              broader, ``"RN"`` related narrower, ``"PAR"`` parent, ``"CHD"``
+              child, ``"SY"`` synonym, ``"RO"`` other related).
+            - ``additionalRelationLabel``: fine-grained label (e.g.,
+              ``"isa"``, ``"has_finding_site"``, ``"may_treat"``).
+            - ``relatedId``: URL of the related CUI's content endpoint; the
+              CUI itself is the trailing path segment.
+            - ``relatedFromIdName`` / ``relatedIdName``: human-readable
+              endpoint labels.
+            - ``rootSource``: the source vocabulary that asserted the relation
+              (e.g., ``"SNOMEDCT_US"``, ``"MSH"``).
+
+        v1 callers typically post-process by extracting the trailing CUI from
+        ``relatedId`` and grouping by ``additionalRelationLabel``.
+
+        v2 punt — pagination: this method returns the first ``page_size``
+        rows only. CUIs with hundreds of relations (rare but possible for
+        broad parent concepts like ``C0011603`` "Dermatitis") will be
+        silently truncated. If a downstream consumer reports missing edges,
+        wire in a ``pageNumber`` loop here.
+        """
+        return _cui_relations_cached(self, cui=cui, page_size=page_size)
+
+    def _cui_relations_uncached(
+        self,
+        *,
+        cui: str,
+        page_size: int,
+    ) -> list[dict[str, Any]]:
+        try:
+            payload = self._get(
+                f"/content/{self._version}/CUI/{cui}/relations",
+                {"pageSize": page_size},
+            )
+        except UMLSNotFoundError:
+            return []
+        result = payload.get("result")
+        return list(result) if isinstance(result, list) else []
+
 
 # Module-level cache helpers. These bypass the ``self``-bound cache problem
 # (mutable instance attrs make ``lru_cache`` on methods leak across instances)
@@ -300,8 +348,19 @@ def _code_to_cui_cached(
     return client._code_to_cui_uncached(code=code, source=source)
 
 
+@lru_cache(maxsize=_LRU_MAXSIZE)
+def _cui_relations_cached(
+    client: UMLSClient,
+    *,
+    cui: str,
+    page_size: int,
+) -> list[dict[str, Any]]:
+    return client._cui_relations_uncached(cui=cui, page_size=page_size)
+
+
 def reset_caches() -> None:
     """Clear UMLS in-process caches (useful in tests)."""
     _cui_lookup_cached.cache_clear()
     _crosswalk_cached.cache_clear()
     _code_to_cui_cached.cache_clear()
+    _cui_relations_cached.cache_clear()

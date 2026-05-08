@@ -301,6 +301,58 @@ def test_crosswalk_404_returns_empty_list() -> None:
         assert client.crosswalk("ZZZ", source="ICD10CM") == []
 
 
+def test_cui_relations_returns_rows() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/content/current/CUI/C0011615/relations" in request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "result": [
+                    {
+                        "relationLabel": "RB",
+                        "additionalRelationLabel": "isa",
+                        "relatedId": "https://uts-ws.nlm.nih.gov/rest/content/current/CUI/C0011603",
+                        "relatedIdName": "Dermatitis",
+                        "rootSource": "MSH",
+                    },
+                    {
+                        "relationLabel": "RN",
+                        "additionalRelationLabel": "inverse_isa",
+                        "relatedId": "https://uts-ws.nlm.nih.gov/rest/content/current/CUI/C0011620",
+                        "relatedIdName": "Atopic Dermatitis (variant)",
+                        "rootSource": "SNOMEDCT_US",
+                    },
+                ]
+            },
+        )
+
+    with _client_with_handler(handler) as client:
+        rows = client.cui_relations("C0011615")
+        assert len(rows) == 2
+        assert rows[0]["additionalRelationLabel"] == "isa"
+
+
+def test_cui_relations_returns_empty_on_404() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with _client_with_handler(handler) as client:
+        assert client.cui_relations("C9999999") == []
+
+
+def test_cui_relations_caches() -> None:
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        return httpx.Response(200, json={"result": []})
+
+    with _client_with_handler(handler) as client:
+        client.cui_relations("C0011615")
+        client.cui_relations("C0011615")
+        assert call_count["n"] == 1
+
+
 def test_search_empty_string_returns_empty_list_without_request() -> None:
     """Don't waste a network call on empty input."""
     call_count = {"n": 0}
