@@ -248,13 +248,26 @@ def _kg_contradicts_llm(signal: KGSignal, role: CausalRole) -> bool:
 
     KG-leak with LLM-accept (or vice-versa) is a hard contradiction —
     the two strongest non-deterministic signals disagree. The voter
-    abstains rather than picking a winner. ``no_signal`` and
-    ``contradictory`` (KG self-contradiction) never themselves
-    contradict the LLM; ``contradictory`` is a separate abstain trigger
-    handled in ``vote``.
+    abstains rather than picking a winner. ``no_signal`` never
+    contradicts the LLM (no evidence either way).
+
+    Codex review MEDIUM (M1, 2026-05-08): ``"contradictory"`` was
+    previously coded as "never contradicts" so the LLM could
+    arbitrate. That silently ignored the leak side of the
+    contradictory edge set whenever the LLM said "accept role"
+    (ancestor / confounder / instrument). The fix: a contradictory
+    KG only "doesn't contradict" the LLM when the LLM agrees there
+    IS a leak (the LLM accepts the leak side of the contradictory
+    pair). When the LLM says accept-role, the leak edges in the
+    contradictory pair stand — that IS a contradiction, so abstain.
     """
-    if signal in ("no_signal", "contradictory"):
+    if signal == "no_signal":
         return False
+    if signal == "contradictory":
+        # Contradictory KG includes leak edges. Trust LLM only when it
+        # ALSO says leak; otherwise the leak edges contradict the
+        # accept-role LLM verdict.
+        return not _llm_role_is_leak(role)
     kg_implies_leak = _kg_signal_implies_leak(signal)
     llm_implies_leak = _llm_role_is_leak(role)
     return kg_implies_leak != llm_implies_leak

@@ -983,6 +983,49 @@ def test_invalid_llm_role_falls_through_to_kg_only():
     assert v.severity == "high"
 
 
+def test_contradictory_kg_with_accept_llm_abstains():
+    """Codex review MEDIUM (M1, 2026-05-08): contradictory KG (mixed
+    treats + taxonomic edges) + LLM=ancestor used to silently trust
+    the LLM. The leak side of the contradictory pair was ignored.
+
+    With the fix, contradictory KG + accept-role LLM abstains.
+    """
+    treats = _kg_treats_edge(drug_id="A", disease_id="B")
+    isa = _kg_isa_edge(child_id="A", parent_id="B")
+    voter = EnsembleVoter()
+    v = voter.vote(
+        "feat_x",
+        kg_edges=[treats, isa],
+        feature_entity_ids=["A"],
+        target_entity_ids=["B"],
+        llm_verdict=_llm_verdict(role="ancestor", remediation="keep_with_caveat"),
+        citation_verdicts=[_verified_citation()],
+    )
+    assert v.decided_by == "abstain"
+    assert v.severity == "abstain"
+    assert any("contradictory" in d.lower() or "disagrees" in d.lower() for d in v.disagreements)
+
+
+def test_contradictory_kg_with_leak_llm_still_decides_via_llm():
+    """Contradictory KG + LLM=descendant → LLM agrees there IS a leak,
+    so the leak edges in the contradictory set are corroborated. Decide
+    via LLM (test_llm_kg_self_contradictory_does_not_force_abstain
+    above covers this; this test pins the explicit M1 scenario)."""
+    treats = _kg_treats_edge(drug_id="A", disease_id="B")
+    isa = _kg_isa_edge(child_id="A", parent_id="B")
+    voter = EnsembleVoter()
+    v = voter.vote(
+        "feat_x",
+        kg_edges=[treats, isa],
+        feature_entity_ids=["A"],
+        target_entity_ids=["B"],
+        llm_verdict=_llm_verdict(role="descendant"),
+        citation_verdicts=[_verified_citation()],
+    )
+    assert v.decided_by == "llm"
+    assert v.severity == "high"
+
+
 def test_invalid_llm_role_does_not_block_layer_1_veto():
     """Layer 1 deterministic veto wins even with an invalid LLM verdict."""
     voter = EnsembleVoter()
