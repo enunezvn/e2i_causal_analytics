@@ -859,6 +859,34 @@ def test_phase29_decided_by_to_layer_mapping_covers_all_cases():
     }
 
 
+def test_phase29_m2_layer_1_verdict_wrapper_routes_through_voter():
+    """Codex review MEDIUM (M2, 2026-05-08): the legacy ``_layer_1_verdict``
+    wrapper used to bypass the voter, missing M4's malformed-contract
+    guard. The fix routes the wrapper through ``_compose_legacy_verdict``
+    so all Layer 1 verdict construction sites apply the same guards.
+
+    Pin: a properly-constructed FeatureContract still produces the
+    expected severity=high/drop verdict.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _layer_1_verdict,
+    )
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    contract = FeatureContract(
+        name="some_post_index_field",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="csu",
+        derivation_inputs=("foo",),
+    )
+    verdict = _layer_1_verdict("some_post_index_field", contract)
+    assert verdict["layer"] == "1"
+    assert verdict["severity"] == "high"
+    assert verdict["remediation"] == "drop"
+    assert verdict["decided_by"] == "layer_1"
+    assert verdict["contract_source"] == "csu"
+
+
 def test_phase29_h5_moderate_adversarial_alone_keeps_ambiguous_remediation():
     """Codex review HIGH (H5, 2026-05-08): adv-moderate-alone used to
     flow through the voter which rewrote remediation from the legacy

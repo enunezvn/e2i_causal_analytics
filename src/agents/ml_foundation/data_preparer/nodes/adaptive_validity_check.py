@@ -125,26 +125,25 @@ def _layer_1_input(feature: str, contract: FeatureContract) -> dict[str, Any]:
 def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
     """Legacy Layer 1 verdict producer — kept for backward compatibility.
 
-    Used by the bypass paths (``_compose_legacy_verdict`` short-circuits)
-    AND by tests that import this helper directly. New decision flow
-    routes through ``_layer_1_input`` + ``EnsembleVoter`` + adapter.
+    Used by external test importers that construct verdicts directly.
+    The internal decision flow routes through ``_layer_1_input`` +
+    ``_compose_legacy_verdict`` + ``EnsembleVoter`` + adapter; this
+    wrapper does the same so the voter's audit-integrity guards (M4
+    malformed contract_source check, etc.) apply uniformly to all
+    Layer 1 verdict-construction call sites.
+
+    Codex review MEDIUM (M2, 2026-05-08): the prior implementation
+    constructed the ``EnsembleVerdict`` directly and called the
+    adapter without involving the voter, bypassing M4's malformed-
+    contract guard. While ``FeatureContract.source`` is typed ``str``
+    (always populated in production), defense in depth routes this
+    helper through the voter so external callers / future code paths
+    that pass synthetic contracts see consistent guard behaviour.
     """
-    return _ensemble_to_legacy_dict(
-        EnsembleVerdict(
-            feature_name=feature,
-            severity="high",
-            remediation="drop",
-            decided_by="layer_1",
-            final_role="descendant",
-            confidence=1.0,
-            evidence=(
-                f"Layer 1 declarative contract: feature.knowable_at="
-                f"{contract.knowable_at} (post_index); the manifest declares this "
-                f"column is not knowable at prediction time → drop",
-            ),
-            layer_1_input=_layer_1_input(feature, contract),
-        ),
-        adversarial_input=None,
+    return _compose_legacy_verdict(
+        feature,
+        voter=EnsembleVoter(),
+        layer_1_input=_layer_1_input(feature, contract),
     )
 
 
