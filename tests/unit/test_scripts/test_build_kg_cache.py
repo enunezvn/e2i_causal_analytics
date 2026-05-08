@@ -488,8 +488,10 @@ def test_build_record_live_status_entity_unresolved_when_all_unknown():
     assert record.edges == ()
 
 
-def test_build_record_live_aggregates_edges_across_entities():
-    """A feature with multiple entity codes aggregates edges from all of them."""
+def test_build_record_live_dedupes_resolved_cuis():
+    """codex L4: a feature with two entity codes resolving to the SAME
+    CUI must query the upstream KG exactly once (no duplicate edges in
+    the cache, no double-counted KG signal downstream)."""
     from scripts.build_kg_cache import _build_record_live
     from src.data.feature_contract import FeatureContract, KnowableAt
 
@@ -500,6 +502,7 @@ def test_build_record_live_aggregates_edges_across_entities():
         derivation_inputs=("diagcode",),
         kg_entity_codes=(("ICD10CM", "L50.9"), ("UMLS", "C0042109")),
     )
+    # Both entities resolve to the same CUI C0042109.
     linker = _StubEntityLinker(
         code_to_cui={("ICD10CM", "L50.9"): "C0042109"},
         umls_known={"C0042109"},
@@ -517,10 +520,124 @@ def test_build_record_live_aggregates_edges_across_entities():
         kg_querier=querier,  # type: ignore[arg-type]
     )
     assert record.status == "ok"
-    # Both entities resolve to the same CUI; query is invoked once per
-    # entity, so we expect 6 edges total (3 per query, 2 entities).
-    assert len(record.edges) == 6
-    assert querier.query_calls == ["C0042109", "C0042109"]
+    # Three edges total — query was invoked ONCE despite two entity codes.
+    assert len(record.edges) == 3
+    assert querier.query_calls == ["C0042109"], (
+        "Duplicate CUI was re-queried; codex L4 dedup contract violated"
+    )
+
+
+def test_build_record_live_aggregates_edges_across_distinct_cuis():
+    """A feature with multiple entity codes resolving to DIFFERENT CUIs
+    aggregates edges from each query (no dedup applied; legitimate)."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"), ("UMLS", "C0033578")),
+    )
+    linker = _StubEntityLinker(
+        code_to_cui={},
+        umls_known={"C0042109", "C0033578"},
+    )
+    querier = _StubKGQuerier(
+        edges_by_cui={
+            "C0042109": [_make_kg_edge("C0042109", "X")],
+            "C0033578": [_make_kg_edge("C0033578", "Y"), _make_kg_edge("C0033578", "Z")],
+        }
+    )
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=querier,  # type: ignore[arg-type]
+    )
+    assert record.status == "ok"
+    assert len(record.edges) == 3  # 1 + 2
+    assert sorted(querier.query_calls) == ["C0033578", "C0042109"]
+
+
+def test_build_record_live_partial_failure_preserved_via_errors_field():
+    """codex M3: when ONE entity resolves+queries successfully but
+    ANOTHER hits a transport error, status remains ``ok`` (we got
+    edges) and the error is recorded in the ``errors`` field for
+    audit. Operators must check BOTH status AND errors."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"), ("UMLS", "C0033578")),
+    )
+    linker = _StubEntityLinker(
+        code_to_cui={},
+        umls_known={"C0042109", "C0033578"},
+    )
+
+    class _PartialFailQuerier:
+        def query_disease_hierarchy(self, cui: str):
+            if cui == "C0033578":
+                raise RuntimeError("transport boom")
+            return [_make_kg_edge(cui, "X")]
+
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=_PartialFailQuerier(),  # type: ignore[arg-type]
+    )
+    assert record.status == "ok"
+    assert len(record.edges) == 1
+    assert any("transport boom" in e for e in record.errors), (
+        f"Expected partial-failure error in errors[]; got {record.errors}"
+    )
+
+
+def test_build_record_live_all_queries_failed_yields_source_error():
+    """codex M2: when every successfully-resolved entity's KG query
+    raises, status MUST be 'source_error' (not 'queried_no_edges')."""
+    from scripts.build_kg_cache import _build_record_live
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="primary_diagnosis_code",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="demo",
+        derivation_inputs=("diagcode",),
+        kg_entity_codes=(("UMLS", "C0042109"),),
+    )
+    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
+
+    class _AlwaysFailQuerier:
+        def query_disease_hierarchy(self, cui: str):
+            raise RuntimeError("transport boom")
+
+    record = _build_record_live(
+        fc,
+        manifest_fp="aaaa",
+        target_fp="bbbb",
+        target_entity_codes=[],
+        sources_attempted=("umls_uts",),
+        entity_linker=linker,  # type: ignore[arg-type]
+        kg_querier=_AlwaysFailQuerier(),  # type: ignore[arg-type]
+    )
+    assert record.status == "source_error", (
+        f"Expected source_error when all queries failed post-resolution; got {record.status}"
+    )
+    assert any("transport boom" in e for e in record.errors)
 
 
 def test_build_record_live_pagination_warning_at_threshold(caplog):
@@ -554,41 +671,6 @@ def test_build_record_live_pagination_warning_at_threshold(caplog):
     assert any("pagination ceiling" in rec.message for rec in caplog.records), (
         f"Pagination warning not emitted; records: {[r.message for r in caplog.records]}"
     )
-
-
-def test_build_record_live_query_exception_treated_as_source_error():
-    """If kg_querier raises, the error is caught + recorded; status reflects."""
-    from scripts.build_kg_cache import _build_record_live
-    from src.data.feature_contract import FeatureContract, KnowableAt
-
-    fc = FeatureContract(
-        name="primary_diagnosis_code",
-        knowable_at=KnowableAt(reference="enrollment"),
-        source="demo",
-        derivation_inputs=("diagcode",),
-        kg_entity_codes=(("UMLS", "C0042109"),),
-    )
-    linker = _StubEntityLinker(code_to_cui={}, umls_known={"C0042109"})
-
-    class _RaisingQuerier:
-        def query_disease_hierarchy(self, cui: str):
-            raise RuntimeError("transport boom")
-
-    record = _build_record_live(
-        fc,
-        manifest_fp="aaaa",
-        target_fp="bbbb",
-        target_entity_codes=[],
-        sources_attempted=("umls_uts",),
-        entity_linker=linker,  # type: ignore[arg-type]
-        kg_querier=_RaisingQuerier(),  # type: ignore[arg-type]
-    )
-    # The entity DID resolve (cui_lookup succeeded), so this is not
-    # entity_unresolved. The query failure is recorded as a source_error
-    # via the empty-edges-with-errors path → "queried_no_edges" because
-    # resolved_any=True. The error appears in record.errors for audit.
-    assert record.status == "queried_no_edges"
-    assert any("transport boom" in e for e in record.errors)
 
 
 def test_build_cache_for_manifest_live_path_produces_records(tmp_path: Path):
