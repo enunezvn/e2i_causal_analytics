@@ -382,9 +382,20 @@ class AdversarialProbe:
         baseline_aligned = baseline_values.loc[common_index]
         prefix_aligned = prefix_values.loc[common_index]
 
-        is_numeric = pd.api.types.is_numeric_dtype(
-            baseline_aligned
-        ) and pd.api.types.is_numeric_dtype(prefix_aligned)
+        # Boolean Series pass `is_numeric_dtype` (True/False cast to 1.0/0.0
+        # under `np.isclose`), but a "max_abs_change=1.0" reading on a
+        # binary feature is not semantically meaningful — the sensible
+        # answer is "the value flipped" without a magnitude. Special-case
+        # bool explicitly so binary features go down the equality path
+        # (max_abs_change stays None) while still flagging drift.
+        is_bool = pd.api.types.is_bool_dtype(baseline_aligned) and pd.api.types.is_bool_dtype(
+            prefix_aligned
+        )
+        is_numeric = (
+            pd.api.types.is_numeric_dtype(baseline_aligned)
+            and pd.api.types.is_numeric_dtype(prefix_aligned)
+            and not is_bool
+        )
 
         max_abs_change: Optional[float] = None
         if is_numeric:

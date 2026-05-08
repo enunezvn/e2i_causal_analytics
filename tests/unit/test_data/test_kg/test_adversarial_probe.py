@@ -532,9 +532,7 @@ class TestArgumentValidation:
                 "event_date": pd.to_datetime(["2024-01-01"], utc=True),  # tz-aware
             }
         )
-        anchors = pd.Series(
-            pd.to_datetime(["2024-01-15"]), index=["p1"]
-        )  # tz-naive
+        anchors = pd.Series(pd.to_datetime(["2024-01-15"]), index=["p1"])  # tz-naive
         probe = AdversarialProbe()
         result = probe.probe(
             feature_name="x",
@@ -750,6 +748,23 @@ class TestCompare:
             prefix_values=prefix,
         )
         assert result.outcome == "unchanged"
+
+    def test_compare_bool_dtype_no_max_abs_change(self) -> None:
+        # Codex N6: boolean features pass `is_numeric_dtype` but
+        # `max_abs_change=1.0` is not semantically meaningful for a binary
+        # flag flip. Special-case bool so the equality path runs and
+        # max_abs_change stays None while still flagging drift.
+        probe = AdversarialProbe()
+        baseline = pd.Series([True, False, True], index=["a", "b", "c"])
+        prefix = pd.Series([True, True, True], index=["a", "b", "c"])
+        result = probe.compare(
+            feature_name="has_med_fill",
+            baseline_values=baseline,
+            prefix_values=prefix,
+        )
+        assert result.outcome == "changed"
+        assert result.n_rows_changed == 1
+        assert result.max_abs_change is None  # not 1.0
 
     def test_compare_int_dtype_works(self) -> None:
         probe = AdversarialProbe()
