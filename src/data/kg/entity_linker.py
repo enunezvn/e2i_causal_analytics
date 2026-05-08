@@ -68,6 +68,27 @@ _UTS_SOURCE_BY_SYSTEM: dict[CodeSystem, str] = {
     "MESH": "MSH",
 }
 
+# Confidence values written into ``EntityLink.confidence`` based on the
+# resolution path. Tuned conservatively: exact cross-walks are full
+# confidence; RxNav approximate matches and UMLS free-text searches are
+# treated as lower-trust evidence by Phase 2.6 / 2.7. The specific values
+# are not load-bearing for now; downstream consumers should compare
+# relative ordering rather than depend on absolute thresholds.
+CONFIDENCE_EXACT_MATCH = 1.0
+CONFIDENCE_APPROXIMATE = 0.8
+CONFIDENCE_SEARCH = 0.7
+
+
+def _with_confidence(link: EntityLink, confidence: float) -> EntityLink:
+    """Return a copy of ``link`` with ``confidence`` populated.
+
+    Frozen dataclasses can't be mutated; this helper rebuilds the link
+    with the new confidence and preserves all other fields.
+    """
+    from dataclasses import replace
+
+    return replace(link, confidence=confidence)
+
 
 class EntityLinker:
     """Compose UMLS + RxNav + Open Targets clients into a single resolution API.
@@ -124,18 +145,27 @@ class EntityLinker:
 
         Two-step: RxNav normalizes name → RxCUI; UMLS cross-walks RxCUI →
         CUI. If RxNav has no match, falls back to UMLS search.
+
+        Confidence is propagated from the resolution path:
+            - Exact RxNav match    → confidence = ``CONFIDENCE_EXACT_MATCH`` (1.0)
+            - Approx RxNav match   → confidence = ``CONFIDENCE_APPROXIMATE`` (0.8)
+            - UMLS free-text search → confidence = ``CONFIDENCE_SEARCH`` (0.7)
         """
         if not name:
             return EntityLink(input_code="", input_system="RXNORM", error="empty name")
         try:
-            rxcui = self.rxnav.rxcui_for_name(name)
+            rxnav_match = self.rxnav.rxcui_for_name(name)
         except Exception as exc:  # noqa: BLE001 — degrade gracefully
             logger.warning("RxNav lookup failed for %r: %s", name, exc)
-            rxcui = None
-        if rxcui:
-            link = self.resolve_rxcui(rxcui)
+            rxnav_match = None
+        if rxnav_match is not None:
+            link = self.resolve_rxcui(rxnav_match.rxcui)
             if link.resolved:
-                return link
+                # Re-emit with confidence propagated from the RxNav match.
+                confidence = (
+                    CONFIDENCE_APPROXIMATE if rxnav_match.approximate else CONFIDENCE_EXACT_MATCH
+                )
+                return _with_confidence(link, confidence)
         return self._resolve_via_search(name)
 
     def _resolve_via_uts(self, code: str, system: CodeSystem) -> EntityLink:
@@ -160,7 +190,9 @@ class EntityLinker:
             return EntityLink(input_code=code, input_system=system, error=str(exc))
         if not cui:
             return EntityLink(input_code=code, input_system=system)
-        return self._link_from_cui(code=code, system=system, cui=cui, sources=(source,))
+        link = self._link_from_cui(code=code, system=system, cui=cui, sources=(source,))
+        # Direct UTS source-code → CUI cross-walks are exact-match evidence.
+        return _with_confidence(link, CONFIDENCE_EXACT_MATCH)
 
     def _resolve_via_search(self, name: str) -> EntityLink:
         try:
@@ -177,7 +209,11 @@ class EntityLinker:
             return EntityLink(input_code=name, input_system="RXNORM")
         root_source = first.get("rootSource")
         sources: tuple[str, ...] = (root_source,) if isinstance(root_source, str) else ()
-        return self._link_from_cui(code=name, system="RXNORM", cui=cui, sources=sources)
+        link = self._link_from_cui(code=name, system="RXNORM", cui=cui, sources=sources)
+        # Free-text search results are weaker evidence than direct
+        # cross-walks (the search ranking is not deterministic across
+        # synonym pages); flag them as such.
+        return _with_confidence(link, CONFIDENCE_SEARCH)
 
     def _link_from_cui(
         self,
