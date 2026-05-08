@@ -308,20 +308,62 @@ def _ensemble_to_legacy_dict(
     }
 
 
+def _legacy_adversarial_alone_verdict(
+    feature: str,
+    adversarial_input: dict[str, Any],
+) -> dict[str, Any]:
+    """Emit a legacy verdict from adversarial-only inputs, bypassing the voter.
+
+    Used when adversarial is the only signal (no Layer 1 contract, no
+    KG/LLM). Preserves the legacy ``severity`` / ``remediation`` /
+    ``evidence`` exactly as ``_adversarial_input`` produced them — for
+    ``info`` severity that's ``keep``, for ``moderate`` it's
+    ``ambiguous`` (codex H5 fix: the voter would have rewritten this
+    to ``review``, diverging from the legacy contract downstream
+    consumers branch on), for ``high`` it's ``drop``.
+
+    Tags ``decided_by="adversarial"`` and the empty-signal KG/disagree
+    audit fields. The voter's value-add (cross-source precedence,
+    contradiction detection, confidence scoring) is irrelevant when
+    adversarial is the only source — the verdict is purely a function
+    of the z-score thresholds.
+    """
+    return {
+        "feature": feature,
+        "layer": "3",
+        "z_score": adversarial_input.get("z_score"),
+        "actual_auc": adversarial_input.get("actual_auc"),
+        "null_mean": adversarial_input.get("null_mean"),
+        "null_std": adversarial_input.get("null_std"),
+        "p_value": adversarial_input.get("p_value"),
+        "n_permutations": adversarial_input.get("n_permutations"),
+        "severity": adversarial_input.get("severity", "info"),
+        "remediation": adversarial_input.get("remediation", "keep"),
+        "evidence": adversarial_input.get("evidence", ""),
+        "contract_source": None,
+        "contract_window_days": None,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "kg_signal": "no_signal",
+    }
+
+
 def _legacy_info_verdict(
     feature: str,
     *,
     adversarial_input: Optional[dict[str, Any]],
     evidence: str,
 ) -> dict[str, Any]:
-    """Emit a legacy ``severity=info, remediation=keep`` verdict directly.
+    """Emit a legacy info verdict — backward-compat wrapper for callers
+    that still construct degenerate-score verdicts directly.
 
-    Used when the voter would abstain because adversarial=info is the
-    only signal (no Layer 1 contract, no KG/LLM signal). The legacy
-    contract for Layer 5 is "every feature gets a verdict" with the
-    info-severity case meaning "tested and passed". Bypassing the voter
-    here keeps that contract intact while still tagging the verdict
-    with the new ``decided_by="adversarial"`` audit field.
+    For the adv-alone path, prefer ``_legacy_adversarial_alone_verdict``;
+    that helper preserves whatever severity / remediation
+    ``_adversarial_input`` computed (so moderate stays ``ambiguous``,
+    not the voter's ``review``). This wrapper is kept for the
+    explicit-None-z-score and degenerate-score callers that always
+    want ``severity=info, remediation=keep`` regardless of the input
+    severity field.
     """
     adv = adversarial_input or {}
     return {
@@ -397,22 +439,20 @@ def _compose_legacy_verdict(
     if short_circuit_evidence is not None:
         return _legacy_short_circuit_verdict(feature, evidence=short_circuit_evidence)
 
-    # Bypass: only signal is adversarial=info → preserve legacy contract.
-    if (
-        layer_1_input is None
-        and adversarial_input is not None
-        and adversarial_input.get("severity") == "info"
-    ):
-        return _legacy_info_verdict(
-            feature,
-            adversarial_input=adversarial_input,
-            evidence=adversarial_input.get("evidence", ""),
-        )
+    # Codex H5 fix: bypass when adversarial is the ONLY signal —
+    # for ANY severity (info, moderate, high). The voter would
+    # otherwise rewrite ``moderate`` remediation from the legacy
+    # ``ambiguous`` to ``review``, diverging from the contract
+    # downstream JSON consumers branch on. The voter only adds value
+    # when there's a real cross-source precedence decision to make
+    # (Layer 1 contract present, or KG / LLM signals — the latter
+    # arrive in Stage 2/3).
+    if layer_1_input is None and adversarial_input is not None:
+        return _legacy_adversarial_alone_verdict(feature, adversarial_input)
 
-    # No signals at all → this code path only fires when a feature has
-    # neither a manifest contract nor an adversarial score (e.g.,
-    # caller misuse). Treat as abstain via a fresh voter call so the
-    # audit trail includes a real EnsembleVerdict record.
+    # Real cross-source decision needed → route through the voter so
+    # the ``EnsembleVerdict`` audit fields (decided_by, disagreements,
+    # kg_signal) reflect the precedence rule that fired.
     verdict = voter.vote(
         feature,
         layer_1_verdict=layer_1_input,

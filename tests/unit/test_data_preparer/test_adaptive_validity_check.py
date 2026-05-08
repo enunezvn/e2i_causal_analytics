@@ -859,6 +859,59 @@ def test_phase29_decided_by_to_layer_mapping_covers_all_cases():
     }
 
 
+def test_phase29_h5_moderate_adversarial_alone_keeps_ambiguous_remediation():
+    """Codex review HIGH (H5, 2026-05-08): adv-moderate-alone used to
+    flow through the voter which rewrote remediation from the legacy
+    ``ambiguous`` to ``review``. Downstream consumers branching on
+    remediation strings would see inconsistent values for equivalent
+    risk levels depending on whether Layer 1 happened to fire.
+
+    The fix bypasses the voter for adv-alone of ANY severity so the
+    legacy remediation (info→keep, moderate→ambiguous, high→drop) is
+    preserved.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {
+            "z_score": 4.0,  # > 3σ but < 5σ → moderate
+            "actual_auc": 0.75,
+            "null_mean": 0.5,
+            "null_std": 0.05,
+            "p_value": 0.01,
+            "n_permutations": 200,
+        },
+    )
+    assert verdict["severity"] == "moderate"
+    assert verdict["remediation"] == "ambiguous"  # NOT "review"
+    assert verdict["decided_by"] == "adversarial"
+
+
+def test_phase29_h5_high_adversarial_alone_keeps_legacy_drop():
+    """Sanity: adv-high-alone still produces drop via the bypass path."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _build_verdict,
+    )
+
+    verdict = _build_verdict(
+        "feat_x",
+        {
+            "z_score": 7.5,
+            "actual_auc": 0.95,
+            "null_mean": 0.5,
+            "null_std": 0.05,
+            "p_value": 0.0,
+            "n_permutations": 200,
+        },
+    )
+    assert verdict["severity"] == "high"
+    assert verdict["remediation"] == "drop"
+    assert verdict["decided_by"] == "adversarial"
+
+
 def test_phase29_h3_adversarial_input_handles_explicit_none_z_score():
     """Codex review HIGH (H3, 2026-05-08): an explicit ``z_score=None``
     (e.g., from a custom scorer or malformed payload) used to crash
