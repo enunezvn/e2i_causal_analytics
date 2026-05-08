@@ -174,6 +174,19 @@ def test_compose_cache_filename_no_cohort_in_path():
     assert "optum" not in fname
 
 
+def test_valid_statuses_derived_from_literal_no_drift():
+    """Runtime _VALID_STATUSES stays in sync with the Literal type alias.
+
+    A future status added to CacheRecordStatus auto-updates the validator
+    (no parallel hardcoded set to drift).
+    """
+    from typing import get_args
+
+    from src.data.kg.cache import CacheRecordStatus, _VALID_STATUSES
+
+    assert _VALID_STATUSES == frozenset(get_args(CacheRecordStatus))
+
+
 def test_kg_edge_serialization_round_trip(tmp_path: Path):
     """KGEdge survives JSON round-trip preserving predicate + score."""
     from src.data.kg.cache import CacheRecord, load_cache, save_cache

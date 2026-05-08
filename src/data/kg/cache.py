@@ -22,16 +22,16 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, get_args
 
 from src.data.feature_contract import FeatureContract
 from src.data.kg.types import KGEdge
 
 CacheRecordStatus = Literal["ok", "queried_no_edges", "entity_unresolved", "source_error"]
 
-_VALID_STATUSES: frozenset[str] = frozenset(
-    {"ok", "queried_no_edges", "entity_unresolved", "source_error"}
-)
+# Derived from the Literal definition so a fifth status added to the
+# type alias automatically updates the runtime validator (codex L2).
+_VALID_STATUSES: frozenset[str] = frozenset(get_args(CacheRecordStatus))
 
 
 class CacheRecordValidationError(ValueError):
@@ -124,6 +124,11 @@ def save_cache(records: Iterable[CacheRecord], path: Path) -> None:
     concurrent regenerations. Write goes to a temp file in the same
     directory, then ``os.replace`` atomically replaces the target. On
     error, the temp file is removed.
+
+    After ``os.replace``, the parent directory is fsynced so the rename
+    itself survives a crash on filesystems where the directory entry
+    isn't durable until the dir is flushed (ext4 / XFS without
+    barriers, codex L1).
     """
     sorted_records = sorted(records, key=lambda r: r.feature_name)
     payload = [r.to_json() for r in sorted_records]
@@ -136,12 +141,29 @@ def save_cache(records: Iterable[CacheRecord], path: Path) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
+        _fsync_directory(parent)
     except Exception:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Fsync a directory so its rename entries are durable on disk.
+
+    Skipped on platforms (Windows) where directories don't expose a
+    descriptor for fsync.
+    """
+    try:
+        dir_fd = os.open(str(directory), os.O_DIRECTORY)
+    except (OSError, AttributeError):
+        return
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def load_cache(path: Path) -> list[CacheRecord]:
