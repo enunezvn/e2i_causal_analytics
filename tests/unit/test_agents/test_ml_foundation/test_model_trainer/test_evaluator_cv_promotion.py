@@ -143,3 +143,32 @@ def test_module_constants_reflect_promoted_set():
     a new ``cv_brier_mean``) is a deliberate edit, not a side-effect."""
     assert _CV_PROMOTED_METRICS == ("roc_auc", "pr_auc", "mcc", "f1")
     assert _CV_PROMOTED_STATS == ("mean", "std")
+
+
+def test_raises_when_n_folds_is_not_5():
+    """Codex pass-1 MEDIUM-2: the ``cv_5fold_`` prefix is hardcoded against
+    the fixed-5-fold CV at the runner's evaluator callsite. A different
+    fold count would silently emit a misleading key name, so the helper
+    fails loudly to surface the intent — both the prefix AND downstream
+    JSON consumers must be updated in lockstep."""
+    import pytest
+
+    metrics_result: dict = {"validation_metrics": {}}
+    cv_result_10fold = {**_full_cv_result(), "n_folds": 10}
+    with pytest.raises(ValueError, match="n_folds=10"):
+        _promote_cv_summary_to_validation_metrics(metrics_result, cv_result_10fold)
+
+
+def test_does_not_raise_when_n_folds_missing():
+    """If ``cv_result`` lacks ``n_folds`` (legacy / partial result), the
+    helper passes through silently — the assertion is only meaningful when
+    a fold count is explicitly recorded."""
+    metrics_result: dict = {"validation_metrics": {}}
+    cv_result_no_n_folds = {
+        "cv_completed": True,
+        "cv_roc_auc_mean": 0.71,
+        "cv_roc_auc_std": 0.04,
+        # n_folds intentionally absent
+    }
+    _promote_cv_summary_to_validation_metrics(metrics_result, cv_result_no_n_folds)
+    assert metrics_result["validation_metrics"]["cv_5fold_roc_auc_mean"] == 0.71
