@@ -3958,6 +3958,7 @@ def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
     """
     if regime == "default":
         kwargs: Dict[str, Any] = {
+            "seed": seed,
             "positive_rate": 0.30,
             "signal_strength": 1.0,
             "noise_sd": 0.10,
@@ -3965,6 +3966,7 @@ def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
         }
     elif regime == "adverse":
         kwargs = {
+            "seed": seed,
             "positive_rate": 0.02,
             "signal_strength": 1.0,
             "noise_sd": 0.10,
@@ -3979,6 +3981,7 @@ def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
         # (post-Codex correction) for the empirical-claim revision and
         # 08-risks.md #9 for the scale*noise_sd risk write-up.
         kwargs = {
+            "seed": seed,
             "positive_rate": 0.70,
             "signal_strength": 1.4,
             "noise_sd": 0.03,
@@ -4505,7 +4508,11 @@ async def run_pipeline(
                 experiment_id,
                 scope_spec,
                 patient_df,
-                skip_leakage_check=(regime == "scenario_a"),
+                # All synthetic_v2 scenario regimes are clinically-grounded
+                # fixtures with no real leakage — they share the
+                # journey_status="active" sentinel that confuses the LLM
+                # remediator. See step_2_data_preparer docstring.
+                skip_leakage_check=(regime in _SCENARIO_REGIME_TO_NAME),
                 data_dir=data_dir,
             )
             state["qc_report"] = result.get("qc_report", {"gate_passed": True})
