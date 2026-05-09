@@ -134,30 +134,42 @@ def test_baseline_scenario_a_unaffected_by_balanced_addition() -> None:
     ],
 )
 def test_no_single_feature_dominance(scenario: ScenarioName) -> None:
-    """No manifest feature has |coefficient| > 3.0 — no single-feature dominance.
+    """No manifest feature carries > 50% of the total |coefficient| L1 mass.
 
-    A coefficient magnitude > 3.0 (post-slope-multiplier) on a standardized
-    feature would mean the linear predictor is dominated by ONE column,
-    producing AUC ~ 1.0 which would look like leakage to a trained
-    discriminator. The existing 4 manifests all satisfy this — coefficients
-    range -0.30 to +0.45 (post-slope=0.67 max ≈ 0.30) — but a future scenario
-    author might accidentally write ``coefficient=5.0`` for a "main effect"
-    feature without realizing the consequences.
+    Codex-rescue pass-2 M1 fix (2026-05-09): prior version was a global-
+    magnitude cap (max |coef × slope| ≤ 3.0) that did NOT actually proxy
+    for dominance — a manifest with one coef=2.99 and 5 tiny coefs of 0.001
+    would pass while being 99.8% single-feature-dominated.
+    ``slope_multiplier`` is a per-scenario scalar that scales all features
+    equally, so it cancels out of the relative-share calculation and adds
+    no discrimination between features.
+
+    The relative-share check ``max(|c|) / sum(|c|) ≤ 0.5`` is the actual
+    dominance contract: no single feature explains more than half of the
+    aggregate signal. Existing 4 manifests easily clear this bar
+    (scenario_a's largest coef is ≈ 0.45 vs sum of |c| ≈ 12, giving max
+    share ~0.04).
 
     Pairs with the runner-side ``skip_leakage_check=True`` decision: the
     skip is safe iff each scenario's manifest is non-leaky by construction;
-    this test makes that contract explicit.
+    this test makes the dominance side of that contract explicit.
     """
     builder = SCENARIO_REGISTRY[scenario]()
-    max_abs_coef = max(
-        abs(m.coefficient) * builder.slope_multiplier for m in builder.feature_manifest
+    abs_coefs = [abs(m.coefficient) for m in builder.feature_manifest]
+    total = sum(abs_coefs)
+    assert total > 0, (
+        f"{scenario.name}: no non-zero coefficients in manifest — "
+        "scenario has no signal at all (separate from dominance)."
     )
-    assert max_abs_coef <= 3.0, (
-        f"{scenario.name}: max |coefficient * slope_multiplier| = "
-        f"{max_abs_coef:.4f} exceeds non-leakage threshold 3.0. "
-        "A single-feature-dominance manifest would look like leakage to a "
-        "trained discriminator and break the skip_leakage_check assumption "
-        "in scripts/run_tier0_test.py:4515."
+    max_share = max(abs_coefs) / total
+    DOMINANCE_THRESHOLD = 0.50
+    assert max_share <= DOMINANCE_THRESHOLD, (
+        f"{scenario.name}: max coefficient share = {max_share:.4f} "
+        f"(largest |coef| {max(abs_coefs):.4f} / sum |coef| {total:.4f}) "
+        f"exceeds dominance threshold {DOMINANCE_THRESHOLD}. "
+        "A single-feature-dominance manifest would produce AUC ~ 1.0 and "
+        "look like leakage to a trained discriminator — breaking the "
+        "skip_leakage_check assumption in scripts/run_tier0_test.py:4515."
     )
 
 
