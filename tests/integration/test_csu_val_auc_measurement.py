@@ -169,24 +169,67 @@ def test_feature_manifest_source_threaded(csu_artifact: dict) -> None:
     """Item A1 sanity check: the runner threaded ``feature_manifest_source``
     through to scope_spec.
 
-    Coverage gap (documented for Item A follow-up): a stronger downstream
-    assertion would also check that ``adaptive_verdicts`` contains at least
-    one ``layer='1'`` verdict — proof that Layer 5 actually consulted the
-    CSU registry. We currently CANNOT assert that here because the tier0
-    runner passes ``data_source: "patient_journeys"`` (a string) to the
-    DataPreparer agent, which routes it through Supabase instead of the
-    CSU JSON on disk; the agent's file-ingestion path requires a dict
-    ``{"type": "files", "paths": {...}}`` shape (see the existing
-    ``test_csu_full_data_preparer_e2e.py`` fixture). The string-routes-to-
-    Supabase gap is unrelated to Item A's manifest-source threading and
-    deserves its own follow-up. Until then, the existing
-    ``test_csu_full_data_preparer_e2e.py::test_layer_5_audit_trail_populated``
-    covers the registry-consumption path via the direct-agent test."""
+    The downstream "did Layer 5 actually consult the CSU registry"
+    assertion is in ``test_adaptive_verdicts_non_empty_with_layer_1``
+    (backlog item #12 closure)."""
     assert csu_artifact.get("feature_manifest_source") == "csu", (
         f"feature_manifest_source not threaded; got "
         f"{csu_artifact.get('feature_manifest_source')!r}. Layer 5 manifest "
         f"verdicts will not have fired — re-check the CLI flag plumbing."
     )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.timeout(2000)
+def test_adaptive_verdicts_non_empty_with_layer_1(csu_artifact: dict) -> None:
+    """Layer 5 produced verdicts on the real CSU schema, including at
+    least one Layer 1 (manifest-driven) verdict.
+
+    Backlog item #12 closure: prior to the runner fix that routed
+    ``--data-dir`` through ``_load_from_files``, the agent's
+    ``adaptive_validity_check`` saw the ``SampleDataGenerator`` synthetic
+    schema instead of real CSU columns and Layer 1 had nothing to match
+    against. After the fix the manifest contracts (24 contracts in the
+    CSU FeatureContract registry) MUST fire on real CSU columns
+    declared in the manifest as ``knowable_at=post_index`` (e.g.,
+    ``journey_duration_days``, ``journey_status``), producing at least
+    one ``layer="1"`` verdict.
+
+    Empty ``adaptive_verdicts`` here = Layer 5 silently skipped or the
+    file-ingestion path regressed back to the synthetic generator;
+    either is a release-blocker regression."""
+    verdicts = csu_artifact.get("adaptive_verdicts") or []
+    assert verdicts, (
+        "adaptive_verdicts is empty — Layer 5 did not produce a single "
+        "verdict on the real CSU run. Either the runner regressed back to "
+        "the SampleDataGenerator path (re-check step_2_data_preparer's "
+        "data_dir threading) or the manifest contracts no longer match the "
+        "on-disk schema."
+    )
+
+    layer_1_verdicts = [
+        v for v in verdicts if isinstance(v, dict) and v.get("layer") == "1"
+    ]
+    assert layer_1_verdicts, (
+        f"No layer='1' verdicts found among {len(verdicts)} adaptive verdicts. "
+        f"The CSU manifest's 24 contracts include several "
+        f"``knowable_at=post_index`` features (e.g. ``journey_duration_days``, "
+        f"``journey_status``, ``brand``); one of those should appear here. "
+        f"Verdict layers seen: "
+        f"{sorted({str(v.get('layer')) for v in verdicts if isinstance(v, dict)})}"
+    )
+
+    # Spot-check verdict shape (matches test_csu_full_data_preparer_e2e.py
+    # lines 243-258).
+    required_keys = {"feature", "layer", "severity", "remediation", "evidence"}
+    for v in verdicts:
+        assert isinstance(v, dict), f"Non-dict verdict: {v!r}"
+        missing = required_keys - set(v.keys())
+        assert not missing, (
+            f"Verdict {v.get('feature')!r} missing required keys: {missing}. "
+            f"Got keys: {sorted(v.keys())}"
+        )
 
 
 @pytest.mark.slow
@@ -259,17 +302,13 @@ def test_no_high_z_score_on_kept_features(csu_artifact: dict) -> None:
     skip them too. The remaining Layer 3 verdicts are on the surviving
     feature set, which the plan demands all sit below 5σ.
 
-    Vacuous-pass caveat (codex H1, partial): if the artifact's
-    ``adaptive_verdicts`` list is empty, this assertion is vacuously
-    true. The tier0 runner currently has a documented gap (see
-    ``test_feature_manifest_source_threaded`` docstring) where the
-    DataPreparer agent reads ``data_source`` as a Supabase table-name
-    string instead of the CSU JSON on disk — Layer 5 then has nothing
-    relevant to evaluate. Once that gap is fixed, this assertion will
-    actually exercise Layer 3 verdicts from the CSU cohort. Until then,
-    the equivalent strict assertion is in
-    ``test_csu_full_data_preparer_e2e.py`` which invokes the agent
-    directly with a file-ingestion data_source.
+    Backlog item #12 (closed): prior to the runner fix this test's
+    ``adaptive_verdicts`` list was empty (vacuously true) because the
+    agent's data_loader read synthetic patient_journeys instead of the
+    on-disk CSU JSON. The companion
+    ``test_adaptive_verdicts_non_empty_with_layer_1`` now guards that
+    invariant directly. This test exercises the Layer 3 z-score gate on
+    the actual surviving feature set.
 
     z_score is a TOP-LEVEL key on the legacy verdict dict per
     ``adaptive_validity_check._build_verdict`` (severity-tagged Layer 3
