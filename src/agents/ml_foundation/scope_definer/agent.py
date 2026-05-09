@@ -17,6 +17,7 @@ Integration:
 import logging
 from datetime import datetime
 from typing import Any, Dict, List
+from uuid import uuid4
 
 from .graph import create_scope_definer_graph
 from .state import ScopeDefinerState
@@ -147,12 +148,15 @@ class ScopeDefinerAgent:
             # D1.2: thread caller-provided audit_workflow_id. Backlog #1
             # (closed 2026-05-09) tightened the State contract from
             # ``Field(default_factory=uuid4)`` to plain ``UUID`` (required,
-            # no default); missing UUID now raises ValidationError at State
-            # construction (fail-loud).
+            # no default) to fix the LangGraph channel-reducer bug
+            # (default_factory firing on every Schema reconstruction).
+            # Caller-provided UUID is preferred; absent that, generate one at
+            # the agent boundary. Either way the UUID is set ONCE before
+            # graph.ainvoke, so LangGraph's reducer pins it across nodes.
             **(
                 {"audit_workflow_id": input_data["audit_workflow_id"]}
                 if input_data.get("audit_workflow_id") is not None
-                else {}
+                else {"audit_workflow_id": uuid4()}
             ),
             # Required inputs
             "problem_description": input_data["problem_description"],

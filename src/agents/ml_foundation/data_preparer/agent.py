@@ -8,6 +8,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Any, Dict
+from uuid import uuid4
 
 from .graph import create_data_preparer_graph
 from .state import DataPreparerState
@@ -113,12 +114,15 @@ class DataPreparerAgent:
         initial_state: DataPreparerState = {
             # D1.2: thread caller-provided audit_workflow_id (see scope_definer
             # for the rationale). Backlog #1 (closed 2026-05-09) tightened the
-            # State to required-no-default; missing UUID now raises
-            # ValidationError at State construction (fail-loud).
+            # State to required-no-default to fix the LangGraph channel-reducer
+            # bug (default_factory firing on every Schema reconstruction).
+            # Caller-provided UUID is preferred; absent that, generate one at
+            # the agent boundary. Either way the UUID is set ONCE before
+            # graph.ainvoke, so LangGraph's reducer pins it across nodes.
             **(
                 {"audit_workflow_id": input_data["audit_workflow_id"]}
                 if input_data.get("audit_workflow_id") is not None
-                else {}
+                else {"audit_workflow_id": uuid4()}
             ),
             "experiment_id": experiment_id,
             "scope_spec": scope_spec,
