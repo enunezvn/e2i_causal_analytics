@@ -299,12 +299,8 @@ def test_scenario_a_balanced_default_n_lands_in_empirical_band(tmp_path: Path) -
         artifact,
         regime="scenario_a_balanced",
         empirical_band=BASELINE_LOCAL_SCENARIO_A_BALANCED["auc_band_empirical_hpo5"],
-        tolerance_empirical=BASELINE_LOCAL_SCENARIO_A_BALANCED[
-            "tolerance_auc_empirical"
-        ],
-        min_perm_p_significant=BASELINE_LOCAL_SCENARIO_A_BALANCED[
-            "min_perm_p_significant"
-        ],
+        tolerance_empirical=BASELINE_LOCAL_SCENARIO_A_BALANCED["tolerance_auc_empirical"],
+        min_perm_p_significant=BASELINE_LOCAL_SCENARIO_A_BALANCED["min_perm_p_significant"],
         max_train_val_delta=BASELINE_LOCAL_SCENARIO_A_BALANCED["max_train_val_delta"],
         calibrated_band=None,  # no biology-derived band — empirical only
         enforce_calibrated_band=False,
@@ -323,9 +319,7 @@ def test_scenario_a_extended_n_20000_envelope_shift(tmp_path: Path) -> None:
     Documents the n-vs-envelope shape so future readers know n=20000 is
     already covered (don't run more — CI budget).
     """
-    artifact = _run_tier0_e2e(
-        "scenario_a", n_total=20000, tmp_path=tmp_path, hpo_trials=5
-    )
+    artifact = _run_tier0_e2e("scenario_a", n_total=20000, tmp_path=tmp_path, hpo_trials=5)
     _assert_scenario_metrics(
         artifact,
         regime="scenario_a@n=20000",
@@ -367,9 +361,7 @@ def test_n_total_below_floor_rejected_at_argparse() -> None:
         "--no-bentoml",
         "--no-save",
     ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=60, cwd=str(REPO_ROOT)
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(REPO_ROOT))
     assert result.returncode == 2, (
         f"Expected argparse exit code 2 for --n-total 99, got {result.returncode}; "
         f"stderr (truncated): {result.stderr[-500:]!r}"
@@ -421,18 +413,13 @@ def test_no_flag_scenario_a_preserves_pre_pr_baseline(tmp_path: Path) -> None:
     train_val_delta = (artifact.get("test_metrics") or {}).get("train_val_auc_delta")
     assert val_auc is not None, "no-flag run produced no val_AUC"
     assert train_val_delta is not None, "no-flag run produced no train_val_auc_delta"
-    assert (
-        abs(val_auc - SCENARIO_A_NO_FLAG_BASELINE_VAL_AUC_LOCAL) <= 1e-9
-    ), (
+    assert abs(val_auc - SCENARIO_A_NO_FLAG_BASELINE_VAL_AUC_LOCAL) <= 1e-9, (
         f"no-flag scenario_a val_AUC drifted: observed {val_auc!r}, "
         f"baseline {SCENARIO_A_NO_FLAG_BASELINE_VAL_AUC_LOCAL!r} "
         "(±1e-9 — bit-deterministic within ISA). The --n-total / --seed "
         "wiring must not change the no-flag path's behaviour."
     )
-    assert (
-        abs(train_val_delta - SCENARIO_A_NO_FLAG_BASELINE_TRAIN_VAL_DELTA_LOCAL)
-        <= 1e-9
-    ), (
+    assert abs(train_val_delta - SCENARIO_A_NO_FLAG_BASELINE_TRAIN_VAL_DELTA_LOCAL) <= 1e-9, (
         f"no-flag scenario_a train-val Δ drifted: observed {train_val_delta!r}, "
         f"baseline {SCENARIO_A_NO_FLAG_BASELINE_TRAIN_VAL_DELTA_LOCAL!r} (±1e-9)."
     )
@@ -458,9 +445,7 @@ def test_n_total_at_floor_accepted_at_argparse() -> None:
         "--no-bentoml",
         "--no-save",
     ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=60, cwd=str(REPO_ROOT)
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=str(REPO_ROOT))
     assert result.returncode == 0, (
         f"Expected exit 0 for --n-total 100 --dry-run, got {result.returncode}; "
         f"stderr (truncated): {result.stderr[-500:]!r}"

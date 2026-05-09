@@ -75,9 +75,7 @@ PREVALENCE_TOLERANCE = 0.02
 
 @pytest.mark.parametrize("n_total", [500, 2000, 6000, 20000])
 @pytest.mark.parametrize("seed", [42, 43, 44])
-def test_scenario_a_balanced_prevalence_converges_at_multiple_n(
-    n_total: int, seed: int
-) -> None:
+def test_scenario_a_balanced_prevalence_converges_at_multiple_n(n_total: int, seed: int) -> None:
     """Realised prevalence is within ±0.02 of target=0.50 for every (n, seed) pair.
 
     If this test fails for a given n, it means the intercept solver could
@@ -86,9 +84,7 @@ def test_scenario_a_balanced_prevalence_converges_at_multiple_n(
     depend on this convergence; failure halts the cohort-growth plan and
     sends it to one of the four fallback paths in plan §Task 3.1b.
     """
-    ds = generate_scenario(
-        ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED, seed=seed, n_total=n_total
-    )
+    ds = generate_scenario(ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED, seed=seed, n_total=n_total)
     # Use the realised prevalence from metadata — that's the full-cohort
     # prevalence pre-split, which is what the solver targets.
     realised = ds.metadata.realized_prevalence
@@ -104,9 +100,7 @@ def test_scenario_a_balanced_prevalence_converges_at_multiple_n(
 
 def test_target_prevalence_is_in_metadata() -> None:
     """``ScenarioMetadata.target_prevalence`` reflects the subclass override."""
-    ds = generate_scenario(
-        ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED, seed=42, n_total=2000
-    )
+    ds = generate_scenario(ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED, seed=42, n_total=2000)
     assert ds.metadata.target_prevalence == 0.50
 
 
@@ -156,8 +150,7 @@ def test_no_single_feature_dominance(scenario: ScenarioName) -> None:
     """
     builder = SCENARIO_REGISTRY[scenario]()
     max_abs_coef = max(
-        abs(m.coefficient) * builder.slope_multiplier
-        for m in builder.feature_manifest
+        abs(m.coefficient) * builder.slope_multiplier for m in builder.feature_manifest
     )
     assert max_abs_coef <= 3.0, (
         f"{scenario.name}: max |coefficient * slope_multiplier| = "
@@ -186,9 +179,7 @@ def test_signal_is_distributed_across_multiple_features(scenario: ScenarioName) 
     existing 4 manifests easily clear (scenario_a has 35 of 40 non-zero).
     """
     builder = SCENARIO_REGISTRY[scenario]()
-    nonzero = sum(
-        1 for m in builder.feature_manifest if abs(m.coefficient) > 1e-9
-    )
+    nonzero = sum(1 for m in builder.feature_manifest if abs(m.coefficient) > 1e-9)
     assert nonzero >= 5, (
         f"{scenario.name}: only {nonzero} features with non-zero coefficient. "
         "Distributed signal (≥5 non-zero) is required for the "
