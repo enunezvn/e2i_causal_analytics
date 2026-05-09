@@ -2242,11 +2242,20 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_no_kg_decided():
 
 
 def _well_formed_verdicts(count: int = 100) -> list[dict[str, Any]]:
-    """100 verdicts, 97 non-abstain, 80 KG-decided, 0 disagreements.
+    """``count`` verdicts where 97% are non-abstain, ≥1 KG-decided, 0 disagreements.
 
     Mirrors the passing-threshold case so each backlog #14 test isolates
     on the patient-count guard alone — no other gate fires.
+
+    Codex pass-1 LOW Q5: assert ``count >= 97`` so a future test author who
+    reuses this helper with a small count gets a fail-loud error instead of
+    silent abstain-padding underflow.
     """
+    if count < 97:
+        raise ValueError(
+            f"_well_formed_verdicts requires count>=97 to keep the abstain padding "
+            f"non-negative and 97% non-abstain shape; got {count}."
+        )
     return (
         [{"decided_by": "kg", "disagreements": []}] * 80
         + [{"decided_by": "adversarial", "disagreements": []}] * 17
