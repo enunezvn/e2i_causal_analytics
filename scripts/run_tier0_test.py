@@ -4620,7 +4620,7 @@ async def run_pipeline(
             ))
 
         # Step 2c: Feast Freshness Check (gracefully degrading)
-        if 2 in steps_to_run:
+        if 2 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             freshness_result = await step_2c_feast_freshness_check(state)
             freshness_status = freshness_result.get("status", "skipped")
