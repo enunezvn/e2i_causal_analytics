@@ -43,6 +43,36 @@ from .advanced_validation import (
 logger = logging.getLogger(__name__)
 
 
+_CV_PROMOTED_METRICS: tuple[str, ...] = ("roc_auc", "pr_auc", "mcc", "f1")
+_CV_PROMOTED_STATS: tuple[str, ...] = ("mean", "std")
+
+
+def _promote_cv_summary_to_validation_metrics(
+    metrics_result: Dict[str, Any], cv_result: Dict[str, Any]
+) -> None:
+    """Promote scalar CV summary metrics into ``validation_metrics``.
+
+    The TIER0_E2E_JSON_OUT artifact filter at
+    ``scripts/run_tier0_test.py:5972-5976`` only retains scalar values
+    (``int``, ``float``, ``str``, ``None``) on the ``validation_metrics``
+    payload. Without this promotion the cv summary lives in
+    ``metrics_result["cv_results"]`` (a sub-dict) and gets dropped by the
+    filter, forcing downstream consumers to stdout-scrape the
+    ``"5-fold CV AUC: ..."`` log line.
+
+    Closes backlog #18. Mutates ``metrics_result`` in place.
+
+    Adds ``cv_5fold_<metric>_<stat>`` keys for {roc_auc, pr_auc, mcc, f1}
+    × {mean, std} when each source key is present in ``cv_result``.
+    """
+    val_metrics = metrics_result.setdefault("validation_metrics", {})
+    for metric in _CV_PROMOTED_METRICS:
+        for stat in _CV_PROMOTED_STATS:
+            src_key = f"cv_{metric}_{stat}"
+            if src_key in cv_result:
+                val_metrics[f"cv_5fold_{metric}_{stat}"] = cv_result[src_key]
+
+
 def _compute_baseline_test_metrics(
     y_train: Optional[np.ndarray],
     y_test: Optional[np.ndarray],
@@ -313,6 +343,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             metrics_result["cv_results"] = cv_result
             if cv_result.get("cv_completed"):
+                _promote_cv_summary_to_validation_metrics(metrics_result, cv_result)
                 logger.info(
                     f"CV results: AUC={cv_result.get('cv_roc_auc_mean', 0):.4f}"
                     f"±{cv_result.get('cv_roc_auc_std', 0):.4f}, "

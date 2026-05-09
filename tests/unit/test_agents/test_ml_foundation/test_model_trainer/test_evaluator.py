@@ -269,14 +269,34 @@ class TestEvaluateModel:
         assert result["mae"] >= 0
 
     async def test_handles_missing_validation_data(self, binary_classification_state):
-        """Should handle missing validation data gracefully."""
+        """Should handle missing validation data gracefully.
+
+        With no validation split, the per-split validation metrics (``roc_auc``,
+        ``pr_auc``, etc.) are not produced. After backlog #18, the 5-fold CV
+        summary IS still computed against the available train+test data and
+        its scalar summary lands in ``validation_metrics`` as
+        ``cv_5fold_*`` keys. The semantic invariant is "no validation-split
+        metrics," not "literally empty dict."
+        """
         del binary_classification_state["X_validation_preprocessed"]
         del binary_classification_state["validation_data"]
 
         result = await evaluate_model(binary_classification_state)
 
         assert "error" not in result
-        assert result["validation_metrics"] == {}
+        val_metrics = result["validation_metrics"]
+        # Per-split validation metrics must not be present:
+        for split_metric in ("roc_auc", "pr_auc", "f1_score", "precision", "recall"):
+            assert split_metric not in val_metrics, (
+                f"With no validation split, {split_metric!r} should not be in "
+                f"validation_metrics; got {val_metrics!r}"
+            )
+        # Only cv_5fold_* keys (or nothing) are allowed:
+        non_cv_keys = [k for k in val_metrics if not k.startswith("cv_5fold_")]
+        assert not non_cv_keys, (
+            f"validation_metrics should contain only cv_5fold_* keys when "
+            f"no validation split exists; unexpected keys: {non_cv_keys!r}"
+        )
 
     async def test_handles_continuous_problem_type(self, regression_state):
         """Should treat 'continuous' as regression."""
