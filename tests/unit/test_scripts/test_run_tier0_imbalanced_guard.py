@@ -53,13 +53,11 @@ def test_imbalanced_with_scenario_regime_errors(scenario_regime: str) -> None:
     )
     err = result.stderr
     assert "--imbalanced" in err and "silently ignored" in err, (
-        f"Error message lacks expected pointers for {scenario_regime}; "
-        f"got:\n{err}"
+        f"Error message lacks expected pointers for {scenario_regime}; got:\n{err}"
     )
     # Source-line reference must point at the actual short-circuit
     assert "generate_sample_data:1469" in err, (
-        f"Error message must cite generate_sample_data:1469 for "
-        f"{scenario_regime}; got:\n{err}"
+        f"Error message must cite generate_sample_data:1469 for {scenario_regime}; got:\n{err}"
     )
 
 
@@ -109,15 +107,12 @@ def test_imbalanced_non_half_redirects_to_legacy_regimes() -> None:
     assert result.returncode == 2
     err = result.stderr
     assert "default/adverse/clean" in err, (
-        f"At --imbalanced 0.30 the guard should redirect to legacy regimes; "
-        f"got:\n{err}"
+        f"At --imbalanced 0.30 the guard should redirect to legacy regimes; got:\n{err}"
     )
     # Extract only the parser.error line (last non-empty line of stderr) —
     # argparse usage banner contains "scenario_a_balanced" as a choice
     # listing, but the error message itself should NOT recommend it.
-    error_line = next(
-        line for line in reversed(err.splitlines()) if line.strip()
-    )
+    error_line = next(line for line in reversed(err.splitlines()) if line.strip())
     assert "scenario_a_balanced" not in error_line, (
         f"Guard error line should not recommend scenario_a_balanced for "
         f"non-0.50 ratio; got:\n{error_line}"
