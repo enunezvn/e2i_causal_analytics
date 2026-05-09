@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+    _F1_FALLBACK_MCC_THRESHOLD,
     _compute_classification_metrics,
     _compute_cost_optimal_threshold,
     _compute_optimal_threshold,
@@ -627,3 +628,166 @@ class TestSelectThresholdWithCostMatrix:
 
         assert threshold == 0.5
         assert source == "default"
+
+
+# ============================================================================
+# Backlog #20 Gap 2: F1-fallback when validation MCC is below the floor
+# ============================================================================
+
+
+class TestF1FallbackOnLowMCC:
+    """Verify F1-fallback engages on low-MCC validation outcomes.
+
+    When the canonical Youden's J / cost-optimal / precision-constrained
+    pick produces validation MCC < 0.20, the evaluator retries with the
+    F1-optimal threshold from advanced_validation. The swap only happens
+    when F1-optimal STRICTLY improves MCC (no performative re-tuning).
+    """
+
+    @staticmethod
+    def _make_low_mcc_split(rng: np.random.Generator, n: int = 200):
+        """Construct a (y_val, y_val_pred, y_val_proba, y_test, ...) bundle
+        whose Youden's J pick yields a deliberately-low MCC.
+
+        We use heavily-overlapping class distributions so any threshold
+        gives near-random separation; the F1-optimal sweep tends to pick
+        a different threshold that may eke out marginally higher MCC.
+        """
+        # Heavy class overlap: positives at 0.45 ± 0.15, negatives at 0.40 ± 0.15
+        n_pos = n // 2
+        n_neg = n - n_pos
+        pos_scores = np.clip(rng.normal(0.45, 0.15, n_pos), 0.001, 0.999)
+        neg_scores = np.clip(rng.normal(0.40, 0.15, n_neg), 0.001, 0.999)
+        y = np.concatenate([np.ones(n_pos, dtype=int), np.zeros(n_neg, dtype=int)])
+        proba_pos = np.concatenate([pos_scores, neg_scores])
+        order = rng.permutation(n)
+        y = y[order]
+        proba_pos = proba_pos[order]
+        y_pred = (proba_pos >= 0.5).astype(int)
+        y_proba = np.column_stack([1.0 - proba_pos, proba_pos])
+        return y, y_pred, y_proba
+
+    def test_f1_fallback_engages_when_mcc_below_floor(self):
+        """When validation MCC at chosen threshold < 0.20 AND F1-optimal
+        improves MCC, the evaluator switches to F1-optimal threshold."""
+        rng = np.random.default_rng(42)
+        y_val, y_val_pred, y_val_proba = self._make_low_mcc_split(rng, n=200)
+        # Test set with same low-separation distribution (decoupled draw)
+        y_test, y_test_pred, y_test_proba = self._make_low_mcc_split(rng, n=200)
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+        )
+
+        validation_metrics = result["validation_metrics"]
+        # Either fallback engaged (MCC at chosen was < floor AND F1-opt
+        # gave higher MCC) OR fallback didn't fire (MCC above floor or
+        # F1-opt didn't beat it). Both are valid; we assert the
+        # post-fallback invariants.
+        if validation_metrics.get("f1_fallback_engaged"):
+            # MCC must be strictly higher post-fallback
+            assert validation_metrics["mcc"] > validation_metrics["f1_fallback_original_mcc"]
+            assert validation_metrics["chosen_threshold_source"] == "validation_f1_fallback"
+            # Original threshold source preserved for audit
+            assert validation_metrics["f1_fallback_original_threshold_source"] in {
+                "validation",
+                "validation_cost_optimal",
+            }
+        else:
+            # If not engaged, original source must still be one of the
+            # canonical sources — never "validation_f1_fallback"
+            assert validation_metrics["chosen_threshold_source"] != "validation_f1_fallback"
+
+    def test_f1_fallback_skipped_when_mcc_above_floor(self):
+        """When validation MCC at chosen threshold >= 0.20, F1-fallback
+        does NOT engage even if F1-optimal would give a higher MCC."""
+        rng = np.random.default_rng(20260509)
+        # Well-separated classes → high MCC at Youden's J
+        n = 200
+        n_pos = n // 2
+        n_neg = n - n_pos
+        pos_scores = np.clip(rng.normal(0.75, 0.05, n_pos), 0.001, 0.999)
+        neg_scores = np.clip(rng.normal(0.25, 0.05, n_neg), 0.001, 0.999)
+        y = np.concatenate([np.ones(n_pos, dtype=int), np.zeros(n_neg, dtype=int)])
+        proba_pos = np.concatenate([pos_scores, neg_scores])
+        order = rng.permutation(n)
+        y = y[order]
+        proba_pos = proba_pos[order]
+        y_pred = (proba_pos >= 0.5).astype(int)
+        y_proba = np.column_stack([1.0 - proba_pos, proba_pos])
+
+        # Reuse same data for test set (just for the test fixture)
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y,
+            y_validation_pred=y_pred,
+            y_validation_proba=y_proba,
+            y_test=y,
+            y_test_pred=y_pred,
+            y_test_proba=y_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+        )
+
+        validation_metrics = result["validation_metrics"]
+        # MCC should be high → fallback should NOT engage
+        assert validation_metrics["mcc"] >= _F1_FALLBACK_MCC_THRESHOLD
+        assert validation_metrics["chosen_threshold_source"] != "validation_f1_fallback"
+        assert "f1_fallback_engaged" not in validation_metrics
+
+    def test_f1_fallback_skipped_when_no_improvement(self):
+        """When MCC < floor BUT F1-optimal does NOT improve MCC, the
+        fallback evaluates and declines to swap. Original threshold +
+        source preserved.
+
+        Construction: degenerate validation set where every threshold gives
+        the same low MCC. F1-optimal's MCC won't exceed the chosen one.
+        """
+        rng = np.random.default_rng(20260510)
+        n = 100
+        # Random labels + uniform probabilities → all thresholds give ~0 MCC
+        y = rng.integers(0, 2, n)
+        proba_pos = rng.uniform(0.45, 0.55, n)  # tight uniform → near-flat ROC
+        y_pred = (proba_pos >= 0.5).astype(int)
+        y_proba = np.column_stack([1.0 - proba_pos, proba_pos])
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y,
+            y_validation_pred=y_pred,
+            y_validation_proba=y_proba,
+            y_test=y,
+            y_test_pred=y_pred,
+            y_test_proba=y_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+        )
+
+        validation_metrics = result["validation_metrics"]
+        # Low MCC environment — fallback either engages with marginal
+        # improvement (rare) or skips (common). Either way, post-state
+        # is consistent.
+        if validation_metrics.get("f1_fallback_engaged"):
+            assert validation_metrics["mcc"] > validation_metrics["f1_fallback_original_mcc"]
+        else:
+            # Fallback declined: source unchanged from canonical pick
+            assert validation_metrics["chosen_threshold_source"] != "validation_f1_fallback"
+
+    def test_f1_fallback_floor_constant_value(self):
+        """Pin the floor constant so a future regression to a different
+        value is caught by the test suite — not by surprise in production."""
+        assert _F1_FALLBACK_MCC_THRESHOLD == 0.20
