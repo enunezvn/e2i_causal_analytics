@@ -1889,6 +1889,7 @@ async def step_2_data_preparer(
     sample_df: pd.DataFrame,
     *,
     skip_leakage_check: bool = False,
+    data_dir: str | None = None,
 ) -> dict[str, Any]:
     """Step 2: Load and prepare data with QC.
 
@@ -1898,6 +1899,13 @@ async def step_2_data_preparer(
     construction; the LLM otherwise name-classifies legitimate clinical
     features (e.g. ``journey_status``) as tautological and replaces the
     feature set with a hallucinated recommendation.
+
+    ``data_dir`` routes the agent's ``data_loader`` through
+    ``_load_from_files`` so the ``adaptive_validity_check`` (Layer 5)
+    audits the actual cohort columns instead of the
+    ``SampleDataGenerator`` synthetic schema. Required for any RWD
+    cohort run where Layer 1 manifest verdicts (``layer="1"``) need to
+    fire on the on-disk JSON. Backlog item #12.
     """
     import time as time_mod
     step_start = time_mod.time()
@@ -1912,13 +1920,25 @@ async def step_2_data_preparer(
         if col not in ["patient_journey_id", CONFIG.target_outcome, "brand"]
     ]
 
+    # When data_dir is supplied (real cohort), route the agent's data_loader
+    # through _load_from_files so Layer 5 sees the on-disk schema. Otherwise
+    # keep the existing SampleDataGenerator path for synthetic regimes.
+    is_rwd_run = data_dir is not None
+    data_source: str | dict[str, Any]
+    if is_rwd_run:
+        data_source = {"type": "file_dir", "path": data_dir}
+        sample_size = len(sample_df)
+    else:
+        data_source = "patient_journeys"
+        sample_size = 500
+
     # Ensure scope_spec has required fields with realistic values.
     # ``sampling_frame_max_drift`` is forwarded so the audit node and the
     # runner gate use the same threshold.
     scope_spec.update({
         "experiment_id": experiment_id,
-        "use_sample_data": True,
-        "sample_size": 500,
+        "use_sample_data": not is_rwd_run,
+        "sample_size": sample_size,
         "prediction_target": CONFIG.target_outcome,
         "problem_type": CONFIG.problem_type,
         "required_features": available_features,
@@ -1928,13 +1948,13 @@ async def step_2_data_preparer(
 
     input_data = {
         "scope_spec": scope_spec,
-        "data_source": "patient_journeys",
+        "data_source": data_source,
         "brand": CONFIG.brand,
         "skip_leakage_check": skip_leakage_check,
     }
 
     print_input_section({
-        "data_source": "patient_journeys",
+        "data_source": data_source if is_rwd_run else "patient_journeys",
         "brand": CONFIG.brand,
         "sample_size": len(sample_df),
         "features": f"{len(available_features)} available",
@@ -4379,6 +4399,7 @@ async def run_pipeline(
                 scope_spec,
                 patient_df,
                 skip_leakage_check=(regime == "scenario_a"),
+                data_dir=data_dir,
             )
             state["qc_report"] = result.get("qc_report", {"gate_passed": True})
             state["gate_passed"] = result.get("gate_passed", True)
