@@ -27,6 +27,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from .graph import create_observability_connector_graph
 from .state import ObservabilityConnectorState
@@ -291,7 +292,9 @@ class ObservabilityConnectorAgent:
                 "output_tokens": output_tokens,
                 "tokens_used": total_tokens,
             }
-            await self.graph.ainvoke({"events_to_log": [event]})
+            await self.graph.ainvoke(
+                {"events_to_log": [event], "audit_workflow_id": uuid4()}
+            )
 
         return result
 
@@ -317,12 +320,15 @@ class ObservabilityConnectorAgent:
         initial_state: ObservabilityConnectorState = {
             # D1.2: thread caller-provided audit_workflow_id (see scope_definer
             # for the rationale). Backlog #1 (closed 2026-05-09) tightened the
-            # State to required-no-default; missing UUID now raises
-            # ValidationError at State construction (fail-loud).
+            # State to required-no-default to fix the LangGraph channel-reducer
+            # bug (default_factory firing on every Schema reconstruction).
+            # Caller-provided UUID is preferred; absent that, generate one at
+            # the agent boundary. Either way the UUID is set ONCE before
+            # graph.ainvoke, so LangGraph's reducer pins it across nodes.
             **(
                 {"audit_workflow_id": input_data["audit_workflow_id"]}
                 if input_data.get("audit_workflow_id") is not None
-                else {}
+                else {"audit_workflow_id": uuid4()}
             ),
             "events_to_log": [],  # No events to log, just compute metrics
             "time_window": time_window,
@@ -377,12 +383,15 @@ class ObservabilityConnectorAgent:
         initial_state: ObservabilityConnectorState = {
             # D1.2: thread caller-provided audit_workflow_id (see scope_definer
             # for the rationale). Backlog #1 (closed 2026-05-09) tightened the
-            # State to required-no-default; missing UUID now raises
-            # ValidationError at State construction (fail-loud).
+            # State to required-no-default to fix the LangGraph channel-reducer
+            # bug (default_factory firing on every Schema reconstruction).
+            # Caller-provided UUID is preferred; absent that, generate one at
+            # the agent boundary. Either way the UUID is set ONCE before
+            # graph.ainvoke, so LangGraph's reducer pins it across nodes.
             **(
                 {"audit_workflow_id": input_data["audit_workflow_id"]}
                 if input_data.get("audit_workflow_id") is not None
-                else {}
+                else {"audit_workflow_id": uuid4()}
             ),
             "events_to_log": input_data.get("events_to_log", []),
             "time_window": input_data.get("time_window", "24h"),
@@ -461,7 +470,9 @@ class ObservabilityConnectorAgent:
             }
 
             # Execute workflow to emit span
-            await self.graph.ainvoke({"events_to_log": [event]})
+            await self.graph.ainvoke(
+                {"events_to_log": [event], "audit_workflow_id": uuid4()}
+            )
 
         except Exception as e:
             # Log but don't fail - observability should not break operations
