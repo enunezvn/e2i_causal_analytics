@@ -182,9 +182,7 @@ class TestCheckCompletenessExcludedFeatures:
             if r["expectation_type"] == "expect_column_null_percentage"
         ]
         warnings_excluded = [
-            r
-            for r in results_excluded
-            if r["expectation_type"] == "expect_column_null_percentage"
+            r for r in results_excluded if r["expectation_type"] == "expect_column_null_percentage"
         ]
         # Without exclusion, ``metadata`` triggers a high-null warning.
         assert any(w.get("column") == "metadata" for w in warnings_no_exclude)
@@ -194,12 +192,8 @@ class TestCheckCompletenessExcludedFeatures:
     def test_no_exclusions_preserves_legacy_behavior(self) -> None:
         df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         score_default, _ = _check_completeness(df, required_columns=["a"])
-        score_explicit, _ = _check_completeness(
-            df, required_columns=["a"], excluded_features=[]
-        )
-        score_none, _ = _check_completeness(
-            df, required_columns=["a"], excluded_features=None
-        )
+        score_explicit, _ = _check_completeness(df, required_columns=["a"], excluded_features=[])
+        score_none, _ = _check_completeness(df, required_columns=["a"], excluded_features=None)
         assert score_default == pytest.approx(1.0)
         assert score_explicit == pytest.approx(1.0)
         assert score_none == pytest.approx(1.0)

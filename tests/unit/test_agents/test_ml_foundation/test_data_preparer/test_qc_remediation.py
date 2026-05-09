@@ -39,9 +39,7 @@ class TestParseRemediationAction:
 
     def test_params_malformed_falls_back_to_empty_dict(self) -> None:
         # Free-form text the LLM might emit instead of JSON.
-        action = _parse_remediation_action(
-            "action: impute, column: foo, params: strategy=mean"
-        )
+        action = _parse_remediation_action("action: impute, column: foo, params: strategy=mean")
         # Per the parser the comma split treats this oddly; the important
         # invariant is that ``params`` is a dict, not a string.
         assert isinstance(action["params"], dict)
@@ -53,9 +51,7 @@ class TestParseRemediationAction:
 
     def test_params_non_dict_json_falls_back(self) -> None:
         # JSON but not a dict — a list or scalar.
-        action_list = _parse_remediation_action(
-            'action: impute, column: foo, params: [1, 2, 3]'
-        )
+        action_list = _parse_remediation_action("action: impute, column: foo, params: [1, 2, 3]")
         assert isinstance(action_list["params"], dict)
         assert action_list["params"] == {}
 
