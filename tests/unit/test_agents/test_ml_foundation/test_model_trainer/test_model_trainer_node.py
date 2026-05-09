@@ -798,6 +798,15 @@ class TestTrainModelGBMSampleWeightIntegration:
 
         Predictions on the minority class should shift when sample_weight
         rebalancing is in effect, confirming the wiring reaches model.fit.
+
+        Codex pass-2 LOW-3 fix: previously this test ran ``rng.shuffle(y)``
+        AFTER applying ``X[y == 1, 0] += 1.5``, which decoupled X/y
+        alignment so the "informative signal" was effectively destroyed.
+        The test still passed because GBM with vs without sample_weight
+        produces different gradients on any input, but it wasn't
+        measuring the intended class-conditional signal recovery. Apply
+        a single permutation to BOTH X and y so alignment is preserved
+        and the class-conditional signal survives the shuffle.
         """
         rng = np.random.default_rng(0)
         n = 200
@@ -805,7 +814,10 @@ class TestTrainModelGBMSampleWeightIntegration:
         y = np.concatenate([np.zeros(190), np.ones(10)]).astype(int)
         X = rng.standard_normal((n, 4))
         X[y == 1, 0] += 1.5  # informative signal for minority
-        rng.shuffle(y)
+        # Codex LOW-3: same permutation for X and y to preserve alignment.
+        order = rng.permutation(n)
+        X = X[order]
+        y = y[order]
 
         base_state = {
             "algorithm_name": "GradientBoosting",
@@ -841,4 +853,18 @@ class TestTrainModelGBMSampleWeightIntegration:
             "GBM with imbalance_detected=True produced identical scores to "
             "the unweighted version — sample_weight wiring is not reaching "
             "model.fit (backlog #20 Gap 3 regression)."
+        )
+
+        # Codex LOW-3: verify the rebalanced model also moves minority-
+        # class scores UP relative to the unweighted version, confirming
+        # the class-conditional signal survived the shuffle and the
+        # weighting is doing what it should. Tightening the assertion
+        # past mere inequality.
+        minority_proba_no_imb = proba_no_imb[y == 1].mean()
+        minority_proba_imb = proba_imb[y == 1].mean()
+        assert minority_proba_imb > minority_proba_no_imb, (
+            f"Reweighted GBM minority-class mean proba "
+            f"({minority_proba_imb:.4f}) should exceed unweighted "
+            f"({minority_proba_no_imb:.4f}); reweighting must lift "
+            f"the minority signal."
         )
