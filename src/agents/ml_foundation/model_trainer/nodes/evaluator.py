@@ -1802,6 +1802,16 @@ def _select_threshold(
     integrity is preserved at the cost of an off-by-default operating
     point.
 
+    Backlog #20 Gap 1 — when the caller supplies a ``cost_matrix`` (the
+    same per-outcome dollar dict consumed by ``_compute_business_utility``),
+    the helper picks the threshold that maximises validation
+    business_utility instead of Youden's J. The cost matrix encodes
+    asymmetric FN-vs-FP economics (typically FN >> FP for biologic-
+    initiation prediction), so a cost-optimal threshold is the
+    economically rational operating point. Falls through to Youden's J
+    if the cost-aware sweep degenerates (constant probabilities, sklearn
+    confusion-matrix shape mismatch, etc.).
+
     Note: the precision-constrained override (rare-event minority class)
     is NOT handled here — it requires additional caller context
     (`minority_ratio`) and produces a `precision_constrained` dict
@@ -1812,18 +1822,32 @@ def _select_threshold(
         y_validation: Validation labels. When None, falls back to default.
         y_validation_proba: Validation probabilities. When None, falls
             back to default.
-        cost_matrix: Reserved for future cost-aware threshold selection
-            (Block 5 #10 follow-up). Currently unused — the helper always
-            picks a single threshold from validation Youden's J.
+        cost_matrix: Optional Block-5 (#10) per-outcome dollar matrix —
+            ``{"tp": v, "fp": v, "fn": v, "tn": v}``. When provided AND
+            validation arrays are present, the helper picks the threshold
+            that maximises business_utility on validation (cost-aware
+            selection). Falls through to Youden's J on degenerate input.
 
     Returns:
         Tuple of ``(chosen_threshold, chosen_threshold_source)``. The
         source string is one of the literals ``"validation"`` (validation
-        arrays present, threshold tuned on them) or ``"default"`` (validation
-        arrays absent, threshold pinned to 0.5). Downstream consumers
-        (mlflow_logger, audit code) rely on these exact literals.
+        arrays present, threshold tuned via Youden's J on them),
+        ``"validation_cost_optimal"`` (validation arrays + cost_matrix
+        present, threshold picked to maximise business_utility), or
+        ``"default"`` (validation arrays absent, threshold pinned to 0.5).
+        Downstream consumers (mlflow_logger, audit code) rely on these
+        exact literals.
     """
     if y_validation is not None and y_validation_proba is not None:
+        if cost_matrix is not None:
+            cost_threshold = _compute_cost_optimal_threshold(
+                y_validation, y_validation_proba, cost_matrix
+            )
+            if cost_threshold is not None:
+                return cost_threshold, "validation_cost_optimal"
+            # Cost-optimal failed (degenerate input or all-equal utilities);
+            # fall through to Youden's J so the model still gets a tuned
+            # operating point.
         return _compute_optimal_threshold(y_validation, y_validation_proba), "validation"
 
     logger.warning(
@@ -1831,6 +1855,65 @@ def _select_threshold(
         "falling back to default 0.5 threshold (test integrity preserved)."
     )
     return 0.5, "default"
+
+
+def _compute_cost_optimal_threshold(
+    y_true: np.ndarray,
+    y_proba: Optional[np.ndarray],
+    cost_matrix: Dict[str, float],
+) -> Optional[float]:
+    """Find the threshold that maximises business_utility on (y_true, y_proba).
+
+    Sweeps a 99-step grid (0.01..0.99) and at each candidate computes
+    ``_compute_business_utility(tp, fp, fn, tn, cost_matrix)`` from the
+    confusion matrix. Returns the threshold yielding the highest utility.
+    Backlog #20 Gap 1.
+
+    Returns ``None`` on degenerate input (no probabilities, single-class
+    y_true, all-zero utility variation across the grid). Caller falls
+    through to Youden's J in that case.
+
+    Args:
+        y_true: True labels (1-D, binary).
+        y_proba: Predicted probabilities (1-D positive-class scores or
+            2-D ``(n, 2)``). None short-circuits to None.
+        cost_matrix: Per-outcome dollar matrix. Required keys
+            ``{"tp", "fp", "fn", "tn"}`` — propagates the same KeyError
+            contract as ``_compute_business_utility``.
+
+    Returns:
+        Threshold (float in (0, 1)) maximising validation utility, or
+        None if the sweep is degenerate.
+    """
+    if y_proba is None:
+        return None
+
+    y_proba_pos = _positive_class_proba(y_proba)
+
+    try:
+        thresholds = np.linspace(0.01, 0.99, 99)
+        best_utility = -np.inf
+        best_threshold: Optional[float] = None
+
+        for t in thresholds:
+            y_pred = (y_proba_pos >= t).astype(int)
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            if cm.shape != (2, 2):
+                continue
+            tn, fp, fn, tp = cm.ravel()
+            utility = _compute_business_utility(int(tp), int(fp), int(fn), int(tn), cost_matrix)
+            if utility > best_utility:
+                best_utility = utility
+                best_threshold = float(t)
+
+        # All-flat utility (e.g., constant probabilities) → no useful pick.
+        # Reject so the caller falls through to Youden's J.
+        if best_threshold is None or not np.isfinite(best_utility):
+            return None
+        return best_threshold
+    except Exception as e:
+        logger.warning(f"Cost-optimal threshold computation failed: {e}")
+        return None
 
 
 def _compute_optimal_threshold(
