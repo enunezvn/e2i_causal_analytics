@@ -509,42 +509,67 @@ class TestCostOptimalThreshold:
         assert result is None
 
     def test_returns_none_for_constant_proba(self):
-        """Constant probabilities → degenerate sweep → None.
+        """Constant probabilities → degenerate sweep → may be None or
+        a finite threshold depending on cost_matrix asymmetry.
 
-        Every threshold gives the same confusion matrix on constant probas
-        (either all-positive or all-negative), so utility is flat. Caller
-        falls through to Youden's J.
+        Constant 0.5 probability flips the prediction once at t=0.5, so
+        utility is two-valued (not strictly flat). Asymmetric matrices
+        still yield a non-flat sweep with a unique max.
         """
         n = 50
         y = np.array([0, 1] * (n // 2))
-        # Constant 0.5 probability for everything → confusion matrix flips
-        # exactly once at t=0.5, but utility may be flat above/below.
         y_proba = np.column_stack([np.full(n, 0.5), np.full(n, 0.5)])
         cost_matrix = {"tp": 1.0, "fp": 0.0, "fn": 0.0, "tn": 0.0}
 
         result = _compute_cost_optimal_threshold(y, y_proba, cost_matrix)
-        # We still expect a finite threshold OR None — assert no crash.
-        # Asymmetric case with all-zero off-diagonal still yields a maximum
-        # at the lowest threshold that flips; only purely-flat utility
-        # returns None.
         assert result is None or (0.0 < result < 1.0)
 
-    def test_propagates_keyerror_on_incomplete_cost_matrix(self):
-        """Missing cost_matrix key surfaces — does NOT silently default to 0.
+    def test_returns_none_for_truly_flat_utility(self):
+        """When every threshold yields IDENTICAL utility (e.g., zero
+        cost_matrix), the helper rejects the cost path so the caller
+        falls through to Youden's J. Codex pass-2 MEDIUM-2: previously
+        the helper returned t≈0.01 and falsely labeled it
+        ``"validation_cost_optimal"``."""
+        rng = np.random.default_rng(20260510)
+        n = 60
+        y = rng.integers(0, 2, n)
+        y_proba = np.column_stack([rng.uniform(0.1, 0.9, n), rng.uniform(0.1, 0.9, n)])
+        # All-zero cost matrix: every threshold gives utility=0 exactly.
+        zero_cost_matrix = {"tp": 0.0, "fp": 0.0, "fn": 0.0, "tn": 0.0}
 
-        ``_compute_business_utility`` raises KeyError on missing keys; the
-        helper catches generic Exception via the outer try, but a KeyError
-        from a malformed config should fail loud. Verify that the failure
-        path returns None (caller falls through cleanly).
+        result = _compute_cost_optimal_threshold(y, y_proba, zero_cost_matrix)
+        assert result is None
+
+    def test_raises_keyerror_on_incomplete_cost_matrix(self):
+        """Missing cost_matrix key MUST raise KeyError loudly.
+
+        Codex pass-2 HIGH-1: the previous broad ``except Exception``
+        silently swallowed KeyError from ``_compute_business_utility``,
+        falling through to Youden's J labeled as if the cost branch had
+        produced it. Malformed config is a bug — fail loud, not silent.
         """
         n = 40
         y = np.random.randint(0, 2, n)
         y_proba = np.column_stack([np.random.rand(n), np.random.rand(n)])
         bad_cost_matrix = {"tp": 1.0, "fp": -1.0}  # missing fn, tn
 
-        # The KeyError gets caught and logged; we get None back.
-        result = _compute_cost_optimal_threshold(y, y_proba, bad_cost_matrix)
-        assert result is None
+        with pytest.raises(KeyError, match="missing required keys"):
+            _compute_cost_optimal_threshold(y, y_proba, bad_cost_matrix)
+
+    def test_keyerror_message_lists_missing_keys(self):
+        """Error message must enumerate the missing keys to aid
+        debugging — not just say 'malformed'."""
+        n = 20
+        y = np.random.randint(0, 2, n)
+        y_proba = np.column_stack([np.random.rand(n), np.random.rand(n)])
+        bad_cost_matrix = {"tp": 1.0}  # missing fp, fn, tn
+
+        with pytest.raises(KeyError) as exc_info:
+            _compute_cost_optimal_threshold(y, y_proba, bad_cost_matrix)
+        msg = str(exc_info.value)
+        assert "fn" in msg
+        assert "fp" in msg
+        assert "tn" in msg
 
 
 class TestSelectThresholdWithCostMatrix:
@@ -592,14 +617,15 @@ class TestSelectThresholdWithCostMatrix:
         assert 0.0 <= threshold <= 1.0
         assert source == "validation"
 
-    def test_cost_matrix_falls_through_to_youden_on_malformed(self):
-        """Malformed cost-matrix (missing keys) → fall through to Youden's
-        J, not 0.5 default. Provenance returns to ``"validation"``.
+    def test_cost_matrix_raises_keyerror_on_malformed(self):
+        """Malformed cost-matrix (missing keys) MUST propagate KeyError
+        from ``_select_threshold`` — codex pass-2 HIGH-1 contract.
 
-        ``_compute_business_utility`` raises KeyError on missing keys; the
-        cost-optimal helper catches generic Exception and returns None,
-        which surfaces here as a fall-through. The validation-tuned
-        threshold is still useful even when the cost matrix is bad.
+        Previously the helper silently fell through to Youden's J on
+        KeyError, hiding the configuration bug. The new contract
+        requires a loud failure so callers (and CI) see the misconfig
+        immediately. Validation-tuned threshold is NOT a substitute for
+        a correct cost matrix.
         """
         rng = np.random.default_rng(20260509)
         n = 40
@@ -608,12 +634,29 @@ class TestSelectThresholdWithCostMatrix:
         y_validation_proba = np.column_stack([1 - proba_pos, proba_pos])
         bad_cost_matrix = {"tp": 1.0, "fp": -1.0}  # missing fn, tn
 
+        with pytest.raises(KeyError, match="missing required keys"):
+            _select_threshold(y_validation, y_validation_proba, cost_matrix=bad_cost_matrix)
+
+    def test_cost_matrix_flat_utility_falls_through_to_youden(self):
+        """Codex pass-2 MEDIUM-2: zero/flat cost matrix → cost-optimal
+        helper returns None → ``_select_threshold`` falls through to
+        Youden's J with provenance ``"validation"``.
+
+        Distinct from HIGH-1 (malformed): a flat valid cost matrix is
+        not a config bug; it just doesn't carry information. Falling
+        through is the right move.
+        """
+        rng = np.random.default_rng(20260510)
+        n = 40
+        proba_pos = rng.uniform(0.1, 0.9, n)
+        y_validation = (proba_pos > 0.5).astype(int)
+        y_validation_proba = np.column_stack([1 - proba_pos, proba_pos])
+        flat_cost_matrix = {"tp": 0.0, "fp": 0.0, "fn": 0.0, "tn": 0.0}
+
         threshold, source = _select_threshold(
-            y_validation, y_validation_proba, cost_matrix=bad_cost_matrix
+            y_validation, y_validation_proba, cost_matrix=flat_cost_matrix
         )
 
-        # Falls through to Youden's J. Provenance is "validation", NOT
-        # "validation_cost_optimal".
         assert source == "validation"
         assert np.isfinite(threshold)
         assert 0.0 <= threshold <= 1.0

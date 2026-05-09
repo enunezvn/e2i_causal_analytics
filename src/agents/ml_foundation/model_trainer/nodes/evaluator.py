@@ -1920,6 +1920,9 @@ def _select_threshold(
     return 0.5, "default"
 
 
+_COST_MATRIX_REQUIRED_KEYS: frozenset[str] = frozenset({"tp", "fp", "fn", "tn"})
+
+
 def _compute_cost_optimal_threshold(
     y_true: np.ndarray,
     y_proba: Optional[np.ndarray],
@@ -1933,29 +1936,55 @@ def _compute_cost_optimal_threshold(
     Backlog #20 Gap 1.
 
     Returns ``None`` on degenerate input (no probabilities, single-class
-    y_true, all-zero utility variation across the grid). Caller falls
-    through to Youden's J in that case.
+    y_true, flat utility across the grid). Caller falls through to
+    Youden's J in that case.
+
+    **Loud failures:** raises ``KeyError`` if ``cost_matrix`` is missing
+    any of ``{"tp", "fp", "fn", "tn"}``. Codex pass-2 HIGH-1: a malformed
+    config is a bug, NOT a fall-through condition — the previous broad
+    ``except Exception`` swallowed ``KeyError`` and silently labeled the
+    Youden's-J pick as the cost path's outcome, hiding the
+    misconfiguration. Validating up front means the caller (and CI test
+    suite) sees the bug immediately.
 
     Args:
         y_true: True labels (1-D, binary).
         y_proba: Predicted probabilities (1-D positive-class scores or
             2-D ``(n, 2)``). None short-circuits to None.
         cost_matrix: Per-outcome dollar matrix. Required keys
-            ``{"tp", "fp", "fn", "tn"}`` — propagates the same KeyError
-            contract as ``_compute_business_utility``.
+            ``{"tp", "fp", "fn", "tn"}`` — raises ``KeyError`` on missing.
 
     Returns:
         Threshold (float in (0, 1)) maximising validation utility, or
-        None if the sweep is degenerate.
+        None if the sweep is degenerate (no proba; flat utility; numeric
+        failure during the sweep).
+
+    Raises:
+        KeyError: If any of the four required cost_matrix keys is missing.
     """
     if y_proba is None:
         return None
+
+    # Codex pass-2 HIGH-1 fix: validate keys upfront and raise loud.
+    # The previous broad ``except Exception`` would silently swallow a
+    # KeyError from ``_compute_business_utility`` when the matrix is
+    # malformed, falling through to Youden's J labeled as if the cost
+    # path produced it. A malformed config must crash, not silently
+    # mislabel.
+    missing_keys = _COST_MATRIX_REQUIRED_KEYS - set(cost_matrix)
+    if missing_keys:
+        raise KeyError(
+            f"_compute_cost_optimal_threshold: cost_matrix is missing required "
+            f"keys {sorted(missing_keys)!r}; got keys {sorted(cost_matrix)!r}. "
+            f"Refusing to fall through silently — fix the matrix and retry."
+        )
 
     y_proba_pos = _positive_class_proba(y_proba)
 
     try:
         thresholds = np.linspace(0.01, 0.99, 99)
         best_utility = -np.inf
+        worst_utility = np.inf
         best_threshold: Optional[float] = None
 
         for t in thresholds:
@@ -1968,13 +1997,28 @@ def _compute_cost_optimal_threshold(
             if utility > best_utility:
                 best_utility = utility
                 best_threshold = float(t)
+            if utility < worst_utility:
+                worst_utility = utility
 
-        # All-flat utility (e.g., constant probabilities) → no useful pick.
-        # Reject so the caller falls through to Youden's J.
+        # Codex pass-2 MEDIUM-2 fix: flat-utility sweep means every
+        # threshold is equivalent. Returning the first-touched threshold
+        # (~0.01) and labeling it ``"validation_cost_optimal"`` would be
+        # a false claim. Reject so the caller falls through to Youden's J.
         if best_threshold is None or not np.isfinite(best_utility):
+            return None
+        if math.isclose(best_utility, worst_utility, rel_tol=0.0, abs_tol=1e-12):
+            logger.info(
+                "Cost-optimal sweep produced flat utility (best=%.6f, worst=%.6f); "
+                "rejecting cost branch and falling through to Youden's J.",
+                best_utility,
+                worst_utility,
+            )
             return None
         return best_threshold
     except Exception as e:
+        # Numeric / data-degeneracy fall-through ONLY. KeyError is
+        # already raised above, so a KeyError here would only arise from
+        # downstream sklearn internals — still appropriate to surface.
         logger.warning(f"Cost-optimal threshold computation failed: {e}")
         return None
 
