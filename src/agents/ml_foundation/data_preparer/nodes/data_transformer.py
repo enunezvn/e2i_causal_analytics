@@ -364,6 +364,14 @@ def _identify_column_types(
 
         if pd.api.types.is_datetime64_any_dtype(dtype):
             datetime_cols.append(col)
+        elif pd.api.types.is_bool_dtype(dtype):
+            # Route bool BEFORE numeric: mixing bool + int + float in a single
+            # DataFrame slice forces pandas to fall back to object dtype on
+            # ``.values`` because there is no safe common numpy dtype, which
+            # crashes ``np.isnan`` in the imputation step. Bool is semantically
+            # binary categorical anyway; the label encoder produces 0/1 — same
+            # downstream effect as numeric treatment.
+            categorical_cols.append(col)
         elif pd.api.types.is_numeric_dtype(dtype):
             numeric_cols.append(col)
         elif isinstance(dtype, pd.CategoricalDtype) or dtype == object:
