@@ -534,8 +534,7 @@ async def _apply_automatic_remediation(
             # malformed shape) must not crash the remediation loop.
             if not isinstance(params, dict):
                 logger.warning(
-                    "Remediation action %r has non-dict params (%s); "
-                    "falling back to empty params",
+                    "Remediation action %r has non-dict params (%s); falling back to empty params",
                     action_type,
                     type(params).__name__,
                 )

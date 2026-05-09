@@ -65,9 +65,8 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         # reasons unrelated to the actual feature surface (backlog #13).
         # Honors both the canonical ``excluded_features`` and the legacy
         # ``exclude_columns`` aliases consumed by ``data_transformer``.
-        excluded_features = (
-            list(scope_spec.get("excluded_features", []))
-            + list(scope_spec.get("exclude_columns", []))
+        excluded_features = list(scope_spec.get("excluded_features", [])) + list(
+            scope_spec.get("exclude_columns", [])
         )
 
         # Initialize results

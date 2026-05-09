@@ -145,14 +145,9 @@ class TestDataQualityValidator:
             ("expect_column_values_to_not_be_null", "patient_journey_id"),
             ("expect_column_values_to_not_be_null", "patient_id"),
         }
-        actual = {
-            (e["expectation_type"], e.get("kwargs", {}).get("column", ""))
-            for e in suite
-        }
+        actual = {(e["expectation_type"], e.get("kwargs", {}).get("column", "")) for e in suite}
         missing = expected_present - actual
-        assert not missing, (
-            f"ml_patients lost contract-relevant guards: {missing}"
-        )
+        assert not missing, f"ml_patients lost contract-relevant guards: {missing}"
 
     def test_get_suite(self, validator):
         """Test getting a registered suite."""
