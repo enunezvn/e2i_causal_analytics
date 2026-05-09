@@ -46,6 +46,16 @@ logger = logging.getLogger(__name__)
 _CV_PROMOTED_METRICS: tuple[str, ...] = ("roc_auc", "pr_auc", "mcc", "f1")
 _CV_PROMOTED_STATS: tuple[str, ...] = ("mean", "std")
 
+# Backlog #20 Gap 2: F1-fallback fires when validation MCC at the
+# canonically-chosen threshold falls below this floor. 0.20 is the band
+# below which the canonical Youden's J / cost-optimal pick is treated as
+# unreliable (extreme imbalance + model that doesn't separate classes
+# well), and we attempt the F1-optimal threshold as a recovery move.
+# The fallback only swaps when F1-optimal STRICTLY improves MCC, so
+# raising the floor never makes the model worse — it just expands the set
+# of cases where a recovery attempt is made.
+_F1_FALLBACK_MCC_THRESHOLD: float = 0.20
+
 
 def _promote_cv_summary_to_validation_metrics(
     metrics_result: Dict[str, Any], cv_result: Dict[str, Any]
@@ -1212,6 +1222,59 @@ def _compute_classification_metrics(
                     y_validation, y_validation_pred_at_chosen, y_validation_proba
                 ),
             )
+
+            # Backlog #20 Gap 2: F1-fallback when validation MCC is very low.
+            # If the canonical pick (Youden's, cost-optimal, or precision-
+            # constrained) leaves validation MCC < 0.20, retune via the
+            # F1-optimal threshold from advanced_validation. F1 maximises
+            # the precision/recall harmonic mean and tends to do better on
+            # severely imbalanced data than Youden's J. We only switch when
+            # the F1-optimal threshold actually IMPROVES MCC; otherwise the
+            # original choice stays — no performative re-tuning.
+            val_mcc_at_chosen = float(validation_metrics.get("mcc", 0.0) or 0.0)
+            if val_mcc_at_chosen < _F1_FALLBACK_MCC_THRESHOLD:
+                from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+                    optimize_threshold_f1,
+                )
+
+                f1_result = optimize_threshold_f1(y_validation, y_validation_proba)
+                f1_threshold = float(f1_result.get("f1_optimal_threshold", 0.5))
+                f1_mcc_candidate = float(f1_result.get("mcc_at_f1_optimal", 0.0) or 0.0)
+                if f1_mcc_candidate > val_mcc_at_chosen:
+                    prior_source = threshold_source
+                    logger.info(
+                        "F1-fallback engaged: validation MCC %.4f < %.2f at "
+                        "threshold %.4f (source=%s); switching to F1-optimal "
+                        "threshold %.4f (MCC=%.4f).",
+                        val_mcc_at_chosen,
+                        _F1_FALLBACK_MCC_THRESHOLD,
+                        optimal_threshold,
+                        prior_source,
+                        f1_threshold,
+                        f1_mcc_candidate,
+                    )
+                    optimal_threshold = f1_threshold
+                    threshold_source = "validation_f1_fallback"
+                    y_validation_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
+                    validation_metrics = cast(
+                        Dict[str, Any],
+                        _compute_split_classification_metrics(
+                            y_validation, y_validation_pred_at_chosen, y_validation_proba
+                        ),
+                    )
+                    validation_metrics["f1_fallback_engaged"] = True
+                    validation_metrics["f1_fallback_original_mcc"] = val_mcc_at_chosen
+                    validation_metrics["f1_fallback_original_threshold_source"] = prior_source
+                else:
+                    logger.info(
+                        "F1-fallback evaluated but not engaged: F1-optimal "
+                        "MCC %.4f does not exceed current MCC %.4f; "
+                        "keeping threshold %.4f (source=%s).",
+                        f1_mcc_candidate,
+                        val_mcc_at_chosen,
+                        optimal_threshold,
+                        threshold_source,
+                    )
         else:
             validation_metrics = cast(
                 Dict[str, Any],
