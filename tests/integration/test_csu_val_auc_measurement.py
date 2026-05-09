@@ -414,7 +414,35 @@ def test_csu_post_index_journey_features_dropped_via_layer_1(csu_artifact: dict)
     the leakage_remediation auto-drop will surface as a specific
     feature missing from one of the two collections — the failure
     message names which feature and which collection so the regression
-    can be triaged without re-reading the artifact by hand."""
+    can be triaged without re-reading the artifact by hand.
+
+    Coexistence-vs-causation gap (codex-rescue MEDIUM, 2026-05-09): the
+    two assertions prove that a Layer 1 verdict EXISTS and the feature
+    IS dropped, but they do not prove the Layer 1 verdict CAUSED the
+    drop. A regression where ``leakage_remediation`` silently ignores
+    the Layer 1 verdict while another detector (perfect_class_separation,
+    GE completeness, etc.) coincidentally drops the same feature would
+    pass both assertions while the closure path is broken. The
+    ``leakage_dropped_features`` artifact carries no per-feature
+    provenance (the auto-drop dict in ``_deterministic_pre_drop``
+    discards source-of-drop after merge). Mitigation: the 5 journey
+    features pinned here have low single-feature AUC (~0.69 for
+    ``journey_duration_days`` per the 2026-05-07 closure record), so
+    Layer 3 single-feature-AUC at ≥0.85 won't trip them; date columns
+    aren't classified as ``logical_dependency`` either; this leaves
+    Layer 1 as the LIKELY drop source. Documented gap; adding a
+    ``drop_reason`` field to the artifact is left to a future tightening.
+
+    String-typed contracts (codex-rescue LOW, 2026-05-09): the
+    comparisons ``v.get("layer") == "1"`` and ``v.get("severity") ==
+    "high"`` rely on the string-typed contract for the verdict dict
+    (matches ``adaptive_validity_check._build_verdict``,
+    ``_layer_1_input``, ``_compose_legacy_verdict``). If the framework
+    ever emits ``layer`` as int/bool/float (e.g., layer=1 instead of
+    "1"), every comparison fails closed → ``missing_layer_1`` lists
+    every feature → the test fails loudly. That's the right failure
+    direction; an accidental schema migration is caught here, not
+    silently absorbed."""
     dropped = set(csu_artifact.get("leakage_dropped_features") or [])
     verdicts = csu_artifact.get("adaptive_verdicts") or []
 
@@ -422,7 +450,7 @@ def test_csu_post_index_journey_features_dropped_via_layer_1(csu_artifact: dict)
         v["feature"]
         for v in verdicts
         if isinstance(v, dict)
-        and v.get("layer") == "1"
+        and v.get("layer") == "1"  # string-typed per the verdict-dict contract
         and v.get("severity") == "high"
         and v.get("remediation") == "drop"
         and v.get("feature")
