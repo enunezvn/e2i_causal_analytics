@@ -142,9 +142,34 @@ URBAN_ZIP3_PREFIXES: frozenset[str] = frozenset(
     {
         # NYC, LA, Chicago, Houston, Philadelphia, Phoenix, SF, Seattle,
         # Boston, DC, Atlanta, Miami
-        "100", "101", "102", "103", "104", "112", "900", "902", "906", "907",
-        "606", "607", "608", "770", "772", "190", "191", "850", "852", "940",
-        "941", "981", "020", "021", "022", "200", "300", "330",
+        "100",
+        "101",
+        "102",
+        "103",
+        "104",
+        "112",
+        "900",
+        "902",
+        "906",
+        "907",
+        "606",
+        "607",
+        "608",
+        "770",
+        "772",
+        "190",
+        "191",
+        "850",
+        "852",
+        "940",
+        "941",
+        "981",
+        "020",
+        "021",
+        "022",
+        "200",
+        "300",
+        "330",
     }
 )
 
@@ -212,9 +237,7 @@ class OptumDataConverter:
             cohort_counts[cohort] = counts
 
             # Per-cohort attrition report
-            rwdc.write_attrition_report(
-                self.output_dir / cohort, self._attrition
-            )
+            rwdc.write_attrition_report(self.output_dir / cohort, self._attrition)
 
         return cohort_counts
 
@@ -313,9 +336,7 @@ class OptumDataConverter:
         )
 
         gated_journeys = _drop_forbidden_columns(journeys, OPTUM_FORBIDDEN_NON_TARGET)
-        rwdc.write_records(
-            cohort_dir, "e2i_ml_v3_patient_journeys", gated_journeys, fmt="parquet"
-        )
+        rwdc.write_records(cohort_dir, "e2i_ml_v3_patient_journeys", gated_journeys, fmt="parquet")
         rwdc.write_records(cohort_dir, "e2i_ml_v3_treatment_events", events, fmt="parquet")
         rwdc.write_records(cohort_dir, "e2i_ml_v3_hcp_profiles", hcps, fmt="parquet")
         rwdc.write_records(cohort_dir, "e2i_ml_v3_split_registry", split_registry, fmt="json")
@@ -337,7 +358,9 @@ class OptumDataConverter:
 
     def _build_cohort(
         self, cohort: str
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[
+        list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
+    ]:
         """Build a single cohort's records and split registry.
 
         Returns (journeys, events, hcps, split_registry).
@@ -356,9 +379,7 @@ class OptumDataConverter:
         self._attrition.append((f"{cohort}: continuous_enrollment=1", len(pids)))
 
         # 3. L50.x diagcode on demographics (necessary for all cohorts)
-        demo = demo[
-            demo["diagcode_raw"].str.upper().str.startswith(CSU_DX_PREFIXES)
-        ]
+        demo = demo[demo["diagcode_raw"].str.upper().str.startswith(CSU_DX_PREFIXES)]
         pids = set(demo["patid"])
         self._attrition.append((f"{cohort}: L50.x diagcode present", len(pids)))
 
@@ -403,9 +424,7 @@ class OptumDataConverter:
                 for p, idx, rec in records_pass
                 if self._first_biologic_fill(p) is not None
             ]
-            self._attrition.append(
-                (f"{cohort}: with biologic initiation", len(records_pass))
-            )
+            self._attrition.append((f"{cohort}: with biologic initiation", len(records_pass)))
 
         # 6. Build journey dicts + compute features + target
         journeys: list[dict[str, Any]] = []
@@ -512,9 +531,7 @@ class OptumDataConverter:
         mask = pd.Series(False, index=grp.index)
         for c in ("diag1", "diag2", "diag3", "diag4", "diag5"):
             if c in grp.columns:
-                mask = mask | grp[c].astype(str).str.upper().str.startswith(
-                    CSU_DX_PREFIXES
-                )
+                mask = mask | grp[c].astype(str).str.upper().str.startswith(CSU_DX_PREFIXES)
         hits = grp.loc[mask, "admit_date"].dropna().sort_values().tolist()
         # Collapse to unique dates
         seen: set[pd.Timestamp] = set()
@@ -559,9 +576,7 @@ class OptumDataConverter:
     # Eligibility checks (§5)                                             #
     # ------------------------------------------------------------------ #
 
-    def _check_enrollment_window(
-        self, demo_row: pd.Series, index_date: pd.Timestamp
-    ) -> bool:
+    def _check_enrollment_window(self, demo_row: pd.Series, index_date: pd.Timestamp) -> bool:
         eligeff = demo_row.get("eligeff")
         eligend = demo_row.get("eligend")
         if pd.isna(eligeff) or pd.isna(eligend):
@@ -595,9 +610,7 @@ class OptumDataConverter:
 
         ip = self._inpatient_by_pat.get(patid)
         if ip is not None:
-            mask_window = (ip["admit_date"] >= lookback_start) & (
-                ip["admit_date"] < index_date
-            )
+            mask_window = (ip["admit_date"] >= lookback_start) & (ip["admit_date"] < index_date)
             ip_w = ip.loc[mask_window]
             for c in ("diag1", "diag2", "diag3", "diag4", "diag5"):
                 if c not in ip_w.columns:
@@ -612,9 +625,7 @@ class OptumDataConverter:
                     return True
         return False
 
-    def _had_biologic_pre_index(
-        self, patid: int, index_date: pd.Timestamp
-    ) -> bool:
+    def _had_biologic_pre_index(self, patid: int, index_date: pd.Timestamp) -> bool:
         """Cohort A washout: any CSU biologic fill within 30 days before index."""
         grp = self._med_by_pat.get(patid)
         if grp is None:
@@ -645,9 +656,7 @@ class OptumDataConverter:
         feats["age_at_index"] = age
         feats["age_group"] = rwdc.age_group(age)
         gdr = demo_row.get("gdr_cd")
-        feats["gender"] = (
-            str(gdr).strip().upper() if pd.notna(gdr) and str(gdr).strip() else "U"
-        )
+        feats["gender"] = str(gdr).strip().upper() if pd.notna(gdr) and str(gdr).strip() else "U"
         zip5 = demo_row.get("zipcode_5")
         zip_str = str(zip5).split("_")[0].strip() if pd.notna(zip5) else None
         feats["zip5"] = zip_str
@@ -656,9 +665,7 @@ class OptumDataConverter:
         feats["insurance_product"] = rwdc.insurance_type(demo_row.get("bus"))
         plan = demo_row.get("product")
         feats["plan_type"] = str(plan) if pd.notna(plan) else None
-        feats["urban_rural_code"] = (
-            "urban" if feats["zip3"] in URBAN_ZIP3_PREFIXES else "suburban"
-        )
+        feats["urban_rural_code"] = "urban" if feats["zip3"] in URBAN_ZIP3_PREFIXES else "suburban"
 
         # 7.2 Disease characteristics (lookback)
         l50_counts: dict[str, int] = {"L501": 0, "L508": 0, "L509": 0, "total": 0}
@@ -730,12 +737,15 @@ class OptumDataConverter:
         if ip is not None:
             ip_w = ip[(ip["admit_date"] >= lb_start) & (ip["admit_date"] <= lb_end)]
             hosp_total = len(ip_w)
-            ed_total = int(ip_w.get("tos_cd", pd.Series(dtype=object))
-                           .astype(str).str.contains("ED", case=False, na=False).sum())
+            ed_total = int(
+                ip_w.get("tos_cd", pd.Series(dtype=object))
+                .astype(str)
+                .str.contains("ED", case=False, na=False)
+                .sum()
+            )
             if "diag1" in ip_w.columns:
                 ed_urticaria = int(
-                    (ip_w["diag1"].astype(str).str.upper().str.startswith(CSU_DX_PREFIXES))
-                    .sum()
+                    (ip_w["diag1"].astype(str).str.upper().str.startswith(CSU_DX_PREFIXES)).sum()
                 )
 
         feats["office_visits_total"] = office_total
@@ -750,9 +760,7 @@ class OptumDataConverter:
         # 7.5 Non-target medication exposure (lookback)
         med = self._med_by_pat.get(patid)
         if med is not None:
-            med_w = med[
-                (med["medication_date"] >= lb_start) & (med["medication_date"] <= lb_end)
-            ]
+            med_w = med[(med["medication_date"] >= lb_start) & (med["medication_date"] <= lb_end)]
             # Exclude biologic rows from non-target drug class features to prevent
             # target leakage (§7.5: "NON-TARGET drugs only")
             bio_mask = self._csu_biologic_mask(med_w)
@@ -792,26 +800,22 @@ class OptumDataConverter:
         primary_tax = None
         if proc is not None and "npi" in proc.columns:
             proc_w = proc[(proc["proc_date"] >= lb_start) & (proc["proc_date"] <= lb_end)]
-            tax_series = proc_w["npi"].dropna().astype(str).map(
-                lambda n: self._provider_by_npi.get(n, "")
+            tax_series = (
+                proc_w["npi"].dropna().astype(str).map(lambda n: self._provider_by_npi.get(n, ""))
             )
             tax_series = tax_series[tax_series != ""]
             if len(tax_series):
                 primary_tax = tax_series.mode().iat[0]
                 # HHI concentration
                 shares = tax_series.value_counts(normalize=True).to_numpy()
-                feats["specialist_concentration"] = float((shares ** 2).sum())
+                feats["specialist_concentration"] = float((shares**2).sum())
             else:
                 feats["specialist_concentration"] = None
         else:
             feats["specialist_concentration"] = None
         feats["primary_specialist_type"] = primary_tax
-        feats["saw_allergist_flag"] = int(
-            bool(primary_tax and primary_tax.startswith("207K"))
-        )
-        feats["saw_dermatologist_flag"] = int(
-            bool(primary_tax and primary_tax.startswith("207N"))
-        )
+        feats["saw_allergist_flag"] = int(bool(primary_tax and primary_tax.startswith("207K")))
+        feats["saw_dermatologist_flag"] = int(bool(primary_tax and primary_tax.startswith("207N")))
 
         return feats
 
@@ -844,9 +848,7 @@ class OptumDataConverter:
                 has_cond = True
         return has_cond, n_claims
 
-    def _elixhauser_approx(
-        self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp
-    ) -> int:
+    def _elixhauser_approx(self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp) -> int:
         """Minimal Elixhauser proxy: count of distinct ICD-10 chapters in lookback."""
         ip = self._inpatient_by_pat.get(patid)
         if ip is None:
@@ -861,9 +863,7 @@ class OptumDataConverter:
                         chapters.add(code[0])
         return len(chapters)
 
-    def _charlson_approx(
-        self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp
-    ) -> int:
+    def _charlson_approx(self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp) -> int:
         """Minimal Charlson proxy: distinct high-severity categories present."""
         ip = self._inpatient_by_pat.get(patid)
         if ip is None:
@@ -927,9 +927,7 @@ class OptumDataConverter:
     # Target derivations (§8)                                             #
     # ------------------------------------------------------------------ #
 
-    def _target_initiated_biologic_180d(
-        self, patid: int, index_date: pd.Timestamp
-    ) -> int:
+    def _target_initiated_biologic_180d(self, patid: int, index_date: pd.Timestamp) -> int:
         end = index_date + timedelta(days=PREDICTION_DAYS)
         grp = self._med_by_pat.get(patid)
         if grp is None:
@@ -938,14 +936,10 @@ class OptumDataConverter:
         bio = grp.loc[mask]
         if bio.empty:
             return 0
-        in_window = (bio["medication_date"] >= index_date) & (
-            bio["medication_date"] <= end
-        )
+        in_window = (bio["medication_date"] >= index_date) & (bio["medication_date"] <= end)
         return int(in_window.any())
 
-    def _target_discontinued_180d(
-        self, patid: int, init_date: pd.Timestamp
-    ) -> int:
+    def _target_discontinued_180d(self, patid: int, init_date: pd.Timestamp) -> int:
         """Gap > 90 days between (fill_end) and next fill within 180 days of init."""
         end = init_date + timedelta(days=PREDICTION_DAYS)
         grp = self._med_by_pat.get(patid)
@@ -969,9 +963,7 @@ class OptumDataConverter:
         last_end = last["medication_date"] + timedelta(days=ds)
         return int(last_end < end - timedelta(days=BIOLOGIC_DISCONT_GAP_DAYS))
 
-    def _target_persistent_at_180d(
-        self, patid: int, init_date: pd.Timestamp
-    ) -> int:
+    def _target_persistent_at_180d(self, patid: int, init_date: pd.Timestamp) -> int:
         """Any fill active at day 180 (days_supply-based, no gap > 60d)."""
         target_day = init_date + timedelta(days=PREDICTION_DAYS)
         grp = self._med_by_pat.get(patid)
@@ -1040,22 +1032,16 @@ class OptumDataConverter:
             "patient_hash": rwdc.patient_hash(patid),
             "_patid": int(patid),  # internal — stripped before output
             "index_date": rwdc.safe_date(index_date),
-            "lookback_start_date": rwdc.safe_date(
-                index_date - timedelta(days=LOOKBACK_DAYS)
-            ),
-            "prediction_end_date": rwdc.safe_date(
-                index_date + timedelta(days=PREDICTION_DAYS)
-            ),
+            "lookback_start_date": rwdc.safe_date(index_date - timedelta(days=LOOKBACK_DAYS)),
+            "prediction_end_date": rwdc.safe_date(index_date + timedelta(days=PREDICTION_DAYS)),
             "journey_start_date": rwdc.safe_date(index_date),
-            "journey_end_date": rwdc.safe_date(
-                index_date + timedelta(days=PREDICTION_DAYS)
-            ),
+            "journey_end_date": rwdc.safe_date(index_date + timedelta(days=PREDICTION_DAYS)),
             "journey_duration_days": PREDICTION_DAYS + LOOKBACK_DAYS,
-            "journey_stage": "initial_treatment" if cohort == "initiation" else "treatment_optimization",
+            "journey_stage": "initial_treatment"
+            if cohort == "initiation"
+            else "treatment_optimization",
             "journey_status": "active",
-            "primary_diagnosis_code": rwdc.format_diagcode(
-                str(demo_row.get("diagcode_raw") or "")
-            ),
+            "primary_diagnosis_code": rwdc.format_diagcode(str(demo_row.get("diagcode_raw") or "")),
             "primary_diagnosis_desc": "Chronic Spontaneous Urticaria",
             "secondary_diagnosis_codes": [],
             "brand": "competitor",
@@ -1187,13 +1173,9 @@ class OptumDataConverter:
                                 if pd.notna(row.get("Brand_Name"))
                                 else None
                             ),
-                            drug_ndc=(
-                                str(row["code"]) if pd.notna(row.get("code")) else None
-                            ),
+                            drug_ndc=(str(row["code"]) if pd.notna(row.get("code")) else None),
                             dosage=(
-                                str(row["strength"])
-                                if pd.notna(row.get("strength"))
-                                else None
+                                str(row["strength"]) if pd.notna(row.get("strength")) else None
                             ),
                             duration=rwdc.safe_int(row.get("days_sup")),
                         )
@@ -1232,11 +1214,7 @@ class OptumDataConverter:
                             patid=patid,
                             event_date=row.get("fst_dt"),
                             event_type="lab_test",
-                            loinc=(
-                                [str(row["loinc_cd"])]
-                                if pd.notna(row.get("loinc_cd"))
-                                else []
-                            ),
+                            loinc=([str(row["loinc_cd"])] if pd.notna(row.get("loinc_cd")) else []),
                             lab_values=lab_val,
                         )
                     )
@@ -1307,8 +1285,10 @@ class OptumDataConverter:
 
             taxonomy = self._provider_by_npi.get(obf, "")
             specialty = (
-                "Allergy/Immunology" if taxonomy.startswith("207K")
-                else "Dermatology" if taxonomy.startswith("207N")
+                "Allergy/Immunology"
+                if taxonomy.startswith("207K")
+                else "Dermatology"
+                if taxonomy.startswith("207N")
                 else "Other"
             )
 
@@ -1465,9 +1445,7 @@ class OptumDataConverter:
     # Pilot audit (§11)                                                   #
     # ------------------------------------------------------------------ #
 
-    def _run_pilot_audit(
-        self, cohort: str, journeys: list[dict[str, Any]]
-    ) -> None:
+    def _run_pilot_audit(self, cohort: str, journeys: list[dict[str, Any]]) -> None:
         """Run a fast leakage audit on the converter output.
 
         Per spec §11: zero CRITICAL findings, <3 HIGH before running the full
@@ -1498,18 +1476,13 @@ class OptumDataConverter:
             return
 
         numeric_features = [
-            c for c in df.columns
-            if c != target_col and pd.api.types.is_numeric_dtype(df[c])
+            c for c in df.columns if c != target_col and pd.api.types.is_numeric_dtype(df[c])
         ]
 
         try:
             findings: list[Any] = []
-            findings.extend(
-                check_single_feature_auc(df, target_col, numeric_features)
-            )
-            findings.extend(
-                check_perfect_class_separation(df, target_col, numeric_features)
-            )
+            findings.extend(check_single_feature_auc(df, target_col, numeric_features))
+            findings.extend(check_perfect_class_separation(df, target_col, numeric_features))
         except Exception as exc:
             logger.warning("  Pilot audit run failed: %s", exc)
             return
