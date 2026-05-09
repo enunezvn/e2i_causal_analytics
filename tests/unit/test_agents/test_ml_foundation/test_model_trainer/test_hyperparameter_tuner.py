@@ -8,6 +8,7 @@ import pytest
 from src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner import (
     _get_fixed_params,
     _get_hpo_pattern_memory,
+    _inject_class_weight_sweep,
     tune_hyperparameters,
     validate_hpo_output,
     validate_hyperparameter_types,
@@ -378,6 +379,204 @@ class TestGetFixedParams:
 
         params = _get_fixed_params("RandomForest", imbalance_detected=False)
         assert "class_weight" not in params
+
+
+# ============================================================================
+# Backlog #20 Gap 4: opt-in HPO sweep over class_weight / scale_pos_weight
+# ============================================================================
+
+
+class TestHPOClassWeightSweepGap4:
+    """Verify the opt-in Optuna sweep over imbalance handlers.
+
+    Default behaviour (``hpo_sweep_class_weight=False``): the
+    deterministic ``_get_fixed_params`` matrix wins; Optuna sees a search
+    space WITHOUT class_weight/scale_pos_weight/is_unbalance.
+
+    Opt-in behaviour (``hpo_sweep_class_weight=True``): the matrix is
+    skipped and ``_inject_class_weight_sweep`` adds Optuna search-space
+    entries for the imbalance handlers so the matrix's choice can be
+    validated per cohort.
+    """
+
+    def test_get_fixed_params_skips_class_weight_when_sweep_enabled_xgboost(self):
+        """XGBoost: hpo_sweep_class_weight=True drops scale_pos_weight."""
+        params = _get_fixed_params(
+            "XGBoost",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+            hpo_sweep_class_weight=True,
+        )
+        assert "scale_pos_weight" not in params
+        # Severity-based regularisation caps still apply (max_depth, etc.):
+        assert params["max_depth"] == 4
+
+    def test_get_fixed_params_skips_class_weight_when_sweep_enabled_lightgbm(self):
+        """LightGBM: hpo_sweep_class_weight=True drops is_unbalance."""
+        params = _get_fixed_params(
+            "LightGBM",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="severe",
+            hpo_sweep_class_weight=True,
+        )
+        assert "is_unbalance" not in params
+        # Severity caps still apply:
+        assert params["max_depth"] == 6
+
+    def test_get_fixed_params_skips_class_weight_when_sweep_enabled_rf(self):
+        """RandomForest: hpo_sweep_class_weight=True drops class_weight."""
+        params = _get_fixed_params(
+            "RandomForest",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="severe",
+            hpo_sweep_class_weight=True,
+        )
+        assert "class_weight" not in params
+        # Severity caps still apply:
+        assert params["max_depth"] == 8
+
+    def test_get_fixed_params_default_preserves_class_weight(self):
+        """Default behaviour (sweep disabled) — XGBoost still gets pinned
+        scale_pos_weight, RandomForest gets class_weight, etc.
+        Backward-compatibility regression guard.
+        """
+        params = _get_fixed_params(
+            "XGBoost",
+            imbalance_detected=True,
+            recommended_strategy="class_weight",
+            class_distribution={0: 970, 1: 30},
+            imbalance_severity="extreme",
+            # hpo_sweep_class_weight not passed = default False
+        )
+        assert "scale_pos_weight" in params
+        assert params["scale_pos_weight"] == pytest.approx(970 / 30)
+
+    def test_inject_class_weight_sweep_xgboost(self):
+        """XGBoost: scale_pos_weight float sweep brackets ratio 2x both ways."""
+        out = _inject_class_weight_sweep(
+            {"n_estimators": {"type": "int", "low": 50, "high": 200}},
+            algorithm_name="XGBoost",
+            class_distribution={0: 800, 1: 200},  # ratio = 4
+        )
+        assert "scale_pos_weight" in out
+        spec = out["scale_pos_weight"]
+        assert spec["type"] == "float"
+        assert spec["low"] == pytest.approx(0.5 * (800 / 200))
+        assert spec["high"] == pytest.approx(2.0 * (800 / 200))
+        assert spec["log"] is False
+        # Doesn't drop the original entry
+        assert "n_estimators" in out
+
+    def test_inject_class_weight_sweep_lightgbm(self):
+        """LightGBM: is_unbalance categorical [True, False]."""
+        out = _inject_class_weight_sweep(
+            {}, algorithm_name="LightGBM", class_distribution={0: 970, 1: 30}
+        )
+        assert out["is_unbalance"] == {
+            "type": "categorical",
+            "choices": [True, False],
+        }
+
+    def test_inject_class_weight_sweep_random_forest(self):
+        """RandomForest: class_weight categorical [None, "balanced"]."""
+        out = _inject_class_weight_sweep(
+            {}, algorithm_name="RandomForest", class_distribution={0: 970, 1: 30}
+        )
+        assert out["class_weight"] == {
+            "type": "categorical",
+            "choices": [None, "balanced"],
+        }
+
+    def test_inject_class_weight_sweep_logistic_regression(self):
+        """LogisticRegression: class_weight categorical [None, "balanced"]."""
+        out = _inject_class_weight_sweep(
+            {}, algorithm_name="LogisticRegression", class_distribution={0: 970, 1: 30}
+        )
+        assert out["class_weight"] == {
+            "type": "categorical",
+            "choices": [None, "balanced"],
+        }
+
+    def test_inject_class_weight_sweep_extra_trees(self):
+        """ExtraTrees: class_weight categorical [None, "balanced"]."""
+        out = _inject_class_weight_sweep(
+            {}, algorithm_name="ExtraTrees", class_distribution={0: 970, 1: 30}
+        )
+        assert out["class_weight"] == {
+            "type": "categorical",
+            "choices": [None, "balanced"],
+        }
+
+    def test_inject_class_weight_sweep_gbm_no_op(self):
+        """GradientBoosting: not swept (sample_weight is fit-time, Gap 3)."""
+        out = _inject_class_weight_sweep(
+            {"n_estimators": {"type": "int", "low": 50, "high": 200}},
+            algorithm_name="GradientBoosting",
+            class_distribution={0: 970, 1: 30},
+        )
+        # Only the original key remains; no sweep injected.
+        assert set(out.keys()) == {"n_estimators"}
+
+    def test_inject_class_weight_sweep_unknown_algo_no_op(self):
+        """Unknown algorithm: helper returns input unmodified."""
+        in_space = {"foo": {"type": "int", "low": 0, "high": 10}}
+        out = _inject_class_weight_sweep(in_space, algorithm_name="UnknownAlgorithm")
+        assert out == in_space
+        # New dict (not the same object) — caller-mutation safety
+        assert out is not in_space
+
+    def test_inject_class_weight_sweep_preserves_existing(self):
+        """Caller-supplied entries take precedence — sweep doesn't
+        overwrite them."""
+        existing = {
+            "scale_pos_weight": {
+                "type": "float",
+                "low": 1.0,
+                "high": 5.0,
+                "log": False,
+            }
+        }
+        out = _inject_class_weight_sweep(
+            existing, algorithm_name="XGBoost", class_distribution={0: 800, 1: 200}
+        )
+        # Caller's bounds preserved
+        assert out["scale_pos_weight"]["low"] == 1.0
+        assert out["scale_pos_weight"]["high"] == 5.0
+
+    def test_inject_class_weight_sweep_xgboost_skip_on_missing_distribution(self):
+        """XGBoost without class_distribution: skip the sweep injection
+        (no ratio to compute bounds from)."""
+        out = _inject_class_weight_sweep({}, algorithm_name="XGBoost", class_distribution=None)
+        assert "scale_pos_weight" not in out
+
+        out = _inject_class_weight_sweep(
+            {},
+            algorithm_name="XGBoost",
+            class_distribution={0: 100},  # single class
+        )
+        assert "scale_pos_weight" not in out
+
+    def test_inject_class_weight_sweep_xgboost_skip_on_zero_minority(self):
+        """XGBoost: when minority count is 0, skip injection (avoids div0)."""
+        out = _inject_class_weight_sweep(
+            {}, algorithm_name="XGBoost", class_distribution={0: 100, 1: 0}
+        )
+        assert "scale_pos_weight" not in out
+
+    def test_inject_class_weight_sweep_does_not_mutate_input(self):
+        """Helper must not mutate the caller's search_space dict."""
+        original = {"n_estimators": {"type": "int", "low": 50, "high": 200}}
+        original_copy = {k: dict(v) for k, v in original.items()}
+        _ = _inject_class_weight_sweep(
+            original, algorithm_name="XGBoost", class_distribution={0: 800, 1: 200}
+        )
+        assert original == original_copy
 
 
 class TestGetHpoPatternMemory:
