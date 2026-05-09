@@ -6234,6 +6234,31 @@ def main():
             "splits at low prevalence become degenerate below it."
         )
 
+    # --imbalanced × scenario-regime conflict (backlog #21.7): the synthetic_v2
+    # dispatch in generate_sample_data:1469 returns BEFORE the relabel block at
+    # lines 1494-1506, so --imbalanced is silently ignored under any
+    # --regime scenario_*. Discovered during plan Phase 3.3 contrast empirically
+    # (conditions A and C produced bit-identical metrics for seed=42).
+    # Fail loud at the CLI boundary instead of silently dropping the flag.
+    if args.imbalanced is not None and args.regime in _SCENARIO_REGIME_TO_NAME:
+        if args.imbalanced == 0.50:
+            redirect = (
+                "Use --regime scenario_a_balanced for a signal-preserving "
+                "50:50 cohort (scenario_a DGP, prevalence re-calibrated via "
+                "intercept solver — preserves feature ↔ target correlation)."
+            )
+        else:
+            redirect = (
+                "No scenario regime accepts an arbitrary prevalence ratio; "
+                "use a legacy regime (default/adverse/clean) with --imbalanced "
+                "for post-hoc relabel. See backlog #21.7."
+            )
+        parser.error(
+            f"--imbalanced {args.imbalanced} is silently ignored under "
+            f"--regime {args.regime} (generate_sample_data:1469 returns before "
+            f"the relabel block at lines 1494-1506). " + redirect
+        )
+
     # Update config
     if args.disable_mlflow:
         CONFIG.enable_mlflow = False
