@@ -6269,11 +6269,13 @@ def main():
     CONFIG.min_samples_per_split = args.min_samples_per_split
     if args.brand:
         CONFIG.brand = args.brand
-    elif args.regime in _SCENARIO_REGIME_TO_NAME:
+    elif args.regime in _SCENARIO_REGIME_TO_BRAND:
         # Without this auto-sync, scenario_b/c write df["brand"]=Fabhalta/Remibrutinib
         # while CONFIG.brand stays at its default (Kisqali), creating data↔metadata
         # divergence in MLflow tags, cohort_name, scope-spec problem description,
         # and state["brand"] readers throughout the runner.
+        # Gate on _SCENARIO_REGIME_TO_BRAND (the dict we read) to avoid KeyError
+        # if the two maps drift out of sync (codex review MEDIUM).
         CONFIG.brand = _SCENARIO_REGIME_TO_BRAND[args.regime]
     if args.target:
         CONFIG.target_outcome = args.target
