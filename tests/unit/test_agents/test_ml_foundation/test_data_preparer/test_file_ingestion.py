@@ -386,6 +386,32 @@ class TestDropUnhashableColumns:
         result = _drop_unhashable_columns(df)
         assert "list_with_nulls" not in result.columns
 
+    def test_drops_mixed_scalar_then_list(self) -> None:
+        # codex review HIGH-B regression: a column whose FIRST non-null
+        # cell is a scalar but LATER rows contain unhashable values must
+        # still be detected and dropped. Sampling iloc[0] alone would
+        # silently let this column through; the full-scan implementation
+        # catches it.
+        df = pd.DataFrame(
+            {
+                "id": ["p1", "p2", "p3"],
+                "tricky": ["scalar_first", "still_scalar", ["asthma", "rhinitis"]],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert "tricky" not in result.columns
+
+    def test_drops_mixed_scalar_then_dict(self) -> None:
+        # Same as above but with dict in a later row.
+        df = pd.DataFrame(
+            {
+                "id": ["p1", "p2", "p3"],
+                "tricky": ["s1", "s2", {"key": "val"}],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert "tricky" not in result.columns
+
     def test_no_op_when_all_columns_hashable(self) -> None:
         df = pd.DataFrame(
             {
