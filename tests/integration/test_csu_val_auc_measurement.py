@@ -368,3 +368,87 @@ def test_no_high_z_score_on_kept_features(csu_artifact: dict) -> None:
         f"z-score < {ADVERSARIAL_Z_MAX}. Either drop these features or "
         f"re-audit the manifest."
     )
+
+
+# CSU manifest's post_index journey-metadata features. Backlog #7 CSU sub-gap
+# (2026-05-07) flagged ``journey_duration_days`` as the leak feature whose
+# unwindowed ``end_date`` derivation at ``convert_csu_rwd.py:645-674`` made it
+# structurally target-correlated and dominated the ON_180 model. Layer 1 of
+# the adaptive temporal-validity defense (PR #84) declares all five as
+# ``knowable_at=post_index``; Layer 5 routes the manifest through the runner
+# (PRs #105 + #106) so the framework now drops them deterministically before
+# model training. This list re-pins the closure: any future regression that
+# silently keeps one of these features in the trained-model surface will
+# trip ``test_csu_post_index_journey_features_dropped_via_layer_1`` below.
+CSU_POST_INDEX_JOURNEY_FEATURES = [
+    "journey_start_date",
+    "journey_end_date",
+    "journey_duration_days",
+    "journey_stage",
+    "journey_status",
+]
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.timeout(2000)
+def test_csu_post_index_journey_features_dropped_via_layer_1(csu_artifact: dict) -> None:
+    """All CSU manifest post_index journey-metadata features are dropped.
+
+    Backlog #7 CSU sub-gap closure (2026-05-09): the original 2026-05-07
+    framing-2 escalation called for a ``convert_csu_rwd.py`` windowing
+    fix on ``journey_duration_days`` analogous to the engagement_score
+    Shard B fix. Subsequent shipping of the four-layer defense (PR #84)
+    + Layer 5 RWD routing (PRs #105 + #106) supersedes the converter-
+    level windowing: the framework now declares each journey-metadata
+    feature as ``knowable_at=post_index`` in
+    ``src/data/manifests/csu_feature_manifest.py`` and Layer 1 emits a
+    ``severity=high, remediation=drop`` verdict that flows through the
+    leakage_remediation node into ``leakage_dropped_features``.
+
+    This test pins that closure path — every member of
+    ``CSU_POST_INDEX_JOURNEY_FEATURES`` MUST appear in
+    ``leakage_dropped_features`` AND have a corresponding Layer 1
+    verdict with ``severity=high, remediation=drop``. A regression in
+    the manifest, the verdict producer, the leakage_findings merge, or
+    the leakage_remediation auto-drop will surface as a specific
+    feature missing from one of the two collections — the failure
+    message names which feature and which collection so the regression
+    can be triaged without re-reading the artifact by hand."""
+    dropped = set(csu_artifact.get("leakage_dropped_features") or [])
+    verdicts = csu_artifact.get("adaptive_verdicts") or []
+
+    layer_1_drops = {
+        v["feature"]
+        for v in verdicts
+        if isinstance(v, dict)
+        and v.get("layer") == "1"
+        and v.get("severity") == "high"
+        and v.get("remediation") == "drop"
+        and v.get("feature")
+    }
+
+    missing_from_dropped = [f for f in CSU_POST_INDEX_JOURNEY_FEATURES if f not in dropped]
+    missing_layer_1 = [f for f in CSU_POST_INDEX_JOURNEY_FEATURES if f not in layer_1_drops]
+
+    assert not missing_from_dropped, (
+        f"CSU post_index journey features missing from leakage_dropped_features: "
+        f"{missing_from_dropped}. "
+        f"Backlog #7 CSU sub-gap closure relies on every "
+        f"``knowable_at=post_index`` journey feature being deterministically "
+        f"dropped by the leakage_remediation node. Saw dropped="
+        f"{sorted(dropped)}. Either the manifest no longer declares the "
+        f"feature post_index, or Layer 1's ``remediation=drop`` verdict is "
+        f"no longer flowing through the merged leakage_findings into "
+        f"leakage_remediation's auto-drop."
+    )
+
+    assert not missing_layer_1, (
+        f"CSU post_index journey features missing a Layer 1 drop verdict: "
+        f"{missing_layer_1}. "
+        f"Each member of CSU_POST_INDEX_JOURNEY_FEATURES must have an "
+        f"adaptive_verdict with layer='1', severity='high', remediation='drop'. "
+        f"Layer 1 verdicts seen: {sorted(layer_1_drops)}. Either the manifest "
+        f"contract was relaxed, the EnsembleVoter no longer emits Layer 1 "
+        f"high+drop, or adaptive_validity_check stopped scanning the feature."
+    )
