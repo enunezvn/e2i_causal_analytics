@@ -197,3 +197,77 @@ class TestCheckCompletenessExcludedFeatures:
         assert score_default == pytest.approx(1.0)
         assert score_explicit == pytest.approx(1.0)
         assert score_none == pytest.approx(1.0)
+
+    def test_excluded_features_count_only_present_cols(self) -> None:
+        """Codex LOW-B: count only excluded cols actually in the frame.
+
+        A misspelled or stale manifest exclusion (col name not in
+        ``df.columns``) used to inflate ``excluded_features_count``,
+        masking the configuration drift. The fix surfaces a separate
+        ``excluded_features_missing`` list so the mismatch is visible.
+        """
+        df = pd.DataFrame(
+            {
+                "id": ["p1", "p2"],
+                "metadata": [None, None],
+            }
+        )
+        _, results = _check_completeness(
+            df,
+            required_columns=["id"],
+            excluded_features=["metadata", "stale_col_that_doesnt_exist", "another_typo"],
+        )
+        table_result = next(
+            r for r in results if r["expectation_type"] == "expect_table_completeness"
+        )
+        # Only ``metadata`` is present in the frame.
+        assert table_result["result"]["excluded_features_count"] == 1
+        assert table_result["result"]["excluded_features_requested"] == 3
+        assert sorted(table_result["result"]["excluded_features_missing"]) == [
+            "another_typo",
+            "stale_col_that_doesnt_exist",
+        ]
+
+
+class TestRunQualityChecksNoneSafeScopeSpec:
+    """Codex MEDIUM B/F: scope_spec keys may be explicitly None.
+
+    ``list(scope_spec.get("excluded_features"))`` would raise
+    ``TypeError`` if the key was set to None. The fix uses
+    ``... or []`` to coerce None → empty.
+    """
+
+    @pytest.mark.asyncio
+    async def test_none_excluded_features_does_not_crash(self) -> None:
+        train_df = pd.DataFrame({"x": [1, 2, 3]})
+        state = {
+            "experiment_id": "exp_none_safe",
+            "train_df": train_df,
+            "scope_spec": {
+                "excluded_features": None,  # explicitly None — would crash pre-fix
+                "exclude_columns": None,
+            },
+        }
+        result = await run_quality_checks(state)
+        # Critically, no TypeError. Status may be passed/warning/failed
+        # depending on the data, but the node returned a result.
+        assert "qc_status" in result
+        assert "completeness_score" in result
+
+    @pytest.mark.asyncio
+    async def test_none_excluded_features_treated_as_empty(self) -> None:
+        train_df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
+        state_with_none = {
+            "experiment_id": "exp_a",
+            "train_df": train_df,
+            "scope_spec": {"excluded_features": None},
+        }
+        state_with_empty = {
+            "experiment_id": "exp_b",
+            "train_df": train_df,
+            "scope_spec": {"excluded_features": []},
+        }
+        result_none = await run_quality_checks(state_with_none)
+        result_empty = await run_quality_checks(state_with_empty)
+        # Same behavior — None and [] are equivalent.
+        assert result_none["completeness_score"] == result_empty["completeness_score"]
