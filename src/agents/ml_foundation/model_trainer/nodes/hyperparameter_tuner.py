@@ -719,8 +719,17 @@ def _get_fixed_params(
                     fixed_params["is_unbalance"] = True
                     logger.info("Added is_unbalance=True for LightGBM")
                 elif algorithm_name == "GradientBoosting":
-                    # sklearn GradientBoosting doesn't support class_weight directly
-                    # but we can adjust sample weights during training
+                    # sklearn GradientBoosting doesn't accept class_weight in the
+                    # constructor, but it DOES accept sample_weight in .fit().
+                    # Backlog #20 Gap 3: the symmetric class-weight handling for
+                    # GBM lives in
+                    # ``model_trainer_node._prepare_fit_params`` — when
+                    # ``state["imbalance_detected"]`` is True, that helper
+                    # populates ``fit_params["sample_weight"]`` via
+                    # ``sklearn.utils.class_weight.compute_sample_weight(
+                    # "balanced", y_train)``, which is the per-sample
+                    # equivalent of ``class_weight="balanced"`` on the other
+                    # tree models.
                     pass
 
     # Regularization caps for imbalanced datasets (mutually exclusive tiers).

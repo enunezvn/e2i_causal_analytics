@@ -195,6 +195,8 @@ async def train_model(state: Dict[str, Any]) -> Dict[str, Any]:
         early_stopping_patience=early_stopping_patience,
         X_validation=X_validation_preprocessed,
         y_validation=y_validation,
+        imbalance_detected=bool(state.get("imbalance_detected", False)),
+        y_train=y_train,
     )
 
     # Train the model on TRAIN ONLY
@@ -682,10 +684,19 @@ def _prepare_fit_params(
     early_stopping_patience: int,
     X_validation: Any,
     y_validation: Any,
+    *,
+    imbalance_detected: bool = False,
+    y_train: Any = None,
 ) -> Dict[str, Any]:
     """Prepare fit parameters for training.
 
-    Handles early stopping for XGBoost/LightGBM.
+    Handles early stopping for XGBoost/LightGBM, and the GradientBoosting
+    sample_weight bridge that mirrors what XGBoost gets via scale_pos_weight,
+    LightGBM via is_unbalance, and RandomForest/LogisticRegression/ExtraTrees
+    via class_weight="balanced". sklearn's ``GradientBoostingClassifier``
+    rejects class_weight at construction but accepts ``sample_weight`` at
+    ``.fit()``, so the imbalance signal flows through fit_params instead of
+    fixed_params (backlog #20 Gap 3).
 
     Args:
         algorithm_name: Algorithm name
@@ -693,11 +704,41 @@ def _prepare_fit_params(
         early_stopping_patience: Early stopping patience
         X_validation: Validation features
         y_validation: Validation labels
+        imbalance_detected: Whether class imbalance was detected upstream
+            (``detect_class_imbalance`` node). Only consulted for the
+            GradientBoosting branch — other algos already get class-weight
+            handling via ``_get_fixed_params`` constructor kwargs.
+        y_train: Training labels used to compute the per-sample weights when
+            ``algorithm_name == "GradientBoosting"`` and imbalance is
+            detected. Accepts any array-like (numpy, pandas Series); the
+            helper flattens via ``np.asarray``. Single-class y_train
+            short-circuits to no sample_weight (degenerate; no positives or
+            no negatives to reweight).
 
     Returns:
         Dictionary of fit parameters
     """
     fit_params: Dict[str, Any] = {}
+
+    # Block 5 — Backlog #20 Gap 3: GradientBoosting sample_weight bridge.
+    # sklearn GBM doesn't accept class_weight in the constructor, so the
+    # symmetric handling is to compute "balanced" sample weights at fit
+    # time. Note this runs even with early_stopping=False, since the
+    # imbalance bridge is independent of early stopping.
+    if algorithm_name == "GradientBoosting" and imbalance_detected and y_train is not None:
+        from sklearn.utils.class_weight import compute_sample_weight
+
+        y_train_arr = np.asarray(y_train).flatten()
+        # compute_sample_weight raises on single-class y; the imbalance
+        # detector emits imbalance_detected=False on degenerate splits but
+        # we guard regardless so any caller path that synthesizes the flag
+        # stays safe.
+        if len(np.unique(y_train_arr)) >= 2:
+            fit_params["sample_weight"] = compute_sample_weight("balanced", y_train_arr)
+            logger.info(
+                "Added sample_weight (n=%d) for GradientBoosting with imbalance_detected=True",
+                len(fit_params["sample_weight"]),
+            )
 
     if not early_stopping:
         return fit_params
@@ -721,7 +762,8 @@ def _prepare_fit_params(
 
     elif algorithm_name == "GradientBoosting":
         # sklearn GradientBoosting uses validation_fraction and n_iter_no_change
-        # These are set in model params, not fit params
+        # for early stopping (set in model params, not fit params). The
+        # sample_weight branch above handles imbalance defense-in-depth.
         pass
 
     return fit_params

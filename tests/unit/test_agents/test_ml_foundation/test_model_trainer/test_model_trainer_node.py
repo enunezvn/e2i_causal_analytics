@@ -10,6 +10,7 @@ from src.agents.ml_foundation.model_trainer.nodes.model_trainer_node import (
     _filter_hyperparameters,
     _get_framework,
     _get_model_class_dynamic,
+    _prepare_fit_params,
     train_model,
 )
 
@@ -623,3 +624,221 @@ class TestGetFramework:
     def test_returns_unknown_for_unrecognized(self):
         """Should return 'unknown' for unrecognized algorithms."""
         assert _get_framework("UnknownAlgorithm") == "unknown"
+
+
+# ============================================================================
+# Backlog #20 Gap 3: GradientBoosting sample_weight bridge
+# ============================================================================
+
+
+class TestPrepareFitParamsGBMSampleWeight:
+    """Verify _prepare_fit_params wires sample_weight for GBM under imbalance.
+
+    sklearn's GradientBoostingClassifier rejects class_weight at construction
+    but accepts sample_weight at .fit(). The bridge mirrors the constructor-
+    level handling that XGBoost/LightGBM/RandomForest/LogReg/ExtraTrees get
+    in hyperparameter_tuner._get_fixed_params, so GBM is no longer the odd
+    one out under class imbalance.
+    """
+
+    def test_gbm_imbalance_adds_sample_weight(self):
+        """GradientBoosting + imbalance_detected=True populates sample_weight."""
+        rng = np.random.default_rng(42)
+        # 95:5 imbalance, n=100
+        y_train = np.concatenate([np.zeros(95), np.ones(5)]).astype(int)
+        rng.shuffle(y_train)
+
+        fit_params = _prepare_fit_params(
+            algorithm_name="GradientBoosting",
+            early_stopping=False,
+            early_stopping_patience=10,
+            X_validation=None,
+            y_validation=None,
+            imbalance_detected=True,
+            y_train=y_train,
+        )
+
+        assert "sample_weight" in fit_params
+        sw = fit_params["sample_weight"]
+        assert isinstance(sw, np.ndarray)
+        assert sw.shape == (100,)
+        # "balanced" weights: minority class gets larger weight than majority
+        # n_samples / (n_classes * n_majority) for class 0; same with n_minority for class 1
+        majority_weight = sw[y_train == 0][0]
+        minority_weight = sw[y_train == 1][0]
+        assert minority_weight > majority_weight
+        # All samples in same class share the same weight
+        assert np.allclose(sw[y_train == 0], majority_weight)
+        assert np.allclose(sw[y_train == 1], minority_weight)
+
+    def test_gbm_no_imbalance_skips_sample_weight(self):
+        """GradientBoosting + imbalance_detected=False omits sample_weight."""
+        y_train = np.random.randint(0, 2, 100)
+
+        fit_params = _prepare_fit_params(
+            algorithm_name="GradientBoosting",
+            early_stopping=False,
+            early_stopping_patience=10,
+            X_validation=None,
+            y_validation=None,
+            imbalance_detected=False,
+            y_train=y_train,
+        )
+
+        assert "sample_weight" not in fit_params
+
+    def test_non_gbm_algorithms_no_sample_weight_via_bridge(self):
+        """RandomForest/XGBoost/LightGBM don't get sample_weight from this bridge.
+
+        They handle imbalance via class_weight/scale_pos_weight/is_unbalance
+        constructor params (in _get_fixed_params), not fit-time sample_weight.
+        """
+        y_train = np.concatenate([np.zeros(95), np.ones(5)]).astype(int)
+
+        for algo in ["RandomForest", "XGBoost", "LightGBM", "LogisticRegression", "ExtraTrees"]:
+            fit_params = _prepare_fit_params(
+                algorithm_name=algo,
+                early_stopping=False,
+                early_stopping_patience=10,
+                X_validation=None,
+                y_validation=None,
+                imbalance_detected=True,
+                y_train=y_train,
+            )
+            assert "sample_weight" not in fit_params, (
+                f"{algo} should not get sample_weight via _prepare_fit_params"
+            )
+
+    def test_gbm_single_class_y_skips_sample_weight(self):
+        """Degenerate single-class y_train short-circuits without crashing.
+
+        compute_sample_weight raises on single-class y; the helper guards
+        regardless so synthesized states stay safe.
+        """
+        y_train = np.zeros(100, dtype=int)  # all-zero, degenerate
+
+        fit_params = _prepare_fit_params(
+            algorithm_name="GradientBoosting",
+            early_stopping=False,
+            early_stopping_patience=10,
+            X_validation=None,
+            y_validation=None,
+            imbalance_detected=True,
+            y_train=y_train,
+        )
+
+        assert "sample_weight" not in fit_params
+
+    def test_gbm_imbalance_with_early_stopping_keeps_both(self):
+        """Early stopping fit_params and sample_weight coexist for GBM.
+
+        Sklearn GBM uses validation_fraction/n_iter_no_change in the
+        constructor for early stopping (not fit_params), so the early-stopping
+        branch in _prepare_fit_params is a no-op for GBM. The sample_weight
+        bridge runs independently.
+        """
+        y_train = np.concatenate([np.zeros(95), np.ones(5)]).astype(int)
+        X_val = np.random.rand(30, 5)
+        y_val = np.random.randint(0, 2, 30)
+
+        fit_params = _prepare_fit_params(
+            algorithm_name="GradientBoosting",
+            early_stopping=True,
+            early_stopping_patience=10,
+            X_validation=X_val,
+            y_validation=y_val,
+            imbalance_detected=True,
+            y_train=y_train,
+        )
+
+        assert "sample_weight" in fit_params
+        # GBM early stopping doesn't add eval_set/callbacks (that's XGB/LGBM)
+        assert "eval_set" not in fit_params
+        assert "callbacks" not in fit_params
+
+    def test_gbm_y_train_none_skips_sample_weight(self):
+        """Missing y_train is a defensive no-op (don't crash callers)."""
+        fit_params = _prepare_fit_params(
+            algorithm_name="GradientBoosting",
+            early_stopping=False,
+            early_stopping_patience=10,
+            X_validation=None,
+            y_validation=None,
+            imbalance_detected=True,
+            y_train=None,
+        )
+
+        assert "sample_weight" not in fit_params
+
+    def test_gbm_pandas_series_y_train_handled(self):
+        """y_train as a pandas Series flattens via np.asarray."""
+        pd = pytest.importorskip("pandas")
+        y_train = pd.Series(np.concatenate([np.zeros(95), np.ones(5)]).astype(int))
+
+        fit_params = _prepare_fit_params(
+            algorithm_name="GradientBoosting",
+            early_stopping=False,
+            early_stopping_patience=10,
+            X_validation=None,
+            y_validation=None,
+            imbalance_detected=True,
+            y_train=y_train,
+        )
+
+        assert "sample_weight" in fit_params
+        assert fit_params["sample_weight"].shape == (100,)
+
+
+@pytest.mark.asyncio
+class TestTrainModelGBMSampleWeightIntegration:
+    """End-to-end check that train_model wires sample_weight into model.fit."""
+
+    async def test_gbm_imbalance_detected_changes_predictions(self):
+        """Compare GBM trained with vs without imbalance_detected=True.
+
+        Predictions on the minority class should shift when sample_weight
+        rebalancing is in effect, confirming the wiring reaches model.fit.
+        """
+        rng = np.random.default_rng(0)
+        n = 200
+        # 95:5 split with informative signal in feature 0
+        y = np.concatenate([np.zeros(190), np.ones(10)]).astype(int)
+        X = rng.standard_normal((n, 4))
+        X[y == 1, 0] += 1.5  # informative signal for minority
+        rng.shuffle(y)
+
+        base_state = {
+            "algorithm_name": "GradientBoosting",
+            "problem_type": "binary_classification",
+            "best_hyperparameters": {"n_estimators": 20, "max_depth": 3, "random_state": 42},
+            "X_train_preprocessed": X,
+            "X_validation_preprocessed": X[:30],
+            "train_data": {"y": y},
+            "validation_data": {"y": y[:30]},
+            "early_stopping": False,
+        }
+
+        # Without imbalance_detected
+        state_no_imb = {**base_state, "imbalance_detected": False}
+        result_no_imb = await train_model(state_no_imb)
+        # With imbalance_detected
+        state_imb = {**base_state, "imbalance_detected": True}
+        result_imb = await train_model(state_imb)
+
+        assert "error" not in result_no_imb
+        assert "error" not in result_imb
+
+        model_no_imb = result_no_imb["trained_model"]
+        model_imb = result_imb["trained_model"]
+
+        # The reweighted model should give DIFFERENT minority-class scores
+        # than the unweighted one. Equality would mean sample_weight was a
+        # no-op, i.e. the wiring didn't reach model.fit.
+        proba_no_imb = model_no_imb.predict_proba(X)[:, 1]
+        proba_imb = model_imb.predict_proba(X)[:, 1]
+
+        assert not np.allclose(proba_no_imb, proba_imb), (
+            "GBM with imbalance_detected=True produced identical scores to "
+            "the unweighted version — sample_weight wiring is not reaching "
+            "model.fit (backlog #20 Gap 3 regression)."
+        )
