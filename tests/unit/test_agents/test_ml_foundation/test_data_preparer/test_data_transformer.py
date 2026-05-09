@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+    _identify_column_types,
     _safe_label_encode,
     transform_data,
 )
@@ -300,3 +301,75 @@ async def test_excluded_features_alone_no_warning():
     touched = _encoded_column_names(result["transformations_applied"])
     assert "patient_id" not in touched
     assert "brand" in touched
+
+
+class TestIdentifyColumnTypesBoolRouting:
+    """Bool dtype must route to categorical, not numeric.
+
+    Mixing bool + int + float in a DataFrame slice forces ``.values``
+    to fall back to object dtype because pandas cannot find a safe
+    common numpy dtype. The downstream imputation step calls
+    ``np.isnan(train_df[numeric_cols].values).any()`` which crashes
+    with ``TypeError: ufunc 'isnan' not supported for the input types``
+    on object arrays.
+
+    Real CSU patient_journeys.json carries ``source_stacking_flag``
+    (bool) alongside int/float numeric features; the existing
+    ``test_csu_full_data_preparer_e2e.py`` fixture worked around this
+    by manually dropping bool cols. Backlog item #12 surfaced the bug
+    when the runner started routing through ``_load_from_files``.
+
+    Treating bool as binary categorical produces 0/1 via label
+    encoding — same downstream effect as numeric treatment, but with
+    no mixed-dtype hazard.
+    """
+
+    def test_bool_column_routed_to_categorical(self) -> None:
+        df = pd.DataFrame(
+            {
+                "flag": [True, False, True, False],
+                "value": [1.0, 2.0, 3.0, 4.0],
+                "count": [10, 20, 30, 40],
+            }
+        )
+        numeric, categorical, datetime = _identify_column_types(df, exclude_columns=[])
+        assert "flag" in categorical
+        assert "flag" not in numeric
+
+    def test_mixed_bool_int_float_no_object_array_after_filter(self) -> None:
+        """The whole point: train_df[numeric_cols].values must NOT be object.
+
+        Pinning this prevents future regressions of the np.isnan crash
+        on real CSU."""
+        df = pd.DataFrame(
+            {
+                "flag": [True, False, True, False],
+                "value": [1.0, 2.0, 3.0, 4.0],
+                "count": [10, 20, 30, 40],
+            }
+        )
+        numeric, _, _ = _identify_column_types(df, exclude_columns=[])
+        # With bool routed away, numeric_cols holds only int+float — common
+        # dtype is float64, no object fallback.
+        values = df[numeric].values
+        assert values.dtype != object, (
+            f"Expected non-object dtype but got {values.dtype}. "
+            f"numeric_cols was {numeric}; if a bool column slipped in, the "
+            f"bool-routing guard regressed."
+        )
+        # And np.isnan works on the slice (the actual downstream check).
+        assert not np.isnan(values).any()
+
+    def test_int_and_float_still_routed_to_numeric(self) -> None:
+        """Sanity: the bool routing did not break the canonical numeric path."""
+        df = pd.DataFrame(
+            {
+                "x_int": [1, 2, 3],
+                "x_float": [1.1, 2.2, 3.3],
+                "x_obj": ["a", "b", "c"],
+            }
+        )
+        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        assert "x_int" in numeric
+        assert "x_float" in numeric
+        assert "x_obj" in categorical
