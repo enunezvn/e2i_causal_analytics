@@ -52,19 +52,36 @@ def _promote_cv_summary_to_validation_metrics(
 ) -> None:
     """Promote scalar CV summary metrics into ``validation_metrics``.
 
-    The TIER0_E2E_JSON_OUT artifact filter at
-    ``scripts/run_tier0_test.py:5972-5976`` only retains scalar values
-    (``int``, ``float``, ``str``, ``None``) on the ``validation_metrics``
-    payload. Without this promotion the cv summary lives in
-    ``metrics_result["cv_results"]`` (a sub-dict) and gets dropped by the
-    filter, forcing downstream consumers to stdout-scrape the
-    ``"5-fold CV AUC: ..."`` log line.
+    The TIER0_E2E_JSON_OUT artifact filter (the dict comprehension that
+    builds ``"validation_metrics"`` in ``scripts/run_tier0_test.py``'s
+    ``main()`` — grep for ``state.get("validation_metrics")`` to find it)
+    only retains scalar values (``int``, ``float``, ``str``, ``None``) on
+    the ``validation_metrics`` payload. Without this promotion the cv
+    summary lives in ``metrics_result["cv_results"]`` (a sub-dict) and
+    gets dropped by the filter, forcing downstream consumers to stdout-
+    scrape the ``"5-fold CV AUC: ..."`` log line.
 
     Closes backlog #18. Mutates ``metrics_result`` in place.
 
     Adds ``cv_5fold_<metric>_<stat>`` keys for {roc_auc, pr_auc, mcc, f1}
     × {mean, std} when each source key is present in ``cv_result``.
+
+    The ``cv_5fold_`` prefix is intentionally hardcoded against the
+    fixed-5-fold CV at the runner's evaluator callsite. If a future caller
+    wants a different fold count, they MUST update both the helper's
+    naming convention and downstream JSON consumers in lockstep — the
+    ``n_folds`` assertion below fails loudly to surface the intent
+    (codex pass-1 MEDIUM-2: runtime fold-count drift would silently emit
+    misleading key names).
     """
+    cv_n_folds = cv_result.get("n_folds")
+    if cv_n_folds is not None and cv_n_folds != 5:
+        raise ValueError(
+            f"_promote_cv_summary_to_validation_metrics: cv_result n_folds={cv_n_folds!r}, "
+            f"but the JSON-artifact key prefix is hardcoded to 'cv_5fold_'. "
+            f"Update both the prefix and downstream consumers if a different "
+            f"fold count is intended."
+        )
     val_metrics = metrics_result.setdefault("validation_metrics", {})
     for metric in _CV_PROMOTED_METRICS:
         for stat in _CV_PROMOTED_STATS:
