@@ -194,7 +194,7 @@ async def _load_from_supabase(
 
 
 def _drop_unhashable_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop object-dtype columns whose first non-null cell is unhashable.
+    """Drop object-dtype columns containing any unhashable cell.
 
     pandas marks any column with a list/dict/set/tuple cell as object dtype
     but cannot compute set-based aggregations like ``nunique()`` /
@@ -204,9 +204,13 @@ def _drop_unhashable_columns(df: pd.DataFrame) -> pd.DataFrame:
     that crash multiple downstream nodes (``leakage_detector``,
     ``data_transformer``, ``baseline_computer``).
 
-    Sampling the first non-null cell is a fast heuristic — pandas guarantees
-    object-dtype within a single column either holds hashable scalars or
-    unhashable containers, so a single sample is sufficient in practice.
+    Scans every non-null cell — sampling only ``iloc[0]`` would let a column
+    whose first row is a scalar but later rows contain lists silently
+    survive the filter (codex review HIGH-B on PR #105). ``Series.map`` with
+    a short-circuiting ``.any()`` is O(n) but cheap relative to the
+    downstream encoding it would otherwise crash; pandas does not guarantee
+    type uniformity within an object-dtype column.
+
     Empty / all-null columns are left in place; they are benign for
     downstream nunique calls and may carry intentional contract semantics.
 
@@ -223,8 +227,9 @@ def _drop_unhashable_columns(df: pd.DataFrame) -> pd.DataFrame:
         non_null = df[col].dropna()
         if non_null.empty:
             continue
-        sample = non_null.iloc[0]
-        if isinstance(sample, (list, dict, set, frozenset, tuple)):
+        if non_null.map(
+            lambda v: isinstance(v, (list, dict, set, frozenset, tuple))
+        ).any():
             drop_cols.append(col)
 
     if not drop_cols:
