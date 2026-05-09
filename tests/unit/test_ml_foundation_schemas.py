@@ -636,7 +636,7 @@ def test_setitem_validates_assignment_rejects_off_spec_literal() -> None:
     """
     from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 
-    state = DataPreparerState()
+    state = DataPreparerState(audit_workflow_id=uuid4())
     with pytest.raises(ValidationError):
         # qc_status is Optional[Literal["passed","failed","warning","skipped"]]
         # — "not_a_real_status" must be rejected loud at assignment time.
@@ -653,7 +653,7 @@ def test_setattr_also_validates_assignment() -> None:
     """
     from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 
-    state = DataPreparerState()
+    state = DataPreparerState(audit_workflow_id=uuid4())
     with pytest.raises(ValidationError):
         state.qc_status = "not_a_real_status"  # type: ignore[assignment]
 
@@ -662,7 +662,7 @@ def test_setitem_validates_assignment_accepts_valid_values() -> None:
     """I1 fix: valid Literal values still pass through assignment."""
     from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 
-    state = DataPreparerState()
+    state = DataPreparerState(audit_workflow_id=uuid4())
     state["qc_status"] = "passed"
     assert state.qc_status == "passed"
     state["qc_status"] = "failed"
@@ -706,7 +706,9 @@ def test_feature_analyzer_state_shap_values_json_dump_raises() -> None:
 
     from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState
 
-    state = FeatureAnalyzerState(shap_values=np.array([[0.1, 0.2], [0.3, 0.4]]))
+    state = FeatureAnalyzerState(
+        audit_workflow_id=uuid4(), shap_values=np.array([[0.1, 0.2], [0.3, 0.4]])
+    )
     with pytest.raises(PydanticSerializationError):
         state.model_dump_json()
 
@@ -720,7 +722,9 @@ def test_feature_analyzer_state_json_dump_works_when_shap_values_is_none() -> No
     """
     from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState
 
-    state = FeatureAnalyzerState(experiment_id="exp_test", problem_type="classification")
+    state = FeatureAnalyzerState(
+        audit_workflow_id=uuid4(), experiment_id="exp_test", problem_type="classification"
+    )
     # Should NOT raise.
     json_str = state.model_dump_json()
     assert "exp_test" in json_str
@@ -806,6 +810,7 @@ def test_model_trainer_state_validates_hyperparameter_search_space_dict_literal(
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
     state = ModelTrainerState(
+        audit_workflow_id=uuid4(),
         hyperparameter_search_space={
             "n_estimators": {"type": "int", "low": 50, "high": 500, "step": 50},
             "learning_rate": {
@@ -818,7 +823,7 @@ def test_model_trainer_state_validates_hyperparameter_search_space_dict_literal(
                 "type": "categorical",
                 "choices": ["binary:logistic", "binary:hinge"],
             },
-        }
+        },
     )
 
     space = state.hyperparameter_search_space
@@ -842,10 +847,11 @@ def test_model_selector_state_validates_hyperparameter_search_space_dict_literal
     from src.agents.ml_foundation.model_selector.state import ModelSelectorState
 
     state = ModelSelectorState(
+        audit_workflow_id=uuid4(),
         hyperparameter_search_space={
             "max_depth": {"type": "int", "low": 3, "high": 10},
             "subsample": {"type": "float", "low": 0.5, "high": 1.0},
-        }
+        },
     )
     space = state.hyperparameter_search_space
     assert space is not None
@@ -864,25 +870,28 @@ def test_model_trainer_state_rejects_invalid_hyperparameter_search_space() -> No
     # Invalid type discriminator
     with pytest.raises(ValidationError):
         ModelTrainerState(
+            audit_workflow_id=uuid4(),
             hyperparameter_search_space={
                 "x": {"type": "ilt", "low": 1, "high": 10},  # typo
-            }
+            },
         )
 
     # Missing required field (high)
     with pytest.raises(ValidationError):
         ModelTrainerState(
+            audit_workflow_id=uuid4(),
             hyperparameter_search_space={
                 "x": {"type": "int", "low": 1},  # missing high
-            }
+            },
         )
 
     # Categorical with empty choices
     with pytest.raises(ValidationError):
         ModelTrainerState(
+            audit_workflow_id=uuid4(),
             hyperparameter_search_space={
                 "x": {"type": "categorical", "choices": []},  # min_length=1
-            }
+            },
         )
 
 
@@ -893,7 +902,7 @@ def test_model_trainer_state_hyperparameter_search_space_none_default() -> None:
     """
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
-    state = ModelTrainerState()
+    state = ModelTrainerState(audit_workflow_id=uuid4())
     assert state.hyperparameter_search_space is None
 
 
@@ -905,7 +914,8 @@ def test_model_trainer_state_hyperparameter_search_space_round_trips_through_jso
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
     state = ModelTrainerState(
-        hyperparameter_search_space={"lr": {"type": "float", "low": 1e-3, "high": 0.5, "log": True}}
+        audit_workflow_id=uuid4(),
+        hyperparameter_search_space={"lr": {"type": "float", "low": 1e-3, "high": 0.5, "log": True}},
     )
     dumped = state.model_dump()
     restored = ModelTrainerState.model_validate(dumped)
@@ -968,6 +978,7 @@ def test_model_trainer_state_qc_report_validates_typed_schema() -> None:
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
     state = ModelTrainerState(
+        audit_workflow_id=uuid4(),
         qc_report={
             "report_id": "qc_test_001",
             "experiment_id": "exp_xyz",
@@ -976,7 +987,7 @@ def test_model_trainer_state_qc_report_validates_typed_schema() -> None:
             "qc_passed": True,
             "qc_errors": [],
             "qc_warnings": ["minor_correlation"],
-        }
+        },
     )
 
     assert state.qc_report is not None
@@ -994,11 +1005,12 @@ def test_model_selector_state_qc_report_validates_typed_schema() -> None:
     from src.agents.ml_foundation.model_selector.state import ModelSelectorState
 
     state = ModelSelectorState(
+        audit_workflow_id=uuid4(),
         qc_report={
             "report_id": "qc_test_002",
             "qc_passed": False,
             "qc_errors": ["leakage_detected:f1"],
-        }
+        },
     )
 
     assert state.qc_report is not None
@@ -1123,13 +1135,14 @@ def test_model_trainer_state_success_criteria_validates_typed_schema() -> None:
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
     state = ModelTrainerState(
+        audit_workflow_id=uuid4(),
         success_criteria={
             "experiment_id": "exp_001",
             "minimum_auc": 0.75,
             "minimum_net_benefit_at_p_t": 0.04,
             "minimum_mcc": 0.30,
             "criteria_source": "adaptive",
-        }
+        },
     )
     assert state.success_criteria is not None
     assert isinstance(state.success_criteria, SuccessCriteriaSchema)
@@ -1224,6 +1237,7 @@ def test_data_preparer_state_scope_spec_validates_typed_schema() -> None:
     from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 
     state = DataPreparerState(
+        audit_workflow_id=uuid4(),
         scope_spec={
             "experiment_id": "exp_001",
             "data_source": "rwd.patients_v2",
@@ -1231,7 +1245,7 @@ def test_data_preparer_state_scope_spec_validates_typed_schema() -> None:
             "date_column": "event_date",
             "required_columns": ["patient_id", "event_date"],
             "split_date": "2026-01-01",
-        }
+        },
     )
     assert state.scope_spec is not None
     assert isinstance(state.scope_spec, ScopeSpecSchema)
@@ -1245,11 +1259,12 @@ def test_model_selector_state_scope_spec_validates_typed_schema() -> None:
     from src.agents.ml_foundation.model_selector.state import ModelSelectorState
 
     state = ModelSelectorState(
+        audit_workflow_id=uuid4(),
         scope_spec={
             "experiment_id": "exp_002",
             "problem_type": "binary_classification",
             "technical_constraints": ["interpretability"],
-        }
+        },
     )
     assert state.scope_spec is not None
     assert isinstance(state.scope_spec, ScopeSpecSchema)
@@ -1379,6 +1394,7 @@ def test_model_deployer_state_validation_metrics_validates_typed_schema() -> Non
     from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
 
     state = ModelDeployerState(
+        audit_workflow_id=uuid4(),
         validation_metrics={
             "accuracy": 0.85,
             "precision": 0.78,
@@ -1387,7 +1403,7 @@ def test_model_deployer_state_validation_metrics_validates_typed_schema() -> Non
             "roc_auc": 0.88,
             "mcc": 0.40,
             "chosen_threshold": 0.5,
-        }
+        },
     )
     assert state.validation_metrics is not None
     assert isinstance(state.validation_metrics, MetricsSchema)
@@ -1460,6 +1476,7 @@ def test_model_trainer_state_test_metrics_validates_typed_schema() -> None:
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
     state = ModelTrainerState(
+        audit_workflow_id=uuid4(),
         test_metrics={
             "roc_auc": 0.83,  # producer-modern alias resolves to auc_roc
             "f1_score": 0.70,
@@ -1490,6 +1507,7 @@ def test_model_trainer_state_test_metrics_round_trips_through_json() -> None:
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
     original = ModelTrainerState(
+        audit_workflow_id=uuid4(),
         test_metrics=MetricsSchema(
             auc_roc=0.83,
             f1_score=0.70,
@@ -1510,7 +1528,7 @@ def test_model_trainer_state_test_metrics_omitted_defaults_to_none() -> None:
     """D2.5b: test_metrics omitted in input defaults to None per Decision 8a."""
     from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
 
-    state = ModelTrainerState()
+    state = ModelTrainerState(audit_workflow_id=uuid4())
     assert state.test_metrics is None
 
 
@@ -1558,7 +1576,7 @@ def test_model_trainer_state_test_metrics_accepts_realistic_evaluator_output() -
         "minimum_lift_over_baseline": 0.04,  # evaluator.py:1226 (binary path)
         "calibrated_ece": 0.025,  # evaluator.py:347-384 (binary path)
     }
-    state = ModelTrainerState(test_metrics=realistic)
+    state = ModelTrainerState(audit_workflow_id=uuid4(), test_metrics=realistic)
     assert state.test_metrics is not None
     assert isinstance(state.test_metrics, MetricsSchema)
     # Zero extra keys: every producer-emitted key was claimed by a declared
