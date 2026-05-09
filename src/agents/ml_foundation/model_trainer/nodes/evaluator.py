@@ -1893,13 +1893,32 @@ def _select_threshold(
 
     Returns:
         Tuple of ``(chosen_threshold, chosen_threshold_source)``. The
-        source string is one of the literals ``"validation"`` (validation
-        arrays present, threshold tuned via Youden's J on them),
-        ``"validation_cost_optimal"`` (validation arrays + cost_matrix
-        present, threshold picked to maximise business_utility), or
-        ``"default"`` (validation arrays absent, threshold pinned to 0.5).
-        Downstream consumers (mlflow_logger, audit code) rely on these
-        exact literals.
+        source string is one of these exact literals (used by
+        downstream consumers — mlflow_logger, audit code, schema checkers
+        — for provenance attribution):
+
+        - ``"validation"``: validation arrays present, threshold tuned
+          via Youden's J on them (canonical default).
+        - ``"validation_cost_optimal"``: validation arrays + cost_matrix
+          present, threshold picked to maximise business_utility on
+          validation (Backlog #20 Gap 1).
+        - ``"validation_f1_fallback"``: caller (``_compute_classification_metrics``)
+          escalated to F1-optimal because validation MCC at the
+          canonically-chosen threshold was below
+          ``_F1_FALLBACK_MCC_THRESHOLD`` AND F1-optimal strictly
+          improved MCC (Backlog #20 Gap 2). NOTE: ``_select_threshold``
+          itself never returns this literal — the F1-fallback rewrites
+          ``threshold_source`` in the parent helper. Documented here so
+          consumers know the full set.
+        - ``"default"``: validation arrays absent, threshold pinned to
+          0.5 (test integrity preserved).
+
+        Schema (``MetricsSchema.chosen_threshold_source``) accepts
+        ``Optional[str]`` so additions don't require migration. Codex
+        pass-2 LOW-4: as of this PR no consumer in src/ does an exact
+        ``== "validation"`` equality check, so the new literals don't
+        silently bypass downstream paths. If a future consumer adds
+        such a check, it must enumerate this literal set.
     """
     if y_validation is not None and y_validation_proba is not None:
         if cost_matrix is not None:
