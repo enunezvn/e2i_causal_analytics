@@ -21,19 +21,28 @@ Specifically proves:
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 
 @pytest.mark.integration
-def test_rwd_realistic_post_index_leak_caught_by_layer_5_pipeline():
+@pytest.mark.asyncio
+async def test_rwd_realistic_post_index_leak_caught_by_layer_5_pipeline():
     """End-to-end pipeline integration with injected leak.
 
     Generate rwd_realistic data with leakage_pattern="post_index_aggregation",
     which adds a `post_index_med_count_LEAK` column. Then run detect_leakage
     + adaptive_validity_check sequentially, mirroring the graph wiring, and
     assert the adaptive layer catches what the legacy detector misses.
+
+    Async + ``pytest.mark.asyncio`` (was sync + ``asyncio.run``): under
+    xdist, an earlier test in the same worker may have triggered
+    ``nest_asyncio.apply()`` (e.g., via ``experiment_designer.graph``),
+    which monkey-patches asyncio globally. Subsequent ``asyncio.run``
+    calls then route through nest_asyncio's wrapper which references a
+    closed loop. ``pytest.mark.asyncio`` manages a fresh loop per
+    test, bypassing the patched runner. Same fix pattern as PR #89
+    commit ``5afa67a`` (kg ``__init__`` lazy-import for the related
+    httpx-side-effect flake).
     """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         adaptive_validity_check,
@@ -76,13 +85,13 @@ def test_rwd_realistic_post_index_leak_caught_by_layer_5_pipeline():
     }
 
     # Step 1: legacy detect_leakage runs first
-    det_result = asyncio.run(detect_leakage(state))
+    det_result = await detect_leakage(state)
     state.update(det_result)
     legacy_severity = state.get("leakage_severity", "none")
     legacy_leaked = set(state.get("leaked_features") or [])
 
     # Step 2: adaptive layer runs after, augments
-    adp_result = asyncio.run(adaptive_validity_check(state))
+    adp_result = await adaptive_validity_check(state)
     state.update(adp_result)
 
     final_severity = state.get("leakage_severity", "none")
@@ -122,12 +131,16 @@ def test_rwd_realistic_post_index_leak_caught_by_layer_5_pipeline():
 
 
 @pytest.mark.integration
-def test_rwd_realistic_no_leak_injection_does_not_falsely_flag():
+@pytest.mark.asyncio
+async def test_rwd_realistic_no_leak_injection_does_not_falsely_flag():
     """Without injected leakage, Layer 5 must NOT escalate severity.
 
     Generate clean rwd_realistic data (leakage_pattern="none"), run the same
     two-node pipeline, and verify that no feature is flagged at z > 5σ.
     This is the false-positive guard for acceptance criterion #4.
+
+    Async per the same nest_asyncio rationale as
+    ``test_rwd_realistic_post_index_leak_caught_by_layer_5_pipeline``.
     """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         adaptive_validity_check,
@@ -166,6 +179,6 @@ def test_rwd_realistic_no_leak_injection_does_not_falsely_flag():
         "leaked_features": [],
     }
 
-    adp_result = asyncio.run(adaptive_validity_check(state))
+    adp_result = await adaptive_validity_check(state)
     flagged = set(adp_result.get("adaptive_flagged_features") or [])
     assert flagged == set(), f"False-positive: clean data flagged features: {flagged}"
