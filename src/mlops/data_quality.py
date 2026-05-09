@@ -661,6 +661,22 @@ class DataQualityValidator:
         )
 
         # ML patients suite (patient-level ML-ready data)
+        # Cohort-agnostic: avoids the prior Novartis-only constraints that
+        # blocked real CSU runs (backlog item #13). Specifically:
+        #   - The hardcoded brand-vocab in-set check (Remibrutinib/Fabhalta/
+        #     Kisqali) was removed: brand vocabulary is cohort-specific
+        #     (CSU uses ``competitor``; Optum uses Novartis brands; future
+        #     cohorts will introduce more). Cross-cohort regression on
+        #     brand vocabulary is caught by the cohort manifest's
+        #     FeatureContract gate (``feature_manifest_source``), not GE.
+        #   - The non-null check on ``discontinuation_flag`` was removed:
+        #     CSU has 7864/9607 patients with null flags by construction
+        #     (only treated patients have discontinuation status; 18% of
+        #     CSU patients ever initiate treatment). Imposing non-null
+        #     here misframes a legitimate data semantic as a defect.
+        # The remaining checks (column existence, ID non-nullability, valid
+        # discontinuation_flag values when present) preserve the
+        # contract-relevant guardrails.
         self.SUITES["ml_patients"] = (
             ExpectationSuiteBuilder("ml_patients")
             .expect_table_row_count_to_be_between(min_value=1)
@@ -670,11 +686,6 @@ class DataQualityValidator:
             .expect_column_to_exist("discontinuation_flag")
             .expect_column_values_to_not_be_null("patient_journey_id")
             .expect_column_values_to_not_be_null("patient_id")
-            .expect_column_values_to_not_be_null("brand")
-            .expect_column_values_to_not_be_null("discontinuation_flag")
-            .expect_column_values_to_be_in_set(
-                "brand", ["Remibrutinib", "Fabhalta", "Kisqali"], mostly=0.95
-            )
             .expect_column_values_to_be_in_set(
                 "discontinuation_flag", [0, 1, True, False], mostly=1.0
             )

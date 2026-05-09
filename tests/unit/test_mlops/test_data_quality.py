@@ -96,6 +96,63 @@ class TestDataQualityValidator:
         assert "patient_journeys" in validator.SUITES
         assert "causal_paths" in validator.SUITES
         assert "agent_activities" in validator.SUITES
+        assert "ml_patients" in validator.SUITES
+
+    def test_ml_patients_suite_is_cohort_agnostic(self, validator):
+        """The ml_patients suite must NOT hardcode brand vocabulary or
+        require non-null discontinuation_flag.
+
+        Backlog item #13 (closed via this commit): real CSU runs
+        (brand="competitor", 82% null discontinuation_flag) were blocked
+        by the prior Novartis-only constraints. Brand vocabulary is
+        cohort-specific and the manifest's FeatureContract gate handles
+        cross-cohort validation; null discontinuation_flag is a
+        legitimate data semantic for untreated patients.
+        """
+        suite = validator.get_suite("ml_patients")
+
+        for expectation in suite:
+            kwargs = expectation.get("kwargs", {})
+            exp_type = expectation.get("expectation_type", "")
+            column = kwargs.get("column", "")
+
+            # No brand-vocab hardcoding allowed.
+            if exp_type == "expect_column_values_to_be_in_set" and column == "brand":
+                pytest.fail(
+                    f"ml_patients hardcodes brand vocabulary "
+                    f"{kwargs.get('value_set')} — must remain cohort-agnostic "
+                    f"per backlog #13 closure"
+                )
+
+            # No non-null requirement on discontinuation_flag.
+            if (
+                exp_type == "expect_column_values_to_not_be_null"
+                and column == "discontinuation_flag"
+            ):
+                pytest.fail(
+                    "ml_patients requires non-null discontinuation_flag — "
+                    "must remain optional per backlog #13 closure (CSU has "
+                    "82% null flags by construction; only treated patients "
+                    "have discontinuation status)"
+                )
+
+        # Confirm the contract-relevant guards remain.
+        expected_present = {
+            ("expect_column_to_exist", "patient_journey_id"),
+            ("expect_column_to_exist", "patient_id"),
+            ("expect_column_to_exist", "brand"),
+            ("expect_column_to_exist", "discontinuation_flag"),
+            ("expect_column_values_to_not_be_null", "patient_journey_id"),
+            ("expect_column_values_to_not_be_null", "patient_id"),
+        }
+        actual = {
+            (e["expectation_type"], e.get("kwargs", {}).get("column", ""))
+            for e in suite
+        }
+        missing = expected_present - actual
+        assert not missing, (
+            f"ml_patients lost contract-relevant guards: {missing}"
+        )
 
     def test_get_suite(self, validator):
         """Test getting a registered suite."""
