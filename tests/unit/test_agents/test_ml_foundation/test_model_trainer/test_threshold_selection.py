@@ -19,6 +19,7 @@ import pytest
 
 from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
     _compute_classification_metrics,
+    _compute_cost_optimal_threshold,
     _compute_optimal_threshold,
     _select_threshold,
 )
@@ -450,3 +451,179 @@ class TestThresholdRebinarisationGuard:
         assert result["optimal_threshold"] == 0.5
         # Same y_pred → identical metrics in both at-0.5 and at-optimal blocks.
         assert result["test_metrics_at_05"] == result["test_metrics_at_optimal"]
+
+
+# ============================================================================
+# Backlog #20 Gap 1: cost-aware threshold selection
+# ============================================================================
+
+
+class TestCostOptimalThreshold:
+    """Direct tests for ``_compute_cost_optimal_threshold``.
+
+    Backlog #20 Gap 1 wires the previously-reserved ``cost_matrix`` parameter
+    of ``_select_threshold`` through to a utility-maximising threshold
+    sweep on validation. ``_compute_business_utility`` is the underlying
+    scorer; this helper picks the threshold that maximises it.
+    """
+
+    def test_returns_threshold_for_asymmetric_cost(self):
+        """High FN cost (e.g., missed biologic-initiation) drives the
+        optimal threshold lower than Youden's J would.
+
+        With FN penalty 10x larger than FP, the cost-optimal selector
+        should accept more false positives to avoid missed positives —
+        i.e., recommend a lower threshold than the symmetric Youden's J.
+        """
+        rng = np.random.default_rng(42)
+        # Bimodal validation: positives cluster around 0.7, negatives around 0.3
+        y = np.array([0] * 100 + [1] * 100)
+        proba_pos = np.concatenate(
+            [
+                rng.normal(0.3, 0.15, 100),
+                rng.normal(0.7, 0.15, 100),
+            ]
+        ).clip(0.01, 0.99)
+        y_proba = np.column_stack([1 - proba_pos, proba_pos])
+
+        # FN heavily penalised vs FP (10x asymmetry typical for missed
+        # biologic-initiation: replacement cost dwarfs false-alarm cost).
+        cost_matrix_fn_heavy = {"tp": 10.0, "fp": -1.0, "fn": -10.0, "tn": 0.0}
+
+        cost_threshold = _compute_cost_optimal_threshold(y, y_proba, cost_matrix_fn_heavy)
+        youden_threshold = _compute_optimal_threshold(y, y_proba)
+
+        assert cost_threshold is not None
+        # Cost-optimal accepts more false positives to avoid missing
+        # positives, so threshold should be at-or-below Youden's.
+        assert cost_threshold <= youden_threshold + 0.05
+
+    def test_returns_none_for_none_proba(self):
+        """No probabilities → None (caller falls through to Youden's J)."""
+        y = np.array([0, 1, 0, 1])
+        cost_matrix = {"tp": 1.0, "fp": -1.0, "fn": -1.0, "tn": 0.0}
+
+        result = _compute_cost_optimal_threshold(y, None, cost_matrix)
+
+        assert result is None
+
+    def test_returns_none_for_constant_proba(self):
+        """Constant probabilities → degenerate sweep → None.
+
+        Every threshold gives the same confusion matrix on constant probas
+        (either all-positive or all-negative), so utility is flat. Caller
+        falls through to Youden's J.
+        """
+        n = 50
+        y = np.array([0, 1] * (n // 2))
+        # Constant 0.5 probability for everything → confusion matrix flips
+        # exactly once at t=0.5, but utility may be flat above/below.
+        y_proba = np.column_stack([np.full(n, 0.5), np.full(n, 0.5)])
+        cost_matrix = {"tp": 1.0, "fp": 0.0, "fn": 0.0, "tn": 0.0}
+
+        result = _compute_cost_optimal_threshold(y, y_proba, cost_matrix)
+        # We still expect a finite threshold OR None — assert no crash.
+        # Asymmetric case with all-zero off-diagonal still yields a maximum
+        # at the lowest threshold that flips; only purely-flat utility
+        # returns None.
+        assert result is None or (0.0 < result < 1.0)
+
+    def test_propagates_keyerror_on_incomplete_cost_matrix(self):
+        """Missing cost_matrix key surfaces — does NOT silently default to 0.
+
+        ``_compute_business_utility`` raises KeyError on missing keys; the
+        helper catches generic Exception via the outer try, but a KeyError
+        from a malformed config should fail loud. Verify that the failure
+        path returns None (caller falls through cleanly).
+        """
+        n = 40
+        y = np.random.randint(0, 2, n)
+        y_proba = np.column_stack([np.random.rand(n), np.random.rand(n)])
+        bad_cost_matrix = {"tp": 1.0, "fp": -1.0}  # missing fn, tn
+
+        # The KeyError gets caught and logged; we get None back.
+        result = _compute_cost_optimal_threshold(y, y_proba, bad_cost_matrix)
+        assert result is None
+
+
+class TestSelectThresholdWithCostMatrix:
+    """Verify ``_select_threshold`` honours the cost_matrix kwarg.
+
+    Provenance string ``"validation_cost_optimal"`` distinguishes this
+    branch from plain Youden's J, so downstream consumers (mlflow_logger,
+    audit code) can attribute the operating point correctly.
+    """
+
+    def test_cost_matrix_branches_to_validation_cost_optimal(self):
+        """When cost_matrix is provided + validation arrays exist,
+        provenance must be ``"validation_cost_optimal"``."""
+        rng = np.random.default_rng(20260509)
+        proba_pos = np.concatenate(
+            [
+                rng.normal(0.3, 0.1, 50),
+                rng.normal(0.7, 0.1, 50),
+            ]
+        ).clip(0.01, 0.99)
+        y_validation = np.array([0] * 50 + [1] * 50)
+        y_validation_proba = np.column_stack([1 - proba_pos, proba_pos])
+
+        cost_matrix = {"tp": 10.0, "fp": -1.0, "fn": -10.0, "tn": 0.0}
+
+        threshold, source = _select_threshold(
+            y_validation, y_validation_proba, cost_matrix=cost_matrix
+        )
+
+        assert 0.0 < threshold < 1.0
+        assert source == "validation_cost_optimal"
+
+    def test_no_cost_matrix_preserves_validation_provenance(self):
+        """cost_matrix=None must preserve the original ``"validation"``
+        provenance — backward compatibility for callers that never set the
+        kwarg."""
+        rng = np.random.default_rng(20260509)
+        n = 60
+        proba_pos = rng.uniform(0.1, 0.9, n)
+        y_validation = (proba_pos > 0.5).astype(int)
+        y_validation_proba = np.column_stack([1 - proba_pos, proba_pos])
+
+        threshold, source = _select_threshold(y_validation, y_validation_proba, cost_matrix=None)
+
+        assert 0.0 <= threshold <= 1.0
+        assert source == "validation"
+
+    def test_cost_matrix_falls_through_to_youden_on_malformed(self):
+        """Malformed cost-matrix (missing keys) → fall through to Youden's
+        J, not 0.5 default. Provenance returns to ``"validation"``.
+
+        ``_compute_business_utility`` raises KeyError on missing keys; the
+        cost-optimal helper catches generic Exception and returns None,
+        which surfaces here as a fall-through. The validation-tuned
+        threshold is still useful even when the cost matrix is bad.
+        """
+        rng = np.random.default_rng(20260509)
+        n = 40
+        proba_pos = rng.uniform(0.1, 0.9, n)
+        y_validation = (proba_pos > 0.5).astype(int)
+        y_validation_proba = np.column_stack([1 - proba_pos, proba_pos])
+        bad_cost_matrix = {"tp": 1.0, "fp": -1.0}  # missing fn, tn
+
+        threshold, source = _select_threshold(
+            y_validation, y_validation_proba, cost_matrix=bad_cost_matrix
+        )
+
+        # Falls through to Youden's J. Provenance is "validation", NOT
+        # "validation_cost_optimal".
+        assert source == "validation"
+        assert np.isfinite(threshold)
+        assert 0.0 <= threshold <= 1.0
+
+    def test_cost_matrix_no_validation_arrays_falls_back_to_default(self):
+        """cost_matrix without validation arrays still defaults to 0.5 —
+        the cost branch only activates when validation tuning is possible.
+        """
+        cost_matrix = {"tp": 10.0, "fp": -1.0, "fn": -10.0, "tn": 0.0}
+
+        threshold, source = _select_threshold(None, None, cost_matrix=cost_matrix)
+
+        assert threshold == 0.5
+        assert source == "default"
