@@ -378,7 +378,7 @@ def test_feature_analyzer_state_holds_numpy_shap_values() -> None:
     import numpy as np
 
     arr = np.array([[0.1, 0.2], [0.3, 0.4]])
-    state = FeatureAnalyzerState(shap_values=arr)
+    state = FeatureAnalyzerState(audit_workflow_id=uuid4(), shap_values=arr)
     assert state.shap_values is not None
     assert state.shap_values.shape == (2, 2)
     np.testing.assert_array_equal(state.shap_values, arr)
@@ -634,6 +634,7 @@ def test_model_trainer_state_repeated_mode_fold_invocation_propagates_through_la
     # Initial state mimics the per-fold invocation pattern from
     # _run_repeated_splits at agent.py:1096.
     initial_state = {
+        "audit_workflow_id": uuid4(),
         "evaluation_mode": "repeated_k10",
         "repeated_mode_fold_invocation": True,
         "fold_idx": 3,
@@ -689,7 +690,9 @@ def test_model_trainer_state_accepts_legacy_underscore_key_at_construction() -> 
     AliasChoices declaration accepts the legacy form at the kwarg
     level. Subsequent tests exercise the more realistic JSON-load path.
     """
-    state = ModelTrainerState(**{"_repeated_mode_fold_invocation": True})
+    state = ModelTrainerState(
+        audit_workflow_id=uuid4(), **{"_repeated_mode_fold_invocation": True}
+    )
     assert state.repeated_mode_fold_invocation is True
 
 
@@ -786,7 +789,9 @@ def test_model_trainer_state_serializes_with_canonical_name_not_legacy_alias() -
     canonical name and fail-fast if some future schema change drops
     the canonical name without coordinating with checkpoint persistence.
     """
-    state = ModelTrainerState(repeated_mode_fold_invocation=True, experiment_id="exp_test")
+    state = ModelTrainerState(
+        audit_workflow_id=uuid4(), repeated_mode_fold_invocation=True, experiment_id="exp_test"
+    )
     json_str = state.model_dump_json(exclude_none=True)
     parsed = json.loads(json_str)
 
