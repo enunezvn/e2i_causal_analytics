@@ -915,7 +915,9 @@ def test_model_trainer_state_hyperparameter_search_space_round_trips_through_jso
 
     state = ModelTrainerState(
         audit_workflow_id=uuid4(),
-        hyperparameter_search_space={"lr": {"type": "float", "low": 1e-3, "high": 0.5, "log": True}},
+        hyperparameter_search_space={
+            "lr": {"type": "float", "low": 1e-3, "high": 0.5, "log": True}
+        },
     )
     dumped = state.model_dump()
     restored = ModelTrainerState.model_validate(dumped)
