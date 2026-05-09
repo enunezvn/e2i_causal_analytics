@@ -22,9 +22,19 @@ class TestScenarioNameEnumValues:
             == "scenario_c_treatment_decision_csu_remib_response"
         )
 
-    def test_three_members_total(self) -> None:
+    def test_a_balanced_value_is_canonical_id(self) -> None:
+        assert (
+            ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED.value
+            == "scenario_a_diagnostic_ebc_idfs_5y_balanced"
+        )
+
+    def test_four_members_total(self) -> None:
+        # synthetic_cohort_growth_plan_20260509.md Phase 3 added the
+        # BALANCED variant — preserves scenario_a's DGP but shifts
+        # target_prevalence 0.20 → 0.50 for cohort-growth empirical sweeps.
         assert {m.name for m in ScenarioName} == {
             "A_DIAGNOSTIC_BC_IDFS",
+            "A_DIAGNOSTIC_BC_IDFS_BALANCED",
             "B_SCREENING_IGAN_ESKD",
             "C_TREATMENT_CSU_RESPONSE",
         }
