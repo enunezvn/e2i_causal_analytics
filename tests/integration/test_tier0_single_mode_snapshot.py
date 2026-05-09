@@ -60,6 +60,10 @@ EXPECTED_TIER0_CLI_ARGS: FrozenSet[str] = frozenset(
         "--regime",
         "--split",
         "--no-demo-cost-matrix",
+        # Added by synthetic_cohort_growth_plan_20260509.md Phase 1 (PR #111):
+        # parametric n_total override + seed threading for synthetic_v2 regimes.
+        "--n-total",
+        "--seed",
     }
 )
 
@@ -176,7 +180,17 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
     },
     "--regime": {
         "default": "default",
-        "choices": ["default", "adverse", "clean", "scenario_a"],
+        # PR #111 (synthetic_cohort_growth) extends choices from
+        # 4 → 7 — adds scenario_a_balanced + scenario_b + scenario_c.
+        "choices": [
+            "default",
+            "adverse",
+            "clean",
+            "scenario_a",
+            "scenario_a_balanced",
+            "scenario_b",
+            "scenario_c",
+        ],
         "nargs": None,
         "type_name": "str",
         "action": "_StoreAction",
@@ -194,6 +208,21 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
         "nargs": 0,
         "type_name": "_no_type",
         "action": "_StoreTrueAction",
+    },
+    # PR #111 (synthetic_cohort_growth Phase 1):
+    "--n-total": {
+        "default": None,
+        "choices": None,
+        "nargs": None,
+        "type_name": "int",
+        "action": "_StoreAction",
+    },
+    "--seed": {
+        "default": 42,
+        "choices": None,
+        "nargs": None,
+        "type_name": "int",
+        "action": "_StoreAction",
     },
 }
 
