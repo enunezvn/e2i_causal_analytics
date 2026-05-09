@@ -791,9 +791,9 @@ def compute_promotion_eligibility(
     The ``n_patients`` parameter is required (no default). The design spec
     requires N ≥ 200 patients in the cohort before promotion is meaningful;
     callers MUST supply the cohort size explicitly so an under-powered
-    cohort cannot pass on a verdict-only signal. Pre-PR-#113 design punted
-    this guard to the caller (codex N2 caller-responsibility); this version
-    builds the guard in so it cannot be silently skipped (closes backlog #14).
+    cohort cannot pass on a verdict-only signal. Earlier versions of this
+    function punted this guard to the caller (codex N2 caller-responsibility);
+    this version builds the guard in so it cannot be silently skipped.
 
     Raises ``ValueError`` if ``n_patients`` is negative.
 
