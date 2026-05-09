@@ -690,9 +690,7 @@ def test_model_trainer_state_accepts_legacy_underscore_key_at_construction() -> 
     AliasChoices declaration accepts the legacy form at the kwarg
     level. Subsequent tests exercise the more realistic JSON-load path.
     """
-    state = ModelTrainerState(
-        audit_workflow_id=uuid4(), **{"_repeated_mode_fold_invocation": True}
-    )
+    state = ModelTrainerState(audit_workflow_id=uuid4(), **{"_repeated_mode_fold_invocation": True})
     assert state.repeated_mode_fold_invocation is True
 
 
