@@ -1428,15 +1428,6 @@ def _scenario_to_dataframe(
     return df
 
 
-def _scenario_a_to_dataframe(seed: int, n_total: int | None = None) -> pd.DataFrame:
-    """Backward-compatible wrapper around ``_scenario_to_dataframe('scenario_a', ...)``.
-
-    Preserved as a stable name for callers (e.g. PR #75 era tests) that reach
-    in directly. New regimes route through ``_scenario_to_dataframe`` directly.
-    """
-    return _scenario_to_dataframe("scenario_a", seed=seed, n_total=n_total)
-
-
 def generate_sample_data(
     n_samples: int = 100,
     seed: int = 42,
@@ -5946,7 +5937,14 @@ async def run_pipeline(
         artifact = {
             "regime": regime,
             "seed": seed,
-            "n_total": n_total,
+            # Closes ultrareview bug_002 (backlog #21.4): n_total flag is
+            # ignored for legacy regimes (default/adverse/clean) which run
+            # the legacy ml_patients() generator hardcoded to n_samples=1500.
+            # Recording the user-supplied --n-total alongside a 1500-row
+            # patient_df was misleading metadata-vs-data divergence.
+            "n_total": (
+                n_total if regime in _SCENARIO_REGIME_TO_NAME else None
+            ),
             "criteria_source": sc_state.get("criteria_source", "fixed"),
             "success_criteria": {
                 k: v
