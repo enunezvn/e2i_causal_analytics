@@ -3907,6 +3907,15 @@ _VALID_REGIMES: Tuple[str, ...] = (
     "scenario_c",
 )
 
+# Codex-rescue pass-2 M2 (2026-05-09): explicit legacy-regimes set used by
+# the artifact n_total guard at run_pipeline. Lifts the artifact gate from
+# "is in scenario set" (positive enumeration) to "is NOT in legacy set"
+# (negative enumeration of the small, stable exception). Future regime
+# additions inherit the synthetic_v2 behavior automatically; only an
+# author who explicitly adds a new legacy ``ml_patients()``-style regime
+# needs to update this set.
+_LEGACY_REGIMES: frozenset[str] = frozenset({"default", "adverse", "clean"})
+
 
 def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
     """Translate a regime name into kwargs for ``ml_patients()``.
@@ -5942,9 +5951,14 @@ async def run_pipeline(
             # the legacy ml_patients() generator hardcoded to n_samples=1500.
             # Recording the user-supplied --n-total alongside a 1500-row
             # patient_df was misleading metadata-vs-data divergence.
-            "n_total": (
-                n_total if regime in _SCENARIO_REGIME_TO_NAME else None
-            ),
+            #
+            # Codex-rescue pass-2 M2 (2026-05-09): inverted the gate — the
+            # artifact records n_total UNLESS the regime is explicitly in
+            # _LEGACY_REGIMES. Future synthetic_v2 regimes added without
+            # updating _LEGACY_REGIMES inherit the correct (recorded) behavior;
+            # only a NEW legacy ml_patients()-style regime would need to be
+            # added to the legacy set.
+            "n_total": n_total if regime not in _LEGACY_REGIMES else None,
             "criteria_source": sc_state.get("criteria_source", "fixed"),
             "success_criteria": {
                 k: v

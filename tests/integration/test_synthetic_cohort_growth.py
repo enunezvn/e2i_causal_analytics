@@ -60,14 +60,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # from "empirical hpo=5 envelope".
 BASELINE_LOCAL_SCENARIO_B: Dict[str, Any] = {
     "regime": "scenario_b",
+    # NOT ENFORCED — enforce_calibrated_band=False (codex pass-2 L3); the
+    # _assert_scenario_metrics helper emits warnings.warn when this band
+    # is supplied but not enforced. Flip enforce_calibrated_band=True after
+    # an hpo>5 sweep confirms the calibrated envelope is reachable.
     "auc_band_calibrated": (0.72, 0.78),
     "auc_band_empirical_hpo5": (0.69, 0.74),  # observed 0.7144 ± 0.025
     "tolerance_auc_empirical": 0.025,
     "min_perm_p_significant": 0.05,
     "max_train_val_delta": 0.10,  # observed 0.013 — pin tight for regression
-    # When True, the test ALSO asserts the calibrated band; flip on once
-    # hpo>5 sweep confirms calibrated landing. Currently False because
-    # hpo=5 lands 0.006 below band-low.
     "enforce_calibrated_band": False,
 }
 
@@ -76,6 +77,13 @@ BASELINE_LOCAL_SCENARIO_B: Dict[str, Any] = {
 # Same calibrated-vs-empirical split as scenario_b.
 BASELINE_LOCAL_SCENARIO_C: Dict[str, Any] = {
     "regime": "scenario_c",
+    # NOT ENFORCED — enforce_calibrated_band=False (codex pass-2 L3). Same
+    # warn-on-skip behavior as scenario_b. Flip True after hpo>5 sweep.
+    # Note (codex pass-2 L2): empirical band upper rail (0.81 + 0.025 = 0.835)
+    # overlaps the calibrated lower rail (0.82) — values in [0.82, 0.835]
+    # would pass the empirical gate without exercising the calibrated check.
+    # This is acceptable for regression-detection purposes today; close the
+    # overlap when enforce_calibrated_band flips.
     "auc_band_calibrated": (0.82, 0.88),
     "auc_band_empirical_hpo5": (0.76, 0.81),  # observed 0.7829 ± 0.025
     "tolerance_auc_empirical": 0.025,
@@ -172,10 +180,16 @@ def _assert_scenario_metrics(
 ) -> None:
     """Assert val_AUC + permutation + train-val Δ for one scenario.
 
-    Codex-rescue H1 (2026-05-09): the assertion now distinguishes the
+    Codex-rescue H1 (2026-05-09 pass 1): the assertion now distinguishes the
     SCENARIO's biology-derived calibrated band from the EMPIRICAL hpo=5
     measurement band. A loose tolerance on calibrated bands previously
     expanded by 70% silently masked real envelope failures.
+
+    Codex-rescue H1 (2026-05-09 pass 2): when ``calibrated_band`` is supplied
+    but ``enforce_calibrated_band=False``, the function now emits a
+    ``warnings.warn`` so the silently-bypassed contract is observable.
+    Lifts pass 1's "dead field" risk where a downstream config change to
+    ``auc_band_calibrated`` would silently land without test signal.
 
     The default mode is "empirical" — we assert the val_AUC lands within
     ``empirical_band ± tolerance_empirical`` (a tight band around the
@@ -188,6 +202,8 @@ def _assert_scenario_metrics(
     band/tolerance. Each failure surfaces with regime-aware context so the
     debugger can trace back to which scenario regressed.
     """
+    import warnings
+
     val = artifact.get("validation_metrics") or {}
     perm = artifact.get("permutation_test") or {}
     test = artifact.get("test_metrics") or {}
@@ -210,13 +226,25 @@ def _assert_scenario_metrics(
     # Calibrated band (optional) — strict no-tolerance check for biology-
     # derived 9/10-seed envelope. Default off because hpo=5 may under-
     # converge below the calibrated band.
-    if enforce_calibrated_band and calibrated_band is not None:
-        cal_low, cal_high = calibrated_band
-        assert cal_low <= val_auc <= cal_high, (
-            f"{regime}: val_AUC {val_auc:.4f} outside calibrated band "
-            f"[{cal_low}, {cal_high}] (no tolerance applied; "
-            "the hpo=5 envelope must cleanly meet biology-derived calibration)."
-        )
+    if calibrated_band is not None:
+        if enforce_calibrated_band:
+            cal_low, cal_high = calibrated_band
+            assert cal_low <= val_auc <= cal_high, (
+                f"{regime}: val_AUC {val_auc:.4f} outside calibrated band "
+                f"[{cal_low}, {cal_high}] (no tolerance applied; "
+                "the hpo=5 envelope must cleanly meet biology-derived calibration)."
+            )
+        else:
+            # Codex-rescue pass-2 H1 fix: warn so a future reader sees the
+            # calibrated band is configured but not enforced. Silent pass
+            # was the codex finding ("dead field" risk).
+            warnings.warn(
+                f"{regime}: calibrated_band={calibrated_band} supplied but "
+                f"enforce_calibrated_band=False — only empirical hpo=5 band "
+                f"is enforced. Flip enforce_calibrated_band=True after an "
+                f"hpo>5 sweep confirms landing in the calibrated band.",
+                stacklevel=2,
+            )
 
     perm_p = perm.get("permutation_pvalue")
     if perm_p is not None:
