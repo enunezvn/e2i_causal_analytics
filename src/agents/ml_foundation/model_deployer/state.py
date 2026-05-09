@@ -14,9 +14,7 @@ This agent manages the model lifecycle from development through production:
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
-from uuid import UUID, uuid4
-
-from pydantic import Field
+from uuid import UUID
 
 from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
@@ -208,6 +206,8 @@ class ModelDeployerState(BaseAgentSchema):
     error_details: Optional[Dict[str, Any]] = None
 
     # === AUDIT CHAIN ===
-    audit_workflow_id: UUID = Field(default_factory=uuid4)
+    # Required: caller MUST provide ``audit_workflow_id`` (backlog #1
+    # tightening landed 2026-05-09; PRs #58 / #62 / #65 thread the field).
+    audit_workflow_id: UUID
 
     _validate_audit_id = audit_workflow_id_validator()

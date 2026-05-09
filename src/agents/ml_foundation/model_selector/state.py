@@ -7,9 +7,7 @@ in Shard C of the migration. Inherits from ``BaseAgentSchema``.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from uuid import UUID, uuid4
-
-from pydantic import Field
+from uuid import UUID
 
 from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
@@ -155,7 +153,8 @@ class ModelSelectorState(BaseAgentSchema):
     error: Optional[str] = None
     error_type: Optional[str] = None
 
-    # Audit chain
-    audit_workflow_id: UUID = Field(default_factory=uuid4)
+    # Audit chain — required: caller MUST provide ``audit_workflow_id``
+    # (backlog #1 tightening landed 2026-05-09; PRs #58 / #62 / #65 thread).
+    audit_workflow_id: UUID
 
     _validate_audit_id = audit_workflow_id_validator()
