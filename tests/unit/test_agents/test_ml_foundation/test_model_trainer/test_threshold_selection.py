@@ -578,6 +578,13 @@ class TestSelectThresholdWithCostMatrix:
     Provenance string ``"validation_cost_optimal"`` distinguishes this
     branch from plain Youden's J, so downstream consumers (mlflow_logger,
     audit code) can attribute the operating point correctly.
+
+    NOTE: ``_select_threshold`` itself activates the cost branch whenever
+    ``cost_matrix`` is non-None. The OPT-IN gate is enforced one level up
+    in ``_compute_classification_metrics`` via the
+    ``use_cost_optimal_threshold`` kwarg, which only forwards
+    ``cost_matrix`` to ``_select_threshold`` when True. These tests
+    bypass that gate to exercise the helper directly.
     """
 
     def test_cost_matrix_branches_to_validation_cost_optimal(self):
@@ -834,3 +841,122 @@ class TestF1FallbackOnLowMCC:
         """Pin the floor constant so a future regression to a different
         value is caught by the test suite — not by surprise in production."""
         assert _F1_FALLBACK_MCC_THRESHOLD == 0.20
+
+
+# ============================================================================
+# Backlog #20 Gap 1 opt-in gate — backward-compat preservation
+# ============================================================================
+
+
+class TestCostOptimalOptInGate:
+    """Verify ``use_cost_optimal_threshold`` opts in to cost-aware
+    threshold selection, and the default OFF preserves Youden's J.
+
+    Codex pass-3 regression: synthetic baseline test
+    (test_synthetic_baseline_invariant.py) tripped on PR #115 because
+    cost_matrix was historically a *reporting* signal (computes
+    business_utility post-hoc) that did NOT influence threshold
+    selection. Making the cost-aware branch transparent shifted the
+    operating point on every caller that supplies a cost_matrix —
+    including the synthetic demo path. The opt-in gate restores
+    backward compatibility: cost_matrix without the flag → Youden's J;
+    cost_matrix with the flag → cost-aware threshold.
+    """
+
+    @staticmethod
+    def _make_data(rng: np.random.Generator, n: int = 100):
+        """Bimodal validation+test dataset with separable classes."""
+        proba_pos = np.concatenate(
+            [
+                rng.normal(0.3, 0.1, n // 2),
+                rng.normal(0.7, 0.1, n // 2),
+            ]
+        ).clip(0.01, 0.99)
+        y = np.array([0] * (n // 2) + [1] * (n // 2))
+        y_pred = (proba_pos >= 0.5).astype(int)
+        y_proba = np.column_stack([1 - proba_pos, proba_pos])
+        return y, y_pred, y_proba
+
+    def test_cost_matrix_without_optin_falls_back_to_youden(self):
+        """cost_matrix supplied + use_cost_optimal_threshold=False (default):
+        threshold source is ``"validation"``, NOT
+        ``"validation_cost_optimal"``. Backward-compat regression guard."""
+        rng = np.random.default_rng(20260509)
+        y_val, y_val_pred, y_val_proba = self._make_data(rng)
+        y_test, y_test_pred, y_test_proba = self._make_data(rng)
+        cost_matrix = {"tp": 10.0, "fp": -1.0, "fn": -10.0, "tn": 0.0}
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+            cost_matrix=cost_matrix,
+            # use_cost_optimal_threshold not passed → default False
+        )
+
+        validation_metrics = result["validation_metrics"]
+        assert validation_metrics["chosen_threshold_source"] == "validation"
+        # business_utility STILL gets reported (cost_matrix is for that)
+        # — only the threshold choice is gated.
+        assert "business_utility" in validation_metrics
+
+    def test_cost_matrix_with_optin_uses_cost_optimal(self):
+        """cost_matrix supplied + use_cost_optimal_threshold=True:
+        threshold source is ``"validation_cost_optimal"``."""
+        rng = np.random.default_rng(20260509)
+        y_val, y_val_pred, y_val_proba = self._make_data(rng)
+        y_test, y_test_pred, y_test_proba = self._make_data(rng)
+        cost_matrix = {"tp": 10.0, "fp": -1.0, "fn": -10.0, "tn": 0.0}
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+            cost_matrix=cost_matrix,
+            use_cost_optimal_threshold=True,
+        )
+
+        validation_metrics = result["validation_metrics"]
+        assert validation_metrics["chosen_threshold_source"] == "validation_cost_optimal"
+
+    def test_no_cost_matrix_with_optin_still_uses_youden(self):
+        """use_cost_optimal_threshold=True without cost_matrix: no
+        cost-aware branch can fire, threshold falls through to Youden's J."""
+        rng = np.random.default_rng(20260509)
+        y_val, y_val_pred, y_val_proba = self._make_data(rng)
+        y_test, y_test_pred, y_test_proba = self._make_data(rng)
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=False,
+            minority_ratio=0.5,
+            cost_matrix=None,
+            use_cost_optimal_threshold=True,
+        )
+
+        validation_metrics = result["validation_metrics"]
+        assert validation_metrics["chosen_threshold_source"] == "validation"

@@ -181,6 +181,12 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     # Block 5 (#10): optional dict mapping {tp,fp,fn,tn} → per-prediction
     # dollar value. None = skip business_utility computation.
     cost_matrix = state.get("cost_matrix")
+    # Backlog #20 Gap 1: opt-in cost-aware threshold selection. Default
+    # OFF preserves backward compatibility with synthetic baseline tests
+    # that pinned Youden's J behaviour while cost_matrix was already
+    # plumbed for business_utility reporting. Production callers that
+    # want a utility-maximising operating point set this to True.
+    use_cost_optimal_threshold = bool(state.get("use_cost_optimal_threshold", False))
 
     # Extract preprocessed data
     X_train_preprocessed = state.get("X_train_preprocessed")
@@ -272,6 +278,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 cost_matrix=cost_matrix,
                 bootstrap_random_state=bootstrap_random_state,
                 success_criteria=success_criteria,
+                use_cost_optimal_threshold=use_cost_optimal_threshold,
             )
         elif problem_type == "multiclass_classification":
             metrics_result = _compute_multiclass_metrics(
@@ -1101,6 +1108,7 @@ def _compute_classification_metrics(
     cost_matrix: Optional[Dict[str, float]] = None,
     bootstrap_random_state: Optional[int] = None,
     success_criteria: Optional[Dict[str, Any]] = None,
+    use_cost_optimal_threshold: bool = False,
 ) -> Dict[str, Any]:
     """Compute binary classification metrics using sklearn.
 
@@ -1185,8 +1193,17 @@ def _compute_classification_metrics(
     # because it needs `minority_ratio` and produces a `precision_constrained`
     # dict consumed by the result builder below.
     # =====================================================================
+    # Backlog #20 Gap 1: cost-aware threshold is OPT-IN via
+    # ``use_cost_optimal_threshold``. cost_matrix has historically been
+    # a *reporting* signal (computes business_utility post-hoc) without
+    # influencing threshold selection — the synthetic-baseline-invariant
+    # test (test_synthetic_baseline_invariant.py) pinned that
+    # behaviour. Only callers that explicitly opt in get the cost-aware
+    # threshold; default OFF preserves backward compatibility.
     optimal_threshold, threshold_source = _select_threshold(
-        y_validation, y_validation_proba, cost_matrix=cost_matrix
+        y_validation,
+        y_validation_proba,
+        cost_matrix=cost_matrix if use_cost_optimal_threshold else None,
     )
 
     # For rare-event prediction, apply precision-constrained threshold
