@@ -385,9 +385,31 @@ class OptumDataConverter:
 
         # 4. Per-patient: derive index date + apply exclusions + temporal window
         records_pass: list[tuple[int, pd.Timestamp, dict[str, Any]]] = []
+        n_smart_index_fallback = 0
         for patid in sorted(pids):
             demo_row = demo[demo["patid"] == patid].iloc[0]
             index_date = self._derive_index_date(patid, cohort, demo_row)
+
+            # Backlog #19 smart-index fallback (cohort A only): the default
+            # `_derive_index_date` picks the earliest clinical anchor without
+            # considering enrollment-window feasibility. When a patient's
+            # earliest anchor predates the [eligeff + ENROLLMENT_PRE_DAYS,
+            # eligend - ENROLLMENT_POST_DAYS] feasibility band but a later
+            # anchor in the same record fits the band, retry with the
+            # feasibility-aware derivation. Cohorts B/C re-anchor on first
+            # biologic fill — re-anchoring there changes cohort semantics
+            # (disc/pers measure outcomes 180d post-FIRST-fill) so the
+            # fallback intentionally does not apply.
+            if cohort == "initiation":
+                pass1_failed = index_date is None or not self._check_enrollment_window(
+                    demo_row, index_date
+                )
+                if pass1_failed:
+                    smart_idx = self._derive_index_date_feasibility_aware(patid, demo_row)
+                    if smart_idx is not None:
+                        index_date = smart_idx
+                        n_smart_index_fallback += 1
+
             if index_date is None:
                 continue
 
@@ -409,6 +431,8 @@ class OptumDataConverter:
             }
             records_pass.append((patid, index_date, record))
 
+        if cohort == "initiation":
+            self._attrition.append((f"{cohort}: smart-index fallback hits", n_smart_index_fallback))
         self._attrition.append(
             (f"{cohort}: after index + enrollment + exclusions", len(records_pass))
         )
@@ -518,6 +542,57 @@ class OptumDataConverter:
                 continue
             dates = grp[col].dropna()
             dates = dates[dates >= eligeff]
+            if len(dates):
+                candidates.append(dates.min())
+        if not candidates:
+            return None
+        return min(candidates)
+
+    def _derive_index_date_feasibility_aware(
+        self, patid: int, demo_row: pd.Series
+    ) -> pd.Timestamp | None:
+        """Cohort-A smart-index fallback. Pick the earliest clinical anchor
+        that lies inside the enrollment-feasibility band
+        ``[eligeff + ENROLLMENT_PRE_DAYS, eligend - ENROLLMENT_POST_DAYS]``.
+
+        Used only when ``_derive_index_date`` has already been tried and the
+        resulting date either was ``None`` or failed
+        ``_check_enrollment_window``. Mirrors the priority order of
+        ``_derive_index_date``: 2nd-or-only inpatient L50.x admit date,
+        then earliest med/proc/lab event, all restricted to the feasibility
+        band so a downstream enrollment-window re-check is guaranteed to
+        succeed when this returns non-None. Returns ``None`` when eligeff /
+        eligend are missing, the feasibility band is empty, or no anchor
+        exists inside the band.
+        """
+        eligeff = demo_row.get("eligeff")
+        eligend = demo_row.get("eligend")
+        if pd.isna(eligeff) or pd.isna(eligend):
+            return None
+
+        feasible_start = eligeff + timedelta(days=ENROLLMENT_PRE_DAYS)
+        feasible_end = eligend - timedelta(days=ENROLLMENT_POST_DAYS)
+        if feasible_start > feasible_end:
+            return None
+
+        ip_dates = self._inpatient_l50_dates(patid)
+        ip_feasible = [d for d in ip_dates if feasible_start <= d <= feasible_end]
+        if len(ip_feasible) >= 2:
+            return ip_feasible[1]
+        if len(ip_feasible) == 1:
+            return ip_feasible[0]
+
+        candidates: list[pd.Timestamp] = []
+        for src, col in (
+            (self._med_by_pat, "medication_date"),
+            (self._proc_by_pat, "proc_date"),
+            (self._lab_by_pat, "fst_dt"),
+        ):
+            grp = src.get(patid)
+            if grp is None or col not in grp.columns:
+                continue
+            dates = grp[col].dropna()
+            dates = dates[(dates >= feasible_start) & (dates <= feasible_end)]
             if len(dates):
                 candidates.append(dates.min())
         if not candidates:
