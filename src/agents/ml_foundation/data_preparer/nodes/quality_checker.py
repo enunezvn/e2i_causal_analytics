@@ -65,8 +65,10 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         # reasons unrelated to the actual feature surface (backlog #13).
         # Honors both the canonical ``excluded_features`` and the legacy
         # ``exclude_columns`` aliases consumed by ``data_transformer``.
-        excluded_features = list(scope_spec.get("excluded_features", [])) + list(
-            scope_spec.get("exclude_columns", [])
+        # ``... or []`` guards against scope_spec keys explicitly set to
+        # None (codex MEDIUM B/F): ``list(None)`` would raise TypeError.
+        excluded_features = list(scope_spec.get("excluded_features") or []) + list(
+            scope_spec.get("exclude_columns") or []
         )
 
         # Initialize results
@@ -228,6 +230,13 @@ def _check_completeness(
     excluded_set -= set(required_columns)
     cols_for_completeness = [c for c in df.columns if c not in excluded_set]
     df_for_completeness = df[cols_for_completeness] if cols_for_completeness else df.iloc[:0, :0]
+    # Codex LOW-B: count only excluded cols actually PRESENT in the
+    # frame so the metric reflects what was filtered, not what the
+    # caller asked to filter. Stale/misspelled exclusions show up as a
+    # mismatch between ``excluded_requested`` and
+    # ``excluded_features_count``.
+    excluded_present = excluded_set & set(df.columns)
+    excluded_missing = excluded_set - set(df.columns)
 
     # Overall null percentage
     total_cells = df_for_completeness.size
@@ -242,7 +251,9 @@ def _check_completeness(
                 "total_cells": int(total_cells),
                 "null_cells": int(null_cells),
                 "completeness_ratio": overall_completeness,
-                "excluded_features_count": len(excluded_set),
+                "excluded_features_count": len(excluded_present),
+                "excluded_features_requested": len(excluded_set),
+                "excluded_features_missing": sorted(excluded_missing),
             },
         }
     )
