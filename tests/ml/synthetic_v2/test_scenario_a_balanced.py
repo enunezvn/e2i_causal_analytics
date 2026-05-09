@@ -121,3 +121,76 @@ def test_baseline_scenario_a_unaffected_by_balanced_addition() -> None:
     # scenario_a target is 0.20; sampling tolerance ±0.02 (Bernoulli SD ≈ 0.009)
     assert abs(ds.metadata.realized_prevalence - 0.20) <= 0.02
     assert ds.metadata.target_prevalence == 0.20
+
+
+# Codex-rescue H2 (2026-05-09): runner skips the LLM-assisted leakage
+# check for ALL 4 synthetic_v2 regimes (was scenario_a only). Since the
+# skip is the load-bearing fix that prevents the LLM remediator from
+# hallucinating a 5-feature replacement set, we add a manifest-side
+# sanity check here so future scenario authors get fail-loud feedback
+# if their manifest has a single-feature-dominance pattern that would
+# look like leakage to a trained discriminator.
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        ScenarioName.A_DIAGNOSTIC_BC_IDFS,
+        ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED,
+        ScenarioName.B_SCREENING_IGAN_ESKD,
+        ScenarioName.C_TREATMENT_CSU_RESPONSE,
+    ],
+)
+def test_no_single_feature_dominance(scenario: ScenarioName) -> None:
+    """No manifest feature has |coefficient| > 3.0 — no single-feature dominance.
+
+    A coefficient magnitude > 3.0 (post-slope-multiplier) on a standardized
+    feature would mean the linear predictor is dominated by ONE column,
+    producing AUC ~ 1.0 which would look like leakage to a trained
+    discriminator. The existing 4 manifests all satisfy this — coefficients
+    range -0.30 to +0.45 (post-slope=0.67 max ≈ 0.30) — but a future scenario
+    author might accidentally write ``coefficient=5.0`` for a "main effect"
+    feature without realizing the consequences.
+
+    Pairs with the runner-side ``skip_leakage_check=True`` decision: the
+    skip is safe iff each scenario's manifest is non-leaky by construction;
+    this test makes that contract explicit.
+    """
+    builder = SCENARIO_REGISTRY[scenario]()
+    max_abs_coef = max(
+        abs(m.coefficient) * builder.slope_multiplier
+        for m in builder.feature_manifest
+    )
+    assert max_abs_coef <= 3.0, (
+        f"{scenario.name}: max |coefficient * slope_multiplier| = "
+        f"{max_abs_coef:.4f} exceeds non-leakage threshold 3.0. "
+        "A single-feature-dominance manifest would look like leakage to a "
+        "trained discriminator and break the skip_leakage_check assumption "
+        "in scripts/run_tier0_test.py:4515."
+    )
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        ScenarioName.A_DIAGNOSTIC_BC_IDFS,
+        ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED,
+        ScenarioName.B_SCREENING_IGAN_ESKD,
+        ScenarioName.C_TREATMENT_CSU_RESPONSE,
+    ],
+)
+def test_signal_is_distributed_across_multiple_features(scenario: ScenarioName) -> None:
+    """At least 5 manifest features have non-zero coefficient.
+
+    Distributed signal is the dual of "no single-feature dominance" — a
+    healthy biology-grounded manifest has multiple features each
+    contributing modestly. ≥5 non-zero coefficients is a low bar that the
+    existing 4 manifests easily clear (scenario_a has 35 of 40 non-zero).
+    """
+    builder = SCENARIO_REGISTRY[scenario]()
+    nonzero = sum(
+        1 for m in builder.feature_manifest if abs(m.coefficient) > 1e-9
+    )
+    assert nonzero >= 5, (
+        f"{scenario.name}: only {nonzero} features with non-zero coefficient. "
+        "Distributed signal (≥5 non-zero) is required for the "
+        "skip_leakage_check assumption to hold."
+    )

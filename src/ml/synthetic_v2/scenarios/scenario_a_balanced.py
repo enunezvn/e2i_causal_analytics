@@ -35,5 +35,18 @@ class ScenarioABalancedBuilder(ScenarioABuilder):
     def target_prevalence(self) -> float:
         return 0.50
 
+    @property
+    def target_auc_band(self) -> tuple[float, float]:
+        # Empirical band measured 2026-05-09 (n=6000, hpo-trials=5,
+        # seed 42): val_AUC=0.7973. Codex-rescue M1 fix — inheriting
+        # scenario_a's [0.78, 0.83] band was wrong because the prevalence
+        # shift changes the AUC envelope. The band here is loosely pinned
+        # to (0.76, 0.84) — wider than the measured ±0.02 SE because
+        # downstream consumers (regression tests, audit reports) expect
+        # a band that absorbs reasonable seed-to-seed variance and HPO
+        # variance at the n=6000 default. Tighten via Phase 1.3 sweep
+        # multi-seed measurement if a stricter contract is desired.
+        return (0.76, 0.84)
+
 
 SCENARIO_REGISTRY[ScenarioName.A_DIAGNOSTIC_BC_IDFS_BALANCED] = ScenarioABalancedBuilder
