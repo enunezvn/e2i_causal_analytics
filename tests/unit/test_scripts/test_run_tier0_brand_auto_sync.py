@@ -78,17 +78,33 @@ def test_explicit_brand_overrides_regime_auto_sync() -> None:
 
 @pytest.mark.parametrize("regime", ["default", "adverse", "clean"])
 def test_legacy_regime_does_not_auto_sync_brand(regime: str) -> None:
-    """Legacy regimes (default/adverse/clean) preserve CONFIG.brand default.
+    """Legacy regimes (default/adverse/clean) do NOT trigger the auto-sync.
 
-    The auto-sync is gated on ``args.regime in _SCENARIO_REGIME_TO_NAME`` —
+    The auto-sync is gated on ``args.regime in _SCENARIO_REGIME_TO_BRAND`` —
     legacy regimes are NOT in the scenario map, so they fall through and
-    leave CONFIG.brand at its module-level default (``"Kisqali"``).
+    leave CONFIG.brand at whatever its module default is. Asserting against
+    the scenario-specific brands (Fabhalta/Remibrutinib) keeps this test
+    robust to a future CONFIG.brand default rename — what we actually want
+    to verify is that the auto-sync DID NOT fire (codex review LOW Q2).
     """
     result = _run_dry("--regime", regime)
     assert result.returncode == 0
-    assert "Brand: Kisqali" in result.stdout, (
-        f"--regime {regime} should preserve CONFIG.brand default Kisqali; "
-        f"got stdout (truncated):\n{result.stdout[-1000:]}"
+    # Extract the brand line from stdout (deterministic format from line 4344).
+    brand_lines = [
+        line for line in result.stdout.splitlines() if line.strip().startswith("Brand:")
+    ]
+    assert len(brand_lines) == 1, (
+        f"Expected exactly one 'Brand:' line in stdout for legacy --regime "
+        f"{regime}; got {len(brand_lines)}. stdout (truncated):\n"
+        f"{result.stdout[-1000:]}"
+    )
+    printed_brand = brand_lines[0].split(":", 1)[1].strip()
+    # Auto-sync would have set the brand to a scenario-specific value;
+    # legacy regimes must not produce those.
+    assert printed_brand not in {"Fabhalta", "Remibrutinib"}, (
+        f"--regime {regime} produced brand={printed_brand!r}; the auto-sync "
+        f"must NOT fire for legacy regimes. stdout (truncated):\n"
+        f"{result.stdout[-1000:]}"
     )
 
 
@@ -99,4 +115,29 @@ def test_explicit_brand_with_legacy_regime_unchanged() -> None:
     assert "Brand: ExplicitBrand" in result.stdout, (
         "Explicit --brand must work with legacy regimes (no regression); "
         f"got stdout (truncated):\n{result.stdout[-1000:]}"
+    )
+
+
+def test_scenario_regime_maps_have_identical_keysets() -> None:
+    """``_SCENARIO_REGIME_TO_NAME`` and ``_SCENARIO_REGIME_TO_BRAND`` keysets match.
+
+    Codex review MEDIUM (2026-05-09): the auto-sync now gates on
+    ``_SCENARIO_REGIME_TO_BRAND`` membership and indexes the same dict, so
+    the two are symmetrical at the override site. But other code (e.g.,
+    ``_scenario_to_dataframe`` at line 1399) still gates on
+    ``_SCENARIO_REGIME_TO_NAME`` and indexes ``_SCENARIO_REGIME_TO_BRAND``
+    at line 1416. If a future scenario is added to one map but not the
+    other, that callsite raises ``KeyError`` instead of fail-loud at
+    config time.
+    """
+    import importlib
+
+    runner = importlib.import_module("scripts.run_tier0_test")
+    name_keys = set(runner._SCENARIO_REGIME_TO_NAME.keys())
+    brand_keys = set(runner._SCENARIO_REGIME_TO_BRAND.keys())
+    assert name_keys == brand_keys, (
+        f"Scenario regime maps drifted out of sync. "
+        f"Keys only in _SCENARIO_REGIME_TO_NAME: {sorted(name_keys - brand_keys)}; "
+        f"keys only in _SCENARIO_REGIME_TO_BRAND: {sorted(brand_keys - name_keys)}. "
+        f"Add the missing entry to whichever map is lacking."
     )
