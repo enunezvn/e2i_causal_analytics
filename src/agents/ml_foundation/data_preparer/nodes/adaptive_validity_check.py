@@ -649,13 +649,33 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
     manifest_source = scope_spec.get("feature_manifest_source")
     if manifest_source and records:
         features = _resolve_manifest_features(manifest_source)
-        if features is not None:
-            # Cache builder only emits records for features with non-empty
-            # ``kg_entity_codes`` (per ``build_cache_for_manifest``) so
-            # the fingerprint must be computed over that same subset
-            # for parity with the writer.
-            entity_features = [fc for fc in features if fc.kg_entity_codes]
-            current_manifest_fp = compute_manifest_fingerprint(entity_features)
+        if features is None:
+            # Codex MEDIUM-3 follow-up: a typo at orchestration time
+            # ("cs" instead of "csu") would silently bypass validation
+            # without this warning. Surfacing the unknown source name
+            # gives the operator one log line to grep for.
+            logger.warning(
+                "kg_cache validation: feature_manifest_source=%r is not in "
+                "the registered manifests (%s) — fingerprint validation "
+                "skipped for this run, cache treated as 'trusted upstream'. "
+                "Verify the manifest source string if this was unexpected.",
+                manifest_source,
+                ("csu", "optum"),
+            )
+        else:
+            # Critical writer/reader symmetry: the cache builder at
+            # ``scripts/build_kg_cache.py:build_cache_for_manifest``
+            # computes ``manifest_fp = compute_manifest_fingerprint(features)``
+            # over the FULL FeatureContract list (not filtered to
+            # ``kg_entity_codes``). It then skips non-entity features
+            # at record-emission time. So a non-entity feature added or
+            # mutated in the manifest STILL changes ``manifest_fp`` —
+            # the reader must hash the same full list, not a filtered
+            # subset, or every cache load would mismatch. (Codex review
+            # of D2 PR HIGH-1 caught this: hashing only entity features
+            # made the reader's fingerprint diverge from every cache
+            # the writer ever emitted.)
+            current_manifest_fp = compute_manifest_fingerprint(features)
             target_codes = _coerce_target_codes_for_fingerprint(
                 scope_spec.get("target_entity_codes") or []
             )

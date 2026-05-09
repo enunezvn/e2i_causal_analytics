@@ -1489,9 +1489,14 @@ def _current_csu_fingerprints(target_codes):
     )
     from src.data.manifests import CSU_FEATURES
 
-    entity_features = [fc for fc in CSU_FEATURES if fc.kg_entity_codes]
+    # Hashes the FULL CSU_FEATURES list (not filtered to entity-bearing).
+    # Matches the writer at ``scripts/build_kg_cache.py:
+    # build_cache_for_manifest`` which computes
+    # ``compute_manifest_fingerprint(features)`` over the unfiltered
+    # iterable. Codex HIGH-1 review of D2 PR caught a reader/writer
+    # asymmetry — the fix aligned both sides on the unfiltered hash.
     return (
-        compute_manifest_fingerprint(entity_features),
+        compute_manifest_fingerprint(CSU_FEATURES),
         compute_target_codes_fingerprint(target_codes),
     )
 
@@ -1741,6 +1746,78 @@ def test_phase29_stage2_load_kg_cache_validates_target_codes_fingerprint(tmp_pat
                 "target_entity_codes": different_target_codes,
             }
         )
+
+
+def test_phase29_stage2_load_kg_cache_writer_reader_symmetry_on_real_csu(tmp_path):
+    """Codex HIGH-1 recommended fix: prove a writer-produced cache passes
+    the reader's fingerprint validation end-to-end. This is the load-
+    bearing invariant: if writer and reader compute the same fingerprint
+    over the SAME input set, every legitimately-built cache loads
+    cleanly. A regression in either side immediately trips this test."""
+    from scripts.build_kg_cache import build_cache_for_manifest
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+    from src.data.manifests import CSU_FEATURES
+
+    target_codes = [("RXNORM", "479158"), ("RXNORM", "1011295")]
+    out_dir = tmp_path / "kg_cache_writer"
+    cache_path = build_cache_for_manifest(
+        features=CSU_FEATURES,
+        target_entity_codes=target_codes,
+        out_dir=out_dir,
+    )
+
+    # Writer-produced cache MUST load via the reader without tripping
+    # any fingerprint mismatch.
+    loaded = _load_kg_cache(
+        {
+            "kg_cache_path": str(cache_path),
+            "kg_mode": "promoted",  # strict mode — would raise on mismatch
+            "feature_manifest_source": "csu",
+            "target_entity_codes": target_codes,
+        }
+    )
+    assert loaded is not None, (
+        "Writer-produced cache failed to load under reader's fingerprint "
+        "validation — writer/reader fingerprint asymmetry regression."
+    )
+
+
+def test_phase29_stage2_load_kg_cache_unknown_manifest_source_warns(tmp_path, caplog):
+    """Codex MEDIUM-3 follow-up: a typo in ``feature_manifest_source``
+    ("cs" vs "csu") would silently bypass validation without an
+    operator-visible signal. The reader logs a WARNING naming the
+    unknown source and the registered alternatives so a typo at
+    orchestration time produces one log line to grep for."""
+    import logging
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _load_kg_cache,
+    )
+
+    cache_path = _build_cache_with_fingerprints(
+        tmp_path,
+        manifest_fp="placeholder",
+        target_fp="placeholder",
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check",
+    ):
+        _load_kg_cache(
+            {
+                "kg_cache_path": str(cache_path),
+                "kg_mode": "shadow",
+                "feature_manifest_source": "cs",  # typo
+                "target_entity_codes": [("RXNORM", "479158")],
+            }
+        )
+    assert any(
+        "feature_manifest_source='cs' is not in the registered manifests" in rec.message
+        for rec in caplog.records
+    ), f"Expected unknown-manifest-source warning; got {[r.message for r in caplog.records]}"
 
 
 def test_phase29_stage2_load_kg_cache_empty_records_skips_validation(tmp_path):
