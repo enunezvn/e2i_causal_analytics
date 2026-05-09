@@ -6,7 +6,7 @@ and attempt automatic remediation when possible.
 
 import json
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import anthropic
 import pandas as pd
@@ -361,21 +361,46 @@ def _parse_remediation_action(action_str: str) -> Dict[str, Any]:
 
     Args:
         action_str: Action string like "action: drop_column, column: x, params: {}"
+            or "action: impute, column: y, params: {\"strategy\": \"mean\"}".
 
     Returns:
-        Structured action dictionary. ``params`` is always a dict; the
-        LLM's free-form value is JSON-decoded when possible and falls
-        back to an empty dict on malformed input. Backlog #13 fix:
-        previously left ``params`` as a raw string, which crashed the
-        downstream ``_apply_automatic_remediation`` block at
-        ``params.get("strategy")`` with
-        ``AttributeError: 'str' object has no attribute 'get'``.
+        Structured action dictionary with keys:
+          - ``type``: action type (str)
+          - ``column``: target column (str | None)
+          - ``params``: dict (always; falls back to ``{}`` on empty input)
+          - ``params_parse_failed``: bool — True when ``params:`` was
+            present but couldn't be JSON-decoded into a dict; the apply
+            loop skips such actions (codex MEDIUM-C: fail loud, not open)
+
+    Splits on the FIRST ``params:`` token rather than the comma — the
+    LLM may emit multi-key JSON params like
+    ``{"strategy": "median", "target": "x"}`` whose internal commas
+    would otherwise corrupt comma-based field parsing (codex HIGH-C).
     """
-    action: Dict[str, Any] = {"type": "unknown", "column": None, "params": {}}
+    action: Dict[str, Any] = {
+        "type": "unknown",
+        "column": None,
+        "params": {},
+        "params_parse_failed": False,
+    }
 
     try:
-        parts = action_str.split(",")
-        for part in parts:
+        params_idx = action_str.find("params:")
+        if params_idx != -1:
+            head = action_str[:params_idx].rstrip(", ")
+            params_value = action_str[params_idx + len("params:") :].strip()
+            parsed = _coerce_params_to_dict(params_value)
+            if parsed is None:
+                # Non-empty but unparseable — surface loudly via the
+                # apply loop's skip logic, not silent default fallback.
+                action["params_parse_failed"] = True
+                action["params_raw"] = params_value
+            else:
+                action["params"] = parsed
+        else:
+            head = action_str
+
+        for part in head.split(","):
             if ":" in part:
                 key, value = part.split(":", 1)
                 key = key.strip().lower()
@@ -385,31 +410,30 @@ def _parse_remediation_action(action_str: str) -> Dict[str, Any]:
                     action["type"] = value
                 elif key == "column":
                     action["column"] = value
-                elif key == "params":
-                    action["params"] = _coerce_params_to_dict(value)
     except Exception:
         pass
 
     return action
 
 
-def _coerce_params_to_dict(value: str) -> Dict[str, Any]:
+def _coerce_params_to_dict(value: str) -> Optional[Dict[str, Any]]:
     """Coerce a free-form ``params`` value to a dict.
 
-    The LLM occasionally emits an empty placeholder ``{}``, a JSON
-    object, or a key=value pair. Whatever comes in, callers that read
-    ``params.get("strategy")`` must see a dict — falling back to ``{}``
-    on any parsing failure preserves the documented action contract
-    (``params: Dict[str, Any]``) and lets the action's downstream
-    handler use its default.
+    Returns:
+      - ``{}`` for empty input (the LLM's explicit "no params" signal).
+      - The decoded dict for valid JSON object input.
+      - ``None`` to signal a non-empty but unparseable value — caller
+        must NOT fall back to ``{}`` silently (codex MEDIUM-C: fail
+        loud, not fail open). Distinguishes "explicitly empty" from
+        "tried to set params but parser couldn't recover".
     """
     if not value:
         return {}
     try:
         parsed = json.loads(value)
     except (json.JSONDecodeError, ValueError, TypeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _rule_based_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -528,6 +552,27 @@ async def _apply_automatic_remediation(
             action_type = action.get("type", "unknown")
             column = action.get("column")
             params = action.get("params", {})
+
+            # Codex MEDIUM-C: skip actions whose ``params`` was set but
+            # couldn't be parsed. Falling back to default params would
+            # apply potentially destructive operations (wrong impute
+            # strategy, wrong drop scope) under a different intent than
+            # the LLM specified. Surface as "skipped — malformed" so
+            # the orchestrator can re-prompt or escalate.
+            if action.get("params_parse_failed"):
+                logger.warning(
+                    "Skipping remediation action %r on column %r: "
+                    "params unparseable (%r). Defaulting params would "
+                    "be unsafe; manual review required.",
+                    action_type,
+                    column,
+                    action.get("params_raw"),
+                )
+                actions_taken.append(
+                    f"SKIPPED {action_type} on {column}: malformed params"
+                )
+                continue
+
             # Defense in depth: ``_parse_remediation_action`` already
             # coerces ``params`` to a dict, but a caller that bypasses
             # the parser (e.g., a future LLM-emitted action JSON with a

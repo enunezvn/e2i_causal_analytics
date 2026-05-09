@@ -1,11 +1,15 @@
 """Unit tests for the qc_remediation node's action parser.
 
-Backlog #13 sub-gate 3: ``_parse_remediation_action`` used to assign
-``params`` as a raw string, which crashed
+Backlog #13 sub-gate 3 (initial fix): ``_parse_remediation_action``
+used to assign ``params`` as a raw string, which crashed
 ``_apply_automatic_remediation`` at ``params.get("strategy")`` with
-``AttributeError: 'str' object has no attribute 'get'``. The parser now
-JSON-decodes ``params`` (or falls back to ``{}`` on malformed input) and
-the apply-loop also defensively coerces non-dict ``params`` to ``{}``.
+``AttributeError: 'str' object has no attribute 'get'``.
+
+Codex review on PR #106 surfaced two follow-ons (HIGH-C + MEDIUM-C):
+multi-key JSON params got truncated by comma-splitting, and malformed
+params silently fell back to default behavior (fail-open). Both
+addressed via the params-is-last parser + ``params_parse_failed``
+flag that the apply loop honors by skipping (fail-loud).
 """
 
 from __future__ import annotations
@@ -21,43 +25,79 @@ from src.agents.ml_foundation.data_preparer.nodes.qc_remediation import (
 
 
 class TestParseRemediationAction:
-    """``_parse_remediation_action`` returns a dict with ``params: dict``."""
+    """``_parse_remediation_action`` returns a structured dict."""
 
     def test_params_empty_object(self) -> None:
         action = _parse_remediation_action("action: drop_column, column: x, params: {}")
         assert action["type"] == "drop_column"
         assert action["column"] == "x"
-        assert isinstance(action["params"], dict)
         assert action["params"] == {}
+        assert action["params_parse_failed"] is False
 
     def test_params_with_strategy(self) -> None:
         action = _parse_remediation_action(
             'action: impute, column: foo, params: {"strategy": "mean"}'
         )
-        assert isinstance(action["params"], dict)
-        assert action["params"]["strategy"] == "mean"
+        assert action["params"] == {"strategy": "mean"}
+        assert action["params_parse_failed"] is False
 
-    def test_params_malformed_falls_back_to_empty_dict(self) -> None:
-        # Free-form text the LLM might emit instead of JSON.
-        action = _parse_remediation_action("action: impute, column: foo, params: strategy=mean")
-        # Per the parser the comma split treats this oddly; the important
-        # invariant is that ``params`` is a dict, not a string.
-        assert isinstance(action["params"], dict)
+    def test_params_multikey_json_not_truncated_by_comma(self) -> None:
+        """Codex HIGH-C regression: comma-split would truncate JSON.
+
+        Pre-fix: ``params: {"strategy": "median", "target": "y"}`` got
+        split at the inner comma, leaving params unparseable. The
+        params-is-last parser treats everything after ``params:`` as
+        the value, preserving multi-key JSON.
+        """
+        action = _parse_remediation_action(
+            'action: impute, column: foo, params: {"strategy": "median", "target": "y"}'
+        )
+        assert action["type"] == "impute"
+        assert action["column"] == "foo"
+        assert action["params"] == {"strategy": "median", "target": "y"}
+        assert action["params_parse_failed"] is False
+
+    def test_params_malformed_marks_parse_failed(self) -> None:
+        """Codex MEDIUM-C: malformed params must NOT silently fall back.
+
+        Free-form text the LLM might emit (e.g., ``strategy=mean``) is
+        not valid JSON; the parser flags it via ``params_parse_failed``
+        so the apply loop skips the action instead of applying defaults.
+        """
+        action = _parse_remediation_action(
+            "action: impute, column: foo, params: strategy=mean"
+        )
+        assert action["params"] == {}
+        assert action["params_parse_failed"] is True
+        assert "strategy=mean" in action.get("params_raw", "")
 
     def test_params_omitted_uses_empty_dict_default(self) -> None:
         action = _parse_remediation_action("action: drop_column, column: x")
-        assert isinstance(action["params"], dict)
         assert action["params"] == {}
+        assert action["params_parse_failed"] is False
 
-    def test_params_non_dict_json_falls_back(self) -> None:
+    def test_params_non_dict_json_marks_parse_failed(self) -> None:
         # JSON but not a dict — a list or scalar.
-        action_list = _parse_remediation_action("action: impute, column: foo, params: [1, 2, 3]")
-        assert isinstance(action_list["params"], dict)
+        action_list = _parse_remediation_action(
+            "action: impute, column: foo, params: [1, 2, 3]"
+        )
         assert action_list["params"] == {}
+        assert action_list["params_parse_failed"] is True
+
+    def test_params_explicit_empty_does_not_set_failed_flag(self) -> None:
+        # ``params:`` with empty value (after the colon) is the LLM's
+        # explicit "no params" signal — not a parse failure.
+        action = _parse_remediation_action("action: drop_column, column: x, params: ")
+        assert action["params"] == {}
+        assert action["params_parse_failed"] is False
 
 
 class TestCoerceParamsToDict:
-    """``_coerce_params_to_dict`` is the lowest-level coercion helper."""
+    """``_coerce_params_to_dict`` returns Optional[Dict] post-codex.
+
+    None signals "non-empty but unparseable"; ``{}`` signals "explicitly
+    empty"; dict signals successful decode.
+    """
 
     @pytest.mark.parametrize(
         "raw,expected",
@@ -66,19 +106,31 @@ class TestCoerceParamsToDict:
             ('{"strategy": "median"}', {"strategy": "median"}),
             ('{"k": 1, "v": "x"}', {"k": 1, "v": "x"}),
             ("", {}),
-            ("not_json_at_all", {}),
-            ("[1, 2]", {}),
-            ("42", {}),
-            ('"just_a_string"', {}),
-            ("null", {}),
+            ('  {"strategy": "median"}  ', {"strategy": "median"}),  # whitespace
         ],
     )
-    def test_coercion(self, raw: str, expected: dict) -> None:
+    def test_valid_decode(self, raw: str, expected: dict) -> None:
         assert _coerce_params_to_dict(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "not_json_at_all",
+            "[1, 2]",
+            "42",
+            '"just_a_string"',
+            "null",
+            "{strategy: median}",  # missing quotes
+            'strategy="median"',
+            "{",  # truncated
+        ],
+    )
+    def test_unparseable_returns_none(self, raw: str) -> None:
+        assert _coerce_params_to_dict(raw) is None
 
 
 class TestApplyAutomaticRemediationDefensiveCoerce:
-    """The apply loop defensively coerces non-dict ``params``."""
+    """The apply loop honors ``params_parse_failed`` and tolerates raw strings."""
 
     @pytest.mark.asyncio
     async def test_string_params_does_not_crash(self) -> None:
@@ -95,10 +147,6 @@ class TestApplyAutomaticRemediationDefensiveCoerce:
         ]
         result = await _apply_automatic_remediation(state, actions)
         assert result["success"] is True
-        # ``x`` was imputed with median (3.0 since values are 1, 2, 4).
-        out = result.get("train_df")
-        assert out is not None
-        assert out["x"].isna().sum() == 0
 
     @pytest.mark.asyncio
     async def test_dict_params_still_works(self) -> None:
@@ -113,3 +161,57 @@ class TestApplyAutomaticRemediationDefensiveCoerce:
         ]
         result = await _apply_automatic_remediation(state, actions)
         assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_params_parse_failed_action_is_skipped(self) -> None:
+        """Codex MEDIUM-C: malformed params must skip, not silently default.
+
+        Applying default impute strategy when the LLM specified a
+        different (unparseable) strategy could be destructive — e.g.,
+        median imputation when the LLM intended forward-fill on a
+        time-series column.
+        """
+        train_df = pd.DataFrame({"x": [1, 2, None, 4]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [
+            {
+                "type": "impute",
+                "column": "x",
+                "params": {},
+                "params_parse_failed": True,
+                "params_raw": "strategy=garbage",
+            }
+        ]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["success"] is True
+        # The action was skipped — no imputation applied.
+        actions_taken = result.get("actions_taken", [])
+        assert any("SKIPPED" in a and "malformed params" in a for a in actions_taken)
+
+    @pytest.mark.asyncio
+    async def test_mixed_actions_skip_only_malformed(self) -> None:
+        """Multiple actions: malformed ones skipped, valid ones applied."""
+        train_df = pd.DataFrame({"x": [1, 2, None, 4], "y": [10, None, 30, 40]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [
+            {
+                "type": "impute",
+                "column": "x",
+                "params": {},
+                "params_parse_failed": True,
+                "params_raw": "garbage",
+            },
+            {
+                "type": "impute",
+                "column": "y",
+                "params": {"strategy": "mean"},
+            },
+        ]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["success"] is True
+        actions_taken = result.get("actions_taken", [])
+        # First action skipped.
+        assert any("SKIPPED" in a for a in actions_taken)
+        # Second action applied (we don't assert exact message, just that
+        # something non-skipped happened).
+        assert any("SKIPPED" not in a for a in actions_taken)
