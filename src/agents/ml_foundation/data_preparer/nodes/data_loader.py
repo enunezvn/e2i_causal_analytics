@@ -227,9 +227,7 @@ def _drop_unhashable_columns(df: pd.DataFrame) -> pd.DataFrame:
         non_null = df[col].dropna()
         if non_null.empty:
             continue
-        if non_null.map(
-            lambda v: isinstance(v, (list, dict, set, frozenset, tuple))
-        ).any():
+        if non_null.map(lambda v: isinstance(v, (list, dict, set, frozenset, tuple))).any():
             drop_cols.append(col)
 
     if not drop_cols:

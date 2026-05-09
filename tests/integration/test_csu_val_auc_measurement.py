@@ -101,10 +101,12 @@ ADVERSARIAL_Z_MAX = 5.0
 # leakage_remediation crash). Any halt reason NOT in this set is an
 # UNRELATED regression — the test should fail loudly, not silently skip
 # (codex review MEDIUM-H on PR #105).
-KNOWN_PARTIAL_CLOSURE_HALT_REASONS: frozenset[str] = frozenset({
-    "qc_gate_blocked",
-    "sampling_frame_audit_blocked",
-})
+KNOWN_PARTIAL_CLOSURE_HALT_REASONS: frozenset[str] = frozenset(
+    {
+        "qc_gate_blocked",
+        "sampling_frame_audit_blocked",
+    }
+)
 
 
 def _skip_or_fail_on_known_halt(csu_artifact: dict, deferred_to: str) -> None:
@@ -249,9 +251,7 @@ def test_adaptive_verdicts_non_empty_with_layer_1(csu_artifact: dict) -> None:
         "on-disk schema."
     )
 
-    layer_1_verdicts = [
-        v for v in verdicts if isinstance(v, dict) and v.get("layer") == "1"
-    ]
+    layer_1_verdicts = [v for v in verdicts if isinstance(v, dict) and v.get("layer") == "1"]
     assert layer_1_verdicts, (
         f"No layer='1' verdicts found among {len(verdicts)} adaptive verdicts. "
         f"The CSU manifest's 24 contracts include several "
