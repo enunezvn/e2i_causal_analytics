@@ -52,12 +52,32 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
         # surfaced 7 spurious GE failures on real CSU runs because that
         # suite expects ``id`` / ``metric_value`` cols absent in
         # patient_journeys (backlog item #12).
+        #
+        # Codex review MEDIUM-E on PR #105: dict shapes the agent does NOT
+        # know about (``type`` not in {file_dir, files}) used to silently
+        # fall through to ``business_metrics``, masking a real
+        # data_source-routing regression. Now they fail closed with an
+        # explicit error so a future shape change is loud, not silent.
         scope_spec = state.get("scope_spec", {})
         _ds_raw = state.get("data_source") or scope_spec.get("data_source", "business_metrics")
         if isinstance(_ds_raw, str):
             data_source: str = _ds_raw
         elif isinstance(_ds_raw, dict) and _ds_raw.get("type") in ("file_dir", "files"):
             data_source = "patient_journeys"
+        elif isinstance(_ds_raw, dict):
+            return {
+                "ge_validation_status": "error",
+                "ge_validation_error": (
+                    f"Unknown data_source dict shape: type="
+                    f"{_ds_raw.get('type')!r}; expected one of "
+                    f"('file_dir', 'files') or a string suite name"
+                ),
+                "blocking_issues": state.get("blocking_issues", [])
+                + [
+                    f"GE validation: unrecognised data_source dict shape "
+                    f"(type={_ds_raw.get('type')!r})"
+                ],
+            }
         else:
             data_source = "business_metrics"
 
