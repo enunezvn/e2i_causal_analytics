@@ -353,6 +353,10 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         imbalance_detected = state.get("imbalance_detected", False)
         recommended_strategy = state.get("recommended_strategy", "none")
         class_distribution = state.get("class_distribution", {})
+        # Backlog #20 Gap 4: opt-in HPO sweep over class_weight /
+        # scale_pos_weight / is_unbalance. Default False preserves
+        # the deterministic _get_fixed_params pinning.
+        hpo_sweep_class_weight = bool(state.get("hpo_sweep_class_weight", False))
 
         fixed_params = _get_fixed_params(
             algorithm_name,
@@ -361,7 +365,24 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
             class_distribution=class_distribution,
             imbalance_severity=state.get("imbalance_severity", "none"),
             random_state=resolve_fold_random_state(state),
+            hpo_sweep_class_weight=hpo_sweep_class_weight,
         )
+
+        # Backlog #20 Gap 4: when sweeping is opted in AND imbalance is
+        # detected, inject the imbalance-handling params into the Optuna
+        # search space so the matrix's choice gets validated empirically.
+        if hpo_sweep_class_weight and imbalance_detected:
+            pre_injection_keys = set(hyperparameter_search_space)
+            hyperparameter_search_space = _inject_class_weight_sweep(
+                hyperparameter_search_space, algorithm_name, class_distribution
+            )
+            injected_keys = sorted(set(hyperparameter_search_space) - pre_injection_keys)
+            logger.info(
+                "Backlog #20 Gap 4: HPO sweep over imbalance handlers enabled "
+                "for %s (injected %s).",
+                algorithm_name,
+                injected_keys,
+            )
 
         # Filter search space to exclude params already pinned in fixed_params —
         # otherwise Optuna wastes trial budget sampling values that get overridden
@@ -615,6 +636,84 @@ def _get_default_metric(
         return "roc_auc"
 
 
+def _inject_class_weight_sweep(
+    search_space: Dict[str, Dict[str, Any]],
+    algorithm_name: str,
+    class_distribution: Optional[Dict[int, int]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Inject the class_weight / scale_pos_weight / is_unbalance sweep.
+
+    Backlog #20 Gap 4: when ``hpo_sweep_class_weight`` is opted-in, the
+    deterministic ``_get_fixed_params`` pinning is skipped, and this
+    helper adds the imbalance-related parameters to the Optuna search
+    space so the matrix's choice can be empirically validated per
+    cohort. Returns a NEW dict; does not mutate the input. Skips
+    parameters already declared in the input search space — caller's
+    explicit definition wins.
+
+    Sweep ranges per algorithm:
+
+    - ``XGBoost``:        ``scale_pos_weight`` ∈ float [0.5×ratio,
+      2.0×ratio] where ratio = majority/minority. The deterministic
+      pick is exactly ``ratio``; the sweep brackets it 2x in both
+      directions so Optuna can validate (or beat) it.
+    - ``LightGBM``:       ``is_unbalance`` ∈ categorical {True, False}.
+    - ``RandomForest`` /  ``LogisticRegression`` / ``ExtraTrees``:
+      ``class_weight`` ∈ categorical {None, "balanced"}.
+    - ``GradientBoosting``: NOT swept here — sklearn GBM's imbalance
+      handling lives in ``model_trainer_node._prepare_fit_params``
+      (Gap 3), as a fit-time ``sample_weight`` array, not a
+      constructor param. Sweeping it would require Optuna to vary a
+      fit-time kwarg, which the current OptunaOptimizer search-space
+      schema doesn't model.
+
+    Args:
+        search_space: E2I-format search space (the same dict consumed
+            by ``OptunaOptimizer._sample_params``).
+        algorithm_name: One of the supported algorithms above. Unknown
+            algorithms return the input unmodified.
+        class_distribution: Class-count dict for the XGBoost ratio
+            calculation. None or single-class skips XGBoost injection.
+
+    Returns:
+        A new search_space dict with the relevant imbalance-handling
+        parameter(s) added. Returns an unmodified copy when the
+        algorithm has no swept imbalance handler.
+    """
+    out: Dict[str, Dict[str, Any]] = dict(search_space)
+
+    if algorithm_name == "XGBoost":
+        if "scale_pos_weight" not in out and class_distribution and len(class_distribution) >= 2:
+            counts = list(class_distribution.values())
+            minority = min(counts)
+            majority = max(counts)
+            if minority > 0:
+                ratio = majority / minority
+                out["scale_pos_weight"] = {
+                    "type": "float",
+                    "low": 0.5 * ratio,
+                    "high": 2.0 * ratio,
+                    "log": False,
+                }
+    elif algorithm_name == "LightGBM":
+        if "is_unbalance" not in out:
+            out["is_unbalance"] = {
+                "type": "categorical",
+                "choices": [True, False],
+            }
+    elif algorithm_name in ("RandomForest", "LogisticRegression", "ExtraTrees"):
+        if "class_weight" not in out:
+            out["class_weight"] = {
+                "type": "categorical",
+                "choices": [None, "balanced"],
+            }
+    # GradientBoosting intentionally not handled — sample_weight is fit-
+    # time, not a model constructor param. See Gap 3 in
+    # model_trainer_node._prepare_fit_params.
+
+    return out
+
+
 def _get_fixed_params(
     algorithm_name: str,
     imbalance_detected: bool = False,
@@ -623,6 +722,7 @@ def _get_fixed_params(
     imbalance_severity: str = "none",
     *,
     random_state: int = 42,
+    hpo_sweep_class_weight: bool = False,
 ) -> Dict[str, Any]:
     """Get fixed parameters for algorithm that shouldn't be tuned.
 
@@ -638,6 +738,16 @@ def _get_fixed_params(
             (shard 17 Day 3). Defaults to 42 for backward-compat with legacy
             single-split callers; the Day 4-5 orchestrator passes a per-fold
             value resolved via ``resolve_fold_random_state(state)``.
+        hpo_sweep_class_weight: Backlog #20 Gap 4 — when True (opt-in via
+            ``state["hpo_sweep_class_weight"]``), the deterministic
+            class_weight / scale_pos_weight / is_unbalance pinning below
+            is SKIPPED so Optuna can sweep these values empirically per
+            cohort. Caller must inject the corresponding search-space
+            entries via ``_inject_class_weight_sweep`` before HPO. The
+            severity-based regularisation caps (max_depth, min_child_*,
+            etc.) still apply independently — they're tree-shape
+            constraints, not imbalance handlers. Default False
+            preserves the legacy fixed-matrix behaviour.
 
     Returns:
         Dictionary of fixed parameters
@@ -696,8 +806,10 @@ def _get_fixed_params(
 
     # Add class weight handling for imbalanced datasets
     # CRITICAL: Always apply when imbalance detected, regardless of strategy
-    # Even with SMOTE, class_weight provides defense-in-depth
-    if imbalance_detected:
+    # Even with SMOTE, class_weight provides defense-in-depth.
+    # Backlog #20 Gap 4: when hpo_sweep_class_weight=True, SKIP this block
+    # so Optuna can sweep the values via the injected search space.
+    if imbalance_detected and not hpo_sweep_class_weight:
         if class_distribution and len(class_distribution) >= 2:
             counts = list(class_distribution.values())
             minority_count = min(counts)
