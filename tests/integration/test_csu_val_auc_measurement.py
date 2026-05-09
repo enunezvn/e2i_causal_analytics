@@ -95,39 +95,6 @@ PERMUTATION_P_MAX = 0.01
 # Per the plan's data-derived threshold replacing the hardcoded 0.65/0.80.
 ADVERSARIAL_Z_MAX = 5.0
 
-# Halt reasons accepted by the partial-closure skip path. Backlog item
-# #12 closed Layer 5 routing on real CSU; full-RWD-pipeline closure is
-# deferred to backlog #13 (cohort-aware GE suite + completeness scope +
-# leakage_remediation crash). Any halt reason NOT in this set is an
-# UNRELATED regression — the test should fail loudly, not silently skip
-# (codex review MEDIUM-H on PR #105).
-KNOWN_PARTIAL_CLOSURE_HALT_REASONS: frozenset[str] = frozenset(
-    {
-        "qc_gate_blocked",
-        "sampling_frame_audit_blocked",
-    }
-)
-
-
-def _skip_or_fail_on_known_halt(csu_artifact: dict, deferred_to: str) -> None:
-    """Skip the test if the pipeline halted for a documented backlog
-    follow-up; otherwise let the caller's assertion fail.
-
-    Prevents the codex-flagged regression where ``pytest.skip(...)`` on
-    *any* halt would silently green a future unrelated failure (e.g., a
-    new schema validation regression). The expected halt_reasons are
-    pinned to the partial-closure set; novel reasons fail through.
-    """
-    halt_reason = csu_artifact.get("halt_reason")
-    if halt_reason in KNOWN_PARTIAL_CLOSURE_HALT_REASONS:
-        pytest.skip(
-            f"Pipeline halted: halt_reason={halt_reason!r}. "
-            f"This is the documented backlog #12 partial-closure surface; "
-            f"full closure deferred to {deferred_to}."
-        )
-    # Halt with an unexpected reason → fall through; caller's assertion
-    # will produce a real test failure.
-
 
 @pytest.fixture(scope="module")
 def csu_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
@@ -188,18 +155,21 @@ def csu_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
 def test_pipeline_runs_to_completion(csu_artifact: dict) -> None:
     """The full tier0 pipeline must complete without halting on real CSU.
 
-    Backlog item #12 partial-closure caveat: this assertion currently
-    fails on real CSU for orthogonal reasons unrelated to the Layer 5
-    closure (cohort-mismatched ml_patients GE suite expects Novartis
-    brand vocab; CSU uses ``competitor``; completeness threshold trips
-    on always-null metadata). When the pipeline halts at QC for these
-    reasons, the test SKIPS rather than fails — the Layer 5 invariant
-    is checked separately by
-    ``test_adaptive_verdicts_non_empty_with_layer_1``. Full-RWD
-    pipeline closure is a follow-up backlog item.
+    Backlog item #13 closure: prior to commits eb3044e (cohort-agnostic
+    ml_patients GE suite) + e7b2570 (completeness scope filter) +
+    0a5c8d2 (qc_remediation params coercion), the pipeline halted at
+    step 2's QC gate on real CSU for three orthogonal reasons. Now the
+    full pipeline runs through model_trainer + evaluator and produces
+    validation_metrics.roc_auc. A future regression in any of those
+    sub-gates would resurface ``pipeline_halted=True`` and fail this
+    test loudly.
     """
-    if csu_artifact.get("pipeline_halted"):
-        _skip_or_fail_on_known_halt(csu_artifact, deferred_to="backlog item #13")
+    assert not csu_artifact.get("pipeline_halted"), (
+        f"Pipeline halted: halt_reason={csu_artifact.get('halt_reason')!r}. "
+        "Backlog item #13 was supposed to close the full-RWD-pipeline "
+        "path; check ml_patients GE suite, quality_checker completeness "
+        "scope, and qc_remediation params coercion for regressions."
+    )
     assert csu_artifact.get("trained_model_present"), (
         "trained_model_present is False — model_trainer did not produce a model."
     )
@@ -284,8 +254,6 @@ def test_val_auc_in_honest_band(csu_artifact: dict) -> None:
     Above 0.68: residual leakage may not be caught (canary for
     regression — re-audit the surviving feature set).
     """
-    if csu_artifact.get("pipeline_halted"):
-        _skip_or_fail_on_known_halt(csu_artifact, deferred_to="backlog item #13")
     val_metrics = csu_artifact.get("validation_metrics") or {}
     val_auc = val_metrics.get("roc_auc")
     assert val_auc is not None, (
@@ -317,8 +285,6 @@ def test_permutation_p_value_significant(csu_artifact: dict) -> None:
     A genuine impossibility (e.g., evaluator skips permutation under a
     documented sample-size gate) should be surfaced as an explicit
     XFAIL by a maintainer, not silently absorbed."""
-    if csu_artifact.get("pipeline_halted"):
-        _skip_or_fail_on_known_halt(csu_artifact, deferred_to="backlog item #13")
     perm = csu_artifact.get("permutation_test") or {}
     p_value = perm.get("permutation_pvalue", perm.get("p_value"))
     assert p_value is not None, (
