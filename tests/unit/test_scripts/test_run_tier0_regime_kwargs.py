@@ -78,11 +78,26 @@ def test_legacy_regimes_different_seeds_produce_different_data(regime: str) -> N
 
     target = "discontinuation_flag"
     if target in df_a.columns and target in df_b.columns:
+        # Primary path for current legacy regimes (default/adverse/clean):
+        # ``ml_patients`` always emits ``discontinuation_flag``, so this
+        # branch fires for every parametrization today and is the
+        # falsifiable AC for backlog #21.3.
         differs = (df_a[target].to_numpy() != df_b[target].to_numpy()).any()
         assert differs, (
             f"{regime}: target column identical across seeds 100 vs 200 — "
             "seed plumbing regressed (backlog #21.3 / ultrareview bug_001)"
         )
     else:
+        # Defensive fallback only — does NOT fire under the current
+        # parametrization. If a future regime is added that lacks
+        # ``discontinuation_flag``, this branch must be re-evaluated:
+        # ``DataFrame.equals`` is only falsifiable here because every
+        # column ``ml_patients`` emits is seed-driven AND ``datetime.now()``
+        # is called once per ``generate_sample_data`` call (so two
+        # back-to-back invocations in this test get effectively-identical
+        # date strings; differences come ONLY from seed). If a future
+        # regime emits a column that varies independently of seed, this
+        # fallback could pass even with seed dropped — replace it with an
+        # explicit assertion on a column known to be seeded.
         differs = not df_a.equals(df_b)
         assert differs, f"{regime}: full dataframe identical across seeds 100 vs 200"
