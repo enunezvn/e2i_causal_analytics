@@ -568,9 +568,7 @@ async def _apply_automatic_remediation(
                     column,
                     action.get("params_raw"),
                 )
-                actions_taken.append(
-                    f"SKIPPED {action_type} on {column}: malformed params"
-                )
+                actions_taken.append(f"SKIPPED {action_type} on {column}: malformed params")
                 continue
 
             # Defense in depth: ``_parse_remediation_action`` already

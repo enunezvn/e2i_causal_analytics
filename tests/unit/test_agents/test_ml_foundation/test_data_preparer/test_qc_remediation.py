@@ -64,9 +64,7 @@ class TestParseRemediationAction:
         not valid JSON; the parser flags it via ``params_parse_failed``
         so the apply loop skips the action instead of applying defaults.
         """
-        action = _parse_remediation_action(
-            "action: impute, column: foo, params: strategy=mean"
-        )
+        action = _parse_remediation_action("action: impute, column: foo, params: strategy=mean")
         assert action["params"] == {}
         assert action["params_parse_failed"] is True
         assert "strategy=mean" in action.get("params_raw", "")
@@ -78,9 +76,7 @@ class TestParseRemediationAction:
 
     def test_params_non_dict_json_marks_parse_failed(self) -> None:
         # JSON but not a dict — a list or scalar.
-        action_list = _parse_remediation_action(
-            "action: impute, column: foo, params: [1, 2, 3]"
-        )
+        action_list = _parse_remediation_action("action: impute, column: foo, params: [1, 2, 3]")
         assert action_list["params"] == {}
         assert action_list["params_parse_failed"] is True
 
