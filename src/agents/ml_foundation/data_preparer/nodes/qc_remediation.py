@@ -4,6 +4,7 @@ This node uses Claude to analyze QC failures, diagnose root causes,
 and attempt automatic remediation when possible.
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Tuple
 
@@ -362,7 +363,13 @@ def _parse_remediation_action(action_str: str) -> Dict[str, Any]:
         action_str: Action string like "action: drop_column, column: x, params: {}"
 
     Returns:
-        Structured action dictionary
+        Structured action dictionary. ``params`` is always a dict; the
+        LLM's free-form value is JSON-decoded when possible and falls
+        back to an empty dict on malformed input. Backlog #13 fix:
+        previously left ``params`` as a raw string, which crashed the
+        downstream ``_apply_automatic_remediation`` block at
+        ``params.get("strategy")`` with
+        ``AttributeError: 'str' object has no attribute 'get'``.
     """
     action: Dict[str, Any] = {"type": "unknown", "column": None, "params": {}}
 
@@ -379,11 +386,30 @@ def _parse_remediation_action(action_str: str) -> Dict[str, Any]:
                 elif key == "column":
                     action["column"] = value
                 elif key == "params":
-                    action["params"] = value
+                    action["params"] = _coerce_params_to_dict(value)
     except Exception:
         pass
 
     return action
+
+
+def _coerce_params_to_dict(value: str) -> Dict[str, Any]:
+    """Coerce a free-form ``params`` value to a dict.
+
+    The LLM occasionally emits an empty placeholder ``{}``, a JSON
+    object, or a key=value pair. Whatever comes in, callers that read
+    ``params.get("strategy")`` must see a dict — falling back to ``{}``
+    on any parsing failure preserves the documented action contract
+    (``params: Dict[str, Any]``) and lets the action's downstream
+    handler use its default.
+    """
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _rule_based_analysis(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -502,6 +528,18 @@ async def _apply_automatic_remediation(
             action_type = action.get("type", "unknown")
             column = action.get("column")
             params = action.get("params", {})
+            # Defense in depth: ``_parse_remediation_action`` already
+            # coerces ``params`` to a dict, but a caller that bypasses
+            # the parser (e.g., a future LLM-emitted action JSON with a
+            # malformed shape) must not crash the remediation loop.
+            if not isinstance(params, dict):
+                logger.warning(
+                    "Remediation action %r has non-dict params (%s); "
+                    "falling back to empty params",
+                    action_type,
+                    type(params).__name__,
+                )
+                params = {}
 
             if action_type == "impute" and column and column in train_df.columns:
                 strategy = params.get("strategy", "median")
