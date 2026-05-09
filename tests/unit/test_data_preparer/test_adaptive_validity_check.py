@@ -2147,7 +2147,7 @@ def test_phase29_stage2_pre_promoted_mode_kg_drives_high_severity():
 
 def test_phase29_stage2_pre_compute_promotion_eligibility_passes_threshold():
     """Promotion eligibility metrics: 95% non-abstain AND ≤5% disagreement
-    → passes=True.
+    → passes=True (assuming n_patients ≥ 200 too).
     """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         compute_promotion_eligibility,
@@ -2159,9 +2159,11 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_passes_threshold():
         + [{"decided_by": "adversarial", "disagreements": []}] * 17
         + [{"decided_by": "abstain", "disagreements": []}] * 3
     )
-    metrics = compute_promotion_eligibility(verdicts)
+    metrics = compute_promotion_eligibility(verdicts, n_patients=500)
     assert metrics["n_features"] == 100
+    assert metrics["n_patients"] == 500
     assert metrics["non_abstain_pct"] == pytest.approx(0.97)
+    assert metrics["patient_count_pass"] is True
     assert metrics["passes"] is True
 
 
@@ -2174,7 +2176,7 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_low_coverage():
     verdicts = [{"decided_by": "kg", "disagreements": []}] * 50 + [
         {"decided_by": "abstain", "disagreements": []}
     ] * 50
-    metrics = compute_promotion_eligibility(verdicts)
+    metrics = compute_promotion_eligibility(verdicts, n_patients=500)
     assert metrics["non_abstain_pct"] == pytest.approx(0.50)
     assert metrics["passes"] is False
 
@@ -2188,22 +2190,30 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_high_disagreemen
     verdicts = [{"decided_by": "kg", "disagreements": ["adversarial=high but kg=accept"]}] * 10 + [
         {"decided_by": "kg", "disagreements": []}
     ] * 90
-    metrics = compute_promotion_eligibility(verdicts)
+    metrics = compute_promotion_eligibility(verdicts, n_patients=500)
     assert metrics["cross_source_disagreement_rate"] == pytest.approx(0.10)
     assert metrics["passes"] is False
 
 
 def test_phase29_stage2_pre_compute_promotion_eligibility_zero_features():
-    """Empty verdict list: well-formed metrics, passes=False (no evidence)."""
+    """Empty verdict list: well-formed metrics, passes=False (no evidence).
+
+    n_patients still required to surface the patient-count guard alongside
+    the no-evidence guard.
+    """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         compute_promotion_eligibility,
     )
 
-    metrics = compute_promotion_eligibility([])
+    metrics = compute_promotion_eligibility([], n_patients=500)
     assert metrics["n_features"] == 0
+    assert metrics["n_patients"] == 500
     assert metrics["non_abstain_pct"] == 0.0
     assert metrics["kg_decided_count"] == 0
     assert metrics["cross_source_disagreement_rate"] == 0.0
+    # Patient-count guard still measured + reported even when no verdicts:
+    assert metrics["patient_count_pass"] is True
+    # Overall passes still False because no verdicts:
     assert metrics["passes"] is False
 
 
@@ -2219,11 +2229,100 @@ def test_phase29_stage2_pre_compute_promotion_eligibility_fails_no_kg_decided():
     )
 
     verdicts = [{"decided_by": "adversarial", "disagreements": []}] * 100
-    metrics = compute_promotion_eligibility(verdicts)
+    metrics = compute_promotion_eligibility(verdicts, n_patients=500)
     assert metrics["n_features"] == 100
     assert metrics["non_abstain_pct"] == pytest.approx(1.0)
     assert metrics["kg_decided_count"] == 0
     assert metrics["passes"] is False
+
+
+# ---------------------------------------------------------------------------
+# Backlog #14: patient-count minimum (N≥200) enforcement
+# ---------------------------------------------------------------------------
+
+
+def _well_formed_verdicts(count: int = 100) -> list[dict[str, Any]]:
+    """100 verdicts, 97 non-abstain, 80 KG-decided, 0 disagreements.
+
+    Mirrors the passing-threshold case so each backlog #14 test isolates
+    on the patient-count guard alone — no other gate fires.
+    """
+    return (
+        [{"decided_by": "kg", "disagreements": []}] * 80
+        + [{"decided_by": "adversarial", "disagreements": []}] * 17
+        + [{"decided_by": "abstain", "disagreements": []}] * (count - 97)
+    )
+
+
+def test_backlog_14_patient_count_at_threshold_passes():
+    """Boundary case: ``n_patients == min_n_patients`` (default 200) passes."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    metrics = compute_promotion_eligibility(_well_formed_verdicts(), n_patients=200)
+    assert metrics["n_patients"] == 200
+    assert metrics["patient_count_pass"] is True
+    assert metrics["passes"] is True
+
+
+def test_backlog_14_patient_count_below_threshold_fails():
+    """``n_patients < min_n_patients`` → ``passes=False`` even when verdict gates pass.
+
+    This is the load-bearing assertion for backlog #14: an under-powered
+    cohort cannot promote on a verdict-only signal.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    metrics = compute_promotion_eligibility(_well_formed_verdicts(), n_patients=199)
+    # Verdict gates all pass:
+    assert metrics["non_abstain_pct"] == pytest.approx(0.97)
+    assert metrics["kg_decided_count"] == 80
+    assert metrics["cross_source_disagreement_rate"] == pytest.approx(0.0)
+    # Patient guard fails → overall passes False:
+    assert metrics["patient_count_pass"] is False
+    assert metrics["passes"] is False
+
+
+def test_backlog_14_custom_min_n_patients_threshold_honored():
+    """``min_n_patients`` override raises the bar (e.g., 1000 for stricter cohorts)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    # 500 patients passes default 200 but fails custom 1000:
+    metrics_default = compute_promotion_eligibility(
+        _well_formed_verdicts(), n_patients=500
+    )
+    assert metrics_default["passes"] is True
+
+    metrics_strict = compute_promotion_eligibility(
+        _well_formed_verdicts(), n_patients=500, min_n_patients=1000
+    )
+    assert metrics_strict["patient_count_pass"] is False
+    assert metrics_strict["passes"] is False
+
+
+def test_backlog_14_negative_n_patients_raises():
+    """Negative cohort sizes are nonsensical → fail-loud at the boundary."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    with pytest.raises(ValueError, match="n_patients must be non-negative"):
+        compute_promotion_eligibility(_well_formed_verdicts(), n_patients=-1)
+
+
+def test_backlog_14_n_patients_required_param():
+    """Calling without ``n_patients`` raises TypeError (param is keyword-only required)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        compute_promotion_eligibility,
+    )
+
+    with pytest.raises(TypeError, match="n_patients"):
+        compute_promotion_eligibility(_well_formed_verdicts())  # type: ignore[call-arg]
 
 
 def test_phase29_stage2_pre_shadow_mode_does_not_cap_adversarial_high():

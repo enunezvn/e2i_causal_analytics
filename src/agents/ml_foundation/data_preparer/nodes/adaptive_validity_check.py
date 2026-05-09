@@ -755,6 +755,8 @@ def _resolve_manifest_features(
 def compute_promotion_eligibility(
     verdicts: Iterable[dict[str, Any]],
     *,
+    n_patients: int,
+    min_n_patients: int = 200,
     min_non_abstain_pct: float = 0.95,
     max_disagreement_rate: float = 0.05,
     min_kg_decided_count: int = 1,
@@ -763,6 +765,7 @@ def compute_promotion_eligibility(
 
     Returns a dict with:
     - ``n_features``: total verdicts considered
+    - ``n_patients``: cohort size passed by the caller
     - ``non_abstain_pct``: fraction with ``decided_by != "abstain"``
     - ``kg_decided_count``: count of verdicts with ``decided_by == "kg"``
       (codex H2: gate against promoting when KG never fired)
@@ -773,7 +776,9 @@ def compute_promotion_eligibility(
       track KG-vs-adversarial as a "disagreement" by design (KG cannot
       contradict a deterministic veto), so the broader cross-source
       rate is the closest available proxy. (codex H1 rename.)
+    - ``patient_count_pass``: True iff ``n_patients >= min_n_patients``
     - ``passes``: True iff all of:
+      * ``patient_count_pass``
       * ``non_abstain_pct >= min_non_abstain_pct``
       * ``cross_source_disagreement_rate <= max_disagreement_rate``
       * ``kg_decided_count >= min_kg_decided_count``
@@ -783,21 +788,35 @@ def compute_promotion_eligibility(
     ``scope_spec.kg_mode`` from ``"shadow"`` to ``"promoted"`` when the
     rates are satisfactory.
 
-    Note: this function measures per-feature verdict metrics only. The
-    design spec requires N ≥ 200 patients in the cohort before
-    promotion is meaningful — that patient-count guard is the caller's
-    responsibility (codex N2).
+    The ``n_patients`` parameter is required (no default). The design spec
+    requires N ≥ 200 patients in the cohort before promotion is meaningful;
+    callers MUST supply the cohort size explicitly so an under-powered
+    cohort cannot pass on a verdict-only signal. Pre-PR-#113 design punted
+    this guard to the caller (codex N2 caller-responsibility); this version
+    builds the guard in so it cannot be silently skipped (closes backlog #14).
+
+    Raises ``ValueError`` if ``n_patients`` is negative.
 
     Empty input returns ``passes=False`` (no evidence ⇒ cannot promote).
     """
+    if n_patients < 0:
+        raise ValueError(
+            f"n_patients must be non-negative; got {n_patients}. "
+            "If the cohort size is unknown, that itself is a promotion blocker."
+        )
+
+    patient_count_pass = n_patients >= min_n_patients
+
     verdicts_list = list(verdicts)
     n = len(verdicts_list)
     if n == 0:
         return {
             "n_features": 0,
+            "n_patients": n_patients,
             "non_abstain_pct": 0.0,
             "kg_decided_count": 0,
             "cross_source_disagreement_rate": 0.0,
+            "patient_count_pass": patient_count_pass,
             "passes": False,
         }
 
@@ -812,16 +831,19 @@ def compute_promotion_eligibility(
     disagreement_rate = disagreements_count / n
 
     passes = (
-        non_abstain_pct >= min_non_abstain_pct
+        patient_count_pass
+        and non_abstain_pct >= min_non_abstain_pct
         and disagreement_rate <= max_disagreement_rate
         and kg_decided_count >= min_kg_decided_count
     )
 
     return {
         "n_features": n,
+        "n_patients": n_patients,
         "non_abstain_pct": non_abstain_pct,
         "kg_decided_count": kg_decided_count,
         "cross_source_disagreement_rate": disagreement_rate,
+        "patient_count_pass": patient_count_pass,
         "passes": passes,
     }
 
