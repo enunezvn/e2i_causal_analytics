@@ -31,6 +31,7 @@ class ScenarioName(str, Enum):
     """
 
     A_DIAGNOSTIC_BC_IDFS = "scenario_a_diagnostic_ebc_idfs_5y"
+    A_DIAGNOSTIC_BC_IDFS_BALANCED = "scenario_a_diagnostic_ebc_idfs_5y_balanced"
     B_SCREENING_IGAN_ESKD = "scenario_b_screening_igan_eskd_5y"
     C_TREATMENT_CSU_RESPONSE = "scenario_c_treatment_decision_csu_remib_response"
 
@@ -70,5 +71,8 @@ __all__ = ["SCENARIO_REGISTRY", "ScenarioName"]
 # B and C are added by commits 08 and 09; missing modules cause ImportError on
 # package load until those commits land.
 from src.ml.synthetic_v2.scenarios import scenario_a as _scenario_a  # noqa: E402, F401
+from src.ml.synthetic_v2.scenarios import (  # noqa: E402, F401
+    scenario_a_balanced as _scenario_a_balanced,
+)
 from src.ml.synthetic_v2.scenarios import scenario_b as _scenario_b  # noqa: E402, F401
 from src.ml.synthetic_v2.scenarios import scenario_c as _scenario_c  # noqa: E402, F401

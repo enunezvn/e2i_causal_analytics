@@ -1345,33 +1345,79 @@ def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
     return df
 
 
-def _scenario_a_to_dataframe(seed: int) -> pd.DataFrame:
-    """Generate synthetic_v2 scenario_a (HR+/HER2- early BC iDFS) and adapt to pipeline.
+_SCENARIO_REGIME_TO_NAME: Dict[str, str] = {
+    "scenario_a": "A_DIAGNOSTIC_BC_IDFS",
+    "scenario_a_balanced": "A_DIAGNOSTIC_BC_IDFS_BALANCED",
+    "scenario_b": "B_SCREENING_IGAN_ESKD",
+    "scenario_c": "C_TREATMENT_CSU_RESPONSE",
+}
 
-    Bypasses ml_patients(); calls synthetic_v2.api.generate_scenario at the
-    scenario's default n_total (6000) so the calibrated AUC band [0.78, 0.83]
-    from scenarios/scenario_a.py:7 holds (9/10 seeds, median 0.793).
-    Concatenates train/val/test back to one DataFrame — the pipeline re-splits
-    downstream, so trusting scenario_a's internal split would double-split.
+_SCENARIO_REGIME_TO_BRAND: Dict[str, str] = {
+    "scenario_a": "Kisqali",
+    "scenario_a_balanced": "Kisqali",
+    "scenario_b": "Fabhalta",
+    "scenario_c": "Remibrutinib",
+}
+
+_SCENARIO_REGIME_TO_ID_PREFIX: Dict[str, str] = {
+    "scenario_a": "sa",
+    "scenario_a_balanced": "sab",
+    "scenario_b": "sb",
+    "scenario_c": "sc",
+}
+
+
+def _scenario_to_dataframe(
+    regime: str,
+    seed: int,
+    n_total: int | None = None,
+) -> pd.DataFrame:
+    """Generate a synthetic_v2 scenario dataset and adapt to the runner contract.
+
+    Bypasses ``ml_patients()``; calls ``synthetic_v2.api.generate_scenario`` and
+    flattens train/val/test back to one DataFrame — the pipeline re-splits
+    downstream, so trusting the scenario's internal split would double-split.
+
+    Args:
+        regime: One of ``scenario_a``, ``scenario_a_balanced``, ``scenario_b``,
+            ``scenario_c``. Maps to a registered ``ScenarioName`` via
+            ``_SCENARIO_REGIME_TO_NAME``.
+        seed: Random seed forwarded to ``generate_scenario``.
+        n_total: Optional override for the scenario's ``builder.default_n_total``.
+            ``None`` preserves the default (6000 for all four scenarios) so
+            no-flag invocations remain bit-identical to the pre-PR baseline.
+
+    Each scenario uses a regime-specific ``brand`` + ``patient_journey_id``
+    prefix so a downstream consumer that union-merges multi-scenario outputs
+    can disambiguate by ``brand`` without colliding on ID.
     """
     import numpy as np
 
     from src.ml.synthetic_v2.api import generate_scenario
     from src.ml.synthetic_v2.scenarios import ScenarioName
 
-    ds = generate_scenario(ScenarioName.A_DIAGNOSTIC_BC_IDFS, seed=seed)
+    if regime not in _SCENARIO_REGIME_TO_NAME:
+        raise ValueError(
+            f"unknown synthetic_v2 regime {regime!r}; "
+            f"expected one of {sorted(_SCENARIO_REGIME_TO_NAME.keys())}"
+        )
+    scenario_attr = _SCENARIO_REGIME_TO_NAME[regime]
+    scenario = getattr(ScenarioName, scenario_attr)
+
+    ds = generate_scenario(scenario, seed=seed, n_total=n_total)
 
     X = np.vstack([ds.X_train, ds.X_val, ds.X_test])
     y = np.concatenate([ds.y_train, ds.y_val, ds.y_test])
     df = pd.DataFrame(X, columns=list(ds.metadata.feature_names))
     df["discontinuation_flag"] = y.astype(int)
-    df["patient_journey_id"] = [f"sa-{i:06d}" for i in range(len(df))]
+    id_prefix = _SCENARIO_REGIME_TO_ID_PREFIX[regime]
+    df["patient_journey_id"] = [f"{id_prefix}-{i:06d}" for i in range(len(df))]
     df["patient_id"] = df["patient_journey_id"]
-    df["brand"] = "Kisqali"
+    df["brand"] = _SCENARIO_REGIME_TO_BRAND[regime]
     df["geographic_region"] = "northeast"
     # journey_status must NOT correlate with the target — a target-coupled value
     # trips the leakage detector and triggers LLM remediation, which then
-    # hallucinates a replacement feature set and discards the 40 scenario_a
+    # hallucinates a replacement feature set and discards the scenario's
     # clinical features. Constant "active" keeps it pipeline-shaped without leakage.
     df["journey_status"] = "active"
     today = datetime.now().isoformat()
@@ -1380,6 +1426,15 @@ def _scenario_a_to_dataframe(seed: int) -> pd.DataFrame:
     df["created_at"] = today
     df["data_quality_score"] = 0.95
     return df
+
+
+def _scenario_a_to_dataframe(seed: int, n_total: int | None = None) -> pd.DataFrame:
+    """Backward-compatible wrapper around ``_scenario_to_dataframe('scenario_a', ...)``.
+
+    Preserved as a stable name for callers (e.g. PR #75 era tests) that reach
+    in directly. New regimes route through ``_scenario_to_dataframe`` directly.
+    """
+    return _scenario_to_dataframe("scenario_a", seed=seed, n_total=n_total)
 
 
 def generate_sample_data(
@@ -1392,6 +1447,7 @@ def generate_sample_data(
     noise_sd: float = 0.10,
     signalize_extra_features: bool = False,
     _generator: str | None = None,
+    n_total: int | None = None,
 ) -> pd.DataFrame:
     """Generate sample patient journey data using the ML-ready generator.
 
@@ -1412,9 +1468,15 @@ def generate_sample_data(
         signalize_extra_features: When True, four additional features
             (age_group, geographic_region, brand, data_quality_score)
             also contribute to the risk score.
+        n_total: For ``_generator`` set to a synthetic_v2 scenario (one of
+            ``scenario_a``, ``scenario_a_balanced``, ``scenario_b``,
+            ``scenario_c``), overrides the scenario's ``builder.default_n_total``
+            (typically 6000). ``None`` preserves the default. Ignored for the
+            ``ml_patients()`` (legacy) path. See
+            ``.claude/plans/synthetic_cohort_growth_plan_20260509.md`` Phase 1.
     """
-    if _generator == "scenario_a":
-        return _scenario_a_to_dataframe(seed=seed)
+    if _generator in _SCENARIO_REGIME_TO_NAME:
+        return _scenario_to_dataframe(_generator, seed=seed, n_total=n_total)
 
     # Use the same generator as the data_preparer agent for consistency
     from src.repositories.sample_data import SampleDataGenerator
@@ -3844,10 +3906,18 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
 # =============================================================================
 
 
-_VALID_REGIMES: Tuple[str, ...] = ("default", "adverse", "clean", "scenario_a")
+_VALID_REGIMES: Tuple[str, ...] = (
+    "default",
+    "adverse",
+    "clean",
+    "scenario_a",
+    "scenario_a_balanced",
+    "scenario_b",
+    "scenario_c",
+)
 
 
-def _regime_kwargs(regime: str) -> Dict[str, Any]:
+def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
     """Translate a regime name into kwargs for ``ml_patients()``.
 
     Section A of pre_phase2_unblockers — single source of truth for the
@@ -3914,13 +3984,16 @@ def _regime_kwargs(regime: str) -> Dict[str, Any]:
             "noise_sd": 0.03,
             "signalize_extra_features": True,
         }
-    elif regime == "scenario_a":
+    elif regime in _SCENARIO_REGIME_TO_NAME:
         # Sentinel: dispatched in generate_sample_data via synthetic_v2.api;
-        # bypasses ml_patients() so AUC band [0.78, 0.83] from
-        # scenarios/scenario_a.py:7 holds (calibrated 9/10 seeds, median 0.793).
+        # bypasses ml_patients() so each scenario's calibrated AUC band holds.
+        # scenario_a:           [0.78, 0.83] — scenarios/scenario_a.py:7
+        # scenario_a_balanced:  empirical (Phase 4 pin) — prevalence shifted to 0.50
+        # scenario_b:           [0.72, 0.78] — scenarios/scenario_b.py:7
+        # scenario_c:           [0.82, 0.88] — scenarios/scenario_c.py:7
         kwargs = {
-            "_generator": "scenario_a",
-            "seed": 42,
+            "_generator": regime,
+            "seed": seed,
         }
     else:
         raise ValueError(
@@ -3963,7 +4036,7 @@ def _compute_adaptive_state_inputs(
 
     See ``.claude/plans/adaptive_success_criteria/05-data-shape-introspection.md``.
     """
-    valid_regimes = {"default", "clean", "adverse", "scenario_a"}
+    valid_regimes = set(_VALID_REGIMES)
     return {
         "n_samples": int(len(df)),
         "prevalence": float(df[target_col].mean()),
@@ -4196,6 +4269,8 @@ async def run_pipeline(
     pre_assigned_splits: Dict[Any, str] | None = None,
     inject_demo_cost_matrix: bool = True,
     feature_manifest_source: str | None = None,
+    n_total: int | None = None,
+    seed: int = 42,
 ) -> dict[str, Any]:
     """Run the full pipeline or a specific step.
 
@@ -4269,11 +4344,13 @@ async def run_pipeline(
     print(f"  MLflow Enabled: {CONFIG.enable_mlflow}")
     print(f"  MLflow Tracking URI: {os.environ.get('MLFLOW_TRACKING_URI', 'not set')}")
     print(f"  BentoML Serving: {'Enabled' if include_bentoml else 'Disabled'}")
-    _regime_summary = _regime_kwargs(regime)
-    if _regime_summary.get("_generator") == "scenario_a":
+    _regime_summary = _regime_kwargs(regime, seed=seed)
+    _scenario_generator = _regime_summary.get("_generator")
+    if _scenario_generator in _SCENARIO_REGIME_TO_NAME:
+        n_total_disp = "default" if n_total is None else str(n_total)
         print(
             f"  Regime: {regime} "
-            f"(synthetic_v2.scenario_a, n_total=6000, AUC band [0.78, 0.83])"
+            f"(synthetic_v2.{_scenario_generator}, n_total={n_total_disp}, seed={seed})"
         )
     else:
         print(
@@ -4300,11 +4377,12 @@ async def run_pipeline(
         print(f"\n  Loading real-world data from {data_dir}...")
         patient_df = load_rwd_data(data_dir, target=CONFIG.target_outcome)
     else:
-        regime_kwargs = _regime_kwargs(regime)
+        regime_kwargs = _regime_kwargs(regime, seed=seed)
         print("\n  Generating sample patient data...")
         patient_df = generate_sample_data(
             n_samples=1500,
             imbalance_ratio=imbalance_ratio,
+            n_total=n_total,
             **regime_kwargs,
         )
         print(f"  Generated {len(patient_df)} patient records")
@@ -5860,7 +5938,8 @@ async def run_pipeline(
         sc_state = state.get("success_criteria") or {}
         artifact = {
             "regime": regime,
-            "seed": 42,  # generate_sample_data hardcodes seed=42
+            "seed": seed,
+            "n_total": n_total,
             "criteria_source": sc_state.get("criteria_source", "fixed"),
             "success_criteria": {
                 k: v
@@ -6047,6 +6126,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "'scenario_a': synthetic_v2 HR+/HER2- early BC iDFS (Kisqali "
             "franchise), 40 clinically-grounded features, n=6000, calibrated "
             "AUC band [0.78, 0.83] (9/10 seeds; scenarios/scenario_a.py:7). "
+            "'scenario_a_balanced': scenario_a derivative with target "
+            "prevalence shifted 0.20 → 0.50, intact feature↔target signal "
+            "(see synthetic_cohort_growth_plan_20260509.md Phase 3). "
+            "'scenario_b': IgAN/ESKD screening, 25 features, prev=0.05, "
+            "AUC band [0.72, 0.78] (scenarios/scenario_b.py:7). "
+            "'scenario_c': CSU treatment response, 60 features, prev=0.40, "
+            "AUC band [0.82, 0.88] (scenarios/scenario_c.py:7). "
             "Ignored when --data-dir is set."
         ),
     )
@@ -6078,6 +6164,35 @@ def _build_parser() -> argparse.ArgumentParser:
             "through the pipeline."
         ),
     )
+    parser.add_argument(
+        "--n-total",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Override the synthetic_v2 scenario default cohort size "
+            "(typically 6000). N must be ≥ 100 per the api.py:158 safety "
+            "floor. Applies only to --regime scenario_*; ignored for "
+            "default/adverse/clean (those go through the legacy "
+            "ml_patients() generator with n_samples=1500). When omitted, "
+            "the scenario's builder.default_n_total is used so no-flag "
+            "invocations remain bit-identical to the pre-PR baseline."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        metavar="N",
+        help=(
+            "Random seed for the synthetic_v2 generator and downstream "
+            "training. Default 42 matches the pre-PR hardcoded seed so "
+            "no-flag invocations remain bit-identical. Used by the "
+            "synthetic_cohort_growth multi-seed sweep "
+            "(.claude/plans/synthetic_cohort_growth_plan_20260509.md "
+            "Phase 1.3) to measure variance across seeds at fixed n_total."
+        ),
+    )
     return parser
 
 
@@ -6089,6 +6204,16 @@ def main():
 
     parser = _build_parser()
     args = parser.parse_args()
+
+    # --n-total validation: api.py:158 enforces ≥100 at generation time, but
+    # surfacing the error at the CLI boundary is friendlier to operators
+    # running the multi-seed sweep, who would otherwise see the failure mid-run.
+    if args.n_total is not None and args.n_total < 100:
+        parser.error(
+            f"--n-total must be ≥ 100 (got {args.n_total}); "
+            "synthetic_v2.api.py:158 enforces this floor because stratified "
+            "splits at low prevalence become degenerate below it."
+        )
 
     # Update config
     if args.disable_mlflow:
@@ -6145,6 +6270,8 @@ def main():
             feature_manifest_source=_resolve_feature_manifest_source(
                 args.data_dir, args.feature_manifest_source
             ),
+            n_total=args.n_total,
+            seed=args.seed,
         ))
     finally:
         # Restore stdout
