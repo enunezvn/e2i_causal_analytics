@@ -25,6 +25,7 @@ from src.agents.ml_foundation.data_preparer.ingestion import (
     ParquetReader,
 )
 from src.agents.ml_foundation.data_preparer.nodes.data_loader import (
+    _drop_unhashable_columns,
     _load_from_files,
     _split_from_column,
 )
@@ -289,3 +290,145 @@ class TestSplitFromColumn:
         df = pd.DataFrame({"x": [1, 2, 3], "data_split": ["train"] * 3})
         result = _split_from_column(df)
         assert result["holdout"] is None
+
+
+class TestDropUnhashableColumns:
+    """Defensive filter for object-dtype cols with unhashable cells.
+
+    Real CSU patient_journeys.json carries list-typed metadata
+    (`comorbidities`, `secondary_diagnosis_codes`, `data_sources_matched`)
+    that crash `nunique()` / `value_counts()` in leakage_detector,
+    data_transformer, and baseline_computer. The filter removes these
+    pre-split so downstream nodes never see them.
+    """
+
+    def test_drops_list_cells(self, caplog: pytest.LogCaptureFixture) -> None:
+        df = pd.DataFrame(
+            {
+                "patient_id": ["p1", "p2", "p3"],
+                "comorbidities": [["asthma"], [], ["allergic_rhinitis"]],
+                "age": [30, 40, 50],
+            }
+        )
+        with caplog.at_level("WARNING"):
+            result = _drop_unhashable_columns(df)
+        assert list(result.columns) == ["patient_id", "age"]
+        assert "comorbidities" in caplog.text
+
+    def test_drops_dict_cells(self) -> None:
+        df = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "metadata": [{"key": "val"}, {"key": "other"}],
+                "score": [0.1, 0.2],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert list(result.columns) == ["id", "score"]
+
+    def test_drops_set_cells(self) -> None:
+        df = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "tags": [{"a", "b"}, {"c"}],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert "tags" not in result.columns
+
+    def test_drops_tuple_cells(self) -> None:
+        df = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "coord": [(1, 2), (3, 4)],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert "coord" not in result.columns
+
+    def test_preserves_scalar_object_columns(self) -> None:
+        df = pd.DataFrame(
+            {
+                "id": ["p1", "p2"],
+                "diagnosis_code": ["L20.9", "L50.1"],
+                "age_group": ["18-34", "65+"],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert list(result.columns) == ["id", "diagnosis_code", "age_group"]
+
+    def test_preserves_numeric_columns(self) -> None:
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [1.1, 2.2, 3.3]})
+        result = _drop_unhashable_columns(df)
+        assert list(result.columns) == ["a", "b"]
+
+    def test_preserves_all_null_object_columns(self) -> None:
+        # All-null object cols cannot be sampled to detect type — leave in
+        # place. nunique() returns 0 for these (benign downstream).
+        df = pd.DataFrame(
+            {
+                "id": ["p1", "p2", "p3"],
+                "always_null": [None, None, None],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert "always_null" in result.columns
+
+    def test_drops_list_when_first_value_is_null(self) -> None:
+        # First non-null cell is what's sampled — None values don't shield
+        # an unhashable column from being detected.
+        df = pd.DataFrame(
+            {
+                "id": ["p1", "p2", "p3"],
+                "list_with_nulls": [None, ["asthma"], None],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        assert "list_with_nulls" not in result.columns
+
+    def test_no_op_when_all_columns_hashable(self) -> None:
+        df = pd.DataFrame(
+            {
+                "id": ["p1", "p2"],
+                "age": [30, 40],
+                "diagnosis": ["L20.9", "L50.1"],
+            }
+        )
+        result = _drop_unhashable_columns(df)
+        # Same column set; same shape.
+        assert list(result.columns) == ["id", "age", "diagnosis"]
+        assert len(result) == 2
+
+    def test_load_from_files_integration_with_list_cols(self, tmp_path: Path) -> None:
+        """End-to-end: _load_from_files cleans list cols before split."""
+        records = [
+            {
+                "patient_id": f"PAT_{i:06d}",
+                "journey_start_date": f"2022-0{(i % 9) + 1}-15",
+                "comorbidities": [] if i % 2 == 0 else ["asthma"],
+                "secondary_diagnosis_codes": [],
+                "treatment_initiated": i % 2,
+                "data_split": ["train", "train", "validation", "test", "holdout", "train"][i % 6],
+            }
+            for i in range(12)
+        ]
+        path = tmp_path / "e2i_ml_v3_patient_journeys.json"
+        with open(path, "w") as f:
+            json.dump(records, f)
+
+        result = _load_from_files(
+            {"type": "file_dir", "path": str(tmp_path)},
+            entity_column="patient_id",
+            date_column="journey_start_date",
+        )
+
+        # List cols dropped before splitter saw them — no nunique crash.
+        for split in ("train", "val", "test", "holdout"):
+            df = result[split]
+            if df is None:
+                continue
+            assert "comorbidities" not in df.columns
+            assert "secondary_diagnosis_codes" not in df.columns
+            # Scalar cols preserved.
+            assert "patient_id" in df.columns
+            assert "treatment_initiated" in df.columns

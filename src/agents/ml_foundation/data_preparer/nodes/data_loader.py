@@ -193,6 +193,51 @@ async def _load_from_supabase(
     return result
 
 
+def _drop_unhashable_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop object-dtype columns whose first non-null cell is unhashable.
+
+    pandas marks any column with a list/dict/set/tuple cell as object dtype
+    but cannot compute set-based aggregations like ``nunique()`` /
+    ``value_counts()`` because those types are unhashable. CSU's
+    ``patient_journeys.json`` carries list-typed metadata cols
+    (``comorbidities``, ``secondary_diagnosis_codes``, ``data_sources_matched``)
+    that crash multiple downstream nodes (``leakage_detector``,
+    ``data_transformer``, ``baseline_computer``).
+
+    Sampling the first non-null cell is a fast heuristic — pandas guarantees
+    object-dtype within a single column either holds hashable scalars or
+    unhashable containers, so a single sample is sufficient in practice.
+    Empty / all-null columns are left in place; they are benign for
+    downstream nunique calls and may carry intentional contract semantics.
+
+    Args:
+        df: Raw DataFrame from file ingestion.
+
+    Returns:
+        DataFrame with unhashable-cell columns removed; warns naming them.
+    """
+    drop_cols: list[str] = []
+    for col in df.columns:
+        if not pd.api.types.is_object_dtype(df[col].dtype):
+            continue
+        non_null = df[col].dropna()
+        if non_null.empty:
+            continue
+        sample = non_null.iloc[0]
+        if isinstance(sample, (list, dict, set, frozenset, tuple)):
+            drop_cols.append(col)
+
+    if not drop_cols:
+        return df
+
+    logger.warning(
+        "Dropping %d non-encodable column(s) with unhashable cells: %s",
+        len(drop_cols),
+        drop_cols,
+    )
+    return df.drop(columns=drop_cols, errors="ignore")
+
+
 def _load_from_files(
     data_source: Dict[str, Any],
     entity_column: Optional[str],
@@ -213,7 +258,12 @@ def _load_from_files(
         split when ``entity_column`` exists, then temporal on ``date_column``,
         then random.
 
-    No cleaning, no transformation — downstream nodes catch data issues.
+    Defensive cleanup: object-dtype columns whose cells are unhashable
+    (list/dict/set/tuple) are dropped post-read via
+    ``_drop_unhashable_columns``. This protects downstream nodes
+    (``leakage_detector``, ``data_transformer``, ``baseline_computer``)
+    that call ``nunique()`` / ``value_counts()`` indiscriminately on
+    object cols.
     """
     ingestor = FileIngestor()
 
@@ -236,7 +286,7 @@ def _load_from_files(
             "downstream nodes require it as the primary table"
         )
 
-    df = frames["patient_journeys"]
+    df = _drop_unhashable_columns(frames["patient_journeys"])
     logger.info("Loaded patient_journeys: %d rows, %d cols", len(df), len(df.columns))
 
     # Prefer precomputed split from converter.
