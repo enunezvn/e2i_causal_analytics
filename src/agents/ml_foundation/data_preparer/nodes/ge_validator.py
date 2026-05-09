@@ -45,11 +45,21 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
             }
 
         # Determine suite name from data source.
-        # data_source may now be a dict (file ingestion) — in that case we have
-        # no suite name to pull from; fall back to the generic suite.
+        # data_source may now be a dict (file ingestion) — in that case we
+        # default to ``patient_journeys`` so the auto-detect block below
+        # picks the appropriate suite from the loaded DataFrame's columns.
+        # Falling back to ``business_metrics`` (the previous behavior)
+        # surfaced 7 spurious GE failures on real CSU runs because that
+        # suite expects ``id`` / ``metric_value`` cols absent in
+        # patient_journeys (backlog item #12).
         scope_spec = state.get("scope_spec", {})
         _ds_raw = state.get("data_source") or scope_spec.get("data_source", "business_metrics")
-        data_source: str = _ds_raw if isinstance(_ds_raw, str) else "business_metrics"
+        if isinstance(_ds_raw, str):
+            data_source: str = _ds_raw
+        elif isinstance(_ds_raw, dict) and _ds_raw.get("type") in ("file_dir", "files"):
+            data_source = "patient_journeys"
+        else:
+            data_source = "business_metrics"
 
         # Get the validator
         validator = get_data_quality_validator()

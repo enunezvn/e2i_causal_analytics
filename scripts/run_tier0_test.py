@@ -1932,6 +1932,34 @@ async def step_2_data_preparer(
         data_source = "patient_journeys"
         sample_size = 500
 
+    # When a feature manifest is selected on a real RWD cohort, exclude
+    # every column the manifest does NOT declare (IDs, audit timestamps,
+    # provenance, placeholders). Post-index forbidden manifest features
+    # (e.g. ``journey_duration_days``, ``journey_status``, ``brand``)
+    # are intentionally NOT excluded here — Layer 5's
+    # adaptive_validity_check is responsible for catching them via
+    # ``layer="1"`` verdicts. Mirrors the working
+    # ``test_csu_full_data_preparer_e2e.py::csu_scope_spec`` pattern.
+    excluded_features: list[str] = []
+    manifest_source = scope_spec.get("feature_manifest_source")
+    if is_rwd_run and manifest_source:
+        try:
+            if manifest_source == "csu":
+                from src.data.manifests import CSU_FEATURES
+                manifest_names = {c.name for c in CSU_FEATURES}
+            elif manifest_source == "optum":
+                from src.data.manifests import OPTUM_FEATURES
+                manifest_names = {c.name for c in OPTUM_FEATURES}
+            else:
+                manifest_names = set()
+            if manifest_names:
+                excluded_features = [
+                    col for col in sample_df.columns
+                    if col not in manifest_names and col != CONFIG.target_outcome
+                ]
+        except ImportError:
+            pass
+
     # Ensure scope_spec has required fields with realistic values.
     # ``sampling_frame_max_drift`` is forwarded so the audit node and the
     # runner gate use the same threshold.
@@ -1942,6 +1970,7 @@ async def step_2_data_preparer(
         "prediction_target": CONFIG.target_outcome,
         "problem_type": CONFIG.problem_type,
         "required_features": available_features,
+        "excluded_features": excluded_features,
         "max_staleness_days": 90,
         "sampling_frame_max_drift": CONFIG.sampling_frame_max_drift,
     })
@@ -4502,7 +4531,15 @@ async def run_pipeline(
 
             if not state["gate_passed"]:
                 print_failure("QC Gate blocked training. Pipeline stopped.")
-                return
+                # Halt subsequent steps via the pipeline_halted flag (each
+                # step gates on `not state.get("pipeline_halted")`) instead
+                # of bailing early, so the TIER0_E2E_JSON_OUT artifact at
+                # the end of run_pipeline still captures adaptive_verdicts
+                # from the data_preparer's Layer 5 audit. Test fixtures
+                # need this artifact even on QC halt to verify Layer 5
+                # invariants on real RWD cohorts (backlog item #12).
+                state["pipeline_halted"] = True
+                state.setdefault("halt_reason", "qc_gate_blocked")
 
             # === Step 2a: Sampling-frame audit gate (Phase-1 Task 1.3) ===
             # Surface the audit's blocking decision as its own step result so
@@ -4539,10 +4576,14 @@ async def run_pipeline(
             ))
             if sf_exceeded:
                 print_failure(f"Sampling-frame audit blocked training: {sf_message}")
-                return
+                # See QC-gate halt above — set pipeline_halted instead of
+                # returning so the TIER0_E2E_JSON_OUT artifact at the end
+                # of run_pipeline still captures adaptive_verdicts.
+                state["pipeline_halted"] = True
+                state.setdefault("halt_reason", "sampling_frame_audit_blocked")
 
         # Step 2b: Feast Feature Registration (gracefully degrading)
-        if 2 in steps_to_run:
+        if 2 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             feast_reg_result = await step_2b_feast_registration(experiment_id, state)
             feast_reg_status = feast_reg_result.get("status", "skipped")
@@ -4616,7 +4657,7 @@ async def run_pipeline(
             ))
 
         # Step 3: Cohort Constructor
-        if 3 in steps_to_run:
+        if 3 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             eligible_df, cohort_result = await step_3_cohort_constructor(patient_df)
             state["eligible_df"] = eligible_df
@@ -4672,7 +4713,7 @@ async def run_pipeline(
             ))
 
         # Step 4: Model Selector
-        if 4 in steps_to_run:
+        if 4 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             scope_spec = state.get("scope_spec", {"problem_type": CONFIG.problem_type})
             qc_report = state.get("qc_report", {"gate_passed": True})
