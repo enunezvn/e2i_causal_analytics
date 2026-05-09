@@ -90,9 +90,7 @@ def test_legacy_regime_does_not_auto_sync_brand(regime: str) -> None:
     result = _run_dry("--regime", regime)
     assert result.returncode == 0
     # Extract the brand line from stdout (deterministic format from line 4344).
-    brand_lines = [
-        line for line in result.stdout.splitlines() if line.strip().startswith("Brand:")
-    ]
+    brand_lines = [line for line in result.stdout.splitlines() if line.strip().startswith("Brand:")]
     assert len(brand_lines) == 1, (
         f"Expected exactly one 'Brand:' line in stdout for legacy --regime "
         f"{regime}; got {len(brand_lines)}. stdout (truncated):\n"
