@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -345,6 +346,31 @@ class TestDropUnhashableColumns:
         )
         result = _drop_unhashable_columns(df)
         assert "coord" not in result.columns
+
+    def test_drops_ndarray_cells(self, caplog: pytest.LogCaptureFixture) -> None:
+        # Iter-5 audit (2026-05-09): Optum-init e2e crashed at
+        # baseline_computer.py:75 because the Optum converter writes Parquet
+        # and pyarrow's ListArray decode produces ``numpy.ndarray`` cells
+        # rather than Python ``list`` cells. PR #105's filter only included
+        # ``list`` so the np.ndarray case slipped through. The two
+        # representations carry the same logical "list-of-strings" payload
+        # (``comorbidities``, ``secondary_diagnosis_codes``, etc.) and must
+        # be dropped uniformly regardless of file format.
+        df = pd.DataFrame(
+            {
+                "patient_id": ["p1", "p2", "p3"],
+                "comorbidities": [
+                    np.array(["asthma"], dtype=object),
+                    np.array([], dtype=object),
+                    np.array(["allergic_rhinitis", "atopic_dermatitis"], dtype=object),
+                ],
+                "age": [30, 40, 50],
+            }
+        )
+        with caplog.at_level("WARNING"):
+            result = _drop_unhashable_columns(df)
+        assert list(result.columns) == ["patient_id", "age"]
+        assert "comorbidities" in caplog.text
 
     def test_preserves_scalar_object_columns(self) -> None:
         df = pd.DataFrame(

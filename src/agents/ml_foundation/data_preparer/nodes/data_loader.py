@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+import numpy as np
 import pandas as pd
 
 # Use direct module imports to avoid circular import with src.repositories
@@ -201,6 +202,14 @@ def _drop_unhashable_columns(df: pd.DataFrame) -> pd.DataFrame:
     that crash multiple downstream nodes (``leakage_detector``,
     ``data_transformer``, ``baseline_computer``).
 
+    The same logical "list-of-strings" cell can land as a Python ``list``
+    (JSON → pandas roundtrip) OR as ``numpy.ndarray`` (Parquet → pandas
+    roundtrip via pyarrow's ``ListArray`` decode). PR #105 caught the JSON
+    case but not the Parquet case; iter-5 audit (2026-05-09) surfaced the
+    Optum-init e2e crashing at ``baseline_computer.py:75`` with
+    ``TypeError: unhashable type: 'numpy.ndarray'`` because the Optum
+    converter writes Parquet, not JSON.
+
     Scans every non-null cell — sampling only ``iloc[0]`` would let a column
     whose first row is a scalar but later rows contain lists silently
     survive the filter (codex review HIGH-B on PR #105). ``Series.map`` with
@@ -224,7 +233,9 @@ def _drop_unhashable_columns(df: pd.DataFrame) -> pd.DataFrame:
         non_null = df[col].dropna()
         if non_null.empty:
             continue
-        if non_null.map(lambda v: isinstance(v, (list, dict, set, frozenset, tuple))).any():
+        if non_null.map(
+            lambda v: isinstance(v, (list, dict, set, frozenset, tuple, np.ndarray))
+        ).any():
             drop_cols.append(col)
 
     if not drop_cols:
