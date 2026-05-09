@@ -2302,9 +2302,7 @@ def test_backlog_14_custom_min_n_patients_threshold_honored():
     )
 
     # 500 patients passes default 200 but fails custom 1000:
-    metrics_default = compute_promotion_eligibility(
-        _well_formed_verdicts(), n_patients=500
-    )
+    metrics_default = compute_promotion_eligibility(_well_formed_verdicts(), n_patients=500)
     assert metrics_default["passes"] is True
 
     metrics_strict = compute_promotion_eligibility(
