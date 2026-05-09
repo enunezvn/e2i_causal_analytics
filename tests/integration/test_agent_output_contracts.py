@@ -402,20 +402,31 @@ def test_pydantic_state_rejects_malformed_audit_workflow_id() -> None:
         ScopeDefinerState(audit_workflow_id="not-a-uuid")
 
 
-def test_pydantic_state_auto_generates_audit_workflow_id() -> None:
-    """``ScopeDefinerState()`` auto-generates a UUID via ``default_factory``.
+def test_pydantic_state_requires_audit_workflow_id() -> None:
+    """``ScopeDefinerState()`` raises ``ValidationError`` when
+    ``audit_workflow_id`` is omitted (backlog #1 closed 2026-05-09).
 
-    Discrimination guard for Decision 7a/8a's "UUID typed, never None"
-    contract — combined with the pragmatic ``default_factory=uuid4``
-    that keeps existing agent flows working without threading an
-    explicit audit_workflow_id from caller → State.
+    Pre-D1 contract: the field had ``Field(default_factory=uuid4)`` so
+    ``ScopeDefinerState()`` auto-generated a UUID. That was a
+    transition mechanism while agent flows were retrofitted to thread
+    the field through the orchestrator (PR #58), per-agent input_data
+    (PR #62), and caller fixtures (PR #65).
 
-    A future sub-shard may tighten the contract to "caller MUST provide
-    audit_workflow_id" once all agent flows are updated. At that point
-    this test should be flipped back to expect ``ValidationError``.
+    Post-D1: the field is plain ``UUID`` (required, no default). The
+    LangGraph channel-reducer bug (every Schema(**channel_dict)
+    reconstruction fired default_factory afresh, breaking the audit
+    chain across nodes) is fixed by construction — no fresh UUID can
+    be minted because there's no factory.
+
+    This test pins the new contract: caller MUST provide
+    audit_workflow_id; missing the field fails loud at State
+    construction.
     """
-    state = ScopeDefinerState()
-    assert isinstance(state.audit_workflow_id, UUID), (
-        "ScopeDefinerState() must auto-generate a UUID via default_factory; "
-        f"got {type(state.audit_workflow_id).__name__}"
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        ScopeDefinerState()
+    assert "audit_workflow_id" in str(exc_info.value), (
+        "ValidationError on missing audit_workflow_id should mention the field "
+        f"name; got: {exc_info.value}"
     )

@@ -13,8 +13,6 @@ from typing import Any, Dict, Mapping, Optional
 
 import pandas as pd
 
-from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
-
 # Use direct module imports to avoid circular import with src.repositories
 from src.repositories.data_splitter import get_data_splitter
 from src.repositories.ml_data_loader import get_ml_data_loader
@@ -26,7 +24,6 @@ from ..state import DataPreparerState
 logger = logging.getLogger(__name__)
 
 
-@preserve_audit_workflow_id
 async def load_data(state: DataPreparerState) -> Dict[str, Any]:
     """Load and split data for ML training.
 

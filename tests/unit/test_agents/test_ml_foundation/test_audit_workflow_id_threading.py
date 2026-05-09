@@ -1,10 +1,12 @@
-"""Per-agent audit_workflow_id threading tests (sub-shard D1.2).
+"""Per-agent audit_workflow_id threading tests (sub-shard D1.2 + backlog #1).
 
 Sub-shard D1.2 threads ``audit_workflow_id`` from caller-supplied
-``input_data`` into each agent's ``initial_state`` dict literal.
-With ``default_factory=uuid4`` still present on each State (D1.4 removes it),
-``None`` from ``.get()`` still triggers the default — so this PR is a
-backward-compat-preserving precursor to D1.4.
+``input_data`` into each agent's ``initial_state`` dict literal. Backlog
+item #1 (closed 2026-05-09) tightened the State contract from
+``Field(default_factory=uuid4)`` to plain ``UUID`` (required, no
+default), so the conditional-spread pattern the threading guards is now
+load-bearing: missing ``audit_workflow_id`` raises ``ValidationError``
+at State construction, not silently defaults to a fresh UUID.
 
 These tests:
     1. STATIC — every agent.py contains ``"audit_workflow_id":
@@ -16,6 +18,8 @@ These tests:
     3. RUNTIME — model_trainer's ``_build_fold_input`` preserves
        audit_workflow_id across fold recursion (the W3-lite repeated-fold
        site flagged in the D1 investigation).
+    4. CONTRACT — every agent State raises ValidationError on
+       construction without ``audit_workflow_id`` (backlog #1 contract).
 """
 
 from __future__ import annotations
@@ -82,18 +86,17 @@ def test_observability_connector_threads_audit_workflow_id_in_both_run_paths() -
     )
 
 
-def test_audit_workflow_id_threading_skips_none_to_let_default_factory_fire() -> None:
-    """D1.2 runtime: when input_data lacks audit_workflow_id, the agent's
-    State construction should NOT include the key (so ``default_factory``
-    fires) rather than passing ``None`` (which the ``coerce_uuid``
-    validator rejects).
+def test_audit_workflow_id_validator_rejects_none() -> None:
+    """The ``audit_workflow_id_validator`` rejects ``None`` to keep the
+    contract explicit. This is unchanged by backlog #1 (the validator
+    rejected None pre- and post-D1; what backlog #1 changed is what
+    happens when the key is OMITTED — see
+    ``test_audit_workflow_id_required_on_all_agent_states`` below).
 
-    This is a regression guard for the bug found in D1.2's first attempt
-    where ``initial_state["audit_workflow_id"] = None`` raised
-    ``ValidationError`` from the audit_workflow_id_validator's
-    ``coerce_uuid`` helper at ``_pydantic_utils.py:216-218``.
+    Regression guard for the bug found in D1.2's first attempt where
+    ``initial_state["audit_workflow_id"] = None`` raised
+    ``ValidationError`` from the validator's ``coerce_uuid`` helper.
     """
-    # Confirm the validator's None-rejecting contract is still in place.
     import pytest
 
     from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState
@@ -101,14 +104,53 @@ def test_audit_workflow_id_threading_skips_none_to_let_default_factory_fire() ->
     with pytest.raises(Exception) as exc_info:
         ScopeDefinerState(audit_workflow_id=None)  # type: ignore[arg-type]
     assert "UUID or str" in str(exc_info.value) or "NoneType" in str(exc_info.value), (
-        "audit_workflow_id_validator should reject None to keep the contract "
-        "explicit; if this changes, D1.2's spread pattern can be simplified "
-        "back to ``input_data.get('audit_workflow_id')``."
+        "audit_workflow_id_validator should reject None to keep the contract explicit."
     )
 
-    # And confirm the omit-key pattern works (default_factory fires).
-    state = ScopeDefinerState()
-    assert state.audit_workflow_id is not None  # default_factory fired
+
+def test_audit_workflow_id_required_on_all_agent_states() -> None:
+    """Backlog #1 contract (closed 2026-05-09): every ml_foundation agent
+    State requires ``audit_workflow_id`` at construction.
+
+    Pre-D1: ``Field(default_factory=uuid4)`` silently minted a fresh UUID
+    when the caller omitted the key, masking missing-threading bugs and
+    breaking the audit chain across LangGraph nodes (every Schema
+    coercion fired the default_factory afresh — codex review B1, 2026-05-05).
+
+    Post-D1: the field is plain ``UUID`` (no default). Constructing a
+    State without ``audit_workflow_id`` raises ``ValidationError``,
+    making missing-threading bugs fail loudly at construction rather
+    than silently masking the audit-chain break.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from src.agents.ml_foundation.data_preparer.state import DataPreparerState
+    from src.agents.ml_foundation.feature_analyzer.state import FeatureAnalyzerState
+    from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
+    from src.agents.ml_foundation.model_selector.state import ModelSelectorState
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+    from src.agents.ml_foundation.observability_connector.state import (
+        ObservabilityConnectorState,
+    )
+    from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState
+
+    state_classes = [
+        ScopeDefinerState,
+        DataPreparerState,
+        FeatureAnalyzerState,
+        ModelSelectorState,
+        ModelTrainerState,
+        ModelDeployerState,
+        ObservabilityConnectorState,
+    ]
+    for cls in state_classes:
+        with pytest.raises(ValidationError) as exc_info:
+            cls()
+        assert "audit_workflow_id" in str(exc_info.value), (
+            f"{cls.__name__} ValidationError on missing audit_workflow_id "
+            f"should mention the field name; got: {exc_info.value}"
+        )
 
 
 def test_model_trainer_build_fold_input_preserves_audit_workflow_id() -> None:

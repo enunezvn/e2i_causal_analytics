@@ -15,8 +15,6 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
-from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
-
 # 1B-M-4: temporal helpers (constants, detector, generator, split-marker
 # round-trip) live in ``_temporal.py``. Re-export here so the existing public
 # import path ``feature_generator._SPLIT_MARKER_COL`` etc. keeps working for
@@ -42,7 +40,6 @@ DOMAIN_FEATURES = "domain"
 AGGREGATE_FEATURES = "aggregate"
 
 
-@preserve_audit_workflow_id
 async def generate_features(state: Dict[str, Any]) -> Dict[str, Any]:
     """Generate engineered features from prepared data.
 

@@ -63,8 +63,7 @@ the Decision 8a "Optional[T]=None as default" convention.
 
 from __future__ import annotations
 
-import functools
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -299,68 +298,6 @@ def coerce_uuid(value: Any) -> UUID:
     raise ValueError(
         f"audit_workflow_id must be UUID or str, got {type(value).__name__}: {value!r}"
     )
-
-
-def preserve_audit_workflow_id(
-    node_fn: Callable[..., Awaitable[dict[str, Any]]],
-) -> Callable[..., Awaitable[dict[str, Any]]]:
-    """Decorator for LangGraph entry-node functions: ensure the wrapped
-    node returns ``audit_workflow_id`` in its update dict, so LangGraph's
-    channel reducer pins the value into channel state.
-
-    Fixes codex review BLOCKING B1 (2026-05-05). Empirically verified:
-
-    - When ``audit_workflow_id`` is provided in initial state at
-      ``graph.ainvoke(initial_state)``, it propagates through all node
-      coercions (LangGraph treats it as a "set" channel value).
-    - When ``audit_workflow_id`` is set ONLY by ``Field(default_factory=uuid4)``
-      on the State class — i.e., the caller didn't provide one — the
-      value is NOT preserved across nodes. Each Schema(**channel_dict)
-      reconstruction inside LangGraph fires the default_factory again,
-      minting a fresh UUID. Result: every node sees a different
-      ``audit_workflow_id`` and the audit chain is broken WITHIN a single
-      agent's graph execution.
-
-    Mechanism: by having the entry node explicitly return ``audit_workflow_id``,
-    the value gets pinned into the channel state after node 0. Every
-    subsequent node then sees the same value (LangGraph reducer treats
-    the explicit return as the channel's current value).
-
-    Apply to each agent's graph entry node:
-
-    .. code-block:: python
-
-        from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
-
-        @preserve_audit_workflow_id
-        async def classify_problem(state: ScopeDefinerState) -> Dict[str, Any]:
-            return {"inferred_problem_type": ...}
-
-    The decorator merges ``{"audit_workflow_id": state.audit_workflow_id}``
-    into whatever the wrapped function returns (only when the wrapped
-    function does NOT already include the key — preserves explicit
-    overrides).
-
-    Long-term fix is sub-shard D1 (caller MUST provide audit_workflow_id),
-    after which Field(default_factory=uuid4) is dropped and this
-    decorator becomes redundant. Until then, this decorator is the
-    surgical mitigation.
-    """
-
-    @functools.wraps(node_fn)
-    async def wrapper(state: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        result = await node_fn(state, *args, **kwargs)
-        if isinstance(result, dict) and "audit_workflow_id" not in result:
-            # state may be a pydantic State instance (BaseAgentSchema
-            # subclass with the dict-like shim) or a plain dict
-            # (some node signatures annotate Dict[str, Any]). Both
-            # support .get().
-            audit_id = state.get("audit_workflow_id") if hasattr(state, "get") else None
-            if audit_id is not None:
-                result["audit_workflow_id"] = audit_id
-        return result
-
-    return wrapper
 
 
 def audit_workflow_id_validator() -> Callable[..., Any]:
