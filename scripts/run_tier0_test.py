@@ -6269,6 +6269,12 @@ def main():
     CONFIG.min_samples_per_split = args.min_samples_per_split
     if args.brand:
         CONFIG.brand = args.brand
+    elif args.regime in _SCENARIO_REGIME_TO_NAME:
+        # Without this auto-sync, scenario_b/c write df["brand"]=Fabhalta/Remibrutinib
+        # while CONFIG.brand stays at its default (Kisqali), creating data↔metadata
+        # divergence in MLflow tags, cohort_name, scope-spec problem description,
+        # and state["brand"] readers throughout the runner.
+        CONFIG.brand = _SCENARIO_REGIME_TO_BRAND[args.regime]
     if args.target:
         CONFIG.target_outcome = args.target
     if args.indication:
