@@ -57,6 +57,18 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         expected_dtypes = scope_spec.get("expected_dtypes", {})
         unique_columns = scope_spec.get("unique_columns", [])
         max_staleness_days = scope_spec.get("max_staleness_days", 30)
+        # Cols the scope marks as non-features (IDs, audit timestamps,
+        # provenance metadata, always-null placeholders) get filtered out
+        # of the global completeness check. Otherwise always-null
+        # metadata cols (e.g., CSU's ``risk_score``, ``state``,
+        # ``data_lag_hours``) drag the score below 0.90 and block QC for
+        # reasons unrelated to the actual feature surface (backlog #13).
+        # Honors both the canonical ``excluded_features`` and the legacy
+        # ``exclude_columns`` aliases consumed by ``data_transformer``.
+        excluded_features = (
+            list(scope_spec.get("excluded_features", []))
+            + list(scope_spec.get("exclude_columns", []))
+        )
 
         # Initialize results
         expectation_results = []
@@ -66,7 +78,9 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         blocking_issues = []
 
         # === COMPLETENESS CHECKS ===
-        completeness_score, completeness_results = _check_completeness(train_df, required_columns)
+        completeness_score, completeness_results = _check_completeness(
+            train_df, required_columns, excluded_features=excluded_features
+        )
         expectation_results.extend(completeness_results)
         for result in completeness_results:
             if not result["success"]:
@@ -189,22 +203,36 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
 
 
 def _check_completeness(
-    df: pd.DataFrame, required_columns: List[str]
+    df: pd.DataFrame,
+    required_columns: List[str],
+    *,
+    excluded_features: Optional[List[str]] = None,
 ) -> tuple[float, List[Dict[str, Any]]]:
     """Check for missing/null values.
 
     Args:
         df: DataFrame to check
         required_columns: Columns that must have no nulls
+        excluded_features: Cols the scope marks as non-features (IDs,
+            audit timestamps, provenance metadata, always-null
+            placeholders). Filtered out of both the global
+            completeness ratio and the per-column null-percentage
+            warnings (backlog #13). Required columns are always
+            checked even if accidentally listed here.
 
     Returns:
         Tuple of (score, expectation_results)
     """
     results = []
+    excluded_set: set[str] = set(excluded_features or [])
+    # Required columns always get checked; never silently excluded.
+    excluded_set -= set(required_columns)
+    cols_for_completeness = [c for c in df.columns if c not in excluded_set]
+    df_for_completeness = df[cols_for_completeness] if cols_for_completeness else df.iloc[:0, :0]
 
     # Overall null percentage
-    total_cells = df.size
-    null_cells = df.isnull().sum().sum()
+    total_cells = df_for_completeness.size
+    null_cells = df_for_completeness.isnull().sum().sum()
     overall_completeness = 1 - (null_cells / total_cells) if total_cells > 0 else 0
 
     results.append(
@@ -212,9 +240,10 @@ def _check_completeness(
             "expectation_type": "expect_table_completeness",
             "success": overall_completeness >= 0.90,
             "result": {
-                "total_cells": total_cells,
+                "total_cells": int(total_cells),
                 "null_cells": int(null_cells),
                 "completeness_ratio": overall_completeness,
+                "excluded_features_count": len(excluded_set),
             },
         }
     )
@@ -240,23 +269,24 @@ def _check_completeness(
                 }
             )
 
-    # Per-column null percentages for non-required columns
+    # Per-column null percentages for non-required, non-excluded columns
     for col in df.columns:
-        if col not in required_columns:
-            null_pct = df[col].isnull().mean()
-            if null_pct > 0.1:  # More than 10% nulls
-                results.append(
-                    {
-                        "expectation_type": "expect_column_null_percentage",
-                        "column": col,
-                        "success": False,
-                        "severity": "warning",
-                        "result": {
-                            "null_percentage": null_pct,
-                            "threshold": 0.10,
-                        },
-                    }
-                )
+        if col in required_columns or col in excluded_set:
+            continue
+        null_pct = df[col].isnull().mean()
+        if null_pct > 0.1:  # More than 10% nulls
+            results.append(
+                {
+                    "expectation_type": "expect_column_null_percentage",
+                    "column": col,
+                    "success": False,
+                    "severity": "warning",
+                    "result": {
+                        "null_percentage": null_pct,
+                        "threshold": 0.10,
+                    },
+                }
+            )
 
     return overall_completeness, results
 
