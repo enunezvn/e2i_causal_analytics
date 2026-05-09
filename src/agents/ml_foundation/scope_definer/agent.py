@@ -144,9 +144,11 @@ class ScopeDefinerAgent:
 
         # Construct initial state
         initial_state: ScopeDefinerState = {
-            # D1.2: thread caller-provided audit_workflow_id; falls back to
-            # State.audit_workflow_id default_factory=uuid4 when None (D1.4
-            # will tighten to required-no-default).
+            # D1.2: thread caller-provided audit_workflow_id. Backlog #1
+            # (closed 2026-05-09) tightened the State contract from
+            # ``Field(default_factory=uuid4)`` to plain ``UUID`` (required,
+            # no default); missing UUID now raises ValidationError at State
+            # construction (fail-loud).
             **(
                 {"audit_workflow_id": input_data["audit_workflow_id"]}
                 if input_data.get("audit_workflow_id") is not None

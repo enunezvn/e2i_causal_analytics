@@ -5,10 +5,7 @@ This module validates that data quality checks passed before training.
 
 from typing import Any, Dict
 
-from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
 
-
-@preserve_audit_workflow_id
 async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
     """Verify QC gate passed before allowing training.
 

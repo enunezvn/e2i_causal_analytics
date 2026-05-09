@@ -219,7 +219,9 @@ class ModelTrainerAgent:
         # Construct initial state
         initial_state: ModelTrainerState = {
             # D1.2: thread caller-provided audit_workflow_id (see scope_definer
-            # for the rationale); falls back to State default_factory when None.
+            # for the rationale). Backlog #1 (closed 2026-05-09) tightened the
+            # State to required-no-default; missing UUID now raises
+            # ValidationError at State construction (fail-loud).
             **(
                 {"audit_workflow_id": input_data["audit_workflow_id"]}
                 if input_data.get("audit_workflow_id") is not None

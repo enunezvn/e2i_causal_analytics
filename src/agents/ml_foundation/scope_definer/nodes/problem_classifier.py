@@ -6,10 +6,7 @@ This module infers ML problem type from business objectives.
 import re
 from typing import Any, Dict, Literal
 
-from src.agents.ml_foundation._pydantic_utils import preserve_audit_workflow_id
 
-
-@preserve_audit_workflow_id
 async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
     """Classify ML problem type from business objective.
 
