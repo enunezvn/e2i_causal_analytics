@@ -279,7 +279,10 @@ class ObservabilityConnectorAgent:
             result["error"] = error
             result["error_type"] = error_type
 
-        # Emit span for tracking
+        # Emit span for tracking. If the caller threaded audit_workflow_id
+        # through the observability context, preserve it so the LLM-call
+        # span lands on the same audit chain as the parent workflow.
+        # Otherwise generate a fresh UUID (pre-D1 default_factory behavior).
         if context.get("sampled", True):
             event = {
                 "span_id": span_id,
@@ -292,8 +295,12 @@ class ObservabilityConnectorAgent:
                 "output_tokens": output_tokens,
                 "tokens_used": total_tokens,
             }
+            ctx_audit_id = context.get("audit_workflow_id")
             await self.graph.ainvoke(
-                {"events_to_log": [event], "audit_workflow_id": uuid4()}
+                {
+                    "events_to_log": [event],
+                    "audit_workflow_id": ctx_audit_id if ctx_audit_id is not None else uuid4(),
+                }
             )
 
         return result
@@ -469,9 +476,17 @@ class ObservabilityConnectorAgent:
                 "output_tokens": getattr(span, "output_tokens", None),
             }
 
-            # Execute workflow to emit span
+            # Execute workflow to emit span. If the Span carried an
+            # audit_workflow_id from the caller's context (set via
+            # ``span.audit_workflow_id = ...`` before emission), preserve
+            # it so the span lands on the parent workflow's audit chain.
+            # Otherwise generate a fresh UUID (pre-D1 default_factory behavior).
+            span_audit_id = getattr(span, "audit_workflow_id", None)
             await self.graph.ainvoke(
-                {"events_to_log": [event], "audit_workflow_id": uuid4()}
+                {
+                    "events_to_log": [event],
+                    "audit_workflow_id": span_audit_id if span_audit_id is not None else uuid4(),
+                }
             )
 
         except Exception as e:
