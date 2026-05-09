@@ -29,7 +29,7 @@ for the rename rationale.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import AliasChoices, Field
 
@@ -355,10 +355,9 @@ class ModelTrainerState(BaseAgentSchema):
     error_type: Optional[str] = None
 
     # Audit chain — Decision 7a: typed as UUID with str↔UUID coercion via the
-    # validator factory. ``default_factory=uuid4`` matches scope_definer +
-    # data_preparer convention so existing agent flows that construct
-    # ModelTrainerState as a dict literal without audit_workflow_id keep
-    # working. A future sub-shard tightens to "caller MUST provide".
-    audit_workflow_id: UUID = Field(default_factory=uuid4)
+    # validator factory. Required: caller MUST provide ``audit_workflow_id``
+    # (backlog #1 tightening landed 2026-05-09). All callers thread the
+    # field explicitly per PRs #58 / #62 / #65.
+    audit_workflow_id: UUID
 
     _validate_audit_id = audit_workflow_id_validator()

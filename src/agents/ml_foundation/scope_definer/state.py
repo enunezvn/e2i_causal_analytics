@@ -27,9 +27,7 @@ consumer migration is complete.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
-from uuid import UUID, uuid4
-
-from pydantic import Field
+from uuid import UUID
 
 from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
@@ -173,14 +171,12 @@ class ScopeDefinerState(BaseAgentSchema):
     # coercion for checkpoint-replay JSON-restore compat via the validator
     # factory. Decision 8a explicit override: NOT Optional[UUID]=None.
     #
-    # ``default_factory=uuid4`` means a fresh UUID is generated when the
-    # caller does not provide one. Today's agent flows do NOT thread an
-    # explicit audit_workflow_id from caller → State (the TypedDict
-    # ``total=False`` semantics made the field absent at runtime). Auto-
-    # generation keeps backward-compat: every State has a UUID even if the
-    # caller didn't provide one. A future sub-shard can tighten the contract
-    # to "caller MUST provide audit_workflow_id" once all agent flows are
-    # updated to thread it through.
-    audit_workflow_id: UUID = Field(default_factory=uuid4)
+    # Required: caller MUST provide ``audit_workflow_id`` (backlog #1
+    # tightening landed 2026-05-09). The previous ``default_factory=uuid4``
+    # was a transition mechanism — agent flows now thread the field
+    # explicitly through the orchestrator (PR #58), per-agent input_data
+    # (PR #62), and caller fixtures (PR #65). Pydantic enforces presence
+    # at construction; missing the field raises ValidationError.
+    audit_workflow_id: UUID
 
     _validate_audit_id = audit_workflow_id_validator()

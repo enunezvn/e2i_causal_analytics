@@ -27,9 +27,7 @@ the agent output dict; wiring is left to a follow-up sub-shard.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Union
-from uuid import UUID, uuid4
-
-from pydantic import Field
+from uuid import UUID
 
 from src.agents.ml_foundation._pydantic_utils import (
     BaseAgentSchema,
@@ -206,10 +204,11 @@ class DataPreparerState(BaseAgentSchema):
     # coercion for checkpoint-replay JSON-restore compat via the validator
     # factory. Decision 8a explicit override: NOT Optional[UUID]=None.
     #
-    # ``default_factory=uuid4`` matches the scope_definer convention so
-    # existing agent flows that construct DataPreparerState as a dict
-    # literal without audit_workflow_id keep working. A future sub-shard
-    # can tighten to "caller MUST provide audit_workflow_id".
-    audit_workflow_id: UUID = Field(default_factory=uuid4)
+    # Required: caller MUST provide ``audit_workflow_id`` (backlog #1
+    # tightening landed 2026-05-09). The previous ``default_factory=uuid4``
+    # was a transition mechanism for dict-literal construction without
+    # threading the field; all callers (orchestrator + per-agent + caller
+    # fixtures) now thread it explicitly per PRs #58 / #62 / #65.
+    audit_workflow_id: UUID
 
     _validate_audit_id = audit_workflow_id_validator()
