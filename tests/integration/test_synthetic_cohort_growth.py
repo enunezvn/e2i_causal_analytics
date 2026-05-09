@@ -155,7 +155,8 @@ def _run_tier0_e2e(
         f"TIER0_E2E_JSON_OUT artifact missing at {json_out}; runner produced no JSON."
     )
 
-    return json.loads(json_out.read_text())
+    artifact: Dict[str, Any] = json.loads(json_out.read_text())
+    return artifact
 
 
 def _assert_scenario_metrics(
