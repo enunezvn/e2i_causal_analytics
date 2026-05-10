@@ -240,6 +240,25 @@ def test_csu_val_auc_pinned_in_honest_band(
     Below 0.62 → Layer 1 manifest may be over-aggressive (a useful
     feature got dropped). Above 0.68 → residual leakage may not be
     fully caught. Either is a regression.
+
+    Codex pass-1 MED-10 decoupling
+    ------------------------------
+    This test asserts the NUMERICAL TOLERANCE (AUC ∈ [0.62, 0.68]).
+    The VERDICT PIN (EXACT match to ``CSU_EXPECTED_DEPLOYER_VERDICT``)
+    is in ``test_csu_deployer_verdict_unchanged``. The two gates are
+    decoupled because:
+      - The verdict label depends on AUC + recall + precision (per
+        ``_compute_verdict``); the verdict can shift even within the
+        AUC band if recall drops below 0.3.
+      - The AUC band is the seed-to-seed noise floor; verdict
+        depends on additional metrics this band does not capture.
+    A regression that shifts recall while AUC stays in-band fires
+    only the verdict gate; a regression that shifts AUC out-of-band
+    fires this gate (and likely also the verdict gate).
+
+    Numerical tolerances documented in
+    ``docs/calibration/g1_optum_baseline_20260510.md`` (CSU companion
+    table).
     """
     val_metrics = csu_negative_control_artifact.get("validation_metrics") or {}
     val_auc = val_metrics.get("roc_auc")
