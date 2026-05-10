@@ -28,6 +28,7 @@ from .deployment_planner import (
 )
 from .health_checker import check_health
 from .registry_manager import (
+    compute_deployer_input_metrics,
     promote_stage,
     register_model,
     validate_promotion,
@@ -45,6 +46,7 @@ __all__ = [
     "register_model",
     "validate_promotion",
     "promote_stage",
+    "compute_deployer_input_metrics",
     # Deployment
     "package_model",
     "deploy_to_endpoint",
