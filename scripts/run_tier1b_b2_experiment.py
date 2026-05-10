@@ -163,6 +163,15 @@ class CohortSpec:
     (different converter regimes produce different parquets there),
     so a label-only refusal can be bypassed by writing the relaxed
     n=1697 parquet under the default label.
+
+    HIGH-1 fix (iter-3): ``manifest_source`` declares the data source
+    string used to look up Layer-1 ``declared_safe`` contracts in the
+    ``MANIFEST_SOURCES`` registry. Each cohort's manifest is
+    declarative — Optum cohorts use ``"optum"``, CSU cohorts use
+    ``"csu"``. The harness wires this into ``run_seed`` so the
+    HBLP-relaxed arm sees a real Layer-1 lookup (not the all-False
+    default), which is the load-bearing precondition for the HIGH-1
+    baseline-vs-HBLP retention contrast.
     """
 
     label: str
@@ -170,6 +179,7 @@ class CohortSpec:
     target: str
     expected_n_exact: int
     data_snooped: bool
+    manifest_source: Optional[str] = None
 
 
 COHORTS: Mapping[str, CohortSpec] = {
@@ -178,12 +188,15 @@ COHORTS: Mapping[str, CohortSpec] = {
     # converter ran with non-default parameters or the cohort was
     # rebuilt — either way, the data is no longer the cohort the
     # pre-spec memo locked.
+    # HIGH-1 (iter-3): manifest_source="optum" wires the Layer-1
+    # declared-safe lookup against the Optum manifest registry.
     "optum_initiation_default": CohortSpec(
         label="optum_initiation_default",
         data_dir="data/rwd/optum/initiation",
         target="treatment_initiated",
         expected_n_exact=1294,
         data_snooped=False,
+        manifest_source="optum",
     ),
     # HIGH-7: n=1697 is the relaxed-window cohort (PRE=180/POST=90),
     # marked data_snooped=true. Available behind --allow-data-snooped
@@ -194,6 +207,7 @@ COHORTS: Mapping[str, CohortSpec] = {
         target="treatment_initiated",
         expected_n_exact=1697,
         data_snooped=True,
+        manifest_source="optum",
     ),
 }
 
@@ -1260,21 +1274,52 @@ def _hash_artifacts(
     return out
 
 
+def _resolve_load_bearing_flag(load_bearing: Optional[bool]) -> bool:
+    """Return whether this run is load-bearing (default: True in CI).
+
+    HIGH-1 (iter-3): a load-bearing run requires real manifest-backed
+    Layer-1 declared-safe coverage; an empty lookup is a hard refusal.
+    Local diagnostic runs (e.g., when a developer has no cohort on
+    disk and is just exercising the harness) can opt out via
+    ``--no-fail-on-empty-declared-safe``, in which case ``load_bearing``
+    is False.
+    """
+    if load_bearing is not None:
+        return bool(load_bearing)
+    return os.environ.get("CI", "").lower() in ("true", "1", "yes")
+
+
 def run_experiment(
     cohort_label: str,
     *,
     project_root: Optional[Path] = None,
     seeds: Optional[Sequence[int]] = None,
+    layer_1_declared_safe_lookup: Optional[Mapping[str, bool]] = None,
+    load_bearing: Optional[bool] = None,
 ) -> ExperimentManifest:
     """Run the full G2 experiment for ``cohort_label`` and return the
     aggregated manifest. Caller is responsible for serialization +
     exit-code mapping.
+
+    HIGH-1 fix (iter-3): wires ``cohort.manifest_source`` through to
+    ``run_seed`` so the HBLP-relaxed arm sees a real Layer-1 lookup
+    sourced from ``MANIFEST_SOURCES``. For load-bearing runs (CI=true
+    OR explicit ``load_bearing=True``), an empty resolved lookup
+    (i.e. no manifest contract declared any feature ``declared_safe``)
+    is a HARD REFUSAL — the contrast between baseline and HBLP arms
+    would collapse to "same model twice", invalidating G2's metric.
+
+    The optional ``layer_1_declared_safe_lookup`` argument lets tests
+    inject a known divergent example without depending on a real
+    manifest. When supplied, the manifest-source resolution is
+    skipped (the explicit lookup IS the lookup).
     """
     if cohort_label not in COHORTS:
         raise KeyError(f"Unknown cohort_label={cohort_label!r}; valid: {sorted(COHORTS.keys())}")
     cohort = COHORTS[cohort_label]
     project_root = project_root or PROJECT_ROOT
     cohort_dir = project_root / cohort.data_dir
+    is_load_bearing = _resolve_load_bearing_flag(load_bearing)
     if not cohort_dir.exists():
         is_ci = os.environ.get("CI", "").lower() in ("true", "1", "yes")
         msg = (
@@ -1327,8 +1372,37 @@ def run_experiment(
 
     X, y = _build_features_and_target(df, cohort.target)
 
+    # HIGH-1 (iter-3) — resolve the Layer-1 declared-safe lookup via
+    # the cohort's manifest_source registry entry. For a load-bearing
+    # run, fail loudly when the resolved lookup has zero declared-safe
+    # features (the HBLP arm would collapse to baseline).
+    resolved_lookup = _resolve_layer_1_declared_safe_lookup(
+        list(X.columns),
+        manifest_source=cohort.manifest_source,
+        explicit_lookup=layer_1_declared_safe_lookup,
+    )
+    n_declared_safe = sum(1 for v in resolved_lookup.values() if v)
+    if is_load_bearing and layer_1_declared_safe_lookup is None and n_declared_safe == 0:
+        raise RuntimeError(
+            f"HIGH-1 hard fail: load-bearing G2 run for "
+            f"cohort_label={cohort.label!r} resolved ZERO Layer-1 "
+            f"declared-safe features against manifest_source="
+            f"{cohort.manifest_source!r}. Without a non-trivial "
+            "declared-safe map the HBLP arm cannot diverge from "
+            "baseline and the G2 contrast is meaningless. "
+            "Resolution: ensure the cohort's manifest_source has "
+            "declared-safe contracts (knowable_at in "
+            "{index_date, lookback_start_date, eligeff}) for at least "
+            "one numeric feature emitted by the converter; OR pass "
+            "an explicit layer_1_declared_safe_lookup; OR re-run with "
+            "load_bearing=False (diagnostic only)."
+        )
+
     seeds_to_run = tuple(seeds) if seeds is not None else G2_SEEDS
-    seed_results = [run_seed(X, y, seed=seed) for seed in seeds_to_run]
+    seed_results = [
+        run_seed(X, y, seed=seed, layer_1_declared_safe_lookup=resolved_lookup)
+        for seed in seeds_to_run
+    ]
 
     return build_manifest(
         cohort=cohort,
@@ -1361,6 +1435,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "pre-spec §2.2). Refuses otherwise."
         ),
     )
+    parser.add_argument(
+        "--no-fail-on-empty-declared-safe",
+        action="store_true",
+        help=(
+            "HIGH-1 (iter-3) escape hatch: bypass the load-bearing "
+            "declared-safe non-emptiness check. Diagnostic only — "
+            "DO NOT use for the load-bearing CI run; the HBLP arm "
+            "collapses to baseline when no manifest contracts apply."
+        ),
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
@@ -1375,7 +1459,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
 
-    manifest = run_experiment(args.cohort_label)
+    # HIGH-1 (iter-3): default load_bearing to None (auto-detect via
+    # CI env) unless the operator explicitly opts out via the flag.
+    load_bearing_flag: Optional[bool] = False if args.no_fail_on_empty_declared_safe else None
+    manifest = run_experiment(args.cohort_label, load_bearing=load_bearing_flag)
     payload = json.dumps(manifest.to_dict(), indent=2, sort_keys=True)
     print(payload)
     if args.manifest_out:

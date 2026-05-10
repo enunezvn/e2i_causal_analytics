@@ -823,3 +823,206 @@ class TestMain:
     def test_main_unknown_cohort_label_raises(self) -> None:
         with pytest.raises(SystemExit):
             H.main(["--cohort-label", "made_up_cohort"])
+
+
+# ---------------------------------------------------------------------------
+# HIGH-1 (iter-3) — production wiring: cohort.manifest_source threads into
+# run_experiment, the resolved Layer-1 lookup is non-trivial for Optum, and
+# load-bearing runs FAIL LOUDLY when no declared-safe features resolve.
+# ---------------------------------------------------------------------------
+
+
+class TestHigh1ProductionManifestWiring:
+    """Production-path tests — without test-only fixture injection — that
+    pin: (a) the cohort spec carries the correct manifest_source, (b) the
+    resolved lookup against the real Optum manifest is non-trivial, and
+    (c) run_experiment refuses to proceed on a load-bearing run with an
+    empty declared-safe lookup."""
+
+    def test_optum_default_cohort_declares_optum_manifest_source(self) -> None:
+        """Default cohort routes to the Optum manifest registry."""
+        assert H.COHORTS["optum_initiation_default"].manifest_source == "optum"
+
+    def test_optum_relaxed_cohort_declares_optum_manifest_source(self) -> None:
+        """Relaxed cohort also routes to Optum (same data dir)."""
+        assert H.COHORTS["optum_initiation_relaxed"].manifest_source == "optum"
+
+    def test_optum_manifest_resolves_nontrivial_declared_safe_lookup(self) -> None:
+        """Production-path resolution against the Optum manifest must
+        return a non-empty declared-safe map for typical numeric features
+        (charlson_score, elixhauser_score, months_since_first_dx, etc.).
+        These have ``knowable_at.reference="index_date"`` which is in
+        the pre-anchor refs set the harness uses.
+        """
+        feature_names = [
+            "charlson_score",
+            "elixhauser_score",
+            "months_since_first_dx",
+            "office_visits_total",
+            "unique_providers",
+        ]
+        out = H._resolve_layer_1_declared_safe_lookup(
+            feature_names,
+            manifest_source="optum",
+        )
+        # Every feature in this list has a manifest contract with
+        # knowable_at.reference="index_date", which IS in the pre-anchor
+        # refs set, so all should resolve declared_safe=True.
+        for f in feature_names:
+            assert out[f] is True, (
+                f"Optum manifest feature {f!r} expected declared_safe=True; "
+                f"got {out[f]!r}. The contract's knowable_at.reference must "
+                f"be one of {{index_date, lookback_start_date, eligeff}}."
+            )
+
+    def test_run_experiment_fails_loud_on_empty_declared_safe_lookup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """End-to-end HIGH-1: when the resolved Layer-1 declared-safe
+        lookup is empty (zero features declared safe), a load-bearing
+        run RAISES instead of silently proceeding with all-False (which
+        would collapse the HBLP arm to baseline)."""
+        cohort_dir = tmp_path / "data" / "rwd" / "optum" / "initiation"
+        cohort_dir.mkdir(parents=True)
+        n = 1294  # match cohort.expected_n_exact for the default cohort
+        df = pd.DataFrame(
+            {
+                "patient_id": list(range(n)),
+                "treatment_initiated": [i % 2 for i in range(n)],
+                # All feature names are NOT in the Optum manifest, so the
+                # resolved lookup will be all False.
+                "feature_unknown_a": [float(i) for i in range(n)],
+                "feature_unknown_b": [float(i) % 7 for i in range(n)],
+            }
+        )
+        df.to_parquet(cohort_dir / "e2i_ml_v3_patient_journeys.parquet")
+
+        def fake_load_patient_journeys(directory: Path) -> pd.DataFrame:
+            return df
+
+        monkeypatch.setattr(H, "_load_patient_journeys", fake_load_patient_journeys)
+
+        with pytest.raises(RuntimeError, match="HIGH-1 hard fail"):
+            H.run_experiment(
+                "optum_initiation_default",
+                project_root=tmp_path,
+                load_bearing=True,
+            )
+
+    def test_run_experiment_proceeds_when_optum_manifest_resolves_safe_features(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """End-to-end HIGH-1: when the patient_journeys frame includes
+        features that ARE in the Optum manifest with pre-anchor
+        ``knowable_at.reference``, the load-bearing run resolves a
+        non-trivial lookup and proceeds (does not raise HIGH-1 hard fail).
+
+        This is the production-path proof that test-only injection is
+        NOT required for the harness to see a non-trivial lookup.
+        """
+        cohort_dir = tmp_path / "data" / "rwd" / "optum" / "initiation"
+        cohort_dir.mkdir(parents=True)
+        n = 1294
+        rng = np.random.default_rng(0)
+        # Use feature names that ARE in the Optum manifest with
+        # knowable_at.reference="index_date".
+        df = pd.DataFrame(
+            {
+                "patient_id": list(range(n)),
+                "treatment_initiated": [i % 2 for i in range(n)],
+                "charlson_score": rng.normal(size=n),
+                "elixhauser_score": rng.normal(size=n),
+                "months_since_first_dx": rng.normal(size=n),
+                "office_visits_total": rng.normal(size=n),
+                "unique_providers": rng.normal(size=n),
+            }
+        )
+        df.to_parquet(cohort_dir / "e2i_ml_v3_patient_journeys.parquet")
+
+        def fake_load_patient_journeys(directory: Path) -> pd.DataFrame:
+            return df
+
+        monkeypatch.setattr(H, "_load_patient_journeys", fake_load_patient_journeys)
+
+        # Should not raise HIGH-1 — the resolved lookup is non-trivial.
+        manifest = H.run_experiment(
+            "optum_initiation_default",
+            project_root=tmp_path,
+            seeds=(42,),  # one seed is enough to prove the wiring path
+            load_bearing=True,
+        )
+        # Manifest is built; whether thresholds pass or not is not the
+        # point — what we're testing is the wiring did not raise.
+        assert manifest.cohort_label == "optum_initiation_default"
+        assert manifest.cohort_observed_n == n
+
+    def test_run_experiment_load_bearing_off_skips_high1_check(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When load_bearing=False (diagnostic run), the empty-lookup
+        check is skipped — the harness still emits a manifest but the
+        contrast is NOT load-bearing for G2."""
+        cohort_dir = tmp_path / "data" / "rwd" / "optum" / "initiation"
+        cohort_dir.mkdir(parents=True)
+        n = 1294
+        df = pd.DataFrame(
+            {
+                "patient_id": list(range(n)),
+                "treatment_initiated": [i % 2 for i in range(n)],
+                "feature_unknown_a": [float(i) for i in range(n)],
+                "feature_unknown_b": [float(i) % 7 for i in range(n)],
+            }
+        )
+        df.to_parquet(cohort_dir / "e2i_ml_v3_patient_journeys.parquet")
+
+        def fake_load_patient_journeys(directory: Path) -> pd.DataFrame:
+            return df
+
+        monkeypatch.setattr(H, "_load_patient_journeys", fake_load_patient_journeys)
+
+        # load_bearing=False: do NOT raise even though declared-safe is empty.
+        manifest = H.run_experiment(
+            "optum_initiation_default",
+            project_root=tmp_path,
+            seeds=(42,),
+            load_bearing=False,
+        )
+        assert manifest.cohort_label == "optum_initiation_default"
+
+    def test_run_experiment_explicit_lookup_bypasses_high1_check(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When the caller passes layer_1_declared_safe_lookup
+        explicitly (test-only injection), the manifest-source
+        resolution is bypassed AND the HIGH-1 empty-lookup gate is
+        bypassed (the caller has taken responsibility for the lookup)."""
+        cohort_dir = tmp_path / "data" / "rwd" / "optum" / "initiation"
+        cohort_dir.mkdir(parents=True)
+        n = 1294
+        df = pd.DataFrame(
+            {
+                "patient_id": list(range(n)),
+                "treatment_initiated": [i % 2 for i in range(n)],
+                # No features in manifest, BUT the caller supplied an
+                # explicit lookup (even if it is an empty dict, the
+                # bypass is intentional).
+                "feature_unknown": [float(i) for i in range(n)],
+            }
+        )
+        df.to_parquet(cohort_dir / "e2i_ml_v3_patient_journeys.parquet")
+
+        def fake_load_patient_journeys(directory: Path) -> pd.DataFrame:
+            return df
+
+        monkeypatch.setattr(H, "_load_patient_journeys", fake_load_patient_journeys)
+
+        manifest = H.run_experiment(
+            "optum_initiation_default",
+            project_root=tmp_path,
+            seeds=(42,),
+            layer_1_declared_safe_lookup={},
+            load_bearing=True,
+        )
+        # Should not raise — explicit (even-if-empty) lookup bypasses
+        # the production-path emptiness check.
+        assert manifest.cohort_label == "optum_initiation_default"
