@@ -243,6 +243,58 @@ class TestLineageAuditDeclaredPath:
         assert "MANIFEST_SOURCES" in result["rationale"]
         assert "audit declared-path" in result["rationale"]
 
+    def test_enrollment_reference_is_pre_anchor_per_plan_v4_g1(self) -> None:
+        """Plan v4 §2 G1: ``enrollment`` is a pre-anchor reference.
+
+        CSU and Optum manifests both declare demographic features
+        (``age_continuous``, ``gender``, ``plan_type``, etc.) as
+        ``knowable_at=enrollment``. ``KnowableAt.is_pre_or_at_index()``
+        treats enrollment as pre-or-at prediction time. The audit's
+        ``pre_anchor_refs`` set must include enrollment so the G1
+        lineage sweep does not flag every demographic feature as a
+        false-positive ``declared_path_valid=False``.
+        """
+        # CSU `age_continuous` is declared knowable_at=enrollment.
+        result = lineage_audit_declared_path("age_continuous", data_source="csu")
+        assert result["contract_found"] is True
+        assert result["knowable_at_reference"] == "enrollment"
+        assert result["declared_path_valid"] is True, (
+            "G1 lineage sweep would surface enrollment-anchored "
+            "demographics as false-positive failures without this fix."
+        )
+
+    def test_index_date_reference_is_pre_anchor(self) -> None:
+        """Sanity: ``index_date`` continues to pass after enrollment
+        was added to ``pre_anchor_refs``."""
+        # `journey_status` is declared post_index in the CSU manifest;
+        # find an `index_date`-anchored CSU feature instead.
+        from src.data.manifests import csu_contract_for
+
+        # Find any feature in CSU manifest with knowable_at.reference="index_date"
+        from src.data.manifests.csu_feature_manifest import CSU_FEATURES
+
+        index_date_feats = [c for c in CSU_FEATURES if c.knowable_at.reference == "index_date"]
+        assert index_date_feats, (
+            "CSU manifest unexpectedly has no index_date-anchored feature; "
+            "this test's setup invariant has shifted."
+        )
+        feat = index_date_feats[0]
+        result = lineage_audit_declared_path(feat.name, data_source="csu")
+        assert csu_contract_for(feat.name) is not None
+        assert result["contract_found"] is True
+        assert result["knowable_at_reference"] == "index_date"
+        assert result["declared_path_valid"] is True
+
+    def test_post_index_reference_is_not_pre_anchor(self) -> None:
+        """``post_index`` continues to fail the audit (the original
+        intent of ``pre_anchor_refs`` — enrollment being added did
+        not relax this)."""
+        # `journey_status` in CSU manifest is declared knowable_at=post_index.
+        result = lineage_audit_declared_path("journey_status", data_source="csu")
+        assert result["contract_found"] is True
+        assert result["knowable_at_reference"] == "post_index"
+        assert result["declared_path_valid"] is False
+
 
 # --------------------------------------------------------------------------- #
 # Plan v3 §3 Tier 1B step 3 — Leakage-injection regression smoke              #
