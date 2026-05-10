@@ -175,16 +175,17 @@ def _resolve_alias_targets(tree: ast.Module) -> set[str]:
                     aliases.add(alias.asname or alias.name)
         # Path 2: module-scope ``alias = hblp_classify`` assignments.
         elif isinstance(node, ast.Assign):
-            value = node.value
-            if isinstance(value, ast.Name) and value.id in aliases:
+            assign_value = node.value
+            if isinstance(assign_value, ast.Name) and assign_value.id in aliases:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         aliases.add(target.id)
         elif isinstance(node, ast.AnnAssign):
-            value = node.value
+            ann_value = node.value
             if (
-                isinstance(value, ast.Name)
-                and value.id in aliases
+                ann_value is not None
+                and isinstance(ann_value, ast.Name)
+                and ann_value.id in aliases
                 and isinstance(node.target, ast.Name)
             ):
                 aliases.add(node.target.id)
