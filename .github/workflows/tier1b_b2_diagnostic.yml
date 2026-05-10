@@ -1,0 +1,135 @@
+name: Tier 1B Gate B2 DIAGNOSTIC (NON-LOAD-BEARING)
+
+# Plan v4 Gate G2 — DIAGNOSTIC-ONLY workflow for the Tier 1B Gate B2
+# experiment. This workflow runs the same harness as the load-bearing
+# tier1b_b2_experiment.yml but:
+#   1. Uploads artifacts under a DIFFERENT name (g2-diagnostic-manifest)
+#      so the audit reviewer cannot confuse a diagnostic run with the
+#      load-bearing one.
+#   2. Allows operator opt-in to the snooped n=1697 cohort via the
+#      `allow_data_snooped` input (the load-bearing workflow has this
+#      hardcoded off).
+#   3. Does NOT enforce the first-attempted-run-is-load-bearing
+#      registry check (HIGH-5) — diagnostic runs are explicitly NOT
+#      load-bearing per pre-spec §2.2.
+#   4. Does NOT append to gate_history (MED-10) — only the
+#      load-bearing workflow's outcome enters the regulatory audit.
+#   5. Posts a LOUD non-load-bearing banner in the summary so the
+#      operator and any audit reader cannot confuse the diagnostic
+#      manifest with the load-bearing one.
+#
+# HIGH-4 fix (codex pass-1): removing workflow_dispatch from the
+# load-bearing workflow blocks the threshold-shopping path of "manual
+# dispatch against the snooped cohort". Diagnostic exploration is
+# preserved here behind a clearly-banner-marked separate workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cohort_label:
+        description: >-
+          Cohort identifier (DIAGNOSTIC ONLY — manifest produced by
+          this workflow is NOT load-bearing for the G2 acceptance
+          criterion).
+        required: false
+        default: 'optum_initiation_default'
+        type: choice
+        options:
+          - optum_initiation_default
+          - optum_initiation_relaxed
+      allow_data_snooped:
+        description: >-
+          Allow runs against data_snooped=true cohorts (informational
+          only). Per pre-spec §2.2, the n=1697 cohort is data-snooped
+          and is NEVER load-bearing.
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+env:
+  PYTHON_VERSION: '3.12'
+  PRE_SPEC_PATH: 'docs/specs/tier1b_b2_prespec_20260510.md'
+
+jobs:
+  g2-diagnostic:
+    name: G2 Diagnostic Run (NON-LOAD-BEARING)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: |
+          set -euo pipefail
+          pip install --upgrade pip
+          pip install -e .
+
+      - name: Diagnostic warning banner
+        run: |
+          echo "::warning::This is a DIAGNOSTIC G2 workflow. The manifest produced by this workflow is NOT load-bearing for the Gate G2 acceptance criterion. The load-bearing run is in tier1b_b2_experiment.yml on tag tier1b-b2-experiment-*."
+
+      - name: Resolve experiment inputs
+        id: inputs
+        run: |
+          set -euo pipefail
+          COHORT="${{ inputs.cohort_label }}"
+          ALLOW_SNOOPED="${{ inputs.allow_data_snooped }}"
+          echo "cohort=$COHORT" >> "$GITHUB_OUTPUT"
+          echo "allow_snooped=$ALLOW_SNOOPED" >> "$GITHUB_OUTPUT"
+
+      - name: Run experiment harness (diagnostic)
+        env:
+          CI: 'true'
+        run: |
+          set -euo pipefail
+          ARGS=(--cohort-label "${{ steps.inputs.outputs.cohort }}")
+          ARGS+=(--manifest-out g2_diagnostic_manifest.json)
+          if [ "${{ steps.inputs.outputs.allow_snooped }}" = "true" ]; then
+            ARGS+=(--allow-data-snooped)
+          fi
+          python scripts/run_tier1b_b2_experiment.py "${ARGS[@]}" \
+            | tee g2_diagnostic_stdout.log || true
+
+      - name: Upload diagnostic manifest as CI artifact (NON-LOAD-BEARING)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Different artifact name so audit reviewers cannot confuse
+          # a diagnostic with the load-bearing manifest.
+          name: g2-diagnostic-manifest
+          path: |
+            g2_diagnostic_manifest.json
+            g2_diagnostic_stdout.log
+          retention-days: 90
+
+      - name: Summary (NON-LOAD-BEARING banner)
+        if: always()
+        run: |
+          {
+            echo "## Gate G2 DIAGNOSTIC Run — NOT LOAD-BEARING"
+            echo ""
+            echo "> [!WARNING]"
+            echo "> The manifest produced by this workflow is **NOT load-bearing** for the Gate G2 acceptance criterion. The load-bearing run is in \`tier1b_b2_experiment.yml\` on tag \`tier1b-b2-experiment-*\`."
+            echo ""
+            echo "Per pre-spec §2.2, runs against the \`optum_initiation_relaxed\` (n=1697) cohort are explicitly marked \`data_snooped=true\` and cannot be load-bearing."
+            echo ""
+            if [ -f g2_diagnostic_manifest.json ]; then
+              echo '```json'
+              cat g2_diagnostic_manifest.json
+              echo '```'
+            else
+              echo "_No diagnostic manifest produced — see run logs._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
