@@ -180,3 +180,50 @@ def test_memo_in_repo_has_four_pinned_entries() -> None:
     # All four keys must be parseable (None or a real hash; the test
     # itself doesn't care which — that's _verify's job).
     assert set(parsed.keys()) == set(V.ARTIFACTS.keys())
+
+
+def test_committed_memo_has_no_placeholder_sha256_values() -> None:
+    """G5 codex pass-2 NEW MED 1 closure: the committed memo MUST have
+    real sha256 values pinned for all four cohort artifacts (no
+    ``TODO_PIN_AT_FIRST_GREEN_RUN`` placeholders in main).
+
+    The verifier script is the load-bearing CI gate; if any of the four
+    keys still parses to ``None`` (meaning the memo still has a
+    placeholder), the threshold-shopping defense is incomplete and the
+    cohort artifacts could drift between memo-lock and run without
+    detection.
+    """
+    memo_path = REPO_ROOT / "docs" / "specs" / "g5_coefficient_sensitivity_prespec_20260510.md"
+    memo_text = memo_path.read_text(encoding="utf-8")
+    parsed = V._parse_pinned_hashes(memo_text)
+    for key, value in parsed.items():
+        assert value is not None, (
+            f"Memo key {key!r} still has a TODO_PIN_AT_FIRST_GREEN_RUN "
+            f"placeholder. M1 closure requires all four cohort artifact "
+            f"hashes to be pinned. Run "
+            f"scripts/verify_g5_prespec_hashes.py --update on a fresh "
+            f"cohort and commit the result via a NEW pre-spec memo."
+        )
+        # Sanity: the value should be a 64-char lowercase hex string.
+        assert len(value) == 64, (
+            f"Memo key {key!r} has a malformed sha256 value of length "
+            f"{len(value)} (expected 64): {value!r}"
+        )
+        assert all(c in "0123456789abcdef" for c in value), (
+            f"Memo key {key!r} sha256 value contains non-hex chars: {value!r}"
+        )
+
+
+def test_verifier_main_is_callable_with_no_args() -> None:
+    """G5 codex pass-2 NEW MED 1 closure: the verifier script's
+    ``main()`` is the entry point CI invokes via
+    ``python scripts/verify_g5_prespec_hashes.py``. This test ensures
+    the function is importable + callable, completing the
+    "load-bearing" handshake (an unimported script is dead code; an
+    uncalled main is unreachable).
+
+    We invoke main([]) (no args = verify mode) and accept any exit code
+    (0 if hashes match, 1 if mismatch — both prove main runs end-to-end).
+    """
+    rc = V.main([])
+    assert rc in (0, 1, 2), f"Unexpected exit code from V.main([]): {rc!r}"
