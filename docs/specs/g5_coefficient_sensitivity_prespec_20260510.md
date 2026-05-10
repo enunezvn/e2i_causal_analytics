@@ -114,38 +114,34 @@ g5_dataset_hashes:
   # data/rwd/optum/initiation/e2i_ml_v3_patient_journeys.parquet
   optum_initiation_patient_journeys_parquet:
     path: "data/rwd/optum/initiation/e2i_ml_v3_patient_journeys.parquet"
-    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"  # set by verify_g5_prespec_hashes.py --update on a fresh cohort
+    sha256: "7e334ca26e64a7e42d317876c9eee58189aa756afd46c70ab8464474e1cb68cd"
   # data/rwd/csu/e2i_ml_v3_patient_journeys.json
   csu_patient_journeys_json:
     path: "data/rwd/csu/e2i_ml_v3_patient_journeys.json"
-    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+    sha256: "13652dac7d6da887d3e7084d622bc52eb743e02e815ca6e50955f9020a40a952"
   # data/rwd/optum/initiation/e2i_ml_v3_treatment_events.parquet
   optum_initiation_treatment_events_parquet:
     path: "data/rwd/optum/initiation/e2i_ml_v3_treatment_events.parquet"
-    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+    sha256: "2449d7fb460c71e506e526e699f84d76fee46e8d5cc82060fef3033e3bc9cf67"
   # data/rwd/csu/e2i_ml_v3_treatment_events.json
   csu_treatment_events_json:
     path: "data/rwd/csu/e2i_ml_v3_treatment_events.json"
-    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+    sha256: "36eb50a75eac2dffe5927892ce48319ded7002651fd765621605faad2e46c5ee"
 ```
 
-#### Why TODO_PIN_AT_FIRST_GREEN_RUN
+#### Hash pinning provenance
 
-The cohort artifacts are not present in this worktree at memo-lock
-time. The placeholder ``TODO_PIN_AT_FIRST_GREEN_RUN`` documents the
-protocol unambiguously: when the cohorts first land on disk and the
-integration test goes green, the operator runs:
+The four cohort artifacts referenced above are present on disk in
+this worktree as of 2026-05-10 (G5 iter-3 fix commit). The sha256
+hashes were computed via ``sha256sum`` on the exact file bytes and
+pinned into this memo in the same commit that closes M1.
 
-```bash
-python scripts/verify_g5_prespec_hashes.py --update
-```
-
-which writes the live sha256 values into THIS memo via a single
-in-place edit. The git diff for that commit MUST be reviewable by
-the threshold-shopping audit (the operator did not also edit
-thresholds in the same commit). Subsequent CI runs invoke
-``verify_g5_prespec_hashes.py`` (no flag) which re-computes hashes
-and fails on mismatch.
+Subsequent CI runs invoke ``scripts/verify_g5_prespec_hashes.py``
+(no flag) which re-computes live sha256 values for these artifacts
+and fails on mismatch. The script's ``--update`` flag is reserved
+for the operator-only path of pinning hashes when a NEW cohort lands
+on disk via a fresh ``g5_*_prespec_<date>.md`` memo (not in-place
+editing of this memo).
 
 The data-hash protocol's load-bearing property is that the committed
 hash AT THE PRE-SPEC SHA equals the hash AT THE EXPERIMENT SHA — i.e.,
