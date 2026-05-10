@@ -12,7 +12,20 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Literal, Optional, Tuple, cast
 
+from src.lifecycle import GateLifecycleState
+
 logger = logging.getLogger(__name__)
+
+
+# Plan v4 Gate N2 — lifecycle-state declarations for the two T2.6 advisory
+# helpers in this module. Both currently in ADVISORY: ``compute_deployer_
+# input_metrics`` (T2.6a) is pure compute; ``compute_advisory_denial_reasons``
+# (T2.6b) is shadow reporting only — neither mutates ``promotion_allowed``.
+# T2.6c (separate work) is the enforcement phase; transitions there require
+# a signed doc at ``docs/calibration/T26A_lifecycle_change_*.md`` /
+# ``docs/calibration/T26B_lifecycle_change_*.md`` per Gate N2 acceptance #3.
+LIFECYCLE_STATE_T26A: GateLifecycleState = GateLifecycleState.ADVISORY
+LIFECYCLE_STATE_T26B: GateLifecycleState = GateLifecycleState.ADVISORY
 
 
 # ============================================================================
