@@ -186,6 +186,13 @@ def optum_held_out_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "competitor",
         "--target",
         OPTUM_INITIATION_TARGET,
+        # Codex pass-1 LOW-11: pass --indication explicitly so the
+        # cohort target is unambiguous in the artifact metadata, not
+        # derived from a default. The
+        # test_optum_indication_recorded_in_artifact test below verifies
+        # the runner echoed this back.
+        "--indication",
+        "initiation",
         "--feature-manifest-source",
         "optum",
         "--hpo-trials",
@@ -348,6 +355,33 @@ def test_optum_baseline_artifact_present_and_complete() -> None:
         f"G1 MED-9: baseline artifact does not record "
         f"target={OPTUM_INITIATION_TARGET!r}. Constants in the test "
         f"file must match the artifact."
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.real_data
+@pytest.mark.timeout(2000)
+def test_optum_indication_recorded_in_artifact(
+    optum_held_out_artifact: dict,
+) -> None:
+    """Codex pass-1 LOW-11 (PR #137 v4 G1): runner artifact MUST
+    record the ``--indication initiation`` flag value.
+
+    The non-inferiority gate is specific to the initiation cohort.
+    A future regression where the runner is invoked with a different
+    indication (or without the flag, falling through to a default)
+    would silently void the gate's empirical anchor. This test
+    asserts the artifact carries the explicit indication value the
+    fixture commanded.
+    """
+    indication = optum_held_out_artifact.get("indication")
+    assert indication == "initiation", (
+        f"G1 LOW-11: expected indication='initiation' in artifact "
+        f"(passed via ``--indication initiation`` in the fixture's "
+        f"subprocess command), but got {indication!r}. The runner "
+        f"may have regressed in echoing CONFIG.indication into the "
+        f"TIER0_E2E_JSON_OUT artifact."
     )
 
 
