@@ -200,9 +200,7 @@ class TestEffectSizeVariance:
             }
         )
         # Outcome unrelated to constant_feat.
-        y = pd.Series(
-            (np.random.default_rng(0).uniform(size=n) > 0.5).astype(int)
-        )
+        y = pd.Series((np.random.default_rng(0).uniform(size=n) > 0.5).astype(int))
         recs = {"constant_feat": "drop_row_or_mean", "noise_feat": "drop_row_or_mean"}
 
         result = compute_coefficient_sensitivity(X, y, recs, seed=0)
@@ -210,10 +208,9 @@ class TestEffectSizeVariance:
         record = result["per_feature"]["constant_feat"]
         # Both coefs near zero → mean ≈ 0 → division by 0 must not yield
         # NaN; helper should return 0.0 when std == 0 too.
-        assert (
-            record["effect_size_variance"] == pytest.approx(0.0, abs=1e-9)
-            or record["effect_size_variance"] == float("inf")
-        )
+        assert record["effect_size_variance"] == pytest.approx(0.0, abs=1e-9) or record[
+            "effect_size_variance"
+        ] == float("inf")
 
 
 # --------------------------------------------------------------------------- #
@@ -390,9 +387,7 @@ class TestOmittedStrategies:
 class TestInputValidation:
     def test_empty_X_raises(self) -> None:
         with pytest.raises(ValueError, match="at least one column"):
-            compute_coefficient_sensitivity(
-                pd.DataFrame(), pd.Series([0, 1]), {}
-            )
+            compute_coefficient_sensitivity(pd.DataFrame(), pd.Series([0, 1]), {})
 
     def test_mismatched_lengths_raise(self) -> None:
         X = pd.DataFrame({"a": [1.0, 2.0, 3.0]})
@@ -403,9 +398,7 @@ class TestInputValidation:
     def test_no_overlap_between_recs_and_X_raises(self) -> None:
         X, y = _make_two_class_dataset(n=50, n_features=2, seed=1)
         with pytest.raises(ValueError, match="no overlap"):
-            compute_coefficient_sensitivity(
-                X, y, {"nonexistent_feature": "drop_row_or_mean"}
-            )
+            compute_coefficient_sensitivity(X, y, {"nonexistent_feature": "drop_row_or_mean"})
 
     def test_no_numeric_columns_raises(self) -> None:
         n = 50
@@ -416,6 +409,4 @@ class TestInputValidation:
         )
         y = pd.Series([0, 1] * 25)
         with pytest.raises(ValueError, match="no numeric columns"):
-            compute_coefficient_sensitivity(
-                X, y, {"string_feat": "drop_row_or_mean"}
-            )
+            compute_coefficient_sensitivity(X, y, {"string_feat": "drop_row_or_mean"})
