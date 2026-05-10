@@ -77,13 +77,25 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Resolve HEAD SHA
+      - name: Resolve HEAD + BASE SHA
         id: head-sha
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+            # codex HIGH-2: pass BASE_SHA to the validator. We resolve
+            # origin/main HEAD via the GitHub event payload (the SHA at
+            # PR-open time) so signoff existence + commit-field parsing +
+            # ancestry checks all run against the immutable base, not the
+            # mutable PR HEAD. This closes the merge-G1+G2-into-the-same-
+            # G3-PR bypass.
+            echo "base_sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
           else
             echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            # On push events to main, base==head: there's no PR context,
+            # the wiring is being committed directly. We still run the
+            # guard but with base_sha empty (validator falls back to
+            # PR-checkout reads).
+            echo "base_sha=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Fetch trusted validator from base ref (H3 mitigation)
@@ -120,12 +132,24 @@ jobs:
         env:
           REPO_ROOT: ${{ github.workspace }}
           HEAD_SHA: ${{ steps.head-sha.outputs.sha }}
+          BASE_SHA: ${{ steps.head-sha.outputs.base_sha }}
         run: |
           set -euo pipefail
           echo "::group::G3 wiring guard output"
+          # codex HIGH-1: pass --require-signature-registry-match so the
+          # signoff committer's email MUST appear in the N3 reviewer
+          # registry; the registry MUST be non-empty (template-stage
+          # registries fail-closed under this flag).
+          # codex HIGH-2: pass --base-sha when present so signoff
+          # existence + commit-field parsing + ancestry all run against
+          # the BASE ref (immutable at PR-open time), closing the merge-
+          # G1+G2-into-the-same-G3-PR bypass.
+          GUARD_ARGS=( --repo-root "$REPO_ROOT" --head-sha "$HEAD_SHA" --require-signature-registry-match )
+          if [ -n "${BASE_SHA:-}" ]; then
+            GUARD_ARGS+=( --base-sha "$BASE_SHA" )
+          fi
           python3 /tmp/governance/check_g3_wiring_guard.py \
-            --repo-root "$REPO_ROOT" \
-            --head-sha "$HEAD_SHA" 2>&1 | tee /tmp/governance/guard_output.txt
+            "${GUARD_ARGS[@]}" 2>&1 | tee /tmp/governance/guard_output.txt
           EXIT=${PIPESTATUS[0]}
           echo "::endgroup::"
           if [ "$EXIT" -ne 0 ]; then

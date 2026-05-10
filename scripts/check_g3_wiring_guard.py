@@ -134,42 +134,111 @@ class CheckResult:
 # --------------------------------------------------------------------------- #
 
 
+# Detection states for ``detect_hblp_wiring``. Per codex MED-7, missing /
+# unparseable target files are a HARD failure (NOT "guard inactive PASS"):
+# a determined developer could rename or delete the gated file to dodge
+# the AST scan. We surface ``scan_error`` as a distinct state and the
+# orchestrator treats it as a downstream-blocking failure.
+WIRING_ABSENT: str = "wiring_absent"
+WIRING_PRESENT: str = "wiring_present"
+SCAN_ERROR: str = "scan_error"
+
+
+def _resolve_alias_targets(tree: ast.Module) -> set[str]:
+    """Collect every module-scope name that points at ``hblp_classify``.
+
+    Tracks two alias paths a determined developer could use to dodge the
+    AST scan (codex HIGH-3):
+
+    * ``ImportFrom`` aliases:
+      ``from src.X import hblp_classify as classify_hblp``
+      → ``classify_hblp`` in returned set.
+
+    * Module-scope assignments:
+      ``classify_hblp = hblp_classify``
+      → ``classify_hblp`` in returned set.
+
+    The canonical name ``hblp_classify`` is always included so callers
+    that match against this set automatically catch the un-aliased form.
+    """
+
+    aliases: set[str] = {HBLP_CALL_NAME}
+    for node in ast.iter_child_nodes(tree):
+        # Path 1: ImportFrom aliases. The module path doesn't matter for
+        # the detection — we only need the local binding name. Re-imports
+        # like ``from .helpers import hblp_classify as fn`` and
+        # ``from src.x.y import hblp_classify`` (no alias) both bind a
+        # local name that calls the helper.
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == HBLP_CALL_NAME:
+                    aliases.add(alias.asname or alias.name)
+        # Path 2: module-scope ``alias = hblp_classify`` assignments.
+        elif isinstance(node, ast.Assign):
+            value = node.value
+            if isinstance(value, ast.Name) and value.id in aliases:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        aliases.add(target.id)
+        elif isinstance(node, ast.AnnAssign):
+            value = node.value
+            if (
+                isinstance(value, ast.Name)
+                and value.id in aliases
+                and isinstance(node.target, ast.Name)
+            ):
+                aliases.add(node.target.id)
+    return aliases
+
+
 def detect_hblp_wiring(source_path: Path) -> CheckResult:
     """AST-scan ``source_path`` for `hblp_classify` calls inside gated functions.
 
-    Returns a CheckResult whose ``ok`` field encodes presence:
+    Returns a CheckResult whose ``name`` encodes the detection state:
 
-      * ``ok=True`` when the wiring IS present (a gated function's body
-        contains an `hblp_classify` call). The caller treats this as
-        "guard activates — must check signoffs".
-      * ``ok=False`` when the wiring is NOT present. The caller treats this
-        as "guard inactive — pass through without signoff checks".
+      * ``WIRING_PRESENT`` when a gated function's body contains a call
+        to ``hblp_classify`` (or a tracked alias). ``ok=True``.
+      * ``WIRING_ABSENT`` when the file parses cleanly but contains no
+        gated callsite. ``ok=False`` — this is the pre-G3 honest state
+        and the orchestrator treats it as "guard inactive PASS".
+      * ``SCAN_ERROR`` when the target file is missing OR has a syntax
+        error. ``ok=False`` AND the orchestrator treats this as a hard
+        downstream-blocking failure (codex MED-7) — a determined
+        developer could rename / delete / break the file to side-step
+        the scan, so we MUST fail closed.
 
-    Detail field carries the function name + line number of the first
-    detected callsite (the FIRST one is sufficient evidence; we don't
-    enumerate all). When no wiring is present, detail names which gated
-    functions were scanned.
+    Per codex HIGH-3, the scanner now resolves module-scope import
+    aliases (``from x import hblp_classify as fn``) and assignment
+    aliases (``fn = hblp_classify``) before walking the function bodies,
+    so call-name re-bindings can't dodge the gate.
     """
 
     if not source_path.is_file():
+        # codex MED-7: missing target file is NOT "guard inactive PASS";
+        # an attacker could rename / delete the file to side-step the
+        # scan. Return SCAN_ERROR so the orchestrator fails closed.
         return CheckResult(
-            "wiring_detection",
+            SCAN_ERROR,
             False,
-            f"target file not found: {source_path} — guard inactive",
+            f"target file not found: {source_path} — scan_error (hard failure)",
         )
 
     try:
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
     except SyntaxError as exc:
-        # Defensive: a syntax error in the production file is itself a
-        # CI-blocking problem, but we can't make a wiring claim under those
-        # conditions. Return ok=False (wiring undetected) and let the
-        # main-loop surface the syntax error elsewhere.
+        # codex MED-7: syntax errors are also a SCAN_ERROR (not absent).
+        # If the file's broken we can't make a wiring claim and a
+        # determined developer could intentionally introduce a syntax
+        # error to dodge the scan.
         return CheckResult(
-            "wiring_detection",
+            SCAN_ERROR,
             False,
-            f"failed to parse {source_path}: {exc}",
+            f"failed to parse {source_path}: {exc} — scan_error (hard failure)",
         )
+
+    # codex HIGH-3: collect every name the file binds to ``hblp_classify``
+    # at module scope (canonical + import-aliases + assignment-aliases).
+    alias_names = _resolve_alias_targets(tree)
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -178,26 +247,29 @@ def detect_hblp_wiring(source_path: Path) -> CheckResult:
             for inner in ast.walk(node):
                 if isinstance(inner, ast.Call):
                     func = inner.func
-                    if isinstance(func, ast.Name) and func.id == HBLP_CALL_NAME:
+                    if isinstance(func, ast.Name) and func.id in alias_names:
+                        alias_note = (
+                            f" (alias of {HBLP_CALL_NAME!r})" if func.id != HBLP_CALL_NAME else ""
+                        )
                         return CheckResult(
-                            "wiring_detection",
+                            WIRING_PRESENT,
                             True,
-                            f"{HBLP_CALL_NAME!r} called inside {node.name!r} "
+                            f"{func.id!r}{alias_note} called inside {node.name!r} "
                             f"at line {inner.lineno}",
                         )
                     # Defensive: also catch attribute access (module.fn) so a
-                    # `from .helpers import hblp_classify as fn`-style indirection
-                    # doesn't sidestep the AST scan.
+                    # ``import .helpers as h; h.hblp_classify(...)``-style
+                    # indirection doesn't sidestep the scan.
                     if isinstance(func, ast.Attribute) and func.attr == HBLP_CALL_NAME:
                         return CheckResult(
-                            "wiring_detection",
+                            WIRING_PRESENT,
                             True,
                             f"{HBLP_CALL_NAME!r} (attribute access) "
                             f"called inside {node.name!r} at line {inner.lineno}",
                         )
 
     return CheckResult(
-        "wiring_detection",
+        WIRING_ABSENT,
         False,
         f"no {HBLP_CALL_NAME!r} call detected inside gated functions "
         f"{list(GATED_FUNCTIONS)} — guard inactive",
@@ -226,49 +298,230 @@ def check_signoff_exists(repo_root: Path, signoff_rel: str) -> CheckResult:
     )
 
 
-def extract_commit_sha(doc_text: str) -> Optional[str]:
-    """Pull the first plausible commit SHA out of a signoff document.
+# Per codex MED-6 — exactly ONE ``commit:`` (or ``Branch / commit:``)
+# field. The pattern accepts both ``commit:`` and ``Branch / commit:``
+# variants used by G1/G2 templates, but NOT bare-backtick SHA tokens
+# (which previously meant the first backtick-wrapped hex anywhere in the
+# doc could be misread as the commit reference).
+#
+# Captures the value:
+#   * single token in backticks: ``commit: `<sha>` ``
+#   * single bare token:        ``commit: <sha>``
+#   * field-bullet form:        ``- **commit:** `<sha>` ``
+#
+# We deliberately do NOT match other field names like ``S_prespec`` or
+# ``experiment commit SHA`` here — the signoff schema for G3 calls for
+# the canonical ``commit:`` / ``Branch / commit:`` field. Other fields
+# may appear in the signoff but only this one carries authoritative
+# commit-reference semantics for the wiring-guard check.
+COMMIT_FIELD_PATTERN = re.compile(
+    # Optional bullet (``- `` or ``* ``), optional bold (``**``), optional
+    # ``Branch / `` prefix, the literal token ``commit``, optional inner
+    # colon + bold close, the canonical colon + value.
+    r"^\s*(?:[-*]\s+)?(?:\*\*)?(?:Branch\s*/\s*)?commit\s*:?\s*(?:\*\*)?\s*:?\s*"
+    # Value: backtick-quoted token (any chars except backtick) OR
+    # bare token (no whitespace / list separators / period).
+    r"(?:`(?P<sha_q>[^`]+)`|(?P<sha_p>[^\s,;.]+))",
+    re.IGNORECASE | re.MULTILINE,
+)
 
-    Signoff templates carry the SHA in one of several documented forms:
+# A commit SHA the policy accepts: 7-40 hex chars (per git's short-SHA
+# convention; full-length is 40). codex MED-6 also requires we reject
+# placeholders like "<sha>", "PLACEHOLDER", "TBD", and any token that
+# isn't full-length hex. We surface that reason explicitly via
+# ``ExtractCommitShaError``.
+_FULL_HEX_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+_SHORT_HEX_PATTERN = re.compile(r"^[0-9a-fA-F]{7,39}$")
+_PLACEHOLDER_TOKENS: tuple[str, ...] = (
+    "<sha>",
+    "<commit>",
+    "placeholder",
+    "tbd",
+    "tba",
+    "to be filled",
+    "not yet filled",
+    "n/a",
+)
 
-      * Inline backtick: ``...Branch / commit:`` `<sha>` ``...`` (G1 template)
-      * Field-form: ``- **commit:** `<sha>``` (some N2/N3 docs)
-      * Field-form with prefixes: ``S_prespec commit SHA: `<sha>``` (G2)
 
-    Returns the FIRST backtick-wrapped 7-40-char hex token (the canonical
-    form used by both the G1 and G2 templates the team has shipped).
-    Falls back to a plain-prefix match if no backtick form is found.
+class ExtractCommitShaError(Exception):
+    """Raised by ``extract_commit_sha`` for any non-conforming input.
+
+    The error's ``args[0]`` carries a human-readable reason (used in
+    ``CheckResult.detail``).
     """
 
-    # Prefer backtick-wrapped SHAs (the dominant template form). Iterate
-    # all matches and return the first that looks like a hex SHA.
-    backtick_pattern = re.compile(r"`(?P<sha>[0-9a-fA-F]{7,40})`")
-    for match in backtick_pattern.finditer(doc_text):
-        return match.group("sha")
 
-    # Fall back to prefix-form (G2 template uses these).
-    prefix_pattern = re.compile(
-        r"(?:commit|sha|S_prespec|experiment[\s_]+commit[\s_]+sha)\s*:\s*"
-        r"(?P<sha>[0-9a-fA-F]{7,40})",
-        re.IGNORECASE,
+def extract_commit_sha(doc_text: str, *, require_full_length: bool = True) -> str:
+    """Pull the explicit ``commit:`` field SHA out of a signoff document.
+
+    Per codex MED-6 the parser:
+
+      * Matches exactly one explicit ``commit:`` (or ``Branch / commit:``)
+        field — line-anchored, so backtick-hex tokens elsewhere in the
+        document cannot satisfy the requirement.
+      * RAISES ``ExtractCommitShaError`` on:
+          - missing field,
+          - duplicated field (multiple ``commit:`` lines),
+          - placeholder values (``<sha>``, ``PLACEHOLDER``, ``TBD``, etc.),
+          - non-hex tokens,
+          - short hex (when ``require_full_length=True``, the default —
+            full-length 40-char SHA is the policy for G3).
+
+    The previous "first backtick SHA wins" behaviour is removed because
+    it could be bypassed by inserting a backtick-hex token anywhere in
+    the document (codex MED-6).
+    """
+
+    matches = list(COMMIT_FIELD_PATTERN.finditer(doc_text))
+    if not matches:
+        raise ExtractCommitShaError(
+            "no `commit:` field found — signoff template must carry exactly "
+            "one explicit `commit: <sha>` line"
+        )
+    if len(matches) > 1:
+        raise ExtractCommitShaError(
+            f"multiple `commit:` fields found ({len(matches)} matches); "
+            "signoff template must carry exactly one"
+        )
+
+    sha_q = matches[0].group("sha_q")
+    sha_p = matches[0].group("sha_p")
+    raw = (sha_q or sha_p or "").strip().strip("`'\"")
+    if not raw:
+        raise ExtractCommitShaError("`commit:` field is empty")
+
+    lower = raw.lower()
+    for placeholder in _PLACEHOLDER_TOKENS:
+        if placeholder in lower:
+            raise ExtractCommitShaError(
+                f"`commit:` field is a placeholder ({raw!r}); "
+                f"signoff must reference a real commit SHA"
+            )
+
+    if require_full_length:
+        if not _FULL_HEX_PATTERN.match(raw):
+            if _SHORT_HEX_PATTERN.match(raw):
+                raise ExtractCommitShaError(
+                    f"`commit:` field is short SHA ({raw!r}); policy requires full 40-char hex"
+                )
+            raise ExtractCommitShaError(f"`commit:` field is not 40-char hex ({raw!r})")
+    else:
+        # Permissive variant for legacy callers / tests.
+        if not _FULL_HEX_PATTERN.match(raw) and not _SHORT_HEX_PATTERN.match(raw):
+            raise ExtractCommitShaError(f"`commit:` field is not hex ({raw!r})")
+    return raw
+
+
+def _extract_commit_sha_or_none(doc_text: str) -> Optional[str]:
+    """Backward-compat shim that returns ``None`` instead of raising.
+
+    Used by callers that want optional SHA extraction (e.g. the
+    advisory-warn paths). Production callers SHOULD use
+    ``extract_commit_sha`` directly so the failure reason surfaces in
+    the report.
+    """
+
+    try:
+        return extract_commit_sha(doc_text, require_full_length=False)
+    except ExtractCommitShaError:
+        return None
+
+
+def _git_show_blob(repo_root: Path, sha: str, path: str) -> Optional[str]:
+    """Return the blob contents of ``path`` at ``sha`` (None if absent)."""
+
+    if shutil.which("git") is None:
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), "show", f"{sha}:{path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout
+
+
+def check_signoff_exists_in_base_ref(
+    repo_root: Path,
+    signoff_rel: str,
+    base_sha: str,
+) -> CheckResult:
+    """The signoff file MUST exist in the BASE ref (codex HIGH-2).
+
+    A determined developer could otherwise merge fake / early G1+G2
+    signoffs into the same G3 PR, making the signoff blobs ancestors of
+    PR HEAD. Requiring base-ref presence prevents that bypass:
+
+      * PR HEAD has the wiring change (G3),
+      * BASE ref (origin/main HEAD at PR-open time) MUST already carry
+        the signoff files — i.e. G1/G2 must have ALREADY merged to main
+        before the G3 PR can pass the guard.
+    """
+
+    if shutil.which("git") is None:
+        return CheckResult(
+            f"signoff_exists_base::{signoff_rel}",
+            False,
+            "git binary not on PATH — cannot verify base-ref existence",
+        )
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), "cat-file", "-e", f"{base_sha}:{signoff_rel}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return CheckResult(
+            f"signoff_exists_base::{signoff_rel}",
+            False,
+            f"git cat-file failed: {exc}",
+        )
+    if completed.returncode == 0:
+        return CheckResult(
+            f"signoff_exists_base::{signoff_rel}",
+            True,
+            f"signoff present in base ref ({base_sha[:12]})",
+        )
+    return CheckResult(
+        f"signoff_exists_base::{signoff_rel}",
+        False,
+        f"signoff MISSING in base ref ({base_sha[:12]}) — codex HIGH-2: "
+        f"G1/G2 must merge to main BEFORE G3 wiring lands",
     )
-    prefix_match = prefix_pattern.search(doc_text)
-    if prefix_match is not None:
-        return prefix_match.group("sha")
-    return None
 
 
 def check_signoff_ancestor(
     repo_root: Path,
     signoff_rel: str,
     head_sha: str,
+    *,
+    base_sha: Optional[str] = None,
 ) -> CheckResult:
-    """The SHA referenced in the signoff MUST be an ancestor of HEAD.
+    """The SHA referenced in the signoff MUST be an ancestor.
 
-    Skips the check (PASS with WARN detail) when the signoff SHA contains
-    template-placeholder tokens (e.g. ``<sha>``) — that's a separate
-    failure surfaced by the signoff-completeness check, not the ancestry
-    check's responsibility.
+    Per codex HIGH-2:
+      * When ``base_sha`` is provided, the signoff's ``commit:`` field is
+        read from the BASE-ref copy (NOT the PR-checkout copy) so a
+        malicious PR cannot rewrite the signoff to reference an
+        attacker-controlled SHA.
+      * Ancestry is checked against ``head_sha`` (which the orchestrator
+        passes as ``base_sha or head_sha``) so the bypass-via-merge-magic
+        path (merging G1+G2 into the same G3 PR) cannot satisfy the
+        check.
+
+    Per codex MED-6:
+      * The ``commit:`` field is parsed via ``extract_commit_sha``, which
+        rejects missing / duplicated / placeholder / non-hex / short SHA
+        tokens. A failed extraction surfaces with the rejection reason.
     """
 
     if shutil.which("git") is None:
@@ -278,20 +531,34 @@ def check_signoff_ancestor(
             "git binary not on PATH — cannot verify ancestry",
         )
 
-    full = repo_root / signoff_rel
-    if not full.is_file():
-        return CheckResult(
-            f"signoff_ancestor::{signoff_rel}",
-            False,
-            f"signoff file missing: {full} — cannot extract SHA",
-        )
+    # codex HIGH-2: read the signoff body from the BASE ref so the PR
+    # cannot rewrite the commit field. Fall back to the on-disk copy
+    # when no base_sha was provided.
+    if base_sha is not None:
+        body = _git_show_blob(repo_root, base_sha, signoff_rel)
+        if body is None:
+            return CheckResult(
+                f"signoff_ancestor::{signoff_rel}",
+                False,
+                f"signoff missing in base ref ({base_sha[:12]}) — cannot extract SHA",
+            )
+    else:
+        full = repo_root / signoff_rel
+        if not full.is_file():
+            return CheckResult(
+                f"signoff_ancestor::{signoff_rel}",
+                False,
+                f"signoff file missing: {full} — cannot extract SHA",
+            )
+        body = full.read_text(encoding="utf-8")
 
-    sha = extract_commit_sha(full.read_text(encoding="utf-8"))
-    if sha is None:
+    try:
+        sha = extract_commit_sha(body)
+    except ExtractCommitShaError as exc:
         return CheckResult(
             f"signoff_ancestor::{signoff_rel}",
             False,
-            f"no commit SHA extractable from {signoff_rel}",
+            f"could not extract commit SHA from {signoff_rel}: {exc}",
         )
 
     # ``git merge-base --is-ancestor`` exit codes:
@@ -323,16 +590,18 @@ def check_signoff_ancestor(
         )
 
     if completed.returncode == 0:
+        ref_label = "BASE_SHA" if base_sha is not None else "HEAD"
         return CheckResult(
             f"signoff_ancestor::{signoff_rel}",
             True,
-            f"signoff SHA {sha[:12]} is ancestor of HEAD {head_sha[:12]}",
+            f"signoff SHA {sha[:12]} is ancestor of {ref_label} {head_sha[:12]}",
         )
     if completed.returncode == 1:
+        ref_label = "BASE_SHA" if base_sha is not None else "HEAD"
         return CheckResult(
             f"signoff_ancestor::{signoff_rel}",
             False,
-            f"signoff SHA {sha[:12]} is NOT an ancestor of HEAD {head_sha[:12]}",
+            f"signoff SHA {sha[:12]} is NOT an ancestor of {ref_label} {head_sha[:12]}",
         )
     stderr = (completed.stderr or "").strip()[:200]
     return CheckResult(
@@ -438,34 +707,30 @@ def check_signoff_committer_match(
     repo_root: Path,
     signoff_rel: str,
     require_match: bool,
+    *,
+    base_sha: Optional[str] = None,
 ) -> CheckResult:
-    """Optional: signoff's introducing-commit committer email must be in registry.
+    """The signoff's introducing-commit committer email must be in registry.
 
-    Behavior:
-      * ``require_match=False`` (default, advisory): always returns PASS
-        with a WARN annotation noting whether a match was found.
-      * ``require_match=True`` (production-deployment policy): the check
-        FAILS if no active registry row carries the committer's email, OR
-        if the registry is empty.
+    Behavior (codex HIGH-1):
+      * ``require_match=False`` (advisory): returns PASS with WARN
+        annotation noting whether a match was found.
+      * ``require_match=True`` (fail-closed, the production CI mode):
+        the check FAILS if:
+          - the registry is missing OR has zero active rows,
+          - the committer email cannot be resolved,
+          - the committer email is NOT in the active registry.
+        These are the codex HIGH-1 failure-closed criteria; the
+        ``--require-signature-registry-match`` flag promotes the check
+        from advisory-warn to hard-fail.
 
-    The signoff's introducing-commit SHA is derived via
-    ``git log --diff-filter=A --follow --reverse`` against the signoff path
-    (mirror of ``check_methodology_signoff.py::_coi_first_add_commit``).
+    Per codex HIGH-2: when ``base_sha`` is provided, the introducing-
+    commit lookup runs against ``base_sha`` (NOT against the PR-tip)
+    so a PR-introduced signoff can't auto-register a malicious
+    committer. The lookup also reads the signoff blob from the base ref
+    to confirm the signoff exists there (mirror of
+    ``check_signoff_exists_in_base_ref``).
     """
-
-    full = repo_root / signoff_rel
-    if not full.is_file():
-        if require_match:
-            return CheckResult(
-                f"signoff_committer_match::{signoff_rel}",
-                False,
-                f"signoff file missing: {full}",
-            )
-        return CheckResult(
-            f"signoff_committer_match::{signoff_rel}",
-            True,
-            "WARN: signoff file missing — committer match advisory-skipped",
-        )
 
     if shutil.which("git") is None:
         if require_match:
@@ -480,11 +745,63 @@ def check_signoff_committer_match(
             "WARN: git not on PATH — committer match advisory-skipped",
         )
 
+    # codex HIGH-2: when a base_sha is provided, look up the signoff in
+    # the base ref. We do NOT fall back to PR-checkout when require_match
+    # is True; in fail-closed mode the signoff MUST exist in base.
+    if base_sha is not None:
+        # Confirm the signoff exists in base.
+        try:
+            cat = subprocess.run(
+                ["git", "-C", str(repo_root), "cat-file", "-e", f"{base_sha}:{signoff_rel}"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            return CheckResult(
+                f"signoff_committer_match::{signoff_rel}",
+                not require_match,
+                f"git cat-file failed: {exc}",
+            )
+        if cat.returncode != 0:
+            if require_match:
+                return CheckResult(
+                    f"signoff_committer_match::{signoff_rel}",
+                    False,
+                    f"signoff missing in base ref ({base_sha[:12]})",
+                )
+            return CheckResult(
+                f"signoff_committer_match::{signoff_rel}",
+                True,
+                f"WARN: signoff missing in base ref ({base_sha[:12]}) — "
+                f"committer match advisory-skipped",
+            )
+        # log range bounded by base_sha so we only consider commits up to
+        # base; this rejects PR-introduced "register myself" attacks.
+        log_range = base_sha
+    else:
+        full = repo_root / signoff_rel
+        if not full.is_file():
+            if require_match:
+                return CheckResult(
+                    f"signoff_committer_match::{signoff_rel}",
+                    False,
+                    f"signoff file missing: {full}",
+                )
+            return CheckResult(
+                f"signoff_committer_match::{signoff_rel}",
+                True,
+                "WARN: signoff file missing — committer match advisory-skipped",
+            )
+        log_range = "HEAD"
+
     cmd = [
         "git",
         "-C",
         str(repo_root),
         "log",
+        log_range,
         "--diff-filter=A",
         "--follow",
         "--reverse",
@@ -535,6 +852,18 @@ def check_signoff_committer_match(
         )
 
     registry_emails = parse_registry_emails(repo_root / REVIEWER_REGISTRY_REL)
+    # codex HIGH-1: in fail-closed mode the registry MUST be non-empty.
+    # An empty registry under --require-signature-registry-match means
+    # the gate is a no-op (no email can match the empty set), so we
+    # surface that as the failure reason.
+    if require_match and not registry_emails:
+        return CheckResult(
+            f"signoff_committer_match::{signoff_rel}",
+            False,
+            "active reviewer registry is EMPTY — codex HIGH-1: fail-closed "
+            "policy requires at least one active row in "
+            f"{REVIEWER_REGISTRY_REL}",
+        )
     if committer_email in registry_emails:
         return CheckResult(
             f"signoff_committer_match::{signoff_rel}",
@@ -569,23 +898,39 @@ def check_g3_wiring_guard(
     repo_root: Path,
     head_sha: str,
     require_signature_registry_match: bool = False,
+    base_sha: Optional[str] = None,
 ) -> List[CheckResult]:
     """Run all G3 wiring-guard checks against ``repo_root``.
 
     Sequence:
 
       1. AST-scan the gated file for `hblp_classify` callsites in the gated
-         functions. If no wiring detected → guard inactive → return only
-         the wiring-detection result with ok=False (treated as PASS by
-         the CLI exit policy).
+         functions. Three outcomes (codex MED-7):
 
-      2. Wiring detected. Now require BOTH G1 and G2 signoff files to:
-         (a) exist at HEAD,
-         (b) reference a SHA that is an ancestor of HEAD.
+         * ``WIRING_PRESENT`` (ok=True) — guard activates; downstream
+           signoff checks must all pass.
+         * ``WIRING_ABSENT`` (ok=False) — pre-G3 honest state; guard
+           inactive; build PASSES.
+         * ``SCAN_ERROR`` (ok=False) — file missing / unparseable;
+           HARD failure (orchestrator surfaces this distinctly so
+           ``evaluate()`` returns 1, NOT 0).
+
+      2. Wiring detected. Require BOTH G1 and G2 signoff files to:
+         (a) exist at HEAD AND in the BASE ref (or merge-base) so
+             a determined developer can't merge fake / early signoff
+             files into the same G3 PR (codex HIGH-2),
+         (b) extract a single explicit ``commit:`` field SHA from the
+             BASE-ref copy (codex MED-6),
+         (c) the SHA is an ancestor of ``base_sha`` (NOT just HEAD —
+             codex HIGH-2: PR HEAD ancestry is bypassable via merge
+             magic if the signoff was merged into the same PR).
 
       3. (Optional, gated on `require_signature_registry_match`): the
          signoff's introducing-commit committer email must match an
-         active reviewer in the N3 registry.
+         active reviewer in the N3 registry. When ``base_sha`` is
+         provided, the introducing-commit lookup runs against the BASE
+         ref so PR-introduced signoffs don't auto-register a malicious
+         committer.
     """
 
     results: List[CheckResult] = []
@@ -593,18 +938,41 @@ def check_g3_wiring_guard(
     wiring_check = detect_hblp_wiring(repo_root / WIRED_FILE_REL)
     results.append(wiring_check)
 
-    if not wiring_check.ok:
+    if wiring_check.name == WIRING_ABSENT:
         # Guard inactive — no signoff requirement.
         return results
 
+    if wiring_check.name == SCAN_ERROR:
+        # codex MED-7: file missing OR syntax error → hard failure.
+        # We do NOT run downstream signoff checks because we can't
+        # claim wiring presence; but we also do NOT return early-PASS
+        # because the orchestrator treats SCAN_ERROR as exit 1.
+        return results
+
+    # Wiring present — enforce signoff existence + ancestry against both
+    # HEAD and BASE_SHA (codex HIGH-2).
+    ancestor_target = base_sha or head_sha
     for signoff_rel in SIGNOFF_FILES:
         results.append(check_signoff_exists(repo_root, signoff_rel))
-        results.append(check_signoff_ancestor(repo_root, signoff_rel, head_sha))
+        # codex HIGH-2: signoff must exist on base ref / merge-base too,
+        # not only on PR HEAD. A base-ref existence failure prevents the
+        # "merge G1+G2 into the same PR" bypass.
+        if base_sha is not None:
+            results.append(check_signoff_exists_in_base_ref(repo_root, signoff_rel, base_sha))
+        results.append(
+            check_signoff_ancestor(
+                repo_root,
+                signoff_rel,
+                ancestor_target,
+                base_sha=base_sha,
+            )
+        )
         results.append(
             check_signoff_committer_match(
                 repo_root,
                 signoff_rel,
                 require_match=require_signature_registry_match,
+                base_sha=base_sha,
             )
         )
     return results
@@ -623,21 +991,26 @@ def render_report(results: Sequence[CheckResult]) -> str:
 def evaluate(results: Sequence[CheckResult]) -> int:
     """Compute the CLI exit code from a result set.
 
-    Policy:
-      * Wiring-detection's ``ok`` field encodes PRESENCE — when False,
-        the guard is inactive AND that's the desired pre-G1/G2 state. We
-        return 0 in that case.
-      * Wiring-detection ok=True but ANY downstream signoff check failed →
-        exit 1 (guard activated, signoffs not in place).
-      * Wiring-detection ok=True AND all downstream checks ok → exit 0.
+    Policy (codex MED-7 split):
+      * Wiring-detection's ``name`` field carries the detection state:
+        - ``WIRING_ABSENT`` (ok=False) — pre-G3 honest state. Build
+          PASSES (exit 0).
+        - ``SCAN_ERROR`` (ok=False) — file missing / syntax error.
+          HARD failure (exit 1) — a determined developer must NOT be
+          able to dodge the scan by deleting / breaking the gated file.
+        - ``WIRING_PRESENT`` (ok=True) — every downstream signoff
+          check must pass for exit 0.
     """
 
     if not results:
         return 2  # invocation error
     wiring = results[0]
-    if not wiring.ok:
+    if wiring.name == WIRING_ABSENT:
         # Guard inactive — pre-G1/G2 honest state. Build PASSES.
         return 0
+    if wiring.name == SCAN_ERROR:
+        # codex MED-7: hard failure on missing / unparseable file.
+        return 1
     # Wiring detected — every downstream check must pass.
     for r in results[1:]:
         if not r.ok:
@@ -674,12 +1047,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--base-sha",
+        default=None,
+        help=(
+            "Base ref SHA (e.g. origin/main HEAD at PR-open time). When "
+            "provided (codex HIGH-2): "
+            "(a) the signoff existence check is run against the BASE ref, "
+            "(b) the signoff `commit:` field is parsed from the BASE-ref "
+            "    blob (NOT the PR-checkout copy), "
+            "(c) the SHA must be an ancestor of BASE_SHA (NOT just HEAD), "
+            "    closing the merge-G1+G2-into-the-same-G3-PR bypass."
+        ),
+    )
+    parser.add_argument(
         "--require-signature-registry-match",
         action="store_true",
         help=(
             "Promote the signoff committer email match from advisory-warn "
-            "to fail-closed. Recommended for production deployments where "
-            "the N3 reviewer registry has at least one active row."
+            "to fail-closed (codex HIGH-1). In fail-closed mode the "
+            "active reviewer registry MUST be non-empty AND the "
+            "signoff-introducing-commit committer email MUST appear in "
+            "an active registry row. Recommended for ALL production CI "
+            "deployments — the workflow at "
+            "`.github/workflows/g3_wiring_guard.yml` passes this flag."
         ),
     )
     return parser
@@ -708,10 +1098,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
+    base_sha = args.base_sha
+    if base_sha is not None and shutil.which("git") is not None:
+        # Resolve the base SHA via rev-parse so a symbolic ref like
+        # ``origin/main`` becomes a real SHA before we hand it to
+        # ``cat-file``.
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-parse", base_sha],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            if completed.returncode == 0:
+                base_sha = (completed.stdout or "").strip() or base_sha
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
     results = check_g3_wiring_guard(
         repo_root,
         head_sha,
         require_signature_registry_match=args.require_signature_registry_match,
+        base_sha=base_sha,
     )
     print(render_report(results))
     return evaluate(results)
