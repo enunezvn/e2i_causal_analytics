@@ -131,6 +131,14 @@ class DataPreparerState(BaseAgentSchema):
     leakage_remediation_viable: Optional[bool] = None  # Whether a viable feature set was found
     requires_leakage_revalidation: Optional[bool] = None  # Trigger re-check loop
 
+    # Gate N1 (plan v4 §2 codex-rescue HIGH-3): one adaptation entry per
+    # remediation pass. Downstream the orchestrator aggregates these into
+    # ``validation_metrics["regulatory_eligibility_audit"]["adaptation_history"]``
+    # which the model_deployer reads to set ``regulatory_eligible``. The
+    # field is per-invocation; cumulative aggregation is the orchestrator's
+    # job (see model_deployer/nodes/registry_manager.py).
+    regulatory_adaptation_entry: Optional[Dict[str, Any]] = None
+
     # Baseline computation
     feature_stats: Optional[Dict[str, Dict[str, Any]]] = None  # Per-feature statistics
     target_rate: Optional[float] = None  # For classification
