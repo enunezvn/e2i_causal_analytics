@@ -880,12 +880,15 @@ def test_verify_sigstore_bundle_with_payload_separates_artifact_from_bundle(
         # Monkeypatch shutil.which so the cosign path is taken without a
         # real cosign binary; we intercept subprocess.run before it
         # actually executes.
-        monkeypatch.setattr(cms.shutil, "which", lambda name: "/fake/cosign" if name == "cosign" else None)
+        monkeypatch.setattr(
+            cms.shutil, "which", lambda name: "/fake/cosign" if name == "cosign" else None
+        )
 
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
         captured["cmd"] = list(cmd)
+
         # Return a dummy CompletedProcess-like object.
         class _CP:
             returncode = 0
