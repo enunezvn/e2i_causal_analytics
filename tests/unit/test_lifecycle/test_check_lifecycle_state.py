@@ -191,6 +191,73 @@ class TestScanPythonModules:
         assert len(findings) == 1
         assert findings[0].code == "missing_python_module"
 
+    # ----------------------------------------------------------------------
+    # N2 finding H2 + L2: scanner must detect class-level constants too.
+    # ----------------------------------------------------------------------
+
+    def test_class_level_constant_detected(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rel = "src/test_module/gate_class.py"
+        (fake_repo / rel).write_text(
+            "from src.lifecycle import GateLifecycleState\n"
+            "class EvaluatorConfig:\n"
+            "    LIFECYCLE_STATE_T22 = GateLifecycleState.ADVISORY\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _scanner_mod,
+            "GATE_RELEVANT_PYTHON_MODULES",
+            {rel: frozenset({"LIFECYCLE_STATE_T22"})},
+        )
+        findings = scan_python_modules(fake_repo)
+        assert findings == [], (
+            "class-level LIFECYCLE_STATE_* constants must be detected; "
+            f"got findings={[f.to_dict() for f in findings]}"
+        )
+
+    def test_class_level_invalid_rhs_flagged(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rel = "src/test_module/gate_class_invalid.py"
+        (fake_repo / rel).write_text(
+            "class Cfg:\n"
+            '    LIFECYCLE_STATE_BAD = "not_a_real_state"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _scanner_mod,
+            "GATE_RELEVANT_PYTHON_MODULES",
+            {rel: frozenset({"LIFECYCLE_STATE_BAD"})},
+        )
+        findings = scan_python_modules(fake_repo)
+        assert len(findings) == 1
+        assert findings[0].code == "unrecognized_lifecycle_rhs"
+
+    def test_function_local_constant_not_detected(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A LIFECYCLE_STATE_* assigned inside a function body is NOT a
+        stable declaration — it must not be picked up; the gate should
+        report it as missing.
+        """
+        rel = "src/test_module/gate_func.py"
+        (fake_repo / rel).write_text(
+            "from src.lifecycle import GateLifecycleState\n"
+            "def _make_cfg():\n"
+            "    LIFECYCLE_STATE_INNER = GateLifecycleState.ADVISORY\n"
+            "    return LIFECYCLE_STATE_INNER\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _scanner_mod,
+            "GATE_RELEVANT_PYTHON_MODULES",
+            {rel: frozenset({"LIFECYCLE_STATE_INNER"})},
+        )
+        findings = scan_python_modules(fake_repo)
+        assert len(findings) == 1
+        assert findings[0].code == "missing_lifecycle_constant"
+
 
 # ---------------------------------------------------------------------------
 # Acceptance #3 + #5: gate-shaped YAML without lifecycle_state fails;

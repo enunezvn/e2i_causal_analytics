@@ -155,7 +155,8 @@ class ScanFinding:
 
 def _read_python_module_constants(path: Path) -> dict[str, Optional[str]]:
     """Return {constant_name: lifecycle_state_value | None} for every
-    module-level ``LIFECYCLE_STATE_*`` assignment in ``path``.
+    ``LIFECYCLE_STATE_*`` assignment in ``path``, regardless of whether it
+    sits at module scope or inside a class body.
 
     Resolves the RHS via AST. Supported RHS shapes (the 3 idiomatic forms):
 
@@ -164,6 +165,13 @@ def _read_python_module_constants(path: Path) -> dict[str, Optional[str]]:
     * ``LIFECYCLE_STATE_X = "advisory"`` — String literal.
     * ``LIFECYCLE_STATE_X: GateLifecycleState = GateLifecycleState.ADVISORY``
       — annotated form.
+
+    Supported scopes (N2 finding H2): module-level OR direct class-body
+    assignments. ``ast.walk(tree)`` is too permissive — it would pick up a
+    ``LIFECYCLE_STATE_*`` assigned inside a function or a nested class,
+    which is NOT a stable declaration the scanner can rely on. We therefore
+    walk the tree and accept assignments whose direct enclosing scope is
+    either ``ast.Module`` (module-level) or ``ast.ClassDef`` (class-body).
 
     Any other RHS shape (function call, conditional, name reference) returns
     None for that constant — the scanner reports "unrecognized RHS" so the
@@ -180,24 +188,50 @@ def _read_python_module_constants(path: Path) -> dict[str, Optional[str]]:
         raise RuntimeError(f"failed to parse {path}: {e}") from e
 
     out: dict[str, Optional[str]] = {}
-    for node in tree.body:
-        targets: list[str] = []
-        value_node: Optional[ast.expr] = None
-        if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name) and tgt.id.startswith("LIFECYCLE_STATE_"):
-                    targets.append(tgt.id)
-            value_node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id.startswith("LIFECYCLE_STATE_"):
-                targets.append(node.target.id)
+    # Walk module-body and class-body nodes only. Function bodies are
+    # explicitly excluded — a constant assigned inside a function is not a
+    # stable declaration and would not represent a gate.
+    for parent in _iter_lifecycle_scopes(tree):
+        for node in parent.body:
+            targets: list[str] = []
+            value_node: Optional[ast.expr] = None
+            if isinstance(node, ast.Assign):
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name) and tgt.id.startswith("LIFECYCLE_STATE_"):
+                        targets.append(tgt.id)
                 value_node = node.value
-        if not targets or value_node is None:
-            continue
-        resolved = _resolve_lifecycle_value(value_node)
-        for name in targets:
-            out[name] = resolved
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name) and node.target.id.startswith(
+                    "LIFECYCLE_STATE_"
+                ):
+                    targets.append(node.target.id)
+                    value_node = node.value
+            if not targets or value_node is None:
+                continue
+            resolved = _resolve_lifecycle_value(value_node)
+            for name in targets:
+                out[name] = resolved
     return out
+
+
+def _iter_lifecycle_scopes(tree: ast.Module) -> list[ast.Module | ast.ClassDef]:
+    """Return every scope where a ``LIFECYCLE_STATE_*`` constant is
+    considered a stable declaration: the module itself + every class body
+    (including nested classes).
+
+    Function bodies are excluded — a constant defined inside a function is
+    a runtime value, not a gate declaration.
+    """
+    scopes: list[ast.Module | ast.ClassDef] = [tree]
+    # Walk all class definitions transitively. ``ast.walk`` yields every
+    # node; we keep ClassDef regardless of nesting depth because a
+    # nested-class lifecycle constant is still a stable identifier, just
+    # one we'd need to spell as ``Outer.Inner.LIFECYCLE_STATE_*`` to
+    # reference. Coverage is still better than silently dropping it.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            scopes.append(node)
+    return scopes
 
 
 def _resolve_lifecycle_value(node: ast.expr) -> Optional[str]:
