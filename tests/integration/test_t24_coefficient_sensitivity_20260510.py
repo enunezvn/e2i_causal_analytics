@@ -368,3 +368,203 @@ class TestOptumInitiationCoefficientSensitivity:
             "the rest of the G5 assertions are vacuously passing. "
             "Investigate the cohort schema."
         )
+
+
+# ---------------------------------------------------------------------------
+# Failure-path coverage (G5 codex H4 closure).
+#
+# Every prior cohort assertion checks ``passes_pre_spec is True``. Without a
+# negative-path test, a regression that makes T1/T2/T3 unreachable would go
+# undetected (e.g., the H1 regression where T1 was trivially passable). These
+# tests use _DeterministicCoefEstimator to construct controlled coefficient
+# sequences that PROVE each threshold can fail when violated.
+# ---------------------------------------------------------------------------
+
+
+from typing import Iterator, List, Optional
+
+from sklearn.base import BaseEstimator
+
+from src.agents.ml_foundation.data_preparer.nodes.coefficient_sensitivity import (
+    compute_coefficient_sensitivity,
+)
+
+
+class _DeterministicCoefEstimator(BaseEstimator):
+    """Mock estimator: returns pre-determined coefs per fit call. Mirrors
+    the unit-test helper. Local copy avoids cross-test-tier import."""
+
+    def __init__(self, coef_sequence: List[np.ndarray]) -> None:
+        self._coef_sequence = coef_sequence
+        self._iter: Optional[Iterator[np.ndarray]] = None
+        self.coef_: Optional[np.ndarray] = None
+
+    def _ensure_iter(self) -> Iterator[np.ndarray]:
+        if self._iter is None:
+            self._iter = iter(self._coef_sequence)
+        return self._iter
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "_DeterministicCoefEstimator":
+        next_coef = next(self._ensure_iter())
+        self.coef_ = np.atleast_2d(np.asarray(next_coef, dtype=np.float64))
+        return self
+
+
+def _failure_fixture_X_y(n_features: int = 4, n_rows: int = 200) -> tuple[pd.DataFrame, pd.Series]:
+    """Build a tiny X (with NaN cells in every column so each gets a
+    per-feature re-fit) + arbitrary balanced y. The mock estimator
+    ignores both — what matters is that the helper iterates over
+    ``compared_features`` once for baseline and once per feature."""
+    rng = np.random.default_rng(0)
+    cols = {}
+    for i in range(n_features):
+        col = rng.standard_normal(size=n_rows)
+        # Inject 30% NaN so the per-feature re-fit fires.
+        mask = rng.uniform(size=n_rows) < 0.30
+        col[mask] = np.nan
+        cols[f"feat_{i}"] = col
+    X = pd.DataFrame(cols)
+    y = pd.Series(rng.integers(0, 2, size=n_rows))
+    return X, y
+
+
+class TestG5FailurePathCoverage:
+    """H4 closure: prove T1, T2, T3 can each FAIL when violated.
+
+    Without a negative-path test, the green cohort assertions could
+    pass vacuously (e.g., if a regression makes a threshold unreachable
+    or the helper silently zeroes out flips). These tests construct
+    deterministic coefficient sequences that GUARANTEE each threshold
+    is violated.
+    """
+
+    @pytest.mark.integration
+    def test_t1_can_fail_when_significant_feature_flips(self) -> None:
+        """T1 fails when any significant feature flips sign in
+        single-strategy mode. Construct a coef sequence where the
+        baseline has one large-magnitude (significant) feature and the
+        per-feature re-fit on that feature flips its sign."""
+        X, y = _failure_fixture_X_y(n_features=4)
+        # Baseline: feat_0 has the largest magnitude, well above 1σ.
+        # Other features have small symmetric magnitudes so feat_0 is
+        # uniquely "significant".
+        baseline = np.array([5.0, 0.1, -0.1, 0.05])
+        # Per-feature re-fits (4 features → 4 re-fits in column order):
+        feat_0_refit = np.array([-5.0, 0.1, -0.1, 0.05])  # FLIP
+        feat_1_refit = np.array([5.0, 0.12, -0.1, 0.05])
+        feat_2_refit = np.array([5.0, 0.1, -0.12, 0.05])
+        feat_3_refit = np.array([5.0, 0.1, -0.1, 0.06])
+        mock = _DeterministicCoefEstimator(
+            [baseline, feat_0_refit, feat_1_refit, feat_2_refit, feat_3_refit]
+        )
+
+        recs = dict.fromkeys(X.columns, "drop_row_or_mean")
+        result = compute_coefficient_sensitivity(X, y, recs, estimator=mock)
+
+        # T1 must fail: feat_0 is significant (|5.0| >> 1σ) AND flipped.
+        assert result["passes_pre_spec"] is False, (
+            "T1 failure path expected passes_pre_spec=False; got True. "
+            f"violations={result['violations']!r}"
+        )
+        # Verify the violation lists T1.
+        violation_text = " ".join(result["violations"])
+        assert "T1 violated" in violation_text, (
+            f"Expected T1 violation in {result['violations']!r}; not found."
+        )
+        # Per-feature contract: feat_0 flipped, others did not.
+        assert result["per_feature"]["feat_0"]["sign_flip"] is True
+        assert result["per_feature"]["feat_0"]["flip_count"] == 1
+        assert result["aggregate"]["max_flips_per_feature_significant"] >= 1
+
+    @pytest.mark.integration
+    def test_t2_can_fail_when_effect_size_cv_exceeds_ceiling(self) -> None:
+        """T2 fails when a significant feature's effect-size CV exceeds
+        G5_EFFECT_SIZE_CV_MAX=0.5. Engineer baseline=+10.0,
+        post_impute=+0.5 → mean=5.25, std=4.75 → CV=0.905 > 0.5.
+        No sign flip (both positive), so T1 + T3 do NOT fail. T2 alone
+        is the load-bearing violation."""
+        X, y = _failure_fixture_X_y(n_features=3)
+        baseline = np.array([10.0, 0.05, -0.05])
+        feat_0_refit = np.array([0.5, 0.05, -0.05])  # CV ≈ 0.905
+        feat_1_refit = np.array([10.0, 0.05, -0.05])
+        feat_2_refit = np.array([10.0, 0.05, -0.05])
+        mock = _DeterministicCoefEstimator([baseline, feat_0_refit, feat_1_refit, feat_2_refit])
+
+        recs = dict.fromkeys(X.columns, "drop_row_or_mean")
+        result = compute_coefficient_sensitivity(X, y, recs, estimator=mock)
+
+        assert result["passes_pre_spec"] is False, (
+            f"T2 failure path expected passes_pre_spec=False; got True. "
+            f"violations={result['violations']!r}, "
+            f"aggregate={result['aggregate']!r}"
+        )
+        violation_text = " ".join(result["violations"])
+        assert "T2 violated" in violation_text, (
+            f"Expected T2 violation in {result['violations']!r}; not found."
+        )
+        # Verify CV is computed correctly: std([10.0, 0.5]) / |mean([10.0, 0.5])|
+        expected_cv = float(np.std([10.0, 0.5], ddof=0)) / abs(float(np.mean([10.0, 0.5])))
+        assert result["aggregate"]["max_effect_size_variance_significant"] == pytest.approx(
+            expected_cv, rel=1e-6
+        )
+        assert result["aggregate"]["max_effect_size_variance_significant"] > G5_EFFECT_SIZE_CV_MAX
+        # T1 and T3 must NOT fire (no flip, fraction_flipped=0).
+        assert result["per_feature"]["feat_0"]["sign_flip"] is False
+        assert result["aggregate"]["fraction_significant_flipped"] == 0.0
+
+    @pytest.mark.integration
+    def test_t3_can_fail_when_too_many_significant_features_flip(self) -> None:
+        """T3 fails when fraction_significant_flipped > 0.10. Construct
+        a 12-feature fixture where 8 features are "significant" (>1σ)
+        and 2 of them flip → 2/8 = 0.25 > 0.10. T1 also fails (any
+        flip in single-strategy mode triggers T1), but T3's failure is
+        the load-bearing observation here."""
+        X, y = _failure_fixture_X_y(n_features=12)
+        # Build a baseline where 8 features are large-magnitude and 4
+        # are noise. Std(|baseline|) determines sigma; pick magnitudes
+        # so the 8 large-magnitude features cross the 1σ threshold.
+        baseline = np.array(
+            [
+                5.0,
+                4.5,
+                4.8,
+                5.2,
+                4.7,
+                5.1,
+                4.9,
+                5.0,  # 8 "significant" (>1σ when sigma ≈ 2.5)
+                0.05,
+                -0.05,
+                0.08,
+                -0.06,  # 4 noise
+            ]
+        )
+        # Per-feature re-fits: feat_0 and feat_1 flip; others stay.
+        feat_0_refit = baseline.copy()
+        feat_0_refit[0] = -5.0  # flip
+        feat_1_refit = baseline.copy()
+        feat_1_refit[1] = -4.5  # flip
+        # The remaining 10 re-fits are no-op coefs (same as baseline,
+        # nudged by 0.001 to avoid CV degeneracy that would also trip T2).
+        nudge = 1e-3
+        no_op_refits = [baseline + nudge for _ in range(10)]
+
+        mock = _DeterministicCoefEstimator(
+            [baseline, feat_0_refit, feat_1_refit, *no_op_refits]
+        )
+
+        recs = dict.fromkeys(X.columns, "drop_row_or_mean")
+        result = compute_coefficient_sensitivity(X, y, recs, estimator=mock)
+
+        assert result["passes_pre_spec"] is False, (
+            f"T3 failure path expected passes_pre_spec=False; got True. "
+            f"violations={result['violations']!r}, "
+            f"aggregate={result['aggregate']!r}"
+        )
+        violation_text = " ".join(result["violations"])
+        assert "T3 violated" in violation_text, (
+            f"Expected T3 violation in {result['violations']!r}; not found."
+        )
+        # 2 of 8 significant features flipped → 0.25 > 0.10.
+        assert result["aggregate"]["fraction_significant_flipped"] > G5_FRACTION_SIGNIFICANT_FLIPPED_MAX
+        assert result["aggregate"]["fraction_significant_flipped"] == pytest.approx(0.25, abs=1e-6)
