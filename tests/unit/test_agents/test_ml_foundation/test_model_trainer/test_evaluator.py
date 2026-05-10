@@ -1191,3 +1191,60 @@ class TestPostHocCalibrationGate:
         assert result.get("calibrated_ece") == native_ece
         test_metrics = result.get("test_metrics", {})
         assert test_metrics.get("calibrated_ece") == native_ece
+
+
+# ============================================================================
+# Tier 1B step 1 — perm-null promotion to validation_metrics (codex MEDIUM-2)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+class TestEvaluatePermNullPromotion:
+    """End-to-end: when `evaluate_model` runs the binary-classification
+    path, the new `permutation_null_p95`, `permutation_null_p99`, and
+    `permutation_n_permutations` keys land on `validation_metrics` with
+    the `DEFAULT_PERMUTATION_COUNT=200` round-tripped from the callsite."""
+
+    async def test_validation_metrics_carries_perm_n_permutations_default(
+        self, real_classifier_state
+    ):
+        """Asserts the evaluator callsite passes
+        `n_permutations=DEFAULT_PERMUTATION_COUNT` (not a stale 100). If
+        someone reverts the default at the callsite this test breaks."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            DEFAULT_PERMUTATION_COUNT,
+        )
+
+        result = await evaluate_model(real_classifier_state)
+        val_metrics = result.get("validation_metrics", {})
+        assert val_metrics.get("permutation_n_permutations") == DEFAULT_PERMUTATION_COUNT
+        assert val_metrics["permutation_n_permutations"] == 200
+
+    async def test_validation_metrics_carries_perm_null_percentiles(self, real_classifier_state):
+        """The new `permutation_null_p95` and `permutation_null_p99` keys
+        are promoted to validation_metrics and lie in the AUC bounds."""
+        result = await evaluate_model(real_classifier_state)
+        val_metrics = result.get("validation_metrics", {})
+        p95 = val_metrics.get("permutation_null_p95")
+        p99 = val_metrics.get("permutation_null_p99")
+        assert p95 is not None
+        assert p99 is not None
+        assert 0.0 <= p95 <= 1.0
+        assert 0.0 <= p99 <= 1.0
+        # By construction p95 <= p99.
+        assert p95 <= p99
+
+    async def test_perm_test_subdict_preserved_after_promotion(self, real_classifier_state):
+        """The sub-dict `metrics_result["permutation_test"]` retains all
+        the original keys (including the legacy `n_permutations` alias and
+        `actual_auc`/`signal_genuine`) — the promoter only LIFTS scalar
+        keys, never moves or removes them."""
+        result = await evaluate_model(real_classifier_state)
+        perm = result.get("permutation_test", {})
+        # Legacy alias preserved on sub-dict.
+        assert "n_permutations" in perm
+        assert perm["n_permutations"] == 200
+        # Other expected sub-dict keys present.
+        assert "actual_auc" in perm
+        assert "signal_genuine" in perm
+        assert "permutation_pvalue" in perm

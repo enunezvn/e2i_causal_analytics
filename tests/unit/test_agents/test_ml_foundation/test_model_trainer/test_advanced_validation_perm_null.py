@@ -281,6 +281,24 @@ def test_promoter_promotes_none_when_keys_present_with_none_values() -> None:
     assert val["permutation_n_permutations"] == 200
 
 
+def test_promoter_does_not_mutate_input_perm_result() -> None:
+    """Codex MEDIUM-2: the promoter must NOT clobber or remove keys from
+    the source `permutation_result` dict. The caller relies on the full
+    sub-dict (including `actual_auc`, `signal_genuine`, legacy
+    `n_permutations`) being intact at `metrics_result["permutation_test"]`
+    after the promoter runs."""
+    perm = _full_perm_result()
+    perm_snapshot = dict(perm)
+    metrics_result: dict = {"permutation_test": perm, "validation_metrics": {}}
+    _promote_permutation_summary_to_validation_metrics(metrics_result, perm)
+    assert perm == perm_snapshot, "promoter must not mutate input dict"
+    # Sub-dict still has all original keys including unpromoted ones.
+    assert metrics_result["permutation_test"] == perm_snapshot
+    assert "actual_auc" in metrics_result["permutation_test"]
+    assert "n_permutations" in metrics_result["permutation_test"]
+    assert "signal_genuine" in metrics_result["permutation_test"]
+
+
 def test_promoter_skips_keys_absent_from_perm_result() -> None:
     """Forward compat: if the perm result is missing a promoted key (e.g.,
     `permutation_n_effective` when an older caller is in flight), the
