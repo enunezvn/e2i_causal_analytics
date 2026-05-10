@@ -65,37 +65,63 @@ jobs:
 
       - name: Determine base ref
         id: base-ref
+        # For pull_request events, diff against the PR base branch.
+        # For push events, diff against `github.event.before` (the SHA of
+        # the previous tip of the pushed branch). This is correct for
+        # multi-commit pushes — using HEAD~1 only checks the LAST commit
+        # and silently skips lifecycle changes in earlier commits of the
+        # same push (see N2 finding M3).
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "ref=origin/${{ github.base_ref }}" >> $GITHUB_OUTPUT
           else
-            echo "ref=HEAD~1" >> $GITHUB_OUTPUT
+            # github.event.before is the all-zeros SHA on the very first
+            # push to a new branch. Fall back to HEAD~1 in that case.
+            ZERO_SHA="0000000000000000000000000000000000000000"
+            if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "$ZERO_SHA" ]; then
+              echo "ref=HEAD~1" >> $GITHUB_OUTPUT
+            else
+              echo "ref=$EVENT_BEFORE" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Run lifecycle-state scanner (baseline)
         # First pass: every gate-relevant location must declare a
         # `lifecycle_state`. This pass does NOT need git diff — it audits
         # the current tree.
+        #
+        # Use `tee` + ${PIPESTATUS[0]} to surface the scanner's exit code:
+        # `python ... > file.json` would let bash see the redirect succeed
+        # even when the scanner exits non-zero (the redirect itself never
+        # fails on a writable disk), so the job would print findings then
+        # pass green. Capturing PIPESTATUS[0] propagates the scanner's
+        # actual exit code to bash.
         run: |
-          set -e
-          python scripts/check_lifecycle_state.py --json > lifecycle_state_findings.json
+          set -o pipefail
+          python scripts/check_lifecycle_state.py --json | tee lifecycle_state_findings.json
+          EXIT=${PIPESTATUS[0]}
           echo "::group::Scanner findings (baseline)"
           cat lifecycle_state_findings.json
           echo "::endgroup::"
+          exit "$EXIT"
 
       - name: Run lifecycle-state scanner (change-detection)
         # Second pass: any change to a `LIFECYCLE_STATE_*` value must have
         # a corresponding signed doc. Runs against the PR base branch (or
-        # HEAD~1 for direct pushes).
+        # the previous push SHA for direct pushes).
         run: |
-          set -e
+          set -o pipefail
           python scripts/check_lifecycle_state.py \
             --check-changes \
             --base-ref "${{ steps.base-ref.outputs.ref }}" \
-            --json > lifecycle_state_changes.json
+            --json | tee lifecycle_state_changes.json
+          EXIT=${PIPESTATUS[0]}
           echo "::group::Scanner findings (change-detection)"
           cat lifecycle_state_changes.json
           echo "::endgroup::"
+          exit "$EXIT"
 
       - name: Upload findings artifact
         if: always()
