@@ -319,6 +319,123 @@ def test_placeholder_constant_matches_memo_token() -> None:
     assert V.PLACEHOLDER in memo_text
 
 
+# ---------------------------------------------------------------------------
+# NEW HIGH-2 (iter-3) — REPO_ROOT resolution when staged into a governance
+# checkout. The workflow copies this script into
+# governance_checkout/scripts/ and runs from there, so
+# Path(__file__).parents[1] resolves to "governance_checkout", NOT the
+# actual worktree. The verifier MUST resolve the worktree via:
+#   1. E2I_GOVERNANCE_REPO_ROOT env var, OR
+#   2. --repo-root CLI flag, OR
+#   3. git rev-parse --show-toplevel
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_repo_root_uses_env_var_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """E2I_GOVERNANCE_REPO_ROOT env var wins over Path(__file__) parent."""
+    monkeypatch.setenv("E2I_GOVERNANCE_REPO_ROOT", str(tmp_path))
+    resolved = V._resolve_repo_root()
+    assert resolved == tmp_path.resolve()
+
+
+def test_main_repo_root_flag_overrides_module_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--repo-root`` CLI override is the workflow's contract for the
+    staged governance checkout. The override must redirect every
+    REPO_ROOT-derived path (MEMO_PATH, artifact paths) to the actual
+    worktree.
+    """
+    # Simulate the workflow scenario: scripts staged in a fake
+    # governance_checkout dir (where the verifier code lives), but the
+    # actual worktree is tmp_path.
+    actual_worktree = tmp_path / "actual_worktree"
+    actual_worktree.mkdir()
+    memo_dir = actual_worktree / "docs" / "specs"
+    memo_dir.mkdir(parents=True)
+    memo_path = memo_dir / "tier1b_b2_prespec_20260510.md"
+    memo_path.write_text(
+        """
+g2_dataset_hashes:
+  optum_initiation_patient_journeys_parquet:
+    path: "data/rwd/optum/initiation/x.parquet"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+  optum_initiation_treatment_events_parquet:
+    path: "data/rwd/optum/initiation/y.parquet"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+""",
+        encoding="utf-8",
+    )
+    # Make sure CI is not set so --allow-missing is honored.
+    monkeypatch.delenv("CI", raising=False)
+    # Pre-call: REPO_ROOT could be anything; --repo-root on CLI must
+    # override and point at the actual_worktree.
+    rc = V.main(
+        [
+            "--allow-missing",
+            "--prespec-sha",
+            "working",
+            "--repo-root",
+            str(actual_worktree),
+        ]
+    )
+    # MEMO_PATH resolves under actual_worktree → memo found.
+    # Both artifacts missing under actual_worktree/data/... → vacuous
+    # pass under --allow-missing (lenient).
+    assert rc == 0
+    # And the post-flag REPO_ROOT module attr is the actual worktree.
+    assert V.REPO_ROOT == actual_worktree.resolve()
+
+
+def test_main_repo_root_flag_finds_planted_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End-to-end NEW HIGH-2: with --repo-root pointing at the actual
+    worktree, the verifier locates artifacts under that root (not under
+    its own staging dir)."""
+    actual_worktree = tmp_path / "actual_worktree"
+    actual_worktree.mkdir()
+    memo_dir = actual_worktree / "docs" / "specs"
+    memo_dir.mkdir(parents=True)
+    memo_path = memo_dir / "tier1b_b2_prespec_20260510.md"
+    journeys_relpath = V.ARTIFACTS["optum_initiation_patient_journeys_parquet"][0]
+    events_relpath = V.ARTIFACTS["optum_initiation_treatment_events_parquet"][0]
+    journeys_path = actual_worktree / journeys_relpath
+    events_path = actual_worktree / events_relpath
+    journeys_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    journeys_payload = b"journeys-bytes"
+    events_payload = b"events-bytes"
+    journeys_path.write_bytes(journeys_payload)
+    events_path.write_bytes(events_payload)
+    journeys_hash = hashlib.sha256(journeys_payload).hexdigest()
+    events_hash = hashlib.sha256(events_payload).hexdigest()
+    memo_path.write_text(
+        f"""
+g2_dataset_hashes:
+  optum_initiation_patient_journeys_parquet:
+    path: "{journeys_relpath}"
+    sha256: "{journeys_hash}"
+  optum_initiation_treatment_events_parquet:
+    path: "{events_relpath}"
+    sha256: "{events_hash}"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("CI", raising=False)
+    rc = V.main(
+        [
+            "--prespec-sha",
+            "working",
+            "--repo-root",
+            str(actual_worktree),
+        ]
+    )
+    assert rc == 0
+
+
 def test_update_skips_already_pinned(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Operator-only --update path must REFUSE to overwrite an
     existing non-placeholder value (audit-visible re-pin requires a

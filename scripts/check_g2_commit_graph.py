@@ -83,12 +83,43 @@ defense is broken even if the others pass.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+
+def _resolve_repo_root() -> Path:
+    """Resolve the actual git worktree root.
+
+    NEW HIGH-2 (iter-3) fix: when the workflow copies this script into
+    ``governance_checkout/scripts/`` (HIGH-6 protected verifier
+    staging), ``Path(__file__).resolve().parents[1]`` resolves to
+    ``governance_checkout``, NOT the actual worktree the workflow
+    checked out from the experiment tag.
+
+    Resolution order:
+      1. ``E2I_GOVERNANCE_REPO_ROOT`` env var — explicit override.
+      2. ``git rev-parse --show-toplevel`` from CWD — preferred.
+      3. ``Path(__file__).resolve().parents[1]`` — legacy fallback.
+    """
+    env_root = os.environ.get("E2I_GOVERNANCE_REPO_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).resolve()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return Path(result.stdout.strip()).resolve()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return Path(__file__).resolve().parents[1]
+
+
+REPO_ROOT = _resolve_repo_root()
 DEFAULT_PRESPEC_PATH = "docs/specs/tier1b_b2_prespec_20260510.md"
 
 
