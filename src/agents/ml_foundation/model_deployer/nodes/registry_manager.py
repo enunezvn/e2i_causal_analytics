@@ -4,15 +4,36 @@ Handles:
 1. Model registration in MLflow registry (via MLflowConnector)
 2. Stage validation and promotion (via MLflowConnector)
 3. Shadow mode criteria validation
+4. Regulatory-eligibility evaluation (Gate N1 — plan v4 §2)
 
 Uses MLflowConnector for circuit breaker protection and async support.
 """
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+
+from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+    RegulatoryEligibilityAudit,
+    is_adapted_regulatory_candidate,
+    is_regulatory_eligible,
+)
 
 logger = logging.getLogger(__name__)
+
+# Gate N1 (plan v4 §2): the literature-anchored absolute thresholds the
+# deployer MUST evaluate before granting ``regulatory_eligible=True``.
+# Each entry maps a gate name (the same key used in ``gate_history``) to
+# its threshold key on ``validation_metrics`` (or ``success_criteria``)
+# and its comparison direction.
+#
+# We start with ``minimum_auc`` only (the canonical literature-anchored
+# floor for binary classification per
+# ``scope_definer/nodes/criteria_validator.py:118-120``). Other gates
+# (precision, recall, calibration, etc.) can be added once their
+# literature-anchored thresholds are signed off — explicit list, no
+# auto-discovery, so a typo cannot silently disable a gate.
+N1_REQUIRED_REGULATORY_GATES: List[str] = ["minimum_auc"]
 
 
 # ============================================================================
@@ -247,6 +268,234 @@ def compute_advisory_denial_reasons(
         )
 
     return reasons
+
+
+# ============================================================================
+# Gate N1 (plan v4 §2) — regulatory-eligibility evaluation helpers.
+#
+# These helpers wrap the ``RegulatoryEligibilityAudit`` runtime guard to
+# produce the eligibility verdict during ``validate_promotion``. The
+# split into helpers keeps the promotion-validation function readable
+# and lets the eligibility logic be tested in isolation.
+# ============================================================================
+
+
+def _load_regulatory_audit_from_state(
+    state: Dict[str, Any],
+) -> RegulatoryEligibilityAudit:
+    """Reconstruct the audit guard from the state's validation_metrics.
+
+    The on-disk shape is a plain dict on
+    ``validation_metrics["regulatory_eligibility_audit"]``. We deep-copy
+    it through ``RegulatoryEligibilityAudit.from_dict`` so the returned
+    guard is fully decoupled from state. Missing dict → fresh empty
+    audit (consistent with checkpoint-restart behavior elsewhere).
+    """
+    validation_metrics = state.get("validation_metrics") or {}
+    if hasattr(validation_metrics, "model_dump"):
+        # MetricsSchema instance — drop into dict shape via pydantic.
+        validation_metrics = validation_metrics.model_dump()
+    audit_payload = (
+        validation_metrics.get("regulatory_eligibility_audit")
+        if isinstance(validation_metrics, dict)
+        else None
+    )
+    if audit_payload is None:
+        return RegulatoryEligibilityAudit()
+    return RegulatoryEligibilityAudit.from_dict(audit_payload)
+
+
+def _evaluate_absolute_threshold_gates(
+    state: Dict[str, Any],
+    audit: RegulatoryEligibilityAudit,
+    timestamp: str,
+) -> Dict[str, Any]:
+    """Append a ``gate_history`` entry for each required absolute gate.
+
+    The deployer reads ``state["success_criteria"]`` for the
+    literature-anchored threshold (e.g. ``minimum_auc=0.75``) and
+    ``state["validation_metrics"]["roc_auc"]`` for the value to compare.
+    Each evaluation produces one ``gate_history`` entry with outcome
+    ``"pass" | "fail" | "skipped"``. ``"skipped"`` fires when either the
+    threshold or the value is missing — this counts as a non-pass for
+    the eligibility check (see
+    ``RegulatoryEligibilityAudit.is_regulatory_eligible``).
+
+    Returns a dict with two keys:
+
+      * ``all_thresholds_cleared``: True iff EVERY required gate
+        evaluated to "pass".
+      * ``failures``: list of human-readable strings describing each
+        failure (or skip) — passed back to the caller for surfacing on
+        ``promotion_denial_reason``.
+    """
+    success_criteria = state.get("success_criteria") or {}
+    validation_metrics = state.get("validation_metrics") or {}
+    if hasattr(validation_metrics, "model_dump"):
+        validation_metrics = validation_metrics.model_dump()
+
+    # Map gate name → (criterion_key, metric_key, direction).
+    # Direction "min" means value must be >= threshold; "max" means
+    # value must be <= threshold. Today we only ship "minimum_auc" —
+    # other gates can be appended once their literature anchor is signed.
+    gate_specs: Dict[str, Tuple[str, str, str]] = {
+        "minimum_auc": ("minimum_auc", "roc_auc", "min"),
+    }
+
+    failures: List[str] = []
+    all_pass = True
+
+    for gate_name in N1_REQUIRED_REGULATORY_GATES:
+        if gate_name not in gate_specs:
+            failures.append(
+                f"Gate N1: unknown required gate '{gate_name}' — "
+                "no spec registered. Eligibility CANNOT be granted."
+            )
+            audit.append_gate_evaluation(
+                timestamp=timestamp,
+                gate_name=gate_name,
+                threshold=None,
+                value=None,
+                outcome="skipped",
+            )
+            all_pass = False
+            continue
+
+        criterion_key, metric_key, direction = gate_specs[gate_name]
+        threshold = success_criteria.get(criterion_key)
+        # validation_metrics may store the AUC under "roc_auc" (modern
+        # producer key) or "auc_roc" (canonical schema name). Both are
+        # accepted at MetricsSchema construction; here we read both for
+        # legacy / dict inputs that bypass the schema.
+        if isinstance(validation_metrics, dict):
+            value = validation_metrics.get(metric_key)
+            if value is None and metric_key == "roc_auc":
+                value = validation_metrics.get("auc_roc")
+        else:
+            value = None
+
+        if threshold is None or value is None:
+            audit.append_gate_evaluation(
+                timestamp=timestamp,
+                gate_name=gate_name,
+                threshold=threshold,
+                value=value,
+                outcome="skipped",
+            )
+            failures.append(
+                f"Gate N1: '{gate_name}' skipped — "
+                f"threshold={threshold}, value={value}. "
+                "Eligibility CANNOT be granted."
+            )
+            all_pass = False
+            continue
+
+        if direction == "min":
+            passed = float(value) >= float(threshold)
+        else:  # "max"
+            passed = float(value) <= float(threshold)
+
+        outcome = "pass" if passed else "fail"
+        audit.append_gate_evaluation(
+            timestamp=timestamp,
+            gate_name=gate_name,
+            threshold=threshold,
+            value=value,
+            outcome=outcome,
+        )
+
+        if not passed:
+            all_pass = False
+            failures.append(
+                f"Gate N1: '{gate_name}' failed — "
+                f"value={value:.4f} {('<' if direction == 'min' else '>')} "
+                f"threshold={float(threshold):.4f}."
+            )
+
+    return {
+        "all_thresholds_cleared": all_pass,
+        "failures": failures,
+    }
+
+
+def _evaluate_regulatory_eligibility(
+    state: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Evaluate Gate N1 preconditions; return state-update dict.
+
+    Three preconditions per plan v4 §2 Gate N1 (codex-rescue HIGH-3):
+
+      1. All literature-anchored absolute thresholds clear (e.g.
+         minimum_auc).
+      2. ``adaptation_history == []`` — no adaptive relaxation during
+         the model's lifecycle.
+      3. ``gate_history`` shows EVERY required gate evaluated to "pass"
+         (no advisory bypasses). Implemented inside
+         ``is_regulatory_eligible``.
+
+    When (1) holds but (2) does not, sets
+    ``adapted_regulatory_candidate=True`` instead of
+    ``regulatory_eligible=True``.
+
+    Returns a dict with three keys for merging into validate_promotion's
+    return value:
+
+      * ``regulatory_eligible``: bool
+      * ``adapted_regulatory_candidate``: bool
+      * ``regulatory_eligibility_audit``: dict (the updated audit, ready
+        to be persisted onto ``validation_metrics``).
+
+    Plus an optional ``regulatory_eligibility_failures`` list (only
+    present when the verdict is False) so the caller can surface why.
+    """
+    audit = _load_regulatory_audit_from_state(state)
+    timestamp = datetime.now(tz=None).isoformat()
+
+    threshold_result = _evaluate_absolute_threshold_gates(state, audit, timestamp)
+    all_thresholds_cleared = bool(threshold_result["all_thresholds_cleared"])
+    threshold_failures = list(threshold_result["failures"])
+
+    # The eligibility verdict reads the (now-updated) audit.
+    eligible = (
+        all_thresholds_cleared
+        and is_regulatory_eligible(audit, N1_REQUIRED_REGULATORY_GATES)
+    )
+    candidate = all_thresholds_cleared and is_adapted_regulatory_candidate(
+        audit, N1_REQUIRED_REGULATORY_GATES
+    )
+
+    # eligibility and candidate are mutually exclusive by construction
+    # (eligible requires adaptation_history == []; candidate requires
+    # adaptation_history non-empty). The check is defensive — a logic
+    # bug elsewhere should never let both flip to True simultaneously.
+    assert not (eligible and candidate), (
+        "Gate N1 invariant violation: regulatory_eligible and "
+        "adapted_regulatory_candidate cannot both be True."
+    )
+
+    failures: List[str] = []
+    if not eligible:
+        if not all_thresholds_cleared:
+            failures.extend(threshold_failures)
+        elif audit.adaptation_history:
+            failures.append(
+                f"Gate N1: regulatory_eligible=False because "
+                f"adaptation_history is non-empty "
+                f"({len(audit.adaptation_history)} adaptation entr"
+                f"{'y' if len(audit.adaptation_history) == 1 else 'ies'}). "
+                "Per plan v4 §2 codex-rescue HIGH-3, ANY adaptive "
+                "relaxation during the model's lifecycle disqualifies "
+                "regulatory eligibility."
+            )
+
+    result = {
+        "regulatory_eligible": eligible,
+        "adapted_regulatory_candidate": candidate,
+        "regulatory_eligibility_audit": audit.to_dict(),
+    }
+    if failures:
+        result["regulatory_eligibility_failures"] = failures
+    return result
 
 
 def _get_mlflow_connector() -> Optional[Any]:
@@ -513,7 +762,9 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
         # logger AND ride along on the return dict so observability
         # dashboards can monitor the would-be denial rate during the
         # one-quarter advisory window before T2.6c enforcement.
-        validation_metrics_for_t26 = state.get("validation_metrics", {}) or {}
+        validation_metrics_for_t26: Dict[str, Any] = state.get("validation_metrics") or {}
+        if hasattr(validation_metrics_for_t26, "model_dump"):
+            validation_metrics_for_t26 = validation_metrics_for_t26.model_dump()
         calibration_error_for_t26 = state.get("calibration_error")
         if calibration_error_for_t26 is None and isinstance(validation_metrics_for_t26, dict):
             calibration_error_for_t26 = validation_metrics_for_t26.get("calibration_error")
@@ -525,6 +776,20 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
         for w in t26_advisory_warnings:
             logger.warning(w)
 
+        # Plan v4 §2 Gate N1 — regulatory-eligibility evaluation. Reads
+        # the immutable ``regulatory_eligibility_audit`` (if any) +
+        # appends one ``gate_history`` entry per required gate. Sets
+        # ``regulatory_eligible=True`` only when ALL three preconditions
+        # hold (codex-rescue HIGH-3): (1) absolute thresholds cleared,
+        # (2) adaptation_history empty, (3) every required gate passed.
+        # When (1) holds but (2) does not, sets
+        # ``adapted_regulatory_candidate=True`` instead. NEVER blocks
+        # promotion on its own — the eligibility flag is the verdict
+        # signal; the gate-passing decision is upstream. This keeps the
+        # rollout signal-only and lets ``deployment_orchestrator`` /
+        # downstream consumers make the final shipping decision.
+        regulatory_result = _evaluate_regulatory_eligibility(state)
+
         # Promotion is allowed
         return {
             "promotion_target_stage": target_stage,
@@ -534,6 +799,7 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
             "promotion_validation_errors": [],
             "t26_deployer_input_metrics": t26_deployer_input_metrics,
             "t26_advisory_warnings": t26_advisory_warnings,
+            **regulatory_result,
         }
 
     except Exception as e:
