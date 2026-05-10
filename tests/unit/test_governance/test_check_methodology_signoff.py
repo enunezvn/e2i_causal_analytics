@@ -286,6 +286,78 @@ def test_required_sections_signoff_missing_signature_section():
     assert result.ok is False
 
 
+# --------------------------------------------------------------------------- #
+# M4: PGP block render-paste taint + structural parse via gpg --list-packets.
+# --------------------------------------------------------------------------- #
+
+
+def test_signature_present_rejects_html_entity_taint():
+    """A PGP block containing &amp; / &lt; / etc. is render-paste contaminated."""
+
+    text = (
+        "## Cryptographic signature\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "AAAA &amp; more data\n"
+        "-----END PGP SIGNATURE-----\n"
+    )
+    result = cms.check_signature_present(text)
+    assert result.ok is False
+    assert "tainted" in result.detail
+
+
+def test_signature_present_rejects_jats_tag_taint():
+    """A PGP block containing JATS tags is render-paste contaminated."""
+
+    text = (
+        "## Cryptographic signature\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "<jats:p>signature</jats:p>\n"
+        "-----END PGP SIGNATURE-----\n"
+    )
+    result = cms.check_signature_present(text)
+    assert result.ok is False
+    assert "tainted" in result.detail
+
+
+def test_signature_present_rejects_html_p_tag_taint():
+    text = (
+        "## Cryptographic signature\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "<p>signature</p>\n"
+        "-----END PGP SIGNATURE-----\n"
+    )
+    result = cms.check_signature_present(text)
+    assert result.ok is False
+
+
+def test_pgp_block_taint_returns_first_token():
+    block = "-----BEGIN PGP SIGNATURE-----\n&amp;\n-----END PGP SIGNATURE-----\n"
+    assert cms._pgp_block_taint(block) == "&amp;"
+
+
+def test_pgp_block_taint_returns_none_for_clean():
+    block = "-----BEGIN PGP SIGNATURE-----\n\nfresh ascii armor\n-----END PGP SIGNATURE-----\n"
+    assert cms._pgp_block_taint(block) is None
+
+
+def test_signature_present_rejects_random_ascii_block():
+    """M4: even a clean-looking armor with random non-base64 content fails
+    the gpg --list-packets structural parse."""
+
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not on PATH; structural parse degrades to WARN")
+
+    text = (
+        "## Cryptographic signature\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "AAAARandomLooKingDataNotRealPGP\n"
+        "-----END PGP SIGNATURE-----\n"
+    )
+    result = cms.check_signature_present(text)
+    assert result.ok is False
+    assert "structural parse" in result.detail
+
+
 def test_signature_present_template_placeholder_rejected():
     text = (
         "## Cryptographic signature\n"
@@ -298,14 +370,17 @@ def test_signature_present_template_placeholder_rejected():
     assert "placeholder" in result.detail
 
 
-def test_signature_present_real_block_accepted():
-    text = (
-        "## Cryptographic signature\n"
-        "-----BEGIN PGP SIGNATURE-----\n"
-        "AAAARealLooKingDataBLOB\n"
-        "-----END PGP SIGNATURE-----\n"
-    )
-    result = cms.check_signature_present(text)
+def test_signature_present_real_block_accepted(gpg_keyring: tuple[Path, str]):
+    """M4: only a real, gpg-parseable PGP armor block passes presence check.
+
+    The pre-M4 implementation accepted any string containing the BEGIN+END
+    armor markers; this test now requires a real signed block.
+    """
+
+    home, _ = gpg_keyring
+    payload = "demo payload\n"
+    doc = _make_signed_signoff_doc(payload, home)
+    result = cms.check_signature_present(doc)
     assert result.ok is True
 
 
@@ -409,14 +484,28 @@ def test_render_report_indicates_pass_and_fail():
 # --------------------------------------------------------------------------- #
 
 
-def test_check_signoff_full_success(fixture_repo: Path, monkeypatch: pytest.MonkeyPatch):
-    """Compose a valid registry + signoff and assert the full check passes."""
+def test_check_signoff_full_success(
+    fixture_repo: Path, gpg_keyring: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+):
+    """Compose a valid registry + signoff and assert the full check passes.
 
+    M4: requires a real PGP-signed payload because the signature_present
+    check now invokes `gpg --list-packets` to confirm structural validity.
+    """
+
+    home, _ = gpg_keyring
     signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
     # H4: use the real first-add SHA for alice's CoI declaration so the
     # coi_referenced sub-checks (path resolves + first-add commit) pass.
     real_sha = _coi_sha(fixture_repo)
-    signoff_path.write_text(_signoff_doc(handle="alice", coi_sha=real_sha), encoding="utf-8")
+    payload = _signoff_doc(handle="alice", coi_sha=real_sha, include_signature=False)
+    # Replace the placeholder "(missing)" signature section with a real
+    # PGP-signed armor block. The _make_signed_signoff_doc helper appends
+    # a fresh "## Cryptographic signature" + armor; strip the "(missing)"
+    # placeholder section first.
+    payload_no_sig = payload.replace("## Cryptographic signature\n(missing)\n", "")
+    doc_text = _make_signed_signoff_doc(payload_no_sig, home)
+    signoff_path.write_text(doc_text, encoding="utf-8")
 
     # Prevent --require-signature path failure when toolchain absent.
     results = cms.check_signoff(signoff_path, fixture_repo, require_signature=False)

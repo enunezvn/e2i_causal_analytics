@@ -847,17 +847,121 @@ def check_selection_rule(
     )
 
 
-def check_signature_present(doc_text: str) -> CheckResult:
-    """A PGP-armor block or sigstore JSON block must be present in the doc."""
+# Tokens whose presence inside a PGP armor block indicates the block is
+# render-paste contaminated (HTML/JATS escape entities, tags, or rendered
+# Markdown emphasis), NOT the literal ASCII-armor that gpg expects. See M4.
+_RENDER_PASTE_TAINT_PATTERNS: tuple[str, ...] = (
+    "&amp;",
+    "&lt;",
+    "&gt;",
+    "&#",
+    "<p>",
+    "</p>",
+    "<br",
+    "<jats:",
+    "</jats:",
+    "<span",
+    "</span>",
+    "<em>",
+    "</em>",
+    "<i>",
+    "</i>",
+)
 
-    if "-----BEGIN PGP SIGNATURE-----" in doc_text and "-----END PGP SIGNATURE-----" in doc_text:
-        if "<signature blob>" in doc_text:
+
+def _pgp_block_taint(armor_block: str) -> Optional[str]:
+    """Return the first taint token detected in ``armor_block``, or None.
+
+    A taint token (HTML entity, tag, JATS namespace prefix) inside the
+    PGP block indicates the doc was rendered + copy-pasted rather than
+    raw-armor-pasted. gpg cannot verify a tainted block, so we reject it
+    upstream of the verifier.
+    """
+
+    for token in _RENDER_PASTE_TAINT_PATTERNS:
+        if token in armor_block:
+            return token
+    return None
+
+
+def _pgp_block_parses_via_gpg(armor_block: str) -> tuple[bool, str]:
+    """Run ``gpg --list-packets`` against the block and check for a sigpacket.
+
+    Returns ``(ok, detail)``. ``ok`` is True iff gpg parses at least one
+    packet AND the output mentions a "signature packet" (gpg's name for
+    type-2 packets). When gpg is unavailable, returns ``(True,
+    'WARN: gpg unavailable')`` so the function degrades gracefully in
+    advisory mode (require_signature path runs the real gpg --verify).
+    """
+
+    if shutil.which("gpg") is None:
+        return True, "WARN: gpg unavailable; structural parse skipped"
+
+    try:
+        completed = subprocess.run(
+            ["gpg", "--batch", "--list-packets"],
+            input=armor_block,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, f"gpg --list-packets failed: {exc}"
+
+    out = (completed.stdout or "") + (completed.stderr or "")
+    # gpg's --list-packets writes "off=N ctb=NN tag=2 hlen=...len=... :signature packet:"
+    # to stdout. Substring search on "signature packet" is enough to
+    # distinguish well-formed armor from random ASCII.
+    if "signature packet" in out:
+        return True, "gpg --list-packets recognises a signature packet"
+    return False, f"gpg --list-packets did not recognise a signature packet: {out.strip()[:200]}"
+
+
+def check_signature_present(doc_text: str) -> CheckResult:
+    """A PGP-armor block or sigstore JSON block must be present in the doc.
+
+    M4 hardening:
+
+    1. Use the ``_extract_pgp_armor_block`` regex (NOT a substring search)
+       so a doc that contains stray "-----BEGIN PGP SIGNATURE-----" text
+       outside an armor block does not trivially pass.
+    2. Reject the block when it contains render-paste taint tokens (HTML
+       entities, JATS tags, etc.) — these indicate the reviewer pasted a
+       rendered HTML view rather than the raw ASCII armor that gpg parses.
+    3. Run ``gpg --list-packets`` to require the block be structurally
+       recognisable as containing a signature packet. The check degrades
+       to WARN if gpg is unavailable, since require_signature path will
+       still run a real ``gpg --verify``.
+
+    For sigstore JSON the heuristic remains a regex match on the JSON
+    fence; the bundle is structurally validated under require_signature.
+    """
+
+    pgp_block = _extract_pgp_armor_block(doc_text)
+    if pgp_block is not None:
+        if "<signature blob>" in pgp_block:
             return CheckResult(
                 "signature_present",
                 False,
                 "PGP block contains template placeholder '<signature blob>'",
             )
-        return CheckResult("signature_present", True, "PGP signature block present")
+        taint = _pgp_block_taint(pgp_block)
+        if taint is not None:
+            return CheckResult(
+                "signature_present",
+                False,
+                f"PGP block is render-paste tainted (token={taint!r}); "
+                f"paste raw ASCII armor, not rendered HTML/JATS",
+            )
+        ok, detail = _pgp_block_parses_via_gpg(pgp_block)
+        if not ok:
+            return CheckResult(
+                "signature_present",
+                False,
+                f"PGP block fails structural parse: {detail}",
+            )
+        return CheckResult("signature_present", True, f"PGP signature block present ({detail})")
     # Sigstore bundle is a plain JSON object inside a ```json fence; match a
     # rough heuristic — we don't parse the JSON here.
     if re.search(r"```json[\s\S]*?\"signatures\"[\s\S]*?```", doc_text):
