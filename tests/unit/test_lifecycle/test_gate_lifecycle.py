@@ -148,6 +148,17 @@ class TestIsTransitionAllowed:
             GateLifecycleState.DEVELOPMENT, GateLifecycleState.ENFORCED
         )
 
+    def test_development_cannot_skip_to_calibrating(self) -> None:
+        """N2 finding L3: DEVELOPMENT -> CALIBRATING is INTENTIONALLY
+        blocked. Lifecycle order is DEVELOPMENT -> ADVISORY ->
+        CALIBRATING. ADVISORY is the operator-feedback window; skipping
+        it would enter the would-be-reject window without ever showing
+        signals to operators.
+        """
+        assert not is_transition_allowed(
+            GateLifecycleState.DEVELOPMENT, GateLifecycleState.CALIBRATING
+        )
+
     def test_advisory_can_advance_to_calibrating(self) -> None:
         assert is_transition_allowed(GateLifecycleState.ADVISORY, GateLifecycleState.CALIBRATING)
 
