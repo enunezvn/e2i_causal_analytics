@@ -1,19 +1,25 @@
 name: Tier 1B Gate B2 Experiment (G2)
 
 # Plan v4 Gate G2 — CI-controlled execution of the Tier 1B Gate B2
-# pre-specified ΔAUC + ECE + CV-stability experiment. The first green
-# run from S_prespec is the LOAD-BEARING G2 result.
+# pre-specified ΔAUC + ECE + CV-stability experiment. The first
+# ATTEMPTED run from S_prespec is the LOAD-BEARING G2 result.
 #
 # Trigger: tags matching `tier1b-b2-experiment-*`. The workflow:
 #   1. Checks out the tag SHA.
-#   2. Verifies the experiment commit is a CHILD of S_prespec via
-#      scripts/check_g2_commit_graph.py.
-#   3. Verifies the dataset content hashes match the pinned values in
-#      docs/specs/tier1b_b2_prespec_20260510.md via
-#      scripts/verify_g2_prespec_dataset_hashes.py.
-#   4. Runs scripts/run_tier1b_b2_experiment.py against the named
-#      cohort.
-#   5. Uploads the run manifest as a CI artifact.
+#   2. Checks out a SECOND copy of the verifier scripts from the
+#      protected `origin/main` ref (HIGH-6 trust boundary).
+#   3. Verifies the experiment commit is a CHILD of S_prespec via
+#      the protected check_g2_commit_graph.py.
+#   4. Verifies the dataset content hashes match the pinned values in
+#      the S_prespec memo via the protected
+#      verify_g2_prespec_dataset_hashes.py with --strict and
+#      --prespec-sha <S_prespec_SHA>.
+#   5. Enforces "first attempted run is load-bearing" via the run
+#      registry at .github/g2_runs/<S_prespec>.json (HIGH-5).
+#   6. Runs scripts/run_tier1b_b2_experiment.py against the
+#      load-bearing default cohort.
+#   7. Uploads the run manifest as a CI artifact + appends to
+#      gate_history (MED-10).
 #
 # Lifecycle state: `LIFECYCLE_STATE_G2 = ADVISORY` until the first
 # green run lands. Promotion to ENFORCED requires the signed
@@ -23,55 +29,36 @@ name: Tier 1B Gate B2 Experiment (G2)
 # the memo's load-bearing values requires a NEW memo at a fresh date
 # per the v3 §8 anti-threshold-shopping protocol.
 #
-# H3 SECURITY ADVISORY (mirrors the methodology_signoff_guard pattern):
-# this workflow currently runs the verifier scripts FROM the tag
-# checkout — i.e. the tagged commit can also weaken the verifiers.
-# Production deployments MUST add CODEOWNERS gating on:
-#   - scripts/check_g2_commit_graph.py
-#   - scripts/verify_g2_prespec_dataset_hashes.py
-#   - scripts/run_tier1b_b2_experiment.py
-#   - .github/workflows/tier1b_b2_experiment.yml
-# OR move the verifiers to a separate protected repository and reference
-# them via `uses: org/governance-actions/g2-verifier@<sha>`.
+# HIGH-4 fix: workflow_dispatch is REMOVED from this workflow. Manual
+# diagnostic runs that target snooped cohorts live in the separate
+# `tier1b_b2_diagnostic.yml` workflow with non-load-bearing artifacts.
+# HIGH-6 fix: verifier scripts are checked out from origin/main into
+# `governance_checkout/` and run from there, so the tagged commit
+# CANNOT weaken the verifiers. CODEOWNERS gating on origin/main is
+# still required (the protected ref is the trust boundary).
 
 on:
   push:
     tags:
       - 'tier1b-b2-experiment-*'
-  workflow_dispatch:
-    inputs:
-      cohort_label:
-        description: 'Cohort identifier (default: optum_initiation_default)'
-        required: false
-        default: 'optum_initiation_default'
-        type: choice
-        options:
-          - optum_initiation_default
-          - optum_initiation_relaxed
-      allow_data_snooped:
-        description: 'Allow runs against data_snooped=true cohorts (informational only)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
 
 env:
   PYTHON_VERSION: '3.12'
   PRE_SPEC_PATH: 'docs/specs/tier1b_b2_prespec_20260510.md'
+  GOVERNANCE_REF: 'origin/main'
 
 jobs:
   g2-experiment:
-    name: G2 Experiment Run
+    name: G2 Experiment Run (LOAD-BEARING)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (tag SHA)
         uses: actions/checkout@v4
         with:
-          # Full history needed so check_g2_commit_graph.py can run
-          # `git log --diff-filter=A --follow` to discover S_prespec.
+          # Full history needed so the introducing-commit lookup of
+          # the pre-spec memo (S_prespec discovery) and the run
+          # registry's prior-run query both have the data they need.
           fetch-depth: 0
 
       - name: Set up Python
@@ -89,34 +76,26 @@ jobs:
           # needs sklearn/numpy/pandas + the project's local packages.
           pip install -e .
 
-      - name: Verify cohort dataset hashes vs pre-spec memo
-        # First gate: data must not have drifted between memo-lock and
-        # tag. Mismatch is a hard failure (the threshold-shopping
-        # defense's data-content half).
+      - name: HIGH-6 — Stage protected verifier scripts from origin/main
+        # The tagged commit could include weakened versions of the
+        # verifiers. We check out a clean copy from origin/main into
+        # governance_checkout/ and run the verifiers from there.
+        # CODEOWNERS gating on origin/main (configured in
+        # .github/CODEOWNERS) is the trust boundary.
         run: |
           set -euo pipefail
-          python scripts/verify_g2_prespec_dataset_hashes.py
+          mkdir -p governance_checkout/scripts
+          git fetch origin main --depth=1
+          for s in check_g2_commit_graph.py verify_g2_prespec_dataset_hashes.py; do
+            git show "${GOVERNANCE_REF}:scripts/${s}" > "governance_checkout/scripts/${s}"
+            chmod +x "governance_checkout/scripts/${s}"
+          done
+          echo "[OK] staged $(ls governance_checkout/scripts/) from ${GOVERNANCE_REF}"
 
-      - name: Verify commit-graph parent constraint
-        # Second gate: the experiment commit (= the tagged commit)
-        # MUST be a CHILD of S_prespec. Anything else is a parent-
-        # constraint violation.
+      - name: Discover S_prespec SHA
+        id: prespec
         run: |
           set -euo pipefail
-          python scripts/check_g2_commit_graph.py \
-            --prespec-path "$PRE_SPEC_PATH" \
-            --experiment-sha HEAD
-
-      - name: Verify tag commit references S_prespec
-        # Third gate: the tag's commit message MUST mention S_prespec
-        # (either by full SHA or short SHA), making the parent
-        # relationship visible in the tag annotation.
-        env:
-          GIT_REF: ${{ github.ref }}
-        run: |
-          set -euo pipefail
-          # Discover S_prespec by inspecting the introducing commit of
-          # the pre-spec memo (matches check_g2_commit_graph.py logic).
           S_PRESPEC=$(git log --diff-filter=A --follow --format=%H -- "$PRE_SPEC_PATH" | tail -n 1 || true)
           if [ -z "$S_PRESPEC" ]; then
             echo "::error::could not discover S_prespec by introducing-commit lookup"
@@ -124,9 +103,88 @@ jobs:
           fi
           S_PRESPEC_SHORT=$(git rev-parse --short=8 "$S_PRESPEC")
           echo "S_prespec=$S_PRESPEC ($S_PRESPEC_SHORT)"
-          # Tag annotation message — `git for-each-ref` retrieves the
-          # annotation body; falls back to the commit message for
-          # lightweight tags.
+          echo "sha=$S_PRESPEC" >> "$GITHUB_OUTPUT"
+          echo "short=$S_PRESPEC_SHORT" >> "$GITHUB_OUTPUT"
+
+      - name: HIGH-5 — Enforce first-attempted-run-is-load-bearing
+        # Maintain a machine-readable run registry at
+        # .github/g2_runs/<S_prespec>.json. The first run against a
+        # given S_prespec writes its tag + SHA into the registry; any
+        # subsequent run sees the registry entry and FAILS LOUDLY so
+        # threshold-shoppers cannot keep tagging child commits until
+        # random split noise produces a favorable manifest.
+        env:
+          S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+          TAG_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REGISTRY="$GITHUB_WORKSPACE/.github/g2_runs/${S_PRESPEC}.json"
+          if [ -f "$REGISTRY" ]; then
+            echo "::error::G2 run registry entry already exists at ${REGISTRY}."
+            echo "::error::Per HIGH-5 (first-attempted-run-is-load-bearing), only ONE workflow run from S_prespec=${S_PRESPEC} is permitted."
+            cat "$REGISTRY"
+            exit 1
+          fi
+          # Defensive secondary check: query GitHub API for prior runs
+          # against this S_prespec. If we ever lose the registry file
+          # (e.g., a force-push wipes it), the API record persists.
+          if command -v gh >/dev/null 2>&1; then
+            PRIOR_RUNS=$(gh run list --workflow=tier1b_b2_experiment.yml --json conclusion,headSha,databaseId 2>/dev/null || echo "[]")
+            CURR_RUN_ID="${GITHUB_RUN_ID:-}"
+            # Note: prior-run filtering is best-effort; the registry
+            # file is the load-bearing control.
+            echo "[INFO] prior runs of this workflow: ${PRIOR_RUNS}"
+          fi
+          mkdir -p "$(dirname "$REGISTRY")"
+          cat > "$REGISTRY" <<EOF
+          {
+            "s_prespec_sha": "${S_PRESPEC}",
+            "tag_ref": "${TAG_REF}",
+            "tag_sha": "${GITHUB_SHA}",
+            "workflow_run_id": "${GITHUB_RUN_ID}",
+            "workflow_run_url": "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}",
+            "first_attempt_timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          echo "[OK] registry entry written: ${REGISTRY}"
+
+      - name: Verify commit-graph parent constraint (governance checkout)
+        # Second gate: the experiment commit (= the tagged commit)
+        # MUST be a CHILD of S_prespec. HIGH-6: run from the protected
+        # checkout, not the tag's checkout.
+        env:
+          S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python governance_checkout/scripts/check_g2_commit_graph.py \
+            --prespec-sha "$S_PRESPEC" \
+            --experiment-sha HEAD
+
+      - name: Verify cohort dataset hashes vs S_prespec memo (governance checkout)
+        # First gate: data must not have drifted between memo-lock and
+        # tag. HIGH-2: --strict (CI=true also forces strict). HIGH-3:
+        # --prespec-sha pins hashes to the immutable S_prespec content.
+        # HIGH-6: run from the protected checkout.
+        env:
+          CI: 'true'
+          S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python governance_checkout/scripts/verify_g2_prespec_dataset_hashes.py \
+            --strict \
+            --prespec-sha "$S_PRESPEC"
+
+      - name: Verify tag commit references S_prespec
+        # Third gate: the tag's commit message MUST mention S_prespec
+        # (either by full SHA or short SHA), making the parent
+        # relationship visible in the tag annotation.
+        env:
+          GIT_REF: ${{ github.ref }}
+          S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+          S_PRESPEC_SHORT: ${{ steps.prespec.outputs.short }}
+        run: |
+          set -euo pipefail
           TAG_NAME="${GIT_REF#refs/tags/}"
           MSG=$(git for-each-ref "refs/tags/$TAG_NAME" --format='%(contents)' 2>/dev/null || true)
           if [ -z "$MSG" ]; then
@@ -142,37 +200,44 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve experiment inputs
-        id: inputs
-        # workflow_dispatch may pass cohort_label/allow_data_snooped;
-        # tag-triggered runs default to optum_initiation_default
-        # (data-snooped cohorts are not load-bearing per pre-spec §2.2).
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            COHORT="${{ inputs.cohort_label }}"
-            ALLOW_SNOOPED="${{ inputs.allow_data_snooped }}"
-          else
-            COHORT="optum_initiation_default"
-            ALLOW_SNOOPED="false"
-          fi
-          echo "cohort=$COHORT" >> "$GITHUB_OUTPUT"
-          echo "allow_snooped=$ALLOW_SNOOPED" >> "$GITHUB_OUTPUT"
-
-      - name: Run experiment harness
+      - name: Run experiment harness (load-bearing default cohort only)
+        # HIGH-4: workflow_dispatch removed from this workflow, so the
+        # cohort label is hardcoded to optum_initiation_default. Manual
+        # diagnostic runs against snooped cohorts must use the separate
+        # tier1b_b2_diagnostic.yml workflow.
         env:
           CI: 'true'
         run: |
           set -euo pipefail
-          ARGS=(--cohort-label "${{ steps.inputs.outputs.cohort }}")
-          ARGS+=(--manifest-out g2_run_manifest.json)
-          if [ "${{ steps.inputs.outputs.allow_snooped }}" = "true" ]; then
-            ARGS+=(--allow-data-snooped)
-          fi
-          python scripts/run_tier1b_b2_experiment.py "${ARGS[@]}" \
+          python scripts/run_tier1b_b2_experiment.py \
+            --cohort-label optum_initiation_default \
+            --manifest-out g2_run_manifest.json \
             | tee g2_stdout.log
 
-      - name: Upload run manifest as CI artifact
+      - name: Append G2 outcome to gate_history (MED-10)
+        # MED-10 fix: the manifest is appended to the N1 audit trail
+        # so the regulatory eligibility record durably captures G2's
+        # pass/fail outcome alongside the commit SHA, tag, S_prespec,
+        # and dataset hashes.
+        if: always()
+        env:
+          S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+          TAG_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ ! -f g2_run_manifest.json ]; then
+            echo "::warning::g2_run_manifest.json missing; skipping audit append"
+            exit 0
+          fi
+          python scripts/append_g2_to_gate_history.py \
+            --manifest g2_run_manifest.json \
+            --tag-ref "$TAG_REF" \
+            --tag-sha "$GITHUB_SHA" \
+            --s-prespec-sha "$S_PRESPEC" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --output g2_gate_history_entry.json
+
+      - name: Upload run manifest + audit entry as CI artifact
         # The manifest is the load-bearing record. Always upload it,
         # even on failure, so the operator can inspect which threshold
         # failed and on what observed value.
@@ -183,12 +248,14 @@ jobs:
           path: |
             g2_run_manifest.json
             g2_stdout.log
+            g2_gate_history_entry.json
+            .github/g2_runs/*.json
           retention-days: 90
 
       - name: Summary
         if: always()
         run: |
-          echo "## Gate G2 Experiment Run" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Gate G2 Experiment Run (LOAD-BEARING)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ -f g2_run_manifest.json ]; then
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
