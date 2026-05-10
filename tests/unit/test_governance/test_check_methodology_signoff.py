@@ -436,6 +436,32 @@ def test_workflow_yaml_parses():
     assert invokes, "workflow does not invoke check_methodology_signoff.py"
 
 
+def test_workflow_has_has_files_boolean(tmp_path: Path):
+    """M3: the workflow must write a `has_files` boolean output and gate on it."""
+
+    workflow_path = PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
+    text = workflow_path.read_text(encoding="utf-8")
+    assert "has_files=true" in text, "workflow must write has_files=true"
+    assert "has_files=false" in text, "workflow must write has_files=false"
+    # Downstream gating uses outputs.has_files == 'true' rather than empty-
+    # string testing on outputs.files.
+    assert "outputs.has_files == 'true'" in text
+    # Whitespace-only lines must be stripped from the candidate file list.
+    assert "grep -v '^[[:space:]]*$'" in text
+
+
+def test_workflow_uses_base_ref_pinned_validator():
+    """H3: the workflow must fetch the validator from base ref before invoking it."""
+
+    workflow_path = PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
+    text = workflow_path.read_text(encoding="utf-8")
+    # base_sha-pinned fetch via `git show <base_sha>:scripts/...`.
+    assert "git show" in text
+    assert "scripts/check_methodology_signoff.py" in text
+    # /tmp/governance/check_methodology_signoff.py is the pinned-copy path.
+    assert "/tmp/governance/check_methodology_signoff.py" in text
+
+
 def test_script_exit_code_on_template():
     """End-to-end CLI test: the script returns non-zero on a template file."""
 

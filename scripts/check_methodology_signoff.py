@@ -34,6 +34,19 @@ Design notes:
   (``docs/results/optum_methodology_signoff_template.md`` and the rejection
   twin) are explicitly skipped by name — the CI workflow only invokes this
   script on dated artifacts.
+
+H3 SECURITY ADVISORY:
+    A pull request that adds a sign-off artifact can ALSO modify this
+    validator script and the workflow YAML; without mitigation, the PR's
+    weakened copy of the script will validate the PR's own artifact. The
+    workflow at ``.github/workflows/methodology_signoff_guard.yml``
+    addresses this by copying the validator from the PR's base SHA via
+    ``git show <base_sha>:scripts/check_methodology_signoff.py`` BEFORE
+    invoking it. In production deployment, the validator should additionally
+    be moved to a separate, protected repository and pinned by SHA. Until
+    that happens, ``scripts/check_methodology_signoff.py`` and
+    ``.github/workflows/methodology_signoff_guard.yml`` MUST be CODEOWNERS-
+    gated to require security-team review.
 """
 
 from __future__ import annotations
