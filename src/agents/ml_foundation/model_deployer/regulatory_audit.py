@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 class RegulatoryAuditMutationError(RuntimeError):
@@ -122,80 +122,132 @@ class GateEvaluationEntry:
 # ``"literature_anchored"`` lets a gate count toward the (1) precondition
 # in ``is_regulatory_eligible``. Other values are recorded for audit
 # purposes but cause the gate to be SKIPPED for eligibility decisions.
+#
+# Codex-rescue N1-H2 pass-2 sharpening: ``"unknown"`` is the default
+# verdict when the (gate, value) pair has no canonical doc reference —
+# replaces silent ``None``/``"cohort_fitted"`` defaults that the prior
+# classifier returned. The eligibility check denies for any provenance
+# other than ``"literature_anchored"``, and ``"unknown"`` makes the
+# denial reason explicit on the gate-history entry.
 THRESHOLD_PROVENANCE_LITERATURE_ANCHORED: str = "literature_anchored"
 THRESHOLD_PROVENANCE_COHORT_FITTED: str = "cohort_fitted"
 THRESHOLD_PROVENANCE_OPERATOR_OVERRIDE: str = "operator_override"
+THRESHOLD_PROVENANCE_UNKNOWN: str = "unknown"
 
 ALLOWED_THRESHOLD_PROVENANCE: frozenset[str] = frozenset(
     {
         THRESHOLD_PROVENANCE_LITERATURE_ANCHORED,
         THRESHOLD_PROVENANCE_COHORT_FITTED,
         THRESHOLD_PROVENANCE_OPERATOR_OVERRIDE,
+        THRESHOLD_PROVENANCE_UNKNOWN,
     }
 )
 
-# Registry of gates whose literature-anchored threshold is signed off.
-# Codex-rescue N1-H2: only thresholds whose value is registered here as
-# the canonical literature anchor are eligible for the (1) precondition.
-# A registered gate uses ``threshold_provenance="literature_anchored"``
-# only if the success_criteria value matches the registered anchor (see
-# ``classify_threshold_provenance``).
+# Registry of (gate, exact-threshold-value) → canonical doc-reference.
+# Codex-rescue N1-H2 pass-2 sharpening: the registry is no longer
+# ``Dict[str, float]`` (gate → anchor) because that conflates "value
+# matches a literature-anchored value" with "operator certified the
+# value as such". A registered gate's value is now keyed on the EXACT
+# (gate, value) pair so registered ``minimum_auc=0.75`` is the only
+# pair that auto-classifies as ``literature_anchored``; any other
+# value (relaxed OR coincidentally-tighter) classifies as ``unknown``
+# and the caller must explicitly opt into a non-literature provenance
+# via the ``register_cohort_fitted_threshold`` API or pass
+# ``declared_provenance`` explicitly to ``classify_threshold_provenance``.
+#
+# Doc-reference values point at the canonical sign-off doc whose
+# threshold is being mirrored — operators must be able to trace any
+# literature_anchored verdict to a citable artifact.
 #
 # Sources:
-#   - minimum_auc=0.75: scope_definer/nodes/criteria_validator.py:118-120,
-#     anchored to the binary-classification floor for clinical-decision
-#     models (Vickers 2019; Cook 2007). Specifically the floor below
-#     which the literature treats the model as ineligible regardless of
-#     other quality signals.
-LITERATURE_ANCHORED_THRESHOLDS: Dict[str, float] = {
-    "minimum_auc": 0.75,
+#   - minimum_auc=0.75 → scope_definer/nodes/criteria_validator.py:
+#     118-120, anchored to the binary-classification floor for
+#     clinical-decision models (Vickers 2019; Cook 2007). Specifically
+#     the floor below which the literature treats the model as
+#     ineligible regardless of other quality signals.
+LITERATURE_ANCHORED_THRESHOLDS: Dict[Tuple[str, float], str] = {
+    (
+        "minimum_auc",
+        0.75,
+    ): "scope_definer/nodes/criteria_validator.py:118-120 (Vickers 2019; Cook 2007)",
 }
+
+
+def get_literature_anchor_doc_ref(gate_name: str, threshold: float) -> Optional[str]:
+    """Return the canonical doc-reference for a (gate, threshold) pair.
+
+    Codex-rescue N1-H2 pass-2 sharpening: callers can recover the
+    sign-off doc-ref for any registered (gate, value) pair. Returns
+    None if the pair is not registered — a missing registration is the
+    expected signal that the caller is trying to relax / tighten the
+    gate without a literature anchor.
+    """
+    try:
+        threshold_f = float(threshold)
+    except (TypeError, ValueError):
+        return None
+    return LITERATURE_ANCHORED_THRESHOLDS.get((gate_name, threshold_f))
 
 
 def classify_threshold_provenance(
     gate_name: str,
     threshold: Any,
     declared_provenance: Any = None,
-) -> str | None:
+) -> str:
     """Return the provenance literal for a (gate, threshold) pair.
 
-    Codex-rescue N1-H2: the deployer cannot trust caller-declared
-    provenance blindly — a relaxed threshold tagged "literature_anchored"
-    must STILL match the registered anchor. The classifier:
+    Codex-rescue N1-H2 pass-2 sharpening: the registry is now
+    ``Dict[Tuple[str, float], str]`` mapping ``(gate, exact_value)``
+    to canonical doc-ref. The classifier returns
+    ``"literature_anchored"`` ONLY when the (gate, threshold) pair is
+    EXACTLY in the registry. Any other case returns ``"unknown"``
+    unless the caller explicitly declares a non-literature provenance
+    (``"cohort_fitted"`` or ``"operator_override"``).
 
-    * If ``gate_name`` is in ``LITERATURE_ANCHORED_THRESHOLDS`` AND the
-      threshold matches the registered anchor, returns
-      ``"literature_anchored"`` (auto-detected from the registry — the
-      declared_provenance argument is informational only on this path).
-    * Else if ``declared_provenance`` is ``"literature_anchored"`` but
-      the threshold does NOT match the registry, returns ``None`` —
-      blocks the laundering attack.
-    * Else if ``declared_provenance`` is in
-      ``ALLOWED_THRESHOLD_PROVENANCE`` (cohort_fitted /
-      operator_override), returns that — recorded for audit but counts
-      as non-literature for eligibility.
-    * Otherwise returns ``None`` — the gate is SKIPPED for eligibility.
+    Behavior matrix:
+
+    * Exact (gate, value) match in registry → ``"literature_anchored"``,
+      regardless of ``declared_provenance``.
+    * Caller declared ``"literature_anchored"`` but pair NOT in registry
+      → ``"unknown"`` (drops the laundering attack).
+    * Caller declared ``"cohort_fitted"`` or ``"operator_override"``
+      and pair NOT in registry → that declared value (passes through;
+      counts as non-literature for eligibility).
+    * No declaration AND pair NOT in registry → ``"unknown"``.
+
+    The classifier no longer returns ``None`` — every code path returns
+    a string from the ``ALLOWED_THRESHOLD_PROVENANCE`` set. ``"unknown"``
+    is the new default when nothing matches.
     """
-    anchor = LITERATURE_ANCHORED_THRESHOLDS.get(gate_name)
-    if anchor is not None and threshold is not None:
+    # Try the exact (gate, value) lookup first — this is the only path
+    # that can return ``"literature_anchored"``.
+    if threshold is not None:
         try:
-            if float(threshold) == float(anchor):
-                return THRESHOLD_PROVENANCE_LITERATURE_ANCHORED
+            threshold_f = float(threshold)
         except (TypeError, ValueError):
-            return None
+            # Non-numeric threshold cannot be in the registry.
+            threshold_f = None
+        if threshold_f is not None and (gate_name, threshold_f) in LITERATURE_ANCHORED_THRESHOLDS:
+            return THRESHOLD_PROVENANCE_LITERATURE_ANCHORED
 
-    # If caller declared "literature_anchored" but the threshold does
-    # not match the registry, drop it on the floor (do not launder).
+    # If caller declared "literature_anchored" but the pair is not in
+    # the registry, drop it on the floor — do not launder a relaxed or
+    # arbitrarily-tightened threshold by tagging it.
     if declared_provenance == THRESHOLD_PROVENANCE_LITERATURE_ANCHORED:
-        return None
+        return THRESHOLD_PROVENANCE_UNKNOWN
 
-    if declared_provenance in ALLOWED_THRESHOLD_PROVENANCE:
-        # Pass through caller-declared provenance for non-literature
-        # values — the eligibility check only counts
-        # ``literature_anchored``, so this still SKIPs eligibility.
-        return str(declared_provenance)
+    # Pass-through caller-declared non-literature provenance values.
+    # The eligibility check only counts ``literature_anchored``, so
+    # this still SKIPs the gate for eligibility — but the explicit
+    # tag is preserved for audit/dashboards.
+    if declared_provenance == THRESHOLD_PROVENANCE_COHORT_FITTED:
+        return THRESHOLD_PROVENANCE_COHORT_FITTED
+    if declared_provenance == THRESHOLD_PROVENANCE_OPERATOR_OVERRIDE:
+        return THRESHOLD_PROVENANCE_OPERATOR_OVERRIDE
 
-    return None
+    # Default: unknown — the gate-history entry will surface this so
+    # the operator can see exactly why the gate was skipped.
+    return THRESHOLD_PROVENANCE_UNKNOWN
 
 
 @dataclass(frozen=True)

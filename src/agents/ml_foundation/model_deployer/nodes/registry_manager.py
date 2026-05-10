@@ -425,7 +425,13 @@ def _evaluate_absolute_threshold_gates(
             declared_provenance=declared_provenance_map.get(gate_name),
         )
         if provenance != THRESHOLD_PROVENANCE_LITERATURE_ANCHORED:
-            anchor_value = LITERATURE_ANCHORED_THRESHOLDS.get(gate_name)
+            # Codex-rescue N1-H2 pass-2 sharpening: registry is keyed
+            # on (gate, exact-value) tuples — surface every registered
+            # value for this gate in the failure message so the operator
+            # can see which thresholds ARE signed off.
+            registered_values = sorted(
+                v for (g, v) in LITERATURE_ANCHORED_THRESHOLDS.keys() if g == gate_name
+            )
             audit.append_gate_evaluation(
                 timestamp=timestamp,
                 gate_name=gate_name,
@@ -438,7 +444,8 @@ def _evaluate_absolute_threshold_gates(
             failures.append(
                 f"Gate N1: '{gate_name}' skipped — threshold={threshold} "
                 f"not in literature-anchored registry "
-                f"(expected {anchor_value}, got provenance={provenance}). "
+                f"(registered values for '{gate_name}': {registered_values}, "
+                f"got provenance={provenance}). "
                 "Eligibility CANNOT be granted against arbitrary "
                 "success_criteria — provenance must be 'literature_anchored'."
             )
