@@ -5972,17 +5972,17 @@ async def run_pipeline(
             "validation_metrics": {
                 k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
                 for k, v in (state.get("validation_metrics") or {}).items()
-                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+                if isinstance(v, (int, float, str, bool)) or v is None
             },
             "test_metrics": {
                 k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
                 for k, v in (state.get("test_metrics") or {}).items()
-                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+                if isinstance(v, (int, float, str, bool)) or v is None
             },
             "train_metrics": {
                 k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
                 for k, v in (state.get("train_metrics") or {}).items()
-                if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+                if isinstance(v, (int, float, str, bool)) or v is None
             },
             "experiment_id": state.get("experiment_id"),
             "pipeline_halted": bool(state.get("pipeline_halted", False)),
