@@ -79,6 +79,19 @@ if TYPE_CHECKING:
     from src.data.kg.types import EnsembleVerdict, KGEdge
 
 
+class _HblpRoutingViolationError(RuntimeError):
+    """Raised when ``_compose_legacy_verdict`` receives a pre-classified
+    ``adversarial_input`` lacking the ``_hblp_classified=True`` tag.
+
+    Plan v4 §2 G3 / codex MED-5: every Layer 3 severity classification
+    MUST route through ``_adversarial_input → hblp_classify``. The
+    wiring-guard's AST scan only verifies static callsites; this
+    runtime check rejects pre-classified dicts that bypassed the
+    routing chain (e.g. a hand-rolled legacy ``if z > HIGH_Z`` ladder
+    constructed in a caller and passed in as ``adversarial_input``).
+    """
+
+
 def _get_ensemble_voter_class() -> type:
     """Return the ``EnsembleVoter`` class via lazy import.
 
@@ -605,6 +618,14 @@ def _adversarial_input(
         "null_std": score.get("null_std"),
         "p_value": score.get("p_value"),
         "n_permutations": score.get("n_permutations"),
+        # Plan v4 §2 G3 / codex MED-5: tag the adversarial-input dict so
+        # ``_compose_legacy_verdict`` can verify the severity classifi-
+        # cation came from ``hblp_classify`` (not a hand-rolled legacy
+        # ``if z > HIGH_Z`` ladder, which would dodge the wiring guard
+        # at runtime). The tag is set unconditionally — the degenerate-
+        # z path also routes severity through this function so the same
+        # invariant holds.
+        "_hblp_classified": True,
     }
 
 
@@ -790,6 +811,7 @@ def _compose_legacy_verdict(
     voter: EnsembleVoter,
     layer_1_input: Optional[dict[str, Any]] = None,
     adversarial_input: Optional[dict[str, Any]] = None,
+    adversarial_score: Optional[dict[str, Any]] = None,
     short_circuit_evidence: Optional[str] = None,
     kg_edges: Iterable["KGEdge"] = (),
     feature_entity_ids: Iterable[str] = (),
@@ -817,20 +839,67 @@ def _compose_legacy_verdict(
     defaults preserve Stage 1 behavior — the voter's KG path is a
     no-op.
 
-    Plan v4 §2 G3 wiring (post-2026-05-10): ``n_train_pos`` and
-    ``layer_1_declared_safe`` are threaded from the orchestrator at
-    ``adaptive_validity_check`` so the Layer 3 severity classification
-    routes through ``hblp_classify`` (the HBLP-effective z-thresholds
-    that compensate for low-N permutation null variance and apply the
-    declared-safe prior). Both are optional: when unset, the underlying
-    classifier falls through to legacy 5σ/3σ behaviour (no relaxation).
-    The legacy ``if z > HIGH_Z`` branch is removed — there is no parallel
-    path. ``adversarial_input`` callers may pre-classify (then
-    ``_compose_legacy_verdict`` re-uses the supplied dict as-is) or pass
-    a raw score and let this function drive the classification — the
-    orchestrator threads cohort metadata so the severity is always HBLP-
-    aware.
+    Plan v4 §2 G3 wiring (post-2026-05-10):
+      * ``n_train_pos`` and ``layer_1_declared_safe`` are threaded from
+        the orchestrator so the Layer 3 severity classification routes
+        through ``hblp_classify`` (the HBLP-effective z-thresholds
+        that compensate for low-N permutation null variance and apply
+        the declared-safe prior). Both are optional: when unset, the
+        underlying classifier falls through to legacy 5σ/3σ behaviour
+        (no relaxation). The legacy ``if z > HIGH_Z`` branch is removed
+        — there is no parallel path.
+      * Per codex MED-5, ``_compose_legacy_verdict`` OWNS classification.
+        Two entry points:
+          (a) Pass ``adversarial_score`` (raw output of
+              ``compute_adversarial_score``); this function calls
+              ``_adversarial_input(score, n_train_pos=...,
+              layer_1_declared_safe=...)`` itself, threading the
+              cohort metadata. This is the codex MED-5 recommended path:
+              `_compose_legacy_verdict` invokes hblp_classify directly.
+          (b) Pass a pre-classified ``adversarial_input``. In this case
+              the dict MUST carry the ``_hblp_classified=True`` tag (set
+              by ``_adversarial_input`` unconditionally). Pre-classified
+              inputs WITHOUT the tag are REJECTED with a
+              ``_HblpRoutingViolationError`` — they would dodge the
+              wiring-guard at runtime.
+
+        Passing both ``adversarial_score`` and ``adversarial_input``
+        is a programmer error and raises ``ValueError``.
     """
+    # codex MED-5: enforce HBLP routing for any Layer 3 input.
+    if adversarial_score is not None and adversarial_input is not None:
+        raise ValueError(
+            "_compose_legacy_verdict: pass exactly one of `adversarial_score` "
+            "(raw — this function classifies) OR `adversarial_input` (pre-"
+            "classified by `_adversarial_input` — must carry "
+            "`_hblp_classified=True` tag). Got both."
+        )
+    if adversarial_score is not None:
+        # Path (a): own the classification by calling _adversarial_input
+        # ourselves. This guarantees the call chain
+        #   _compose_legacy_verdict → _adversarial_input → hblp_classify
+        # runs end-to-end so the wiring-guard's AST scan finds the
+        # callsite (codex MED-5).
+        adversarial_input = _adversarial_input(
+            adversarial_score,
+            n_train_pos=n_train_pos,
+            layer_1_declared_safe=bool(layer_1_declared_safe),
+        )
+    elif adversarial_input is not None and not adversarial_input.get("_hblp_classified", False):
+        # Path (b) violation: pre-classified input lacks the HBLP tag.
+        # Reject so a hand-rolled legacy classifier can't dodge the wiring
+        # guard at runtime (codex MED-5).
+        raise _HblpRoutingViolationError(
+            f"_compose_legacy_verdict: `adversarial_input` for {feature!r} "
+            "lacks `_hblp_classified=True` tag — every Layer 3 severity "
+            "classification MUST route through `_adversarial_input` (which "
+            "calls `hblp_classify`). Pass `adversarial_score=` instead so "
+            "this function classifies, OR build the input via "
+            "`_adversarial_input(...)`. The wiring guard's AST scan only "
+            "verifies static callsites; this runtime check rejects "
+            "pre-classified dicts that bypassed the routing chain."
+        )
+
     if short_circuit_evidence is not None:
         return _legacy_short_circuit_verdict(feature, evidence=short_circuit_evidence)
 
