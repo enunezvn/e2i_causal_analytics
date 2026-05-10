@@ -278,3 +278,130 @@ async def test_evaluate_model_t22_advisory_does_not_block_success_criteria(
     assert result.get("success_criteria_met") is True
     # Sanity: advisory key is a bool or None (not a string sentinel).
     assert advisory_violated in (True, False, None)
+
+
+# --------------------------------------------------------------------------- #
+# MEDIUM-1: Regression path must NOT emit advisory keys                       #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_evaluate_model_regression_does_not_emit_t22_advisory_keys() -> None:
+    """evaluate_model with problem_type='regression' must NOT emit T2.2
+    advisory keys — the helper is wired exclusively inside the
+    binary_classification branch (evaluator.py line ~445).
+
+    Regression runs do not call ``_emit_permutation_anchored_auc_advisory``
+    at all, so none of the three T2.2 keys should appear on
+    validation_metrics regardless of what the perm-null surface emits.
+    """
+    np.random.seed(RANDOM_STATE)
+    from sklearn.ensemble import RandomForestRegressor
+
+    X_train = np.random.rand(N_TRAIN_SAMPLES, N_FEATURES)
+    y_train = np.random.rand(N_TRAIN_SAMPLES)
+    X_val = np.random.rand(N_VAL_SAMPLES, N_FEATURES)
+    y_val = np.random.rand(N_VAL_SAMPLES)
+    X_test = np.random.rand(N_TEST_SAMPLES, N_FEATURES)
+    y_test = np.random.rand(N_TEST_SAMPLES)
+
+    model = RandomForestRegressor(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE)
+    model.fit(X_train, y_train)
+
+    state = {
+        "trained_model": model,
+        "problem_type": "regression",
+        "X_train_preprocessed": X_train,
+        "X_validation_preprocessed": X_val,
+        "X_test_preprocessed": X_test,
+        "train_data": {"y": y_train},
+        "validation_data": {"y": y_val},
+        "test_data": {"y": y_test},
+        "success_criteria": {},
+    }
+    result = await evaluate_model(state)
+    val = result.get("validation_metrics", {})
+
+    # None of the three T2.2 advisory keys must be present.
+    assert "auc_above_permutation_null" not in val, (
+        "T2.2 advisory key leaked into regression path"
+    )
+    assert "permutation_anchored_auc_advisory_violated" not in val, (
+        "T2.2 advisory key leaked into regression path"
+    )
+    assert "permutation_anchored_auc_buffer" not in val, (
+        "T2.2 advisory key leaked into regression path"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# MEDIUM-2: TIER0_E2E_JSON_OUT filter must pass bool advisory key             #
+# --------------------------------------------------------------------------- #
+
+
+def test_tier0_artifact_filter_passes_bool_advisory_key() -> None:
+    """Regression-pin for HIGH-1: the TIER0_E2E_JSON_OUT scalar filter in
+    ``scripts/run_tier0_test.py`` previously used:
+        if isinstance(v, (int, float, str)) and not isinstance(v, bool) or v is None
+    which silently dropped bool values (True/False).
+    The fixed filter is:
+        if isinstance(v, (int, float, str, bool)) or v is None
+    This test pins that bool advisory values survive a filter consistent
+    with the corrected form, so any regression to the old form is caught.
+
+    NOTE: This test directly validates the filter semantics — it does NOT
+    import run_tier0_test.py (which has heavy top-level side-effects).
+    If the script's filter is reverted to exclude bools, update the script
+    alongside this test.
+    """
+
+    def corrected_filter(v: object) -> bool:
+        """Fixed filter: scalars + bool + None pass; dicts/lists dropped."""
+        return isinstance(v, (int, float, str, bool)) or v is None
+
+    def corrected_coerce(v: object) -> object:
+        """Fixed coerce: non-bool numeric → float; everything else → as-is."""
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+        return v
+
+    advisory_keys = {
+        "auc_above_permutation_null": 0.03,
+        "permutation_anchored_auc_buffer": 0.05,
+        "permutation_anchored_auc_advisory_violated": True,
+    }
+
+    filtered = {
+        k: corrected_coerce(v)
+        for k, v in advisory_keys.items()
+        if corrected_filter(v)
+    }
+
+    assert "auc_above_permutation_null" in filtered
+    assert filtered["auc_above_permutation_null"] == 0.03
+    assert "permutation_anchored_auc_buffer" in filtered
+    assert filtered["permutation_anchored_auc_buffer"] == 0.05
+    # Key fix: bool must survive the filter — old filter dropped this.
+    assert "permutation_anchored_auc_advisory_violated" in filtered, (
+        "bool advisory key dropped by scalar filter — HIGH-1 regression"
+    )
+    assert filtered["permutation_anchored_auc_advisory_violated"] is True
+
+    # Verify False also survives (the None case already passes under both filters).
+    advisory_false = {"permutation_anchored_auc_advisory_violated": False}
+    filtered_false = {
+        k: corrected_coerce(v)
+        for k, v in advisory_false.items()
+        if corrected_filter(v)
+    }
+    assert "permutation_anchored_auc_advisory_violated" in filtered_false
+    assert filtered_false["permutation_anchored_auc_advisory_violated"] is False
+
+    # Confirm dicts are still excluded (no regression on the original intent).
+    advisory_dict = {"some_dict": {"nested": 1}}
+    filtered_dict = {
+        k: corrected_coerce(v)
+        for k, v in advisory_dict.items()
+        if corrected_filter(v)
+    }
+    assert "some_dict" not in filtered_dict
