@@ -766,6 +766,12 @@ def test_g1_lineage_helper_signature_unchanged_from_pr_127() -> None:
     ``data_source: Optional[str]`` accept-None contract), this test
     fires.
 
+    Codex pass-1 INFO-13: pin the RETURN SCHEMA in addition to the
+    parameter signature. The G1 lineage-audit sweep and the
+    downstream pipeline node both read specific keys from the
+    returned dict; a key rename or removal would silently break
+    callers.
+
     Mirrors the discipline of pinning helper signatures used by
     cross-PR contracts (matches the pattern in PRs #105/#106 for
     ``data_loader._drop_unhashable_columns``).
@@ -779,3 +785,45 @@ def test_g1_lineage_helper_signature_unchanged_from_pr_127() -> None:
     # Both should be positional-or-keyword (no required-keyword shift).
     assert params["feature_name"].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert params["data_source"].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+
+    # Codex pass-1 INFO-13: return-schema pin. Probe with a real
+    # source (CSU manifest's ``age_continuous`` Layer-1-cleared feature
+    # used elsewhere in the sweep) so the schema reflects the
+    # contract-found branch — the most-exercised return shape.
+    result = lineage_audit_declared_path("age_continuous", data_source="csu")
+    required_keys = {
+        "contract_found",
+        "declared_path_valid",
+        "knowable_at_reference",
+        "rationale",
+    }
+    missing = required_keys - set(result.keys())
+    assert not missing, (
+        f"INFO-13 return-schema regression: required keys missing "
+        f"from lineage_audit_declared_path() return: {sorted(missing)}. "
+        f"Actual keys: {sorted(result.keys())}"
+    )
+    # Type pins on the contract-found branch
+    assert isinstance(result["contract_found"], bool)
+    # declared_path_valid is bool when contract_found, None otherwise
+    assert isinstance(result["declared_path_valid"], (bool, type(None)))
+    # knowable_at_reference is str when contract_found, may be None
+    assert isinstance(result["knowable_at_reference"], (str, type(None)))
+    assert isinstance(result["rationale"], str)
+
+    # Probe the contract-not-found branch — feature_name that doesn't
+    # exist in any manifest. The schema MUST still carry the same keys
+    # so callers can rely on key presence regardless of branch.
+    result_missing = lineage_audit_declared_path(
+        "__info13_definitely_not_a_real_feature__", data_source="csu"
+    )
+    missing_missing = required_keys - set(result_missing.keys())
+    assert not missing_missing, (
+        f"INFO-13 return-schema regression on contract-not-found branch: "
+        f"required keys missing: {sorted(missing_missing)}. "
+        f"Actual keys: {sorted(result_missing.keys())}"
+    )
+    assert result_missing["contract_found"] is False
+    # declared_path_valid must be None when contract_found is False
+    # (the audit can't validate something that doesn't exist)
+    assert result_missing["declared_path_valid"] is None
