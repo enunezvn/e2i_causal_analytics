@@ -6,9 +6,20 @@ from the available data, and apply remediation before training proceeds.
 
 This follows the same pattern as qc_remediation.py:
   detect → LLM analysis → automatic fix → re-check loop
+
+Gate N1 (plan v4 §2): each successful remediation pass produces a
+``regulatory_adaptation_entry`` dict in the return payload. The entry's
+shape matches the ``adaptation_history`` schema consumed by the model_deployer's
+``RegulatoryEligibilityAudit`` — i.e. one row per adaptation event with the
+keys ``commit_sha``, ``justification_doc``, ``gate_name``,
+``before_threshold``, ``after_threshold``, ``timestamp``. The downstream
+deployer aggregates entries into ``validation_metrics["regulatory_eligibility_audit"]``;
+ANY entry there disqualifies ``regulatory_eligible=True`` per codex-rescue HIGH-3.
 """
 
 import logging
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +31,63 @@ logger = logging.getLogger(__name__)
 
 # Maximum number of remediation attempts before giving up
 MAX_LEAKAGE_REMEDIATION_ATTEMPTS = 5
+
+
+# =============================================================================
+# Gate N1 (plan v4 §2) — regulatory-eligibility adaptation hook.
+# =============================================================================
+
+
+def _build_regulatory_adaptation_entry(
+    *,
+    dropped: List[str],
+    added: List[str],
+    reasoning: str,
+) -> Dict[str, Any]:
+    """Build one ``adaptation_history`` entry for the model_deployer.
+
+    Plan v4 §2 Gate N1: leakage_remediation drops features that would
+    otherwise have been fed to the trainer. That is a pipeline-level
+    adaptation — the success-criteria thresholds remain literature-
+    anchored, but the feature set the model is allowed to use has been
+    relaxed post-hoc to dodge a leakage detection. ANY such adaptation
+    in the model's lifecycle disqualifies ``regulatory_eligible=True``
+    (codex-rescue HIGH-3); the entry exists so the deployer can read it
+    and downgrade the model to ``adapted_regulatory_candidate``.
+
+    Returns a dict matching ``RegulatoryEligibilityAudit.append_adaptation``'s
+    keyword args, except the deployer wraps the dict via
+    ``adaptation_history.append(entry)`` so we surface it as a plain dict
+    here. The ``commit_sha`` is read from ``GIT_COMMIT_SHA`` (CI-set) or
+    falls back to ``"unknown"``; same for ``justification_doc`` (env var
+    ``REMEDIATION_JUSTIFICATION_DOC`` if set, else a default placeholder).
+
+    Args:
+        dropped: list of features the remediation pass dropped.
+        added: list of replacement features the remediation pass kept.
+        reasoning: LLM/rule-based reasoning string from the analysis.
+
+    Returns:
+        A dict with the six adaptation-entry keys.
+    """
+    return {
+        "commit_sha": os.environ.get("GIT_COMMIT_SHA", "unknown"),
+        "justification_doc": os.environ.get(
+            "REMEDIATION_JUSTIFICATION_DOC",
+            "data_preparer/leakage_remediation (auto-generated; "
+            "supply REMEDIATION_JUSTIFICATION_DOC env var to override)",
+        ),
+        "gate_name": "leakage_remediation_feature_drop",
+        "before_threshold": {
+            "leaked_features_count": len(dropped),
+            "dropped_features": list(dropped),
+        },
+        "after_threshold": {
+            "remediated_features_count": len(added),
+            "added_features": list(added),
+        },
+        "timestamp": datetime.now(tz=None).isoformat(),
+    }
 
 
 # =============================================================================
@@ -158,6 +226,25 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 f"Leakage remediation applied: dropped={result['dropped']}, "
                 f"final_features={result['final_features']}"
             )
+            # Gate N1 (plan v4 §2 codex-rescue HIGH-3): record this
+            # remediation pass as an adaptation entry. Downstream the
+            # model_deployer reads the cumulative ``adaptation_history``
+            # from ``validation_metrics["regulatory_eligibility_audit"]``
+            # and disqualifies ``regulatory_eligible=True`` if ANY entry
+            # exists. The deployer downgrades the model to
+            # ``adapted_regulatory_candidate=True`` if absolute
+            # thresholds still clear at promotion time.
+            adaptation_entry = _build_regulatory_adaptation_entry(
+                dropped=result["dropped"],
+                added=result["added"],
+                reasoning=analysis.get("reasoning", ""),
+            )
+            logger.info(
+                "Gate N1: emitted regulatory_adaptation_entry "
+                f"(dropped={len(result['dropped'])}, "
+                f"added={len(result['added'])}, "
+                f"gate={adaptation_entry['gate_name']})"
+            )
             return {
                 "leakage_remediation_status": "applied",
                 "leakage_remediation_attempts": attempts + 1,
@@ -167,6 +254,10 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 "leakage_remediation_reasoning": analysis.get("reasoning", ""),
                 "leakage_remediation_viable": result["viable"],
                 "requires_leakage_revalidation": True,
+                # Gate N1 (plan v4 §2): one adaptation entry per remediation
+                # pass; the deployer aggregates these across all data_preparer
+                # invocations during a model's lifecycle.
+                "regulatory_adaptation_entry": adaptation_entry,
                 # Updated DataFrames with leaked columns removed
                 "train_df": result["train_df"],
                 "validation_df": result["validation_df"],
