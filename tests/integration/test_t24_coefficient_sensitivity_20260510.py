@@ -23,14 +23,19 @@ The thresholds are imported from the helper's constants — NOT
 re-declared in the test file — so the spec memo's threshold values are
 the only place they live (no drift possible).
 
-Skip-if-data-missing: if a cohort artifact is absent (e.g., CSU not on
-disk in the current checkout), the test SKIPS that cohort rather than
-fails. CI runs both cohorts; local dev may run only one.
+Cohort-data presence (G5 codex M2 closure):
+  - In CI (env ``CI=true``): both cohort artifacts MUST be present;
+    missing data = test FAILS, not skips. Skipping silently in CI
+    removes the load-bearing cohort gate without surfacing the gap.
+  - Locally: missing data SKIPS the cohort assertions. The
+    ``RUN_LOCAL_ONLY=1`` env var is honored as an explicit opt-in for
+    local-only runs that intentionally skip cohort assertions.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -184,26 +189,64 @@ def _run_g5_on_cohort(directory: Path, target_col: str, seed: int = 42) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _cohort_artifact_missing_action(artifact_path: Path, cohort_name: str) -> None:
+    """G5 codex M2 closure: in CI, missing cohort artifacts FAIL the
+    test (so the cohort gate cannot be silently elided). Locally,
+    skip with a clear pointer.
+
+    Honors:
+      - ``CI=true`` (GitHub Actions / GitLab CI / generic CI marker)
+        → fail with pytest.fail (artifact missing in CI is unacceptable
+        because the cohort gate is required by v3 §6 T2.4 acceptance).
+      - ``RUN_LOCAL_ONLY=1`` → explicit local-only opt-in; skip with
+        a different message identifying the intentional opt-out.
+      - default (no env vars) → skip locally.
+    """
+    is_ci = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+    is_local_only = os.environ.get("RUN_LOCAL_ONLY", "") == "1"
+
+    if is_ci:
+        pytest.fail(
+            f"{cohort_name} cohort artifact missing at {artifact_path} in CI. "
+            "G5 v3 §6 T2.4 acceptance criterion requires both cohort "
+            "assertions to run. Provision the artifact or unset CI to skip "
+            "locally. (To explicitly run locally without cohort data, set "
+            "RUN_LOCAL_ONLY=1.)",
+            pytrace=False,
+        )
+
+    if is_local_only:
+        pytest.skip(
+            f"{cohort_name} cohort artifact missing at {artifact_path}; "
+            "RUN_LOCAL_ONLY=1 set, skipping cohort assertion intentionally."
+        )
+
+    pytest.skip(
+        f"{cohort_name} journeys file not present at {artifact_path}; "
+        f"skipping {cohort_name} coefficient-sensitivity assertions. "
+        "(Set CI=true to fail on missing artifacts.)"
+    )
+
+
 @pytest.fixture(scope="module")
 def csu_sensitivity() -> dict:
-    """Run G5 on real CSU patient_journeys. Skips if data not on disk."""
+    """Run G5 on real CSU patient_journeys.
+
+    Skip semantics (M2): CI fails on missing artifact; local skips.
+    """
     if not CSU_JOURNEYS_PATH.exists():
-        pytest.skip(
-            f"CSU journeys file not present at {CSU_JOURNEYS_PATH}; "
-            "skipping CSU coefficient-sensitivity assertions."
-        )
+        _cohort_artifact_missing_action(CSU_JOURNEYS_PATH, "CSU")
     return _run_g5_on_cohort(CSU_DATA_DIR, CSU_TARGET)
 
 
 @pytest.fixture(scope="module")
 def optum_initiation_sensitivity() -> dict:
-    """Run G5 on real Optum initiation cohort. Skips if data not on disk."""
+    """Run G5 on real Optum initiation cohort.
+
+    Skip semantics (M2): CI fails on missing artifact; local skips.
+    """
     if not OPTUM_INITIATION_JOURNEYS_PATH.exists():
-        pytest.skip(
-            f"Optum initiation journeys file not present at "
-            f"{OPTUM_INITIATION_JOURNEYS_PATH}; skipping Optum "
-            "coefficient-sensitivity assertions."
-        )
+        _cohort_artifact_missing_action(OPTUM_INITIATION_JOURNEYS_PATH, "Optum-initiation")
     return _run_g5_on_cohort(OPTUM_INITIATION_DIR, OPTUM_TARGET)
 
 
