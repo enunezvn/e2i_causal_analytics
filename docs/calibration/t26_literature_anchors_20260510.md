@@ -170,4 +170,10 @@ The following citations are listed as `[CITATION-CHECK NEEDED]` in §4 above —
 
 - Vickers, van Calster, & Steyerberg (2019) is retained in §4 ONLY for clinical-utility framing (decision curve analysis / net benefit); it is NOT an ECE threshold anchor.
 
-The other citations (Fisher 1925, Fisher 1935, Naeini 2015, Kumar 2019, Bouckaert & Frank 2004, Kohavi 1995, Mukherjee 2006, Ojala & Garriga 2010) are standard works whose existence and content are well-attested in the ML/statistics literature; no `[CITATION NEEDED]` flag is required, though specific page references should be verified at the next docs-pass.
+The other citations (Fisher 1925, Fisher 1935, Naeini 2015, Kumar 2019, Bouckaert & Frank 2004, Kohavi 1995, Mukherjee 2006, Ojala & Garriga 2010) are standard works whose **existence is verified** and well-attested in the ML/statistics literature. However, **numeric threshold claims drawn from these works require page/table pins before enforcement** — several load-bearing values used in §3-§5 (e.g., Naeini 2015 "ECE 0.02-0.04 range" attributed to §4.2 Table 2; Bouckaert & Frank 2004 "0.02-0.05 for Adult/Letter" attributed to §3; Kohavi 1995 "5-fold std clusters at ~0.02-0.05" attributed to §4) have not yet been pinned to verifiable page/table numbers in the canonical published editions. Until those pins land, the bands rest on general-direction support from the literature plus heuristic operator-friendly gradation, and remain advisory-only per §1.
+
+**Pending citation work (next review pass):**
+- Pin Naeini 2015 Table 2 reference to verifiable AAAI 2015 proceedings page numbers.
+- Pin Kumar 2019 Tables 1-3 to verifiable PMLR 80 proceedings page numbers.
+- Pin Bouckaert & Frank 2004 §3 to verifiable Springer LNCS 3056 page numbers.
+- Pin Kohavi 1995 §4 to verifiable IJCAI-95 proceedings page numbers.
