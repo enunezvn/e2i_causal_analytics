@@ -268,12 +268,11 @@ def summarize_recommendations(
 # ---------------------------------------------------------------------------
 
 
-def __all__() -> List[str]:
-    return [
-        "compute_imputation_audit",
-        "summarize_recommendations",
-        "T2_4_RECOMMEND_DROP_ROW_RATE_MAX",
-        "T2_4_RECOMMEND_INDICATOR_RATE_MIN",
-        "T2_4_RECOMMEND_DROP_COLUMN_RATE_MIN",
-        "T2_4_STABILITY_TOLERANCE_DEFAULT",
-    ]
+__all__ = [
+    "compute_imputation_audit",
+    "summarize_recommendations",
+    "T2_4_RECOMMEND_DROP_ROW_RATE_MAX",
+    "T2_4_RECOMMEND_INDICATOR_RATE_MIN",
+    "T2_4_RECOMMEND_DROP_COLUMN_RATE_MIN",
+    "T2_4_STABILITY_TOLERANCE_DEFAULT",
+]
