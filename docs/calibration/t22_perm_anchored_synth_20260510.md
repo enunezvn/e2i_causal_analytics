@@ -85,25 +85,23 @@ After all 35 cells run:
 
 **Recommended `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT`:** TBD (after sweep). Current code value `0.05` is **provisional, not calibrated** — it is a domain-typical "above-noise" placeholder, NOT the output of the §2.3 threshold-fit logic. The advisory built on this provisional value is fit-for-purpose for surfacing observability signals (it does NOT block the deployer; see §1.5 of the v3 plan), but the value MUST NOT be promoted to enforcement until the sweep completes.
 
-### 3.1 Follow-up issue (file before G4 lands)
+### 3.1 Follow-up tracking issue
 
-When this PR lands, file a new tracking issue with the following text:
+**Tracked in [#135](https://github.com/enunezvn/e2i_causal_analytics/issues/135)** (filed when PR #130 G4-iter-3 landed).
 
-> **Title:** Calibrate `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT` via 35-cell synthetic sweep
->
-> **Body:** PR #130 (G4) shipped the calibration-protocol documentation for T2.2 but deferred the actual 35-cell sweep to a follow-up. The current `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT = 0.05` is provisional/uncalibrated.
->
-> **Acceptance:**
-> - [ ] Implement `scripts/calibration/run_t22_synth_sweep.py` and `scripts/calibration/aggregate_t22_sweep.py` per §4 of `docs/calibration/t22_perm_anchored_synth_20260510.md`.
-> - [ ] Run the 35-cell sweep (5 seeds × 7 target AUCs) on `synthetic_rwd_realistic` and produce the §3 results table.
-> - [ ] Apply the §2.3 threshold-fit logic to derive the recommended buffer.
-> - [ ] If the recommended buffer differs from the provisional 0.05, update `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT` in `evaluator.py:71` AND update the §3 doc table in lockstep (per §7 re-tuning trigger).
-> - [ ] Confirm the §5 acceptance criteria all hold.
-> - [ ] Update `T22_BUFFER_LIFECYCLE_STATE` (if added) and the doc's lifecycle/promotion section.
->
-> **Estimated effort:** ~30-45 min compute + ~2-4h dev for the harness scripts and result aggregation.
->
-> **Blocks:** T2.2 advisory → enforcement promotion (§7).
+**Issue title:** T2.2 perm-anchored AUC threshold calibration sweep (synthetic-only)
+
+**Acceptance:**
+- [ ] Implement `scripts/calibration/run_t22_synth_sweep.py` and `scripts/calibration/aggregate_t22_sweep.py` per §4 of this doc.
+- [ ] Run the 35-cell sweep (5 seeds × 7 target AUCs) on `synthetic_rwd_realistic` and produce the §3 results table.
+- [ ] Apply the §2.3 threshold-fit logic to derive the recommended buffer.
+- [ ] If the recommended buffer differs from the provisional 0.05, update `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT` in `evaluator.py:71` AND update the §3 doc table in lockstep (per §7 re-tuning trigger).
+- [ ] Confirm the §5 acceptance criteria all hold.
+- [ ] Update `T22_BUFFER_LIFECYCLE_STATE` (if added) and the doc's lifecycle/promotion section.
+
+**Estimated effort:** ~30-45 min compute + ~2-4h dev for the harness scripts and result aggregation.
+
+**Blocks:** T2.2 advisory → enforcement promotion (§7).
 
 ---
 
