@@ -822,3 +822,103 @@ class TestN1H2CandidateRequiresLiteratureAnchored:
         # Even with adaptation history, the candidate flag is denied
         # because the required gate's threshold isn't literature-anchored.
         assert is_adapted_regulatory_candidate(audit, ["minimum_auc"]) is False
+
+
+# --------------------------------------------------------------------------- #
+# Codex N1-M1: candidate logic must mirror eligibility's failed-gate check.   #
+# Pre-fix: a model with minimum_auc=pass + some_other_gate=fail + adaptation  #
+# became a candidate. Post-fix: any failed gate (required or not) denies.    #
+# --------------------------------------------------------------------------- #
+
+
+class TestN1M1CandidateMirrorsFailedNonRequiredGate:
+    def test_candidate_denied_when_non_required_gate_failed(self) -> None:
+        """A non-required gate failing in history must deny candidate
+        status — mirrors precondition 3 from is_regulatory_eligible."""
+        audit = RegulatoryEligibilityAudit()
+        # Required gate passes with literature_anchored provenance.
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.75,
+            value=0.80,
+            outcome="pass",
+            threshold_provenance="literature_anchored",
+        )
+        # Non-required gate FAILS.
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="some_other_gate",
+            threshold=0.5,
+            value=0.3,
+            outcome="fail",
+        )
+        # Adaptation entry present → would otherwise be a candidate.
+        audit.append_adaptation(
+            commit_sha="sha",
+            justification_doc="doc",
+            gate_name="minimum_auc",
+            before_threshold=0.85,
+            after_threshold=0.75,
+            timestamp="t",
+        )
+
+        # Pre-fix: this returned True. Post-fix: False because the
+        # non-required gate failed.
+        assert is_adapted_regulatory_candidate(audit, ["minimum_auc"]) is False
+
+    def test_candidate_granted_when_all_evaluations_pass(self) -> None:
+        """Sanity: the existing happy path still works."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.75,
+            value=0.80,
+            outcome="pass",
+            threshold_provenance="literature_anchored",
+        )
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="some_other_gate",
+            threshold=0.5,
+            value=0.7,
+            outcome="pass",
+        )
+        audit.append_adaptation(
+            commit_sha="sha",
+            justification_doc="doc",
+            gate_name="minimum_auc",
+            before_threshold=0.85,
+            after_threshold=0.75,
+            timestamp="t",
+        )
+        assert is_adapted_regulatory_candidate(audit, ["minimum_auc"]) is True
+
+    def test_candidate_denied_when_advisory_outcome_in_history(self) -> None:
+        """An ``"advisory"`` outcome (non-pass) likewise denies candidate."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.75,
+            value=0.80,
+            outcome="pass",
+            threshold_provenance="literature_anchored",
+        )
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="advisory_gate",
+            threshold=0.5,
+            value=0.4,
+            outcome="advisory",
+        )
+        audit.append_adaptation(
+            commit_sha="sha",
+            justification_doc="doc",
+            gate_name="minimum_auc",
+            before_threshold=0.85,
+            after_threshold=0.75,
+            timestamp="t",
+        )
+        assert is_adapted_regulatory_candidate(audit, ["minimum_auc"]) is False
