@@ -79,7 +79,8 @@ class TestRegulatoryAuditAppend:
 
     def test_append_gate_evaluation_grows_gate_history(self) -> None:
         audit = RegulatoryEligibilityAudit()
-        assert audit.gate_history == []
+        # Codex-rescue N1-H1: gate_history is a read-only tuple snapshot.
+        assert audit.gate_history == ()
 
         audit.append_gate_evaluation(
             timestamp="2026-05-10T00:00:00",
@@ -112,7 +113,8 @@ class TestRegulatoryAuditAppend:
 
     def test_append_adaptation_grows_adaptation_history(self) -> None:
         audit = RegulatoryEligibilityAudit()
-        assert audit.adaptation_history == []
+        # Codex-rescue N1-H1: adaptation_history is a read-only tuple snapshot.
+        assert audit.adaptation_history == ()
 
         audit.append_adaptation(
             commit_sha="abc1234",
@@ -177,10 +179,13 @@ class TestRegulatoryAuditRead:
             timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
         )
         snapshot = audit["gate_history"]
-        snapshot[0]["outcome"] = "fail"  # mutate snapshot
-        snapshot.clear()
+        # Codex-rescue N1-H1: snapshot is a tuple; mutating individual
+        # entry dicts must not leak back. Tuples themselves are
+        # immutable so the .clear() / slice-assign attacks are
+        # syntactically blocked.
+        snapshot[0]["outcome"] = "fail"  # mutate the dict inside the tuple
 
-        # The audit's actual list is unchanged.
+        # The audit's actual list is unchanged — outcome is still pass.
         assert len(audit.gate_history) == 1
         assert audit.gate_history[0]["outcome"] == "pass"
 
@@ -194,6 +199,175 @@ class TestRegulatoryAuditRead:
         assert "gate_history" in audit
         assert "adaptation_history" in audit
         assert "nonexistent" not in audit
+
+
+# --------------------------------------------------------------------------- #
+# Codex-rescue N1-H1: read-only-tuple property invariants.                     #
+# Pins the public-list-bypass mitigation: callers cannot ``.append()``,        #
+# ``[i] = ...``, ``.clear()`` or slice-assign on the gate_history /            #
+# adaptation_history attributes — they return a new tuple snapshot each        #
+# read, so any in-place mutation would either raise (tuple immutability)       #
+# or write to a throwaway copy.                                                #
+# --------------------------------------------------------------------------- #
+
+
+class TestRegulatoryAuditN1H1ReadOnlyProperties:
+    """Codex N1-H1: gate_history / adaptation_history must be read-only.
+
+    The pre-fix exposure was: ``RegulatoryEligibilityAudit`` declared
+    public list fields, so a caller could call
+    ``audit.gate_history.append({"outcome": "pass"})`` or
+    ``audit.gate_history[0]["outcome"] = "pass"`` and bypass the
+    ``__setitem__`` guard entirely. The fix: store via private fields,
+    expose tuple-returning properties.
+    """
+
+    def test_gate_history_is_tuple(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
+        )
+        assert isinstance(audit.gate_history, tuple)
+
+    def test_adaptation_history_is_tuple(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        audit.append_adaptation(
+            commit_sha="sha",
+            justification_doc="doc",
+            gate_name="g",
+            before_threshold=0.85,
+            after_threshold=0.75,
+            timestamp="t",
+        )
+        assert isinstance(audit.adaptation_history, tuple)
+
+    def test_gate_history_append_raises_attribute_error(self) -> None:
+        """Tuples have no ``.append()`` — the in-place attack is blocked."""
+        audit = RegulatoryEligibilityAudit()
+        with pytest.raises(AttributeError):
+            audit.gate_history.append({"foo": "bar"})  # type: ignore[attr-defined]
+
+    def test_adaptation_history_append_raises_attribute_error(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        with pytest.raises(AttributeError):
+            audit.adaptation_history.append({"foo": "bar"})  # type: ignore[attr-defined]
+
+    def test_gate_history_clear_raises_attribute_error(self) -> None:
+        """Tuples have no ``.clear()`` — the wipe attack is blocked."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
+        )
+        with pytest.raises(AttributeError):
+            audit.gate_history.clear()  # type: ignore[attr-defined]
+
+    def test_adaptation_history_clear_raises_attribute_error(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        audit.append_adaptation(
+            commit_sha="sha",
+            justification_doc="doc",
+            gate_name="g",
+            before_threshold=0.85,
+            after_threshold=0.75,
+            timestamp="t",
+        )
+        with pytest.raises(AttributeError):
+            audit.adaptation_history.clear()  # type: ignore[attr-defined]
+
+    def test_gate_history_slice_assign_raises_typeerror(self) -> None:
+        """Tuples reject ``__setitem__`` — slice-assign is blocked."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
+        )
+        with pytest.raises(TypeError):
+            audit.gate_history[0] = {"foo": "bar"}  # type: ignore[index]
+
+    def test_inner_dict_mutation_does_not_leak_back(self) -> None:
+        """A dict reachable through the tuple snapshot is a deep copy —
+        mutating it must not mutate the audit's stored entry."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
+        )
+        snapshot = audit.gate_history
+        snapshot[0]["outcome"] = "fail"  # mutate the deep-copied dict
+        # Re-read; the source entry is unchanged.
+        assert audit.gate_history[0]["outcome"] == "pass"
+
+    def test_subsequent_reads_independent(self) -> None:
+        """Two consecutive ``audit.gate_history`` reads return distinct
+        tuples whose dicts are independent deep copies."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
+        )
+        snap_a = audit.gate_history
+        snap_b = audit.gate_history
+        # Same content, different dict identities.
+        assert snap_a[0] == snap_b[0]
+        assert snap_a[0] is not snap_b[0]
+
+    def test_assigning_to_property_raises_attribute_error(self) -> None:
+        """Replacing the property attribute itself must fail.
+
+        Without a setter, ``audit.gate_history = []`` raises
+        ``AttributeError`` — the public list reassignment attack is
+        blocked.
+        """
+        audit = RegulatoryEligibilityAudit()
+        with pytest.raises(AttributeError):
+            audit.gate_history = []  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            audit.adaptation_history = []  # type: ignore[misc]
+
+    def test_to_dict_unaffected_by_snapshot_mutation(self) -> None:
+        """Even if a caller mutates a tuple snapshot's dict, ``to_dict``
+        returns the source's pristine state."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
+        )
+        snap = audit.gate_history
+        snap[0]["outcome"] = "fail"  # corrupt snapshot
+        # Source is intact.
+        assert audit.to_dict()["gate_history"][0]["outcome"] == "pass"
+
+
+class TestRegulatoryAuditN1H1FrozenEntries:
+    """Codex N1-H1: individual entries are frozen dataclass-derived dicts.
+
+    The dicts come out of frozen ``GateEvaluationEntry`` /
+    ``AdaptationEntry`` instances via ``to_dict()`` so the stored
+    entries are append-once. Re-imports preserve frozen status.
+    """
+
+    def test_gate_evaluation_entry_is_frozen(self) -> None:
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            GateEvaluationEntry,
+        )
+
+        entry = GateEvaluationEntry(
+            timestamp="t", gate_name="g", threshold=0.5, value=0.6, outcome="pass"
+        )
+        with pytest.raises((AttributeError, TypeError)):
+            entry.outcome = "fail"  # type: ignore[misc]
+
+    def test_adaptation_entry_is_frozen(self) -> None:
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            AdaptationEntry,
+        )
+
+        entry = AdaptationEntry(
+            commit_sha="sha",
+            justification_doc="doc",
+            gate_name="g",
+            before_threshold=0.85,
+            after_threshold=0.75,
+            timestamp="t",
+        )
+        with pytest.raises((AttributeError, TypeError)):
+            entry.gate_name = "other"  # type: ignore[misc]
 
 
 # --------------------------------------------------------------------------- #
@@ -253,8 +427,9 @@ class TestRegulatoryAuditSerialization:
 
     def test_from_dict_empty_payload_yields_empty_audit(self) -> None:
         audit = RegulatoryEligibilityAudit.from_dict({})
-        assert audit.gate_history == []
-        assert audit.adaptation_history == []
+        # Codex-rescue N1-H1: read-only tuple properties.
+        assert audit.gate_history == ()
+        assert audit.adaptation_history == ()
 
     def test_from_dict_decouples_from_source(self) -> None:
         """Mutating the source dict post-from_dict must not affect the audit."""
@@ -278,7 +453,8 @@ class TestRegulatoryAuditSerialization:
 
         # The audit's lists are unchanged.
         assert len(audit.gate_history) == 1
-        assert audit.adaptation_history == []
+        # Codex-rescue N1-H1: read-only tuple property.
+        assert audit.adaptation_history == ()
 
     def test_from_dict_rejects_non_list_gate_history(self) -> None:
         with pytest.raises(TypeError):
@@ -295,8 +471,9 @@ class TestRegulatoryAuditSerialization:
         audit = RegulatoryEligibilityAudit.from_dict(
             {"gate_history": None, "adaptation_history": None}
         )
-        assert audit.gate_history == []
-        assert audit.adaptation_history == []
+        # Codex-rescue N1-H1: read-only tuple properties.
+        assert audit.gate_history == ()
+        assert audit.adaptation_history == ()
 
 
 # --------------------------------------------------------------------------- #
