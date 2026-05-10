@@ -47,21 +47,42 @@ pre-spec memo violates v3 §8. The unit tests in
 ``tests/scripts/test_run_tier1b_b2_experiment.py`` pin the constants
 and fail loudly if drift occurs.
 
-Modeling note (HBLP toggle)
----------------------------
+Modeling note (HBLP toggle — REAL CONTRAST)
+-------------------------------------------
 
-The "HBLP-disabled" vs "HBLP-relaxed" toggle in this harness is a
-**downstream feature-selection** difference, not a change to the
-underlying classifier. Both runs train the same logistic regression
-on the same numeric feature surface, but the HBLP-relaxed run
-preserves features that a strict baseline would drop (variance-
-inflation + Layer-1-conditional priors per
-``hblp_classify``). On a cohort where HBLP relaxation captures a
-genuine signal that the baseline drops, the post-relaxation AUC, ECE,
-and CV-stability all improve in the pre-specified directions; on a
-cohort where the dropped features were genuinely leakage, the metrics
-degrade. The pre-specified thresholds are the load-bearing test of
-which regime applies.
+The "HBLP-disabled" (baseline) vs "HBLP-relaxed" (post) toggle in this
+harness is a **feature-retention** difference materialized BEFORE the
+classifier sees the matrix:
+
+  1. For each numeric feature, the harness computes a marginal
+     z-score against the binary target (the same statistic the
+     production Layer 3 detector uses, simplified to a single-pass
+     Welch's-t-style z over the standardized correlation).
+  2. The **baseline arm** applies the legacy strict policy from
+     ``adaptive_validity_check.py``: any feature with ``z > HIGH_Z``
+     (= 5.0σ) is treated as a leak and DROPPED. ``HIGH_Z`` is the
+     production constant, NOT a harness invention.
+  3. The **HBLP arm** applies the production ``hblp_classify`` from
+     the same module: variance-inflation + Layer-1-conditional priors
+     produce a higher effective threshold for low-N or
+     ``layer_1_declared_safe=True`` features. Only features whose
+     post-HBLP severity is ``"high"`` are dropped.
+
+Both arms then fit the same LogisticRegression on the resulting
+feature subsets. Feature retention diverges → metric arrays diverge →
+ΔAUC / ECE-ratio / CV-stability-ratio are all real per-arm contrasts,
+not 0-by-construction.
+
+The harness contract: when a feature has high marginal z (would be
+dropped by baseline) but ``layer_1_declared_safe=True`` and small
+``n_train_pos`` (variance-inflated), HBLP retains it. This is the
+production behavior that G2 measures.
+
+``layer_1_declared_safe`` per feature is sourced from the
+``MANIFEST_SOURCES`` registry when a manifest source is provided; a
+test-injectable ``layer_1_declared_safe_lookup`` argument lets the
+unit suite construct a known-divergent example without depending on
+manifest content.
 
 Cohort artifacts
 ----------------
@@ -301,38 +322,213 @@ def _train_val_test_split(
 
 
 # ---------------------------------------------------------------------------
-# Baseline + HBLP-relaxed feature surfaces
+# Baseline + HBLP-relaxed feature surfaces — REAL CONTRAST
+#
+# The contrast lives at feature retention: both arms compute the same
+# per-feature marginal z-score against the target; the baseline applies
+# the legacy strict ``z > HIGH_Z`` policy from adaptive_validity_check;
+# the HBLP arm applies ``hblp_classify`` with ``n_train_pos`` and
+# ``layer_1_declared_safe`` per feature.
 # ---------------------------------------------------------------------------
 
 
-def _build_baseline_feature_surface(X: pd.DataFrame) -> List[str]:
-    """Baseline feature surface — the legacy strict drop policy: any
-    feature whose marginal correlation with the target exceeds the
-    base 5σ threshold is treated as a leak and dropped.
+def _compute_marginal_z_scores(
+    X: pd.DataFrame,
+    y: pd.Series,
+) -> Dict[str, float]:
+    """Compute a per-feature marginal z-score against the binary target.
 
-    For the harness, we approximate the strict-baseline drop list by
-    using ALL columns. The pipeline production code (post-G3) will
-    encode the actual HBLP-vs-baseline split via
-    ``hblp_classify``; this harness materializes the contrast at the
-    feature-surface level so the comparison is apples-to-apples and
-    runnable WITHOUT G3 having landed (G2 is a precondition for G3).
+    Implementation: Welch's-t-style two-sample standardized difference
+    between feature means in y=1 vs y=0, expressed as a z-statistic.
+    This is a simplified, deterministic surrogate for the production
+    Layer 3 permutation-baseline z-score (which is computationally
+    heavier and depends on a permutation null). The harness uses the
+    Welch z because:
+      (a) it agrees with the production permutation z in regime — both
+          rank-correlate with the leakage signal;
+      (b) it is deterministic per (X, y) so the contrast is reproducible
+          across CI runs;
+      (c) it matches the threshold semantics the legacy strict policy
+          uses (``z > HIGH_Z`` is the drop boundary).
+
+    Constant features and degenerate y produce z=0.0 (kept by both
+    arms — neither classifier learns anything from a constant).
     """
-    return list(X.columns)
+    z_scores: Dict[str, float] = {}
+    y_arr = y.to_numpy(dtype=np.float64)
+    pos_mask = y_arr > 0.5
+    neg_mask = ~pos_mask
+    n_pos = int(pos_mask.sum())
+    n_neg = int(neg_mask.sum())
+    if n_pos < 2 or n_neg < 2:
+        # Degenerate target — every z is 0.0 so neither arm drops
+        # anything based on the marginal-z policy.
+        return dict.fromkeys(X.columns, 0.0)
+
+    for col in X.columns:
+        x = X[col].to_numpy(dtype=np.float64)
+        # Drop NaN rows symmetrically across feature + target.
+        finite_mask = np.isfinite(x)
+        if not finite_mask.any():
+            z_scores[col] = 0.0
+            continue
+        xv = x[finite_mask]
+        yv = y_arr[finite_mask]
+        pmask = yv > 0.5
+        nmask = ~pmask
+        if pmask.sum() < 2 or nmask.sum() < 2:
+            z_scores[col] = 0.0
+            continue
+        x_pos = xv[pmask]
+        x_neg = xv[nmask]
+        var_pos = float(np.var(x_pos, ddof=1)) if x_pos.size > 1 else 0.0
+        var_neg = float(np.var(x_neg, ddof=1)) if x_neg.size > 1 else 0.0
+        # Welch SE on the difference of means.
+        se = float(np.sqrt(var_pos / max(x_pos.size, 1) + var_neg / max(x_neg.size, 1)))
+        if se <= 1e-12 or not np.isfinite(se):
+            z_scores[col] = 0.0
+            continue
+        diff = float(np.mean(x_pos) - np.mean(x_neg))
+        z = abs(diff) / se
+        z_scores[col] = float(z) if np.isfinite(z) else 0.0
+    return z_scores
 
 
-def _build_hblp_relaxed_feature_surface(X: pd.DataFrame) -> List[str]:
-    """HBLP-relaxed feature surface — same column set as the baseline
-    in this harness because HBLP RELAXES the threshold (it never
-    tightens, per ``hblp_effective_z_threshold``); the relaxation
-    cannot drop MORE features than the baseline.
+def _legacy_strict_drop(z_scores: Mapping[str, float]) -> List[str]:
+    """Baseline arm — legacy strict policy from
+    ``adaptive_validity_check._adversarial_input``: ``z > HIGH_Z``
+    drops the feature.
 
-    See the modeling note in the module docstring for why the harness
-    contrast is at the feature-surface layer rather than inside
-    ``_build_verdict``: G3 is the gate that wires HBLP into
-    ``_build_verdict``, and G2 is the precondition for G3. The harness
-    must therefore run WITHOUT depending on G3.
+    ``HIGH_Z`` is imported from the production module so the harness
+    drift-detects against the same constant the pipeline uses.
     """
-    return list(X.columns)
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        HIGH_Z,
+    )
+
+    return [feat for feat, z in z_scores.items() if z > HIGH_Z]
+
+
+def _hblp_drop(
+    z_scores: Mapping[str, float],
+    *,
+    n_train_pos: int,
+    layer_1_declared_safe_lookup: Mapping[str, bool],
+) -> List[str]:
+    """HBLP arm — production ``hblp_classify`` policy from
+    ``adaptive_validity_check``. A feature is dropped iff its post-HBLP
+    severity is ``"high"`` (i.e., its z exceeds the variance-inflated +
+    Layer-1-conditional threshold).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    dropped: List[str] = []
+    for feat, z in z_scores.items():
+        declared_safe = bool(layer_1_declared_safe_lookup.get(feat, False))
+        verdict = hblp_classify(
+            z_score=float(z),
+            n_positives=int(n_train_pos),
+            layer_1_declared_safe=declared_safe,
+        )
+        if verdict["severity"] == "high":
+            dropped.append(feat)
+    return dropped
+
+
+def _resolve_layer_1_declared_safe_lookup(
+    feature_names: Sequence[str],
+    *,
+    manifest_source: Optional[str] = None,
+    explicit_lookup: Optional[Mapping[str, bool]] = None,
+) -> Dict[str, bool]:
+    """Resolve a per-feature ``layer_1_declared_safe`` mapping.
+
+    Resolution order:
+      1. If ``explicit_lookup`` is provided (test injection), use it
+         verbatim — features missing default to False.
+      2. If ``manifest_source`` is provided, query
+         ``MANIFEST_SOURCES`` for each feature; ``declared_safe=True``
+         iff a contract exists with a pre-anchor ``knowable_at``
+         reference. Manifest unavailable → all features default False.
+      3. Otherwise, all features default False (the most conservative
+         baseline-equivalent assumption).
+
+    The harness intentionally treats "no manifest information" as
+    ``declared_safe=False`` — this is the safe default that makes the
+    HBLP arm's behavior match the baseline arm in the absence of
+    Layer-1 information, ensuring the contrast only diverges where
+    Layer-1 actually has something to say.
+    """
+    if explicit_lookup is not None:
+        return {feat: bool(explicit_lookup.get(feat, False)) for feat in feature_names}
+
+    out = dict.fromkeys(feature_names, False)
+    if manifest_source is None:
+        return out
+
+    try:
+        from src.data.manifests import MANIFEST_SOURCES
+    except ImportError:
+        return out
+
+    if manifest_source not in MANIFEST_SOURCES:
+        return out
+
+    pre_anchor_refs = {"index_date", "lookback_start_date", "eligeff"}
+    for feat in feature_names:
+        try:
+            contract = MANIFEST_SOURCES[manifest_source](feat)
+        except Exception:  # noqa: BLE001 — defensive against manifest bugs
+            contract = None
+        if contract is None:
+            continue
+        knowable_ref = getattr(getattr(contract, "knowable_at", None), "reference", None)
+        out[feat] = knowable_ref in pre_anchor_refs
+    return out
+
+
+def _build_baseline_feature_surface(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+) -> Tuple[List[str], Dict[str, float], List[str]]:
+    """Baseline arm's retained feature list + the z-score map +
+    the explicit drop list (kept for manifest provenance).
+
+    Returns ``(retained_features, z_scores, dropped_features)``.
+    """
+    z_scores = _compute_marginal_z_scores(X_train, y_train)
+    dropped = _legacy_strict_drop(z_scores)
+    retained = [c for c in X_train.columns if c not in set(dropped)]
+    return retained, z_scores, dropped
+
+
+def _build_hblp_relaxed_feature_surface(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    *,
+    layer_1_declared_safe_lookup: Mapping[str, bool],
+    z_scores: Optional[Mapping[str, float]] = None,
+) -> Tuple[List[str], Dict[str, float], List[str]]:
+    """HBLP arm's retained feature list + the z-score map +
+    the explicit drop list.
+
+    Returns ``(retained_features, z_scores, dropped_features)``.
+
+    If ``z_scores`` is provided, it is reused (so both arms see the
+    same statistic and the contrast is purely at the policy layer).
+    """
+    if z_scores is None:
+        z_scores = _compute_marginal_z_scores(X_train, y_train)
+    n_train_pos = int((y_train > 0.5).sum())
+    dropped = _hblp_drop(
+        z_scores,
+        n_train_pos=n_train_pos,
+        layer_1_declared_safe_lookup=layer_1_declared_safe_lookup,
+    )
+    retained = [c for c in X_train.columns if c not in set(dropped)]
+    return retained, dict(z_scores), dropped
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +657,7 @@ def _compute_cv_stability_ratio(
 
 @dataclass
 class SeedResult:
-    """One seed's (baseline, HBLP) metrics."""
+    """One seed's (baseline, HBLP) metrics + retention provenance."""
 
     seed: int
     baseline_auc: Optional[float] = None
@@ -471,6 +667,14 @@ class SeedResult:
     baseline_cv_stability: Optional[float] = None
     hblp_cv_stability: Optional[float] = None
     error: Optional[str] = None
+    # Retention provenance — surface so the manifest can audit which
+    # features each arm dropped (proves the contrast is non-trivial).
+    n_train_pos: Optional[int] = None
+    baseline_n_features_retained: Optional[int] = None
+    hblp_n_features_retained: Optional[int] = None
+    baseline_features_dropped: List[str] = field(default_factory=list)
+    hblp_features_dropped: List[str] = field(default_factory=list)
+    features_diverged: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -482,21 +686,86 @@ class SeedResult:
             "baseline_cv_stability": self.baseline_cv_stability,
             "hblp_cv_stability": self.hblp_cv_stability,
             "error": self.error,
+            "n_train_pos": self.n_train_pos,
+            "baseline_n_features_retained": self.baseline_n_features_retained,
+            "hblp_n_features_retained": self.hblp_n_features_retained,
+            "baseline_features_dropped": list(self.baseline_features_dropped),
+            "hblp_features_dropped": list(self.hblp_features_dropped),
+            "features_diverged": list(self.features_diverged),
         }
+
+    def has_complete_metrics(self) -> bool:
+        """True iff all six metrics are finite + error is None."""
+        if self.error is not None:
+            return False
+        for v in (
+            self.baseline_auc,
+            self.hblp_auc,
+            self.baseline_ece,
+            self.hblp_ece,
+            self.baseline_cv_stability,
+            self.hblp_cv_stability,
+        ):
+            if v is None or not np.isfinite(float(v)):
+                return False
+        return True
 
 
 def run_seed(
     X: pd.DataFrame,
     y: pd.Series,
     seed: int,
+    *,
+    layer_1_declared_safe_lookup: Optional[Mapping[str, bool]] = None,
+    manifest_source: Optional[str] = None,
 ) -> SeedResult:
-    """Execute one seed: split, fit baseline + HBLP, compute metrics."""
+    """Execute one seed: split, build baseline + HBLP feature surfaces
+    via the legacy strict / ``hblp_classify`` policies, fit, and
+    compute metrics.
+
+    Two contrast arms diverge at feature retention. The classifier and
+    preprocessing are otherwise identical so the only signal in the
+    metric arrays is the policy difference.
+    """
     result = SeedResult(seed=seed)
     try:
         X_train, X_val, X_test, y_train, y_val, y_test = _train_val_test_split(X, y, seed=seed)
 
-        baseline_features = _build_baseline_feature_surface(X_train)
-        hblp_features = _build_hblp_relaxed_feature_surface(X_train)
+        n_train_pos = int((y_train > 0.5).sum())
+        result.n_train_pos = n_train_pos
+        lookup = _resolve_layer_1_declared_safe_lookup(
+            list(X_train.columns),
+            manifest_source=manifest_source,
+            explicit_lookup=layer_1_declared_safe_lookup,
+        )
+
+        baseline_features, z_scores, baseline_dropped = _build_baseline_feature_surface(
+            X_train, y_train
+        )
+        hblp_features, _, hblp_dropped = _build_hblp_relaxed_feature_surface(
+            X_train,
+            y_train,
+            layer_1_declared_safe_lookup=lookup,
+            z_scores=z_scores,
+        )
+
+        result.baseline_n_features_retained = len(baseline_features)
+        result.hblp_n_features_retained = len(hblp_features)
+        result.baseline_features_dropped = list(baseline_dropped)
+        result.hblp_features_dropped = list(hblp_dropped)
+        # "Diverged" = features the baseline drops but HBLP retains.
+        # This is the load-bearing set whose presence proves the
+        # contrast is non-trivial.
+        result.features_diverged = sorted(set(baseline_dropped) - set(hblp_dropped))
+
+        if not baseline_features or not hblp_features:
+            # At least one arm dropped every feature — degenerate by
+            # construction. Surface as error so the all-seeds-required
+            # gate fails the manifest.
+            raise RuntimeError(
+                f"Degenerate retention: baseline_n={len(baseline_features)}, "
+                f"hblp_n={len(hblp_features)}; one arm dropped every feature"
+            )
 
         # Baseline fit
         X_train_b = X_train[baseline_features]
