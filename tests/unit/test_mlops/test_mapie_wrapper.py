@@ -353,3 +353,50 @@ class TestMapieWrapperCrossConformalAcceptance:
         assert proba.shape == (10, 2)
         sets = wrapper.predict_sets(X[:10])
         assert np.asarray(sets).ndim >= 2
+
+
+class TestMapieWrapperStratifiedSplitEdgeCases:
+    """MEDIUM-1: forced split mode with tiny minority should raise an actionable
+    ValueError rather than letting a raw sklearn error propagate."""
+
+    def test_forced_split_on_n_minority_1_raises_actionable_value_error(self):
+        """n_minority=1 → sklearn stratified split fails; wrapper must re-raise
+        with a message that names n_minority, calib_fraction, and remediation
+        options."""
+        from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((50, N_FEATURES))
+        y = np.zeros(50, dtype=int)
+        y[0] = 1  # n_minority = 1
+
+        wrapper = MapieConformalBinaryClassifier(
+            base_estimator=LogisticRegression(max_iter=500, random_state=SEED),
+            conformal_mode="split",
+            calib_fraction=0.20,
+            random_state=SEED,
+        )
+        with pytest.raises(ValueError, match="Stratified calibration split failed"):
+            wrapper.fit(X, y)
+
+    def test_forced_split_on_n_minority_2_succeeds(self):
+        """n_minority=2 still has 2 class members → sklearn stratifies without
+        error even though calib may contain 0 minority samples. The wrapper
+        should complete fit (coverage guarantee is weak, but no crash)."""
+        from src.mlops.wrappers.mapie_wrapper import MapieConformalBinaryClassifier
+
+        rng = np.random.default_rng(1)
+        X = rng.standard_normal((100, N_FEATURES))
+        y = np.zeros(100, dtype=int)
+        y[:2] = 1  # n_minority = 2
+
+        wrapper = MapieConformalBinaryClassifier(
+            base_estimator=LogisticRegression(max_iter=500, random_state=SEED),
+            conformal_mode="split",
+            calib_fraction=0.20,
+            random_state=SEED,
+        )
+        # Should not crash — sklearn can stratify with n_minority=2 (gets 0 in calib).
+        wrapper.fit(X, y)
+        assert wrapper.fitted_conformal_mode_ == "split"
+        assert wrapper.n_minority_ == 2
