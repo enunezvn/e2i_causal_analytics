@@ -35,7 +35,6 @@ from tests.unit.test_agents.test_ml_foundation.test_model_trainer.conftest impor
     RF_N_ESTIMATORS,
 )
 
-
 # --------------------------------------------------------------------------- #
 # Module-level constants                                                      #
 # --------------------------------------------------------------------------- #
