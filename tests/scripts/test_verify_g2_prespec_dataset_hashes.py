@@ -85,21 +85,58 @@ def test_sha256_helper_matches_hashlib(tmp_path: Path) -> None:
     assert V._sha256_of(f) == expected
 
 
-def test_verify_returns_zero_when_all_artifacts_missing(
+def test_verify_lenient_returns_zero_when_all_artifacts_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Vacuous-pass when no artifact is present on disk; the harness's
-    CI-presence guard is the load-bearing check."""
+    """LENIENT (strict=False): vacuous-pass when no artifact is present.
+
+    This is the local-diagnostic mode (``--allow-missing``). The
+    HIGH-2 fix means CI invocations always set strict=True, so this
+    code path is unreachable from CI.
+    """
     monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
     pinned = dict.fromkeys(V.ARTIFACTS)
-    rc = V._verify(pinned)
+    rc = V._verify(pinned, strict=False)
     assert rc == 0
+
+
+def test_verify_strict_fails_when_artifacts_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """HIGH-2 fix: strict mode (CI=true OR --strict) rejects missing
+    artifacts as a HARD FAILURE. Vacuous-pass on missing artifacts is
+    the threshold-shopping escape hatch the codex pass-1 flagged."""
+    monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
+    pinned = dict.fromkeys(V.ARTIFACTS)
+    rc = V._verify(pinned, strict=True)
+    assert rc == 1
+
+
+def test_verify_strict_fails_when_one_of_two_artifacts_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Strict mode catches partial-missing too — even ONE absent
+    artifact violates the data-content half of the defense."""
+    monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
+    # Plant only one of two artifacts.
+    target_relpath = V.ARTIFACTS["optum_initiation_treatment_events_parquet"][0]
+    target_path = tmp_path / target_relpath
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = b"events-bytes"
+    target_path.write_bytes(payload)
+
+    pinned = {
+        "optum_initiation_patient_journeys_parquet": "0" * 64,
+        "optum_initiation_treatment_events_parquet": hashlib.sha256(payload).hexdigest(),
+    }
+    rc = V._verify(pinned, strict=True)
+    assert rc == 1
 
 
 def test_verify_returns_nonzero_on_hash_mismatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Hash mismatch is a hard failure."""
+    """Hash mismatch is a hard failure (independent of strict)."""
     monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
 
     target_relpath = V.ARTIFACTS["optum_initiation_patient_journeys_parquet"][0]
@@ -110,7 +147,7 @@ def test_verify_returns_nonzero_on_hash_mismatch(
     pinned = dict.fromkeys(V.ARTIFACTS)
     pinned["optum_initiation_patient_journeys_parquet"] = "0" * 64
 
-    rc = V._verify(pinned)
+    rc = V._verify(pinned, strict=False)
     assert rc == 1
 
 
@@ -130,7 +167,7 @@ def test_verify_returns_zero_when_pinned_matches_live(
     pinned = dict.fromkeys(V.ARTIFACTS)
     pinned["optum_initiation_treatment_events_parquet"] = expected_hash
 
-    rc = V._verify(pinned)
+    rc = V._verify(pinned, strict=False)
     assert rc == 0
 
 
@@ -146,8 +183,82 @@ def test_verify_returns_nonzero_when_artifact_present_but_pinned_is_placeholder(
     target_path.write_bytes(b"present-but-unpinned")
 
     pinned = dict.fromkeys(V.ARTIFACTS)
-    rc = V._verify(pinned)
+    rc = V._verify(pinned, strict=False)
     assert rc == 1
+
+
+def test_main_strict_in_ci_rejects_missing_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End-to-end HIGH-2 contract: CI=true → main() returns 1 when
+    artifacts are missing."""
+    monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
+    fake_memo = tmp_path / "fake_memo.md"
+    fake_memo.write_text(
+        """
+g2_dataset_hashes:
+  optum_initiation_patient_journeys_parquet:
+    path: "data/rwd/optum/initiation/x.parquet"
+    sha256: "abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
+  optum_initiation_treatment_events_parquet:
+    path: "data/rwd/optum/initiation/y.parquet"
+    sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(V, "MEMO_PATH", fake_memo)
+    monkeypatch.setenv("CI", "true")
+    rc = V.main(["--prespec-sha", "working"])
+    assert rc == 1
+
+
+def test_main_allow_missing_rejected_in_ci(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """HIGH-2 contract: --allow-missing is REJECTED in strict mode
+    (CI=true OR --strict) so an operator cannot accidentally pass it
+    in CI."""
+    monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(V, "MEMO_PATH", tmp_path / "fake.md")
+    (tmp_path / "fake.md").write_text("g2_dataset_hashes:\n", encoding="utf-8")
+    monkeypatch.setenv("CI", "true")
+    rc = V.main(["--allow-missing", "--prespec-sha", "working"])
+    assert rc == 2
+
+
+def test_main_allow_missing_rejected_with_explicit_strict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Symmetric: --strict + --allow-missing is also rejected."""
+    monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(V, "MEMO_PATH", tmp_path / "fake.md")
+    (tmp_path / "fake.md").write_text("g2_dataset_hashes:\n", encoding="utf-8")
+    monkeypatch.delenv("CI", raising=False)
+    rc = V.main(["--strict", "--allow-missing", "--prespec-sha", "working"])
+    assert rc == 2
+
+
+def test_main_local_allow_missing_returns_zero_when_artifacts_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Local diagnostic flow: CI unset, --allow-missing, no artifacts
+    on disk → exit 0 (vacuous pass)."""
+    monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
+    fake_memo = tmp_path / "fake_memo.md"
+    fake_memo.write_text(
+        """
+g2_dataset_hashes:
+  optum_initiation_patient_journeys_parquet:
+    path: "data/rwd/optum/initiation/x.parquet"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+  optum_initiation_treatment_events_parquet:
+    path: "data/rwd/optum/initiation/y.parquet"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(V, "MEMO_PATH", fake_memo)
+    monkeypatch.delenv("CI", raising=False)
+    rc = V.main(["--allow-missing", "--prespec-sha", "working"])
+    assert rc == 0
 
 
 def test_memo_in_repo_has_two_pinned_entries() -> None:
