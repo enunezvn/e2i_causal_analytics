@@ -125,11 +125,24 @@ def optum_held_out_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
     ``test_metrics.roc_auc`` — the held-out test split AUC G1 demands).
     """
     if not OPTUM_DATA_DIR.exists():
-        pytest.skip(
+        # Codex pass-1 HIGH-1: default to hard-fail when real Optum data is
+        # absent. CI green without proving real-cohort regression is the
+        # exact failure mode this gate guards against. To explicitly opt
+        # into a skip (CI environments that intentionally lack data
+        # fixtures), set ``ALLOW_MISSING_REAL_DATA=1``.
+        if os.environ.get("ALLOW_MISSING_REAL_DATA") == "1":
+            pytest.skip(
+                f"Optum initiation cohort not present at {OPTUM_DATA_DIR} "
+                "and ALLOW_MISSING_REAL_DATA=1 set; G1 Optum non-inferiority "
+                "skip explicitly opted into. Locally: run "
+                "scripts/convert_optum_rwd.py --cohort initiation."
+            )
+        pytest.fail(
             f"Optum initiation cohort not present at {OPTUM_DATA_DIR}; "
-            "G1 Optum non-inferiority requires real Optum data. In CI "
-            "without data this is a skip, not a fail. Locally: "
-            "run scripts/convert_optum_rwd.py --cohort initiation."
+            "G1 Optum non-inferiority requires real Optum data and "
+            "ALLOW_MISSING_REAL_DATA != '1'. Set the env var to opt into "
+            "skip behaviour, OR run scripts/convert_optum_rwd.py "
+            "--cohort initiation before re-running."
         )
 
     out_dir = tmp_path_factory.mktemp("optum_g1_noninf")
