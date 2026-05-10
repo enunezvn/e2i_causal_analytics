@@ -398,9 +398,11 @@ class TestExtractLifecycleChanges:
             "+LIFECYCLE_STATE_T22 = GateLifecycleState.CALIBRATING\n"
         )
         changes = self._extract(diff)
+        # N2 M1: slugs are namespaced by source (py_/yaml_) to prevent
+        # cross-source doc collision.
         assert changes == [
             {
-                "slug": "t22",
+                "slug": "py_t22",
                 "from_state": "advisory",
                 "to_state": "calibrating",
                 "source_path": "src/x.py",
@@ -428,7 +430,7 @@ class TestExtractLifecycleChanges:
         )
         changes = self._extract(diff)
         assert len(changes) == 1
-        assert changes[0]["slug"] == "t22"
+        assert changes[0]["slug"] == "py_t22"
 
     def test_yaml_change_detected(self) -> None:
         diff = (
@@ -440,12 +442,33 @@ class TestExtractLifecycleChanges:
         changes = self._extract(diff)
         assert changes == [
             {
-                "slug": "fake_gate",
+                "slug": "yaml_fake_gate",
                 "from_state": "advisory",
                 "to_state": "calibrating",
                 "source_path": "config/fake_gate.yaml",
             }
         ]
+
+    def test_slug_collision_avoided_by_source_prefix(self) -> None:
+        """N2 finding M1: a Python ``LIFECYCLE_STATE_T22`` and a YAML
+        ``t22.yaml`` would collide on bare slug ``t22``. The ``py_`` /
+        ``yaml_`` prefix keeps them in independent namespaces.
+        """
+        diff = (
+            "+++ b/src/x.py\n"
+            "@@ -1 +1 @@\n"
+            "-LIFECYCLE_STATE_T22 = GateLifecycleState.ADVISORY\n"
+            "+LIFECYCLE_STATE_T22 = GateLifecycleState.CALIBRATING\n"
+            "+++ b/config/t22.yaml\n"
+            "@@ -1 +1 @@\n"
+            "-lifecycle_state: calibrating\n"
+            "+lifecycle_state: enforced\n"
+        )
+        changes = self._extract(diff)
+        slugs = sorted(c["slug"] for c in changes)
+        assert slugs == ["py_t22", "yaml_t22"], (
+            f"Python and YAML T22 must have distinct namespaced slugs; got {slugs}"
+        )
 
     def test_pure_addition_emits_no_change(self) -> None:
         # New constant landing — handled by the missing-constant check, not

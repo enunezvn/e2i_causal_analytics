@@ -501,11 +501,18 @@ def scan_lifecycle_changes(repo_root: Path, base_ref: str) -> list[ScanFinding]:
         slug = change["slug"]
         from_state = change["from_state"]
         to_state = change["to_state"]
-        # Identity changes (X -> X) cannot happen in a real diff (the diff
-        # only shows actual changes), but the slug may be wrong; fall through.
+        # N2 finding M1: slugs are now namespaced (``py_t22`` vs ``yaml_t22``)
+        # so a doc must match the prefixed slug exactly. We also accept the
+        # bare slug (``t22``) for backward compat with docs authored before
+        # the prefix policy landed; a future hard-cut would drop the bare
+        # form. Lower-casing is preserved for case-insensitive filenames.
+        bare_slug = slug.split("_", 1)[1] if "_" in slug else slug
         candidate_keys = [
             (slug, from_state, to_state),
             (slug.lower(), from_state, to_state),
+            # Backward-compat: docs without the py_/yaml_ prefix still match.
+            (bare_slug, from_state, to_state),
+            (bare_slug.lower(), from_state, to_state),
         ]
         matched = False
         matched_doc: Optional[Path] = None
@@ -574,9 +581,17 @@ def _extract_lifecycle_changes(diff_text: str) -> list[dict[str, str]]:
 
     Each entry: ``{slug, from_state, to_state, source_path}``.
 
-    The ``slug`` derivation: for Python, the constant name minus the
-    ``LIFECYCLE_STATE_`` prefix (lowercase). For YAML, the file basename
-    minus the extension.
+    The ``slug`` derivation (N2 finding M1): the slug is prefixed by the
+    SOURCE TYPE — ``py_`` for Python, ``yaml_`` for YAML — to prevent a
+    Python constant ``LIFECYCLE_STATE_T22`` from accidentally matching a
+    doc named for the YAML config ``t22.yaml`` (or vice versa). Two
+    independent gates with overlapping bare slugs would otherwise share
+    the same lifecycle-change doc, which is incorrect.
+
+    For Python, the bare slug is the constant name minus the
+    ``LIFECYCLE_STATE_`` prefix (lowercase). For YAML, the bare slug is
+    the file basename minus the extension. The ``py_``/``yaml_`` prefix
+    is then prepended.
     """
     current_path: Optional[str] = None
     # Per-(path, slug) accumulator.
@@ -597,7 +612,8 @@ def _extract_lifecycle_changes(diff_text: str) -> list[dict[str, str]]:
             m = _PYTHON_DIFF_LINE_RE.match(line)
             if not m:
                 continue
-            slug = m.group("name").removeprefix("LIFECYCLE_STATE_").lower()
+            bare_slug = m.group("name").removeprefix("LIFECYCLE_STATE_").lower()
+            slug = f"py_{bare_slug}"
             attr = m.group("attr")
             lit = m.group("lit")
             if attr is not None:
@@ -616,7 +632,7 @@ def _extract_lifecycle_changes(diff_text: str) -> list[dict[str, str]]:
             value = m_yaml.group("value")
             if value not in VALID_STATE_VALUES:
                 continue
-            slug = Path(current_path).stem
+            slug = f"yaml_{Path(current_path).stem}"
         else:
             continue
         sign = line[0]
