@@ -11,14 +11,17 @@
 > docs/calibration/{slug}_lifecycle_change_{from_state}_to_{to_state}_{YYYYMMDD}.md
 > ```
 >
-> * `{slug}` — the lowercase suffix of the Python `LIFECYCLE_STATE_*`
->   constant (e.g., `t22`, `t23`, `t26a`, `t26b`, `t24`), or the YAML
->   filename stem.
+> * `{slug}` — namespaced by source type (N2 pass-2 M1 + new MED):
+>   * `py_` prefix for Python `LIFECYCLE_STATE_*` constants — e.g.,
+>     `py_t22`, `py_t23`, `py_t26a`, `py_t26b`, `py_t24`.
+>   * `yaml_` prefix for YAML configs — `yaml_<filename-stem>`.
+>   The bare-slug form (`t22`) is NOT accepted: it reintroduces the
+>   cross-source collision risk the prefix was designed to eliminate.
 > * `{from_state}` / `{to_state}` — lowercase enum values
 >   (`development`, `advisory`, `calibrating`, `enforced`, `deprecated`).
 > * `{YYYYMMDD}` — date the change is committed.
 >
-> Example: `docs/calibration/t22_lifecycle_change_advisory_to_calibrating_20260615.md`
+> Example: `docs/calibration/py_t22_lifecycle_change_advisory_to_calibrating_20260615.md`
 >
 > This template file (`example_lifecycle_change_template.md`) does NOT
 > match the filename pattern intentionally — copy it to a new file with
