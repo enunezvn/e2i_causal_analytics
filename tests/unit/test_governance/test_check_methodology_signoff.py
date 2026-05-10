@@ -665,3 +665,94 @@ def test_extract_pgp_armor_block_returns_full_block():
     assert block.startswith("-----BEGIN PGP SIGNATURE-----")
     assert block.endswith("-----END PGP SIGNATURE-----")
     assert "AAAA" in block
+
+
+# --------------------------------------------------------------------------- #
+# H2: selection-rule expansion — gh PR query, CoI declared-PR parse,
+# warnings-vs-violations distinction.
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_coi_declared_prs_extracts_json_array():
+    coi_text = (
+        "## Evidence\n\nSome prose.\n\n"
+        "```json\n"
+        '[{"number": 131, "title": "x", "files": [{"path": "scripts/foo.py"}]}]\n'
+        "```\n"
+        "More prose.\n"
+    )
+    parsed = cms._parse_coi_declared_prs(coi_text)
+    assert len(parsed) == 1
+    assert parsed[0]["number"] == 131
+
+
+def test_parse_coi_declared_prs_returns_empty_on_no_array():
+    coi_text = "## Evidence\n\nNo JSON here.\n"
+    assert cms._parse_coi_declared_prs(coi_text) == []
+
+
+def test_parse_coi_declared_prs_returns_empty_on_malformed_json():
+    coi_text = "## Evidence\n```json\n[not valid json,]\n```\n"
+    assert cms._parse_coi_declared_prs(coi_text) == []
+
+
+def test_selection_rule_coi_self_declared_overlap_fails(fixture_repo: Path):
+    """Reviewer's own CoI declares a PR that touches the subject file -> FAIL."""
+
+    rows = cms.parse_registry(
+        fixture_repo / "docs" / "governance" / "methodology_reviewer_registry.md"
+    )
+    text = _signoff_doc(handle="alice")
+    coi_text = (
+        "## Evidence\n\n"
+        "```json\n"
+        '[{"number": 999, "title": "alice touched convert", '
+        '"files": [{"path": "scripts/convert_optum_rwd.py"}]}]\n'
+        "```\n"
+    )
+    result = cms.check_selection_rule(text, fixture_repo, rows, coi_text=coi_text)
+    assert result.ok is False
+    assert "coi-self-declared" in result.detail
+    assert "999" in result.detail
+
+
+def test_selection_rule_coi_unrelated_overlap_passes(fixture_repo: Path):
+    """CoI declares a PR but it touches an unrelated file -> does NOT fail."""
+
+    rows = cms.parse_registry(
+        fixture_repo / "docs" / "governance" / "methodology_reviewer_registry.md"
+    )
+    text = _signoff_doc(handle="alice")
+    coi_text = (
+        "## Evidence\n\n"
+        "```json\n"
+        '[{"number": 999, "title": "unrelated", '
+        '"files": [{"path": "src/something/else.py"}]}]\n'
+        "```\n"
+    )
+    result = cms.check_selection_rule(text, fixture_repo, rows, coi_text=coi_text)
+    assert result.ok is True
+
+
+def test_selection_rule_gh_missing_emits_warning(fixture_repo: Path, monkeypatch):
+    """When gh is unavailable, selection rule still PASSES (with WARN in detail)."""
+
+    rows = cms.parse_registry(
+        fixture_repo / "docs" / "governance" / "methodology_reviewer_registry.md"
+    )
+    # Force gh to be reported missing.
+    real_which = shutil.which
+
+    def fake_which(name: str) -> str | None:
+        if name == "gh":
+            return None
+        return real_which(name)
+
+    monkeypatch.setattr(cms.shutil, "which", fake_which)
+
+    text = _signoff_doc(handle="alice")
+    result = cms.check_selection_rule(text, fixture_repo, rows)
+    assert result.ok is True
+    # Warning surfaces, but does not fail the check.
+    assert "WARN" in result.detail
+    assert "gh-author" in result.detail or "gh not on PATH" in result.detail
