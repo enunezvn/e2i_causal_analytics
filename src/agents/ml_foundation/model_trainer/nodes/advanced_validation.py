@@ -107,11 +107,19 @@ def compute_permutation_test(
             shuffled_aucs.append(auc)
 
     if not shuffled_aucs:
+        # Codex MEDIUM-1: preserve a finite actual_auc when ALL shuffles
+        # NaN-filtered. The pvalue/percentiles are genuinely degenerate
+        # (no null distribution to compare against), but discarding the
+        # observed AUC silently hides a real measurement from downstream
+        # consumers reading `permutation_test["actual_auc"]`.
         return {
             "permutation_pvalue": None,
             "permutation_null_p95": None,
             "permutation_null_p99": None,
             "permutation_n_permutations": n_permutations,
+            "permutation_n_effective": 0,
+            "actual_auc": actual_auc,
+            "n_permutations": n_permutations,
             "signal_genuine": None,
         }
 
