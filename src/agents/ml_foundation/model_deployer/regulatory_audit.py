@@ -42,6 +42,8 @@ Plan reference:
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -248,6 +250,60 @@ def classify_threshold_provenance(
     # Default: unknown — the gate-history entry will surface this so
     # the operator can see exactly why the gate was skipped.
     return THRESHOLD_PROVENANCE_UNKNOWN
+
+
+# --------------------------------------------------------------------------- #
+# Canonical-hash helpers — codex-rescue N1-H3 pass-2 + new MED.               #
+# --------------------------------------------------------------------------- #
+
+# Fields that constitute the canonical identity of an adaptation entry.
+# Codex-rescue N1-H3 pass-2 + new MED: the prior 3-tuple
+# ``(commit_sha, gate_name, timestamp)`` was insufficient — a tampered
+# payload with the same key fields but altered ``before_threshold`` /
+# ``after_threshold`` / ``justification_doc`` was treated as ingested.
+# The hash now covers EVERY canonical field so the load-bearing
+# threshold deltas are part of the identity.
+ADAPTATION_ENTRY_CANONICAL_FIELDS: Tuple[str, ...] = (
+    "commit_sha",
+    "justification_doc",
+    "gate_name",
+    "before_threshold",
+    "after_threshold",
+    "timestamp",
+)
+
+
+def compute_canonical_entry_hash(entry: Mapping[str, Any]) -> str:
+    """Return the sha256 hex-digest of the entry's canonical JSON form.
+
+    Codex-rescue N1-H3 pass-2 + new MED: ingestion-detection in the
+    deployer must catch tampered payloads. The 3-tuple key
+    ``(commit_sha, gate_name, timestamp)`` matched a tampered entry as
+    "ingested" if those three fields were preserved — even though the
+    threshold deltas / justification doc were swapped. Replacing the
+    tuple lookup with a sha256 over the full canonical entry catches
+    any field-level tampering.
+
+    The canonical form is the JSON serialization of the entry's
+    ``ADAPTATION_ENTRY_CANONICAL_FIELDS`` projected with
+    ``sort_keys=True`` (deterministic key order) and ``default=str``
+    (handles datetime / non-JSON-native types). Missing fields are
+    represented as ``null`` in the canonical form so two entries
+    differing in the presence of a key produce different hashes.
+
+    Args:
+        entry: a mapping containing the canonical adaptation-entry
+            fields. Extra fields are ignored — only the canonical
+            projection is hashed.
+
+    Returns:
+        Hex-encoded sha256 digest of the canonical JSON.
+    """
+    canonical = {
+        field_name: entry.get(field_name) for field_name in ADAPTATION_ENTRY_CANONICAL_FIELDS
+    }
+    payload = json.dumps(canonical, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)

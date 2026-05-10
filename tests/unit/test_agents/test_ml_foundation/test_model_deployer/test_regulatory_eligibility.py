@@ -578,6 +578,222 @@ class TestN1H3LeftoverAdaptationEntry:
 
 
 # --------------------------------------------------------------------------- #
+# Codex N1-H3 pass-2 + new MED: canonical-hash matching catches tampered      #
+# payloads. The pre-fix 3-tuple (commit_sha, gate_name, timestamp) match      #
+# treated a payload with the same identity fields but altered                  #
+# before_threshold / after_threshold / justification_doc as ingested.         #
+# Post-fix: sha256 over the full canonical entry → any field tampering         #
+# invalidates the match and the entry surfaces as a leftover.                  #
+# --------------------------------------------------------------------------- #
+
+
+class TestN1H3CanonicalHashMatching:
+    @pytest.mark.asyncio
+    async def test_tampered_before_threshold_detected_as_unmatched(self) -> None:
+        """A state payload with the same key fields (commit_sha,
+        gate_name, timestamp) but altered ``before_threshold`` MUST be
+        detected as a leftover — pre-fix the 3-tuple match would treat
+        it as ingested."""
+        ingested_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,  # original
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        # Same identity fields (commit_sha, gate_name, timestamp) — but
+        # the threshold delta is tampered. Pre-fix this would silently
+        # match. Post-fix the canonical hash differs.
+        tampered_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.99,  # TAMPERED
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        prior_audit = {
+            "gate_history": [],
+            "adaptation_history": [ingested_entry],
+        }
+        state = _state_with_passing_minimum_auc(audit=prior_audit)
+        state["regulatory_adaptation_entry"] = tampered_entry
+        result = await validate_promotion(state)
+
+        # Eligibility denied — the tampered entry is a leftover.
+        assert result["regulatory_eligible"] is False
+        # And the leftover surfaces explicitly so the operator sees it.
+        assert "regulatory_leftover_adaptation_entries" in result
+        leftovers = result["regulatory_leftover_adaptation_entries"]
+        assert len(leftovers) == 1
+        assert leftovers[0] == tampered_entry
+
+    @pytest.mark.asyncio
+    async def test_tampered_after_threshold_detected_as_unmatched(self) -> None:
+        """A tampered ``after_threshold`` is also caught by canonical-
+        hash matching."""
+        ingested_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,  # original
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        tampered_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.50,  # TAMPERED — looser threshold
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        prior_audit = {
+            "gate_history": [],
+            "adaptation_history": [ingested_entry],
+        }
+        state = _state_with_passing_minimum_auc(audit=prior_audit)
+        state["regulatory_adaptation_entry"] = tampered_entry
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        leftovers = result["regulatory_leftover_adaptation_entries"]
+        assert len(leftovers) == 1
+        assert leftovers[0] == tampered_entry
+
+    @pytest.mark.asyncio
+    async def test_tampered_justification_doc_detected_as_unmatched(self) -> None:
+        """A tampered ``justification_doc`` invalidates the match — the
+        whole canonical form is hashed."""
+        ingested_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        tampered_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/forged_signoff.md",  # TAMPERED
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        prior_audit = {
+            "gate_history": [],
+            "adaptation_history": [ingested_entry],
+        }
+        state = _state_with_passing_minimum_auc(audit=prior_audit)
+        state["regulatory_adaptation_entry"] = tampered_entry
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        leftovers = result["regulatory_leftover_adaptation_entries"]
+        assert len(leftovers) == 1
+        assert leftovers[0] == tampered_entry
+
+    @pytest.mark.asyncio
+    async def test_byte_for_byte_match_recognized_as_ingested(self) -> None:
+        """Sanity: a byte-for-byte identical payload IS recognized as
+        ingested under canonical-hash matching."""
+        entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        prior_audit = {
+            "gate_history": [],
+            "adaptation_history": [entry],
+        }
+        state = _state_with_passing_minimum_auc(audit=prior_audit)
+        state["regulatory_adaptation_entry"] = entry  # exact same dict
+        result = await validate_promotion(state)
+
+        # Not eligible (adaptation_history non-empty) — but no leftover.
+        assert result["regulatory_eligible"] is False
+        assert "regulatory_leftover_adaptation_entries" not in result
+
+    def test_compute_canonical_entry_hash_deterministic(self) -> None:
+        """The hash is a deterministic function of the canonical
+        projection — two equal entries produce the same hash regardless
+        of dict-key order in the source."""
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            compute_canonical_entry_hash,
+        )
+
+        entry_a = {
+            "commit_sha": "abc",
+            "justification_doc": "d",
+            "gate_name": "g",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "t",
+        }
+        # Same fields, different key insertion order.
+        entry_b = {
+            "timestamp": "t",
+            "after_threshold": 0.75,
+            "before_threshold": 0.85,
+            "gate_name": "g",
+            "justification_doc": "d",
+            "commit_sha": "abc",
+        }
+        assert compute_canonical_entry_hash(entry_a) == compute_canonical_entry_hash(entry_b)
+
+    def test_compute_canonical_entry_hash_differs_on_tamper(self) -> None:
+        """Any field-level mutation produces a different hash — covers
+        the canonical fields exhaustively."""
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            ADAPTATION_ENTRY_CANONICAL_FIELDS,
+            compute_canonical_entry_hash,
+        )
+
+        base = {
+            "commit_sha": "abc",
+            "justification_doc": "d",
+            "gate_name": "g",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "t",
+        }
+        base_hash = compute_canonical_entry_hash(base)
+        # Mutate each canonical field in turn — every mutation changes
+        # the hash. This is the property that closes the new MED.
+        for field_name in ADAPTATION_ENTRY_CANONICAL_FIELDS:
+            tampered = dict(base)
+            tampered[field_name] = "TAMPERED"
+            assert compute_canonical_entry_hash(tampered) != base_hash, (
+                f"Tampering field '{field_name}' did not change canonical hash"
+            )
+
+    def test_compute_canonical_entry_hash_ignores_extra_fields(self) -> None:
+        """Extra (non-canonical) fields do NOT affect the hash — only
+        the canonical projection is hashed. This lets the audit roundtrip
+        with auxiliary metadata that isn't part of the identity."""
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            compute_canonical_entry_hash,
+        )
+
+        base = {
+            "commit_sha": "abc",
+            "justification_doc": "d",
+            "gate_name": "g",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "t",
+        }
+        with_extra = dict(base)
+        with_extra["extra_audit_metadata"] = "ignored"
+        assert compute_canonical_entry_hash(base) == compute_canonical_entry_hash(with_extra)
+
+
+# --------------------------------------------------------------------------- #
 # Codex N1-M2: malformed metric (non-numeric value/threshold) falls into a    #
 # SKIPPED gate evaluation with reason="malformed_metric" — does NOT collapse  #
 # into validate_promotion's broad except path.                                 #
