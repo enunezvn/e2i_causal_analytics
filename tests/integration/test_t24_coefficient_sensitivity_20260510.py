@@ -62,9 +62,7 @@ CSU_DATA_DIR = REPO_ROOT / "data" / "rwd" / "csu"
 CSU_JOURNEYS_PATH = CSU_DATA_DIR / "e2i_ml_v3_patient_journeys.json"
 
 OPTUM_INITIATION_DIR = REPO_ROOT / "data" / "rwd" / "optum" / "initiation"
-OPTUM_INITIATION_JOURNEYS_PATH = (
-    OPTUM_INITIATION_DIR / "e2i_ml_v3_patient_journeys.parquet"
-)
+OPTUM_INITIATION_JOURNEYS_PATH = OPTUM_INITIATION_DIR / "e2i_ml_v3_patient_journeys.parquet"
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +103,7 @@ def _load_patient_journeys(directory: Path) -> pd.DataFrame:
     ingestor = FileIngestor()
     frames = ingestor.ingest_directory(directory)
     if "patient_journeys" not in frames:
-        raise RuntimeError(
-            f"Cohort directory {directory} did not yield a patient_journeys frame"
-        )
+        raise RuntimeError(f"Cohort directory {directory} did not yield a patient_journeys frame")
     return frames["patient_journeys"]
 
 
@@ -338,13 +334,9 @@ class TestOptumInitiationCoefficientSensitivity:
         )
 
     @pytest.mark.integration
-    def test_t1_flips_per_feature(
-        self, optum_initiation_sensitivity: dict
-    ) -> None:
+    def test_t1_flips_per_feature(self, optum_initiation_sensitivity: dict) -> None:
         """Per-feature flip count ≤ T1 on Optum."""
-        max_flips = optum_initiation_sensitivity["aggregate"][
-            "max_flips_per_feature_significant"
-        ]
+        max_flips = optum_initiation_sensitivity["aggregate"]["max_flips_per_feature_significant"]
         assert max_flips <= G5_FLIPS_PER_FEATURE_MAX, (
             f"Optum T1 violated: max_flips_per_feature_significant={max_flips} "
             f"exceeds pre-spec ceiling {G5_FLIPS_PER_FEATURE_MAX}."
@@ -353,31 +345,23 @@ class TestOptumInitiationCoefficientSensitivity:
     @pytest.mark.integration
     def test_t2_effect_size_cv(self, optum_initiation_sensitivity: dict) -> None:
         """Max effect-size CV ≤ T2 on Optum."""
-        max_cv = optum_initiation_sensitivity["aggregate"][
-            "max_effect_size_variance_significant"
-        ]
+        max_cv = optum_initiation_sensitivity["aggregate"]["max_effect_size_variance_significant"]
         assert max_cv <= G5_EFFECT_SIZE_CV_MAX, (
             f"Optum T2 violated: max_effect_size_variance_significant={max_cv:.3f} "
             f"exceeds pre-spec ceiling {G5_EFFECT_SIZE_CV_MAX}."
         )
 
     @pytest.mark.integration
-    def test_t3_fraction_significant_flipped(
-        self, optum_initiation_sensitivity: dict
-    ) -> None:
+    def test_t3_fraction_significant_flipped(self, optum_initiation_sensitivity: dict) -> None:
         """Aggregate fraction of significant features flipping ≤ T3 on Optum."""
-        fraction = optum_initiation_sensitivity["aggregate"][
-            "fraction_significant_flipped"
-        ]
+        fraction = optum_initiation_sensitivity["aggregate"]["fraction_significant_flipped"]
         assert fraction <= G5_FRACTION_SIGNIFICANT_FLIPPED_MAX, (
             f"Optum T3 violated: fraction_significant_flipped={fraction:.3f} "
             f"exceeds pre-spec ceiling {G5_FRACTION_SIGNIFICANT_FLIPPED_MAX}."
         )
 
     @pytest.mark.integration
-    def test_n_features_audited_nonzero(
-        self, optum_initiation_sensitivity: dict
-    ) -> None:
+    def test_n_features_audited_nonzero(self, optum_initiation_sensitivity: dict) -> None:
         """Sanity: the helper actually saw features."""
         assert optum_initiation_sensitivity["n_features"] > 0, (
             "Optum yielded no numeric features for the sensitivity audit; "

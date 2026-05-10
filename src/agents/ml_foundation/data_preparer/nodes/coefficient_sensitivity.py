@@ -181,9 +181,7 @@ def _coef_vector(estimator: BaseEstimator, feature_names: List[str]) -> Dict[str
     elif arr.ndim == 1:
         flat = arr
     else:
-        raise ValueError(
-            f"Unexpected coef_ shape {arr.shape}; expected 1D or 2D (1, n_features)."
-        )
+        raise ValueError(f"Unexpected coef_ shape {arr.shape}; expected 1D or 2D (1, n_features).")
     if len(flat) != len(feature_names):
         raise ValueError(
             f"Coefficient vector length {len(flat)} ≠ feature count "
@@ -268,16 +266,11 @@ def compute_coefficient_sensitivity(
     # Filter recommendations to the columns actually present in X.
     feature_names = [c for c in X.columns if c in recommended_strategies]
     if len(feature_names) == 0:
-        raise ValueError(
-            "recommended_strategies has no overlap with X.columns; "
-            "nothing to audit."
-        )
+        raise ValueError("recommended_strategies has no overlap with X.columns; nothing to audit.")
 
     # Restrict to numeric columns. Non-numeric (string/object) columns are
     # skipped — coefficient comparison requires numeric features.
-    numeric_features = [
-        c for c in feature_names if pd.api.types.is_numeric_dtype(X[c])
-    ]
+    numeric_features = [c for c in feature_names if pd.api.types.is_numeric_dtype(X[c])]
     if len(numeric_features) == 0:
         raise ValueError(
             "X has no numeric columns aligned with recommended_strategies; "
@@ -287,9 +280,7 @@ def compute_coefficient_sensitivity(
     omitted_features: List[str] = [
         c for c in numeric_features if recommended_strategies[c] in _OMIT_STRATEGIES
     ]
-    compared_features: List[str] = [
-        c for c in numeric_features if c not in omitted_features
-    ]
+    compared_features: List[str] = [c for c in numeric_features if c not in omitted_features]
 
     # Baseline fit: zero-impute NaNs, fit on the full feature surface
     # restricted to numeric columns.
@@ -300,20 +291,14 @@ def compute_coefficient_sensitivity(
         baseline_estimator = _build_default_estimator(seed)
     else:
         baseline_estimator = estimator
-    coef_baseline = _fit_and_get_coefs(
-        baseline_estimator, X_baseline, y, numeric_features
-    )
+    coef_baseline = _fit_and_get_coefs(baseline_estimator, X_baseline, y, numeric_features)
 
     # Identify "significant" features per the 1σ rule.
-    coef_abs_vector = np.array(
-        [abs(coef_baseline[f]) for f in numeric_features], dtype=np.float64
-    )
+    coef_abs_vector = np.array([abs(coef_baseline[f]) for f in numeric_features], dtype=np.float64)
     sigma = float(np.std(coef_abs_vector))
     significance_cutoff = G5_SIGNIFICANCE_SIGMA_MULTIPLE * sigma
     significant_features: List[str] = [
-        f
-        for f in numeric_features
-        if abs(coef_baseline[f]) > significance_cutoff
+        f for f in numeric_features if abs(coef_baseline[f]) > significance_cutoff
     ]
 
     # Imputed fit: apply per-feature strategies, drop omitted features.
@@ -323,7 +308,8 @@ def compute_coefficient_sensitivity(
             strat = recommended_strategies[col]
             # Type-narrow for mypy: strat is a str at the call boundary.
             X_imputed[col] = _impute_for_strategy(
-                X_imputed[col], strat  # type: ignore[arg-type]
+                X_imputed[col],
+                strat,  # type: ignore[arg-type]
             )
         # Catch any residual NaN from edge cases (all-NaN column).
         X_imputed = X_imputed.fillna(0.0)
@@ -332,9 +318,7 @@ def compute_coefficient_sensitivity(
             imputed_estimator = _build_default_estimator(seed)
         else:
             imputed_estimator = estimator
-        coef_post = _fit_and_get_coefs(
-            imputed_estimator, X_imputed, y, compared_features
-        )
+        coef_post = _fit_and_get_coefs(imputed_estimator, X_imputed, y, compared_features)
     else:
         coef_post = {}
 
@@ -354,8 +338,7 @@ def compute_coefficient_sensitivity(
 
         post_coef = coef_post[feature]
         sign_flip = bool(
-            (baseline_coef > 0 and post_coef < 0)
-            or (baseline_coef < 0 and post_coef > 0)
+            (baseline_coef > 0 and post_coef < 0) or (baseline_coef < 0 and post_coef > 0)
         )
 
         # Effect-size variance is std/|mean| across the two-element series
@@ -376,16 +359,12 @@ def compute_coefficient_sensitivity(
         }
 
     # Aggregate over significant features only.
-    significant_compared = [
-        f for f in significant_features if f not in omitted_features
-    ]
+    significant_compared = [f for f in significant_features if f not in omitted_features]
 
     n_significant = len(significant_features)
     if len(significant_compared) > 0:
         flips = sum(1 for f in significant_compared if per_feature[f]["sign_flip"])
-        max_cv = max(
-            per_feature[f]["effect_size_variance"] for f in significant_compared
-        )
+        max_cv = max(per_feature[f]["effect_size_variance"] for f in significant_compared)
     else:
         flips = 0
         max_cv = 0.0
