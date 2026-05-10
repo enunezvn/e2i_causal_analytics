@@ -49,7 +49,20 @@ from typing import Any, Dict, List, Literal, Mapping, Optional
 
 import pandas as pd
 
+from src.lifecycle import GateLifecycleState
+
 logger = logging.getLogger(__name__)
+
+
+# Plan v4 Gate N2 — lifecycle-state declaration for the T2.4 imputation
+# audit. Currently DEVELOPMENT: ``compute_imputation_audit`` is exported
+# from ``data_preparer.nodes`` but NOT yet invoked by the pipeline (no
+# downstream caller threads its output into ``validation_metrics`` or any
+# enforcement path). Promoting to ADVISORY requires wiring the helper into
+# the data_preparer graph; that wiring + a signed
+# ``docs/calibration/T24_lifecycle_change_development_to_advisory_*.md``
+# is the gating prerequisite per Gate N2 acceptance #3.
+LIFECYCLE_STATE_T24: GateLifecycleState = GateLifecycleState.DEVELOPMENT
 
 
 # Default thresholds for the recommendation helper. Anchored to common
