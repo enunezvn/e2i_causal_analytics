@@ -574,6 +574,37 @@ class TestScanLifecycleChangesIntegration:
         findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
         assert findings == []
 
+    def test_change_in_scripts_dir_detected(
+        self,
+        fake_repo_with_change_machinery: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """N2 finding H4: a lifecycle change to a file in ``scripts/`` must
+        also be detected (the diff scope previously listed only src/ +
+        config/, silently skipping script-resident gate constants).
+        """
+        captured_args: dict[str, object] = {}
+
+        def fake_check_output(*args: object, **kwargs: object) -> str:
+            captured_args["args"] = args
+            return (
+                "+++ b/scripts/gate_runner.py\n"
+                "@@ -1 +1 @@\n"
+                "-LIFECYCLE_STATE_RUNNER = GateLifecycleState.ADVISORY\n"
+                "+LIFECYCLE_STATE_RUNNER = GateLifecycleState.CALIBRATING\n"
+            )
+
+        monkeypatch.setattr(_scanner_mod.subprocess, "check_output", fake_check_output)
+        findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
+        # Confirm scripts/ is in the diff path list.
+        argv = list(captured_args["args"][0])  # type: ignore[arg-type]
+        assert "scripts/" in argv, f"scripts/ must be in `git diff -- ...` argv; got {argv}"
+        # The change should be detected as needing a doc.
+        assert any(
+            f.code == "missing_lifecycle_change_doc" and "scripts/gate_runner.py" in f.path
+            for f in findings
+        ), [f.to_dict() for f in findings]
+
 
 # ---------------------------------------------------------------------------
 # Acceptance #7: CI workflow YAML loads cleanly.
