@@ -838,6 +838,85 @@ def test_extract_pgp_armor_block_returns_full_block():
 
 
 # --------------------------------------------------------------------------- #
+# iter-3 NEW HIGH: sigstore verify-blob misuse — the verifier must pass
+# the payload (not the bundle file) as the artifact arg to cosign.
+# --------------------------------------------------------------------------- #
+
+
+def test_verify_sigstore_bundle_no_payload_warns_about_known_broken():
+    """iter-3 NEW HIGH: invoking _verify_sigstore_bundle without payload
+    triggers the legacy degraded path that verifies the bundle as its
+    own artifact — and the function must explicitly warn about it in
+    the detail string.
+
+    The test only asserts the warn-text presence (not the exit code,
+    which depends on whether cosign is available on the test runner).
+    """
+
+    if shutil.which("cosign") is None:
+        pytest.skip("cosign not on PATH; degraded-path warn test only meaningful with toolchain")
+
+    bundle_json = (
+        '{"base64Signature": "AAAA", "cert": "BBBB", '
+        '"rekorBundle": {"Payload": {"body": "CCCC"}}, "signatures": ["AAAA"]}'
+    )
+    ok, detail = cms._verify_sigstore_bundle(bundle_json, payload=None)
+    # When cosign is on PATH but no real signing materials are wired, ok
+    # is False, but the WARN string must be present regardless.
+    assert "KNOWN BROKEN" in detail or "WARN" in detail
+
+
+def test_verify_sigstore_bundle_with_payload_separates_artifact_from_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """iter-3 NEW HIGH: with a payload supplied, cosign is invoked with
+    the artifact path DIFFERENT from the bundle path.
+
+    We monkeypatch subprocess.run to capture the actual cosign argv and
+    assert the artifact arg points to a different file than --bundle.
+    """
+
+    if shutil.which("cosign") is None:
+        # Monkeypatch shutil.which so the cosign path is taken without a
+        # real cosign binary; we intercept subprocess.run before it
+        # actually executes.
+        monkeypatch.setattr(cms.shutil, "which", lambda name: "/fake/cosign" if name == "cosign" else None)
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["cmd"] = list(cmd)
+        # Return a dummy CompletedProcess-like object.
+        class _CP:
+            returncode = 0
+            stdout = ""
+            stderr = "fake-cosign-ok"
+
+        return _CP()
+
+    monkeypatch.setattr(cms.subprocess, "run", fake_run)
+
+    bundle_json = '{"signatures": ["AAAA"], "cert": "BBBB"}'
+    payload = "## Reviewer\n@alice\n## Methodology decision\nApprove.\n"
+    ok, _ = cms._verify_sigstore_bundle(bundle_json, payload=payload)
+    assert ok is True
+
+    cmd = captured["cmd"]
+    # cmd shape: ["cosign", "verify-blob", "--bundle", <bundle_path>,
+    #            "--insecure-ignore-tlog", <artifact_path>]
+    assert cmd[0] == "cosign"
+    assert cmd[1] == "verify-blob"
+    bundle_idx = cmd.index("--bundle") + 1
+    bundle_path = cmd[bundle_idx]
+    # Artifact path is the trailing positional.
+    artifact_path = cmd[-1]
+    assert bundle_path != artifact_path, (
+        "iter-3 NEW HIGH: cosign artifact path must NOT be the bundle file "
+        f"(got bundle={bundle_path!r} artifact={artifact_path!r})"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # H2: selection-rule expansion — gh PR query, CoI declared-PR parse,
 # warnings-vs-violations distinction.
 # --------------------------------------------------------------------------- #
