@@ -324,8 +324,33 @@ def check_reviewer_registered(
     )
 
 
-def check_coi_referenced(doc_text: str) -> CheckResult:
-    """A CoI commit SHA and a CoI file path must both be present."""
+_COI_FILENAME_PATTERN = re.compile(r"^(?P<handle>[A-Za-z0-9][-A-Za-z0-9_]*)_(?P<date>\d{8})\.md$")
+
+
+def check_coi_referenced(
+    doc_text: str,
+    repo_root: Optional[Path] = None,
+) -> CheckResult:
+    """H4: validate CoI fields beyond mere presence.
+
+    Checks (in order):
+
+    1. SHA and path fields are non-empty and not template placeholders.
+    2. CoI path filename matches ``<handle>_<YYYYMMDD>.md`` where
+       ``<handle>`` matches the sign-off doc's reviewer handle.
+    3. ``git cat-file -e <sha>:<path>`` resolves (the SHA committed the
+       declared path).
+    4. The declared SHA is the FIRST commit that added the path
+       (``git log --diff-filter=A --follow --reverse``); a later-modify
+       SHA is rejected because it would let a reviewer point at a
+       declaration that was originally written for a different period.
+
+    Steps 3 and 4 run only when ``repo_root`` is provided AND ``git`` is
+    on PATH; otherwise they are skipped with a WARN annotation. Step 4
+    is also skipped (with a WARN, not a fail) if ``git log
+    --diff-filter=A`` returns no result — that case can occur in test
+    fixture repos that do not yet have the CoI declaration committed.
+    """
 
     sha = extract_coi_sha(doc_text)
     path = extract_coi_path(doc_text)
@@ -337,7 +362,56 @@ def check_coi_referenced(doc_text: str) -> CheckResult:
             False,
             f"CoI fields missing or placeholder (sha={sha!r}, path={path!r})",
         )
-    return CheckResult("coi_referenced", True, f"sha={sha[:12]}, path={path}")
+
+    # Type narrowing for mypy — guarded above.
+    assert sha is not None and path is not None
+
+    # H4 sub-check 2: filename format and handle match.
+    handle = extract_handle(doc_text)
+    coi_filename = path.rsplit("/", 1)[-1]
+    name_match = _COI_FILENAME_PATTERN.match(coi_filename)
+    if name_match is None:
+        return CheckResult(
+            "coi_referenced",
+            False,
+            f"CoI filename {coi_filename!r} does not match <handle>_<YYYYMMDD>.md",
+        )
+    file_handle = name_match.group("handle")
+    if handle is not None and file_handle != handle:
+        return CheckResult(
+            "coi_referenced",
+            False,
+            f"CoI filename handle {file_handle!r} does not match reviewer handle {handle!r}",
+        )
+
+    warnings: list[str] = []
+
+    # H4 sub-check 3: SHA + path resolve in repo.
+    if repo_root is not None and shutil.which("git") is not None:
+        ok, detail = _coi_sha_resolves(repo_root, sha, path)
+        if not ok:
+            return CheckResult(
+                "coi_referenced",
+                False,
+                f"CoI SHA/path do not resolve in git: {detail}",
+            )
+        # H4 sub-check 4: SHA is the first-add commit for the path.
+        first_add = _coi_first_add_commit(repo_root, path)
+        if first_add is None:
+            warnings.append("first-add SHA not derivable (path may not be committed in fixture)")
+        elif not (sha.startswith(first_add) or first_add.startswith(sha)):
+            return CheckResult(
+                "coi_referenced",
+                False,
+                f"CoI SHA {sha[:12]} is not the first-add commit for {path} (first_add={first_add[:12]})",
+            )
+    else:
+        warnings.append("git resolution skipped (no repo_root or git not on PATH)")
+
+    detail = f"sha={sha[:12]}, path={path}"
+    if warnings:
+        detail += " | WARN: " + "; ".join(warnings)
+    return CheckResult("coi_referenced", True, detail)
 
 
 def _git_log_touches(
@@ -946,7 +1020,7 @@ def check_signoff(
 
     results.append(check_required_sections(doc_text, kind))
     results.append(check_signature_present(doc_text))
-    results.append(check_coi_referenced(doc_text))
+    results.append(check_coi_referenced(doc_text, repo_root=repo_root))
 
     registry_path = repo_root / "docs" / "governance" / "methodology_reviewer_registry.md"
     try:

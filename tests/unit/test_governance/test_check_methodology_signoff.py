@@ -148,9 +148,6 @@ def fixture_repo(tmp_path: Path) -> Iterator[Path]:
     (repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
         VALID_REGISTRY, encoding="utf-8"
     )
-    (repo / "docs" / "governance" / "coi_declarations" / "alice_20260510.md").write_text(
-        "# CoI Alice\n\nzero touches\n", encoding="utf-8"
-    )
     # Seed a convert script so commits against it are meaningful.
     (repo / "scripts" / "convert_optum_rwd.py").write_text("# stub\n", encoding="utf-8")
 
@@ -172,7 +169,52 @@ def fixture_repo(tmp_path: Path) -> Iterator[Path]:
         env_overrides={"GIT_COMMITTER_DATE": "2026-04-01T12:00:00"},
     )
 
+    # H4: the CoI declaration must be added in a SEPARATE commit so the
+    # first-add SHA derivation works. We add it as the second commit so
+    # tests that need a resolvable SHA can read it via _coi_sha().
+    (repo / "docs" / "governance" / "coi_declarations" / "alice_20260510.md").write_text(
+        "# CoI Alice\n\nzero touches\n", encoding="utf-8"
+    )
+    _git("add", "docs/governance/coi_declarations/alice_20260510.md", cwd=repo)
+    _git(
+        "-c",
+        "user.email=alice@example.com",
+        "-c",
+        "user.name=Alice",
+        "commit",
+        "--date=2026-04-02T12:00:00",
+        "-m",
+        "add CoI alice",
+        cwd=repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-02T12:00:00"},
+    )
+
     yield repo
+
+
+def _coi_sha(repo: Path, path: str = "docs/governance/coi_declarations/alice_20260510.md") -> str:
+    """Return the first-add commit SHA for ``path`` in the fixture repo."""
+
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "log",
+            "--diff-filter=A",
+            "--follow",
+            "--reverse",
+            "--format=%H",
+            "--",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    shas = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    assert shas, f"no first-add SHA for {path}"
+    return shas[0]
 
 
 @pytest.fixture
@@ -371,7 +413,10 @@ def test_check_signoff_full_success(fixture_repo: Path, monkeypatch: pytest.Monk
     """Compose a valid registry + signoff and assert the full check passes."""
 
     signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
-    signoff_path.write_text(_signoff_doc(handle="alice"), encoding="utf-8")
+    # H4: use the real first-add SHA for alice's CoI declaration so the
+    # coi_referenced sub-checks (path resolves + first-add commit) pass.
+    real_sha = _coi_sha(fixture_repo)
+    signoff_path.write_text(_signoff_doc(handle="alice", coi_sha=real_sha), encoding="utf-8")
 
     # Prevent --require-signature path failure when toolchain absent.
     results = cms.check_signoff(signoff_path, fixture_repo, require_signature=False)
@@ -758,6 +803,98 @@ def test_selection_rule_coi_unrelated_overlap_passes(fixture_repo: Path):
     )
     result = cms.check_selection_rule(text, fixture_repo, rows, coi_text=coi_text)
     assert result.ok is True
+
+
+# --------------------------------------------------------------------------- #
+# H4: CoI SHA resolution + first-add commit + filename handle match.
+# --------------------------------------------------------------------------- #
+
+
+def test_coi_referenced_sha_must_resolve_in_repo(fixture_repo: Path):
+    """A CoI SHA that does not exist as an object in the repo FAILS."""
+
+    text = _signoff_doc(handle="alice", coi_sha="0000000000000000000000000000000000000000")
+    result = cms.check_coi_referenced(text, repo_root=fixture_repo)
+    assert result.ok is False
+    assert "do not resolve" in result.detail or "git cat-file" in result.detail
+
+
+def test_coi_referenced_sha_must_be_first_add(fixture_repo: Path):
+    """A SHA that resolves but is NOT the first-add commit FAILS."""
+
+    # Make a second commit that modifies the CoI declaration.
+    coi_path = fixture_repo / "docs" / "governance" / "coi_declarations" / "alice_20260510.md"
+    coi_path.write_text("# CoI Alice (modified)\n\nzero touches\n", encoding="utf-8")
+    _git("add", "docs/governance/coi_declarations/alice_20260510.md", cwd=fixture_repo)
+    _git(
+        "-c",
+        "user.email=alice@example.com",
+        "-c",
+        "user.name=Alice",
+        "commit",
+        "--date=2026-04-03T12:00:00",
+        "-m",
+        "modify CoI",
+        cwd=fixture_repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-03T12:00:00"},
+    )
+    # HEAD is now the modify commit; reading HEAD gives the modify SHA.
+    head_sha = subprocess.run(
+        ["git", "-C", str(fixture_repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    text = _signoff_doc(handle="alice", coi_sha=head_sha)
+    result = cms.check_coi_referenced(text, repo_root=fixture_repo)
+    assert result.ok is False
+    assert "first-add" in result.detail
+
+
+def test_coi_referenced_filename_handle_mismatch(fixture_repo: Path):
+    """If the CoI filename is e.g. bob_20260510.md but reviewer is alice → FAIL."""
+
+    text = _signoff_doc(
+        handle="alice",
+        coi_sha=_coi_sha(fixture_repo),
+        coi_path="docs/governance/coi_declarations/bob_20260510.md",
+    )
+    result = cms.check_coi_referenced(text, repo_root=fixture_repo)
+    assert result.ok is False
+    assert "filename" in result.detail or "handle" in result.detail
+
+
+def test_coi_referenced_filename_must_be_dated(fixture_repo: Path):
+    """CoI filename without _<YYYYMMDD>.md suffix FAILS."""
+
+    text = _signoff_doc(
+        handle="alice",
+        coi_sha=_coi_sha(fixture_repo),
+        coi_path="docs/governance/coi_declarations/alice.md",
+    )
+    result = cms.check_coi_referenced(text, repo_root=fixture_repo)
+    assert result.ok is False
+    assert "<handle>_<YYYYMMDD>.md" in result.detail or "filename" in result.detail
+
+
+def test_coi_referenced_resolves_with_real_sha(fixture_repo: Path):
+    """A CoI declaration that resolves AND is the first-add commit PASSES."""
+
+    text = _signoff_doc(handle="alice", coi_sha=_coi_sha(fixture_repo))
+    result = cms.check_coi_referenced(text, repo_root=fixture_repo)
+    assert result.ok is True
+    assert "WARN" not in result.detail
+
+
+def test_coi_referenced_no_repo_root_warns_only(fixture_repo: Path):
+    """Without repo_root, the SHA-resolves and first-add subchecks WARN, not FAIL."""
+
+    text = _signoff_doc(handle="alice", coi_sha="abc1234567890def")
+    # No repo_root passed — git checks are skipped with a WARN.
+    result = cms.check_coi_referenced(text)
+    assert result.ok is True
+    assert "WARN" in result.detail
 
 
 def test_selection_rule_gh_missing_emits_warning(fixture_repo: Path, monkeypatch):
