@@ -341,28 +341,25 @@ def lineage_audit_declared_path(
         }
 
     knowable_at_ref = getattr(contract.knowable_at, "reference", None)
-    # Pre-anchor references: index_date and any earlier marker. Per
-    # plan §3 Tier 1B step 5, MANIFEST_SOURCES is the single source of
-    # truth for what's pre-anchor. Plan v4 §2 G1 (lineage-sweep
-    # acceptance criterion) requires this set to be aligned with
-    # ``KnowableAt.is_pre_or_at_index()`` so the audit returns
-    # consistent verdicts for every manifest-declared knowable_at
-    # value: ``index_date`` and ``enrollment`` are both pre-or-at
-    # prediction time; ``post_index`` is forbidden; ``lookback_start_date``
-    # / ``eligeff`` are legacy upstream-marker references some
-    # converters emit for derivation provenance. Without ``enrollment``
-    # in this set, every CSU/Optum demographic feature (age, gender,
-    # plan_type, etc.) — which the manifests CORRECTLY declare as
-    # ``knowable_at=enrollment`` — would be flagged ``declared_path_valid=False``,
-    # producing a sweep of false-positive lineage failures on the
-    # surviving feature set.
-    pre_anchor_refs = {
-        "index_date",
-        "enrollment",
-        "lookback_start_date",
-        "eligeff",
-    }
-    declared_path_valid = knowable_at_ref in pre_anchor_refs
+    # Codex pass-1 MED-7 (PR #137 v4 G1): use ``KnowableAt.is_pre_or_at_index()``
+    # API instead of a string allow-list. The string allow-list approach
+    # was fragile — adding a new pre-anchor reference (e.g., a column
+    # reference like ``"first_eligible_date"``) required updating the
+    # set in two places. The API delegates that decision to the
+    # ``KnowableAt`` dataclass, which is the single source of truth per
+    # ``src/data/feature_contract.py:115`` (returns False only for
+    # ``"post_index"`` or positive ``offset_days``; conservatively
+    # accepts any other reference at offset_days <= 0).
+    knowable_at = contract.knowable_at
+    if knowable_at is None:
+        declared_path_valid = False
+        rationale = "contract.knowable_at is None — cannot audit declared-path validity"
+    else:
+        declared_path_valid = knowable_at.is_pre_or_at_index()
+        rationale = (
+            f"contract knowable_at={knowable_at} "
+            f"{'IS pre-anchor (audit pass; is_pre_or_at_index=True)' if declared_path_valid else 'is NOT pre-anchor (audit fail; is_pre_or_at_index=False)'}"
+        )
 
     return {
         "feature_name": feature_name,
@@ -370,10 +367,7 @@ def lineage_audit_declared_path(
         "contract_found": True,
         "knowable_at_reference": knowable_at_ref,
         "declared_path_valid": declared_path_valid,
-        "rationale": (
-            f"contract knowable_at.reference={knowable_at_ref!r} "
-            f"{'IS pre-anchor (audit pass)' if declared_path_valid else 'is NOT pre-anchor (audit fail)'}"
-        ),
+        "rationale": rationale,
     }
 
 
