@@ -489,6 +489,65 @@ def test_lifecycle_state_guard_workflow_yaml_is_valid() -> None:
     assert any("change-detection" in n for n in step_names)
 
 
+def test_lifecycle_state_guard_propagates_scanner_exit_code() -> None:
+    """N2 finding H1: scanner steps MUST propagate the script exit code.
+
+    `python ... > file.json` lets bash see the redirect succeed (file write
+    rarely fails) even when the scanner returns 1, so the job prints findings
+    then passes green. Both scanner steps must capture ``${PIPESTATUS[0]}``
+    via ``tee`` and ``exit`` with that value.
+    """
+    workflow_path = (
+        Path(__file__).resolve().parents[3] / ".github" / "workflows" / "lifecycle_state_guard.yml"
+    )
+    with workflow_path.open("r", encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    job = doc["jobs"]["lifecycle-state-guard"]
+    scanner_steps = [
+        s
+        for s in job["steps"]
+        if isinstance(s, dict) and "lifecycle-state scanner" in s.get("name", "")
+    ]
+    assert len(scanner_steps) == 2, (
+        f"expected 2 scanner steps; got {[s.get('name') for s in scanner_steps]}"
+    )
+    for step in scanner_steps:
+        run_block = step["run"]
+        assert "tee" in run_block, f"step {step['name']!r} must pipe via `tee`, got: {run_block}"
+        assert "PIPESTATUS[0]" in run_block, (
+            f"step {step['name']!r} must capture ${{PIPESTATUS[0]}}, got: {run_block}"
+        )
+        assert 'exit "$EXIT"' in run_block or "exit $EXIT" in run_block, (
+            f"step {step['name']!r} must propagate exit code, got: {run_block}"
+        )
+
+
+def test_lifecycle_state_guard_uses_event_before_for_push() -> None:
+    """N2 finding M3: for push events, the workflow must use
+    ``github.event.before`` (the SHA of the previous tip of the pushed
+    branch) rather than HEAD~1, which only catches the last commit of a
+    multi-commit push.
+    """
+    workflow_path = (
+        Path(__file__).resolve().parents[3] / ".github" / "workflows" / "lifecycle_state_guard.yml"
+    )
+    with workflow_path.open("r", encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    job = doc["jobs"]["lifecycle-state-guard"]
+    base_ref_step = next(
+        (s for s in job["steps"] if isinstance(s, dict) and s.get("id") == "base-ref"),
+        None,
+    )
+    assert base_ref_step is not None, "no `base-ref` step in workflow"
+    env_block = base_ref_step.get("env", {})
+    # The env var should reference github.event.before so the workflow
+    # author can see the dependency at-a-glance.
+    assert "EVENT_BEFORE" in env_block, base_ref_step
+    assert "github.event.before" in env_block["EVENT_BEFORE"], env_block
+    run_block = base_ref_step["run"]
+    assert "EVENT_BEFORE" in run_block, run_block
+
+
 # ---------------------------------------------------------------------------
 # Repo-level smoke test: scanner passes against the actual repo.
 # ---------------------------------------------------------------------------
