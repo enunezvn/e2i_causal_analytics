@@ -10,9 +10,167 @@ Uses MLflowConnector for circuit breaker protection and async support.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Literal, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Plan v3 §4 T2.6a — Deployer input metric computation (pure compute, no
+# enforcement). Categorizes the three quality signals the T2.6c enforcement
+# phase will gate on:
+#   - signal_genuineness:   from validation_metrics["permutation_pvalue"]
+#   - calibration_quality:  from metrics_result["calibration_error"] (ECE)
+#   - cv_stability:         from validation_metrics["cv_5fold_roc_auc_std" /
+#                           "_mean"] ratio
+#
+# Bands are domain-typical defaults; T2.6c can override per cohort. Plan §6
+# T2.6 calibration protocol: synthetic regimes [0.55, 0.85] for plumbing →
+# retrospective held-out cohorts for threshold fitting → operator decisions
+# for drift monitoring only.
+# ============================================================================
+
+SignalGenuinenessCategory = Literal["genuine", "likely_genuine", "marginal", "random", "degenerate"]
+CalibrationQualityCategory = Literal["excellent", "good", "marginal", "poor", "degenerate"]
+CvStabilityCategory = Literal["stable", "moderate", "unstable", "very_unstable", "degenerate"]
+
+# Signal-genuineness pvalue bands. Stricter end matches the existing
+# `PERMUTATION_P_MAX = 0.01` ceiling in `tests/integration/test_csu_val_auc_measurement.py`.
+T2_6A_SIGNAL_GENUINE_PVALUE_MAX: float = 0.001
+T2_6A_SIGNAL_LIKELY_GENUINE_PVALUE_MAX: float = 0.01
+T2_6A_SIGNAL_MARGINAL_PVALUE_MAX: float = 0.05
+
+# Calibration-quality ECE bands. ECE thresholds anchored to Vickers 2019 +
+# Naeini 2015: < 0.05 = excellent for clinical models; ≥ 0.20 = poor.
+T2_6A_CALIBRATION_EXCELLENT_ECE_MAX: float = 0.05
+T2_6A_CALIBRATION_GOOD_ECE_MAX: float = 0.10
+T2_6A_CALIBRATION_MARGINAL_ECE_MAX: float = 0.20
+
+# CV-stability std/mean ratio bands. < 0.05 = stable across folds; ≥ 0.20 =
+# very unstable (suggests fold-dependent overfitting).
+T2_6A_CV_STABILITY_STABLE_RATIO_MAX: float = 0.05
+T2_6A_CV_STABILITY_MODERATE_RATIO_MAX: float = 0.10
+T2_6A_CV_STABILITY_UNSTABLE_RATIO_MAX: float = 0.20
+
+
+def _categorize_signal_genuineness(
+    pvalue: Optional[float],
+) -> SignalGenuinenessCategory:
+    """Plan v3 §4 T2.6a: categorize permutation-test p-value into a
+    deployer-input signal-genuineness band. Lower p = stronger signal.
+
+    Returns ``"degenerate"`` when ``pvalue`` is None (perm test could not
+    be evaluated — single-class y, missing proba). Returns the band
+    Literal otherwise.
+    """
+    if pvalue is None:
+        return "degenerate"
+    if pvalue < T2_6A_SIGNAL_GENUINE_PVALUE_MAX:
+        return "genuine"
+    if pvalue < T2_6A_SIGNAL_LIKELY_GENUINE_PVALUE_MAX:
+        return "likely_genuine"
+    if pvalue < T2_6A_SIGNAL_MARGINAL_PVALUE_MAX:
+        return "marginal"
+    return "random"
+
+
+def _categorize_calibration_quality(
+    ece: Optional[float],
+) -> CalibrationQualityCategory:
+    """Plan v3 §4 T2.6a: categorize Expected Calibration Error into a
+    deployer-input calibration-quality band. Lower ECE = better calibrated.
+
+    Returns ``"degenerate"`` when ``ece`` is None.
+    """
+    if ece is None:
+        return "degenerate"
+    if ece < T2_6A_CALIBRATION_EXCELLENT_ECE_MAX:
+        return "excellent"
+    if ece < T2_6A_CALIBRATION_GOOD_ECE_MAX:
+        return "good"
+    if ece < T2_6A_CALIBRATION_MARGINAL_ECE_MAX:
+        return "marginal"
+    return "poor"
+
+
+def _categorize_cv_stability(
+    std_over_mean: Optional[float],
+) -> CvStabilityCategory:
+    """Plan v3 §4 T2.6a: categorize CV-fold std/mean AUC ratio into a
+    deployer-input stability band. Lower ratio = more stable across folds.
+
+    Returns ``"degenerate"`` when ``std_over_mean`` is None.
+    """
+    if std_over_mean is None:
+        return "degenerate"
+    if std_over_mean < T2_6A_CV_STABILITY_STABLE_RATIO_MAX:
+        return "stable"
+    if std_over_mean < T2_6A_CV_STABILITY_MODERATE_RATIO_MAX:
+        return "moderate"
+    if std_over_mean < T2_6A_CV_STABILITY_UNSTABLE_RATIO_MAX:
+        return "unstable"
+    return "very_unstable"
+
+
+def compute_deployer_input_metrics(
+    validation_metrics: Dict[str, Any],
+    calibration_error: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Plan v3 §4 T2.6a — Deployer-input metric computation (pure compute).
+
+    Pulls three quality signals from the model-trainer's
+    ``validation_metrics`` payload and categorizes each into a deployer-
+    input band that T2.6c (separate work) will gate on. NO ENFORCEMENT
+    here — pure computation that surfaces structured signals for the
+    deployer to read.
+
+    Inputs:
+
+      * ``validation_metrics["permutation_pvalue"]`` — promoted in PR #118
+        (plan v3 §3 Tier 1B step 1). Lower = more signal.
+      * ``calibration_error`` — Expected Calibration Error, computed by
+        ``compute_calibration_analysis`` (evaluator.py) and stored at
+        ``metrics_result["calibration_error"]``. Lower = better calibrated.
+      * ``validation_metrics["cv_5fold_roc_auc_std"]`` and
+        ``["cv_5fold_roc_auc_mean"]`` — promoted in PR #114 (backlog #18).
+        Ratio std/mean is the stability index.
+
+    Returns dict with the following deployer-input keys (all should land
+    on the deployer's input contract by the T2.6b shadow-reporting phase):
+
+      * ``signal_genuineness_category`` — Literal band, one of
+        ``"genuine" | "likely_genuine" | "marginal" | "random" | "degenerate"``.
+      * ``signal_genuineness_pvalue`` — float input or None.
+      * ``calibration_quality_category`` — Literal band, one of
+        ``"excellent" | "good" | "marginal" | "poor" | "degenerate"``.
+      * ``calibration_quality_ece`` — float input or None.
+      * ``cv_stability_category`` — Literal band, one of
+        ``"stable" | "moderate" | "unstable" | "very_unstable" | "degenerate"``.
+      * ``cv_stability_std_over_mean`` — float ratio or None.
+      * ``cv_stability_std`` / ``cv_stability_mean`` — raw inputs or None.
+
+    Backward compat: graceful no-op when any input key is missing —
+    returns the corresponding ``"degenerate"`` band.
+    """
+    pvalue = validation_metrics.get("permutation_pvalue")
+    cv_std = validation_metrics.get("cv_5fold_roc_auc_std")
+    cv_mean = validation_metrics.get("cv_5fold_roc_auc_mean")
+
+    if cv_std is None or cv_mean is None or cv_mean == 0:
+        std_over_mean: Optional[float] = None
+    else:
+        std_over_mean = float(cv_std) / float(cv_mean)
+
+    return {
+        "signal_genuineness_category": _categorize_signal_genuineness(pvalue),
+        "signal_genuineness_pvalue": pvalue,
+        "calibration_quality_category": _categorize_calibration_quality(calibration_error),
+        "calibration_quality_ece": calibration_error,
+        "cv_stability_category": _categorize_cv_stability(std_over_mean),
+        "cv_stability_std_over_mean": std_over_mean,
+        "cv_stability_std": cv_std,
+        "cv_stability_mean": cv_mean,
+    }
 
 
 def _get_mlflow_connector() -> Optional[Any]:
