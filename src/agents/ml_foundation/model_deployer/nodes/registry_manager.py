@@ -173,6 +173,82 @@ def compute_deployer_input_metrics(
     }
 
 
+# ============================================================================
+# Plan v3 §4 T2.6b — Shadow reporting (advisory-mode warnings).
+# Emit structured "denial reasons" derived from the T2.6a categories.
+# OBSERVABILITY ONLY — does NOT mutate `promotion_allowed`. The T2.6c
+# enforcement phase (separate work) is where these signals graduate to
+# blocking checks.
+# ============================================================================
+
+# Categories that the T2.6c enforcement phase will reject. T2.6b emits
+# these as STRUCTURED WARNINGS (not denials) so an operator can monitor
+# the would-be denial rate during the one-quarter advisory window.
+T2_6B_SIGNAL_GENUINENESS_REJECT_CATEGORIES: frozenset[str] = frozenset(
+    {"random", "marginal", "degenerate"}
+)
+T2_6B_CALIBRATION_QUALITY_REJECT_CATEGORIES: frozenset[str] = frozenset(
+    {"poor", "marginal", "degenerate"}
+)
+T2_6B_CV_STABILITY_REJECT_CATEGORIES: frozenset[str] = frozenset(
+    {"very_unstable", "unstable", "degenerate"}
+)
+
+
+def compute_advisory_denial_reasons(
+    deployer_metrics: Dict[str, Any],
+) -> list[str]:
+    """Plan v3 §4 T2.6b — Shadow reporting (advisory-mode warnings).
+
+    Derives a list of structured "would-be denial reasons" from the
+    deployer-input metric categories computed by
+    ``compute_deployer_input_metrics`` (T2.6a). Each entry is a
+    human-readable string describing the category + the input value so
+    operator dashboards can triage.
+
+    This is OBSERVABILITY only — the T2.6c enforcement phase (separate
+    work) is where these reasons graduate to blocking checks. Plan §6
+    T2.6: "advisory mode for one quarter; same calibration protocol as
+    T2.2 — synthetic for plumbing, retrospective held-out for threshold
+    fitting, operator decisions for drift monitoring only".
+
+    Returns an empty list when all three categories are healthy.
+    """
+    reasons: list[str] = []
+
+    sig_cat = deployer_metrics.get("signal_genuineness_category")
+    if sig_cat in T2_6B_SIGNAL_GENUINENESS_REJECT_CATEGORIES:
+        pvalue = deployer_metrics.get("signal_genuineness_pvalue")
+        pvalue_str = f"{pvalue:.4f}" if pvalue is not None else "None"
+        reasons.append(
+            f"T2.6b ADVISORY: signal_genuineness={sig_cat} "
+            f"(perm_pvalue={pvalue_str}). T2.6c enforcement would reject "
+            "promotion at this category; current run is advisory-only."
+        )
+
+    calib_cat = deployer_metrics.get("calibration_quality_category")
+    if calib_cat in T2_6B_CALIBRATION_QUALITY_REJECT_CATEGORIES:
+        ece = deployer_metrics.get("calibration_quality_ece")
+        ece_str = f"{ece:.4f}" if ece is not None else "None"
+        reasons.append(
+            f"T2.6b ADVISORY: calibration_quality={calib_cat} "
+            f"(ece={ece_str}). T2.6c enforcement would reject promotion "
+            "at this category; current run is advisory-only."
+        )
+
+    cv_cat = deployer_metrics.get("cv_stability_category")
+    if cv_cat in T2_6B_CV_STABILITY_REJECT_CATEGORIES:
+        ratio = deployer_metrics.get("cv_stability_std_over_mean")
+        ratio_str = f"{ratio:.4f}" if ratio is not None else "None"
+        reasons.append(
+            f"T2.6b ADVISORY: cv_stability={cv_cat} "
+            f"(std/mean={ratio_str}). T2.6c enforcement would reject "
+            "promotion at this category; current run is advisory-only."
+        )
+
+    return reasons
+
+
 def _get_mlflow_connector() -> Optional[Any]:
     """Get MLflow connector singleton if available.
 
@@ -431,6 +507,24 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
                     "error_type": "shadow_validation_failed",
                 }
 
+        # Plan v3 §4 T2.6b — Compute deployer-input quality metrics +
+        # advisory denial reasons. SHADOW REPORTING ONLY: does NOT mutate
+        # `promotion_allowed`. The structured warnings emit through the
+        # logger AND ride along on the return dict so observability
+        # dashboards can monitor the would-be denial rate during the
+        # one-quarter advisory window before T2.6c enforcement.
+        validation_metrics_for_t26 = state.get("validation_metrics", {}) or {}
+        calibration_error_for_t26 = state.get("calibration_error")
+        if calibration_error_for_t26 is None and isinstance(validation_metrics_for_t26, dict):
+            calibration_error_for_t26 = validation_metrics_for_t26.get("calibration_error")
+        t26_deployer_input_metrics = compute_deployer_input_metrics(
+            validation_metrics_for_t26,
+            calibration_error=calibration_error_for_t26,
+        )
+        t26_advisory_warnings = compute_advisory_denial_reasons(t26_deployer_input_metrics)
+        for w in t26_advisory_warnings:
+            logger.warning(w)
+
         # Promotion is allowed
         return {
             "promotion_target_stage": target_stage,
@@ -438,6 +532,8 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
             "promotion_reason": f"Promotion from {current_stage} to {target_stage} validated",
             "shadow_mode_validated": shadow_mode_validated,
             "promotion_validation_errors": [],
+            "t26_deployer_input_metrics": t26_deployer_input_metrics,
+            "t26_advisory_warnings": t26_advisory_warnings,
         }
 
     except Exception as e:
