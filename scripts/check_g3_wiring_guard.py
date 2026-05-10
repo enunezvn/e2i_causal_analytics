@@ -628,21 +628,20 @@ _REGISTRY_HEADERS = (
 )
 
 
-def parse_registry_emails(registry_path: Path) -> set[str]:
-    """Extract the set of registered reviewer emails (active rows only).
+def _parse_registry_emails_from_text(content: str) -> set[str]:
+    """Parse active-row reviewer emails out of a registry markdown string.
 
-    Returns an empty set when the registry is missing OR contains no active
-    rows (the typical state of the template-stage registry — the caller
-    treats an empty set as "registry empty, skip the email match check").
+    Pure-string variant of ``parse_registry_emails``: callers that need
+    to pull the registry blob from a specific git ref (e.g. base_sha
+    via ``git show``) can pass the content directly without a filesystem
+    detour. Returns an empty set when no active rows are found OR the
+    string contains no recognizable reviewer table.
     """
-
-    if not registry_path.is_file():
-        return set()
 
     emails: set[str] = set()
     in_table = False
     saw_separator = False
-    for raw_line in registry_path.read_text(encoding="utf-8").splitlines():
+    for raw_line in content.splitlines():
         line = raw_line.strip()
         if not line.startswith("|"):
             in_table = False
@@ -669,6 +668,47 @@ def parse_registry_emails(registry_path: Path) -> set[str]:
                 if tok:
                     emails.add(tok.lower())
     return emails
+
+
+def parse_registry_emails(registry_path: Path) -> set[str]:
+    """Extract the set of registered reviewer emails (active rows only).
+
+    Returns an empty set when the registry is missing OR contains no active
+    rows (the typical state of the template-stage registry — the caller
+    treats an empty set as "registry empty, skip the email match check").
+    """
+
+    if not registry_path.is_file():
+        return set()
+    return _parse_registry_emails_from_text(registry_path.read_text(encoding="utf-8"))
+
+
+def parse_registry_emails_from_base_ref(
+    repo_root: Path,
+    base_sha: str,
+) -> Optional[set[str]]:
+    """Read + parse the reviewer registry from a specific git ref.
+
+    Per codex pass-2 NEW HIGH (registry trust PR-mutable): the registry
+    MUST be sourced from the immutable BASE ref so a malicious PR can't
+    add itself as an active reviewer to satisfy the committer-match
+    check. This helper reads
+    ``base_sha:docs/governance/methodology_reviewer_registry.md`` via
+    ``git show`` and parses the active-row emails.
+
+    Returns:
+      * a (possibly empty) set of emails when the blob loaded
+        successfully — empty means the registry exists at base but has
+        no active rows.
+      * ``None`` when the blob could NOT be loaded (file missing in base
+        ref OR git unavailable). Callers in ``require_match`` mode MUST
+        treat ``None`` as a hard failure (fail-closed).
+    """
+
+    blob = _git_show_blob(repo_root, base_sha, REVIEWER_REGISTRY_REL)
+    if blob is None:
+        return None
+    return _parse_registry_emails_from_text(blob)
 
 
 def get_committer_email(repo_root: Path, sha: str) -> Optional[str]:
@@ -731,6 +771,14 @@ def check_signoff_committer_match(
     committer. The lookup also reads the signoff blob from the base ref
     to confirm the signoff exists there (mirror of
     ``check_signoff_exists_in_base_ref``).
+
+    Per codex pass-2 NEW HIGH (registry trust PR-mutable): when
+    ``base_sha`` is provided, the reviewer registry is ALSO read from
+    the base ref via ``git show`` (NOT the PR-checkout copy). A PR that
+    adds itself as an active reviewer in the same commit that lands the
+    wiring would otherwise satisfy the committer-match check from
+    inside the PR. Under ``require_match=True`` we fail closed when the
+    registry is missing OR empty in the base ref.
     """
 
     if shutil.which("git") is None:
@@ -852,11 +900,44 @@ def check_signoff_committer_match(
             "WARN: committer email unresolvable — advisory-skipped",
         )
 
-    registry_emails = parse_registry_emails(repo_root / REVIEWER_REGISTRY_REL)
+    # codex pass-2 NEW HIGH (registry trust PR-mutable): when a base_sha
+    # is provided, read the registry blob from the BASE ref via
+    # ``git show`` rather than the PR-checkout filesystem. A malicious PR
+    # can otherwise add the attacker's email to
+    # ``docs/governance/methodology_reviewer_registry.md`` in the same
+    # commit that introduces the wiring, satisfying the committer-match
+    # check from inside the PR. Sourcing the registry from base_sha
+    # closes that bypass.
+    if base_sha is not None:
+        base_registry = parse_registry_emails_from_base_ref(repo_root, base_sha)
+        if base_registry is None:
+            # File missing in base ref OR git unavailable. In require_match
+            # mode this is a hard failure: we MUST NOT silently fall back
+            # to the PR-checkout copy.
+            if require_match:
+                return CheckResult(
+                    f"signoff_committer_match::{signoff_rel}",
+                    False,
+                    "reviewer registry not loadable from base ref "
+                    f"({base_sha[:12]}) — codex pass-2 NEW HIGH: "
+                    f"{REVIEWER_REGISTRY_REL} must exist + be readable in "
+                    "the immutable BASE ref",
+                )
+            return CheckResult(
+                f"signoff_committer_match::{signoff_rel}",
+                True,
+                "WARN: reviewer registry not loadable from base ref "
+                f"({base_sha[:12]}) — committer match advisory-skipped",
+            )
+        registry_emails = base_registry
+    else:
+        registry_emails = parse_registry_emails(repo_root / REVIEWER_REGISTRY_REL)
     # codex HIGH-1: in fail-closed mode the registry MUST be non-empty.
     # An empty registry under --require-signature-registry-match means
     # the gate is a no-op (no email can match the empty set), so we
-    # surface that as the failure reason.
+    # surface that as the failure reason. With base_sha, this also
+    # closes the codex pass-2 NEW HIGH bypass: empty registry at base
+    # cannot be made non-empty by the PR.
     if require_match and not registry_emails:
         return CheckResult(
             f"signoff_committer_match::{signoff_rel}",

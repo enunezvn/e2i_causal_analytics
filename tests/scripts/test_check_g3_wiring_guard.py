@@ -842,6 +842,243 @@ class TestSignoffAncestorWithBaseSha:
 
 
 # --------------------------------------------------------------------------- #
+# Registry-from-base-ref tests (codex pass-2 NEW HIGH)
+# --------------------------------------------------------------------------- #
+
+
+def _write_registry(repo: Path, rows: str) -> Path:
+    """Write the methodology reviewer registry with the supplied table rows.
+
+    ``rows`` should be the body rows only (one per line, pipe-delimited);
+    headers + separator are emitted automatically. Pass empty string to
+    write an active-row-empty registry.
+    """
+
+    gov_dir = repo / "docs" / "governance"
+    gov_dir.mkdir(parents=True, exist_ok=True)
+    path = gov_dir / "methodology_reviewer_registry.md"
+    body = (
+        "# Methodology Reviewer Registry\n"
+        "\n"
+        "| name | email | github_handle | role | date_added | areas_of_expertise | status |\n"
+        "|------|-------|---------------|------|------------|--------------------|--------|\n"
+        f"{rows}"
+    )
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+class TestRegistryFromBaseRef:
+    """codex pass-2 NEW HIGH (registry trust PR-mutable):
+
+    The reviewer registry is a markdown file under ``docs/governance/``
+    that the PR can freely edit. If the committer-match check sources
+    the registry from the PR-checkout copy, a malicious PR can add the
+    attacker's email as an active reviewer in the same commit that
+    introduces the wiring, satisfying the gate from inside the PR.
+
+    The fix: when ``base_sha`` is provided, the registry is read from
+    the BASE ref via ``git show``. PR-introduced reviewer rows are
+    invisible to the check.
+
+    Tests:
+      1. Registry empty at base (template stage) under require_match
+         + base_sha → FAIL even when the PR adds the active row.
+      2. Registry MISSING entirely at base under require_match
+         + base_sha → FAIL with "not loadable" reason (we don't
+         silently fall back to PR-checkout).
+      3. PR adds the entry, base lacks it → FAIL.
+      4. Base contains the entry → PASS even if PR removes it (sanity
+         check that we read from base, not HEAD).
+    """
+
+    def test_pr_adds_registry_entry_base_lacks_it_fails(self, tmp_repo: Path) -> None:
+        """codex pass-2 NEW HIGH primary scenario: PR adds itself as
+        reviewer; base ref has no such row → committer match FAILS.
+
+        We pre-seed the signoff at base so the earlier "signoff in
+        base ref" gate passes; the test isolates the registry-mutation
+        bypass.
+        """
+
+        # Step 1: seed signoff + an EMPTY registry at base (template
+        # stage — no active reviewers yet). Both files must be in
+        # base because the upstream signoff-in-base check runs first.
+        _write_signoff(tmp_repo, "g1", commit_sha=_FULL_SHA_TEST)
+        _write_registry(tmp_repo, "")
+        base_sha = _git_commit(tmp_repo, "seed signoff + empty registry at base")
+
+        # Step 2: in the PR, add the test user as an active reviewer.
+        # If the check sourced the registry from PR checkout, this
+        # would PASS — proving the bypass. We expect FAIL because the
+        # registry is sourced from base (still empty).
+        _write_registry(
+            tmp_repo,
+            "| Test User | test@example.com | testuser | reviewer | 2026 | misc | active |\n",
+        )
+        _git_commit(tmp_repo, "PR adds reviewer (bypass attempt)")
+
+        result = guard.check_signoff_committer_match(
+            tmp_repo,
+            "docs/calibration/g1_completion_signoff_20260510.md",
+            require_match=True,
+            base_sha=base_sha,
+        )
+        assert result.ok is False
+        # The empty-registry-at-base failure path is the expected one.
+        detail_lower = result.detail.lower()
+        assert "empty" in detail_lower or "no active" in detail_lower
+
+    def test_registry_missing_at_base_fails(self, tmp_repo: Path) -> None:
+        """codex pass-2 NEW HIGH: registry FILE missing in base ref under
+        require_match + base_sha → FAIL with "not loadable" message.
+        Critical: must NOT silently fall back to PR-checkout copy.
+        """
+
+        # Pre-seed the signoff at base so we isolate the registry-load
+        # path; otherwise the upstream signoff-in-base check fires
+        # first.
+        _write_signoff(tmp_repo, "g1", commit_sha=_FULL_SHA_TEST)
+        base_sha = _git_commit(tmp_repo, "seed signoff (no registry) at base")
+
+        # PR adds the registry; base lacks the file entirely.
+        _write_registry(
+            tmp_repo,
+            "| Test User | test@example.com | testuser | reviewer | 2026 | misc | active |\n",
+        )
+        _git_commit(tmp_repo, "PR adds registry (no base registry)")
+
+        result = guard.check_signoff_committer_match(
+            tmp_repo,
+            "docs/calibration/g1_completion_signoff_20260510.md",
+            require_match=True,
+            base_sha=base_sha,
+        )
+        assert result.ok is False
+        # "not loadable from base ref" is the file-missing failure
+        # message; we MUST NOT silently fall back to PR-checkout.
+        detail_lower = result.detail.lower()
+        assert "not loadable" in detail_lower
+
+    def test_registry_at_base_passes_even_if_pr_removes_it(self, tmp_repo: Path) -> None:
+        """Sanity check: the check reads from base, NOT HEAD. A PR that
+        REMOVES the registry while keeping the signoff still PASSES if
+        the base ref carries the active row.
+        """
+
+        # Seed registry with the test user + signoff at base.
+        _write_registry(
+            tmp_repo,
+            "| Test User | test@example.com | testuser | reviewer | 2026 | misc | active |\n",
+        )
+        _write_signoff(tmp_repo, "g1", commit_sha=_FULL_SHA_TEST)
+        base_sha = _git_commit(tmp_repo, "seed registry + signoff at base")
+
+        # PR removes the registry rows entirely (regression to
+        # template stage). The base copy still has the active row.
+        _write_registry(tmp_repo, "")
+        _git_commit(tmp_repo, "PR strips registry to empty")
+
+        result = guard.check_signoff_committer_match(
+            tmp_repo,
+            "docs/calibration/g1_completion_signoff_20260510.md",
+            require_match=True,
+            base_sha=base_sha,
+        )
+        # The base ref still has the active row → committer matches.
+        assert result.ok is True
+        assert "matches registry" in result.detail.lower()
+
+    def test_advisory_mode_registry_missing_at_base_passes(self, tmp_repo: Path) -> None:
+        """Advisory mode (require_match=False): registry not loadable
+        from base ref → PASS with WARN. Mirrors other advisory-skip
+        paths so dev-machine usage doesn't break.
+        """
+
+        # Pre-seed signoff at base; no registry at base.
+        _write_signoff(tmp_repo, "g1", commit_sha=_FULL_SHA_TEST)
+        base_sha = _git_commit(tmp_repo, "seed signoff (no registry) at base")
+
+        # PR adds registry; base has signoff but not registry.
+        _write_registry(
+            tmp_repo,
+            "| Test User | test@example.com | testuser | reviewer | 2026 | misc | active |\n",
+        )
+        _git_commit(tmp_repo, "PR adds registry")
+
+        result = guard.check_signoff_committer_match(
+            tmp_repo,
+            "docs/calibration/g1_completion_signoff_20260510.md",
+            require_match=False,
+            base_sha=base_sha,
+        )
+        assert result.ok is True
+        # WARN message documents the advisory skip.
+        assert "warn" in result.detail.lower() or "advisory" in result.detail.lower()
+
+
+class TestParseRegistryEmailsFromBaseRef:
+    """codex pass-2 NEW HIGH unit tests for the
+    ``parse_registry_emails_from_base_ref`` helper.
+
+    The helper returns:
+      * ``set[str]`` of active emails when the blob loaded.
+      * ``None`` when the blob could NOT be loaded from base.
+
+    Callers in fail-closed mode MUST treat None as a hard failure.
+    """
+
+    def test_returns_none_when_blob_missing_in_base(self, tmp_repo: Path) -> None:
+        base_sha = _seed_initial_commit(tmp_repo)
+        # Registry file does NOT exist at base.
+        result = guard.parse_registry_emails_from_base_ref(tmp_repo, base_sha)
+        assert result is None
+
+    def test_returns_empty_set_when_registry_at_base_has_no_active_rows(
+        self, tmp_repo: Path
+    ) -> None:
+        _write_registry(tmp_repo, "")
+        base_sha = _git_commit(tmp_repo, "seed empty registry")
+
+        result = guard.parse_registry_emails_from_base_ref(tmp_repo, base_sha)
+        assert result == set()
+
+    def test_returns_active_emails_from_base_blob(self, tmp_repo: Path) -> None:
+        _write_registry(
+            tmp_repo,
+            "| Alice | alice@example.com | alice | reviewer | 2026 | causal | active |\n"
+            "| Bob | bob@example.com | bob | reviewer | 2026 | survival | inactive |\n",
+        )
+        base_sha = _git_commit(tmp_repo, "seed registry with mixed rows")
+
+        result = guard.parse_registry_emails_from_base_ref(tmp_repo, base_sha)
+        assert result == {"alice@example.com"}
+
+    def test_pr_modifications_do_not_leak_into_base_read(self, tmp_repo: Path) -> None:
+        """Critical NEW HIGH invariant: edits made to the registry
+        AFTER base_sha must NOT change what the helper returns.
+        """
+
+        _write_registry(
+            tmp_repo,
+            "| Alice | alice@example.com | alice | reviewer | 2026 | causal | active |\n",
+        )
+        base_sha = _git_commit(tmp_repo, "seed registry at base")
+
+        # PR adds attacker as active reviewer.
+        _write_registry(
+            tmp_repo,
+            "| Alice | alice@example.com | alice | reviewer | 2026 | causal | active |\n"
+            "| Attacker | attacker@evil.example | attacker | reviewer | 2026 | misc | active |\n",
+        )
+        _git_commit(tmp_repo, "PR adds attacker (bypass attempt)")
+
+        result = guard.parse_registry_emails_from_base_ref(tmp_repo, base_sha)
+        # Only base-ref emails surface; attacker is invisible.
+        assert result == {"alice@example.com"}
+
+
+# --------------------------------------------------------------------------- #
 # check_g3_wiring_guard orchestrator tests
 # --------------------------------------------------------------------------- #
 
