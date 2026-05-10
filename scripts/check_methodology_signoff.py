@@ -366,12 +366,218 @@ def _git_log_touches(
     return bool(output), output
 
 
+def _gh_pr_touches(
+    handle: str,
+    role: str,
+    subject_files: Sequence[str],
+    period_start: str,
+    period_end: str,
+) -> tuple[Optional[bool], str]:
+    """Best-effort `gh pr list` query for PRs authored OR reviewed by ``handle``.
+
+    Returns ``(has_touches, detail)`` where ``has_touches`` is:
+      * ``True`` — at least one PR matches handle + period + subject files.
+      * ``False`` — query ran cleanly and returned no overlapping PRs.
+      * ``None`` — query could not run (gh not on PATH, no repo, no auth).
+        In that case the caller MUST treat the result as best-effort and
+        emit a warning rather than fail-or-pass on this signal alone.
+
+    ``role`` is either "author" or "reviewer".
+
+    The PR-files JSON shape from `gh pr list --json files` is::
+
+        [{"number": 131, "files": [{"path": "scripts/foo.py"}, ...]}, ...]
+    """
+
+    if shutil.which("gh") is None:
+        return None, "gh not on PATH (best-effort signal skipped)"
+
+    if role == "author":
+        flag = "--author"
+        date_flag = "created"
+    elif role == "reviewer":
+        flag = "--reviewer"
+        date_flag = "updated"
+    else:
+        raise ValueError(f"unknown role {role!r} (expected 'author' or 'reviewer')")
+
+    search = f"{date_flag}:{period_start}..{period_end}"
+    cmd = [
+        "gh",
+        "pr",
+        "list",
+        flag,
+        handle,
+        "--state",
+        "all",
+        "--search",
+        search,
+        "--json",
+        "number,files,title",
+        "--limit",
+        "200",
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return None, f"gh invocation failed: {exc}"
+
+    if completed.returncode != 0:
+        # gh returns non-zero on auth errors or repo unavailable. We treat
+        # that as best-effort skip rather than a violation.
+        return (
+            None,
+            f"gh returncode={completed.returncode}: {(completed.stderr or '').strip()[:200]}",
+        )
+
+    import json as _json
+
+    try:
+        prs = _json.loads(completed.stdout or "[]")
+    except _json.JSONDecodeError as exc:
+        return None, f"gh JSON parse failed: {exc}"
+
+    overlaps: list[str] = []
+    subject_set = set(subject_files)
+    for pr in prs:
+        files = pr.get("files") or []
+        pr_paths = {entry.get("path") for entry in files if isinstance(entry, dict)}
+        intersect = pr_paths & subject_set
+        if intersect:
+            overlaps.append(f"PR#{pr.get('number')} ({role}, files={sorted(intersect)})")
+    if overlaps:
+        return True, "; ".join(overlaps)
+    return False, f"0 {role} PRs touching subject files in {period_start}..{period_end}"
+
+
+def _coi_sha_resolves(repo_root: Path, sha: str, path: str) -> tuple[bool, str]:
+    """Run ``git cat-file -e <sha>:<path>`` to confirm the SHA + path resolve.
+
+    Returns ``(ok, detail)``. ``ok`` is True iff git's exit is 0 (the
+    object exists at that commit). The detail is a short human label.
+    """
+
+    if shutil.which("git") is None:
+        return False, "git not on PATH"
+
+    cmd = [
+        "git",
+        "-C",
+        str(repo_root),
+        "cat-file",
+        "-e",
+        f"{sha}:{path}",
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, f"git cat-file failed: {exc}"
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        return False, f"git cat-file -e {sha[:12]}:{path}: {stderr or 'not found'}"
+    return True, f"git cat-file resolves {sha[:12]}:{path}"
+
+
+def _coi_first_add_commit(repo_root: Path, path: str) -> Optional[str]:
+    """Return the first commit SHA that added ``path`` to history, or None.
+
+    Uses ``git log --diff-filter=A --follow --reverse``. None is returned
+    if git is unavailable or the path was never added (e.g. only modified).
+    """
+
+    if shutil.which("git") is None:
+        return None
+
+    cmd = [
+        "git",
+        "-C",
+        str(repo_root),
+        "log",
+        "--diff-filter=A",
+        "--follow",
+        "--reverse",
+        "--format=%H",
+        "--",
+        path,
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    shas = [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+    return shas[0] if shas else None
+
+
+def _parse_coi_declared_prs(coi_text: str) -> list[dict]:
+    """Extract the JSON array of declared PRs from the CoI markdown body.
+
+    The CoI template asks reviewers to paste `gh pr list --json` output
+    inside fenced code blocks. This helper scans for the FIRST JSON-like
+    array inside any code fence and returns it parsed. On parse failure or
+    no array found, returns an empty list.
+
+    The returned list is best-effort: each entry is whatever shape the
+    reviewer pasted (typically ``{"number": int, "title": str,
+    "files": [{"path": str}, ...]}``).
+    """
+
+    import json as _json
+
+    pattern = re.compile(r"```[a-zA-Z]*\s*(?P<body>\[[\s\S]*?\])\s*```")
+    for match in pattern.finditer(coi_text):
+        body = match.group("body").strip()
+        try:
+            parsed = _json.loads(body)
+        except _json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            return parsed
+    return []
+
+
 def check_selection_rule(
     doc_text: str,
     repo_root: Path,
     registry: Sequence[ReviewerInfo],
+    coi_text: Optional[str] = None,
 ) -> CheckResult:
-    """For each subject file, the reviewer's git log in the named period must be empty."""
+    """Selection rule (H2): combine git-log + gh PR/review evidence + CoI parse.
+
+    For each subject file, the reviewer must have:
+      * 0 git commits authored in the named period (git log --author=email),
+      * 0 PRs authored intersecting the subject files in the named period,
+      * 0 PRs reviewed intersecting the subject files in the named period,
+      * if the CoI document text is provided, 0 PRs declared therein that
+        intersect the subject files (this is the reviewer's own admission).
+
+    The git-log signal is canonical; the gh signals are best-effort and a
+    "could not query" outcome (gh missing, auth error, etc.) emits a WARN
+    in the detail string but does NOT fail the check on its own.
+
+    The CoI-declared-PR signal IS authoritative for what the reviewer
+    self-declares (a non-empty intersection means they have admitted touching
+    the subject file and the rule fails regardless of git/gh signal).
+    """
 
     handle = extract_handle(doc_text)
     if handle is None:
@@ -389,6 +595,8 @@ def check_selection_rule(
         )
     email = matching[0].email
     violations: List[str] = []
+    warnings: List[str] = []
+
     for subject in SUBJECT_FILES:
         has_touches, output = _git_log_touches(
             repo_root,
@@ -398,17 +606,54 @@ def check_selection_rule(
             NAMED_PERIOD_END,
         )
         if has_touches:
-            violations.append(f"{subject}: {output}")
+            violations.append(f"git({subject}): {output}")
+
+    # Best-effort gh queries — both author and reviewer roles.
+    for role in ("author", "reviewer"):
+        result, detail = _gh_pr_touches(
+            handle,
+            role,
+            SUBJECT_FILES,
+            NAMED_PERIOD_START,
+            NAMED_PERIOD_END,
+        )
+        if result is True:
+            violations.append(f"gh-{role}: {detail}")
+        elif result is None:
+            warnings.append(f"gh-{role}: {detail}")
+        # result is False → no overlap; nothing to record.
+
+    # Authoritative self-declaration check from the CoI document body, if
+    # the caller provided it.
+    if coi_text is not None:
+        declared = _parse_coi_declared_prs(coi_text)
+        if declared:
+            subject_set = set(SUBJECT_FILES)
+            for pr in declared:
+                if not isinstance(pr, dict):
+                    continue
+                files = pr.get("files") or []
+                pr_paths = {entry.get("path") for entry in files if isinstance(entry, dict)}
+                intersect = pr_paths & subject_set
+                if intersect:
+                    violations.append(
+                        f"coi-self-declared: PR#{pr.get('number')} touches {sorted(intersect)}"
+                    )
+
     if violations:
         return CheckResult(
             "selection_rule",
             False,
             "; ".join(violations),
         )
+
+    detail = f"0 git touches for {email} in {NAMED_PERIOD_START}..{NAMED_PERIOD_END}"
+    if warnings:
+        detail += " | WARN: " + "; ".join(warnings)
     return CheckResult(
         "selection_rule",
         True,
-        f"0 git touches for {email} in {NAMED_PERIOD_START}..{NAMED_PERIOD_END}",
+        detail,
     )
 
 
@@ -699,7 +944,17 @@ def check_signoff(
 
     results.append(CheckResult("registry_loaded", True, f"{len(registry)} rows"))
     results.append(check_reviewer_registered(doc_text, registry))
-    results.append(check_selection_rule(doc_text, repo_root, registry))
+
+    # Read the CoI declaration body (if it exists at the declared path) so
+    # check_selection_rule can scan its declared-PRs JSON for self-admitted
+    # subject-file overlap.
+    coi_text: Optional[str] = None
+    coi_path = extract_coi_path(doc_text)
+    if coi_path:
+        coi_full = repo_root / coi_path
+        if coi_full.is_file():
+            coi_text = coi_full.read_text(encoding="utf-8")
+    results.append(check_selection_rule(doc_text, repo_root, registry, coi_text=coi_text))
     results.append(check_signature_verifies(doc_path, require_signature, keyring_dir=keyring_dir))
     return results
 
