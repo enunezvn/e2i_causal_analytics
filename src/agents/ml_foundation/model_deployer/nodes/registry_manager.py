@@ -474,6 +474,66 @@ def _evaluate_absolute_threshold_gates(
     }
 
 
+def _detect_leftover_adaptation_entries(
+    state: Dict[str, Any],
+    audit: RegulatoryEligibilityAudit,
+) -> List[Dict[str, Any]]:
+    """Return adaptation entries present in state but missing from audit.
+
+    Codex-rescue N1-H3: ``leakage_remediation`` emits a
+    ``regulatory_adaptation_entry`` payload that the orchestrator MUST
+    aggregate into ``validation_metrics["regulatory_eligibility_audit"]
+    ["adaptation_history"]`` before promotion. If the orchestrator
+    (incorrectly) skips that handoff, the audit's ``adaptation_history``
+    stays empty and ``regulatory_eligible=True`` is granted on a model
+    whose features were adaptively dropped.
+
+    The deployer is the last line of defense: it scans state for any
+    ``regulatory_adaptation_entry`` payload that is NOT yet in
+    ``audit.adaptation_history``. Anything found is a "leftover" — the
+    eligibility verdict must fail closed.
+
+    Matching uses (commit_sha, gate_name, timestamp) as the entry key
+    since these uniquely identify a remediation pass. We tolerate
+    out-of-order ingestion: an entry already in ``adaptation_history``
+    is considered ingested regardless of position.
+
+    Args:
+        state: the current agent state
+        audit: the audit reconstructed from state's
+            ``validation_metrics["regulatory_eligibility_audit"]``
+
+    Returns:
+        A list of leftover entries. Empty list iff every state-level
+        ``regulatory_adaptation_entry`` has been ingested.
+    """
+    raw = state.get("regulatory_adaptation_entry")
+    if raw is None:
+        return []
+
+    # Accept either a single entry dict or a list of entries (future-
+    # proof for batched orchestrator ingestion).
+    candidates: List[Dict[str, Any]] = []
+    if isinstance(raw, dict):
+        candidates = [raw]
+    elif isinstance(raw, list):
+        candidates = [e for e in raw if isinstance(e, dict)]
+    else:
+        # Unknown shape — treat as malformed leftover.
+        return [{"_malformed_payload": repr(raw)}]
+
+    def _key(entry: Dict[str, Any]) -> Tuple[Any, Any, Any]:
+        return (
+            entry.get("commit_sha"),
+            entry.get("gate_name"),
+            entry.get("timestamp"),
+        )
+
+    ingested_keys = {_key(e) for e in audit.adaptation_history}
+    leftover = [c for c in candidates if _key(c) not in ingested_keys]
+    return leftover
+
+
 def _evaluate_regulatory_eligibility(
     state: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -507,22 +567,59 @@ def _evaluate_regulatory_eligibility(
     audit = _load_regulatory_audit_from_state(state)
     timestamp = datetime.now(tz=None).isoformat()
 
+    # Codex-rescue N1-H3: detect un-ingested ``regulatory_adaptation_entry``
+    # payloads BEFORE evaluating thresholds. If the orchestrator hasn't
+    # aggregated leakage_remediation's emitted entries into the audit's
+    # ``adaptation_history``, the deployer fails closed: the model's
+    # threshold history is not clean and eligibility cannot be granted.
+    leftover_adaptation_entries = _detect_leftover_adaptation_entries(state, audit)
+
     threshold_result = _evaluate_absolute_threshold_gates(state, audit, timestamp)
     all_thresholds_cleared = bool(threshold_result["all_thresholds_cleared"])
     threshold_failures = list(threshold_result["failures"])
 
     # The eligibility verdict reads the (now-updated) audit.
-    eligible = all_thresholds_cleared and is_regulatory_eligible(
-        audit, N1_REQUIRED_REGULATORY_GATES
+    eligible = (
+        all_thresholds_cleared
+        and not leftover_adaptation_entries
+        and is_regulatory_eligible(audit, N1_REQUIRED_REGULATORY_GATES)
     )
+    # Candidate: thresholds cleared but a leftover entry would have been
+    # an adaptation, so we treat leftovers as if they were adaptations
+    # for the candidate flag too.
     candidate = all_thresholds_cleared and is_adapted_regulatory_candidate(
         audit, N1_REQUIRED_REGULATORY_GATES
     )
+    # If there are leftover entries AND threshold gates passed AND the
+    # required gates have literature_anchored provenance, surface as
+    # candidate (would be eligible if cohort confirms).
+    if leftover_adaptation_entries and all_thresholds_cleared and not candidate and not eligible:
+        # is_adapted_regulatory_candidate returns False when
+        # adaptation_history is empty — but there ARE pending
+        # adaptation entries, just not ingested. Re-check the
+        # required-gate condition without the adaptation_history
+        # gating: if every required gate cleared with literature
+        # provenance and every gate evaluation passed, this is a
+        # candidate.
+        gate_latest: Dict[str, Dict[str, Any]] = {}
+        for entry in audit.gate_history:
+            gate = entry.get("gate_name")
+            if isinstance(gate, str):
+                gate_latest[gate] = entry
+        all_required_clear = all(
+            gate_latest.get(g, {}).get("outcome") == "pass"
+            and gate_latest.get(g, {}).get("threshold_provenance") == "literature_anchored"
+            for g in N1_REQUIRED_REGULATORY_GATES
+        )
+        all_evaluations_pass = all(e.get("outcome") == "pass" for e in audit.gate_history)
+        if all_required_clear and all_evaluations_pass:
+            candidate = True
 
     # eligibility and candidate are mutually exclusive by construction
-    # (eligible requires adaptation_history == []; candidate requires
-    # adaptation_history non-empty). The check is defensive — a logic
-    # bug elsewhere should never let both flip to True simultaneously.
+    # (eligible requires adaptation_history == [] and no leftovers;
+    # candidate requires non-empty adaptation_history OR leftovers).
+    # The check is defensive — a logic bug elsewhere should never let
+    # both flip to True simultaneously.
     assert not (eligible and candidate), (
         "Gate N1 invariant violation: regulatory_eligible and "
         "adapted_regulatory_candidate cannot both be True."
@@ -532,6 +629,20 @@ def _evaluate_regulatory_eligibility(
     if not eligible:
         if not all_thresholds_cleared:
             failures.extend(threshold_failures)
+        elif leftover_adaptation_entries:
+            # Codex-rescue N1-H3: leftover entry → fail closed.
+            n_left = len(leftover_adaptation_entries)
+            failures.append(
+                f"Gate N1: regulatory_eligible=False because state has "
+                f"{n_left} leftover regulatory_adaptation_entry "
+                f"payload{'s' if n_left != 1 else ''} that have not been "
+                "ingested into the audit's adaptation_history. The "
+                "orchestrator must aggregate leakage_remediation's "
+                "emitted entries into the audit before promotion. Per "
+                "plan v4 §2 codex-rescue HIGH-3 + N1-H3, an un-ingested "
+                "entry signals a broken handoff — eligibility CANNOT "
+                "be granted."
+            )
         elif audit.adaptation_history:
             failures.append(
                 f"Gate N1: regulatory_eligible=False because "
@@ -543,11 +654,13 @@ def _evaluate_regulatory_eligibility(
                 "regulatory eligibility."
             )
 
-    result = {
+    result: Dict[str, Any] = {
         "regulatory_eligible": eligible,
         "adapted_regulatory_candidate": candidate,
         "regulatory_eligibility_audit": audit.to_dict(),
     }
+    if leftover_adaptation_entries:
+        result["regulatory_leftover_adaptation_entries"] = leftover_adaptation_entries
     if failures:
         result["regulatory_eligibility_failures"] = failures
     return result

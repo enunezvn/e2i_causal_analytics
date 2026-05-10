@@ -417,3 +417,161 @@ class TestN1H2ValidatePromotionRejectsNonLiteratureThresholds:
         assert result["regulatory_eligible"] is False
 
 
+# --------------------------------------------------------------------------- #
+# Codex N1-H3: leftover regulatory_adaptation_entry — fail closed.            #
+# When state has a regulatory_adaptation_entry payload that hasn't been       #
+# aggregated into adaptation_history, the deployer must refuse to grant       #
+# regulatory_eligible=True.                                                   #
+# --------------------------------------------------------------------------- #
+
+
+class TestN1H3LeftoverAdaptationEntry:
+    @pytest.mark.asyncio
+    async def test_leftover_entry_blocks_eligibility(self) -> None:
+        """A regulatory_adaptation_entry in state without a matching
+        entry in adaptation_history fails closed."""
+        leftover_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        state = _state_with_passing_minimum_auc()
+        # Simulate orchestrator failing to aggregate the entry into
+        # validation_metrics["regulatory_eligibility_audit"][
+        # "adaptation_history"].
+        state["regulatory_adaptation_entry"] = leftover_entry
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        assert "regulatory_leftover_adaptation_entries" in result
+        leftovers = result["regulatory_leftover_adaptation_entries"]
+        assert len(leftovers) == 1
+        assert leftovers[0] == leftover_entry
+
+        failures = result["regulatory_eligibility_failures"]
+        assert any("leftover regulatory_adaptation_entry" in f for f in failures)
+
+    @pytest.mark.asyncio
+    async def test_leftover_entry_with_passing_thresholds_becomes_candidate(self) -> None:
+        """When thresholds clear AND there's a leftover entry, the model
+        is flagged as adapted_regulatory_candidate (would be eligible if
+        cohort confirms)."""
+        leftover_entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        state = _state_with_passing_minimum_auc()
+        state["regulatory_adaptation_entry"] = leftover_entry
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        assert result["adapted_regulatory_candidate"] is True
+
+    @pytest.mark.asyncio
+    async def test_ingested_entry_does_not_count_as_leftover(self) -> None:
+        """If state's entry IS already in adaptation_history (matched on
+        commit_sha + gate_name + timestamp), the deployer recognizes the
+        ingestion and only the standard adaptation_history denial logic
+        applies."""
+        entry = {
+            "commit_sha": "abc123",
+            "justification_doc": "docs/relaxation_signoff.md",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "2026-05-10T00:00:00",
+        }
+        prior_audit = {
+            "gate_history": [],
+            "adaptation_history": [entry],  # ingested
+        }
+        state = _state_with_passing_minimum_auc(audit=prior_audit)
+        state["regulatory_adaptation_entry"] = entry  # same key
+        result = await validate_promotion(state)
+
+        # Not eligible because adaptation_history non-empty.
+        assert result["regulatory_eligible"] is False
+        # But the leftover key should NOT be present (entry is ingested).
+        assert "regulatory_leftover_adaptation_entries" not in result
+        # And the failure should be the standard adaptation_history one.
+        failures = result["regulatory_eligibility_failures"]
+        assert any("adaptation_history" in f for f in failures)
+        # NOT the leftover failure.
+        assert not any("leftover" in f for f in failures)
+
+    @pytest.mark.asyncio
+    async def test_no_state_entry_no_leftover(self) -> None:
+        """The standard happy path — no state entry, no leftover."""
+        state = _state_with_passing_minimum_auc()
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is True
+        assert "regulatory_leftover_adaptation_entries" not in result
+
+    @pytest.mark.asyncio
+    async def test_list_of_leftover_entries(self) -> None:
+        """Future-proof: accept list-shape regulatory_adaptation_entry."""
+        entries = [
+            {
+                "commit_sha": "abc123",
+                "justification_doc": "doc",
+                "gate_name": "minimum_auc",
+                "before_threshold": 0.85,
+                "after_threshold": 0.75,
+                "timestamp": "t1",
+            },
+            {
+                "commit_sha": "def456",
+                "justification_doc": "doc",
+                "gate_name": "minimum_auc",
+                "before_threshold": 0.85,
+                "after_threshold": 0.75,
+                "timestamp": "t2",
+            },
+        ]
+        state = _state_with_passing_minimum_auc()
+        state["regulatory_adaptation_entry"] = entries
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        assert len(result["regulatory_leftover_adaptation_entries"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_partial_ingestion_surfaces_remaining_leftover(self) -> None:
+        """If list-shape entries are partially ingested, only the
+        un-ingested ones surface as leftovers."""
+        ingested = {
+            "commit_sha": "abc123",
+            "justification_doc": "doc",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "t1",
+        }
+        unmingested = {
+            "commit_sha": "def456",
+            "justification_doc": "doc",
+            "gate_name": "minimum_auc",
+            "before_threshold": 0.85,
+            "after_threshold": 0.75,
+            "timestamp": "t2",
+        }
+        prior_audit = {
+            "gate_history": [],
+            "adaptation_history": [ingested],
+        }
+        state = _state_with_passing_minimum_auc(audit=prior_audit)
+        state["regulatory_adaptation_entry"] = [ingested, unmingested]
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        leftovers = result["regulatory_leftover_adaptation_entries"]
+        assert len(leftovers) == 1
+        assert leftovers[0] == unmingested
