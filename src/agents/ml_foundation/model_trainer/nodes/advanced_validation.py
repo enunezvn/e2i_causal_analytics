@@ -59,8 +59,9 @@ def compute_permutation_test(
 
     Returns:
         Dictionary with p-value, shuffled AUC stats, percentiles, and verdict.
-        Plan v3 §3 Tier 1B step 1 surface keys: ``permutation_null_p95``,
-        ``permutation_null_p99``, ``permutation_n_permutations``.
+        Plan v3 §3 Tier 1B step 1 promotes p95 and p99 of the permutation
+        null distribution plus the realized permutation count into the
+        result mapping (see field names defined in the function body).
     """
     if y_proba is None:
         return {
