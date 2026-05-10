@@ -335,6 +335,47 @@ class TestScanYamlConfigs:
         # One yaml_parse_error finding.
         assert any(f.code == "yaml_parse_error" for f in findings)
 
+    # ----------------------------------------------------------------------
+    # N2 finding H3: nested config dirs (config/env/prod.yaml) must be
+    # scanned, not silently skipped.
+    # ----------------------------------------------------------------------
+
+    def test_nested_config_dir_scanned(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        nested = fake_repo / "config" / "env"
+        nested.mkdir(parents=True)
+        (nested / "prod.yaml").write_text("threshold: 0.7\nbuffer: 0.05\n", encoding="utf-8")
+        findings = scan_yaml_configs(fake_repo)
+        assert len(findings) == 1
+        assert findings[0].path == "config/env/prod.yaml"
+        assert findings[0].code == "missing_lifecycle_state_key"
+
+    def test_nested_config_dir_with_lifecycle_state_passes(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        nested = fake_repo / "config" / "overlays" / "staging"
+        nested.mkdir(parents=True)
+        (nested / "limits.yml").write_text(
+            "lifecycle_state: advisory\nthreshold: 0.7\n", encoding="utf-8"
+        )
+        findings = scan_yaml_configs(fake_repo)
+        assert findings == []
+
+    def test_nested_config_denylist_honored(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        nested = fake_repo / "config" / "env"
+        nested.mkdir(parents=True)
+        (nested / "denied.yaml").write_text("threshold: 0.7\n", encoding="utf-8")
+        monkeypatch.setattr(
+            _scanner_mod,
+            "YAML_CONFIG_DENYLIST",
+            frozenset({"config/env/denied.yaml"}),
+        )
+        findings = scan_yaml_configs(fake_repo)
+        assert findings == []
+
 
 # ---------------------------------------------------------------------------
 # Acceptance #6: lifecycle-state changes without a signed doc fail.

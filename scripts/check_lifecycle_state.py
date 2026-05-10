@@ -129,6 +129,28 @@ YAML_CONFIG_DENYLIST: frozenset[str] = frozenset(
         "config/self_improvement.yaml",
         "config/model_endpoints.yaml",
         "config/autoscale.yml",
+        # Nested config dirs surfaced by the H3 fix (rglob). None of these
+        # are gate guardrails — they are agent configs, ontology defs, or
+        # archived vocabularies. They live under config/ for organization,
+        # not because they control verdict behavior.
+        "config/agents/cohort_constructor.yaml",
+        "config/agents/gap_analyzer.yaml",
+        "config/archived/003_memory_vocabulary.yaml",
+        "config/archived/Feedback Loop domain vocabulary.yml",
+        "config/archived/Ragas-Opik Integration Domain Vocabulary.yml",
+        "config/archived/domain_vocabulary_v3.1.0.yaml",
+        "config/archived/domain_vocabulary_v3_2_additions.yaml",
+        "config/archived/domain_vocabulary_v4.2.0.yaml",
+        "config/archived/domain_vocabulary_v5.0.0.yaml",
+        "config/mlflow/mlflow.yaml",
+        "config/ontology/confidence.yaml",
+        "config/ontology/digital_twin.yaml",
+        "config/ontology/drift_config.yaml",
+        "config/ontology/falkordb_config.yaml",
+        "config/ontology/mlops_config.yaml",
+        "config/ontology/node_types.yaml",
+        "config/ontology/self_improvement.yaml",
+        "config/ontology/validation_rules.yaml",
     }
 )
 
@@ -252,14 +274,24 @@ def _resolve_lifecycle_value(node: ast.expr) -> Optional[str]:
 
 
 def _candidate_yaml_configs(repo_root: Path) -> list[Path]:
-    """Return YAML configs in ``config/`` that look gate-relevant (have a
-    threshold/cutoff/limit/min/max-bearing key) and are NOT in the denylist.
+    """Return YAML configs under ``config/`` (recursively) that look
+    gate-relevant (have a threshold/cutoff/limit/min/max-bearing key) and
+    are NOT in the denylist.
+
+    N2 finding H3: previously only the top-level ``config/`` directory was
+    scanned via ``glob("*.y*ml")``. Environment overlays
+    (``config/env/prod.yaml``) and other nested gate configs were missed.
+    The scanner now uses ``rglob("*.y*ml")`` to walk every YAML in the
+    ``config/`` subtree.
     """
     config_dir = repo_root / "config"
     if not config_dir.is_dir():
         return []
     out: list[Path] = []
-    for path in sorted(config_dir.glob("*.y*ml")):
+    yaml_paths: list[Path] = []
+    for ext in ("*.yaml", "*.yml"):
+        yaml_paths.extend(config_dir.rglob(ext))
+    for path in sorted(set(yaml_paths)):
         rel = path.relative_to(repo_root).as_posix()
         if rel in YAML_CONFIG_DENYLIST:
             continue
