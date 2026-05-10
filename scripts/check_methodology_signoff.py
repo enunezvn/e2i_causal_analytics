@@ -1138,15 +1138,49 @@ def _verify_pgp_signature(
         return ok, combined.strip() or f"gpg returncode={completed.returncode}"
 
 
-def _verify_sigstore_bundle(bundle_json: str) -> tuple[bool, str]:
-    """Run ``cosign verify-blob`` (or ``rekor-cli verify``) against the bundle.
+def _verify_sigstore_bundle(
+    bundle_json: str,
+    payload: Optional[str] = None,
+) -> tuple[bool, str]:
+    """Run ``cosign verify-blob`` against the bundle and a payload.
 
-    Both tools are stub-best-effort: the bundle alone is not enough — cosign
-    needs ``--certificate-identity`` and ``--certificate-oidc-issuer``, and
-    rekor-cli needs a separate artifact. We accept the bundle, write it to a
-    temp file, and ask cosign to verify the bundle's internal signatures
-    via ``cosign verify-blob --bundle <path> --insecure-ignore-tlog``.
-    Failure is fatal; absence of any tool is fatal under require_signature.
+    iter-3 NEW HIGH (sigstore misuse):
+
+    The pre-iter-3 implementation invoked
+    ``cosign verify-blob --bundle <bundle> <bundle>`` — i.e. it asked cosign
+    to verify the BUNDLE FILE as if it were the signed artifact, which is
+    structurally wrong. cosign verify-blob's positional arg is the
+    ARTIFACT whose signature is in the bundle. Verifying the bundle as
+    its own artifact silently passes for any well-formed bundle whose
+    payload-hash field matches the bundle file hash, OR fails for
+    spurious reasons unrelated to the actual sign-off doc.
+
+    This iter-3 fix accepts the original ``payload`` (the sign-off doc
+    body up to but not including the ``## Cryptographic signature``
+    heading) and writes it to a temp file before invoking cosign so the
+    correct artifact is verified.
+
+    KNOWN LIMITATION (deferred — see
+    ``docs/governance/n3_known_limitations_20260510.md``): cosign also
+    requires ``--certificate-identity`` and ``--certificate-oidc-issuer``
+    for the keyless flow OR ``--key`` for the long-lived-key flow.
+    Without those, an attacker who can run a sigstore-signing-capable
+    OIDC identity can produce a verifiable signature regardless of who
+    they are. Production deployments MUST set those flags via env-var
+    or config; this validator does not enforce identity binding.
+
+    Args:
+        bundle_json: the JSON text inside the sign-off doc's
+            `````json ... ````` fence.
+        payload: the doc body up to the ``## Cryptographic signature``
+            heading (must match what was signed). When omitted, the
+            verification falls back to verifying the bundle JSON as the
+            artifact — KNOWN BROKEN, retained only for transitional
+            compatibility and emits a warning in the detail string.
+
+    Returns:
+        ``(ok, detail)``. ``ok`` is True iff cosign returns 0 against
+        the supplied payload. Failure is fatal under require_signature.
     """
 
     has_cosign = shutil.which("cosign") is not None
@@ -1160,13 +1194,26 @@ def _verify_sigstore_bundle(bundle_json: str) -> tuple[bool, str]:
         bundle_path = Path(tmpdir) / "bundle.sigstore"
         bundle_path.write_text(bundle_json, encoding="utf-8")
         if has_cosign:
+            warnings: list[str] = []
+            if payload is None:
+                # Pre-iter-3 broken behaviour retained only for legacy
+                # callers; new callers MUST pass payload. Emit a warning
+                # in the detail so operators see this is a degraded path.
+                artifact_path = bundle_path
+                warnings.append(
+                    "payload is None — verifying bundle file as its own artifact "
+                    "(KNOWN BROKEN; pass payload to fix)"
+                )
+            else:
+                artifact_path = Path(tmpdir) / "payload.txt"
+                artifact_path.write_text(payload, encoding="utf-8")
             cmd = [
                 "cosign",
                 "verify-blob",
                 "--bundle",
                 str(bundle_path),
                 "--insecure-ignore-tlog",
-                str(bundle_path),
+                str(artifact_path),
             ]
             try:
                 completed = subprocess.run(
@@ -1180,7 +1227,10 @@ def _verify_sigstore_bundle(bundle_json: str) -> tuple[bool, str]:
                 return False, f"cosign invocation failed: {exc}"
             ok = completed.returncode == 0
             combined = (completed.stderr or "") + (completed.stdout or "")
-            return ok, combined.strip() or f"cosign returncode={completed.returncode}"
+            detail = combined.strip() or f"cosign returncode={completed.returncode}"
+            if warnings:
+                detail = "WARN: " + "; ".join(warnings) + " | " + detail
+            return ok, detail
         # rekor-cli verify needs the original artifact + a UUID; without those
         # we can only report best-effort presence (matches its limitation).
         return False, "rekor-cli requires --uuid + artifact; bundle alone insufficient"
@@ -1259,7 +1309,15 @@ def check_signature_verifies(
         )
 
     if sigstore_block is not None and (has_cosign or has_rekor):
-        ok, detail = _verify_sigstore_bundle(sigstore_block)
+        # iter-3 NEW HIGH: extract the doc body up to the cryptographic-
+        # signature heading and pass it as the payload — cosign verify-
+        # blob's positional arg must be the ARTIFACT, not the bundle.
+        payload_marker = "## Cryptographic signature"
+        if payload_marker in doc_text:
+            sigstore_payload = doc_text.split(payload_marker, 1)[0]
+        else:
+            sigstore_payload = doc_text
+        ok, detail = _verify_sigstore_bundle(sigstore_block, payload=sigstore_payload)
         if ok:
             return CheckResult("signature_verifies", True, f"sigstore verify OK: {detail[:200]}")
         return CheckResult(
