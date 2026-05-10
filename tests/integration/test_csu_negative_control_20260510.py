@@ -110,6 +110,11 @@ CSU_POST_INDEX_JOURNEY_FEATURES = [
 # numerical AUC tolerance (codex MED-10).
 CSU_EXPECTED_DEPLOYER_VERDICT = "ACCEPTABLE"
 
+# Codex pass-1 HIGH-3 (PR #137 v4 G1): canonical CSU cohort size at
+# PR #116 closure (default-window cohort). Pinned so a cohort-build
+# regression that silently shifts cohort size fires this gate.
+CSU_EXPECTED_COHORT_SIZE = 9607
+
 
 @pytest.fixture(scope="module")
 def csu_negative_control_artifact(
@@ -336,6 +341,42 @@ def test_csu_deployer_verdict_unchanged(
         f"If the shift is intentional, update "
         f"CSU_EXPECTED_DEPLOYER_VERDICT IN THIS COMMIT with PR/SHA "
         f"reference + signed memo."
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.real_data
+@pytest.mark.timeout(2000)
+def test_csu_cohort_size_pinned(
+    csu_negative_control_artifact: dict,
+) -> None:
+    """Codex pass-1 HIGH-3 (PR #137 v4 G1): pin CSU cohort_size = 9607.
+
+    Plan v4 §2 G1 explicitly cites "CSU n=9607". The artifact carries
+    ``cohort_size`` (the assembled-cohort row count). A cohort-build
+    regression that silently shifts the cohort size — even by 1 — fires
+    this gate; the val_AUC honest band is sample-size dependent and a
+    silent cohort-size shift voids the empirical anchor.
+    """
+    actual = csu_negative_control_artifact.get("cohort_size")
+    assert actual is not None, (
+        "cohort_size missing from artifact — runner did not record "
+        "the assembled-cohort row count. Either eligible_df + patient_df "
+        "are both absent in state, or the runner's artifact-emission "
+        "block regressed."
+    )
+    assert actual == CSU_EXPECTED_COHORT_SIZE, (
+        f"G1 negative-control: CSU cohort_size shifted from "
+        f"{CSU_EXPECTED_COHORT_SIZE} (PR #116 closure baseline) to "
+        f"{actual}. The CSU pipeline cohort assembly produced a "
+        f"different patient count than the empirical anchor. This may "
+        f"indicate cohort-build path regression, eligibility-filter "
+        f"changes, or upstream data shifts. Re-audit "
+        f"src/agents/data/cohort_constructor and the CSU eligibility "
+        f"filters.\n"
+        f"If the shift is intentional, update CSU_EXPECTED_COHORT_SIZE "
+        f"IN THIS COMMIT with PR/SHA reference + signed memo."
     )
 
 

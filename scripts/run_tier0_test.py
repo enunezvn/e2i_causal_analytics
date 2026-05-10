@@ -5978,6 +5978,26 @@ async def run_pipeline(
             _deployer_verdict = _v
             _deployer_description = _desc
             _deployer_recommendation = _rec
+        # Codex pass-1 HIGH-3 (PR #137 v4 G1): cohort_size pins the
+        # assembled cohort row count so G1 integration tests can assert
+        # n=9607 (CSU) / n=1294 (Optum default) without re-running
+        # cohort-build. Sourced from state["eligible_df"] when present
+        # (cohort-constructor's output), else state["patient_df"]; None
+        # if neither.
+        _cohort_size: Optional[int] = None
+        _eligible = state.get("eligible_df")
+        if _eligible is not None and hasattr(_eligible, "__len__"):
+            try:
+                _cohort_size = int(len(_eligible))
+            except Exception:
+                _cohort_size = None
+        if _cohort_size is None:
+            _patient_df = state.get("patient_df")
+            if _patient_df is not None and hasattr(_patient_df, "__len__"):
+                try:
+                    _cohort_size = int(len(_patient_df))
+                except Exception:
+                    _cohort_size = None
         artifact = {
             "regime": regime,
             "seed": seed,
@@ -6027,6 +6047,8 @@ async def run_pipeline(
             "deployer_verdict": _deployer_verdict,
             "deployer_verdict_description": _deployer_description,
             "deployer_verdict_recommendation": _deployer_recommendation,
+            # Codex pass-1 HIGH-3 (PR #137 v4 G1)
+            "cohort_size": _cohort_size,
             "trained_model_present": state.get("trained_model") is not None,
             "class_imbalance_info": state.get("class_imbalance_info") or {},
             # Layer 3 / Layer 5 audit surface used by the CSU val_AUC

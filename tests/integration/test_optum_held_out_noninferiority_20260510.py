@@ -111,6 +111,13 @@ OPTUM_HELDOUT_AUC_FLOOR = OPTUM_BASELINE_HELDOUT_AUC - OPTUM_NONINFERIORITY_EPSI
 # COHORT_TARGETS["initiation"] in scripts/run_optum_tier0_test.py.
 OPTUM_INITIATION_TARGET = "initiated_biologic_180d"
 
+# Codex pass-1 HIGH-3 (PR #137 v4 G1): canonical Optum default-window
+# cohort size at PR #116 closure (n=1294 PRE=360/POST=180; NOT the
+# data-snooped n=1697 relaxed-window cohort, per plan v4 §5 forbidding
+# encoding the snooped outcome). Pinned so a silent shift to relaxed
+# windows or upstream data changes fires this gate.
+OPTUM_EXPECTED_DEFAULT_COHORT_SIZE = 1294
+
 
 @pytest.fixture(scope="module")
 def optum_held_out_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
@@ -272,6 +279,42 @@ def test_optum_held_out_auc_non_inferior(
         f"If the regression is intentional (e.g., a deliberate Layer 1 "
         f"tightening), update OPTUM_BASELINE_HELDOUT_AUC IN THIS COMMIT "
         f"with a PR/SHA reference + signed update memo."
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.real_data
+@pytest.mark.timeout(2000)
+def test_optum_default_window_cohort_size_pinned(
+    optum_held_out_artifact: dict,
+) -> None:
+    """Codex pass-1 HIGH-3 (PR #137 v4 G1): pin default-window cohort
+    size = 1294, NOT the data-snooped relaxed n=1697.
+
+    Plan v4 §5 explicitly forbids encoding the data-snooped n=1697
+    GENUINE outcome as a regression test until N3 sign-off. The
+    baseline non-inferiority gate is therefore pinned at the
+    default-window cohort. A silent shift from PRE=360/POST=180
+    (default) to PRE=180/POST=90 (relaxed) — which would change cohort
+    size to 1697 — fires this gate.
+    """
+    actual = optum_held_out_artifact.get("cohort_size")
+    assert actual is not None, (
+        "cohort_size missing from Optum artifact — runner did not "
+        "record the assembled-cohort row count. Either eligible_df + "
+        "patient_df are both absent in state, or the runner's "
+        "artifact-emission block regressed."
+    )
+    assert actual == OPTUM_EXPECTED_DEFAULT_COHORT_SIZE, (
+        f"G1 non-inferiority: Optum cohort_size = {actual} but expected "
+        f"default-window {OPTUM_EXPECTED_DEFAULT_COHORT_SIZE} (PR #116 "
+        f"closure baseline). If actual=1697 the relaxed-window cohort "
+        f"is being used — plan v4 §5 forbids encoding that data-snooped "
+        f"outcome as a regression test until N3 sign-off. Either revert "
+        f"to PRE=360/POST=180 enrollment regime, OR if N3 sign-off has "
+        f"landed, update OPTUM_EXPECTED_DEFAULT_COHORT_SIZE IN THIS "
+        f"COMMIT with PR/SHA reference + signed memo."
     )
 
 
