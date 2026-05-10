@@ -29,6 +29,17 @@ name: Methodology Sign-off Guard
 #   - As a minimum: branch-protection rule requiring CODEOWNERS review on
 #     `scripts/check_methodology_signoff.py` and `.github/workflows/
 #     methodology_signoff_guard.yml`.
+#
+# M1 (iter-3) — gh provenance is best-effort. The validator emits a
+# CRITICAL warning AND sets `provenance_check_skipped=True` on the
+# selection_rule check when `gh` is unavailable / unauthenticated on the
+# runner. The "Detect skipped provenance signal" step below scans the
+# validator output for the CRITICAL token and posts a workflow warning.
+# Production deployments that require gh-confirmed PR/review provenance
+# MUST provision a `GH_TOKEN` with `repo:read` and switch the policy to
+# fail-closed by changing the trailing `exit 0` in that step to `exit 1`.
+# See `docs/governance/n3_known_limitations_20260510.md` for the full
+# deferred-infra rationale.
 
 on:
   pull_request:
@@ -136,6 +147,7 @@ jobs:
           fi
 
       - name: Run check_methodology_signoff.py on each artifact
+        id: validate
         if: steps.touched.outputs.has_files == 'true'
         env:
           # The selection-rule check shells out to git log; the workspace
@@ -144,6 +156,10 @@ jobs:
         run: |
           set -euo pipefail
           STATUS=0
+          PROVENANCE_SKIPPED=0
+          # Capture combined output across all artifacts so the next step
+          # can scan for the M1 CRITICAL marker.
+          : > /tmp/governance/validator_output.txt
           while IFS= read -r ARTIFACT; do
             [ -z "$ARTIFACT" ] && continue
             echo "::group::Validating $ARTIFACT"
@@ -153,13 +169,32 @@ jobs:
             if ! python3 /tmp/governance/check_methodology_signoff.py \
                   --repo-root "$REPO_ROOT" \
                   --require-signature \
-                  "$ARTIFACT"; then
+                  "$ARTIFACT" 2>&1 | tee -a /tmp/governance/validator_output.txt; then
               echo "::error file=$ARTIFACT::methodology sign-off validation failed"
               STATUS=1
             fi
             echo "::endgroup::"
           done <<< "${{ steps.touched.outputs.files }}"
+          # iter-3 M1: detect CRITICAL provenance-skip markers without
+          # blocking validation success. A separate "Provenance signal"
+          # step inspects this flag.
+          if grep -q "CRITICAL: gh provenance query SKIPPED" \
+              /tmp/governance/validator_output.txt; then
+            PROVENANCE_SKIPPED=1
+          fi
+          echo "provenance_skipped=$PROVENANCE_SKIPPED" >> "$GITHUB_OUTPUT"
           exit "$STATUS"
+
+      - name: Provenance signal (M1) — surface skipped gh queries
+        if: steps.touched.outputs.has_files == 'true' && steps.validate.outputs.provenance_skipped == '1'
+        run: |
+          # iter-3 M1: the validator could not query gh (gh missing,
+          # unauthenticated, or API error). The git-log signal still gates
+          # the PASS, but PR/review provenance was NOT confirmed. This
+          # step posts a workflow-level warning. To switch to fail-closed
+          # in production, change the trailing `exit 0` to `exit 1`.
+          echo "::warning::CRITICAL: gh provenance query was SKIPPED on at least one artifact. PR/review evidence is unverified. To fail-closed, change `exit 0` here to `exit 1`. See docs/governance/n3_known_limitations_20260510.md."
+          exit 0
 
       - name: Summary
         if: always()

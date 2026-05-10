@@ -47,6 +47,24 @@ H3 SECURITY ADVISORY:
     that happens, ``scripts/check_methodology_signoff.py`` and
     ``.github/workflows/methodology_signoff_guard.yml`` MUST be CODEOWNERS-
     gated to require security-team review.
+
+M1 (iter-3) — gh provenance best-effort:
+    The selection rule's ``gh pr list`` signals (PRs authored / reviewed by
+    the reviewer that touch the subject files) are best-effort: when ``gh``
+    is unavailable on the runner OR the runner lacks an authenticated token
+    OR the gh API returns an error, ``check_selection_rule`` PASSES on the
+    canonical git-log signal but emits a CRITICAL warning in the result
+    detail AND sets ``CheckResult.provenance_check_skipped=True``. The CI
+    workflow MUST inspect this flag and decide whether to fail-closed; see
+    ``.github/workflows/methodology_signoff_guard.yml`` for the policy
+    comment. See also ``docs/governance/n3_known_limitations_20260510.md``
+    for the full deferred-infra rationale.
+
+NEW MED (iter-3) — future-dated artifacts:
+    ``check_signoff_age`` rejects sign-offs whose filename date is more than
+    1 day ahead of ``today``. The 1-day tolerance covers TZ-skew at the day
+    boundary. Prevents reviewers from pre-dating sign-offs to evade the
+    max-age window.
 """
 
 from __future__ import annotations
@@ -116,11 +134,18 @@ class CheckResult:
         name: short human label (used in reporter output).
         ok: True when the check passed.
         detail: optional explanation (always populated on failure).
+        provenance_check_skipped: True when a best-effort provenance signal
+            (gh PR/review query) could not be evaluated due to missing
+            tooling or auth. The check passed on the canonical signal
+            (git log) but the caller (CI) MUST decide whether to fail-
+            closed when this flag is set. A CRITICAL warning is logged
+            in the detail string when this flag is True (iter-3 M1).
     """
 
     name: str
     ok: bool
     detail: str = ""
+    provenance_check_skipped: bool = False
 
 
 @dataclasses.dataclass
@@ -780,8 +805,15 @@ def check_selection_rule(
         intersect the subject files (this is the reviewer's own admission).
 
     The git-log signal is canonical; the gh signals are best-effort and a
-    "could not query" outcome (gh missing, auth error, etc.) emits a WARN
-    in the detail string but does NOT fail the check on its own.
+    "could not query" outcome (gh missing, auth error, etc.) emits a CRITICAL
+    warning in the detail string AND sets ``provenance_check_skipped=True``
+    on the returned ``CheckResult`` (iter-3 M1). The check itself still
+    PASSES on the canonical git-log signal — gh-skip alone is not a
+    violation — but the caller (CI workflow) MUST decide whether to fail-
+    closed when ``provenance_check_skipped`` is True. Recommended CI policy:
+    fail-closed in production deployments where every PR landing must have
+    its sign-off provenance fully verified; warn-only in early-stage / dev
+    contexts where infra (gh CLI auth on runner) is not yet provisioned.
 
     The CoI-declared-PR signal IS authoritative for what the reviewer
     self-declares (a non-empty intersection means they have admitted touching
@@ -824,6 +856,11 @@ def check_selection_rule(
                 violations.append(f"git({subject}, {alias}): {output}")
 
     # Best-effort gh queries — both author and reviewer roles.
+    # iter-3 M1: track whether ANY gh query was skipped so the caller (CI)
+    # can decide to fail-closed. A skipped gh query means we did NOT
+    # confirm absence of overlapping PRs; the canonical git-log signal is
+    # confirmed, but the gh signal is unavailable.
+    gh_skipped = False
     for role in ("author", "reviewer"):
         result, detail = _gh_pr_touches(
             handle,
@@ -836,6 +873,7 @@ def check_selection_rule(
             violations.append(f"gh-{role}: {detail}")
         elif result is None:
             warnings.append(f"gh-{role}: {detail}")
+            gh_skipped = True
         # result is False → no overlap; nothing to record.
 
     # Authoritative self-declaration check from the CoI document body, if
@@ -860,15 +898,29 @@ def check_selection_rule(
             "selection_rule",
             False,
             "; ".join(violations),
+            provenance_check_skipped=gh_skipped,
         )
 
     detail = f"0 git touches for {email} in {NAMED_PERIOD_START}..{NAMED_PERIOD_END}"
     if warnings:
-        detail += " | WARN: " + "; ".join(warnings)
+        # iter-3 M1: when any gh signal was skipped, elevate the warning to
+        # CRITICAL so log scrapers / CI summaries notice. The canonical
+        # git-log signal still gates the PASS, but the caller (CI) MUST
+        # decide whether to fail-closed when provenance_check_skipped=True.
+        if gh_skipped:
+            detail += (
+                " | CRITICAL: gh provenance query SKIPPED — "
+                "PR/review evidence not validated; caller must decide whether "
+                "to fail-closed (provenance_check_skipped=True): "
+            )
+        else:
+            detail += " | WARN: "
+        detail += "; ".join(warnings)
     return CheckResult(
         "selection_rule",
         True,
         detail,
+        provenance_check_skipped=gh_skipped,
     )
 
 

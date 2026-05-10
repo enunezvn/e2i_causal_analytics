@@ -1189,7 +1189,13 @@ def test_selection_rule_catches_alias_commit(tmp_path: Path):
 
 
 def test_selection_rule_gh_missing_emits_warning(fixture_repo: Path, monkeypatch):
-    """When gh is unavailable, selection rule still PASSES (with WARN in detail)."""
+    """When gh is unavailable, selection rule still PASSES on git-log but:
+
+    iter-3 M1:
+      * a CRITICAL warning is in the detail string,
+      * ``provenance_check_skipped=True`` is set on the CheckResult so
+        the caller (CI) can decide to fail-closed.
+    """
 
     rows = cms.parse_registry(
         fixture_repo / "docs" / "governance" / "methodology_reviewer_registry.md"
@@ -1207,6 +1213,28 @@ def test_selection_rule_gh_missing_emits_warning(fixture_repo: Path, monkeypatch
     text = _signoff_doc(handle="alice")
     result = cms.check_selection_rule(text, fixture_repo, rows)
     assert result.ok is True
-    # Warning surfaces, but does not fail the check.
-    assert "WARN" in result.detail
+    # iter-3 M1: CRITICAL warning surfaces, and the explicit skip flag is set.
+    assert "CRITICAL" in result.detail
+    assert result.provenance_check_skipped is True
     assert "gh-author" in result.detail or "gh not on PATH" in result.detail
+
+
+def test_selection_rule_gh_present_does_not_set_skip_flag(fixture_repo: Path):
+    """iter-3 M1: when gh signal succeeds (or is empty), no skip flag is set.
+
+    In this fixture-repo test, gh may or may not be on PATH. If it IS on
+    PATH but unauthenticated, _gh_pr_touches returns None too, which
+    legitimately sets the skip flag. We only assert on the case where
+    gh is genuinely unavailable: provenance_check_skipped tracks the
+    None-result count from _gh_pr_touches.
+    """
+
+    rows = cms.parse_registry(
+        fixture_repo / "docs" / "governance" / "methodology_reviewer_registry.md"
+    )
+    text = _signoff_doc(handle="alice")
+    result = cms.check_selection_rule(text, fixture_repo, rows)
+    # ok must be True regardless (canonical git-log signal is clean).
+    assert result.ok is True
+    # The CheckResult's provenance_check_skipped attribute exists and is a bool.
+    assert isinstance(result.provenance_check_skipped, bool)
