@@ -508,7 +508,11 @@ def test_check_signoff_full_success(
     signoff_path.write_text(doc_text, encoding="utf-8")
 
     # Prevent --require-signature path failure when toolchain absent.
-    results = cms.check_signoff(signoff_path, fixture_repo, require_signature=False)
+    # Pin today so the iter-3 future-date check (NEW MED) doesn't reject a
+    # doc dated 2026-05-20 against the system's current date.
+    results = cms.check_signoff(
+        signoff_path, fixture_repo, require_signature=False, today="2026-05-20"
+    )
     failed = [r for r in results if not r.ok]
     assert failed == [], f"unexpected failures: {[(r.name, r.detail) for r in failed]}"
 
@@ -519,14 +523,18 @@ def test_check_signoff_missing_signature_section(fixture_repo: Path):
         _signoff_doc(handle="alice", omit_section="## Cryptographic signature"),
         encoding="utf-8",
     )
-    results = cms.check_signoff(signoff_path, fixture_repo, require_signature=False)
+    results = cms.check_signoff(
+        signoff_path, fixture_repo, require_signature=False, today="2026-05-20"
+    )
     assert any(r.name == "required_sections" and not r.ok for r in results)
 
 
 def test_check_signoff_unregistered_reviewer(fixture_repo: Path):
     signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
     signoff_path.write_text(_signoff_doc(handle="zoe"), encoding="utf-8")
-    results = cms.check_signoff(signoff_path, fixture_repo, require_signature=False)
+    results = cms.check_signoff(
+        signoff_path, fixture_repo, require_signature=False, today="2026-05-20"
+    )
     assert any(r.name == "reviewer_registered" and not r.ok for r in results)
 
 
@@ -536,14 +544,16 @@ def test_check_signoff_selection_rule_violation(
     repo = fixture_repo_with_bob_conflict
     signoff_path = repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
     signoff_path.write_text(_signoff_doc(handle="bob"), encoding="utf-8")
-    results = cms.check_signoff(signoff_path, repo, require_signature=False)
+    results = cms.check_signoff(signoff_path, repo, require_signature=False, today="2026-05-20")
     assert any(r.name == "selection_rule" and not r.ok for r in results)
 
 
 def test_check_signoff_missing_coi_sha(fixture_repo: Path):
     signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
     signoff_path.write_text(_signoff_doc(handle="alice", coi_sha="<sha>"), encoding="utf-8")
-    results = cms.check_signoff(signoff_path, fixture_repo, require_signature=False)
+    results = cms.check_signoff(
+        signoff_path, fixture_repo, require_signature=False, today="2026-05-20"
+    )
     assert any(r.name == "coi_referenced" and not r.ok for r in results)
 
 
@@ -1040,15 +1050,45 @@ def test_signoff_age_fails_outside_window():
     assert "older than today" in result.detail
 
 
-def test_signoff_age_passes_for_future_dated():
-    """Doc dated tomorrow → still PASS (negative age, < max)."""
+def test_signoff_age_rejects_future_dated_beyond_tolerance():
+    """iter-3 NEW MED: doc dated 22 days in the future → FAIL.
+
+    Future-dated artifacts must be rejected; reviewers cannot pre-date
+    sign-offs to evade the max-age window or claim review of work that
+    has not yet happened. A small 1-day tolerance covers timezone-skew
+    at the day boundary.
+    """
 
     result = cms.check_signoff_age(
         Path("/x/optum_methodology_signoff_20260601.md"),
         today="2026-05-10",
         max_age_days=30,
     )
+    assert result.ok is False
+    assert "future" in result.detail
+
+
+def test_signoff_age_tolerates_one_day_future_skew():
+    """iter-3 NEW MED: a doc dated 1 day ahead is tolerated for TZ-skew."""
+
+    result = cms.check_signoff_age(
+        Path("/x/optum_methodology_signoff_20260511.md"),
+        today="2026-05-10",
+        max_age_days=30,
+    )
     assert result.ok is True
+
+
+def test_signoff_age_rejects_two_day_future_skew():
+    """iter-3 NEW MED: a doc dated 2 days ahead is OUTSIDE the 1-day tolerance."""
+
+    result = cms.check_signoff_age(
+        Path("/x/optum_methodology_signoff_20260512.md"),
+        today="2026-05-10",
+        max_age_days=30,
+    )
+    assert result.ok is False
+    assert "future" in result.detail
 
 
 def test_signoff_age_rejects_unparseable_filename():

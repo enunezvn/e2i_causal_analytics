@@ -302,12 +302,17 @@ def check_filename(doc_path: Path) -> CheckResult:
     )
 
 
+FUTURE_DATE_TOLERANCE_DAYS: int = 1
+
+
 def check_signoff_age(
     doc_path: Path,
     today: Optional[str] = None,
     max_age_days: int = MAX_SIGNOFF_AGE_DAYS,
 ) -> CheckResult:
-    """M2: reject sign-offs older than ``max_age_days`` vs ``today``.
+    """M2 + iter-3 NEW MED: reject sign-offs older than ``max_age_days`` AND
+    sign-offs whose filename date is more than ``FUTURE_DATE_TOLERANCE_DAYS``
+    ahead of ``today``.
 
     The artifact's date is parsed from the filename suffix
     ``_<YYYYMMDD>.md`` (the FILENAME_PATTERN-captured ``date`` group).
@@ -315,10 +320,15 @@ def check_signoff_age(
     inject a fixed reference for deterministic behaviour.
 
     Returns:
-      * PASS when the doc date is within the window or in the future
-        (future-dated docs are tolerated; the upstream filename check
-        already reports invalid dates).
+      * PASS when the doc date is within the window AND not unreasonably
+        future-dated. A 1-day tolerance covers timezone-skew at the day
+        boundary (a CI runner in UTC may see "tomorrow" on a doc dated
+        for the reviewer's local "today").
       * FAIL when the doc date is older than ``max_age_days`` vs today.
+      * FAIL when the doc date is more than
+        ``FUTURE_DATE_TOLERANCE_DAYS`` ahead of today (iter-3 NEW MED:
+        prevents reviewers from pre-dating sign-offs to evade the
+        max-age window or to claim review of work not yet performed).
       * FAIL on filename pattern mismatch (defensive — the orchestrator
         already filtered via check_filename, but we re-validate so the
         function stays callable in isolation).
@@ -358,6 +368,21 @@ def check_signoff_age(
             )
 
     age_days = (ref_date - doc_date).days
+
+    # iter-3 NEW MED: future-dated artifacts beyond the small TZ-skew
+    # tolerance are rejected. age_days < 0 means the doc is dated in the
+    # future relative to today; we tolerate up to FUTURE_DATE_TOLERANCE_DAYS
+    # of skew (so age_days >= -FUTURE_DATE_TOLERANCE_DAYS is OK).
+    if age_days < -FUTURE_DATE_TOLERANCE_DAYS:
+        future_days = -age_days
+        return CheckResult(
+            "signoff_age",
+            False,
+            f"sign-off filename date {doc_date.isoformat()} is {future_days} days "
+            f"in the future vs today={ref_date.isoformat()} "
+            f"(tolerance={FUTURE_DATE_TOLERANCE_DAYS}d)",
+        )
+
     if age_days > max_age_days:
         return CheckResult(
             "signoff_age",
