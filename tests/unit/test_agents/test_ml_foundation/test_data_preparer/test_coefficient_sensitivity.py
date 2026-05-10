@@ -24,7 +24,6 @@ from src.agents.ml_foundation.data_preparer.nodes.coefficient_sensitivity import
     compute_coefficient_sensitivity,
 )
 
-
 # --------------------------------------------------------------------------- #
 # Mock estimator: returns deterministic coefficients per fit                  #
 # --------------------------------------------------------------------------- #
@@ -63,6 +62,7 @@ class _DeterministicCoefEstimator(BaseEstimator):
         # 2D shape (1, n_features) matches binary LogisticRegression.
         self.coef_ = np.atleast_2d(np.asarray(next_coef, dtype=np.float64))
         return self
+
 
 # --------------------------------------------------------------------------- #
 # Module constants — pre-spec values must not drift                           #

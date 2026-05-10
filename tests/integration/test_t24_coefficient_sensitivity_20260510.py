@@ -592,9 +592,7 @@ class TestG5FailurePathCoverage:
         nudge = 1e-3
         no_op_refits = [baseline + nudge for _ in range(10)]
 
-        mock = _DeterministicCoefEstimator(
-            [baseline, feat_0_refit, feat_1_refit, *no_op_refits]
-        )
+        mock = _DeterministicCoefEstimator([baseline, feat_0_refit, feat_1_refit, *no_op_refits])
 
         recs = dict.fromkeys(X.columns, "drop_row_or_mean")
         result = compute_coefficient_sensitivity(X, y, recs, estimator=mock)
@@ -609,5 +607,8 @@ class TestG5FailurePathCoverage:
             f"Expected T3 violation in {result['violations']!r}; not found."
         )
         # 2 of 8 significant features flipped → 0.25 > 0.10.
-        assert result["aggregate"]["fraction_significant_flipped"] > G5_FRACTION_SIGNIFICANT_FLIPPED_MAX
+        assert (
+            result["aggregate"]["fraction_significant_flipped"]
+            > G5_FRACTION_SIGNIFICANT_FLIPPED_MAX
+        )
         assert result["aggregate"]["fraction_significant_flipped"] == pytest.approx(0.25, abs=1e-6)

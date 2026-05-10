@@ -103,7 +103,7 @@ def test_verify_returns_zero_when_all_artifacts_missing(
     (vacuous pass) — the integration test's M2 fixture is the load-
     bearing CI gate. _verify prints a warning, not a failure."""
     monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
-    pinned = {key: None for key in V.ARTIFACTS}
+    pinned = dict.fromkeys(V.ARTIFACTS)
     rc = V._verify(pinned)
     assert rc == 0
 
@@ -123,7 +123,7 @@ def test_verify_returns_nonzero_on_hash_mismatch(
 
     # Pin a deliberately-wrong sha256 for that artifact; leave the
     # other three as None (missing → skipped).
-    pinned = {key: None for key in V.ARTIFACTS}
+    pinned = dict.fromkeys(V.ARTIFACTS)
     pinned["csu_patient_journeys_json"] = "0" * 64
 
     rc = V._verify(pinned)
@@ -144,7 +144,7 @@ def test_verify_returns_zero_when_pinned_matches_live(
     target_path.write_bytes(payload)
     expected_hash = hashlib.sha256(payload).hexdigest()
 
-    pinned = {key: None for key in V.ARTIFACTS}
+    pinned = dict.fromkeys(V.ARTIFACTS)
     pinned["csu_patient_journeys_json"] = expected_hash
 
     rc = V._verify(pinned)
@@ -165,7 +165,7 @@ def test_verify_returns_nonzero_when_artifact_present_but_pinned_is_placeholder(
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_bytes(b"present-but-unpinned")
 
-    pinned = {key: None for key in V.ARTIFACTS}
+    pinned = dict.fromkeys(V.ARTIFACTS)
     rc = V._verify(pinned)
     assert rc == 1
 
