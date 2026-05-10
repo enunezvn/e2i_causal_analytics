@@ -343,8 +343,25 @@ def lineage_audit_declared_path(
     knowable_at_ref = getattr(contract.knowable_at, "reference", None)
     # Pre-anchor references: index_date and any earlier marker. Per
     # plan §3 Tier 1B step 5, MANIFEST_SOURCES is the single source of
-    # truth for what's pre-anchor.
-    pre_anchor_refs = {"index_date", "lookback_start_date", "eligeff"}
+    # truth for what's pre-anchor. Plan v4 §2 G1 (lineage-sweep
+    # acceptance criterion) requires this set to be aligned with
+    # ``KnowableAt.is_pre_or_at_index()`` so the audit returns
+    # consistent verdicts for every manifest-declared knowable_at
+    # value: ``index_date`` and ``enrollment`` are both pre-or-at
+    # prediction time; ``post_index`` is forbidden; ``lookback_start_date``
+    # / ``eligeff`` are legacy upstream-marker references some
+    # converters emit for derivation provenance. Without ``enrollment``
+    # in this set, every CSU/Optum demographic feature (age, gender,
+    # plan_type, etc.) — which the manifests CORRECTLY declare as
+    # ``knowable_at=enrollment`` — would be flagged ``declared_path_valid=False``,
+    # producing a sweep of false-positive lineage failures on the
+    # surviving feature set.
+    pre_anchor_refs = {
+        "index_date",
+        "enrollment",
+        "lookback_start_date",
+        "eligeff",
+    }
     declared_path_valid = knowable_at_ref in pre_anchor_refs
 
     return {
