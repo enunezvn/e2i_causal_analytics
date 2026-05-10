@@ -21,11 +21,11 @@ A run violates the advisory when this margin is below the buffer (default `T2_2_
 
 **The buffer literal needs calibration evidence**: the 0.05 default is a domain-typical "above-noise" margin (5pp lift over the upper tail of label-shuffle noise). To know that 0.05 is the correct floor — not 0.03, not 0.08 — we need to:
 
-1. Run the framework on a regime where the **true AUC is known and we control its magnitude**.
-2. Compute the empirical perm-null distribution at each known-AUC point.
+1. Run the framework on a regime where the **target/empirical AUC is controlled and measured** (i.e., the synthetic generator's signal scale parameterizes the realized AUC, and we measure that realized AUC end-to-end). Note: we do NOT analytically compute the Bayes-optimal AUC of the regime, so the realized AUC is an empirical observation under controlled signal scale, not a closed-form ground truth.
+2. Compute the empirical perm-null distribution at each controlled-AUC point.
 3. Find the largest buffer value that still passes the advisory at every point in the legitimate-AUC range.
 
-The synthetic regimes are perfect for this: their signal magnitude is parameterized, the noise structure is reproducible, and the AUC range is well-bounded. **No real-cohort touch is required.**
+The synthetic regimes are suitable for this: their signal magnitude is parameterized, the noise structure is reproducible, the realized AUC is measured per-cell, and the AUC range is well-bounded. **No real-cohort touch is required.**
 
 ---
 
