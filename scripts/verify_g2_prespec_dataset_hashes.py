@@ -77,7 +77,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _resolve_repo_root() -> Path:
@@ -240,11 +240,8 @@ def _discover_s_prespec_sha(*, cwd: Optional[Path] = None) -> Optional[str]:
 
 
 # Load-bearing memo sections that, if edited after S_prespec, MUST
-# invalidate the run. The check is content-based: we compare the
-# entire load-bearing slice between the S_prespec snapshot and the
-# experiment-tag working copy. The slice covers thresholds, hashes,
-# seeds, and cohort identifiers; the prose sections are excluded so
-# editorial improvements do not require a fresh memo.
+# invalidate the run. Per-key substring matching kept as a
+# defense-in-depth backstop so a token rename is also surfaced.
 _MEMO_LOAD_BEARING_KEYS: Tuple[str, ...] = (
     "G2_DELTA_AUC_MIN",
     "G2_ECE_RATIO_MAX",
@@ -257,6 +254,96 @@ _MEMO_LOAD_BEARING_KEYS: Tuple[str, ...] = (
 )
 
 
+# Regex extractors for the canonical load-bearing values. Each yields
+# a normalized form so that whitespace, ordering, or prose edits do
+# NOT register as drift, but a value change DOES.
+#
+# HIGH-3 (iter-3) — codex pass-2 raised that token-line comparison
+# misses multi-line load-bearing edits. The structured extractors
+# below produce a JSON fingerprint of the load-bearing values; the
+# fingerprint comparison is the primary signal, and the per-token
+# line check from pass-1 is kept as a backstop for rename detection.
+# Match either ``G2_DELTA_AUC_MIN: float = 0.03`` or
+# ``G2_DELTA_AUC_MIN = 0.03`` or any whitespace-tolerant variant.
+_RE_T1 = re.compile(r"G2_DELTA_AUC_MIN[^=\n]*=\s*([0-9.]+)")
+_RE_T2 = re.compile(r"G2_ECE_RATIO_MAX[^=\n]*=\s*([0-9.]+)")
+_RE_T3 = re.compile(r"G2_CV_STABILITY_RATIO_MAX[^=\n]*=\s*([0-9.]+)")
+_RE_SEEDS = re.compile(r"G2_SEEDS[^=\n]*=\s*[\[(]([0-9,\s]+)[\])]")
+_RE_DELTA_INEQ = re.compile(r"`?\s*Δ?_?AUC\s*≥\s*([0-9.]+)\s*`?", re.IGNORECASE)
+_RE_ECE_INEQ = re.compile(r"ECE_post\s*≤\s*([0-9.]+)\s*[×x*]\s*ECE_pre", re.IGNORECASE)
+_RE_CV_INEQ = re.compile(
+    r"\(?std/mean\)?_post\s*≤\s*([0-9.]+)\s*[×x*]\s*\(?std/mean\)?_pre",
+    re.IGNORECASE,
+)
+_RE_COHORT_LABEL = re.compile(
+    r"Cohort label:\*?\*?\s*`([a-z_0-9]+)`",
+    re.IGNORECASE,
+)
+_RE_PATIENT_COUNT = re.compile(
+    r"Patient[- ]journey count:\*?\*?\s*([0-9]+)",
+    re.IGNORECASE,
+)
+_RE_TARGET_COL = re.compile(
+    r"Target column:\*?\*?\s*`([a-z_0-9]+)`",
+    re.IGNORECASE,
+)
+
+
+def _extract_load_bearing_fingerprint(memo_text: str) -> Dict[str, Any]:
+    """Extract a canonical fingerprint of the memo's load-bearing values.
+
+    HIGH-3 (iter-3) fix: replaces pass-1's per-line token comparison
+    (which only captures the LINE containing a token, missing
+    multi-line load-bearing edits) with a structured extraction. The
+    fingerprint covers:
+
+      * Pre-spec threshold constants (T1, T2, T3) — both code-block
+        form (``G2_DELTA_AUC_MIN: float = 0.03``) and prose-inequality
+        form (``Δ_AUC ≥ 0.03``).
+      * Seeds list.
+      * Pinned cohort sha256s — sourced from
+        ``_parse_pinned_hashes`` (already canonicalized).
+      * Cohort labels + patient-journey counts + target column.
+
+    Two memos with identical fingerprints are equivalent for the
+    threshold-shopping defense; differing fingerprints are drift.
+    """
+    fp: Dict[str, Any] = {}
+    # Threshold constants — code block.
+    m = _RE_T1.search(memo_text)
+    fp["t1_code"] = float(m.group(1)) if m else None
+    m = _RE_T2.search(memo_text)
+    fp["t2_code"] = float(m.group(1)) if m else None
+    m = _RE_T3.search(memo_text)
+    fp["t3_code"] = float(m.group(1)) if m else None
+    # Threshold inequalities — prose form (catches edits that change
+    # the inequality without touching the code-block constant).
+    fp["t1_prose"] = sorted({m.group(1) for m in _RE_DELTA_INEQ.finditer(memo_text)})
+    fp["t2_prose"] = sorted({m.group(1) for m in _RE_ECE_INEQ.finditer(memo_text)})
+    fp["t3_prose"] = sorted({m.group(1) for m in _RE_CV_INEQ.finditer(memo_text)})
+    # Seeds list — normalized (sorted ints).
+    m = _RE_SEEDS.search(memo_text)
+    if m:
+        seeds_raw = m.group(1)
+        seeds_parts = [s.strip() for s in seeds_raw.split(",") if s.strip()]
+        try:
+            fp["seeds"] = sorted(int(s) for s in seeds_parts)
+        except ValueError:
+            fp["seeds"] = seeds_parts
+    else:
+        fp["seeds"] = None
+    # Cohort identifiers (sorted to be order-insensitive).
+    fp["cohort_labels"] = sorted(set(_RE_COHORT_LABEL.findall(memo_text)))
+    fp["cohort_patient_counts"] = sorted(set(_RE_PATIENT_COUNT.findall(memo_text)))
+    fp["target_columns"] = sorted(set(_RE_TARGET_COL.findall(memo_text)))
+    # Pinned hashes — re-use the existing parser. Map keys are sorted
+    # by virtue of dict-of-string-keys; values are placeholder ("None")
+    # or sha256.
+    pinned = _parse_pinned_hashes(memo_text)
+    fp["pinned_hashes"] = {k: pinned.get(k) for k in sorted(pinned.keys())}
+    return fp
+
+
 def _check_memo_unchanged_since_prespec(
     *,
     s_prespec_sha: str,
@@ -267,11 +354,12 @@ def _check_memo_unchanged_since_prespec(
 
     Returns ``(is_unchanged, [diagnostic_messages])``.
 
-    Implementation: per-key substring comparison. For each
-    load-bearing token, the count + neighborhood (current line) must
-    match between the S_prespec memo and the working-copy memo. A
-    full diff is too noisy (whitespace/prose), so we extract the
-    lines containing each token and compare those slices.
+    HIGH-3 (iter-3) implementation: structured comparison of the
+    load-bearing FINGERPRINT extracted from each memo, plus the
+    per-token line backstop from pass-1 for rename detection.
+    Whitespace, prose, ordering, or section-reorganization edits do
+    NOT register as drift; threshold-value, seed, hash, cohort-count,
+    or target-column edits DO.
     """
     snapshot = _git_show(s_prespec_sha, MEMO_RELPATH, cwd=cwd)
     if snapshot is None:
@@ -283,16 +371,36 @@ def _check_memo_unchanged_since_prespec(
         return False, [f"working-copy memo missing at {MEMO_PATH}"]
     current = MEMO_PATH.read_text(encoding="utf-8")
     diagnostics: List[str] = []
-    for key in _MEMO_LOAD_BEARING_KEYS:
-        snap_lines = sorted(ln.strip() for ln in snapshot.splitlines() if key in ln)
-        curr_lines = sorted(ln.strip() for ln in current.splitlines() if key in ln)
-        if snap_lines != curr_lines:
+
+    # Primary: structured fingerprint comparison.
+    snap_fp = _extract_load_bearing_fingerprint(snapshot)
+    curr_fp = _extract_load_bearing_fingerprint(current)
+    if snap_fp != curr_fp:
+        diff_keys = sorted(
+            k for k in (set(snap_fp) | set(curr_fp)) if snap_fp.get(k) != curr_fp.get(k)
+        )
+        for key in diff_keys:
             diagnostics.append(
-                f"load-bearing token {key!r} differs between S_prespec and "
-                f"working tree:\n"
-                f"  S_prespec lines: {snap_lines}\n"
-                f"  current lines:   {curr_lines}"
+                f"load-bearing fingerprint key {key!r} differs between "
+                f"S_prespec and working tree:\n"
+                f"  S_prespec value: {snap_fp.get(key)!r}\n"
+                f"  current value:   {curr_fp.get(key)!r}"
             )
+
+    # Backstop: per-token presence-of-line comparison. Catches the
+    # case where a token is REMOVED entirely (so the regex extractor
+    # returns None on both sides and the fingerprint matches by
+    # mutual absence). The per-token check distinguishes "removed
+    # everywhere" from "present in S_prespec but removed in current".
+    for key in _MEMO_LOAD_BEARING_KEYS:
+        snap_count = sum(1 for ln in snapshot.splitlines() if key in ln)
+        curr_count = sum(1 for ln in current.splitlines() if key in ln)
+        if snap_count != curr_count:
+            diagnostics.append(
+                f"load-bearing token {key!r} occurrence count differs: "
+                f"S_prespec={snap_count}, current={curr_count}"
+            )
+
     return (not diagnostics), diagnostics
 
 
