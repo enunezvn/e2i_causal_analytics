@@ -90,3 +90,21 @@ description = "docker/supabase/start.sh echo prints 'YOUR_ANON_KEY' literal"
 regexes = [
   '''YOUR_ANON_KEY''',
 ]
+
+# ---------------------------------------------------------------------------
+# Content allowlist — Plan v3 §3 Tier 1B step 1 surface-key Python
+# identifiers (`permutation_null_p95`, `permutation_null_p99`,
+# `permutation_n_permutations`, `permutation_n_effective`) appearing in
+# docstrings as code-formatted result-mapping keys.
+# Gitleaks's `generic-api-key` rule was matching the
+#   "surface keys: ``permutation_null_p95``, ..."
+# pattern as a quoted-key/value assignment. The strings are public Python
+# identifiers, not secrets.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Plan v3 Tier 1B step 1 permutation-null surface key identifiers"
+regexes = [
+  '''permutation_null_p9[59]''',
+  '''permutation_n_permutations''',
+  '''permutation_n_effective''',
+]
