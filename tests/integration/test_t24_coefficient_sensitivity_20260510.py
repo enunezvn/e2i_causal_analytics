@@ -482,11 +482,26 @@ class TestG5FailurePathCoverage:
     """
 
     @pytest.mark.integration
-    def test_t1_can_fail_when_significant_feature_flips(self) -> None:
-        """T1 fails when any significant feature flips sign in
-        single-strategy mode. Construct a coef sequence where the
-        baseline has one large-magnitude (significant) feature and the
-        per-feature re-fit on that feature flips its sign."""
+    def test_single_flip_in_single_strategy_mode_does_not_fire_t1_but_fires_t3(
+        self,
+    ) -> None:
+        """G5 codex pass-2 NEW MED — helper-vs-memo threshold alignment.
+
+        Spec memo: "flips_per_feature ≤ 1" → 1 flip is tolerated; failure
+        is strictly ``> 1``. In single-strategy mode flip_count is
+        bounded by {0, 1} so T1 cannot fire here (forward-compat for
+        multi-strategy sweeps). The single-flip violation IS still
+        caught — by T3 (cohort fraction flipped > 0.10). This test
+        pins both behaviors:
+
+          - max_flips_per_feature_significant <= 1 (T1 NOT violated)
+          - 1 flip / 1 significant feature = 1.0 > 0.10 → T3 violated
+          - passes_pre_spec is False (overall failure via T3)
+
+        Construct a coef sequence where the baseline has one large-
+        magnitude (significant) feature and the per-feature re-fit on
+        that feature flips its sign.
+        """
         X, y = _failure_fixture_X_y(n_features=4)
         # Baseline: feat_0 has the largest magnitude, well above 1σ.
         # Other features have small symmetric magnitudes so feat_0 is
@@ -504,20 +519,31 @@ class TestG5FailurePathCoverage:
         recs = dict.fromkeys(X.columns, "drop_row_or_mean")
         result = compute_coefficient_sensitivity(X, y, recs, estimator=mock)
 
-        # T1 must fail: feat_0 is significant (|5.0| >> 1σ) AND flipped.
+        # passes_pre_spec is False (T3 fires) — overall failure surfaced.
         assert result["passes_pre_spec"] is False, (
-            "T1 failure path expected passes_pre_spec=False; got True. "
+            f"T3 failure path expected passes_pre_spec=False; got True. "
             f"violations={result['violations']!r}"
         )
-        # Verify the violation lists T1.
         violation_text = " ".join(result["violations"])
-        assert "T1 violated" in violation_text, (
-            f"Expected T1 violation in {result['violations']!r}; not found."
+        # T1 must NOT fire (single flip is within tolerance per memo).
+        assert "T1 violated" not in violation_text, (
+            f"T1 fired on a single flip; spec memo allows ≤ 1 flip. "
+            f"violations={result['violations']!r}"
+        )
+        # T3 must fire (1 flip / 1 sig feature = 1.0 > 0.10).
+        assert "T3 violated" in violation_text, (
+            f"Expected T3 violation in {result['violations']!r}; not found."
         )
         # Per-feature contract: feat_0 flipped, others did not.
         assert result["per_feature"]["feat_0"]["sign_flip"] is True
         assert result["per_feature"]["feat_0"]["flip_count"] == 1
-        assert result["aggregate"]["max_flips_per_feature_significant"] >= 1
+        # max_flips_per_feature_significant must be <= 1 in single-strategy
+        # mode (T1's tolerance is ≤ 1).
+        assert result["aggregate"]["max_flips_per_feature_significant"] == 1
+        assert (
+            result["aggregate"]["max_flips_per_feature_significant"]
+            <= G5_FLIPS_PER_FEATURE_MAX
+        )
 
     @pytest.mark.integration
     def test_t2_can_fail_when_effect_size_cv_exceeds_ceiling(self) -> None:

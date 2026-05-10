@@ -89,6 +89,87 @@ class TestG5Thresholds:
         assert G5_SIGNIFICANCE_SIGMA_MULTIPLE == 1.0
 
 
+class TestT1ThresholdSemantics:
+    """G5 codex pass-2 NEW MED — pin the helper's T1 failure rule to
+    the spec memo's "flips_per_feature ≤ 1" definition.
+
+    Memo: a single flip is acceptable; two flips for the same feature
+    is the violation. Helper failure rule: ``> G5_FLIPS_PER_FEATURE_MAX``
+    (i.e., > 1). NOT ``>= 1``.
+
+    In single-strategy mode the helper computes flip_count = 1 if
+    sign_flip else 0, so flip_count ∈ {0, 1} per feature. T1 is
+    therefore unreachable in single-strategy mode (T3 catches single
+    flips at the cohort-fraction level). These tests pin both
+    behaviors explicitly.
+    """
+
+    def test_single_flip_does_not_violate_t1(self) -> None:
+        """A single sign flip on a significant feature must NOT violate
+        T1 (the spec memo allows ≤ 1 flip per feature)."""
+        rng = np.random.default_rng(seed=12)
+        n = 200
+        X = pd.DataFrame(
+            {
+                "feat_big": np.where(
+                    rng.uniform(size=n) < 0.3, np.nan, rng.standard_normal(size=n)
+                ),
+                "feat_small_a": np.where(
+                    rng.uniform(size=n) < 0.3, np.nan, rng.standard_normal(size=n)
+                ),
+                "feat_small_b": np.where(
+                    rng.uniform(size=n) < 0.3, np.nan, rng.standard_normal(size=n)
+                ),
+            }
+        )
+        y = pd.Series(rng.integers(0, 2, size=n))
+
+        # Force a single sign flip on the only significant feature.
+        baseline = np.array([5.0, 0.1, -0.1])
+        feat_big_refit = np.array([-5.0, 0.1, -0.1])  # flip
+        feat_small_a_refit = np.array([5.0, 0.12, -0.1])
+        feat_small_b_refit = np.array([5.0, 0.1, -0.12])
+        mock = _DeterministicCoefEstimator(
+            [baseline, feat_big_refit, feat_small_a_refit, feat_small_b_refit]
+        )
+        recs = dict.fromkeys(X.columns, "drop_row_or_mean")
+        result = compute_coefficient_sensitivity(X, y, recs, estimator=mock)
+
+        # max_flips_per_feature_significant=1; T1 must NOT fire because 1 ≤ 1.
+        assert result["aggregate"]["max_flips_per_feature_significant"] == 1
+        violation_text = " ".join(result["violations"])
+        assert "T1 violated" not in violation_text, (
+            f"T1 incorrectly fired on max_flips=1 (spec allows ≤ 1). "
+            f"violations={result['violations']!r}"
+        )
+
+    def test_t1_strict_inequality_not_inclusive(self) -> None:
+        """Pin the helper's strict ``>`` (not ``>=``) check on the T1
+        threshold. Read the helper's source to confirm the operator
+        used; if someone reverts to ``>=`` the test catches it."""
+        from src.agents.ml_foundation.data_preparer.nodes import (
+            coefficient_sensitivity as cs,
+        )
+
+        # The helper module file must contain the strict-greater-than
+        # form. We grep the source for the exact operator pattern.
+        import inspect
+
+        source = inspect.getsource(cs.compute_coefficient_sensitivity)
+        # Expect: "if max_flips_per_feature > G5_FLIPS_PER_FEATURE_MAX:"
+        # NOT:    "if max_flips_per_feature >= G5_FLIPS_PER_FEATURE_MAX:"
+        assert "max_flips_per_feature > G5_FLIPS_PER_FEATURE_MAX" in source, (
+            "Helper's T1 threshold check must use strict '>' to match the "
+            "spec memo's 'flips_per_feature ≤ 1' definition (1 is acceptable). "
+            "If the operator '>=' is in source, the helper rejects single "
+            "flips as T1 violations, which conflicts with the memo."
+        )
+        assert ">= G5_FLIPS_PER_FEATURE_MAX" not in source, (
+            "Helper's T1 threshold check uses '>=', which conflicts with the "
+            "spec memo. Update to '>'."
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Fixture builders                                                            #
 # --------------------------------------------------------------------------- #

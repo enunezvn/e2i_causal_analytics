@@ -100,11 +100,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 G5_FLIPS_PER_FEATURE_MAX: int = 1
 """T1: among "significant" features, at most 1 imputation re-fit may flip the
-coefficient sign. The spec memo's ceiling stays at 1 for forward-compatibility
-with multi-strategy sweeps. In single-strategy mode the per-feature flip count
-is bounded by {0, 1}, so the violation rule fires at ``>= 1`` (any flip
-violates T1). Multi-strategy sweeps would tighten this to ``> 1`` so a single
-outlier strategy is tolerated."""
+coefficient sign — i.e., the violation rule is strictly ``> G5_FLIPS_PER_FEATURE_MAX``
+(``> 1``). This matches the spec memo's "flips_per_feature ≤ 1" definition
+verbatim: a single flip is acceptable; two flips for the same feature is the
+violation. In single-strategy mode the per-feature flip count is bounded by
+{0, 1}, so T1 is effectively unreachable (forward-compat for multi-strategy
+sweeps); T2 (effect-size CV) and T3 (cohort fraction flipped) are the
+load-bearing gates in single-strategy mode."""
 
 G5_EFFECT_SIZE_CV_MAX: float = 0.5
 """T2: per-feature coefficient effect-size variance ``std / |mean|`` ≤ 0.5
@@ -471,20 +473,20 @@ def compute_coefficient_sensitivity(
 
     # Threshold checks.
     violations: List[str] = []
-    # T1 closure (H1 from G5 codex review): in the current single-strategy
-    # comparison, max_flips_per_feature ∈ {0, 1}. The spec memo's
-    # G5_FLIPS_PER_FEATURE_MAX=1 is the forward-compatible ceiling for
-    # multi-strategy sweeps; in single-strategy mode "no flip" is the
-    # actual gate. We trigger T1 when any significant feature flips
-    # (flip_count >= 1). The constant stays at 1 (spec-locked); the
-    # check uses ``>=`` to make T1 reachable. Multi-strategy sweeps
-    # would tighten this to ``> G5_FLIPS_PER_FEATURE_MAX`` (i.e. >1).
-    if max_flips_per_feature >= G5_FLIPS_PER_FEATURE_MAX:
+    # T1 (G5 codex pass-2 NEW MED — helper-vs-memo alignment): the
+    # spec memo says "flips_per_feature ≤ 1", so the violation rule
+    # is strictly ``> G5_FLIPS_PER_FEATURE_MAX`` (i.e., > 1). Two flips
+    # for the same feature is the violation; one flip is tolerated.
+    # In single-strategy mode flip_count ∈ {0, 1}, so T1 is effectively
+    # unreachable here (forward-compat for multi-strategy sweeps where
+    # flip_count can exceed 1). T3 (cohort fraction flipped) is the
+    # load-bearing gate that catches single-flip violations in
+    # single-strategy mode.
+    if max_flips_per_feature > G5_FLIPS_PER_FEATURE_MAX:
         violations.append(
             f"T1 violated: max_flips_per_feature_significant={max_flips_per_feature} "
-            f">= G5_FLIPS_PER_FEATURE_MAX={G5_FLIPS_PER_FEATURE_MAX} "
-            "(any sign-flip among significant features triggers T1 in "
-            "single-strategy mode)."
+            f"> G5_FLIPS_PER_FEATURE_MAX={G5_FLIPS_PER_FEATURE_MAX} "
+            "(more than the spec memo's tolerance of 1 outlier strategy)."
         )
     if max_cv > G5_EFFECT_SIZE_CV_MAX:
         violations.append(
