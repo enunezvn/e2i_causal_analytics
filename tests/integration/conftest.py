@@ -85,3 +85,50 @@ def _use_fixture_skills():
         with patch("src.skills.loader._default_loader", None):
             with patch("src.skills.matcher._default_matcher", None):
                 yield
+
+
+# =============================================================================
+# G1 SHARED-ARTIFACT REGISTRY (PR #137 v4 G1 — codex pass-2 HIGH-4 closure)
+# =============================================================================
+#
+# The CSU + Optum integration tests (test_csu_negative_control_20260510.py and
+# test_optum_held_out_noninferiority_20260510.py) each spin up the full tier0
+# pipeline against real cohort data and emit a JSON artifact at the path
+# referenced by ``TIER0_E2E_JSON_OUT``. The lineage-audit sweep
+# (test_g1_lineage_audit_sweep.py::test_g1_lineage_audit_on_actual_relaxed_features)
+# wants to AUDIT those captured artifacts in the SAME pytest run so the
+# captured-artifact path is always exercised in CI — not gated behind an
+# env-var indirection that silently skips when the var is unset.
+#
+# This session-scoped fixture provides a shared dict the CSU/Optum fixtures
+# write to (after their subprocess emits the JSON artifact) and the lineage
+# sweep test reads from. Combined with the
+# ``ALLOW_MISSING_REAL_DATA != "1"`` default-hard-fail policy (codex pass-1
+# HIGH-1), this closes the HIGH-4 NOT-CLOSED escape hatch.
+#
+# Storage shape: {"csu": Path | None, "optum": Path | None}.
+# - None means: the corresponding fixture did NOT run (different pytest
+#   session / file-not-found / env-var opt-in skip).
+# - Path means: the artifact was captured to that filesystem path during
+#   THIS pytest run.
+
+
+@pytest.fixture(scope="session")
+def g1_artifact_registry() -> dict[str, Path | None]:
+    """Session-shared registry for G1 captured pipeline artifacts.
+
+    Used by the CSU + Optum integration tests (writers) and the
+    lineage-audit sweep (reader) to thread artifact paths between
+    test files in the same pytest run, without relying on env-var
+    indirection that silently skips in CI.
+
+    Codex pass-2 HIGH-4 / HIGH-5 (PR #137 v4 G1):
+    - The lineage sweep's "audit ACTUAL relaxed features" test
+      defaults to HARD-FAIL when no artifact is registered, mirroring
+      the ALLOW_MISSING_REAL_DATA policy of the CSU/Optum fixtures.
+    - Explicit opt-in skip: set ALLOW_MISSING_REAL_DATA=1 in the
+      environment for both the artifact-producing fixtures AND the
+      consumer test. This keeps the escape hatch SYMMETRIC across
+      writer + reader.
+    """
+    return {"csu": None, "optum": None}

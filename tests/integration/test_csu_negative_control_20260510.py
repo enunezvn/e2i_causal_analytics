@@ -119,6 +119,7 @@ CSU_EXPECTED_COHORT_SIZE = 9607
 @pytest.fixture(scope="module")
 def csu_negative_control_artifact(
     tmp_path_factory: pytest.TempPathFactory,
+    g1_artifact_registry: dict,
 ) -> dict:
     """Run the full tier0 pipeline on real CSU data, return parsed artifact.
 
@@ -191,6 +192,11 @@ def csu_negative_control_artifact(
     assert json_out.exists(), (
         f"TIER0_E2E_JSON_OUT artifact missing at {json_out}; runner produced no JSON."
     )
+    # Codex pass-2 HIGH-4 (PR #137 v4 G1): register the artifact path
+    # in the session-shared registry so the lineage-audit sweep
+    # (test_g1_lineage_audit_sweep.py::test_g1_lineage_audit_on_actual_relaxed_features)
+    # can consume it in the SAME pytest run without env-var indirection.
+    g1_artifact_registry["csu"] = json_out
     return json.loads(json_out.read_text())
 
 

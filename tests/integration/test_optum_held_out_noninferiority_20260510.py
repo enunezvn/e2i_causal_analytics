@@ -135,7 +135,10 @@ OPTUM_BASELINE_REQUIRED_FIELDS = (
 
 
 @pytest.fixture(scope="module")
-def optum_held_out_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
+def optum_held_out_artifact(
+    tmp_path_factory: pytest.TempPathFactory,
+    g1_artifact_registry: dict,
+) -> dict:
     """Run the full tier0 pipeline on real Optum initiation data.
 
     Module-scoped: one subprocess invocation amortized across every
@@ -223,6 +226,11 @@ def optum_held_out_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
             f"runner exit={result.returncode}. "
             f"stderr (truncated): {result.stderr[-1500:]!r}"
         )
+    # Codex pass-2 HIGH-4 (PR #137 v4 G1): register the artifact path
+    # in the session-shared registry so the lineage-audit sweep
+    # (test_g1_lineage_audit_sweep.py::test_g1_lineage_audit_on_actual_relaxed_features)
+    # can consume it in the SAME pytest run without env-var indirection.
+    g1_artifact_registry["optum"] = json_out
     return json.loads(json_out.read_text())
 
 
