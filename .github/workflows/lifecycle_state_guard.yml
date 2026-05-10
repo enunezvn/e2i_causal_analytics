@@ -1,0 +1,108 @@
+name: Lifecycle State Guard
+
+# Plan v4 Gate N2 — CI guard ensuring every gate-relevant location declares
+# a `lifecycle_state` (YAML key or `LIFECYCLE_STATE_*` Python constant) AND
+# any change to a lifecycle value has a corresponding signed doc at
+# `docs/calibration/{slug}_lifecycle_change_{from}_to_{to}_{YYYYMMDD}.md`.
+#
+# The advisory invariant must guard BEHAVIOR, not SPELLING. A naive scan for
+# `advisory_mode: true` misses configs that use `mode: advisory`,
+# `enforcement: false`, `shadow: true`, env vars, JSON, TOML, code constants.
+# This workflow runs `scripts/check_lifecycle_state.py`, which uses the
+# canonical `GateLifecycleState` enum + AST/YAML/TOML/JSON parsers to
+# enforce the declaration regardless of spelling.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'config/**'
+      - 'docs/calibration/**'
+      - 'scripts/check_lifecycle_state.py'
+      - '.github/workflows/lifecycle_state_guard.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'config/**'
+      - 'docs/calibration/**'
+      - 'scripts/check_lifecycle_state.py'
+      - '.github/workflows/lifecycle_state_guard.yml'
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  lifecycle-state-guard:
+    name: Lifecycle State Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Need full history so the change-detection mode can diff against
+          # the merge base. `fetch-depth: 0` is required because GitHub's
+          # default shallow clone (`fetch-depth: 1`) breaks `git diff base..HEAD`.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install scanner dependencies
+        # PyYAML + pydantic are runtime deps; the scanner imports
+        # `src.lifecycle.gate_lifecycle` which uses pydantic.
+        # We pin to the same versions as `requirements.txt` so the scanner
+        # behaves identically locally and in CI.
+        run: |
+          pip install --upgrade pip
+          pip install 'pydantic>=2.9.0' 'pyyaml>=6.0'
+
+      - name: Determine base ref
+        id: base-ref
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=origin/${{ github.base_ref }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=HEAD~1" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run lifecycle-state scanner (baseline)
+        # First pass: every gate-relevant location must declare a
+        # `lifecycle_state`. This pass does NOT need git diff — it audits
+        # the current tree.
+        run: |
+          set -e
+          python scripts/check_lifecycle_state.py --json > lifecycle_state_findings.json
+          echo "::group::Scanner findings (baseline)"
+          cat lifecycle_state_findings.json
+          echo "::endgroup::"
+
+      - name: Run lifecycle-state scanner (change-detection)
+        # Second pass: any change to a `LIFECYCLE_STATE_*` value must have
+        # a corresponding signed doc. Runs against the PR base branch (or
+        # HEAD~1 for direct pushes).
+        run: |
+          set -e
+          python scripts/check_lifecycle_state.py \
+            --check-changes \
+            --base-ref "${{ steps.base-ref.outputs.ref }}" \
+            --json > lifecycle_state_changes.json
+          echo "::group::Scanner findings (change-detection)"
+          cat lifecycle_state_changes.json
+          echo "::endgroup::"
+
+      - name: Upload findings artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-state-findings
+          path: |
+            lifecycle_state_findings.json
+            lifecycle_state_changes.json
+          retention-days: 14
