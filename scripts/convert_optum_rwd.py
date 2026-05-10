@@ -400,6 +400,7 @@ class OptumDataConverter:
             # biologic fill — re-anchoring there changes cohort semantics
             # (disc/pers measure outcomes 180d post-FIRST-fill) so the
             # fallback intentionally does not apply.
+            used_smart_index = False
             if cohort == "initiation":
                 pass1_failed = index_date is None or not self._check_enrollment_window(
                     demo_row, index_date
@@ -408,7 +409,7 @@ class OptumDataConverter:
                     smart_idx = self._derive_index_date_feasibility_aware(patid, demo_row)
                     if smart_idx is not None:
                         index_date = smart_idx
-                        n_smart_index_fallback += 1
+                        used_smart_index = True
 
             if index_date is None:
                 continue
@@ -423,6 +424,13 @@ class OptumDataConverter:
             if cohort == "initiation":
                 if self._had_biologic_pre_index(patid, index_date):
                     continue  # treatment-naïveté violation (30d washout)
+
+            # Counter only increments for patients who actually survive all
+            # filters via the fallback. Codex MEDIUM-1: incrementing earlier
+            # would overstate net cohort addition when a fallback-rescued
+            # index date later trips the exclusion or washout gates.
+            if used_smart_index:
+                n_smart_index_fallback += 1
 
             record = {
                 "patid": patid,
