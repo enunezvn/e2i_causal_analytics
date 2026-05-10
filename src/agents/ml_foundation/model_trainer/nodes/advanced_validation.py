@@ -32,10 +32,19 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+# Default permutation count. Plan v3 §3 Tier 1B step 1 raises the default
+# from 100 to 200 so the p95/p99 percentiles of the null distribution have
+# stable Monte Carlo error at low N (variance of an empirical p_q estimator
+# scales as q*(1-q)/n_perm; n=200 gives σ_p99 ≈ 0.007, n=100 gives 0.010 —
+# the increase costs ~1s on tier0-scale evaluation, well below the >100s
+# cohort-build envelope).
+DEFAULT_PERMUTATION_COUNT = 200
+
+
 def compute_permutation_test(
     y_true: np.ndarray,
     y_proba: Optional[np.ndarray],
-    n_permutations: int = 100,
+    n_permutations: int = DEFAULT_PERMUTATION_COUNT,
 ) -> Dict[str, Any]:
     """Permutation test: shuffle labels, recompute AUC, derive p-value.
 
@@ -45,41 +54,84 @@ def compute_permutation_test(
     Args:
         y_true: True labels
         y_proba: Predicted probabilities (1D or 2D)
-        n_permutations: Number of label shuffles
+        n_permutations: Number of label shuffles. Default
+            ``DEFAULT_PERMUTATION_COUNT`` (200) per plan v3 §3 Tier 1B step 1.
 
     Returns:
-        Dictionary with p-value, shuffled AUC stats, and verdict
+        Dictionary with p-value, shuffled AUC stats, percentiles, and verdict.
+        Plan v3 §3 Tier 1B step 1 surface keys: ``permutation_null_p95``,
+        ``permutation_null_p99``, ``permutation_n_permutations``.
     """
     if y_proba is None:
-        return {"permutation_pvalue": None, "signal_genuine": None}
+        return {
+            "permutation_pvalue": None,
+            "permutation_null_p95": None,
+            "permutation_null_p99": None,
+            "permutation_n_permutations": n_permutations,
+            "signal_genuine": None,
+        }
 
     y_proba_pos = y_proba[:, 1] if y_proba.ndim == 2 else y_proba
 
     try:
         actual_auc = float(roc_auc_score(y_true, y_proba_pos))
     except ValueError:
-        return {"permutation_pvalue": None, "signal_genuine": None}
+        return {
+            "permutation_pvalue": None,
+            "permutation_null_p95": None,
+            "permutation_null_p99": None,
+            "permutation_n_permutations": n_permutations,
+            "signal_genuine": None,
+        }
+    # sklearn 1.4+ returns NaN (with UndefinedMetricWarning) for single-class
+    # y_true rather than raising ValueError. Treat that as a degenerate run.
+    if not np.isfinite(actual_auc):
+        return {
+            "permutation_pvalue": None,
+            "permutation_null_p95": None,
+            "permutation_null_p99": None,
+            "permutation_n_permutations": n_permutations,
+            "signal_genuine": None,
+        }
 
     rng = np.random.default_rng(42)
     shuffled_aucs: List[float] = []
     for _ in range(n_permutations):
         y_shuffled = rng.permutation(y_true)
         try:
-            shuffled_aucs.append(float(roc_auc_score(y_shuffled, y_proba_pos)))
+            auc = float(roc_auc_score(y_shuffled, y_proba_pos))
         except ValueError:
             continue
+        # Filter NaN-returning shuffles (single-class permutations on tiny y).
+        if np.isfinite(auc):
+            shuffled_aucs.append(auc)
 
     if not shuffled_aucs:
-        return {"permutation_pvalue": None, "signal_genuine": None}
+        return {
+            "permutation_pvalue": None,
+            "permutation_null_p95": None,
+            "permutation_null_p99": None,
+            "permutation_n_permutations": n_permutations,
+            "signal_genuine": None,
+        }
 
     pvalue = float(np.mean([a >= actual_auc for a in shuffled_aucs]))
+    # NumPy default percentile interpolation is "linear" — well-defined for
+    # any non-empty sample including n_eff=1 (returns the single value).
+    null_p95 = float(np.percentile(shuffled_aucs, 95))
+    null_p99 = float(np.percentile(shuffled_aucs, 99))
+    n_effective = len(shuffled_aucs)
 
     return {
         "permutation_pvalue": pvalue,
         "permutation_auc_mean": float(np.mean(shuffled_aucs)),
         "permutation_auc_std": float(np.std(shuffled_aucs)),
+        "permutation_null_p95": null_p95,
+        "permutation_null_p99": null_p99,
+        "permutation_n_permutations": n_permutations,
+        "permutation_n_effective": n_effective,
         "actual_auc": actual_auc,
-        "n_permutations": n_permutations,
+        "n_permutations": n_permutations,  # legacy alias preserved
         "signal_genuine": pvalue < 0.05,
     }
 
