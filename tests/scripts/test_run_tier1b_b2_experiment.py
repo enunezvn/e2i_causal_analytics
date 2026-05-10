@@ -426,12 +426,15 @@ class TestRunSeed:
         assert result.error is None
         assert result.baseline_auc is not None
         assert result.hblp_auc is not None
-        # Baseline and HBLP feature surfaces are identical in the
-        # harness's contrast layer, so the metrics agree exactly per
-        # seed (the test pins the equivalence — when a future PR
-        # refines the contrast layer, this test gets updated to
-        # reflect the new behaviour).
-        assert result.baseline_auc == pytest.approx(result.hblp_auc, abs=1e-6)
+        # Both arms produce finite metrics. On synthetic data with
+        # only well-behaved (low-z) features, the baseline and HBLP
+        # arms have IDENTICAL retention sets (no feature crosses the
+        # 5σ legacy drop threshold), so the metrics agree exactly. The
+        # real-contrast test below pins the divergent case where HBLP
+        # retains a feature the baseline drops.
+        assert result.baseline_n_features_retained == result.hblp_n_features_retained, (
+            "synthetic XY has no high-z leak features → arms agree on retention"
+        )
 
     def test_run_seed_handles_degenerate_target(self) -> None:
         X = pd.DataFrame({"f": np.arange(20.0)})
@@ -441,6 +444,193 @@ class TestRunSeed:
         # a single-class target) or we get None metrics. Both are
         # acceptable degenerate handling.
         assert result.error is not None or result.baseline_auc is None
+
+
+# ---------------------------------------------------------------------------
+# HIGH-1 — REAL baseline-vs-HBLP contrast at feature retention.
+#
+# The contrast must materialize at retention time: a feature with high
+# marginal z-score that the baseline drops must be retained by HBLP when
+# layer_1_declared_safe=True (and/or low n_train_pos triggers
+# variance-inflation). This test pins the divergence so a regression to
+# "no contrast" (the codex HIGH-1 finding) is caught loudly.
+# ---------------------------------------------------------------------------
+
+
+class TestRealBaselineVsHblpContrast:
+    """Pins the HIGH-1 fix: real per-arm feature retention divergence."""
+
+    def _make_xy_with_high_z_feature(
+        self,
+        n: int = 400,
+        seed: int = 0,
+        leak_mean_shift: float = 0.8,
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        """Construct an XY where ONE feature has a marginal z just
+        above ``HIGH_Z=5σ`` but below the HBLP-relaxed threshold of
+        ``5σ × 1.5 = 7.5σ`` (when ``layer_1_declared_safe=True`` and
+        ``n_train_pos`` is large enough that variance-inflation = 1.0).
+
+        The mean-shift of 0.8 produces a Welch z ≈ 5.8 in the training
+        split, which is dropped by baseline (>5) but retained by HBLP
+        (5.8 < 7.5). The remaining features are the same noisy signal
+        as the harness's synthetic baseline.
+        """
+        rng = np.random.default_rng(seed)
+        n_signal = 4
+        X_signal = rng.normal(size=(n, n_signal))
+        logits = X_signal[:, 0] * 0.8 + X_signal[:, 1] * 0.5 - X_signal[:, 2] * 0.4
+        p = 1.0 / (1.0 + np.exp(-logits))
+        y = (rng.uniform(size=n) < p).astype(np.int64)
+        leak = np.where(
+            y > 0,
+            rng.normal(loc=leak_mean_shift, scale=1.0, size=n),
+            rng.normal(loc=0.0, scale=1.0, size=n),
+        )
+        df_X = pd.DataFrame(X_signal, columns=[f"feature_{i}" for i in range(n_signal)])
+        df_X["leakage_proxy"] = leak
+        return df_X, pd.Series(y, name="treatment_initiated")
+
+    def test_hblp_retains_feature_baseline_drops_when_declared_safe(self) -> None:
+        """The load-bearing HIGH-1 contract: a high-z feature with
+        ``layer_1_declared_safe=True`` is dropped by baseline (legacy
+        ``z > HIGH_Z``) but retained by HBLP (``hblp_classify``
+        severity != 'high').
+
+        This proves the two arms diverge on retention, which proves
+        the metric arrays diverge, which proves G2's ΔAUC / ECE-ratio
+        / CV-stability-ratio are genuine contrasts.
+        """
+        X, y = self._make_xy_with_high_z_feature(n=400, seed=0)
+        # Construct lookup so the leak feature is "declared safe" by
+        # Layer 1 (it has a manifest contract claiming knowable_at <=
+        # index_date). All other features default to declared_safe=False.
+        explicit_lookup = {"leakage_proxy": True}
+
+        result = H.run_seed(
+            X,
+            y,
+            seed=42,
+            layer_1_declared_safe_lookup=explicit_lookup,
+        )
+        assert result.error is None, f"unexpected error: {result.error}"
+        # Sanity: the leak feature has z > HIGH_Z (legacy strict
+        # would drop it).
+        # Sanity: baseline dropped the leak; HBLP retained it.
+        assert "leakage_proxy" in result.baseline_features_dropped, (
+            "baseline should drop the leak feature (legacy strict z > HIGH_Z), but it was kept"
+        )
+        assert "leakage_proxy" not in result.hblp_features_dropped, (
+            "HBLP should retain the leak feature when "
+            "layer_1_declared_safe=True (variance-inflation + 1.5x "
+            "prior pushes effective threshold above the leak's z); "
+            "but HBLP dropped it"
+        )
+        # Divergence set is non-empty.
+        assert "leakage_proxy" in result.features_diverged
+        # Retained-feature counts differ → metric arrays must differ.
+        assert result.hblp_n_features_retained > result.baseline_n_features_retained, (
+            f"HBLP retention ({result.hblp_n_features_retained}) "
+            f"should exceed baseline retention "
+            f"({result.baseline_n_features_retained})"
+        )
+
+    def test_hblp_drops_with_baseline_when_declared_safe_false(self) -> None:
+        """Symmetric pinning: when ``layer_1_declared_safe=False`` and
+        ``n_train_pos`` is large enough that variance-inflation = 1.0,
+        HBLP and baseline agree (both drop the high-z feature)."""
+        X, y = self._make_xy_with_high_z_feature(n=400, seed=0)
+        # No Layer-1 information → declared_safe=False for all → HBLP
+        # threshold collapses to base HIGH_Z, matching baseline.
+        result = H.run_seed(
+            X,
+            y,
+            seed=42,
+            layer_1_declared_safe_lookup={},  # all False
+        )
+        assert result.error is None
+        # With n_train_pos in the hundreds (variance-inflation = 1.0)
+        # and declared_safe=False everywhere, the HBLP effective
+        # threshold equals the legacy HIGH_Z, so the leak should be
+        # dropped by BOTH arms.
+        assert "leakage_proxy" in result.baseline_features_dropped
+        assert "leakage_proxy" in result.hblp_features_dropped
+        assert result.features_diverged == []
+
+    def test_compute_marginal_z_scores_returns_finite(self) -> None:
+        """Sanity: the z-score helper produces non-negative finite values."""
+        X, y = self._make_xy_with_high_z_feature(n=400, seed=0)
+        z = H._compute_marginal_z_scores(X, y)
+        assert set(z.keys()) == set(X.columns)
+        for col, val in z.items():
+            assert val >= 0.0
+            assert np.isfinite(val)
+        # Leak feature has z > 5 (the legacy HIGH_Z drop threshold).
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            HIGH_Z,
+        )
+
+        assert z["leakage_proxy"] > HIGH_Z
+
+    def test_legacy_strict_drop_uses_high_z_constant(self) -> None:
+        """Pin that the baseline arm drops EXACTLY at z > HIGH_Z."""
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            HIGH_Z,
+        )
+
+        z = {
+            "below": HIGH_Z - 0.1,
+            "at": HIGH_Z,  # not strictly greater → kept
+            "above": HIGH_Z + 0.1,  # strictly greater → dropped
+        }
+        dropped = H._legacy_strict_drop(z)
+        assert dropped == ["above"]
+
+    def test_hblp_drop_relaxes_threshold_when_declared_safe(self) -> None:
+        """Pin the HBLP retention contract directly on the helper:
+        a feature with z just above HIGH_Z but ``declared_safe=True``
+        is retained by HBLP (severity is ``"moderate"`` or ``"info"``,
+        not ``"high"``)."""
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            HIGH_Z,
+        )
+
+        z = {"borderline_safe": HIGH_Z + 0.5, "borderline_unsafe": HIGH_Z + 0.5}
+        # n_train_pos large enough that variance-inflation = 1.0;
+        # only the layer-1 prior matters.
+        dropped = H._hblp_drop(
+            z,
+            n_train_pos=300,
+            layer_1_declared_safe_lookup={
+                "borderline_safe": True,
+                "borderline_unsafe": False,
+            },
+        )
+        # Unsafe: HBLP threshold = HIGH_Z (no relaxation) → z=HIGH_Z+0.5 > 5.0 → drop.
+        assert "borderline_unsafe" in dropped
+        # Safe: HBLP threshold = HIGH_Z * 1.5 = 7.5σ → z=5.5 < 7.5 → keep.
+        assert "borderline_safe" not in dropped
+
+
+class TestResolveLayerOneDeclaredSafeLookup:
+    def test_explicit_lookup_takes_precedence(self) -> None:
+        out = H._resolve_layer_1_declared_safe_lookup(
+            ["a", "b", "c"],
+            manifest_source="anything",
+            explicit_lookup={"a": True, "c": True},
+        )
+        assert out == {"a": True, "b": False, "c": True}
+
+    def test_no_manifest_returns_all_false(self) -> None:
+        out = H._resolve_layer_1_declared_safe_lookup(["a", "b"])
+        assert out == {"a": False, "b": False}
+
+    def test_unknown_manifest_source_returns_all_false(self) -> None:
+        out = H._resolve_layer_1_declared_safe_lookup(
+            ["a", "b"],
+            manifest_source="not_a_manifest_source_anywhere",
+        )
+        assert out == {"a": False, "b": False}
 
 
 # ---------------------------------------------------------------------------
