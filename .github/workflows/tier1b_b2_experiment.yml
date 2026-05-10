@@ -153,27 +153,38 @@ jobs:
         # Second gate: the experiment commit (= the tagged commit)
         # MUST be a CHILD of S_prespec. HIGH-6: run from the protected
         # checkout, not the tag's checkout.
+        # NEW HIGH-2 (iter-3): pass --repo-root "$GITHUB_WORKSPACE" so
+        # the staged copy in governance_checkout/scripts/ resolves the
+        # actual worktree root, not its own staging directory.
         env:
           S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+          E2I_GOVERNANCE_REPO_ROOT: ${{ github.workspace }}
         run: |
           set -euo pipefail
           python governance_checkout/scripts/check_g2_commit_graph.py \
             --prespec-sha "$S_PRESPEC" \
-            --experiment-sha HEAD
+            --experiment-sha HEAD \
+            --repo-root "$GITHUB_WORKSPACE"
 
       - name: Verify cohort dataset hashes vs S_prespec memo (governance checkout)
         # First gate: data must not have drifted between memo-lock and
         # tag. HIGH-2: --strict (CI=true also forces strict). HIGH-3:
         # --prespec-sha pins hashes to the immutable S_prespec content.
         # HIGH-6: run from the protected checkout.
+        # NEW HIGH-2 (iter-3): pass --repo-root "$GITHUB_WORKSPACE"
+        # because the staged copy under governance_checkout/scripts/
+        # resolves Path(__file__).parents[1] to governance_checkout
+        # without the override.
         env:
           CI: 'true'
           S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+          E2I_GOVERNANCE_REPO_ROOT: ${{ github.workspace }}
         run: |
           set -euo pipefail
           python governance_checkout/scripts/verify_g2_prespec_dataset_hashes.py \
             --strict \
-            --prespec-sha "$S_PRESPEC"
+            --prespec-sha "$S_PRESPEC" \
+            --repo-root "$GITHUB_WORKSPACE"
 
       - name: Verify tag commit references S_prespec
         # Third gate: the tag's commit message MUST mention S_prespec

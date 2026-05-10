@@ -79,7 +79,45 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+
+def _resolve_repo_root() -> Path:
+    """Resolve the actual git worktree root.
+
+    NEW HIGH-2 (iter-3) fix: when the workflow copies this script into
+    ``governance_checkout/scripts/`` (HIGH-6 protected verifier
+    staging), ``Path(__file__).resolve().parents[1]`` resolves to
+    ``governance_checkout``, NOT the actual worktree the workflow
+    checked out. Subsequent ``REPO_ROOT / "docs/..."``,
+    ``REPO_ROOT / "data/..."`` paths then point at empty
+    ``governance_checkout/docs/...`` and ``governance_checkout/data/...``
+    (which never exist), and the verifier silently miscategorizes
+    every artifact as MISSING / fails to find the memo.
+
+    Resolution order:
+      1. ``E2I_GOVERNANCE_REPO_ROOT`` env var — explicit override.
+      2. ``git rev-parse --show-toplevel`` from CWD — preferred.
+      3. ``Path(__file__).resolve().parents[1]`` — legacy fallback.
+
+    The legacy path is kept so unit tests that ``monkeypatch.setattr(V,
+    "REPO_ROOT", tmp_path)`` continue to work; production CI invocations
+    rely on (1) or (2).
+    """
+    env_root = os.environ.get("E2I_GOVERNANCE_REPO_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).resolve()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return Path(result.stdout.strip()).resolve()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return Path(__file__).resolve().parents[1]
+
+
+REPO_ROOT = _resolve_repo_root()
 MEMO_PATH = REPO_ROOT / "docs" / "specs" / "tier1b_b2_prespec_20260510.md"
 MEMO_RELPATH = "docs/specs/tier1b_b2_prespec_20260510.md"
 PLACEHOLDER = "TODO_PIN_AT_FIRST_GREEN_RUN"
@@ -448,7 +486,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             "(legacy / unsafe)."
         ),
     )
+    parser.add_argument(
+        "--repo-root",
+        default=None,
+        help=(
+            "NEW HIGH-2 (iter-3) fix: explicit override for the worktree "
+            "root. Required when this script is invoked from a staged "
+            "governance checkout (e.g. governance_checkout/scripts/) "
+            "where Path(__file__).parents[1] resolves to the staging "
+            "directory, NOT the actual worktree. Workflows should pass "
+            '--repo-root "$GITHUB_WORKSPACE" or set '
+            "E2I_GOVERNANCE_REPO_ROOT in env."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    # NEW HIGH-2 (iter-3): allow CLI override of REPO_ROOT — the
+    # scripts get copied into governance_checkout/scripts/ and need to
+    # know the actual worktree root.
+    if args.repo_root is not None:
+        global REPO_ROOT, MEMO_PATH
+        REPO_ROOT = Path(args.repo_root).resolve()
+        MEMO_PATH = REPO_ROOT / "docs" / "specs" / "tier1b_b2_prespec_20260510.md"
 
     is_ci = _is_ci_env()
     strict = args.strict or is_ci
