@@ -179,6 +179,21 @@ class ModelDeployerState(BaseAgentSchema):
     previous_deployment_id: Optional[str] = None
     previous_deployment_url: Optional[str] = None
 
+    # === REGULATORY ELIGIBILITY (Gate N1 — plan v4 §2) ===
+    #
+    # Two boolean status flags mirror the codex-rescue HIGH-3 mitigation:
+    # the deployer must distinguish a regulatory-eligible model (clean
+    # threshold history) from an adapted-regulatory-candidate (clears
+    # absolute thresholds at promotion time but adaptively relaxed them
+    # during dev). Both default to False — only ``validate_promotion``
+    # may set either to True after evaluating the three preconditions
+    # against the immutable ``regulatory_eligibility_audit`` (stored on
+    # ``validation_metrics``). The audit's append-only invariant is
+    # enforced by the ``RegulatoryEligibilityAudit`` runtime guard at
+    # ``model_deployer/regulatory_audit.py``.
+    regulatory_eligible: bool = False
+    adapted_regulatory_candidate: bool = False
+
     # === OUTPUT FIELDS (Final) ===
 
     # Deployment manifest
