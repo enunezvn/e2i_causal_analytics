@@ -98,11 +98,10 @@ Each set of bands is anchored to a peer-reviewed source below. The MARGINAL boun
 **Justification (Kumar 2019):**
 - Kumar, Sarawagi, & Jain 2019 introduced Maximum Mean Calibration Error (MMCE) and reported deep-net ECE bands clustering at ~0.05-0.10 for well-calibrated models and 0.15-0.25 for uncalibrated ones (Tables 1-3). This corroborates the EXCELLENT/GOOD/MARGINAL gradation we currently use.
 
-**Anchor source (tertiary, clinical specific):**
-> Vickers, A. J., van Calster, B., & Steyerberg, E. W. (2019). A simple, step-by-step guide to interpreting decision curve analysis. *Diagnostic and Prognostic Research*, 3(18). [CITATION-CHECK NEEDED — also see Steyerberg, E. W. (2019). *Clinical Prediction Models: A Practical Approach to Development, Validation, and Updating* (2nd ed.). Springer.]
+**Clinical-utility framing (NOT an ECE threshold anchor):**
+> Vickers, A. J., van Calster, B., & Steyerberg, E. W. (2019). A simple, step-by-step guide to interpreting decision curve analysis. *Diagnostic and Prognostic Research*, 3(18).
 
-**Justification (clinical):**
-- Steyerberg (2019) §15 "Calibration" emphasizes calibration-in-the-large + slope checks for clinical prediction models. The conventional clinical "miscalibration tolerance" is a 5-10pp gap between predicted and observed risk per decile — corresponding to ECE in the 0.05-0.10 range. Our `EXCELLENT` (≤ 0.05) and `GOOD` (≤ 0.10) bands track this exactly.
+**Note on Vickers 2019 scope:** Vickers et al. 2019 covers **decision curve analysis and net benefit**, NOT ECE thresholds or calibration-band cutoffs. The publisher page (BMC, *Diagnostic and Prognostic Research*) confirms the paper's scope is clinical-utility framing of predicted-risk thresholds via decision curves. This citation is retained here ONLY for clinical-utility framing context — it is **not** a load-bearing ECE-band anchor and is NOT used to justify the `T2_6A_CALIBRATION_*_ECE_MAX` literals. The ECE-band literals in this section rest entirely on Naeini 2015 (primary) and Kumar 2019 (secondary).
 
 **Threshold value carried into code:**
 - `T2_6A_CALIBRATION_MARGINAL_ECE_MAX = 0.20` (rejection boundary; above this is `poor`).
@@ -167,7 +166,6 @@ Each set of bands is anchored to a peer-reviewed source below. The MARGINAL boun
 
 The following citations are listed as `[CITATION-CHECK NEEDED]` in §4 above — they should be verified against the canonical edition during the next review pass:
 
-- Vickers, van Calster, & Steyerberg (2019) DOI/page reference for ECE clinical bands.
-- Steyerberg (2019) *Clinical Prediction Models* 2nd ed., §15 page reference for calibration-in-the-large guidance.
+- Vickers, van Calster, & Steyerberg (2019) is retained in §4 ONLY for clinical-utility framing (decision curve analysis / net benefit); it is NOT an ECE threshold anchor.
 
 The other citations (Fisher 1925, Fisher 1935, Naeini 2015, Kumar 2019, Bouckaert & Frank 2004, Kohavi 1995, Mukherjee 2006, Ojala & Garriga 2010) are standard works whose existence and content are well-attested in the ML/statistics literature; no `[CITATION NEEDED]` flag is required, though specific page references should be verified at the next docs-pass.
