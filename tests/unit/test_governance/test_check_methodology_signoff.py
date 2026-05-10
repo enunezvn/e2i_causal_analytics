@@ -25,9 +25,7 @@ SCRIPT_PATH = PROJECT_ROOT / "scripts" / "check_methodology_signoff.py"
 
 
 def _load_check_module():
-    spec = importlib.util.spec_from_file_location(
-        "check_methodology_signoff", SCRIPT_PATH
-    )
+    spec = importlib.util.spec_from_file_location("check_methodology_signoff", SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["check_methodology_signoff"] = module
@@ -43,7 +41,9 @@ cms = _load_check_module()
 # --------------------------------------------------------------------------- #
 
 
-def _git(*args: str, cwd: Path, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _git(
+    *args: str, cwd: Path, env_overrides: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run a git command in ``cwd`` and return the completed process.
 
     ``env_overrides`` lets callers set GIT_COMMITTER_DATE alongside the
@@ -152,9 +152,7 @@ def fixture_repo(tmp_path: Path) -> Iterator[Path]:
         "# CoI Alice\n\nzero touches\n", encoding="utf-8"
     )
     # Seed a convert script so commits against it are meaningful.
-    (repo / "scripts" / "convert_optum_rwd.py").write_text(
-        "# stub\n", encoding="utf-8"
-    )
+    (repo / "scripts" / "convert_optum_rwd.py").write_text("# stub\n", encoding="utf-8")
 
     _git("add", "-A", cwd=repo)
     # Initial commit BEFORE the named period — does NOT trigger selection rule.
@@ -162,10 +160,14 @@ def fixture_repo(tmp_path: Path) -> Iterator[Path]:
     # before 2026-04-15 because `git log --since/--until` filters on commit
     # date by default.
     _git(
-        "-c", "user.email=alice@example.com",
-        "-c", "user.name=Alice",
-        "commit", "--date=2026-04-01T12:00:00",
-        "-m", "initial",
+        "-c",
+        "user.email=alice@example.com",
+        "-c",
+        "user.name=Alice",
+        "commit",
+        "--date=2026-04-01T12:00:00",
+        "-m",
+        "initial",
         cwd=repo,
         env_overrides={"GIT_COMMITTER_DATE": "2026-04-01T12:00:00"},
     )
@@ -183,10 +185,14 @@ def fixture_repo_with_bob_conflict(fixture_repo: Path) -> Path:
     convert.write_text("# stub\n# bob touched\n", encoding="utf-8")
     _git("add", "scripts/convert_optum_rwd.py", cwd=repo)
     _git(
-        "-c", "user.email=bob@example.com",
-        "-c", "user.name=Bob",
-        "commit", "--date=2026-04-20T12:00:00",
-        "-m", "bob touched convert",
+        "-c",
+        "user.email=bob@example.com",
+        "-c",
+        "user.name=Bob",
+        "commit",
+        "--date=2026-04-20T12:00:00",
+        "-m",
+        "bob touched convert",
         cwd=repo,
         env_overrides={"GIT_COMMITTER_DATE": "2026-04-20T12:00:00"},
     )
@@ -338,10 +344,7 @@ def test_selection_rule_bob_with_commit_in_window(
     """Bob has a commit dated 2026-04-20 against convert_optum_rwd.py → selection rule fails."""
 
     rows = cms.parse_registry(
-        fixture_repo_with_bob_conflict
-        / "docs"
-        / "governance"
-        / "methodology_reviewer_registry.md"
+        fixture_repo_with_bob_conflict / "docs" / "governance" / "methodology_reviewer_registry.md"
     )
     text = _signoff_doc(handle="bob")
     result = cms.check_selection_rule(text, fixture_repo_with_bob_conflict, rows)
@@ -373,9 +376,7 @@ def test_check_signoff_full_success(fixture_repo: Path, monkeypatch: pytest.Monk
     # Prevent --require-signature path failure when toolchain absent.
     results = cms.check_signoff(signoff_path, fixture_repo, require_signature=False)
     failed = [r for r in results if not r.ok]
-    assert failed == [], (
-        f"unexpected failures: {[(r.name, r.detail) for r in failed]}"
-    )
+    assert failed == [], f"unexpected failures: {[(r.name, r.detail) for r in failed]}"
 
 
 def test_check_signoff_missing_signature_section(fixture_repo: Path):
@@ -421,9 +422,7 @@ def test_workflow_yaml_parses():
     """The methodology_signoff_guard.yml workflow must be valid YAML."""
 
     yaml = pytest.importorskip("yaml")
-    workflow_path = (
-        PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
-    )
+    workflow_path = PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
     assert workflow_path.is_file(), f"workflow missing: {workflow_path}"
     parsed = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
     # Top-level YAML on/jobs keys must be present. (PyYAML interprets bare
