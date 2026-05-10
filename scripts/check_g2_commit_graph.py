@@ -49,6 +49,35 @@ Behaviour on edge cases
 * If S_prespec == experiment_sha, the parent constraint is VIOLATED
   (the experiment must be a CHILD, not an alias).
 * If the path passed to --prespec-sha-from-file is unreadable, exits 2.
+
+Scope (INFO-12 — codex pass-1 informational)
+---------------------------------------------
+
+Commit ancestry alone CANNOT prove that no prior exploration occurred.
+A determined developer can explore locally on a scratch branch, then
+create a clean child commit after S_prespec — the parent-check will
+pass even though the developer already knows which thresholds would
+pass on the cohort.
+
+The commit-graph parent-check is therefore ONE control in a stack of
+four that together close the threshold-shopping defense:
+
+  1. ``check_g2_commit_graph.py`` (this script) — ensures the
+     experiment commit DESCENDS from S_prespec.
+  2. ``verify_g2_prespec_dataset_hashes.py --prespec-sha`` — ensures
+     the pinned hashes are read from the IMMUTABLE S_prespec content,
+     not the mutable working tree. Plus the memo-content-unchanged
+     check catches edits to load-bearing sections.
+  3. Workflow runs verifiers from ``origin/main`` (protected ref) so
+     the experiment tag CANNOT weaken the verifier code.
+  4. ``.github/g2_runs/<S_prespec>.json`` run registry — first
+     ATTEMPTED workflow run is load-bearing; subsequent runs from the
+     same S_prespec are rejected. Defeats sequential-testing
+     fishing-expedition.
+
+Threshold-shopping is fully prevented only when all four controls
+hold. If any control is bypassed or weakened, the threshold-shopping
+defense is broken even if the others pass.
 """
 
 from __future__ import annotations
