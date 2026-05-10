@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
     hblp_classify,
