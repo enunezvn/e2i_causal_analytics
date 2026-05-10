@@ -37,6 +37,7 @@ plan v3 ``.claude/plans/adaptive_disease_agnostic_quality_uplift.md`` §4 T2.1.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Any, Literal, Optional
 
 import numpy as np
@@ -180,6 +181,19 @@ class MapieConformalBinaryClassifier:
         self.fitted_conformal_mode_ = mode
 
         if mode == "prefit_legacy":
+            # MAPIE adversarial-review MEDIUM-2: warn callers that prefit_legacy
+            # uses training-set conformal calibration, which breaks the marginal-
+            # coverage guarantee. Preserved for back-compat only; use with caution.
+            warnings.warn(
+                "MapieConformalBinaryClassifier: conformal_mode='prefit_legacy' "
+                "calibrates MAPIE on the SAME data used to fit the base estimator. "
+                "The marginal-coverage guarantee (plan §6 T2.1) is NOT honoured in "
+                "this mode. Use conformal_mode=None (auto) or 'split'/'cross' for "
+                "statistically-honest conformal intervals. prefit_legacy is preserved "
+                "for back-compat with pre-T2.1 outputs only.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             self.base_estimator.fit(X, y_arr)
             self._mapie = MapieClassifier(
                 estimator=self.base_estimator,
