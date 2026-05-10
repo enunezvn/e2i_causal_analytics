@@ -209,6 +209,55 @@ class TestDeriveIndexDateFeasibilityAware:
         demo_row = _demo_row("2019-01-01", "2023-01-01")
         assert cv._derive_index_date_feasibility_aware(1, demo_row) is None
 
+    def test_single_day_feasibility_band_is_valid(self) -> None:
+        """Codex pass-1 LOW-4: at exactly PRE+POST days enrollment,
+        feasible_start == feasible_end. The strict ``>`` guard treats this
+        as a valid single-point band; an event landing exactly on that day
+        must qualify."""
+        cv = _make_converter()
+        eligeff = _ts("2020-01-01")
+        eligend = eligeff + timedelta(days=ENROLLMENT_PRE_DAYS + ENROLLMENT_POST_DAYS)
+        feasible_point = eligeff + timedelta(days=ENROLLMENT_PRE_DAYS)
+        assert feasible_point == eligend - timedelta(days=ENROLLMENT_POST_DAYS)
+        cv._med_by_pat[1] = pd.DataFrame({"medication_date": [feasible_point]})
+        demo_row = pd.Series(
+            {
+                "patid": 1,
+                "eligeff": eligeff,
+                "eligend": eligend,
+                "diagcode_raw": "L509",
+            }
+        )
+        result = cv._derive_index_date_feasibility_aware(1, demo_row)
+        assert result == feasible_point
+
+    def test_three_in_band_inpatient_dates_picks_second_not_third(
+        self,
+    ) -> None:
+        """Codex pass-1 LOW-5: with 3+ in-band inpatient L50.x dates, the
+        rule must select ``ip_feasible[1]`` (chronologically 2nd), not the
+        last or any other. Guards against an off-by-one regression that
+        would silently pass when there are exactly 2 in-band dates."""
+        cv = _make_converter()
+        cv._inpatient_by_pat[1] = pd.DataFrame(
+            {
+                "diag1": ["L509", "L509", "L509"],
+                "diag2": [None, None, None],
+                "diag3": [None, None, None],
+                "diag4": [None, None, None],
+                "diag5": [None, None, None],
+                "admit_date": [
+                    _ts("2020-03-15"),  # 1st in-band
+                    _ts("2020-09-15"),  # 2nd in-band — must be selected
+                    _ts("2021-06-15"),  # 3rd in-band — must NOT be selected
+                ],
+            }
+        )
+        demo_row = _demo_row("2019-01-01", "2023-01-01")
+        result = cv._derive_index_date_feasibility_aware(1, demo_row)
+        assert result == _ts("2020-09-15")
+        assert result != _ts("2021-06-15")
+
 
 # --------------------------------------------------------------------------- #
 # Integration: smart-index fallback in _build_cohort                          #
@@ -390,3 +439,57 @@ class TestSmartIndexFallbackIntegration:
         cv._build_cohort("persistence")
         steps = dict(cv._attrition)
         assert "persistence: smart-index fallback hits" not in steps
+
+    def test_smart_index_counter_excludes_washout_dropouts(self) -> None:
+        """Codex pass-1 LOW-3 + MEDIUM-1: when a fallback-rescued patient
+        later trips ``_had_biologic_pre_index`` (30d washout), the
+        ``smart-index fallback hits`` row must NOT count them. The counter
+        and ``records_pass`` should share the same gate.
+
+        Setup: patient 2 gets re-fixtured so that
+          - Pass 1 picks the 2nd of 2 out-of-band inpatient L50.x dates
+            (fails enrollment_window),
+          - Smart-index picks the 3rd inpatient L50.x date which lies in-
+            band (priority 1, NOT the claim fallback — so a biologic fill
+            within 30d of the smart index does not become the smart index
+            itself),
+          - A Xolair fill 14 days before the smart index trips
+            ``_had_biologic_pre_index`` and drops the patient.
+        """
+        cv = self._build_fixture_converter()
+        # Patient 2: rebuild as inpatient-anchored to keep biologic-fill
+        # out of the index-date pool.
+        cv._inpatient_by_pat[2] = pd.DataFrame(
+            {
+                "diag1": ["L509", "L509", "L509"],
+                "diag2": [None, None, None],
+                "diag3": [None, None, None],
+                "diag4": [None, None, None],
+                "diag5": [None, None, None],
+                "admit_date": [
+                    _ts("2018-06-01"),  # out-of-band — Pass 1's 1st
+                    _ts("2018-09-01"),  # out-of-band — Pass 1's 2nd, fails
+                    _ts("2020-12-15"),  # in-band — smart-index's pick
+                ],
+            }
+        )
+        cv._med_by_pat[2] = pd.DataFrame(
+            {
+                "medication_date": [_ts("2020-12-01")],  # 14d pre-index
+                "code": ["50242021501"],  # Xolair NDC
+                "Brand_Name": ["XOLAIR"],
+                "Generic_Name": ["omalizumab"],
+            }
+        )
+
+        journeys, _, _, _ = cv._build_cohort("initiation")
+        steps = dict(cv._attrition)
+
+        ids = sorted(j["patient_id"] for j in journeys)
+        # Patient 2 is rescued by smart-index but then dropped by washout.
+        assert "PAT_000000000002" not in ids
+        # Patient 3 still passes via smart-index → counter == 1 (not 2).
+        assert steps["initiation: smart-index fallback hits"] == 1
+        # And the neighbor row reflects the same drop (3 fixture passers
+        # minus pat 2 washout = 2).
+        assert steps["initiation: after index + enrollment + exclusions"] == 2
