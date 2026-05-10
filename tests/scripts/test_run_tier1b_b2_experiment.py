@@ -338,6 +338,180 @@ class TestBuildManifest:
 
 
 # ---------------------------------------------------------------------------
+# HIGH-7 — exact cohort identity enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestCohortIdentityEnforcement:
+    """Per HIGH-7: cohort spec's expected_n_exact pins the cohort
+    identity; the harness must refuse to run on data that does not
+    match the declared row count."""
+
+    def test_default_cohort_expects_n_1294(self) -> None:
+        """Pin the pre-spec memo's load-bearing default cohort size."""
+        assert H.COHORTS["optum_initiation_default"].expected_n_exact == 1294
+
+    def test_relaxed_cohort_expects_n_1697(self) -> None:
+        """Pin the pre-spec memo's sensitivity-cohort size."""
+        assert H.COHORTS["optum_initiation_relaxed"].expected_n_exact == 1697
+
+    def test_cohort_specs_carry_expected_n_exact_field(self) -> None:
+        """The CohortSpec dataclass field name is the load-bearing one."""
+        cohort = H.COHORTS["optum_initiation_default"]
+        assert hasattr(cohort, "expected_n_exact")
+        assert isinstance(cohort.expected_n_exact, int)
+
+    def test_run_experiment_raises_on_cohort_n_mismatch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """End-to-end HIGH-7: when the loaded patient_journeys frame
+        has a different row count than the cohort spec's expected_n_exact,
+        run_experiment raises ValueError."""
+        # Plant a fake patient_journeys frame with the WRONG row count.
+        cohort_dir = tmp_path / "data" / "rwd" / "optum" / "initiation"
+        cohort_dir.mkdir(parents=True)
+        wrong_n = 100  # not 1294 or 1697
+        df = pd.DataFrame(
+            {
+                "patient_id": list(range(wrong_n)),
+                "treatment_initiated": [i % 2 for i in range(wrong_n)],
+                "feature_a": [float(i) for i in range(wrong_n)],
+            }
+        )
+        df.to_parquet(cohort_dir / "e2i_ml_v3_patient_journeys.parquet")
+
+        # Monkey-patch the FileIngestor so we don't need the full
+        # ingestion machinery — return our wrong-n frame directly.
+        def fake_load_patient_journeys(directory: Path) -> pd.DataFrame:
+            return df
+
+        monkeypatch.setattr(H, "_load_patient_journeys", fake_load_patient_journeys)
+
+        with pytest.raises(ValueError, match="HIGH-7 cohort identity mismatch"):
+            H.run_experiment(
+                "optum_initiation_default",
+                project_root=tmp_path,
+            )
+
+
+# ---------------------------------------------------------------------------
+# HIGH-8 — all-seeds + all-metrics required before threshold eval
+# ---------------------------------------------------------------------------
+
+
+class TestHigh8AllSeedsRequired:
+    def test_missing_seeds_fail_manifest(self) -> None:
+        """Only 3 of 5 seeds produced metrics → manifest fails hard."""
+        cohort = H.COHORTS["optum_initiation_default"]
+        seed_results = [_seed_result(s) for s in (42, 43, 44)]  # missing 45, 46
+        manifest = H.build_manifest(
+            cohort=cohort,
+            seed_results=seed_results,
+            experiment_commit_sha="abc",
+        )
+        assert manifest.g2_passes_pre_spec is False
+        assert manifest.thresholds == []
+        comp = manifest.seed_completeness
+        assert comp["all_seeds_complete"] is False
+        assert comp["missing_seeds"] == [45, 46]
+        assert "HIGH-8" in manifest.notes
+
+    def test_incomplete_seed_metrics_fail_manifest(self) -> None:
+        """All 5 seeds present, but ONE has a None metric → fail hard."""
+        cohort = H.COHORTS["optum_initiation_default"]
+        seed_results = [_seed_result(s) for s in H.G2_SEEDS]
+        # Knock out one metric on seed=43.
+        for r in seed_results:
+            if r.seed == 43:
+                r.baseline_ece = None
+        manifest = H.build_manifest(
+            cohort=cohort,
+            seed_results=seed_results,
+            experiment_commit_sha="abc",
+        )
+        assert manifest.g2_passes_pre_spec is False
+        assert manifest.thresholds == []
+        comp = manifest.seed_completeness
+        assert comp["all_seeds_complete"] is False
+        assert 43 in comp["incomplete_seeds"]
+
+    def test_seed_with_error_fails_manifest(self) -> None:
+        """A seed with non-None ``error`` field counts as incomplete."""
+        cohort = H.COHORTS["optum_initiation_default"]
+        seed_results = [_seed_result(s) for s in H.G2_SEEDS]
+        seed_results[2].error = "RuntimeError: simulated"
+        manifest = H.build_manifest(
+            cohort=cohort,
+            seed_results=seed_results,
+            experiment_commit_sha="abc",
+        )
+        assert manifest.g2_passes_pre_spec is False
+        assert manifest.thresholds == []
+
+    def test_all_seeds_complete_proceeds_to_threshold_eval(self) -> None:
+        """Happy path: all 5 seeds with all 6 metrics → thresholds eval."""
+        cohort = H.COHORTS["optum_initiation_default"]
+        seed_results = [_seed_result(s) for s in H.G2_SEEDS]
+        manifest = H.build_manifest(
+            cohort=cohort,
+            seed_results=seed_results,
+            experiment_commit_sha="abc",
+        )
+        assert manifest.seed_completeness["all_seeds_complete"] is True
+        assert len(manifest.thresholds) == 3
+
+    def test_seed_completeness_diagnostic_helper(self) -> None:
+        """The diagnostic helper returns the expected shape."""
+        seed_results = [_seed_result(s) for s in H.G2_SEEDS]
+        comp = H._seed_completeness_diagnostic(seed_results)
+        assert comp["all_seeds_complete"] is True
+        assert comp["observed_seeds"] == list(H.G2_SEEDS)
+        assert comp["missing_seeds"] == []
+        assert comp["incomplete_seeds"] == []
+        assert len(comp["per_seed_diagnostic"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# LOW-11 — ECE method metadata in manifest
+# ---------------------------------------------------------------------------
+
+
+class TestEceMethodMetadata:
+    """The manifest must record HOW ECE was computed (helper, bin
+    count, binning strategy) so a future helper change is audit-visible."""
+
+    def test_manifest_has_ece_method_metadata(self) -> None:
+        cohort = H.COHORTS["optum_initiation_default"]
+        seed_results = [_seed_result(s) for s in H.G2_SEEDS]
+        manifest = H.build_manifest(
+            cohort=cohort,
+            seed_results=seed_results,
+            experiment_commit_sha="abc",
+        )
+        meta = manifest.ece_method_metadata
+        assert (
+            meta["helper_module"]
+            == "src.agents.ml_foundation.model_trainer.nodes.advanced_validation"
+        )
+        assert meta["helper_function"] == "compute_calibration_analysis"
+        assert meta["n_bins"] == H.G2_ECE_BINS
+        assert meta["binning_strategy"] == "equal-width"
+
+    def test_ece_method_metadata_serializable(self) -> None:
+        cohort = H.COHORTS["optum_initiation_default"]
+        seed_results = [_seed_result(s) for s in H.G2_SEEDS]
+        manifest = H.build_manifest(
+            cohort=cohort,
+            seed_results=seed_results,
+            experiment_commit_sha="abc",
+        )
+        # JSON round-trip catches non-stdlib types.
+        parsed = json.loads(json.dumps(manifest.to_dict()))
+        assert "ece_method_metadata" in parsed
+        assert parsed["ece_method_metadata"]["n_bins"] == H.G2_ECE_BINS
+
+
+# ---------------------------------------------------------------------------
 # _build_features_and_target — feature/target extraction
 # ---------------------------------------------------------------------------
 

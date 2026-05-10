@@ -154,28 +154,45 @@ G2_ECE_BINS: int = 10
 
 @dataclass(frozen=True)
 class CohortSpec:
-    """Cohort identity per pre-spec §2."""
+    """Cohort identity per pre-spec §2.
+
+    HIGH-7 fix: ``expected_n_exact`` pins the EXACT observed patient
+    count for each cohort. The harness asserts the loaded cohort's
+    n equals this value; mismatch is a hard refusal regardless of
+    which label was passed. Both cohorts point at the same directory
+    (different converter regimes produce different parquets there),
+    so a label-only refusal can be bypassed by writing the relaxed
+    n=1697 parquet under the default label.
+    """
 
     label: str
     data_dir: str
     target: str
-    expected_n_lower: int
+    expected_n_exact: int
     data_snooped: bool
 
 
 COHORTS: Mapping[str, CohortSpec] = {
+    # HIGH-7: n=1294 is the load-bearing default-window cohort
+    # (PRE=365/POST=180). Mismatch on this exact value indicates the
+    # converter ran with non-default parameters or the cohort was
+    # rebuilt — either way, the data is no longer the cohort the
+    # pre-spec memo locked.
     "optum_initiation_default": CohortSpec(
         label="optum_initiation_default",
         data_dir="data/rwd/optum/initiation",
         target="treatment_initiated",
-        expected_n_lower=900,
+        expected_n_exact=1294,
         data_snooped=False,
     ),
+    # HIGH-7: n=1697 is the relaxed-window cohort (PRE=180/POST=90),
+    # marked data_snooped=true. Available behind --allow-data-snooped
+    # for diagnostic comparison only.
     "optum_initiation_relaxed": CohortSpec(
         label="optum_initiation_relaxed",
         data_dir="data/rwd/optum/initiation",
         target="treatment_initiated",
-        expected_n_lower=1300,
+        expected_n_exact=1697,
         data_snooped=True,
     ),
 }
@@ -991,6 +1008,73 @@ def evaluate_t3(
     )
 
 
+# LOW-11 — ECE method metadata for the manifest. Records the helper
+# path, bin count, and binning strategy so a future change to
+# compute_calibration_analysis is detectable in the audit trail.
+ECE_METHOD_METADATA: Dict[str, Any] = {
+    "helper_module": "src.agents.ml_foundation.model_trainer.nodes.advanced_validation",
+    "helper_function": "compute_calibration_analysis",
+    "n_bins": G2_ECE_BINS,
+    "binning_strategy": "equal-width",
+    "notes": (
+        "ECE = sum(|empirical_freq - mean_pred_prob|) over equal-width bins "
+        "of predicted probability. Helper version is captured by the experiment "
+        "commit SHA in the manifest's experiment_commit_sha field."
+    ),
+}
+
+
+def _seed_completeness_diagnostic(
+    seed_results: Sequence[SeedResult],
+    *,
+    expected_seeds: Sequence[int] = G2_SEEDS,
+) -> Dict[str, Any]:
+    """HIGH-8 fix: build the diagnostic record + pass/fail flag for
+    the all-seeds-required gate.
+
+    Returns a dict with:
+      * ``all_seeds_complete``: bool — True iff every expected seed
+        appears AND has ``has_complete_metrics() == True``.
+      * ``expected_seeds``: list[int]
+      * ``observed_seeds``: list[int]
+      * ``missing_seeds``: list[int]
+      * ``incomplete_seeds``: list[int]
+      * ``per_seed_diagnostic``: list[dict]
+    """
+    expected_set = set(expected_seeds)
+    observed_seeds = [r.seed for r in seed_results]
+    observed_set = set(observed_seeds)
+    missing_seeds = sorted(expected_set - observed_set)
+    incomplete_seeds: List[int] = []
+    per_seed_diagnostic: List[Dict[str, Any]] = []
+    for r in seed_results:
+        complete = r.has_complete_metrics()
+        if not complete:
+            incomplete_seeds.append(r.seed)
+        per_seed_diagnostic.append(
+            {
+                "seed": r.seed,
+                "complete": complete,
+                "error": r.error,
+                "has_baseline_auc": r.baseline_auc is not None,
+                "has_hblp_auc": r.hblp_auc is not None,
+                "has_baseline_ece": r.baseline_ece is not None,
+                "has_hblp_ece": r.hblp_ece is not None,
+                "has_baseline_cv": r.baseline_cv_stability is not None,
+                "has_hblp_cv": r.hblp_cv_stability is not None,
+            }
+        )
+    all_complete = not missing_seeds and not incomplete_seeds and observed_set == expected_set
+    return {
+        "all_seeds_complete": all_complete,
+        "expected_seeds": list(expected_seeds),
+        "observed_seeds": observed_seeds,
+        "missing_seeds": missing_seeds,
+        "incomplete_seeds": sorted(incomplete_seeds),
+        "per_seed_diagnostic": per_seed_diagnostic,
+    }
+
+
 @dataclass
 class ExperimentManifest:
     """Top-level manifest emitted by the harness."""
@@ -1000,6 +1084,8 @@ class ExperimentManifest:
     cohort_data_dir: str
     cohort_target: str
     cohort_data_snooped: bool
+    cohort_expected_n_exact: int = 0
+    cohort_observed_n: Optional[int] = None
     dataset_hashes: Dict[str, str] = field(default_factory=dict)
     seeds: List[int] = field(default_factory=list)
     seed_results: List[Dict[str, Any]] = field(default_factory=list)
@@ -1007,6 +1093,8 @@ class ExperimentManifest:
     thresholds: List[Dict[str, Any]] = field(default_factory=list)
     g2_passes_pre_spec: bool = False
     lifecycle_state: str = LIFECYCLE_STATE_G2.value
+    ece_method_metadata: Dict[str, Any] = field(default_factory=lambda: dict(ECE_METHOD_METADATA))
+    seed_completeness: Dict[str, Any] = field(default_factory=dict)
     notes: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1016,6 +1104,8 @@ class ExperimentManifest:
             "cohort_data_dir": self.cohort_data_dir,
             "cohort_target": self.cohort_target,
             "cohort_data_snooped": self.cohort_data_snooped,
+            "cohort_expected_n_exact": self.cohort_expected_n_exact,
+            "cohort_observed_n": self.cohort_observed_n,
             "dataset_hashes": self.dataset_hashes,
             "seeds": self.seeds,
             "seed_results": self.seed_results,
@@ -1023,6 +1113,8 @@ class ExperimentManifest:
             "thresholds": self.thresholds,
             "g2_passes_pre_spec": self.g2_passes_pre_spec,
             "lifecycle_state": self.lifecycle_state,
+            "ece_method_metadata": self.ece_method_metadata,
+            "seed_completeness": self.seed_completeness,
             "notes": self.notes,
         }
 
@@ -1033,9 +1125,55 @@ def build_manifest(
     seed_results: Sequence[SeedResult],
     experiment_commit_sha: str,
     dataset_hashes: Optional[Mapping[str, str]] = None,
+    cohort_observed_n: Optional[int] = None,
     notes: str = "",
 ) -> ExperimentManifest:
-    """Aggregate seed results, evaluate T1/T2/T3, build the manifest."""
+    """Aggregate seed results, evaluate T1/T2/T3, build the manifest.
+
+    HIGH-8 fix: ALL five seeds must have ``error is None`` AND all six
+    metrics finite for threshold evaluation to proceed. Otherwise the
+    threshold list records a hard failure with a diagnostic and
+    ``g2_passes_pre_spec=False``.
+    """
+    completeness = _seed_completeness_diagnostic(seed_results)
+
+    if not completeness["all_seeds_complete"]:
+        diag = (
+            "HIGH-8 hard fail: G2 requires ALL "
+            f"{len(G2_SEEDS)} seeds × 6 metrics finite before threshold eval. "
+            f"missing_seeds={completeness['missing_seeds']}, "
+            f"incomplete_seeds={completeness['incomplete_seeds']}"
+        )
+        # Surface the failure as a non-passing manifest. Threshold list
+        # is empty (no evaluation performed). Aggregate captures
+        # whatever values are present for diagnostic only.
+        return ExperimentManifest(
+            experiment_commit_sha=experiment_commit_sha,
+            cohort_label=cohort.label,
+            cohort_data_dir=cohort.data_dir,
+            cohort_target=cohort.target,
+            cohort_data_snooped=cohort.data_snooped,
+            cohort_expected_n_exact=cohort.expected_n_exact,
+            cohort_observed_n=cohort_observed_n,
+            dataset_hashes=dict(dataset_hashes or {}),
+            seeds=list(G2_SEEDS),
+            seed_results=[r.to_dict() for r in seed_results],
+            aggregate={
+                "baseline_auc_mean": _seed_mean([r.baseline_auc for r in seed_results]),
+                "hblp_auc_mean": _seed_mean([r.hblp_auc for r in seed_results]),
+                "baseline_ece_mean": _seed_mean([r.baseline_ece for r in seed_results]),
+                "hblp_ece_mean": _seed_mean([r.hblp_ece for r in seed_results]),
+                "baseline_cv_stability_mean": _seed_mean(
+                    [r.baseline_cv_stability for r in seed_results]
+                ),
+                "hblp_cv_stability_mean": _seed_mean([r.hblp_cv_stability for r in seed_results]),
+            },
+            thresholds=[],
+            g2_passes_pre_spec=False,
+            seed_completeness=completeness,
+            notes=(notes + " | " if notes else "") + diag,
+        )
+
     baseline_aucs = [r.baseline_auc for r in seed_results]
     hblp_aucs = [r.hblp_auc for r in seed_results]
     baseline_eces = [r.baseline_ece for r in seed_results]
@@ -1064,12 +1202,15 @@ def build_manifest(
         cohort_data_dir=cohort.data_dir,
         cohort_target=cohort.target,
         cohort_data_snooped=cohort.data_snooped,
+        cohort_expected_n_exact=cohort.expected_n_exact,
+        cohort_observed_n=cohort_observed_n,
         dataset_hashes=dict(dataset_hashes or {}),
         seeds=list(G2_SEEDS),
         seed_results=[r.to_dict() for r in seed_results],
         aggregate=aggregate,
         thresholds=[t1.to_dict(), t2.to_dict(), t3.to_dict()],
         g2_passes_pre_spec=g2_passes,
+        seed_completeness=completeness,
         notes=notes,
     )
 
@@ -1152,6 +1293,8 @@ def run_experiment(
             cohort_data_dir=cohort.data_dir,
             cohort_target=cohort.target,
             cohort_data_snooped=cohort.data_snooped,
+            cohort_expected_n_exact=cohort.expected_n_exact,
+            cohort_observed_n=None,
             dataset_hashes={},
             seeds=list(seeds or G2_SEEDS),
             seed_results=[],
@@ -1162,6 +1305,26 @@ def run_experiment(
         )
 
     df = _load_patient_journeys(cohort_dir)
+
+    # HIGH-7 fix — cohort identity enforcement: assert observed n
+    # equals the cohort spec's expected_n_exact. The two cohorts
+    # (default n=1294, relaxed n=1697) live in the same data_dir; the
+    # converter regime determines which one's parquet is on disk. A
+    # label-only refusal can be bypassed by writing the relaxed
+    # n=1697 parquet under the default label, so we verify the actual
+    # patient count loaded from disk.
+    observed_n = int(len(df))
+    if observed_n != cohort.expected_n_exact:
+        raise ValueError(
+            f"HIGH-7 cohort identity mismatch: "
+            f"cohort_label={cohort.label!r} declares "
+            f"expected_n_exact={cohort.expected_n_exact}, but the loaded "
+            f"patient_journeys frame has {observed_n} rows. "
+            f"Refusing to run with potentially-snooped data — verify the "
+            f"converter regime that produced {cohort_dir} matches the "
+            f"cohort label."
+        )
+
     X, y = _build_features_and_target(df, cohort.target)
 
     seeds_to_run = tuple(seeds) if seeds is not None else G2_SEEDS
@@ -1170,6 +1333,7 @@ def run_experiment(
     return build_manifest(
         cohort=cohort,
         seed_results=seed_results,
+        cohort_observed_n=observed_n,
         experiment_commit_sha=_resolve_head_sha(),
         dataset_hashes=_hash_artifacts(cohort, project_root=project_root),
     )
