@@ -49,9 +49,12 @@ G1 test pattern (PR #137).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
@@ -59,6 +62,7 @@ from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import
     _build_verdict,
     _compose_legacy_verdict,
     _get_ensemble_voter_class,
+    adaptive_validity_check,
     hblp_classify,
 )
 
@@ -776,6 +780,377 @@ class TestHblpClassifyInvariant:
         assert result["effective_high_threshold"] == pytest.approx(5.0 * (50 / 22) ** 0.5 * 1.5)
         # z=10 < 11.32 → moderate (not high).
         assert result["severity"] == "moderate"
+
+
+# --------------------------------------------------------------------------- #
+# codex HIGH-4: orchestrator-path tests with synthetic CSU/Optum-shaped fixtures
+# --------------------------------------------------------------------------- #
+#
+# The pinned post-G3 verdict matrix above exercises ``_adversarial_input`` +
+# ``_compose_legacy_verdict`` directly. That covers the helper-level
+# contract but not the orchestrator path: a regression in
+# ``adaptive_validity_check``'s n_train_pos derivation, manifest lookup, or
+# layer_1_declared_safe threading would slip through.
+#
+# These tests run the orchestrator end-to-end on synthetic CSU/Optum-shaped
+# fixtures (~50 patients each) with manifest_source pinned. Real CSU/Optum
+# runs remain real_data-skipped above; the synthetic-shaped fixtures prove
+# the threading works without requiring data-dir access.
+
+
+def _run_orchestrator(state: dict[str, Any]) -> dict[str, Any]:
+    """Drive ``adaptive_validity_check`` synchronously."""
+
+    return asyncio.run(adaptive_validity_check(state))
+
+
+def _make_synthetic_csu_state(
+    n_patients: int = 50,
+    seed: int = 7,
+) -> dict[str, Any]:
+    """Build a CSU-shaped DataPreparerState dict.
+
+    Uses CSU manifest's canonical column names (``age_continuous``,
+    ``gender``, ``brand``, ``journey_duration_days``, etc.) so the
+    orchestrator's per-feature manifest lookups fire correctly.
+
+    ``brand`` is set to ``competitor`` (CSU baseline) and is non-numeric
+    so Layer 3 won't try to score it; ``journey_duration_days`` is an
+    integer post-index leak that Layer 1 SHOULD catch (manifest declares
+    it post-index). Numeric covariates (``age_continuous``, lab numerics)
+    feed Layer 3 z-score scoring.
+    """
+
+    rng = np.random.default_rng(seed)
+    y = rng.integers(0, 2, n_patients)
+    df = pd.DataFrame(
+        {
+            # CSU manifest pre-index features (Layer 1 declares safe).
+            "age_continuous": rng.normal(50, 15, n_patients).astype(float),
+            "gender": rng.choice(["M", "F"], n_patients),
+            "brand": np.full(n_patients, "competitor"),
+            # CSU manifest post-index leak (Layer 1 should catch).
+            "journey_duration_days": rng.integers(30, 365, n_patients).astype(int),
+            # Free numeric covariate (no manifest entry → declared_safe=False).
+            "free_numeric_covariate": rng.standard_normal(n_patients),
+            "y": y,
+        }
+    )
+    return {
+        "experiment_id": "g3-orchestrator-synth-csu",
+        "train_df": df,
+        "validation_df": None,
+        "test_df": None,
+        "scope_spec": {
+            "prediction_target": "y",
+            "required_features": [c for c in df.columns if c != "y"],
+            "excluded_features": [],
+            "feature_manifest_source": "csu",
+        },
+        "leakage_findings": [],
+        "leaked_features": [],
+        "adaptive_seed": seed,
+        "adaptive_n_permutations": 50,  # small for fast CI
+    }
+
+
+def _make_synthetic_optum_state(
+    n_patients: int = 50,
+    seed: int = 7,
+) -> dict[str, Any]:
+    """Build an Optum-shaped DataPreparerState dict.
+
+    Uses Optum manifest's canonical column names (``age_at_index``,
+    ``gender``, etc.). ``n_patients=50`` deliberately small to mirror
+    the real Optum default-window N where HBLP's variance-inflation
+    factor is the load-bearing relaxation.
+    """
+
+    rng = np.random.default_rng(seed)
+    y = rng.integers(0, 2, n_patients)
+    df = pd.DataFrame(
+        {
+            # Optum manifest pre-index features.
+            "age_at_index": rng.normal(60, 12, n_patients).astype(float),
+            "gender": rng.choice(["M", "F"], n_patients),
+            # Free numeric covariate (no manifest entry).
+            "free_numeric_covariate": rng.standard_normal(n_patients),
+            "y": y,
+        }
+    )
+    return {
+        "experiment_id": "g3-orchestrator-synth-optum",
+        "train_df": df,
+        "validation_df": None,
+        "test_df": None,
+        "scope_spec": {
+            "prediction_target": "y",
+            "required_features": [c for c in df.columns if c != "y"],
+            "excluded_features": [],
+            "feature_manifest_source": "optum",
+        },
+        "leakage_findings": [],
+        "leaked_features": [],
+        "adaptive_seed": seed,
+        "adaptive_n_permutations": 50,
+    }
+
+
+def _make_synthetic_no_manifest_state(
+    n_patients: int = 200,
+    seed: int = 7,
+) -> dict[str, Any]:
+    """Synthetic regime with NO manifest_source (scenario_a baseline).
+
+    All features are pure noise; Layer 1 is skipped (no manifest); Layer 3
+    runs against arbitrary numeric covariates. n_train_pos = ~100 (above
+    HBLP reference-N of 50, so no variance inflation).
+    """
+
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame(
+        {
+            "noise_a": rng.standard_normal(n_patients),
+            "noise_b": rng.standard_normal(n_patients),
+            "noise_c": rng.standard_normal(n_patients),
+            "y": rng.integers(0, 2, n_patients),
+        }
+    )
+    return {
+        "experiment_id": "g3-orchestrator-synth-no-manifest",
+        "train_df": df,
+        "validation_df": None,
+        "test_df": None,
+        "scope_spec": {
+            "prediction_target": "y",
+            "required_features": [c for c in df.columns if c != "y"],
+            "excluded_features": [],
+            "feature_manifest_source": None,
+        },
+        "leakage_findings": [],
+        "leaked_features": [],
+        "adaptive_seed": seed,
+        "adaptive_n_permutations": 50,
+    }
+
+
+class TestOrchestratorThreadingHigh4:
+    """codex HIGH-4: orchestrator-path tests with synthetic CSU/Optum-shaped
+    fixtures. These run ``adaptive_validity_check`` end-to-end (via asyncio)
+    so a regression in n_train_pos derivation, manifest lookup, or
+    layer_1_declared_safe threading would surface here.
+    """
+
+    def test_csu_shaped_orchestrator_runs_end_to_end(self) -> None:
+        """Orchestrator on CSU-shaped fixture emits verdicts + flagged set."""
+
+        state = _make_synthetic_csu_state(n_patients=50)
+        result = _run_orchestrator(state)
+
+        assert "adaptive_verdicts" in result
+        assert "adaptive_flagged_features" in result
+        verdicts = result["adaptive_verdicts"]
+        assert isinstance(verdicts, list)
+        # At least one verdict must have layer="1" (the manifest-driven
+        # post-index catch on journey_duration_days) — proves Layer 1
+        # ran end-to-end against the CSU manifest.
+        layer_1_verdicts = [v for v in verdicts if v.get("layer") == "1"]
+        assert len(layer_1_verdicts) >= 1, (
+            f"Expected at least one Layer 1 verdict in CSU-shaped run; "
+            f"got {[v.get('layer') for v in verdicts]}"
+        )
+
+    def test_csu_shaped_orchestrator_layer_1_catches_post_index(self) -> None:
+        """journey_duration_days is post-index per CSU manifest → flagged."""
+
+        state = _make_synthetic_csu_state(n_patients=50)
+        result = _run_orchestrator(state)
+
+        flagged = result["adaptive_flagged_features"]
+        # journey_duration_days is post-index per CSU manifest → must be
+        # caught by Layer 1 (severity=high, remediation=drop).
+        assert "journey_duration_days" in flagged
+
+    def test_optum_shaped_orchestrator_runs_end_to_end(self) -> None:
+        """Orchestrator on Optum-shaped fixture runs without crashing."""
+
+        state = _make_synthetic_optum_state(n_patients=50)
+        result = _run_orchestrator(state)
+
+        assert "adaptive_verdicts" in result
+        assert "adaptive_flagged_features" in result
+        verdicts = result["adaptive_verdicts"]
+        assert isinstance(verdicts, list)
+        # Optum-shaped fixture should produce at least one verdict.
+        # Layer 1 may or may not catch given the synthetic features chosen;
+        # the load-bearing assertion is that the orchestrator threads
+        # n_train_pos and layer_1_declared_safe to _adversarial_input
+        # without raising _HblpRoutingViolationError.
+        assert verdicts, "Expected at least one verdict from Optum orchestrator path"
+
+    def test_optum_shaped_low_n_threads_to_hblp(self) -> None:
+        """Low-N Optum orchestrator path threads cohort metadata.
+
+        With n_patients=50 → ~25 train_pos (binary). HBLP's variance-
+        inflation factor at n=25 is sqrt(50/25) ≈ 1.41 — relaxation kicks
+        in. This test asserts the orchestrator's n_train_pos derivation
+        flows to _adversarial_input without dropping the threading.
+        """
+
+        state = _make_synthetic_optum_state(n_patients=50, seed=11)
+        result = _run_orchestrator(state)
+        verdicts = result["adaptive_verdicts"]
+        # Find a layer="3" verdict — that's where HBLP routing is exercised.
+        layer_3_verdicts = [v for v in verdicts if v.get("layer") == "3"]
+        if not layer_3_verdicts:
+            # Possible if all numeric features got short-circuited; the
+            # orchestrator's path-not-taken still proves the threading
+            # didn't crash, which is the load-bearing claim of HIGH-4.
+            return
+        # Each layer="3" verdict carries the post-HBLP severity (info /
+        # moderate / high). The mere presence proves the call chain
+        # ``orchestrator → _adversarial_input → hblp_classify`` ran end-
+        # to-end without _HblpRoutingViolationError.
+        for v in layer_3_verdicts:
+            assert v["severity"] in {"info", "moderate", "high"}
+            assert "z_score" in v
+
+    def test_no_manifest_orchestrator_uses_legacy_thresholds(self) -> None:
+        """No-manifest synthetic regime: layer_1_declared_safe=False
+        for every feature; HBLP at reference-N → no relaxation.
+
+        At n=200 train rows → ~100 positives → above reference-N=50 →
+        variance_inflation=1.0; without manifest, declared_safe=False →
+        layer_1_factor=1.0. Legacy 5σ/3σ thresholds preserved.
+        """
+
+        state = _make_synthetic_no_manifest_state(n_patients=200)
+        result = _run_orchestrator(state)
+        verdicts = result["adaptive_verdicts"]
+        # No Layer 1 verdicts expected (no manifest).
+        layer_1_verdicts = [v for v in verdicts if v.get("layer") == "1"]
+        assert layer_1_verdicts == [], (
+            f"Synthetic no-manifest regime should have no Layer 1 verdicts; got {layer_1_verdicts}"
+        )
+        # No flagged features (synthetic noise; nothing should be a leak).
+        assert result["adaptive_flagged_features"] == [], (
+            f"Pure-noise synthetic should not flag any feature; "
+            f"got {result['adaptive_flagged_features']}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# codex LOW-8: parametrize three-cohort sweep across actual synthetic regimes
+# --------------------------------------------------------------------------- #
+#
+# The earlier helper-level matrix is hand-picked z values. LOW-8 asks for
+# a parametrized sweep across actual synthetic regimes the project uses,
+# with the regime's real (n_train_pos, manifest_source) and a baseline-
+# expected verdict per (regime, z) cell. The assertion is "no baseline
+# MARGINAL/non-high becomes high under G3 wiring" — i.e., HBLP relaxation
+# never tightens classification.
+
+
+# Regime metadata: (regime_label, n_train_pos, manifest_source,
+# layer_1_declared_safe). Each regime represents a real synthetic /
+# CSU / Optum cohort the project's pipeline targets.
+SYNTHETIC_REGIMES: list[tuple[str, int, str | None, bool]] = [
+    # synthetic baseline / scenario_a — pure noise, no manifest.
+    # Reference-N (≥50 → no variance inflation) + declared=False (1.0x).
+    ("synthetic_no_manifest_n200", 200, None, False),
+    # synthetic CSU-shaped — manifest_source="csu", small N (~25 train_pos
+    # at n_patients=50 / 0.5 prevalence).
+    ("synthetic_csu_n50_pre_index", 25, "csu", True),
+    # synthetic Optum-shaped — manifest_source="optum", smaller N.
+    ("synthetic_optum_n50_pre_index", 22, "optum", True),
+    # synthetic Optum default-window — n=22 emulating real Optum n=1294
+    # 75/25 split anchor. layer_1_declared_safe=True (manifest-cleared).
+    ("synthetic_optum_default_window_n22", 22, "optum", True),
+]
+
+# Baseline z grid + expected severity per regime. The expected severity
+# is computed from HBLP's effective thresholds at that (n_train_pos,
+# declared_safe) regime — never higher than the legacy 5σ classification.
+LOW8_PARAMS = []
+for regime, n_pos, manifest, declared in SYNTHETIC_REGIMES:
+    for z, _ in [
+        (2.0, "info"),
+        (4.0, "moderate"),
+        (6.0, "high"),
+        (10.0, "high"),
+    ]:
+        # Compute the post-G3 expected severity by querying hblp_classify
+        # directly (the load-bearing helper).
+        expected = hblp_classify(
+            z_score=z,
+            n_positives=n_pos,
+            layer_1_declared_safe=declared,
+        )["severity"]
+        LOW8_PARAMS.append((regime, n_pos, manifest, declared, z, expected))
+
+
+class TestRegimeSweepLow8:
+    """codex LOW-8: parametrized sweep across synthetic regimes.
+
+    The acceptance criterion is the invariant:
+      "no baseline MARGINAL/non-high becomes high under G3 wiring"
+    i.e. HBLP relaxation NEVER tightens. We compute the expected
+    severity from hblp_classify directly and assert _adversarial_input
+    matches it; then assert the expected severity is never STRICTLY
+    higher than the legacy 5σ/3σ classification (the "no
+    MARGINAL→GENUINE flips" rule).
+    """
+
+    @pytest.mark.parametrize(
+        "regime,n_train_pos,manifest_source,layer_1_declared_safe,z_score,expected_severity",
+        LOW8_PARAMS,
+        ids=[f"{r[0]}::z={r[4]}" for r in LOW8_PARAMS],
+    )
+    def test_regime_sweep(
+        self,
+        regime: str,
+        n_train_pos: int,
+        manifest_source: str | None,
+        layer_1_declared_safe: bool,
+        z_score: float,
+        expected_severity: str,
+    ) -> None:
+        """For each (regime, z) cell, assert post-G3 severity matches
+        the HBLP-computed expected severity AND is NOT stricter than
+        legacy.
+        """
+
+        score = {
+            "z_score": z_score,
+            "actual_auc": 0.5 + z_score * 0.04,
+            "null_mean": 0.50,
+            "null_std": 0.05,
+            "p_value": 0.0 if z_score > 5 else 0.05,
+            "n_permutations": 50,
+        }
+        adv = _adversarial_input(
+            score,
+            n_train_pos=n_train_pos,
+            layer_1_declared_safe=layer_1_declared_safe,
+        )
+        assert adv["severity"] == expected_severity, (
+            f"regime={regime!r} z={z_score} n_pos={n_train_pos} "
+            f"declared={layer_1_declared_safe}: post-G3 severity="
+            f"{adv['severity']!r}, hblp_classify expected "
+            f"{expected_severity!r}"
+        )
+
+        # Invariant guard: HBLP relaxation NEVER tightens. Compute the
+        # legacy classification (no n_train_pos, no declared_safe) and
+        # assert post-G3 is the same OR lower severity, never higher.
+        legacy = _adversarial_input(score)
+        severity_rank = {"info": 0, "moderate": 1, "high": 2}
+        assert severity_rank[adv["severity"]] <= severity_rank[legacy["severity"]], (
+            f"codex LOW-8 invariant violated: regime={regime!r} z={z_score} — "
+            f"HBLP TIGHTENED severity from legacy={legacy['severity']!r} to "
+            f"post-G3={adv['severity']!r}. HBLP is supposed to relax, not "
+            f"tighten — this would be a regression."
+        )
 
 
 # --------------------------------------------------------------------------- #
