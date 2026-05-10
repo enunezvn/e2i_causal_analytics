@@ -434,41 +434,229 @@ def check_signature_present(doc_text: str) -> CheckResult:
     )
 
 
+def _extract_pgp_armor_block(doc_text: str) -> Optional[str]:
+    """Return the first complete PGP armor block from doc_text, or None.
+
+    The block is matched literally between ``-----BEGIN PGP SIGNATURE-----``
+    and ``-----END PGP SIGNATURE-----``. We use a non-greedy match so multi-
+    block documents return only the first block. Returns the entire armored
+    string (including BEGIN/END markers) so it can be piped to ``gpg``.
+    """
+
+    pattern = re.compile(
+        r"-----BEGIN PGP SIGNATURE-----.*?-----END PGP SIGNATURE-----",
+        re.DOTALL,
+    )
+    match = pattern.search(doc_text)
+    return match.group(0) if match else None
+
+
+def _extract_sigstore_json_block(doc_text: str) -> Optional[str]:
+    """Return the first sigstore JSON bundle (between ```json fences), or None."""
+
+    pattern = re.compile(
+        r"```json\s*(?P<body>\{[\s\S]*?\"signatures\"[\s\S]*?\})\s*```",
+        re.DOTALL,
+    )
+    match = pattern.search(doc_text)
+    return match.group("body") if match else None
+
+
+def _verify_pgp_signature(
+    doc_path: Path,
+    armor_block: str,
+    keyring_dir: Optional[Path] = None,
+) -> tuple[bool, str]:
+    """Run ``gpg --verify`` against the armored block and the doc payload.
+
+    Returns ``(ok, detail)``. ``ok`` is True iff gpg returns 0. The detail
+    string contains gpg's stderr (which is what gpg writes verification
+    output to).
+
+    The "doc payload" is the body of the document up to (but not including)
+    the ``## Cryptographic signature`` heading — see
+    ``docs/results/optum_methodology_signoff_template.md`` §Cryptographic
+    signature.
+    """
+
+    if shutil.which("gpg") is None:
+        return False, "gpg binary not found on PATH"
+
+    doc_text = doc_path.read_text(encoding="utf-8")
+    payload_marker = "## Cryptographic signature"
+    if payload_marker in doc_text:
+        payload = doc_text.split(payload_marker, 1)[0]
+    else:
+        payload = doc_text
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        sig_path = tmpdir_path / "sig.asc"
+        payload_path = tmpdir_path / "payload.txt"
+        sig_path.write_text(armor_block, encoding="utf-8")
+        payload_path.write_text(payload, encoding="utf-8")
+
+        cmd = ["gpg", "--batch", "--status-fd=1"]
+        if keyring_dir is not None:
+            cmd.extend(["--homedir", str(keyring_dir)])
+        cmd.extend(["--verify", str(sig_path), str(payload_path)])
+
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except FileNotFoundError:
+            return False, "gpg binary not found on PATH"
+        except subprocess.TimeoutExpired:
+            return False, "gpg verification timed out"
+
+        ok = completed.returncode == 0
+        # gpg writes verification output to stderr; status messages to stdout.
+        combined = (completed.stderr or "") + (completed.stdout or "")
+        return ok, combined.strip() or f"gpg returncode={completed.returncode}"
+
+
+def _verify_sigstore_bundle(bundle_json: str) -> tuple[bool, str]:
+    """Run ``cosign verify-blob`` (or ``rekor-cli verify``) against the bundle.
+
+    Both tools are stub-best-effort: the bundle alone is not enough — cosign
+    needs ``--certificate-identity`` and ``--certificate-oidc-issuer``, and
+    rekor-cli needs a separate artifact. We accept the bundle, write it to a
+    temp file, and ask cosign to verify the bundle's internal signatures
+    via ``cosign verify-blob --bundle <path> --insecure-ignore-tlog``.
+    Failure is fatal; absence of any tool is fatal under require_signature.
+    """
+
+    has_cosign = shutil.which("cosign") is not None
+    has_rekor = shutil.which("rekor-cli") is not None
+    if not (has_cosign or has_rekor):
+        return False, "neither cosign nor rekor-cli found on PATH"
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bundle_path = Path(tmpdir) / "bundle.sigstore"
+        bundle_path.write_text(bundle_json, encoding="utf-8")
+        if has_cosign:
+            cmd = [
+                "cosign",
+                "verify-blob",
+                "--bundle",
+                str(bundle_path),
+                "--insecure-ignore-tlog",
+                str(bundle_path),
+            ]
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                return False, f"cosign invocation failed: {exc}"
+            ok = completed.returncode == 0
+            combined = (completed.stderr or "") + (completed.stdout or "")
+            return ok, combined.strip() or f"cosign returncode={completed.returncode}"
+        # rekor-cli verify needs the original artifact + a UUID; without those
+        # we can only report best-effort presence (matches its limitation).
+        return False, "rekor-cli requires --uuid + artifact; bundle alone insufficient"
+
+
 def check_signature_verifies(
     doc_path: Path,
     require_signature: bool,
+    keyring_dir: Optional[Path] = None,
 ) -> CheckResult:
-    """Attempt PGP / sigstore verification; non-fatal unless required.
+    """Verify the PGP / sigstore block in the document cryptographically.
 
-    When ``require_signature`` is False (the default), absence of the
-    verification toolchain produces a passing result with a ``detail`` warning;
-    failure of an available verifier is still fatal. When True, missing
-    toolchain is itself fatal.
+    Behaviour:
+
+    * ``require_signature=True`` (the CI path): actual cryptographic
+      verification is performed. Missing toolchain → FAIL. Missing armor /
+      bundle → FAIL. Non-zero verifier exit → FAIL. This is the H1 fix —
+      previously this code path only checked binary existence.
+    * ``require_signature=False`` (the default, used for local-dev /
+      scaffolding): no cryptographic verification is attempted; the function
+      records a WARN and returns PASS, preserving the prior contract for
+      callers that want to defer verification (e.g. tests that compose
+      sign-off docs with placeholder signatures).
+
+    The PGP code path verifies the armored block against the document body
+    up to (but not including) the ``## Cryptographic signature`` heading,
+    matching the convention in
+    ``docs/results/optum_methodology_signoff_template.md``.
+
+    When a sigstore bundle is present and cosign is available we shell out
+    to ``cosign verify-blob``.
     """
 
-    has_gpg = shutil.which("gpg") is not None
-    has_sigstore = shutil.which("cosign") is not None or shutil.which("rekor-cli") is not None
-    if not (has_gpg or has_sigstore):
-        if require_signature:
-            return CheckResult(
-                "signature_verifies",
-                False,
-                "no signature-verification tool found (gpg, cosign, rekor-cli) and --require-signature passed",
-            )
+    if not require_signature:
+        # H1: in advisory mode (no --require-signature), we do not silently
+        # claim verification succeeded just because gpg is on PATH. We
+        # explicitly note that no crypto check ran. Callers that want
+        # actual verification MUST pass --require-signature.
         return CheckResult(
             "signature_verifies",
             True,
-            "WARN: no signature-verification tool found; skipping verification",
+            "WARN: --require-signature not set; cryptographic verification skipped",
         )
-    # We do NOT attempt actual verification here — it requires the reviewer's
-    # public key on the verifying host, which is host-specific. Real CI will
-    # need to set up the keyring before invoking this script with
-    # --require-signature. For scaffolding purposes we record that the
-    # toolchain is available.
+
+    doc_text = doc_path.read_text(encoding="utf-8")
+    pgp_block = _extract_pgp_armor_block(doc_text)
+    sigstore_block = _extract_sigstore_json_block(doc_text)
+
+    has_gpg = shutil.which("gpg") is not None
+    has_cosign = shutil.which("cosign") is not None
+    has_rekor = shutil.which("rekor-cli") is not None
+    has_any = has_gpg or has_cosign or has_rekor
+
+    if not has_any:
+        return CheckResult(
+            "signature_verifies",
+            False,
+            "no signature-verification tool found (gpg, cosign, rekor-cli) and --require-signature passed",
+        )
+
+    if pgp_block is None and sigstore_block is None:
+        return CheckResult(
+            "signature_verifies",
+            False,
+            "no extractable PGP armor block or sigstore JSON bundle found",
+        )
+
+    if pgp_block is not None and has_gpg:
+        ok, detail = _verify_pgp_signature(doc_path, pgp_block, keyring_dir=keyring_dir)
+        if ok:
+            return CheckResult("signature_verifies", True, f"gpg --verify OK: {detail[:200]}")
+        return CheckResult(
+            "signature_verifies",
+            False,
+            f"gpg --verify FAILED: {detail[:500]}",
+        )
+
+    if sigstore_block is not None and (has_cosign or has_rekor):
+        ok, detail = _verify_sigstore_bundle(sigstore_block)
+        if ok:
+            return CheckResult("signature_verifies", True, f"sigstore verify OK: {detail[:200]}")
+        return CheckResult(
+            "signature_verifies",
+            False,
+            f"sigstore verify FAILED: {detail[:500]}",
+        )
+
+    # We have a verifier available, but it does not match the block kind.
     return CheckResult(
         "signature_verifies",
-        True,
-        f"signature toolchain available (gpg={has_gpg}, sigstore={has_sigstore})",
+        False,
+        f"no matching verifier for block kind (pgp_block={pgp_block is not None}, sigstore_block={sigstore_block is not None}, has_gpg={has_gpg}, has_cosign={has_cosign}, has_rekor={has_rekor})",
     )
 
 
@@ -481,6 +669,7 @@ def check_signoff(
     doc_path: Path,
     repo_root: Path,
     require_signature: bool = False,
+    keyring_dir: Optional[Path] = None,
 ) -> List[CheckResult]:
     """Run all checks against ``doc_path`` and return their results."""
 
@@ -511,7 +700,7 @@ def check_signoff(
     results.append(CheckResult("registry_loaded", True, f"{len(registry)} rows"))
     results.append(check_reviewer_registered(doc_text, registry))
     results.append(check_selection_rule(doc_text, repo_root, registry))
-    results.append(check_signature_verifies(doc_path, require_signature))
+    results.append(check_signature_verifies(doc_path, require_signature, keyring_dir=keyring_dir))
     return results
 
 
@@ -554,8 +743,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-signature",
         action="store_true",
         help=(
-            "Treat absence of a signature-verification toolchain (gpg, "
-            "cosign, rekor-cli) as fatal."
+            "Treat absence of a signature-verification toolchain (gpg, cosign, rekor-cli) as fatal."
+        ),
+    )
+    parser.add_argument(
+        "--keyring-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to a GPG home directory containing the trusted "
+            "public keys for sign-off reviewers. Passed to gpg via "
+            "--homedir. If unset, the system default keyring is used."
         ),
     )
     return parser
@@ -572,7 +770,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: file not found: {doc_path}", file=sys.stderr)
         return 2
 
-    results = check_signoff(doc_path, repo_root, require_signature=args.require_signature)
+    results = check_signoff(
+        doc_path,
+        repo_root,
+        require_signature=args.require_signature,
+        keyring_dir=args.keyring_dir,
+    )
     print(render_report(results))
     return 0 if all(r.ok for r in results) else 1
 

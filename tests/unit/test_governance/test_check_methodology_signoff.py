@@ -452,3 +452,216 @@ def test_script_exit_code_on_template():
     )
     assert completed.returncode != 0
     assert "template" in completed.stdout
+
+
+# --------------------------------------------------------------------------- #
+# H1: signature verification — actual cryptographic verification with fixture
+# GPG key. Tests gated on ``gpg`` being on PATH (skip otherwise — Ubuntu CI
+# images carry it by default but local devboxes may not).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def gpg_keyring(tmp_path: Path) -> Iterator[tuple[Path, str]]:
+    """Generate a throwaway GPG keypair in an isolated GNUPGHOME.
+
+    Yields ``(home_dir, fingerprint)``. Skips the test if gpg is unavailable
+    or key generation fails (e.g. CI image lacks an entropy source).
+    """
+
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not available on PATH")
+
+    home = tmp_path / "gpghome"
+    home.mkdir(mode=0o700)
+
+    batch_input = (
+        "%no-protection\n"
+        "Key-Type: RSA\n"
+        "Key-Length: 2048\n"
+        "Name-Real: Test Reviewer\n"
+        "Name-Email: test@example.com\n"
+        "Expire-Date: 0\n"
+        "%commit\n"
+    )
+
+    import os
+
+    env = os.environ.copy()
+    env["GNUPGHOME"] = str(home)
+    gen = subprocess.run(
+        ["gpg", "--batch", "--gen-key"],
+        input=batch_input,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if gen.returncode != 0:
+        pytest.skip(f"gpg --gen-key failed in test env: {gen.stderr}")
+
+    list_keys = subprocess.run(
+        ["gpg", "--list-keys", "--with-colons", "--keyid-format=long"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    fingerprint = ""
+    for line in list_keys.stdout.splitlines():
+        if line.startswith("fpr:"):
+            fingerprint = line.split(":")[9]
+            break
+    if not fingerprint:
+        pytest.skip("could not extract fingerprint from gpg --list-keys")
+
+    yield home, fingerprint
+
+
+def _make_signed_signoff_doc(
+    payload: str,
+    keyring_dir: Path,
+) -> str:
+    """Sign ``payload`` with the fixture key and embed the armored signature.
+
+    Returns the full doc text: payload + ``## Cryptographic signature`` +
+    armored sig. ``payload`` MUST end with a trailing newline so gpg's
+    canonical-text-mode signing matches what the validator extracts.
+    """
+
+    import os
+
+    env = os.environ.copy()
+    env["GNUPGHOME"] = str(keyring_dir)
+
+    sign = subprocess.run(
+        ["gpg", "--batch", "--detach-sign", "--armor", "--output", "-"],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if sign.returncode != 0:
+        raise RuntimeError(f"gpg sign failed: {sign.stderr}")
+    armor = sign.stdout
+
+    return payload + "## Cryptographic signature\n\n" + armor
+
+
+def test_signature_verifies_passes_for_valid_pgp(fixture_repo: Path, gpg_keyring: tuple[Path, str]):
+    """A document signed by the fixture key under --require-signature passes."""
+
+    home, _ = gpg_keyring
+    payload = (
+        "# Optum Methodology Sign-off — 2026-05-10\n"
+        "## Reviewer\n- **GitHub handle:** @alice\n"
+        "## Conflict-of-interest declaration\n"
+        "- **CoI document:** docs/governance/coi_declarations/alice_20260510.md\n"
+        "- **CoI declaration commit SHA:** abc1234567890def\n"
+        "## Methodology decision\nApprove.\n"
+    )
+    doc_text = _make_signed_signoff_doc(payload, home)
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    doc_path.write_text(doc_text, encoding="utf-8")
+
+    result = cms.check_signature_verifies(doc_path, require_signature=True, keyring_dir=home)
+    assert result.ok is True, f"unexpected verify failure: {result.detail}"
+
+
+def test_signature_verifies_fails_for_tampered_payload(
+    fixture_repo: Path, gpg_keyring: tuple[Path, str]
+):
+    """A document whose payload is mutated after signing FAILS verification."""
+
+    home, _ = gpg_keyring
+    payload = (
+        "# Optum Methodology Sign-off — 2026-05-10\n"
+        "## Reviewer\n- **GitHub handle:** @alice\n"
+        "## Conflict-of-interest declaration\n"
+        "- **CoI document:** docs/governance/coi_declarations/alice_20260510.md\n"
+        "- **CoI declaration commit SHA:** abc1234567890def\n"
+        "## Methodology decision\nApprove.\n"
+    )
+    doc_text = _make_signed_signoff_doc(payload, home)
+    # Tamper the payload AFTER the signature was generated.
+    tampered = doc_text.replace("Approve.", "REJECT.")
+
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    doc_path.write_text(tampered, encoding="utf-8")
+
+    result = cms.check_signature_verifies(doc_path, require_signature=True, keyring_dir=home)
+    assert result.ok is False
+    assert "FAILED" in result.detail or "BAD" in result.detail.upper()
+
+
+def test_signature_verifies_fails_when_signed_by_wrong_key(
+    fixture_repo: Path, tmp_path: Path, gpg_keyring: tuple[Path, str]
+):
+    """A signature from a key NOT in the keyring fails verification."""
+
+    home, _ = gpg_keyring
+
+    # Create a SECOND, separate keyring with a different key. The doc is
+    # signed by this OTHER key but verified against the FIRST keyring.
+    other_home = tmp_path / "other_gpghome"
+    other_home.mkdir(mode=0o700)
+    import os
+
+    env_other = os.environ.copy()
+    env_other["GNUPGHOME"] = str(other_home)
+    batch = (
+        "%no-protection\n"
+        "Key-Type: RSA\n"
+        "Key-Length: 2048\n"
+        "Name-Real: Other Reviewer\n"
+        "Name-Email: other@example.com\n"
+        "Expire-Date: 0\n"
+        "%commit\n"
+    )
+    gen = subprocess.run(
+        ["gpg", "--batch", "--gen-key"],
+        input=batch,
+        capture_output=True,
+        text=True,
+        env=env_other,
+    )
+    if gen.returncode != 0:
+        pytest.skip(f"second gpg --gen-key failed: {gen.stderr}")
+
+    payload = (
+        "# Optum Methodology Sign-off — 2026-05-10\n"
+        "## Reviewer\n- **GitHub handle:** @alice\n"
+        "## Methodology decision\nApprove.\n"
+    )
+    doc_text = _make_signed_signoff_doc(payload, other_home)
+
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    doc_path.write_text(doc_text, encoding="utf-8")
+
+    # Verify against ``home`` (first keyring) which does NOT contain the
+    # signing key.
+    result = cms.check_signature_verifies(doc_path, require_signature=True, keyring_dir=home)
+    assert result.ok is False
+    assert "FAILED" in result.detail or "no public key" in result.detail.lower()
+
+
+def test_signature_verifies_require_signature_fails_with_no_block(fixture_repo: Path):
+    """No PGP / sigstore block + --require-signature → FAIL even if gpg present."""
+
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not on PATH; require_signature path only meaningful with toolchain")
+
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    doc_path.write_text(
+        "# Doc with no signature block\n## Reviewer\n@alice\n",
+        encoding="utf-8",
+    )
+    result = cms.check_signature_verifies(doc_path, require_signature=True)
+    assert result.ok is False
+
+
+def test_extract_pgp_armor_block_returns_full_block():
+    text = "before\n-----BEGIN PGP SIGNATURE-----\nAAAA\n-----END PGP SIGNATURE-----\nafter\n"
+    block = cms._extract_pgp_armor_block(text)
+    assert block is not None
+    assert block.startswith("-----BEGIN PGP SIGNATURE-----")
+    assert block.endswith("-----END PGP SIGNATURE-----")
+    assert "AAAA" in block
