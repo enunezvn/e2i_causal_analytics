@@ -252,9 +252,9 @@ def extract_commit_sha(doc_text: str) -> Optional[str]:
         r"(?P<sha>[0-9a-fA-F]{7,40})",
         re.IGNORECASE,
     )
-    match = prefix_pattern.search(doc_text)
-    if match is not None:
-        return match.group("sha")
+    prefix_match = prefix_pattern.search(doc_text)
+    if prefix_match is not None:
+        return prefix_match.group("sha")
     return None
 
 
