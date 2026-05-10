@@ -252,27 +252,49 @@ def summarize_recommendations(
 
 
 # ---------------------------------------------------------------------------
-# Coefficient sensitivity (plan §4 T2.4 third bullet) — placeholder docstring.
+# Coefficient sensitivity (plan §4 T2.4 third bullet) — implemented in the
+# sibling module ``coefficient_sensitivity.py`` (Plan v4 Gate G5, 2026-05-10).
 #
-# The third T2.4 audit (does a feature's coefficient flip sign under different
-# imputation?) requires fitting linear models under at least two imputation
-# strategies and comparing per-feature signs. That depends on a trained-model
-# artifact and is best invoked AFTER training, not in data_preparer. The
-# model_trainer can call a separate `compute_coefficient_sensitivity` helper
-# (deferred) that:
-#   1. Fits a sklearn LogisticRegression under strategy=mean_imputation.
-#   2. Fits a second under strategy=zero_imputation.
-#   3. Reports per-feature sign-flip count and effect-size variance.
-# This module focuses on the missingness shape (audits 1+2 above); the
-# coefficient sensitivity audit is a separate follow-on PR.
+# The helper takes an (X, y, recommended_strategies) tuple where
+# ``recommended_strategies`` is the dict surfaced by THIS module's
+# ``imputation_audit_recommendations`` field, fits a baseline + imputed
+# LogisticRegression pair, and reports per-feature sign-flip count plus
+# effect-size variance. The G5 spec memo at
+# ``docs/specs/g5_coefficient_sensitivity_prespec_20260510.md`` locks the
+# three pre-specified acceptance thresholds (T1/T2/T3).
+#
+# Callers may either import directly from
+# ``src.agents.ml_foundation.data_preparer.nodes.coefficient_sensitivity``
+# or via the ``__getattr__`` lazy re-export below, which avoids the
+# import-time circular dependency between the two modules.
 # ---------------------------------------------------------------------------
 
 
 __all__ = [
     "compute_imputation_audit",
     "summarize_recommendations",
+    "compute_coefficient_sensitivity",
     "T2_4_RECOMMEND_DROP_ROW_RATE_MAX",
     "T2_4_RECOMMEND_INDICATOR_RATE_MIN",
     "T2_4_RECOMMEND_DROP_COLUMN_RATE_MIN",
     "T2_4_STABILITY_TOLERANCE_DEFAULT",
+    "G5_FLIPS_PER_FEATURE_MAX",
+    "G5_EFFECT_SIZE_CV_MAX",
+    "G5_FRACTION_SIGNIFICANT_FLIPPED_MAX",
+    "G5_SIGNIFICANCE_SIGMA_MULTIPLE",
 ]
+
+
+# End-of-module re-export of the G5 helper + constants. Placed AFTER the
+# ImputationRecommendation type alias is fully bound to avoid a circular
+# import: coefficient_sensitivity imports ImputationRecommendation from
+# this module at its own import time. By the time Python reaches this
+# bottom-of-file import, all of imputation_audit's module-level names
+# (including ImputationRecommendation) are already bound.
+from src.agents.ml_foundation.data_preparer.nodes.coefficient_sensitivity import (  # noqa: E402, I001
+    G5_EFFECT_SIZE_CV_MAX,
+    G5_FLIPS_PER_FEATURE_MAX,
+    G5_FRACTION_SIGNIFICANT_FLIPPED_MAX,
+    G5_SIGNIFICANCE_SIGMA_MULTIPLE,
+    compute_coefficient_sensitivity,
+)
