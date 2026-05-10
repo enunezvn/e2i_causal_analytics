@@ -136,6 +136,23 @@ class MetricsSchema(BaseAgentSchema):
     # Business utility (when scope_spec.cost_matrix is present)
     business_utility: Optional[float] = None
 
+    # Gate N1 (plan v4 §2): regulatory-eligibility audit.
+    #
+    # Append-only audit trail with two list-typed sub-fields:
+    #
+    #   * ``gate_history`` — every gate evaluation (timestamp, gate_name,
+    #     threshold, value, outcome).
+    #   * ``adaptation_history`` — every adaptive threshold relaxation
+    #     (commit_sha, justification_doc, gate_name, before_threshold,
+    #     after_threshold, timestamp). Empty == clean lifecycle.
+    #
+    # The runtime guard at ``model_deployer/regulatory_audit.py`` rejects
+    # ``__setitem__`` so an entry, once landed, cannot be silently rewritten.
+    # The dict shape declared here lets the field flow through the typed
+    # MetricsSchema contract; deployer code wraps reads/writes through
+    # ``RegulatoryEligibilityAudit.from_dict`` / ``.to_dict()``.
+    regulatory_eligibility_audit: Optional[Dict[str, List[Dict[str, Any]]]] = None
+
     @model_validator(mode="after")
     def _check_metrics_subset_for_problem_type(self) -> "MetricsSchema":
         """Soft invariant: a populated MetricsSchema must have at least
