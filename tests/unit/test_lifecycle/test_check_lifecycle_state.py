@@ -481,6 +481,54 @@ class TestScanYamlConfigs:
         findings = scan_yaml_configs(fake_repo)
         assert findings == []
 
+    # ----------------------------------------------------------------------
+    # N2 pass-2 finding H3 PARTIAL: scanner scope is documented as
+    # ``config/`` only. Sibling roots (``conf/``, ``configs/``,
+    # ``settings/``) are intentionally NOT scanned in this iteration —
+    # this codebase canonicalises on ``config/``. The exclusion is
+    # reviewer-flagged for future expansion (one extra ``rglob`` in
+    # ``_candidate_yaml_configs`` + an entry in the workflow ``paths:``
+    # filter would extend coverage).
+    # ----------------------------------------------------------------------
+
+    def test_sibling_conf_root_intentionally_not_scanned(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A gate-shaped YAML living under ``conf/`` is intentionally
+        NOT scanned because the canonical root is ``config/``. This
+        test pins that intentional exclusion so any future refactor
+        that lands a sibling root remembers to also wire the scanner.
+        """
+        sibling = fake_repo / "conf"
+        sibling.mkdir()
+        (sibling / "fake_gate.yaml").write_text(
+            "threshold: 0.7\nbuffer: 0.05\n", encoding="utf-8"
+        )
+        findings = scan_yaml_configs(fake_repo)
+        assert findings == [], (
+            "scanner currently scans only `config/` (recursive); a YAML "
+            "under sibling root `conf/` must be silently skipped in this "
+            "iteration. To add coverage, extend `_candidate_yaml_configs` "
+            "and the workflow `paths:` filter."
+        )
+
+    def test_sibling_configs_root_intentionally_not_scanned(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same exclusion for ``configs/`` and ``settings/``."""
+        for sibling_name in ("configs", "settings"):
+            sibling = fake_repo / sibling_name
+            sibling.mkdir()
+            (sibling / "fake_gate.yaml").write_text(
+                "threshold: 0.7\n", encoding="utf-8"
+            )
+        findings = scan_yaml_configs(fake_repo)
+        assert findings == [], (
+            "scanner must NOT pick up sibling roots configs/ or "
+            "settings/ in this iteration; got "
+            f"{[f.to_dict() for f in findings]}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Acceptance #6: lifecycle-state changes without a signed doc fail.

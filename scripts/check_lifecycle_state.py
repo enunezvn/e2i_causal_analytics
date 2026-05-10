@@ -11,11 +11,20 @@ or denies a promotion. We discover them by:
 
 * explicit registration in ``GATE_RELEVANT_PYTHON_MODULES`` below (the
   authoritative list — adding a new gate requires updating this list); and
-* keyword scan of ``config/`` for files whose top-level keys mention
-  ``gate``, ``threshold``, ``advisory``, ``enforcement``, ``deployer``
-  combined with at least one ``threshold`` or ``cutoff`` value (i.e., a
-  numeric guardrail). Configs with no numeric guardrails are not gates;
-  configs with guardrails MUST declare ``lifecycle_state``.
+* keyword scan of ``config/`` (recursively) for files whose top-level keys
+  mention ``gate``, ``threshold``, ``advisory``, ``enforcement``,
+  ``deployer`` combined with at least one ``threshold`` or ``cutoff``
+  value (i.e., a numeric guardrail). Configs with no numeric guardrails
+  are not gates; configs with guardrails MUST declare ``lifecycle_state``.
+
+**Scope of YAML scan (N2 pass-2 H3 PARTIAL)**: only the canonical
+``config/`` root is scanned. Sibling roots commonly used by other Python
+projects — ``conf/``, ``configs/``, ``settings/`` — are intentionally NOT
+scanned in this iteration. The codebase canonicalises on ``config/``
+(verified by repo audit at PR #132 review time); reviewer flagged this
+scope as a future-expansion opportunity. To add a sibling root, modify
+``_candidate_yaml_configs`` and the workflow's ``paths:`` filter in
+``.github/workflows/lifecycle_state_guard.yml``.
 
 The scanner also detects lifecycle-state CHANGES across git history when
 invoked with ``--check-changes``: any change in a ``LIFECYCLE_STATE_*``
@@ -318,6 +327,19 @@ def _candidate_yaml_configs(repo_root: Path) -> list[Path]:
     (``config/env/prod.yaml``) and other nested gate configs were missed.
     The scanner now uses ``rglob("*.y*ml")`` to walk every YAML in the
     ``config/`` subtree.
+
+    **Scope (intentional / N2 pass-2 H3 PARTIAL)**: only the canonical
+    ``config/`` root is scanned. Sibling roots commonly used by other
+    Python projects — ``conf/``, ``configs/``, ``settings/`` — are
+    intentionally NOT scanned in this iteration. The codebase canonicalises
+    on ``config/`` (verified by repo audit at PR #132 review time); a
+    sibling root cropping up in the future would be a project-wide refactor
+    surfaced loudly enough to also remember to wire this scanner. Reviewer
+    flagged this scope as a future-expansion opportunity; to add a sibling
+    root, edit this function (one extra ``rglob`` per root) and add the
+    sibling to the workflow's ``paths:`` filter in
+    ``.github/workflows/lifecycle_state_guard.yml`` so push/PR events on
+    that root trigger the gate.
     """
     config_dir = repo_root / "config"
     if not config_dir.is_dir():
