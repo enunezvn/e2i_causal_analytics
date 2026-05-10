@@ -269,6 +269,12 @@ class TestMapieWrapperHonestCoverage:
     # Shared coefs across train/test draws — exchangeability is the load-
     # bearing assumption for marginal-coverage, so train and test must be
     # drawn from the SAME logistic process. Generated once at class scope.
+    #
+    # LOW-3 (determinism): _COVERAGE_COEFS is a class attribute evaluated
+    # ONCE at class-body parse time (import/collection), not per test. The
+    # SEED=42 module constant makes it stable regardless of pytest collection
+    # order. np.random.default_rng(SEED) resets the RNG to a fixed state
+    # before drawing, so the result is identical across all runs.
     _COVERAGE_COEFS: np.ndarray = np.random.default_rng(SEED).standard_normal(N_FEATURES)
 
     @classmethod
