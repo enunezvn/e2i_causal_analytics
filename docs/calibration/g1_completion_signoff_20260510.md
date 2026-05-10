@@ -7,7 +7,12 @@ held-out non-inferiority + lineage audit per Plan v4 §2 G1.
 
 **Date:** 2026-05-10
 
-**Branch / commit:** `<COMMIT_SHA_PLACEHOLDER>` on branch `v4-g1-phase-b`.
+**Branch / commit:** `d1af6d11` (initial signoff commit on branch
+`v4-g1-phase-b`; updated SHA recorded in the followup commit that
+edits this `commit:` field). The G3 wiring-guard CI workflow
+(scheduled to land with G3 PR) verifies this SHA is an ancestor
+of the wiring-PR HEAD; until G3, this field is recorded but
+not yet enforced.
 
 > **WARNING:** This signoff is INTERIM. The cryptographic signature
 > requirement is gated on the N3 reviewer registry + CoI infrastructure
