@@ -82,13 +82,16 @@ VAL_AUC_MIN = 0.62
 VAL_AUC_MAX = 0.68
 
 # Permutation null p-value ceiling. The model_trainer's evaluator
-# (advanced_validation.compute_permutation_test) uses n_permutations=100
-# (evaluator.py:262), so the smallest observable empirical p is 1/100 =
-# 0.01. The plan demands p < 0.001 which a 100-perm test cannot resolve
-# directly — we treat p ≤ 0.01 as "indistinguishable from < 0.001" given
-# the perm budget, and document the gap. A future tightening could push
-# n_permutations to ≥ 1000 to resolve the 0.001 boundary (backlog #11.b
-# is the related Layer 5 follow-up on this propagation).
+# (advanced_validation.compute_permutation_test) uses
+# DEFAULT_PERMUTATION_COUNT = 200 (raised from 100 by plan v3 §3 Tier 1B
+# step 1; passed through at the evaluator callsite). The smallest
+# observable empirical p is 1/200 = 0.005 — the original 0.01 ceiling
+# remains conservative under the new default. The plan demands p < 0.001
+# which the 200-perm test still cannot resolve directly; we treat
+# p ≤ 0.01 as "indistinguishable from < 0.001" given the perm budget,
+# and document the gap. A future tightening could push n_permutations
+# to ≥ 1000 to resolve the 0.001 boundary (backlog #11.b is the related
+# Layer 5 follow-up on this propagation).
 PERMUTATION_P_MAX = 0.01
 
 # Layer 3 adversarial z-score ceiling on KEPT features (post-remediation).

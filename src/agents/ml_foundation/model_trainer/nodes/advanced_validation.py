@@ -124,8 +124,12 @@ def compute_permutation_test(
         }
 
     pvalue = float(np.mean([a >= actual_auc for a in shuffled_aucs]))
-    # NumPy default percentile interpolation is "linear" — well-defined for
-    # any non-empty sample including n_eff=1 (returns the single value).
+    # NumPy default percentile method is "linear" (R type 7) — well-defined
+    # for any non-empty sample including n_eff=1 (returns the single value).
+    # Plan v3 §3 Tier 1B does not specify an estimator. "Linear" is the
+    # symmetric default; for HBLP gating the consumer (step 2, not yet
+    # written) can elect to over-quote the null tail by switching to
+    # method="higher" if false-positive relaxations become a concern.
     null_p95 = float(np.percentile(shuffled_aucs, 95))
     null_p99 = float(np.percentile(shuffled_aucs, 99))
     n_effective = len(shuffled_aucs)
