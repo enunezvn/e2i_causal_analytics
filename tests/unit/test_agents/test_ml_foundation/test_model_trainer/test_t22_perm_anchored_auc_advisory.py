@@ -323,9 +323,7 @@ async def test_evaluate_model_regression_does_not_emit_t22_advisory_keys() -> No
     val = result.get("validation_metrics", {})
 
     # None of the three T2.2 advisory keys must be present.
-    assert "auc_above_permutation_null" not in val, (
-        "T2.2 advisory key leaked into regression path"
-    )
+    assert "auc_above_permutation_null" not in val, "T2.2 advisory key leaked into regression path"
     assert "permutation_anchored_auc_advisory_violated" not in val, (
         "T2.2 advisory key leaked into regression path"
     )
@@ -371,11 +369,7 @@ def test_tier0_artifact_filter_passes_bool_advisory_key() -> None:
         "permutation_anchored_auc_advisory_violated": True,
     }
 
-    filtered = {
-        k: corrected_coerce(v)
-        for k, v in advisory_keys.items()
-        if corrected_filter(v)
-    }
+    filtered = {k: corrected_coerce(v) for k, v in advisory_keys.items() if corrected_filter(v)}
 
     assert "auc_above_permutation_null" in filtered
     assert filtered["auc_above_permutation_null"] == 0.03
@@ -390,9 +384,7 @@ def test_tier0_artifact_filter_passes_bool_advisory_key() -> None:
     # Verify False also survives (the None case already passes under both filters).
     advisory_false = {"permutation_anchored_auc_advisory_violated": False}
     filtered_false = {
-        k: corrected_coerce(v)
-        for k, v in advisory_false.items()
-        if corrected_filter(v)
+        k: corrected_coerce(v) for k, v in advisory_false.items() if corrected_filter(v)
     }
     assert "permutation_anchored_auc_advisory_violated" in filtered_false
     assert filtered_false["permutation_anchored_auc_advisory_violated"] is False
@@ -400,8 +392,6 @@ def test_tier0_artifact_filter_passes_bool_advisory_key() -> None:
     # Confirm dicts are still excluded (no regression on the original intent).
     advisory_dict = {"some_dict": {"nested": 1}}
     filtered_dict = {
-        k: corrected_coerce(v)
-        for k, v in advisory_dict.items()
-        if corrected_filter(v)
+        k: corrected_coerce(v) for k, v in advisory_dict.items() if corrected_filter(v)
     }
     assert "some_dict" not in filtered_dict
