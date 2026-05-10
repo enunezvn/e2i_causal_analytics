@@ -108,3 +108,19 @@ regexes = [
   '''permutation_n_permutations''',
   '''permutation_n_effective''',
 ]
+
+# ---------------------------------------------------------------------------
+# Path allowlist — advanced_validation.py contains Plan v3 Tier 1B
+# step 1 docstrings that list result-mapping key identifier strings
+# (`permutation_null_p95`, `permutation_null_p99`, ...). The
+# generic-api-key rule false-positives on these.
+# The file is a pure Python module — no API keys, no tokens, no secrets.
+# Belt-and-suspenders backup to the regex allowlist above (the regex
+# pattern intermittently fails to match in gitleaks 8.24.3 when the
+# secret is captured from a multi-backtick docstring context).
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "advanced_validation.py: surface-key docstrings, no secrets"
+paths = [
+  '''^src/agents/ml_foundation/model_trainer/nodes/advanced_validation\.py$''',
+]
