@@ -65,8 +65,27 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "rwd" / "optum"
 
 LOOKBACK_DAYS = 180
 PREDICTION_DAYS = 180
-ENROLLMENT_PRE_DAYS = 360
-ENROLLMENT_POST_DAYS = 180
+
+# Enrollment-window regime constants (Tier 1A bifurcation, plan v3 §3).
+# Default = production (360/180). Research regime (180/90) trades stricter
+# enrollment-feasibility for a larger eligible cohort and is gated behind the
+# `--enrollment-regime research` CLI flag (or `enrollment_regime="research"`
+# kwarg) per plan §3 Tier 1A "MAYBE" branch — domain-expert sign-off required
+# before research-regime artifacts are used downstream of pure feasibility
+# analysis. The empirical anchor (`docs/results/optum_initiation_revalidation_20260510.md`)
+# showed research-regime n=1697 crosses the perm p<0.05 GENUINE threshold at
+# n_train_positives=~34 vs production-regime n=1294 at ~22.
+ENROLLMENT_REGIMES: dict[str, dict[str, int]] = {
+    "production": {"pre_days": 360, "post_days": 180},
+    "research": {"pre_days": 180, "post_days": 90},
+}
+DEFAULT_ENROLLMENT_REGIME = "production"
+# Module-level aliases for the production regime, retained for any external
+# caller that imports the constants directly. Per-converter values live on the
+# OptumDataConverter instance attributes `enrollment_pre_days` /
+# `enrollment_post_days`, which the cohort-build path uses.
+ENROLLMENT_PRE_DAYS = ENROLLMENT_REGIMES[DEFAULT_ENROLLMENT_REGIME]["pre_days"]
+ENROLLMENT_POST_DAYS = ENROLLMENT_REGIMES[DEFAULT_ENROLLMENT_REGIME]["post_days"]
 WASHOUT_DAYS = 30
 BIOLOGIC_DISCONT_GAP_DAYS = 90
 BIOLOGIC_PERSISTENCE_GAP_DAYS = 60
@@ -191,12 +210,22 @@ class OptumDataConverter:
         cohorts: tuple[str, ...] = ("initiation", "discontinuation", "persistence"),
         max_patients: int | None = None,
         pilot_audit: bool = False,
+        enrollment_regime: str = DEFAULT_ENROLLMENT_REGIME,
     ) -> None:
+        if enrollment_regime not in ENROLLMENT_REGIMES:
+            allowed = sorted(ENROLLMENT_REGIMES.keys())
+            raise ValueError(
+                f"enrollment_regime={enrollment_regime!r} not in {allowed}; "
+                f"plan v3 §3 Tier 1A defines exactly two regimes."
+            )
         self.parquet_dir = Path(parquet_dir)
         self.output_dir = Path(output_dir)
         self.cohorts = cohorts
         self.max_patients = max_patients
         self.pilot_audit = pilot_audit
+        self.enrollment_regime = enrollment_regime
+        self.enrollment_pre_days = ENROLLMENT_REGIMES[enrollment_regime]["pre_days"]
+        self.enrollment_post_days = ENROLLMENT_REGIMES[enrollment_regime]["post_days"]
         self.now_iso = datetime.now().isoformat()
 
         # Loaded DataFrames, indexed per patient for speed
@@ -222,6 +251,12 @@ class OptumDataConverter:
 
     def convert_all(self) -> dict[str, dict[str, int]]:
         """Run the pipeline. Returns per-cohort record counts."""
+        logger.info(
+            "Enrollment regime: %s (pre=%dd, post=%dd)",
+            self.enrollment_regime,
+            self.enrollment_pre_days,
+            self.enrollment_post_days,
+        )
         logger.info("Reading Optum parquet from %s", self.parquet_dir)
         self._read_parquets()
         self._clean()
@@ -366,6 +401,16 @@ class OptumDataConverter:
         Returns (journeys, events, hcps, split_registry).
         """
         all_patids = sorted(self.demo["patid"].unique().tolist())
+        # Pin enrollment-regime label as the first row of the attrition log so
+        # downstream consumers (Tier 1B/1C runs) can audit which regime
+        # produced the cohort artifact (plan v3 §3 Tier 1A).
+        self._attrition.append(
+            (
+                f"{cohort}: enrollment_regime={self.enrollment_regime} "
+                f"(pre={self.enrollment_pre_days}d, post={self.enrollment_post_days}d)",
+                len(all_patids),
+            )
+        )
         self._attrition.append((f"{cohort}: start", len(all_patids)))
 
         # 1. Age gate
@@ -393,8 +438,8 @@ class OptumDataConverter:
             # Backlog #19 smart-index fallback (cohort A only): the default
             # `_derive_index_date` picks the earliest clinical anchor without
             # considering enrollment-window feasibility. When a patient's
-            # earliest anchor predates the [eligeff + ENROLLMENT_PRE_DAYS,
-            # eligend - ENROLLMENT_POST_DAYS] feasibility band but a later
+            # earliest anchor predates the [eligeff + self.enrollment_pre_days,
+            # eligend - self.enrollment_post_days] feasibility band but a later
             # anchor in the same record fits the band, retry with the
             # feasibility-aware derivation. Cohorts B/C re-anchor on first
             # biologic fill — re-anchoring there changes cohort semantics
@@ -561,7 +606,7 @@ class OptumDataConverter:
     ) -> pd.Timestamp | None:
         """Cohort-A smart-index fallback. Pick the earliest clinical anchor
         that lies inside the enrollment-feasibility band
-        ``[eligeff + ENROLLMENT_PRE_DAYS, eligend - ENROLLMENT_POST_DAYS]``.
+        ``[eligeff + self.enrollment_pre_days, eligend - self.enrollment_post_days]``.
 
         Used only when ``_derive_index_date`` has already been tried and the
         resulting date either was ``None`` or failed
@@ -586,8 +631,8 @@ class OptumDataConverter:
         if pd.isna(eligeff) or pd.isna(eligend):
             return None
 
-        feasible_start = eligeff + timedelta(days=ENROLLMENT_PRE_DAYS)
-        feasible_end = eligend - timedelta(days=ENROLLMENT_POST_DAYS)
+        feasible_start = eligeff + timedelta(days=self.enrollment_pre_days)
+        feasible_end = eligend - timedelta(days=self.enrollment_post_days)
         if feasible_start > feasible_end:
             return None
 
@@ -672,8 +717,8 @@ class OptumDataConverter:
         eligend = demo_row.get("eligend")
         if pd.isna(eligeff) or pd.isna(eligend):
             return False
-        need_start = index_date - timedelta(days=ENROLLMENT_PRE_DAYS)
-        need_end = index_date + timedelta(days=ENROLLMENT_POST_DAYS)
+        need_start = index_date - timedelta(days=self.enrollment_pre_days)
+        need_end = index_date + timedelta(days=self.enrollment_post_days)
         return bool(eligeff <= need_start and eligend >= need_end)
 
     def _has_exclusion_condition(
@@ -1666,6 +1711,17 @@ def main() -> int:
         action="store_true",
         help="After conversion, run leakage_detector on output (spec §11 gate)",
     )
+    parser.add_argument(
+        "--enrollment-regime",
+        choices=sorted(ENROLLMENT_REGIMES.keys()),
+        default=DEFAULT_ENROLLMENT_REGIME,
+        help=(
+            "Enrollment-window regime (plan v3 §3 Tier 1A). "
+            "production=360/180 (default, current behavior); "
+            "research=180/90 (larger eligible cohort, requires domain-expert "
+            "sign-off before downstream use)."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
 
@@ -1689,6 +1745,7 @@ def main() -> int:
         cohorts=cohorts,
         max_patients=args.max_patients,
         pilot_audit=args.pilot_audit,
+        enrollment_regime=args.enrollment_regime,
     )
 
     if args.dry_run:

@@ -11,10 +11,13 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pandas as pd
+import pytest
 
 from scripts.convert_optum_rwd import (
+    DEFAULT_ENROLLMENT_REGIME,
     ENROLLMENT_POST_DAYS,
     ENROLLMENT_PRE_DAYS,
+    ENROLLMENT_REGIMES,
     OptumDataConverter,
 )
 
@@ -493,3 +496,186 @@ class TestSmartIndexFallbackIntegration:
         # And the neighbor row reflects the same drop (3 fixture passers
         # minus pat 2 washout = 2).
         assert steps["initiation: after index + enrollment + exclusions"] == 2
+
+    def test_attrition_log_pins_enrollment_regime_label(self) -> None:
+        """Plan v3 §3 Tier 1A: the first attrition row of every cohort build
+        must encode which enrollment regime produced the artifact, so a
+        downstream reader of attrition_report.csv can audit the regime
+        without rerunning the converter."""
+        cv = self._build_fixture_converter()
+        cv._build_cohort("initiation")
+        steps = dict(cv._attrition)
+        regime_key = (
+            f"initiation: enrollment_regime={cv.enrollment_regime} "
+            f"(pre={cv.enrollment_pre_days}d, post={cv.enrollment_post_days}d)"
+        )
+        assert regime_key in steps
+        # Regime row count must equal cohort start size (the row pins the
+        # all-patids count, before any filter has been applied).
+        assert steps[regime_key] == steps["initiation: start"]
+
+
+# --------------------------------------------------------------------------- #
+# Tier 1A enrollment-regime bifurcation (plan v3 §3)                          #
+# --------------------------------------------------------------------------- #
+
+
+class TestEnrollmentRegimeBifurcation:
+    """The OptumDataConverter exposes a two-regime enrollment-window switch
+    (production=360/180, research=180/90) per plan v3 §3 Tier 1A. The default
+    is production; research is opt-in and must be flagged for downstream
+    consumers via converter attribute + attrition log."""
+
+    def test_default_regime_constant_is_production(self) -> None:
+        assert DEFAULT_ENROLLMENT_REGIME == "production"
+
+    def test_module_constants_match_production_regime(self) -> None:
+        """Module-level ENROLLMENT_PRE_DAYS / ENROLLMENT_POST_DAYS preserve
+        the production-regime values for any external caller importing them."""
+        assert ENROLLMENT_PRE_DAYS == ENROLLMENT_REGIMES["production"]["pre_days"]
+        assert ENROLLMENT_POST_DAYS == ENROLLMENT_REGIMES["production"]["post_days"]
+        assert ENROLLMENT_PRE_DAYS == 360
+        assert ENROLLMENT_POST_DAYS == 180
+
+    def test_regime_table_pins_research_to_180_90(self) -> None:
+        """Plan v3 §3 Tier 1A 'MAYBE' branch literal numbers."""
+        assert ENROLLMENT_REGIMES["research"]["pre_days"] == 180
+        assert ENROLLMENT_REGIMES["research"]["post_days"] == 90
+
+    def test_default_constructor_uses_production(self) -> None:
+        cv = _make_converter()
+        assert cv.enrollment_regime == "production"
+        assert cv.enrollment_pre_days == 360
+        assert cv.enrollment_post_days == 180
+
+    def test_explicit_production_regime(self) -> None:
+        cv = OptumDataConverter(
+            parquet_dir=".",
+            output_dir=".",
+            cohorts=("initiation",),
+            enrollment_regime="production",
+        )
+        assert cv.enrollment_pre_days == 360
+        assert cv.enrollment_post_days == 180
+
+    def test_research_regime(self) -> None:
+        cv = OptumDataConverter(
+            parquet_dir=".",
+            output_dir=".",
+            cohorts=("initiation",),
+            enrollment_regime="research",
+        )
+        assert cv.enrollment_regime == "research"
+        assert cv.enrollment_pre_days == 180
+        assert cv.enrollment_post_days == 90
+
+    def test_invalid_regime_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="enrollment_regime"):
+            OptumDataConverter(
+                parquet_dir=".",
+                output_dir=".",
+                cohorts=("initiation",),
+                enrollment_regime="aggressive",
+            )
+
+    def test_research_regime_check_enrollment_window_accepts_shorter_continuous_enrollment(
+        self,
+    ) -> None:
+        """A patient with exactly 270 days continuous enrollment around index
+        passes the research regime (180+90) but fails production (360+180)."""
+        cv_prod = OptumDataConverter(
+            parquet_dir=".",
+            output_dir=".",
+            cohorts=("initiation",),
+            enrollment_regime="production",
+        )
+        cv_rsch = OptumDataConverter(
+            parquet_dir=".",
+            output_dir=".",
+            cohorts=("initiation",),
+            enrollment_regime="research",
+        )
+        index_date = _ts("2021-06-01")
+        # 270d centered on index_date: eligeff = idx-180, eligend = idx+90.
+        demo_row = pd.Series(
+            {
+                "patid": 1,
+                "eligeff": index_date - timedelta(days=180),
+                "eligend": index_date + timedelta(days=90),
+                "diagcode_raw": "L509",
+            }
+        )
+        # Production needs 360d pre + 180d post = 540d total → fails.
+        assert cv_prod._check_enrollment_window(demo_row, index_date) is False
+        # Research needs 180d pre + 90d post = 270d total → passes (boundary).
+        assert cv_rsch._check_enrollment_window(demo_row, index_date) is True
+
+    def test_research_regime_smart_index_fallback_uses_relaxed_band(self) -> None:
+        """A med date that falls inside the research-regime feasibility band
+        but outside the production-regime band must be selected by the
+        research-regime fallback only."""
+        # Feasibility band depends on (eligeff + pre_days, eligend - post_days).
+        # eligeff=2020-01-01, eligend=2020-12-31 (366d):
+        #   production: [2020-12-26, 2020-07-04] → empty (start > end) → None.
+        #   research:   [2020-06-29, 2020-10-02] → valid 95d band.
+        eligeff = _ts("2020-01-01")
+        eligend = _ts("2020-12-31")
+        in_research_band_only = _ts("2020-08-15")  # inside 180/90, outside 360/180
+
+        cv_prod = OptumDataConverter(
+            parquet_dir=".",
+            output_dir=".",
+            cohorts=("initiation",),
+            enrollment_regime="production",
+        )
+        cv_rsch = OptumDataConverter(
+            parquet_dir=".",
+            output_dir=".",
+            cohorts=("initiation",),
+            enrollment_regime="research",
+        )
+        for cv in (cv_prod, cv_rsch):
+            cv._med_by_pat[1] = pd.DataFrame({"medication_date": [in_research_band_only]})
+
+        demo_row = pd.Series(
+            {
+                "patid": 1,
+                "eligeff": eligeff,
+                "eligend": eligend,
+                "diagcode_raw": "L509",
+            }
+        )
+        # Production: feasibility band is empty (start > end), fallback returns None.
+        assert cv_prod._derive_index_date_feasibility_aware(1, demo_row) is None
+        # Research: the date qualifies.
+        assert cv_rsch._derive_index_date_feasibility_aware(1, demo_row) == in_research_band_only
+
+    def test_research_regime_attrition_log_pins_research_label(self) -> None:
+        """The regime label row at the head of every cohort build encodes
+        the active regime so an attrition_report.csv reader can audit."""
+        cv = OptumDataConverter(
+            parquet_dir=".",
+            output_dir=".",
+            cohorts=("initiation",),
+            enrollment_regime="research",
+        )
+        # Stub the demographics input so _build_cohort emits the regime row.
+        cv.demo = pd.DataFrame(
+            [
+                {
+                    "patid": 999,
+                    "age": 30,
+                    "continuous_enrollment": 0,  # filter drops everyone, but
+                    "eligeff": _ts("2020-01-01"),  # the regime row still emits.
+                    "eligend": _ts("2020-12-31"),
+                    "diagcode_raw": "L509",
+                    "diagcode": "L509",
+                    "gdr_cd": "F",
+                    "zipcode_5": "10001",
+                }
+            ]
+        )
+        cv._build_cohort("initiation")
+        steps = dict(cv._attrition)
+        regime_key = "initiation: enrollment_regime=research (pre=180d, post=90d)"
+        assert regime_key in steps
