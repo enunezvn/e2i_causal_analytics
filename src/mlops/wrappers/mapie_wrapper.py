@@ -209,13 +209,28 @@ class MapieConformalBinaryClassifier:
                 self.n_calib_,
             )
         elif mode == "split":
-            X_train, X_calib, y_train, y_calib = train_test_split(
-                X,
-                y_arr,
-                test_size=self.calib_fraction,
-                random_state=self.random_state,
-                stratify=y_arr,
-            )
+            # MAPIE adversarial-review MEDIUM-1: sklearn stratified split
+            # raises ValueError when n_minority is too small to stratify
+            # (e.g. n_minority=1 → "least populated class has only 1 member").
+            # Re-raise with an actionable message rather than letting the raw
+            # sklearn error propagate without context.
+            try:
+                X_train, X_calib, y_train, y_calib = train_test_split(
+                    X,
+                    y_arr,
+                    test_size=self.calib_fraction,
+                    random_state=self.random_state,
+                    stratify=y_arr,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Stratified calibration split failed for split-conformal mode "
+                    f"(n_minority={self.n_minority_}, calib_fraction={self.calib_fraction}). "
+                    "sklearn requires ≥ 2 samples per class in each split. "
+                    "Options: (1) lower calib_fraction so fewer minority samples end up in calib, "
+                    "(2) use conformal_mode='cross' for small-sample datasets, "
+                    "(3) collect more minority-class observations."
+                ) from exc
             self.base_estimator.fit(X_train, y_train)
             self._mapie = MapieClassifier(
                 estimator=self.base_estimator,
