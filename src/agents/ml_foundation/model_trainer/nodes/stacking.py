@@ -70,7 +70,7 @@ def _ensemble_predictions(
     """
     proba_matrix = np.array(list(per_base_proba.values()))
     if method == "soft_voting":
-        return np.mean(proba_matrix, axis=0)
+        return np.asarray(np.mean(proba_matrix, axis=0))
     if method == "rank_averaging":
         # rank within each base estimator's predictions, then average
         # ranks across bases. Normalize by n_samples so the output is
@@ -79,7 +79,7 @@ def _ensemble_predictions(
 
         n_samples = proba_matrix.shape[1]
         ranks = np.array([rankdata(row, method="average") for row in proba_matrix])
-        return np.mean(ranks, axis=0) / float(n_samples)
+        return np.asarray(np.mean(ranks, axis=0) / float(n_samples))
     raise ValueError(
         f"Unknown ensemble method {method!r}; expected one of {{'soft_voting', 'rank_averaging'}}."
     )
