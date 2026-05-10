@@ -18,6 +18,7 @@ from src.agents.ml_foundation.model_deployer.regulatory_audit import (
     THRESHOLD_PROVENANCE_LITERATURE_ANCHORED,
     RegulatoryEligibilityAudit,
     classify_threshold_provenance,
+    compute_canonical_entry_hash,
     is_adapted_regulatory_candidate,
     is_regulatory_eligible,
 )
@@ -543,10 +544,18 @@ def _detect_leftover_adaptation_entries(
     ``audit.adaptation_history``. Anything found is a "leftover" — the
     eligibility verdict must fail closed.
 
-    Matching uses (commit_sha, gate_name, timestamp) as the entry key
-    since these uniquely identify a remediation pass. We tolerate
-    out-of-order ingestion: an entry already in ``adaptation_history``
-    is considered ingested regardless of position.
+    Codex-rescue N1-H3 pass-2 + new MED: matching now uses the
+    sha256-hex of the entry's canonical JSON form
+    (``compute_canonical_entry_hash``) instead of the prior 3-tuple
+    ``(commit_sha, gate_name, timestamp)``. The 3-tuple matched a
+    tampered payload (same identity fields, swapped
+    ``before_threshold`` / ``after_threshold`` / ``justification_doc``)
+    as "ingested" — but a tampered entry is exactly the case the
+    deployer is the last line of defense for. The hash covers EVERY
+    canonical field so any field-level mutation invalidates the match
+    and the entry surfaces as a leftover. We tolerate out-of-order
+    ingestion: an entry already in ``adaptation_history`` is considered
+    ingested regardless of position.
 
     Args:
         state: the current agent state
@@ -555,7 +564,8 @@ def _detect_leftover_adaptation_entries(
 
     Returns:
         A list of leftover entries. Empty list iff every state-level
-        ``regulatory_adaptation_entry`` has been ingested.
+        ``regulatory_adaptation_entry`` has been ingested with byte-
+        for-byte canonical equality.
     """
     raw = state.get("regulatory_adaptation_entry")
     if raw is None:
@@ -572,15 +582,13 @@ def _detect_leftover_adaptation_entries(
         # Unknown shape — treat as malformed leftover.
         return [{"_malformed_payload": repr(raw)}]
 
-    def _key(entry: Dict[str, Any]) -> Tuple[Any, Any, Any]:
-        return (
-            entry.get("commit_sha"),
-            entry.get("gate_name"),
-            entry.get("timestamp"),
-        )
-
-    ingested_keys = {_key(e) for e in audit.adaptation_history}
-    leftover = [c for c in candidates if _key(c) not in ingested_keys]
+    # Codex-rescue N1-H3 pass-2 + new MED: canonical-hash matching.
+    # The audit's adaptation_history entries are themselves dicts with
+    # the same canonical fields (see AdaptationEntry.to_dict), so we
+    # hash both sides through the same helper. A tampered candidate
+    # produces a different hash and surfaces as a leftover.
+    ingested_hashes = {compute_canonical_entry_hash(e) for e in audit.adaptation_history}
+    leftover = [c for c in candidates if compute_canonical_entry_hash(c) not in ingested_hashes]
     return leftover
 
 
