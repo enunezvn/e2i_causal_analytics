@@ -31,6 +31,7 @@ from sklearn.metrics import (
 )
 
 from .advanced_validation import (
+    DEFAULT_PERMUTATION_COUNT,
     apply_post_hoc_calibration,
     check_imbalance_aware_suspicion,
     compute_calibration_analysis,
@@ -45,6 +46,19 @@ logger = logging.getLogger(__name__)
 
 _CV_PROMOTED_METRICS: tuple[str, ...] = ("roc_auc", "pr_auc", "mcc", "f1")
 _CV_PROMOTED_STATS: tuple[str, ...] = ("mean", "std")
+
+# Plan v3 §3 Tier 1B step 1: keys promoted from the permutation_test sub-dict
+# into the scalar-only ``validation_metrics`` payload for HBLP gating, deployer
+# input contracts (T2.6a), and downstream observability dashboards.
+_PERMUTATION_PROMOTED_KEYS: tuple[str, ...] = (
+    "permutation_pvalue",
+    "permutation_null_p95",
+    "permutation_null_p99",
+    "permutation_n_permutations",
+    "permutation_n_effective",
+    "permutation_auc_mean",
+    "permutation_auc_std",
+)
 
 # Backlog #20 Gap 2: F1-fallback fires when validation MCC at the
 # canonically-chosen threshold falls below this floor. 0.20 is the band
@@ -98,6 +112,31 @@ def _promote_cv_summary_to_validation_metrics(
             src_key = f"cv_{metric}_{stat}"
             if src_key in cv_result:
                 val_metrics[f"cv_5fold_{metric}_{stat}"] = cv_result[src_key]
+
+
+def _promote_permutation_summary_to_validation_metrics(
+    metrics_result: Dict[str, Any], permutation_result: Dict[str, Any]
+) -> None:
+    """Promote permutation-test scalar keys into ``validation_metrics``.
+
+    Plan v3 §3 Tier 1B step 1 prerequisite for HBLP gating: the
+    permutation-null distribution percentiles (``p95``, ``p99``) and shuffle
+    count must be visible on the scalar-only ``validation_metrics`` payload
+    so downstream HBLP variance-inflation logic, deployer T2.6 metric
+    contract, and observability dashboards do not have to descend into the
+    nested ``permutation_test`` sub-dict (which the JSON-artifact filter in
+    ``scripts/run_tier0_test.py`` strips). Same pattern as
+    ``_promote_cv_summary_to_validation_metrics``.
+
+    Mutates ``metrics_result`` in place. None values from a degenerate
+    permutation run (single-class y, missing y_proba) ARE promoted as
+    None — downstream consumers must distinguish "perm test ran but null
+    is degenerate" from "perm test was never executed" (key absent).
+    """
+    val_metrics = metrics_result.setdefault("validation_metrics", {})
+    for key in _PERMUTATION_PROMOTED_KEYS:
+        if key in permutation_result:
+            val_metrics[key] = permutation_result[key]
 
 
 def _compute_baseline_test_metrics(
@@ -321,14 +360,24 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     if problem_type == "binary_classification":
         y_test_proba = predictions.get("y_test_proba")
 
-        # 1. Permutation test — confirm signal is genuine
-        logger.info("Running permutation test (100 shuffles)...")
-        permutation_result = compute_permutation_test(y_test_np, y_test_proba, n_permutations=100)
+        # 1. Permutation test — confirm signal is genuine. Plan v3 §3 Tier 1B
+        # step 1 raises the default shuffle count to 200 so p95/p99 percentiles
+        # of the null distribution stabilize for downstream HBLP gating.
+        logger.info("Running permutation test (%d shuffles)...", DEFAULT_PERMUTATION_COUNT)
+        permutation_result = compute_permutation_test(
+            y_test_np, y_test_proba, n_permutations=DEFAULT_PERMUTATION_COUNT
+        )
         metrics_result["permutation_test"] = permutation_result
+        _promote_permutation_summary_to_validation_metrics(metrics_result, permutation_result)
         if permutation_result.get("signal_genuine") is not None:
+            p95 = permutation_result.get("permutation_null_p95")
+            p99 = permutation_result.get("permutation_null_p99")
             logger.info(
-                f"Permutation test: p={permutation_result['permutation_pvalue']:.4f}, "
-                f"signal_genuine={permutation_result['signal_genuine']}"
+                "Permutation test: p=%.4f, null_p95=%s, null_p99=%s, signal_genuine=%s",
+                permutation_result["permutation_pvalue"],
+                f"{p95:.4f}" if p95 is not None else "None",
+                f"{p99:.4f}" if p99 is not None else "None",
+                permutation_result["signal_genuine"],
             )
 
         # 2. Calibration analysis — ECE + calibration curve
