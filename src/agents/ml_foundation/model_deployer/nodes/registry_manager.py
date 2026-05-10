@@ -445,10 +445,40 @@ def _evaluate_absolute_threshold_gates(
             all_pass = False
             continue
 
+        # Codex-rescue N1-M2: ``float(value)`` / ``float(threshold)`` can
+        # raise TypeError / ValueError on malformed metrics (e.g. value
+        # is a dict, threshold is a non-numeric string). Pre-fix: the
+        # exception bubbled to the broad ``validate_promotion`` except
+        # path and emitted a generic "promotion_validation_error" with
+        # no SKIPPED gate evaluation. Post-fix: catch the exception,
+        # append a SKIPPED entry with reason="malformed_metric", and
+        # surface a clean failure — return regulatory_eligible=False
+        # without escaping into the broad except path.
+        try:
+            value_f = float(value)
+            threshold_f = float(threshold)
+        except (TypeError, ValueError) as exc:
+            audit.append_gate_evaluation(
+                timestamp=timestamp,
+                gate_name=gate_name,
+                threshold=threshold,
+                value=value,
+                outcome="skipped",
+                threshold_provenance=provenance,
+                reason="malformed_metric",
+            )
+            failures.append(
+                f"Gate N1: '{gate_name}' skipped — malformed metric "
+                f"(threshold={threshold!r}, value={value!r}, error={exc}). "
+                "Eligibility CANNOT be granted."
+            )
+            all_pass = False
+            continue
+
         if direction == "min":
-            passed = float(value) >= float(threshold)
+            passed = value_f >= threshold_f
         else:  # "max"
-            passed = float(value) <= float(threshold)
+            passed = value_f <= threshold_f
 
         outcome = "pass" if passed else "fail"
         audit.append_gate_evaluation(
@@ -464,8 +494,8 @@ def _evaluate_absolute_threshold_gates(
             all_pass = False
             failures.append(
                 f"Gate N1: '{gate_name}' failed — "
-                f"value={float(value):.4f} {('<' if direction == 'min' else '>')} "
-                f"threshold={float(threshold):.4f}."
+                f"value={value_f:.4f} {('<' if direction == 'min' else '>')} "
+                f"threshold={threshold_f:.4f}."
             )
 
     return {

@@ -575,3 +575,107 @@ class TestN1H3LeftoverAdaptationEntry:
         leftovers = result["regulatory_leftover_adaptation_entries"]
         assert len(leftovers) == 1
         assert leftovers[0] == unmingested
+
+
+# --------------------------------------------------------------------------- #
+# Codex N1-M2: malformed metric (non-numeric value/threshold) falls into a    #
+# SKIPPED gate evaluation with reason="malformed_metric" — does NOT collapse  #
+# into validate_promotion's broad except path.                                 #
+# --------------------------------------------------------------------------- #
+
+
+class TestN1M2MalformedMetricHandling:
+    @pytest.mark.asyncio
+    async def test_string_value_skipped_with_malformed_metric_reason(self) -> None:
+        """A non-numeric string value triggers SKIPPED + malformed_metric
+        reason — must not collapse into the broad validate_promotion
+        exception path."""
+        state: Dict[str, Any] = {
+            "current_stage": "None",
+            "target_environment": "staging",
+            "success_criteria": {"minimum_auc": 0.75},
+            "validation_metrics": {
+                "roc_auc": "not-a-number",
+                "regulatory_eligibility_audit": {},
+            },
+        }
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        # Promotion validation itself should NOT error.
+        assert (
+            "error_type" not in result or result.get("error_type") != "promotion_validation_error"
+        )
+
+        gate_history = result["regulatory_eligibility_audit"]["gate_history"]
+        minimum_auc_entry = next(e for e in gate_history if e["gate_name"] == "minimum_auc")
+        assert minimum_auc_entry["outcome"] == "skipped"
+        assert minimum_auc_entry.get("reason") == "malformed_metric"
+
+        failures = result["regulatory_eligibility_failures"]
+        assert any("malformed metric" in f for f in failures)
+
+    @pytest.mark.asyncio
+    async def test_dict_value_skipped_with_malformed_metric_reason(self) -> None:
+        """A dict value (non-numeric, non-string) triggers SKIPPED +
+        malformed_metric reason."""
+        state: Dict[str, Any] = {
+            "current_stage": "None",
+            "target_environment": "staging",
+            "success_criteria": {"minimum_auc": 0.75},
+            "validation_metrics": {
+                "roc_auc": {"oops": "dict"},
+                "regulatory_eligibility_audit": {},
+            },
+        }
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        assert (
+            "error_type" not in result or result.get("error_type") != "promotion_validation_error"
+        )
+
+        gate_history = result["regulatory_eligibility_audit"]["gate_history"]
+        minimum_auc_entry = next(e for e in gate_history if e["gate_name"] == "minimum_auc")
+        assert minimum_auc_entry["outcome"] == "skipped"
+        assert minimum_auc_entry.get("reason") == "malformed_metric"
+
+    @pytest.mark.asyncio
+    async def test_list_value_skipped_with_malformed_metric_reason(self) -> None:
+        state: Dict[str, Any] = {
+            "current_stage": "None",
+            "target_environment": "staging",
+            "success_criteria": {"minimum_auc": 0.75},
+            "validation_metrics": {
+                "roc_auc": [0.80, 0.85],  # list, not numeric
+                "regulatory_eligibility_audit": {},
+            },
+        }
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        gate_history = result["regulatory_eligibility_audit"]["gate_history"]
+        minimum_auc_entry = next(e for e in gate_history if e["gate_name"] == "minimum_auc")
+        assert minimum_auc_entry["outcome"] == "skipped"
+        assert minimum_auc_entry.get("reason") == "malformed_metric"
+
+    @pytest.mark.asyncio
+    async def test_promotion_allowed_unaffected_by_malformed_metric(self) -> None:
+        """Eligibility is signal-only — even on malformed metric, the
+        promotion validation path itself returns promotion_allowed=True
+        for staging promotions."""
+        state: Dict[str, Any] = {
+            "current_stage": "None",
+            "target_environment": "staging",
+            "success_criteria": {"minimum_auc": 0.75},
+            "validation_metrics": {
+                "roc_auc": "not-a-number",
+                "regulatory_eligibility_audit": {},
+            },
+        }
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        # promotion_allowed for staging is signal-only — eligibility
+        # denial doesn't block.
+        assert result["promotion_allowed"] is True
