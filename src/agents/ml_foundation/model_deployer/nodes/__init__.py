@@ -28,6 +28,7 @@ from .deployment_planner import (
 )
 from .health_checker import check_health
 from .registry_manager import (
+    N1_REQUIRED_REGULATORY_GATES,
     compute_deployer_input_metrics,
     promote_stage,
     register_model,
@@ -47,6 +48,8 @@ __all__ = [
     "validate_promotion",
     "promote_stage",
     "compute_deployer_input_metrics",
+    # Gate N1 (plan v4 §2) — regulatory-eligibility evaluation
+    "N1_REQUIRED_REGULATORY_GATES",
     # Deployment
     "package_model",
     "deploy_to_endpoint",
