@@ -14,7 +14,10 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+    LITERATURE_ANCHORED_THRESHOLDS,
+    THRESHOLD_PROVENANCE_LITERATURE_ANCHORED,
     RegulatoryEligibilityAudit,
+    classify_threshold_provenance,
     is_adapted_regulatory_candidate,
     is_regulatory_eligible,
 )
@@ -329,15 +332,26 @@ def _evaluate_absolute_threshold_gates(
     literature-anchored threshold (e.g. ``minimum_auc=0.75``) and
     ``state["validation_metrics"]["roc_auc"]`` for the value to compare.
     Each evaluation produces one ``gate_history`` entry with outcome
-    ``"pass" | "fail" | "skipped"``. ``"skipped"`` fires when either the
-    threshold or the value is missing — this counts as a non-pass for
-    the eligibility check (see
-    ``RegulatoryEligibilityAudit.is_regulatory_eligible``).
+    ``"pass" | "fail" | "skipped"``.
+
+    Codex-rescue N1-H2: a passing value alone is not enough — the
+    threshold must come from the canonical literature-anchored
+    registry (``LITERATURE_ANCHORED_THRESHOLDS`` in
+    ``regulatory_audit``). If the success_criteria value does NOT match
+    the registered anchor (e.g. operator passed ``minimum_auc=0.50`` to
+    relax the gate), the gate is recorded with outcome ``"skipped"`` and
+    a non-literature_anchored provenance — ``is_regulatory_eligible``
+    will then deny.
+
+    Codex-rescue N1-M2: ``float(value)`` / ``float(threshold)`` calls
+    are wrapped in try/except (``TypeError``, ``ValueError``); on
+    exception, append a SKIPPED gate evaluation with
+    ``reason="malformed_metric"`` and surface a failure.
 
     Returns a dict with two keys:
 
       * ``all_thresholds_cleared``: True iff EVERY required gate
-        evaluated to "pass".
+        evaluated to "pass" against a literature-anchored threshold.
       * ``failures``: list of human-readable strings describing each
         failure (or skip) — passed back to the caller for surfacing on
         ``promotion_denial_reason``.
@@ -355,6 +369,13 @@ def _evaluate_absolute_threshold_gates(
         "minimum_auc": ("minimum_auc", "roc_auc", "min"),
     }
 
+    # Codex N1-H2: caller may declare provenance per gate via
+    # ``state["threshold_provenance"]`` (a dict keyed on gate name). The
+    # classifier normalizes against the registered literature anchor —
+    # if the declared provenance doesn't match the registered anchor's
+    # threshold, the gate is SKIPPED for eligibility.
+    declared_provenance_map: Dict[str, Any] = state.get("threshold_provenance") or {}
+
     failures: List[str] = []
     all_pass = True
 
@@ -370,6 +391,8 @@ def _evaluate_absolute_threshold_gates(
                 threshold=None,
                 value=None,
                 outcome="skipped",
+                threshold_provenance=None,
+                reason="unknown_required_gate",
             )
             all_pass = False
             continue
@@ -394,11 +417,43 @@ def _evaluate_absolute_threshold_gates(
                 threshold=threshold,
                 value=value,
                 outcome="skipped",
+                threshold_provenance=None,
+                reason="threshold_or_value_missing",
             )
             failures.append(
                 f"Gate N1: '{gate_name}' skipped — "
                 f"threshold={threshold}, value={value}. "
                 "Eligibility CANNOT be granted."
+            )
+            all_pass = False
+            continue
+
+        # Codex-rescue N1-H2: classify the threshold's provenance
+        # against the registered literature anchor. If it doesn't
+        # match, record SKIPPED + a non-literature provenance — the
+        # eligibility evaluator will then deny.
+        provenance = classify_threshold_provenance(
+            gate_name=gate_name,
+            threshold=threshold,
+            declared_provenance=declared_provenance_map.get(gate_name),
+        )
+        if provenance != THRESHOLD_PROVENANCE_LITERATURE_ANCHORED:
+            anchor_value = LITERATURE_ANCHORED_THRESHOLDS.get(gate_name)
+            audit.append_gate_evaluation(
+                timestamp=timestamp,
+                gate_name=gate_name,
+                threshold=threshold,
+                value=value,
+                outcome="skipped",
+                threshold_provenance=provenance,
+                reason="non_literature_threshold",
+            )
+            failures.append(
+                f"Gate N1: '{gate_name}' skipped — threshold={threshold} "
+                f"not in literature-anchored registry "
+                f"(expected {anchor_value}, got provenance={provenance}). "
+                "Eligibility CANNOT be granted against arbitrary "
+                "success_criteria — provenance must be 'literature_anchored'."
             )
             all_pass = False
             continue
@@ -415,13 +470,14 @@ def _evaluate_absolute_threshold_gates(
             threshold=threshold,
             value=value,
             outcome=outcome,
+            threshold_provenance=provenance,
         )
 
         if not passed:
             all_pass = False
             failures.append(
                 f"Gate N1: '{gate_name}' failed — "
-                f"value={value:.4f} {('<' if direction == 'min' else '>')} "
+                f"value={float(value):.4f} {('<' if direction == 'min' else '>')} "
                 f"threshold={float(threshold):.4f}."
             )
 
