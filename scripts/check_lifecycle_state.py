@@ -539,13 +539,22 @@ def scan_lifecycle_changes(repo_root: Path, base_ref: str) -> list[ScanFinding]:
             continue
         if to_state == GateLifecycleState.ENFORCED.value and matched_doc is not None:
             doc_body = matched_doc.read_text(encoding="utf-8")
+            # N2 finding M2: each required field MUST appear on a non-comment
+            # line (comments-only would satisfy a naive substring check, so
+            # an operator could commit a doc with all four fields commented
+            # out and pass the gate). We anchor the regex at the start of a
+            # line (after optional indent) and reject ``#`` prefixes.
             required_fields = (
                 "start_date:",
                 "end_date:",
                 "drift_summary:",
                 "signing_reviewer:",
             )
-            missing = [f for f in required_fields if f not in doc_body]
+            missing = [
+                f
+                for f in required_fields
+                if not re.search(rf"^[ \t]*{re.escape(f)}", doc_body, flags=re.MULTILINE)
+            ]
             if missing:
                 findings.append(
                     ScanFinding(

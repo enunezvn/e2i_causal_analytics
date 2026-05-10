@@ -597,6 +597,75 @@ class TestScanLifecycleChangesIntegration:
         findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
         assert findings == []
 
+    def test_enforced_doc_with_commented_out_fields_fails(
+        self,
+        fake_repo_with_change_machinery: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """N2 finding M2: a substring-only check (``"start_date:" in body``)
+        is satisfied when the field is commented out
+        (``# start_date: 2026-06-15``). The fix anchors each required
+        field at the start of a line, rejecting ``#`` prefixes.
+        """
+        diff = (
+            "+++ b/src/x.py\n"
+            "@@ -1 +1 @@\n"
+            "-LIFECYCLE_STATE_T22 = GateLifecycleState.CALIBRATING\n"
+            "+LIFECYCLE_STATE_T22 = GateLifecycleState.ENFORCED\n"
+        )
+        self._patch_subprocess(monkeypatch, diff)
+        # All 4 fields appear, but each is commented out.
+        (
+            fake_repo_with_change_machinery
+            / "docs"
+            / "calibration"
+            / "py_t22_lifecycle_change_calibrating_to_enforced_20260615.md"
+        ).write_text(
+            "# start_date: 2026-06-15\n"
+            "# end_date: 2026-09-15\n"
+            "# drift_summary: pretend\n"
+            "# signing_reviewer: nobody\n"
+            "Just placeholder prose.\n",
+            encoding="utf-8",
+        )
+        findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
+        codes = {f.code for f in findings}
+        assert "enforced_doc_missing_fields" in codes, (
+            f"commented-out fields must NOT satisfy the gate; got codes={codes}"
+        )
+
+    def test_enforced_doc_with_indented_fields_passes(
+        self,
+        fake_repo_with_change_machinery: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fields indented as YAML mapping members are still valid (the
+        regex tolerates leading whitespace, only ``#`` prefixes are
+        rejected).
+        """
+        diff = (
+            "+++ b/src/x.py\n"
+            "@@ -1 +1 @@\n"
+            "-LIFECYCLE_STATE_T22 = GateLifecycleState.CALIBRATING\n"
+            "+LIFECYCLE_STATE_T22 = GateLifecycleState.ENFORCED\n"
+        )
+        self._patch_subprocess(monkeypatch, diff)
+        (
+            fake_repo_with_change_machinery
+            / "docs"
+            / "calibration"
+            / "py_t22_lifecycle_change_calibrating_to_enforced_20260615.md"
+        ).write_text(
+            "transition:\n"
+            "  start_date: 2026-06-15\n"
+            "  end_date: 2026-09-15\n"
+            "  drift_summary: clean\n"
+            "  signing_reviewer: Erik\n",
+            encoding="utf-8",
+        )
+        findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
+        assert findings == []
+
     def test_change_in_scripts_dir_detected(
         self,
         fake_repo_with_change_machinery: Path,
