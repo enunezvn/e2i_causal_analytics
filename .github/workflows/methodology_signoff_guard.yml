@@ -1,0 +1,120 @@
+name: Methodology Sign-off Guard
+
+# Validates Gate N3 methodology sign-off / rejection artifacts on PR landing.
+# Triggered when a PR adds or modifies a file matching the
+# docs/results/optum_methodology_signoff_*.md or
+# docs/results/optum_methodology_rejection_*.md pattern (excluding the
+# template files, which the validator rejects by name).
+#
+# The job runs scripts/check_methodology_signoff.py against each touched
+# artifact. Validation failure (selection-rule violation, unregistered
+# reviewer, missing section, missing signature) blocks the PR.
+
+on:
+  pull_request:
+    paths:
+      - 'docs/results/optum_methodology_signoff_*.md'
+      - 'docs/results/optum_methodology_rejection_*.md'
+      - 'docs/governance/methodology_reviewer_registry.md'
+      - 'docs/governance/coi_declarations/**'
+      - 'scripts/check_methodology_signoff.py'
+      - '.github/workflows/methodology_signoff_guard.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-signoff:
+    name: Validate Methodology Sign-off
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history needed so `git log --author=...` evaluations in
+          # check_methodology_signoff.py see the full commit graph for the
+          # named period.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Identify touched artifacts
+        id: touched
+        # On pull_request events GH Actions exposes the merge ref. We diff
+        # against the PR base to find the artifacts in scope. On
+        # workflow_dispatch we fall through to scanning all dated artifacts.
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            git fetch origin "$BASE" --depth=1 || true
+            CHANGED=$(git diff --name-only --diff-filter=AM "$BASE...$HEAD" -- \
+              'docs/results/optum_methodology_signoff_*.md' \
+              'docs/results/optum_methodology_rejection_*.md' \
+              || true)
+          else
+            CHANGED=$(find docs/results \
+              -maxdepth 1 \
+              -type f \
+              \( -name 'optum_methodology_signoff_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].md' \
+                 -o -name 'optum_methodology_rejection_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].md' \) \
+              || true)
+          fi
+
+          # Filter out template files explicitly.
+          FILTERED=$(echo "$CHANGED" | grep -v '_template.md$' || true)
+
+          # Persist for the next step (multi-line output uses GH's heredoc).
+          {
+            echo "files<<EOF"
+            echo "$FILTERED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ -z "$FILTERED" ]; then
+            echo "No methodology artifacts in scope; the validator will be skipped."
+          else
+            echo "Will validate the following artifacts:"
+            echo "$FILTERED"
+          fi
+
+      - name: Run check_methodology_signoff.py on each artifact
+        if: steps.touched.outputs.files != ''
+        env:
+          # The selection-rule check shells out to git log; the workspace
+          # checkout is the natural --repo-root.
+          REPO_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          STATUS=0
+          while IFS= read -r ARTIFACT; do
+            [ -z "$ARTIFACT" ] && continue
+            echo "::group::Validating $ARTIFACT"
+            if ! python3 scripts/check_methodology_signoff.py \
+                  --repo-root "$REPO_ROOT" \
+                  --require-signature \
+                  "$ARTIFACT"; then
+              echo "::error file=$ARTIFACT::methodology sign-off validation failed"
+              STATUS=1
+            fi
+            echo "::endgroup::"
+          done <<< "${{ steps.touched.outputs.files }}"
+          exit "$STATUS"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Methodology Sign-off Guard" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "${{ steps.touched.outputs.files }}" ]; then
+            echo "_No methodology artifacts touched by this PR — guard was a no-op._" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Artifacts validated:" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "${{ steps.touched.outputs.files }}" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
