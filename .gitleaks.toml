@@ -109,6 +109,12 @@ regexes = [
   '''permutation_n_permutations''',
   '''permutation_n_effective''',
 ]
+stopwords = [
+  "permutation_null_p95",
+  "permutation_null_p99",
+  "permutation_n_permutations",
+  "permutation_n_effective",
+]
 
 # ---------------------------------------------------------------------------
 # Path allowlist — advanced_validation.py contains Plan v3 Tier 1B
