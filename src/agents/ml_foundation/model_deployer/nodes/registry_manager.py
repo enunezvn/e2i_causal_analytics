@@ -456,9 +456,8 @@ def _evaluate_regulatory_eligibility(
     threshold_failures = list(threshold_result["failures"])
 
     # The eligibility verdict reads the (now-updated) audit.
-    eligible = (
-        all_thresholds_cleared
-        and is_regulatory_eligible(audit, N1_REQUIRED_REGULATORY_GATES)
+    eligible = all_thresholds_cleared and is_regulatory_eligible(
+        audit, N1_REQUIRED_REGULATORY_GATES
     )
     candidate = all_thresholds_cleared and is_adapted_regulatory_candidate(
         audit, N1_REQUIRED_REGULATORY_GATES

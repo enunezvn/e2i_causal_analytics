@@ -214,13 +214,10 @@ class RegulatoryEligibilityAudit:
         gate_history_raw = payload.get("gate_history", []) or []
         adaptation_history_raw = payload.get("adaptation_history", []) or []
         if not isinstance(gate_history_raw, list):
-            raise TypeError(
-                f"gate_history must be a list, got {type(gate_history_raw).__name__}"
-            )
+            raise TypeError(f"gate_history must be a list, got {type(gate_history_raw).__name__}")
         if not isinstance(adaptation_history_raw, list):
             raise TypeError(
-                f"adaptation_history must be a list, "
-                f"got {type(adaptation_history_raw).__name__}"
+                f"adaptation_history must be a list, got {type(adaptation_history_raw).__name__}"
             )
         return cls(
             gate_history=copy.deepcopy(gate_history_raw),
