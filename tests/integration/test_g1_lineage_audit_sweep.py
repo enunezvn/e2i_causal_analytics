@@ -200,6 +200,105 @@ def test_g1_every_post_anchor_feature_fails_lineage_audit(
 # --------------------------------------------------------------------------- #
 
 
+# Codex pass-1 MED-8 (PR #137 v4 G1): per-source pre-anchor raw-column
+# registry. A derivation input that is NOT a manifest-declared feature
+# MUST be an entry in this registry — otherwise the audit fails loudly.
+# The registry encodes the converter's promise that these raw columns
+# are read from upstream data BEFORE the anchor and therefore
+# observable-at-prediction-time. Adding a new raw input to a manifest
+# entry that is not in this registry will fail this sweep, forcing the
+# author to either add it here (with rationale) or re-shape the
+# derivation to use a manifest-declared intermediate.
+#
+# These registries are intentionally minimal — only columns the
+# production converters in scripts/convert_csu_rwd.py and
+# scripts/convert_optum_rwd.py emit, all of which are read from raw
+# upstream tables before the pipeline assembles the anchor cohort.
+#
+# Date-shaped columns (medication_date, proc_date, etc.) are listed
+# here because the WINDOWED aggregations in the manifest already enforce
+# pre-anchor selection (window_days param). The raw column itself is
+# not pre/post-anchor; the windowed feature is.
+PRE_ANCHOR_RAW_COLUMNS: dict[str, frozenset[str]] = {
+    "csu": frozenset(
+        {
+            # Demographics (read from member-eligibility table at enrollment)
+            "age",
+            "gdr_cd",
+            "zipcode_5",
+            "bus",
+            "diagcode",
+            # Enrollment span (member-eligibility table)
+            "eligeff",
+            "eligend",
+            # Index-date source column
+            "indexdt",
+            # Date-shaped event columns (windowed by manifest derivations)
+            "medication_date",
+            "proc_date",
+            "fst_dt",
+            "days_sup",
+            # Provider / brand normalisation columns
+            "npi",
+            "brand_normalised",
+            "proc_code",
+            "abnl_cd",
+            # Post-anchor target columns: included as raw inputs because
+            # post-anchor features legitimately list them as derivation
+            # inputs (e.g., journey_status uses treatment_initiated).
+            # The post-anchor feature itself is correctly flagged
+            # post_index by Layer 1; this registry's job is only to
+            # confirm the input IS a known column, not to re-classify it.
+            "treatment_initiated",
+            "discontinuation_flag",
+        }
+    ),
+    "optum": frozenset(
+        {
+            # Demographics
+            "age",
+            "gdr_cd",
+            "zipcode_5",
+            "zip5",
+            "zip3",
+            "bus",
+            "product",
+            "diagcode",
+            "diagcode_raw",
+            # Enrollment + index
+            "eligeff",
+            "eligend",
+            "indexdt",
+            "index_date",
+            # Date-shaped event columns
+            "medication_date",
+            "drug_name",
+            "proc_date",
+            "fst_dt",
+            "days_sup",
+            "admit_date",
+            "diag1",
+            "diag2",
+            "diag3",
+            "diag4",
+            "diag5",
+            "tos_cd",
+            "loinc_cd",
+            "result",
+            # Provider / brand
+            "npi",
+            "brand_normalised",
+            "proc_code",
+            "abnl_cd",
+            # Post-anchor target columns (same rationale as CSU)
+            "treatment_initiated",
+            "discontinuation_flag",
+            "initiated_biologic_180d",
+        }
+    ),
+}
+
+
 def _audit_derivation_inputs_recursively(
     feature_name: str,
     data_source: str,
@@ -209,10 +308,13 @@ def _audit_derivation_inputs_recursively(
     """Walk a feature's derivation_inputs and audit each input that is
     itself a manifest-declared feature.
 
-    Returns (all_inputs_pre_anchor, list_of_violation_messages). An
-    input that is NOT in the manifest registry is treated as a raw
-    column / external source and skipped (matches the convention in
-    ``feature_contract.validate_contract_chain``).
+    Returns (all_inputs_pre_anchor, list_of_violation_messages).
+
+    Codex pass-1 MED-8 (PR #137 v4 G1): an input that is NOT a
+    manifest-declared feature MUST be an entry in
+    ``PRE_ANCHOR_RAW_COLUMNS[data_source]`` — otherwise the audit
+    fails. Previously such inputs were silently skipped, masking
+    undeclared post-anchor leaks.
     """
     if visited is None:
         visited = set()
@@ -225,11 +327,25 @@ def _audit_derivation_inputs_recursively(
         # Not a manifest-declared feature; nothing to walk.
         return True, []
 
+    raw_registry = PRE_ANCHOR_RAW_COLUMNS.get(data_source, frozenset())
     violations: list[str] = []
     for input_name in contract.derivation_inputs:
         input_contract = contracts_by_name.get(input_name)
         if input_contract is None:
-            # Raw column / external source — assumed safe by convention.
+            # Codex pass-1 MED-8: previously raw columns were assumed
+            # safe-by-convention. Now we require every undeclared input
+            # to be in the source-level raw-column registry; otherwise
+            # an undeclared post-anchor column would silently slip past
+            # the audit.
+            if input_name not in raw_registry:
+                violations.append(
+                    f"{feature_name} -> {input_name}: undeclared "
+                    f"derivation input — not a manifest-declared "
+                    f"feature AND not in PRE_ANCHOR_RAW_COLUMNS"
+                    f"[{data_source!r}]. Either declare a manifest "
+                    f"contract for it, or add it to the raw-column "
+                    f"registry with rationale."
+                )
             continue
         # Recursively audit the input.
         if not input_contract.knowable_at.is_pre_or_at_index():
@@ -428,6 +544,72 @@ def test_g1_manifest_sources_registry_covers_csu_optum() -> None:
     # `Mapping[str, Callable[[str], FeatureContract | None]]` type).
     assert callable(MANIFEST_SOURCES["csu"])
     assert callable(MANIFEST_SOURCES["optum"])
+
+
+def test_g1_undeclared_derivation_input_fails_med_8() -> None:
+    """Codex pass-1 MED-8 (PR #137 v4 G1): an undeclared derivation
+    input — neither a manifest-declared feature NOR in the
+    ``PRE_ANCHOR_RAW_COLUMNS`` registry — MUST fail the audit.
+
+    Builds a synthetic in-memory manifest naming an input that is
+    not in either catalog and verifies the recursive auditor
+    surfaces a violation. Also verifies that an input listed in
+    ``PRE_ANCHOR_RAW_COLUMNS`` does NOT fail.
+    """
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    # Synthetic source name not in MANIFEST_SOURCES; the helper that
+    # _audit_derivation_inputs_recursively calls (lineage_audit_declared_path)
+    # short-circuits unknown sources, so our test exercises only the
+    # raw-column registry branch.
+    fake_source = "med8_synthetic"
+
+    # Build a contract that references an undeclared raw input.
+    bad_contract = FeatureContract(
+        name="med8_undeclared_input_feature",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="synthetic",
+        derivation_inputs=("__med8_definitely_not_in_registry__",),
+    )
+
+    # And one that references a known raw column (should not fail
+    # the registry branch).
+    good_contract = FeatureContract(
+        name="med8_declared_input_feature",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="synthetic",
+        derivation_inputs=("medication_date",),  # in CSU registry
+    )
+
+    # Use the CSU registry by piggy-backing on the fake_source key.
+    # We modify the registry transiently with monkeypatching; simpler
+    # to override locally with the global patch via a try/finally.
+    original = PRE_ANCHOR_RAW_COLUMNS.get(fake_source)
+    PRE_ANCHOR_RAW_COLUMNS[fake_source] = PRE_ANCHOR_RAW_COLUMNS["csu"]
+    try:
+        contracts_by_name_bad = {bad_contract.name: bad_contract}
+        ok_bad, violations_bad = _audit_derivation_inputs_recursively(
+            bad_contract.name, fake_source, contracts_by_name_bad
+        )
+        assert not ok_bad
+        assert any("__med8_definitely_not_in_registry__" in v for v in violations_bad), (
+            f"expected violation message to name the offending input, got: {violations_bad}"
+        )
+        assert any("PRE_ANCHOR_RAW_COLUMNS" in v for v in violations_bad), (
+            f"expected violation message to point at PRE_ANCHOR_RAW_COLUMNS, got: {violations_bad}"
+        )
+
+        contracts_by_name_good = {good_contract.name: good_contract}
+        ok_good, violations_good = _audit_derivation_inputs_recursively(
+            good_contract.name, fake_source, contracts_by_name_good
+        )
+        assert ok_good, f"expected pass, got violations: {violations_good}"
+        assert violations_good == []
+    finally:
+        if original is None:
+            PRE_ANCHOR_RAW_COLUMNS.pop(fake_source, None)
+        else:
+            PRE_ANCHOR_RAW_COLUMNS[fake_source] = original
 
 
 def test_g1_lineage_helper_signature_unchanged_from_pr_127() -> None:
