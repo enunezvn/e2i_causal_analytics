@@ -442,9 +442,7 @@ def compute_coefficient_sensitivity(
         # significant set. In the current single-strategy design the
         # max is at most 1; the metric exists so future multi-strategy
         # sweeps can populate it without restructuring the helper.
-        max_flips_per_feature = max(
-            int(per_feature[f]["flip_count"]) for f in significant_compared
-        )
+        max_flips_per_feature = max(int(per_feature[f]["flip_count"]) for f in significant_compared)
     else:
         flips = 0
         max_cv = 0.0
