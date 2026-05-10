@@ -68,8 +68,12 @@ class TestDeriveIndexDateFeasibilityAware:
         """eligeff + PRE > eligend - POST (enrollment too short for any
         feasible index)."""
         cv = _make_converter()
-        # 540d total enrollment but PRE+POST=540 makes feasibility band a
-        # single point; one day shorter and the band is empty.
+        # 539d total enrollment: feasible_start = eligeff + 360 = D+360,
+        # feasible_end = eligend - 180 = D+359 → band is empty and the
+        # method returns None. At exactly 540d (PRE+POST), feasible_start
+        # equals feasible_end, producing a valid single-point band — the
+        # `feasible_start > feasible_end` guard uses strict > and does not
+        # block that case (covered by a separate test).
         eligeff = _ts("2020-01-01")
         eligend = eligeff + timedelta(days=ENROLLMENT_PRE_DAYS + ENROLLMENT_POST_DAYS - 1)
         demo_row = pd.Series(
