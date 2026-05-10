@@ -572,6 +572,14 @@ class OptumDataConverter:
         succeed when this returns non-None. Returns ``None`` when eligeff /
         eligend are missing, the feasibility band is empty, or no anchor
         exists inside the band.
+
+        Note on "2nd": the priority-1 rule selects the 2nd chronologically
+        ``in-band`` inpatient L50.x admit date, not the 2nd of all inpatient
+        dates on file. When a patient has 3 total admits with 2 inside the
+        feasibility band, ``_derive_index_date`` would pick the 2nd of all 3;
+        this method picks the 2nd of the 2 in-band. The two can differ — by
+        construction, since the fallback only fires when the original choice
+        already failed enrollment.
         """
         eligeff = demo_row.get("eligeff")
         eligend = demo_row.get("eligend")
