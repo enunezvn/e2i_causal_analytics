@@ -276,6 +276,9 @@ def extract_coi_path(doc_text: str) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 
 
+MAX_SIGNOFF_AGE_DAYS: int = 30
+
+
 def check_filename(doc_path: Path) -> CheckResult:
     """Filename must match optum_methodology_(signoff|rejection)_<YYYYMMDD>.md.
 
@@ -296,6 +299,77 @@ def check_filename(doc_path: Path) -> CheckResult:
         "filename",
         False,
         f"filename does not match expected pattern: {name!r}",
+    )
+
+
+def check_signoff_age(
+    doc_path: Path,
+    today: Optional[str] = None,
+    max_age_days: int = MAX_SIGNOFF_AGE_DAYS,
+) -> CheckResult:
+    """M2: reject sign-offs older than ``max_age_days`` vs ``today``.
+
+    The artifact's date is parsed from the filename suffix
+    ``_<YYYYMMDD>.md`` (the FILENAME_PATTERN-captured ``date`` group).
+    ``today`` defaults to the system date in ISO-8601 format; tests can
+    inject a fixed reference for deterministic behaviour.
+
+    Returns:
+      * PASS when the doc date is within the window or in the future
+        (future-dated docs are tolerated; the upstream filename check
+        already reports invalid dates).
+      * FAIL when the doc date is older than ``max_age_days`` vs today.
+      * FAIL on filename pattern mismatch (defensive — the orchestrator
+        already filtered via check_filename, but we re-validate so the
+        function stays callable in isolation).
+    """
+
+    import datetime as _dt
+
+    name = doc_path.name
+    match = FILENAME_PATTERN.match(name)
+    if match is None:
+        return CheckResult(
+            "signoff_age",
+            False,
+            f"filename does not carry a parseable date: {name!r}",
+        )
+
+    date_str = match.group("date")
+    try:
+        doc_date = _dt.date(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:8]))
+    except ValueError as exc:
+        return CheckResult(
+            "signoff_age",
+            False,
+            f"unparseable date {date_str!r} in filename: {exc}",
+        )
+
+    if today is None:
+        ref_date = _dt.date.today()
+    else:
+        try:
+            ref_date = _dt.date.fromisoformat(today)
+        except ValueError as exc:
+            return CheckResult(
+                "signoff_age",
+                False,
+                f"unparseable today {today!r}: {exc}",
+            )
+
+    age_days = (ref_date - doc_date).days
+    if age_days > max_age_days:
+        return CheckResult(
+            "signoff_age",
+            False,
+            f"sign-off filename date {doc_date.isoformat()} is {age_days} days "
+            f"older than today={ref_date.isoformat()} (max={max_age_days}d)",
+        )
+    return CheckResult(
+        "signoff_age",
+        True,
+        f"sign-off filename date {doc_date.isoformat()} is {age_days} days old "
+        f"(<= {max_age_days}d)",
     )
 
 
@@ -1031,6 +1105,8 @@ def check_signoff(
     repo_root: Path,
     require_signature: bool = False,
     keyring_dir: Optional[Path] = None,
+    today: Optional[str] = None,
+    max_age_days: int = MAX_SIGNOFF_AGE_DAYS,
 ) -> List[CheckResult]:
     """Run all checks against ``doc_path`` and return their results."""
 
@@ -1047,6 +1123,7 @@ def check_signoff(
 
     doc_text = doc_path.read_text(encoding="utf-8")
 
+    results.append(check_signoff_age(doc_path, today=today, max_age_days=max_age_days))
     results.append(check_required_sections(doc_text, kind))
     results.append(check_signature_present(doc_text))
     results.append(check_coi_referenced(doc_text, repo_root=repo_root))
@@ -1127,6 +1204,25 @@ def build_parser() -> argparse.ArgumentParser:
             "--homedir. If unset, the system default keyring is used."
         ),
     )
+    parser.add_argument(
+        "--today",
+        default=None,
+        help=(
+            "Reference date (YYYY-MM-DD) for the sign-off-age check (M2). "
+            "Defaults to the system date. Pass an explicit value when "
+            "running the validator from a deterministic harness."
+        ),
+    )
+    parser.add_argument(
+        "--max-age-days",
+        type=int,
+        default=MAX_SIGNOFF_AGE_DAYS,
+        help=(
+            f"Maximum age (days) of the sign-off artifact's filename date "
+            f"vs --today. Older artifacts are rejected. Default: "
+            f"{MAX_SIGNOFF_AGE_DAYS}."
+        ),
+    )
     return parser
 
 
@@ -1146,6 +1242,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         repo_root,
         require_signature=args.require_signature,
         keyring_dir=args.keyring_dir,
+        today=args.today,
+        max_age_days=args.max_age_days,
     )
     print(render_report(results))
     return 0 if all(r.ok for r in results) else 1
