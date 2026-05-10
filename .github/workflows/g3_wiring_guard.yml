@@ -1,0 +1,147 @@
+name: G3 Wiring Guard
+
+# Plan v4 §2 Gate G3 — mechanical CI enforcement of the "G3 lands LAST"
+# sequencing rule. Runs `scripts/check_g3_wiring_guard.py` on every PR and
+# every push to main. The script AST-scans
+# `src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py`
+# for `hblp_classify` calls inside the gated functions
+# (`_build_verdict`, `_compose_legacy_verdict`, `_adversarial_input`).
+#
+# Failure semantics:
+#   * Wiring NOT detected (pre-G3) → guard inactive → PASS.
+#   * Wiring detected (G3 has wired HBLP into the production default path)
+#     → both `docs/calibration/g1_completion_signoff_20260510.md` and
+#     `docs/calibration/g2_completion_signoff_20260510.md` MUST exist at
+#     HEAD AND each must reference a `commit:` SHA that is an ancestor of
+#     HEAD. Failure of either is a hard PR block.
+#
+# This is the codex-rescue HIGH-1 mitigation:
+# > "G3 lands last" is a process rule that an honest PR sequence will follow
+# > but a determined developer can sidestep with a feature-flag config flip
+# > or a commit labeled "test fix" that quietly enables HBLP. The AST scan
+# > + signoff-file requirement makes the rule machine-enforceable.
+#
+# H3 SECURITY ADVISORY (mirror of methodology_signoff_guard.yml):
+#   This workflow currently runs `scripts/check_g3_wiring_guard.py` from
+#   the PR checkout — i.e. the PR can also modify the validator and have
+#   its weakened version validate itself. The "Run validator from a
+#   pinned trusted ref" step below is the production fix; until it is
+#   enabled, `scripts/check_g3_wiring_guard.py` MUST be added to a
+#   CODEOWNERS entry that requires review by a member of the security
+#   team. Recommended production deployment:
+#
+#     - Move the validator into a separate, protected repository
+#       `org/governance-actions` and reference it via
+#       `uses: org/governance-actions/g3-wiring-guard@<sha>` pinned by
+#       SHA on `main` of THIS repo's protected refs.
+#     - Alternatively, add a "fetch validator from base ref" step that
+#       uses `git show <base_sha>:scripts/check_g3_wiring_guard.py >
+#       /tmp/validator.py` and invokes the base-ref copy.
+
+on:
+  pull_request:
+    paths:
+      - 'src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py'
+      - 'docs/calibration/g1_completion_signoff_*.md'
+      - 'docs/calibration/g2_completion_signoff_*.md'
+      - 'docs/governance/methodology_reviewer_registry.md'
+      - 'scripts/check_g3_wiring_guard.py'
+      - '.github/workflows/g3_wiring_guard.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py'
+      - 'docs/calibration/g1_completion_signoff_*.md'
+      - 'docs/calibration/g2_completion_signoff_*.md'
+      - 'docs/governance/methodology_reviewer_registry.md'
+      - 'scripts/check_g3_wiring_guard.py'
+      - '.github/workflows/g3_wiring_guard.yml'
+  workflow_dispatch:
+
+jobs:
+  g3-wiring-guard:
+    name: G3 Wiring Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history needed so `git merge-base --is-ancestor` resolves
+          # against the full commit graph — a shallow clone fails because
+          # the signoff's referenced SHA may not exist in the shallow set.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve HEAD SHA
+        id: head-sha
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch trusted validator from base ref (H3 mitigation)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # H3: run the validator from the PR's base ref so a malicious PR
+          # cannot weaken the validator and have its own weakened copy
+          # validate itself. If the validator does not yet exist on base
+          # (this PR introducing it), fall back to the PR-checkout copy
+          # and log a warning that a CODEOWNERS-gated review is required.
+          mkdir -p /tmp/governance
+          if [ -n "$BASE_SHA" ] && \
+             git cat-file -e "${BASE_SHA}:scripts/check_g3_wiring_guard.py" 2>/dev/null; then
+            git show "${BASE_SHA}:scripts/check_g3_wiring_guard.py" \
+              > /tmp/governance/check_g3_wiring_guard.py
+            echo "validator_source=base_sha"
+            echo "Using base-ref validator at SHA $BASE_SHA"
+          else
+            cp scripts/check_g3_wiring_guard.py /tmp/governance/check_g3_wiring_guard.py
+            echo "::warning::validator absent on base ref; using PR-checkout copy. CODEOWNERS gating required."
+            echo "validator_source=pr_head"
+          fi
+
+      - name: Use PR-checkout validator (push events)
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/governance
+          cp scripts/check_g3_wiring_guard.py /tmp/governance/check_g3_wiring_guard.py
+
+      - name: Run G3 wiring guard
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+          HEAD_SHA: ${{ steps.head-sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo "::group::G3 wiring guard output"
+          python3 /tmp/governance/check_g3_wiring_guard.py \
+            --repo-root "$REPO_ROOT" \
+            --head-sha "$HEAD_SHA" 2>&1 | tee /tmp/governance/guard_output.txt
+          EXIT=${PIPESTATUS[0]}
+          echo "::endgroup::"
+          if [ "$EXIT" -ne 0 ]; then
+            echo "::error::G3 wiring guard FAILED — HBLP wiring detected without G1+G2 signoffs in place. See output above for the failing signoff/ancestor checks. Per Plan v4 §3 sequencing, G3 lands LAST: G1 (PR #137) and G2 (PR #136) must merge to main BEFORE G3 wiring lands."
+          fi
+          exit "$EXIT"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## G3 Wiring Guard" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f /tmp/governance/guard_output.txt ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/governance/guard_output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_Guard did not produce output — pre-step failure or pure no-op._" >> "$GITHUB_STEP_SUMMARY"
+          fi
