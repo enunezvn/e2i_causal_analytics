@@ -147,13 +147,13 @@ class TestT1ThresholdSemantics:
         """Pin the helper's strict ``>`` (not ``>=``) check on the T1
         threshold. Read the helper's source to confirm the operator
         used; if someone reverts to ``>=`` the test catches it."""
-        from src.agents.ml_foundation.data_preparer.nodes import (
-            coefficient_sensitivity as cs,
-        )
-
         # The helper module file must contain the strict-greater-than
         # form. We grep the source for the exact operator pattern.
         import inspect
+
+        from src.agents.ml_foundation.data_preparer.nodes import (
+            coefficient_sensitivity as cs,
+        )
 
         source = inspect.getsource(cs.compute_coefficient_sensitivity)
         # Expect: "if max_flips_per_feature > G5_FLIPS_PER_FEATURE_MAX:"
