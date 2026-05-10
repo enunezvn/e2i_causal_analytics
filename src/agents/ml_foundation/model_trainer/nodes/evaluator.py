@@ -97,6 +97,21 @@ T2_3_HONEST_BAND_MAX_LIFT_DEFAULT: float = 0.30
 T2_3_HONEST_BAND_CEILING_DEFAULT: float = 0.95
 T2_3_HONEST_BAND_NOISE_SIGMA_DEFAULT: float = 1.0
 
+# Plan v4 §6 G4 — T2.3 lifecycle marker.
+#
+# The honest band is currently advisory-observability-only — the band-derivation
+# constants above (MIN_LIFT, MAX_LIFT, CEILING, NOISE_SIGMA) were calibrated
+# against cohort metrics whose values were used to argue for the band's
+# correctness (CSU n=9607 val_AUC=0.6592, Optum n=1294 cv_mean=0.6795,
+# synthetic_rwd_realistic [0.62, 0.68]). Promoting them to deployer enforcement
+# would be data-snooping until an un-touched cohort is onboarded.
+#
+# See `docs/calibration/t23_cohort_bands_20260510.md` for the advisory framing
+# and `docs/calibration/t26_future_cohort_plan_20260510.md` for the graduation
+# criteria. Possible future values: "advisory" (current), "shadow" (T2.6b
+# integration), "enforced" (post-graduation).
+T23_BAND_LIFECYCLE_STATE: Literal["advisory", "shadow", "enforced"] = "advisory"
+
 # Backlog #20 Gap 2: F1-fallback fires when validation MCC at the
 # canonically-chosen threshold falls below this floor. 0.20 is the band
 # below which the canonical Youden's J / cost-optimal pick is treated as
@@ -262,6 +277,17 @@ def _emit_cohort_derived_honest_band(
     noise_sigma: float = T2_3_HONEST_BAND_NOISE_SIGMA_DEFAULT,
 ) -> None:
     """Plan v3 §4 T2.3 — cohort-derived honest band (advisory mode only).
+
+    ADVISORY OBSERVABILITY ONLY — see
+    ``docs/calibration/t23_cohort_bands_20260510.md`` for the advisory
+    framing and ``docs/calibration/t26_future_cohort_plan_20260510.md`` for
+    the promotion-to-enforcement criteria. The band-derivation constants
+    (``T2_3_HONEST_BAND_*_DEFAULT``) were calibrated against cohort metrics
+    whose values were used to argue for the band's correctness (CSU n=9607
+    val_AUC=0.6592, Optum n=1294 cv_mean=0.6795, synthetic_rwd_realistic
+    [0.62, 0.68]); promoting them to deployer enforcement is data-snooping
+    until an un-touched cohort lands. The lifecycle marker
+    ``T23_BAND_LIFECYCLE_STATE`` (above) is set to ``"advisory"``.
 
     Surfaces the cohort-conditional honest range of test AUC values onto
     ``validation_metrics``. An "honest" AUC is large enough to be
