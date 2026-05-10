@@ -558,18 +558,20 @@ def scan_lifecycle_changes(repo_root: Path, base_ref: str) -> list[ScanFinding]:
         slug = change["slug"]
         from_state = change["from_state"]
         to_state = change["to_state"]
-        # N2 finding M1: slugs are now namespaced (``py_t22`` vs ``yaml_t22``)
-        # so a doc must match the prefixed slug exactly. We also accept the
-        # bare slug (``t22``) for backward compat with docs authored before
-        # the prefix policy landed; a future hard-cut would drop the bare
-        # form. Lower-casing is preserved for case-insensitive filenames.
-        bare_slug = slug.split("_", 1)[1] if "_" in slug else slug
+        # N2 finding M1 + pass-2 follow-up (M1 PARTIAL + new MED): docs
+        # MUST use the namespaced slug (``py_t22`` or ``yaml_t22``).
+        # The bare-slug fallback (``t22``) was originally kept for
+        # backward compat, but it reintroduces the cross-source
+        # collision risk M1 was designed to eliminate (a Python
+        # ``LIFECYCLE_STATE_T22`` change could match a doc actually
+        # authored for the YAML ``t22.yaml`` config). The repo has zero
+        # lifecycle-change docs at the time this fallback is removed
+        # (verified: ``find docs/calibration -name '*_lifecycle_change_*.md'``
+        # returns only the template), so the cut is safe.
+        # Lower-casing is preserved for case-insensitive filesystems.
         candidate_keys = [
             (slug, from_state, to_state),
             (slug.lower(), from_state, to_state),
-            # Backward-compat: docs without the py_/yaml_ prefix still match.
-            (bare_slug, from_state, to_state),
-            (bare_slug.lower(), from_state, to_state),
         ]
         matched = False
         matched_doc: Optional[Path] = None

@@ -501,9 +501,7 @@ class TestScanYamlConfigs:
         """
         sibling = fake_repo / "conf"
         sibling.mkdir()
-        (sibling / "fake_gate.yaml").write_text(
-            "threshold: 0.7\nbuffer: 0.05\n", encoding="utf-8"
-        )
+        (sibling / "fake_gate.yaml").write_text("threshold: 0.7\nbuffer: 0.05\n", encoding="utf-8")
         findings = scan_yaml_configs(fake_repo)
         assert findings == [], (
             "scanner currently scans only `config/` (recursive); a YAML "
@@ -519,9 +517,7 @@ class TestScanYamlConfigs:
         for sibling_name in ("configs", "settings"):
             sibling = fake_repo / sibling_name
             sibling.mkdir()
-            (sibling / "fake_gate.yaml").write_text(
-                "threshold: 0.7\n", encoding="utf-8"
-            )
+            (sibling / "fake_gate.yaml").write_text("threshold: 0.7\n", encoding="utf-8")
         findings = scan_yaml_configs(fake_repo)
         assert findings == [], (
             "scanner must NOT pick up sibling roots configs/ or "
@@ -690,12 +686,13 @@ class TestScanLifecycleChangesIntegration:
             "+LIFECYCLE_STATE_T22 = GateLifecycleState.CALIBRATING\n"
         )
         self._patch_subprocess(monkeypatch, diff)
-        # Plant a matching doc.
+        # Plant a matching doc — N2 pass-2 M1 + new MED: doc filename
+        # MUST use the namespaced ``py_`` / ``yaml_`` prefix.
         (
             fake_repo_with_change_machinery
             / "docs"
             / "calibration"
-            / "t22_lifecycle_change_advisory_to_calibrating_20260615.md"
+            / "py_t22_lifecycle_change_advisory_to_calibrating_20260615.md"
         ).write_text("transition record\n", encoding="utf-8")
         findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
         assert findings == []
@@ -717,7 +714,7 @@ class TestScanLifecycleChangesIntegration:
             fake_repo_with_change_machinery
             / "docs"
             / "calibration"
-            / "t22_lifecycle_change_calibrating_to_enforced_20260615.md"
+            / "py_t22_lifecycle_change_calibrating_to_enforced_20260615.md"
         ).write_text("just some prose\n", encoding="utf-8")
         findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
         codes = {f.code for f in findings}
@@ -739,7 +736,7 @@ class TestScanLifecycleChangesIntegration:
             fake_repo_with_change_machinery
             / "docs"
             / "calibration"
-            / "t22_lifecycle_change_calibrating_to_enforced_20260615.md"
+            / "py_t22_lifecycle_change_calibrating_to_enforced_20260615.md"
         ).write_text(
             "start_date: 2026-06-15\n"
             "end_date: 2026-09-15\n"
@@ -747,6 +744,66 @@ class TestScanLifecycleChangesIntegration:
             "signing_reviewer: Erik Nunez\n",
             encoding="utf-8",
         )
+        findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
+        assert findings == []
+
+    def test_bare_slug_doc_no_longer_matches(
+        self,
+        fake_repo_with_change_machinery: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """N2 pass-2 M1 PARTIAL + new MED: doc filenames MUST use the
+        ``py_`` or ``yaml_`` prefix. A bare-slug doc (``t22_*``) used
+        to match via the backward-compat fallback; the fallback is now
+        removed because it reintroduced the cross-source collision M1
+        was designed to eliminate. The change should now be reported
+        as missing a doc.
+        """
+        diff = (
+            "+++ b/src/x.py\n"
+            "@@ -1 +1 @@\n"
+            "-LIFECYCLE_STATE_T22 = GateLifecycleState.ADVISORY\n"
+            "+LIFECYCLE_STATE_T22 = GateLifecycleState.CALIBRATING\n"
+        )
+        self._patch_subprocess(monkeypatch, diff)
+        # Plant a BARE-slug doc — must NOT satisfy the gate.
+        (
+            fake_repo_with_change_machinery
+            / "docs"
+            / "calibration"
+            / "t22_lifecycle_change_advisory_to_calibrating_20260615.md"
+        ).write_text("transition record\n", encoding="utf-8")
+        findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
+        codes = {f.code for f in findings}
+        assert "missing_lifecycle_change_doc" in codes, (
+            "bare-slug docs (`t22_*`) must NOT satisfy the gate after "
+            "the M1 PARTIAL fix; the doc filename must use the "
+            "`py_` or `yaml_` prefix. got "
+            f"{[f.to_dict() for f in findings]}"
+        )
+
+    def test_yaml_change_with_namespaced_doc_passes(
+        self,
+        fake_repo_with_change_machinery: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Sanity counter-test: a YAML change with a properly-prefixed
+        ``yaml_*`` doc still passes after the bare-slug fallback is
+        removed.
+        """
+        diff = (
+            "+++ b/config/fake_gate.yaml\n"
+            "@@ -1 +1 @@\n"
+            "-lifecycle_state: advisory\n"
+            "+lifecycle_state: calibrating\n"
+        )
+        self._patch_subprocess(monkeypatch, diff)
+        (
+            fake_repo_with_change_machinery
+            / "docs"
+            / "calibration"
+            / "yaml_fake_gate_lifecycle_change_advisory_to_calibrating_20260615.md"
+        ).write_text("transition record\n", encoding="utf-8")
         findings = scan_lifecycle_changes(fake_repo_with_change_machinery, "origin/main")
         assert findings == []
 
