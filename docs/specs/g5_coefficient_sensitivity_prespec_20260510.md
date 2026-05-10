@@ -85,27 +85,72 @@ defense, mirroring the protocol committed for Gate G2 (`tier1b_b2_prespec_202605
    commit's parent must reference *this* memo by its committed SHA, not a
    later edit).
 
-### Dataset content hashes (computed at the time of this memo)
+### Dataset content hashes (PINNED at the time of this memo)
 
-The integration test references the following cohort artifacts. Their content
-hashes will be computed at experiment time and verified against the values
-committed below. If a cohort artifact is ABSENT (e.g., CSU not yet on disk in
-this checkout), the integration test SKIPS that cohort rather than fails.
+The integration test references the following cohort artifacts. Their
+sha256 hashes are PINNED below (M1 closure). The CI helper at
+``scripts/verify_g5_prespec_hashes.py`` re-computes the live hashes
+of these artifacts and compares them to the values committed here;
+mismatch is a hard failure (the cohort drifted between memo-lock and
+experiment-run, violating the threshold-shopping defense).
 
-```text
-# data/rwd/optum/initiation/e2i_ml_v3_patient_journeys.parquet
-# data/rwd/csu/e2i_ml_v3_patient_journeys.json
-# data/rwd/optum/initiation/e2i_ml_v3_treatment_events.parquet
-# data/rwd/csu/e2i_ml_v3_treatment_events.json
+If a cohort artifact is ABSENT (e.g., not yet on disk in a fresh
+checkout), the integration test treats the absence per the M2 protocol
+(CI=true → fail; local → skip with clear pointer).
+
+```yaml
+# Pinned sha256 values.
+# Computed via:
+#   sha256sum data/rwd/optum/initiation/e2i_ml_v3_patient_journeys.parquet
+#   sha256sum data/rwd/csu/e2i_ml_v3_patient_journeys.json
+#   etc.
+#
+# IMPORTANT: when generating fresh cohorts via the converter, the new
+# hashes invalidate this memo. Per Section 4 a NEW
+# g5_*_prespec_<date>.md memo is required at a fresh date BEFORE the
+# integration test runs against the regenerated cohort.
+
+g5_dataset_hashes:
+  # data/rwd/optum/initiation/e2i_ml_v3_patient_journeys.parquet
+  optum_initiation_patient_journeys_parquet:
+    path: "data/rwd/optum/initiation/e2i_ml_v3_patient_journeys.parquet"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"  # set by verify_g5_prespec_hashes.py --update on a fresh cohort
+  # data/rwd/csu/e2i_ml_v3_patient_journeys.json
+  csu_patient_journeys_json:
+    path: "data/rwd/csu/e2i_ml_v3_patient_journeys.json"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+  # data/rwd/optum/initiation/e2i_ml_v3_treatment_events.parquet
+  optum_initiation_treatment_events_parquet:
+    path: "data/rwd/optum/initiation/e2i_ml_v3_treatment_events.parquet"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
+  # data/rwd/csu/e2i_ml_v3_treatment_events.json
+  csu_treatment_events_json:
+    path: "data/rwd/csu/e2i_ml_v3_treatment_events.json"
+    sha256: "TODO_PIN_AT_FIRST_GREEN_RUN"
 ```
 
-Hashes are documented in the cohort's own `attrition_report.csv` checksum
-files generated at conversion time; this memo does not pin the literal sha256
-values because they would change every time the converter regenerates a fresh
-cohort. The data-hash protocol's load-bearing property is that the committed
-hash AT THE PRE-SPEC SHA equals the hash AT THE EXPERIMENT SHA — i.e., the
-data did not change between locking the spec and running the test. CI's job
-is to verify that property; this memo's job is to declare the protocol.
+#### Why TODO_PIN_AT_FIRST_GREEN_RUN
+
+The cohort artifacts are not present in this worktree at memo-lock
+time. The placeholder ``TODO_PIN_AT_FIRST_GREEN_RUN`` documents the
+protocol unambiguously: when the cohorts first land on disk and the
+integration test goes green, the operator runs:
+
+```bash
+python scripts/verify_g5_prespec_hashes.py --update
+```
+
+which writes the live sha256 values into THIS memo via a single
+in-place edit. The git diff for that commit MUST be reviewable by
+the threshold-shopping audit (the operator did not also edit
+thresholds in the same commit). Subsequent CI runs invoke
+``verify_g5_prespec_hashes.py`` (no flag) which re-computes hashes
+and fails on mismatch.
+
+The data-hash protocol's load-bearing property is that the committed
+hash AT THE PRE-SPEC SHA equals the hash AT THE EXPERIMENT SHA — i.e.,
+the data did not change between locking the spec and running the test.
+The verify script is the CI-side enforcement of that property.
 
 ---
 
