@@ -554,77 +554,161 @@ def test_g1_hblp_relaxation_surfaces_only_declared_path_valid_features(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    "data_source,artifact_env_var",
-    [
-        ("csu", "G1_CSU_ARTIFACT_PATH"),
-        ("optum", "G1_OPTUM_ARTIFACT_PATH"),
-    ],
-)
+# Codex pass-2 HIGH-4 (PR #137 v4 G1): per-source identity expectations the
+# captured pipeline artifact MUST match. Used by the relaxed-feature audit
+# to confirm the artifact in the registry actually came from the cohort
+# we're trying to audit (rather than a stray same-pytest-run artifact from
+# an unrelated test).
+G1_ARTIFACT_IDENTITY = {
+    "csu": {
+        "feature_manifest_source": "csu",
+        "indication": "Chronic Spontaneous Urticaria (CSU)",
+        "expected_cohort_size": 9607,
+    },
+    "optum": {
+        "feature_manifest_source": "optum",
+        "indication": "initiation",
+        "expected_cohort_size": 1294,
+    },
+}
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.real_data
+@pytest.mark.timeout(2000)
+@pytest.mark.parametrize("data_source", ["csu", "optum"])
 def test_g1_lineage_audit_on_actual_relaxed_features(
     data_source: str,
-    artifact_env_var: str,
+    g1_artifact_registry: dict,
+    request: pytest.FixtureRequest,
 ) -> None:
-    """Codex pass-1 HIGH-4 (PR #137 v4 G1): audit ACTUAL relaxed
-    features from a captured pipeline run, not synthetic z-scores.
+    """Codex pass-1 HIGH-4 + pass-2 HIGH-4 NOT-CLOSED (PR #137 v4 G1):
+    audit ACTUAL relaxed features from a captured pipeline run, not
+    synthetic z-scores.
 
-    Reads the pipeline artifact JSON path from the env var named in
-    ``artifact_env_var`` (e.g., ``G1_CSU_ARTIFACT_PATH``). Captures the
-    ``adaptive_verdicts`` list and treats each layer="3" verdict with
-    ``hblp_relaxed=True`` (or ``severity != "high"`` when
-    ``hblp_classify`` would have produced "high" under legacy 5σ) as a
-    "relaxed feature". For each such feature, calls
-    ``lineage_audit_declared_path`` and asserts ``declared_path_valid is True``.
+    Reads the captured pipeline artifact JSON from the SESSION-SHARED
+    ``g1_artifact_registry`` populated by the CSU + Optum integration
+    test fixtures in this same pytest run. There is NO env-var
+    indirection; the registry is the single source of truth so the
+    captured-artifact path is always exercised when the upstream
+    fixtures ran.
+
+    Codex pass-2 HIGH-4 closure
+    ---------------------------
+    The pass-1 implementation skipped when ``G1_CSU_ARTIFACT_PATH`` /
+    ``G1_OPTUM_ARTIFACT_PATH`` env vars were unset. CI configurations
+    rarely set those env vars, so the captured-artifact half could go
+    green without auditing any actual relaxed feature. The pass-2 fix
+    (a) consumes artifacts from the SAME pytest run via a
+    session-shared registry, (b) defaults to HARD-FAIL when no artifact
+    is registered (the symmetric pair of HIGH-1's data-fixture policy),
+    and (c) opt-in skip via ``ALLOW_MISSING_REAL_DATA=1`` only.
+
+    Codex pass-2 HIGH-5 closure
+    ---------------------------
+    Beyond the CSU empty-set assertion (the original HIGH-5 invariant),
+    we additionally:
+    - Assert artifact identity (``feature_manifest_source``,
+      ``indication``, ``cohort_size``) so a stray artifact from an
+      unrelated run cannot satisfy this gate.
+    - Assert ``adaptive_verdicts`` is present AND non-empty (a
+      vacuous-pass on empty/malformed verdicts is itself a regression).
+    - For Optum, assert the relaxed-feature set is non-empty (HBLP
+      relaxation IS active at n_train_pos≈22). A captured Optum run
+      that surfaces zero relaxed features means HBLP isn't firing or
+      the verdict payload schema regressed.
 
     HIGH-5 invariant for CSU: the captured artifact's relaxed-feature
     set MUST be ``[]`` (CSU n_train_pos≈98 has no HBLP relaxation
     active by construction).
-
-    Skip semantics
-    --------------
-    Skips when the env var is not set OR points to a missing file.
-    Locally, run the CSU/Optum integration tests once with
-    ``TIER0_E2E_JSON_OUT`` set, then export the artifact path before
-    re-running this test:
-
-        TIER0_E2E_JSON_OUT=/tmp/csu.json pytest \\
-            tests/integration/test_csu_negative_control_20260510.py
-        G1_CSU_ARTIFACT_PATH=/tmp/csu.json pytest \\
-            tests/integration/test_g1_lineage_audit_sweep.py::test_g1_lineage_audit_on_actual_relaxed_features
-
-    The skip is intentionally permissive (it does not require
-    ALLOW_MISSING_REAL_DATA=1) because this test is intended to run
-    after the CSU/Optum integration tests as a follow-up audit, not
-    as a primary CI gate.
     """
     import json
     import os
-    from pathlib import Path
 
-    artifact_path_str = os.environ.get(artifact_env_var)
-    if not artifact_path_str:
-        pytest.skip(
-            f"{artifact_env_var} env var not set — this test is intended "
-            f"to run after the {data_source.upper()} integration test has "
-            f"emitted a TIER0_E2E_JSON_OUT artifact. Set "
-            f"{artifact_env_var} to that artifact's path."
+    artifact_path = g1_artifact_registry.get(data_source)
+    if artifact_path is None:
+        # Codex pass-2 HIGH-4: default-hard-fail when no upstream
+        # fixture registered an artifact. Mirrors the
+        # ALLOW_MISSING_REAL_DATA=1 policy of the CSU/Optum fixtures
+        # (codex pass-1 HIGH-1) so writer + reader share the same
+        # escape hatch.
+        if os.environ.get("ALLOW_MISSING_REAL_DATA") == "1":
+            pytest.skip(
+                f"g1_artifact_registry has no '{data_source}' artifact "
+                f"and ALLOW_MISSING_REAL_DATA=1; G1 captured-artifact "
+                f"audit skipped explicitly. Locally: run "
+                f"{data_source.upper()} integration test in the same "
+                f"pytest invocation."
+            )
+        pytest.fail(
+            f"G1 HIGH-4: g1_artifact_registry has no '{data_source}' "
+            f"artifact registered. The {data_source.upper()} integration "
+            f"test fixture either did not run in this pytest invocation "
+            f"or did not register its artifact path. Run the CSU + Optum "
+            f"integration tests in the SAME pytest invocation as this "
+            f"sweep, OR set ALLOW_MISSING_REAL_DATA=1 to opt into a "
+            f"skip."
         )
-    artifact_path = Path(artifact_path_str)
+
     if not artifact_path.exists():
-        pytest.skip(
-            f"{artifact_env_var}={artifact_path_str} but file does not exist; "
-            f"the CSU/Optum integration test may not have produced an artifact "
-            f"on the run that set this env var."
+        pytest.fail(
+            f"G1 HIGH-4: registered artifact path {artifact_path} does "
+            f"not exist. The upstream fixture wrote the path but the "
+            f"file is missing. Either pytest's tmp_path was cleaned up "
+            f"between fixtures (re-order test files so the producer "
+            f"runs BEFORE this consumer in the same pytest session) or "
+            f"the runner deleted the artifact post-emission."
         )
 
     artifact = json.loads(artifact_path.read_text())
-    verdicts = artifact.get("adaptive_verdicts") or []
+
+    # Codex pass-2 HIGH-5: artifact identity assertions. Without these,
+    # a stray artifact from an unrelated cohort run could satisfy this
+    # gate (vacuous pass).
+    identity = G1_ARTIFACT_IDENTITY[data_source]
+    actual_manifest = artifact.get("feature_manifest_source")
+    assert actual_manifest == identity["feature_manifest_source"], (
+        f"G1 HIGH-5: artifact at {artifact_path} has "
+        f"feature_manifest_source={actual_manifest!r}, expected "
+        f"{identity['feature_manifest_source']!r}. The artifact is from "
+        f"a different cohort than this {data_source} sweep iteration."
+    )
+    actual_indication = artifact.get("indication")
+    assert actual_indication == identity["indication"], (
+        f"G1 HIGH-5: artifact at {artifact_path} has "
+        f"indication={actual_indication!r}, expected "
+        f"{identity['indication']!r}. Wrong-cohort artifact."
+    )
+    actual_cohort_size = artifact.get("cohort_size")
+    assert actual_cohort_size == identity["expected_cohort_size"], (
+        f"G1 HIGH-5: artifact at {artifact_path} has "
+        f"cohort_size={actual_cohort_size}, expected "
+        f"{identity['expected_cohort_size']} for {data_source}. "
+        f"Cohort-build regression OR wrong-cohort artifact."
+    )
+
+    # Codex pass-2 HIGH-5: adaptive_verdicts MUST be present + non-empty.
+    # A vacuous pass on empty/malformed verdicts is itself a regression
+    # — Layer 5 should always emit verdicts on a real-data run.
+    verdicts = artifact.get("adaptive_verdicts")
+    assert verdicts is not None, (
+        f"G1 HIGH-5: artifact at {artifact_path} has no "
+        f"adaptive_verdicts key. The runner's audit emission regressed."
+    )
+    assert isinstance(verdicts, list), (
+        f"G1 HIGH-5: artifact at {artifact_path} adaptive_verdicts is "
+        f"not a list (got {type(verdicts).__name__}). Schema regression."
+    )
+    assert len(verdicts) > 0, (
+        f"G1 HIGH-5: artifact at {artifact_path} adaptive_verdicts is "
+        f"empty. Layer 5 did not produce a single verdict on the real "
+        f"{data_source} run — vacuous-pass guard fires here."
+    )
 
     # A "relaxed feature" in the captured artifact is a layer="3"
     # verdict whose hblp_relaxed=True (the helper marked it relaxed
-    # in the actual pipeline run). For older runs without
-    # hblp_relaxed in the verdict payload, fall back to severity !=
-    # "high" with an explicit z_score check.
+    # in the actual pipeline run).
     relaxed_feature_names: set[str] = set()
     for v in verdicts:
         if not isinstance(v, dict):
@@ -652,6 +736,23 @@ def test_g1_lineage_audit_on_actual_relaxed_features(
         return  # CSU sweep is degenerate by construction.
 
     # Optum: audit each relaxed feature.
+    # Codex pass-2 HIGH-4 + HIGH-5: assert non-empty relaxed-feature
+    # set. Optum n_train_pos≈22 has HBLP variance-inflation factor
+    # ~1.51 (5σ → ~7.54σ effective threshold); the relaxed band IS
+    # active and a real Optum run MUST surface at least one
+    # hblp_relaxed feature. Vacuous pass = explicit fail.
+    assert relaxed_feature_names, (
+        f"G1 HIGH-4 (Optum, captured artifact at {artifact_path}): "
+        f"zero hblp_relaxed=True features in adaptive_verdicts. HBLP "
+        f"relaxation MUST be active on Optum at n_train_pos≈22 "
+        f"(effective z-threshold ≈ 7.54σ vs legacy 5σ). Either (a) HBLP "
+        f"wiring did not fire on this run, (b) all Layer 3 features "
+        f"scored below 5σ (the legacy floor — no relaxation needed), "
+        f"or (c) the verdict payload schema regressed (hblp_relaxed "
+        f"key not emitted). The captured-artifact audit is vacuous "
+        f"unless this set is non-empty."
+    )
+
     failures: list[str] = []
     for feat_name in sorted(relaxed_feature_names):
         result = lineage_audit_declared_path(feat_name, data_source=data_source)
