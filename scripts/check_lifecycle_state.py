@@ -96,6 +96,11 @@ GATE_RELEVANT_PYTHON_MODULES: dict[str, frozenset[str]] = {
     "src/agents/ml_foundation/data_preparer/nodes/imputation_audit.py": frozenset(
         {"LIFECYCLE_STATE_T24"}
     ),
+    # MED-9 fix (codex pass-1): the G2 experiment harness declares
+    # LIFECYCLE_STATE_G2 = GateLifecycleState.ADVISORY. The N2 scanner
+    # must detect this declaration so a future promotion to ENFORCED
+    # cannot evade lifecycle-change documentation.
+    "scripts/run_tier1b_b2_experiment.py": frozenset({"LIFECYCLE_STATE_G2"}),
 }
 
 # Calibration-doc filename pattern. Captures slug, from_state, to_state, date.

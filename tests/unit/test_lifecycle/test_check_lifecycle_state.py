@@ -1006,3 +1006,63 @@ def test_scanner_passes_against_real_repo() -> None:
     assert errors == [], "scanner emitted unexpected errors against real repo: " + "; ".join(
         f"{f.path}: {f.code}" for f in errors
     )
+
+
+# ---------------------------------------------------------------------------
+# MED-9 (codex pass-1) — N2 scanner detects G2 harness as ADVISORY
+# ---------------------------------------------------------------------------
+
+
+def test_med_9_g2_harness_registered_in_scanner() -> None:
+    """The G2 experiment harness MUST be registered in
+    ``GATE_RELEVANT_PYTHON_MODULES`` so the N2 scanner enforces a
+    ``LIFECYCLE_STATE_G2`` declaration. The codex pass-1 MED-9 finding
+    flagged that the harness shipped the constant but the scanner did
+    not require it — a future promotion to ENFORCED could evade
+    lifecycle-change documentation.
+    """
+    g2_relpath = "scripts/run_tier1b_b2_experiment.py"
+    assert g2_relpath in GATE_RELEVANT_PYTHON_MODULES, (
+        "G2 harness must be registered in GATE_RELEVANT_PYTHON_MODULES "
+        "so the N2 scanner can detect its lifecycle declaration"
+    )
+    required = GATE_RELEVANT_PYTHON_MODULES[g2_relpath]
+    assert "LIFECYCLE_STATE_G2" in required
+
+
+def test_med_9_scanner_detects_g2_advisory_in_real_harness() -> None:
+    """End-to-end MED-9: invoke the scanner against the actual harness
+    file and assert it sees ``LIFECYCLE_STATE_G2`` resolved to
+    ``"advisory"``.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    harness_path = repo_root / "scripts" / "run_tier1b_b2_experiment.py"
+    assert harness_path.is_file(), f"harness not found at {harness_path}"
+
+    constants = _scanner_mod._read_python_module_constants(harness_path)
+    assert "LIFECYCLE_STATE_G2" in constants, (
+        f"scanner failed to detect LIFECYCLE_STATE_G2 in {harness_path}; "
+        f"observed: {sorted(constants.keys())}"
+    )
+    assert constants["LIFECYCLE_STATE_G2"] == "advisory", (
+        f"scanner resolved LIFECYCLE_STATE_G2 to "
+        f"{constants['LIFECYCLE_STATE_G2']!r}, expected 'advisory'"
+    )
+
+
+def test_med_9_scanner_no_findings_on_real_harness() -> None:
+    """End-to-end MED-9: when the scanner walks the harness module,
+    no error finding is emitted for the G2 entry. This is the load-
+    bearing test that would FAIL if the harness deleted the
+    LIFECYCLE_STATE_G2 constant or changed its RHS to an unrecognized
+    shape (e.g., function call)."""
+    repo_root = Path(__file__).resolve().parents[3]
+    findings = scan_python_modules(repo_root)
+    g2_errors = [
+        f
+        for f in findings
+        if f.path == "scripts/run_tier1b_b2_experiment.py" and f.severity == "error"
+    ]
+    assert g2_errors == [], "scanner emitted unexpected errors against G2 harness: " + "; ".join(
+        f"{f.code}: {f.message}" for f in g2_errors
+    )
