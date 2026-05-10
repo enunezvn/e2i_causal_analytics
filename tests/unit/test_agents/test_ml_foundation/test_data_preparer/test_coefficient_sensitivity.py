@@ -9,9 +9,12 @@ in ``tests/integration/test_t24_coefficient_sensitivity_20260510.py``.
 
 from __future__ import annotations
 
+from typing import Iterator, List, Optional
+
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.base import BaseEstimator
 
 from src.agents.ml_foundation.data_preparer.nodes.coefficient_sensitivity import (
     G5_EFFECT_SIZE_CV_MAX,
@@ -20,6 +23,46 @@ from src.agents.ml_foundation.data_preparer.nodes.coefficient_sensitivity import
     G5_SIGNIFICANCE_SIGMA_MULTIPLE,
     compute_coefficient_sensitivity,
 )
+
+
+# --------------------------------------------------------------------------- #
+# Mock estimator: returns deterministic coefficients per fit                  #
+# --------------------------------------------------------------------------- #
+
+
+class _DeterministicCoefEstimator(BaseEstimator):
+    """Mock sklearn-compatible estimator whose ``coef_`` is dictated by
+    a sequence of pre-determined vectors (one per fit call).
+
+    The first ``fit`` call returns the first coef vector, the second
+    returns the second, etc. Used to GUARANTEE specific flip / no-flip
+    outcomes in unit tests without relying on data + seed luck.
+
+    Note: compute_coefficient_sensitivity creates a fresh estimator per
+    re-fit when ``estimator=None`` is passed. To make this mock
+    work, we pass a SINGLE shared instance via the ``estimator`` kwarg;
+    the helper then re-uses the same instance across baseline + every
+    per-feature re-fit, calling ``.fit`` once per re-fit and reading
+    ``.coef_`` immediately after.
+    """
+
+    def __init__(self, coef_sequence: List[np.ndarray]) -> None:
+        # The estimator must NOT introspect the sequence in __init__ to
+        # remain sklearn-clone-friendly; we snapshot via an iterator.
+        self._coef_sequence = coef_sequence
+        self._iter: Optional[Iterator[np.ndarray]] = None
+        self.coef_: Optional[np.ndarray] = None
+
+    def _ensure_iter(self) -> Iterator[np.ndarray]:
+        if self._iter is None:
+            self._iter = iter(self._coef_sequence)
+        return self._iter
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "_DeterministicCoefEstimator":
+        next_coef = next(self._ensure_iter())
+        # 2D shape (1, n_features) matches binary LogisticRegression.
+        self.coef_ = np.atleast_2d(np.asarray(next_coef, dtype=np.float64))
+        return self
 
 # --------------------------------------------------------------------------- #
 # Module constants — pre-spec values must not drift                           #
@@ -95,58 +138,92 @@ class TestSignFlipDetection:
     def test_flip_detected_when_imputed_strategy_reverses_coefficient(
         self,
     ) -> None:
-        """Construct a fixture where the baseline coefficient on a feature
-        is positive, but the mean-imputed copy of the column flips it
-        negative.
+        """Closes G5 codex H3: this test now ASSERTS sign_flip is True
+        for the flipped feature (vs. the prior version that only
+        verified the flag was a bool).
 
-        Mechanism: build X where ``feat_flip`` is informative for class 1
-        when present, but mostly NaN. Zero-imputation in the baseline
-        treats the NaN cells as "not informative" (zero contribution);
-        mean-imputation fills them with the column's empirical mean,
-        which (when the present-cell mean differs from the truly-causal
-        value) can yield a coefficient with the opposite sign.
+        Uses _DeterministicCoefEstimator to GUARANTEE the helper sees
+        a baseline-vs-imputed coefficient pair that flips for one
+        feature and stays positive for the other two. Synthetic data +
+        seed luck cannot be relied on — the mock makes the coefficients
+        deterministic.
+
+        Coef sequence:
+          1. baseline fit: feat_flip=+1.5, feat_steady_pos=+1.0, feat_steady_neg=-0.8
+          2. per-feature re-fit on feat_flip ONLY: feat_flip=-1.2 (FLIP),
+             others unchanged.
+          3. per-feature re-fit on feat_steady_pos ONLY: feat_steady_pos=+1.2 (no flip)
+          4. per-feature re-fit on feat_steady_neg ONLY: feat_steady_neg=-0.9 (no flip)
         """
+        # Build X with NaN in every column so each gets a per-feature
+        # re-fit (the helper short-circuits when a column is NaN-free).
         rng = np.random.default_rng(seed=0)
         n = 300
-        # Build an X where feat_flip's PRESENT entries are signal, but
-        # the mean of present entries is large + positive (so mean-impute
-        # "smears" that mean over rows with NaN, decoupling the
-        # coefficient from the original signal direction).
         X = pd.DataFrame(
             {
                 "feat_flip": np.where(
-                    rng.uniform(size=n) < 0.8,  # 80% NaN
+                    rng.uniform(size=n) < 0.5,
                     np.nan,
-                    rng.uniform(low=2.0, high=4.0, size=n),  # all positive
+                    rng.standard_normal(size=n),
                 ),
-                "feat_steady_pos": rng.standard_normal(size=n) + 0.5,
-                "feat_steady_neg": rng.standard_normal(size=n) - 0.5,
+                "feat_steady_pos": np.where(
+                    rng.uniform(size=n) < 0.5,
+                    np.nan,
+                    rng.standard_normal(size=n),
+                ),
+                "feat_steady_neg": np.where(
+                    rng.uniform(size=n) < 0.5,
+                    np.nan,
+                    rng.standard_normal(size=n),
+                ),
             }
         )
-        # Outcome: y depends only on feat_flip (when present, positive
-        # values mean class 1) and feat_steady_pos.
-        feat_flip_filled = X["feat_flip"].fillna(0.0).to_numpy()
-        feat_steady_pos = X["feat_steady_pos"].to_numpy()
-        logits = 2.0 * feat_flip_filled + 1.5 * feat_steady_pos
-        y = pd.Series((rng.uniform(size=n) < 1.0 / (1.0 + np.exp(-logits))).astype(int))
+        # y can be arbitrary balanced 0/1; the mock estimator ignores
+        # the data and returns the next pre-determined coef vector.
+        y = pd.Series(rng.integers(0, 2, size=n))
+
+        # Coef vectors — order matches the helper's fit sequence:
+        # baseline first, then one per-feature re-fit per compared
+        # column (in the X.columns order). The numeric_features order
+        # in the helper preserves X.columns iteration order.
+        baseline_coef = np.array([1.5, 1.0, -0.8])  # all +/- as expected
+        feat_flip_refit = np.array([-1.2, 1.0, -0.8])  # feat_flip FLIPS
+        feat_steady_pos_refit = np.array([1.5, 1.2, -0.8])  # no flip
+        feat_steady_neg_refit = np.array([1.5, 1.0, -0.9])  # no flip
+
+        mock = _DeterministicCoefEstimator(
+            [
+                baseline_coef,
+                feat_flip_refit,
+                feat_steady_pos_refit,
+                feat_steady_neg_refit,
+            ]
+        )
 
         recs = {
             "feat_flip": "drop_row_or_mean",
             "feat_steady_pos": "drop_row_or_mean",
             "feat_steady_neg": "drop_row_or_mean",
         }
-        result = compute_coefficient_sensitivity(X, y, recs, seed=0)
+        result = compute_coefficient_sensitivity(X, y, recs, estimator=mock)
 
-        # Helper produced a per-feature record for each.
-        assert "feat_flip" in result["per_feature"]
-        assert "feat_steady_pos" in result["per_feature"]
-        # The helper RAN — that is what this test asserts. A specific
-        # sign-flip outcome on synthetic data is fragile to seed; we
-        # verify the helper correctly REPORTS sign-flip as a boolean.
+        # HARD ASSERT (H3): feat_flip MUST report sign_flip=True. With
+        # the deterministic mock the result is non-flaky.
         flip = result["per_feature"]["feat_flip"]
-        assert isinstance(flip["sign_flip"], bool)
-        assert flip["effect_size_baseline"] is not None
-        assert flip["effect_size_post_impute"] is not None
+        assert flip["sign_flip"] is True, (
+            f"Helper failed to detect sign flip on feat_flip: "
+            f"baseline={flip['effect_size_baseline']:.3f}, "
+            f"post_impute={flip['effect_size_post_impute']:.3f}"
+        )
+        assert flip["flip_count"] == 1
+        assert flip["effect_size_baseline"] == pytest.approx(1.5)
+        assert flip["effect_size_post_impute"] == pytest.approx(-1.2)
+
+        # Other features must NOT flip.
+        assert result["per_feature"]["feat_steady_pos"]["sign_flip"] is False
+        assert result["per_feature"]["feat_steady_pos"]["flip_count"] == 0
+        assert result["per_feature"]["feat_steady_neg"]["sign_flip"] is False
+        assert result["per_feature"]["feat_steady_neg"]["flip_count"] == 0
 
     def test_no_flip_detected_with_clean_data(self) -> None:
         """Clean data (no NaN) → mean-imputation is a no-op → no flips."""
