@@ -120,6 +120,32 @@ class MapieConformalBinaryClassifier:
         calib_fraction: float = DEFAULT_CALIB_FRACTION,
         min_honest_split_n: int = MIN_HONEST_SPLIT_N,
     ) -> None:
+        """
+        Parameters
+        ----------
+        base_estimator : sklearn-compatible estimator
+            Must implement fit / predict_proba.
+        method : str, default "lac"
+            MAPIE scoring rule. See MAPIE 0.8+ docs.
+        cv : int, default 5
+            Fold count passed to MAPIE in ``"cross"`` mode. Note: the
+            actual fold count is clamped to
+            ``max(2, min(cv, DEFAULT_CROSS_CONFORMAL_FOLDS))`` (default
+            max=5) to avoid OOF positive counts dropping below 1 at small
+            n_minority. Pass ``conformal_mode="cross"`` with a high ``cv``
+            if you need more folds; the clamp is intentional at this scale.
+        alpha : float, default 0.10
+            Target miscoverage rate. Coverage ≈ 1 - alpha.
+        random_state : int, default 42
+        conformal_mode : {None, "split", "cross", "prefit_legacy"}, default None
+            Override the auto-selection logic. None → auto based on n_minority.
+            "prefit_legacy" emits a DeprecationWarning (breaks coverage guarantee).
+        calib_fraction : float in (0, 1), default 0.20
+            Hold-out fraction for split-conformal calibration.
+        min_honest_split_n : int, default 50
+            n_minority threshold below which cross-conformal is used instead
+            of split-conformal (Vovk 2005 / Lei et al. 2018 finite-sample floor).
+        """
         if not 0.0 < calib_fraction < 1.0:
             raise ValueError(f"calib_fraction must be in (0, 1); got {calib_fraction}")
         if min_honest_split_n < 1:
@@ -264,6 +290,12 @@ class MapieConformalBinaryClassifier:
             # NOT used for MAPIE calibration (MAPIE has its own K-fold
             # estimators internally), only for downstream proba reporting.
             self.base_estimator.fit(X, y_arr)
+            # LOW-2: n_calib_ in cross mode = total dataset size. MAPIE
+            # distributes this across K OOF folds (each fold uses (K-1)/K
+            # of the data as conformal calibration residuals). The reported
+            # value is NOT a separate held-out calib set — it is the
+            # effective OOF aggregate. This is intentionally the same as the
+            # full n (accurate for cross-conformal semantics per MAPIE docs).
             self.n_calib_ = int(len(y_arr))
             logger.info(
                 "MAPIE conformal: cross-conformal mode (n_minority=%d, n_calib=%d, cv=%d)",
