@@ -454,9 +454,21 @@ def scan_lifecycle_changes(repo_root: Path, base_ref: str) -> list[ScanFinding]:
       lifecycle-change reviewer's job.)
     """
     findings: list[ScanFinding] = []
+    # N2 finding H4: include ``scripts/`` in the diff scope. A future gate
+    # constant landing in a script (e.g., ``scripts/gate_runner.py``) was
+    # not change-detected when the diff path list was just src/ + config/.
     try:
         diff_output = subprocess.check_output(
-            ["git", "diff", "--unified=0", base_ref, "--", "src/", "config/"],
+            [
+                "git",
+                "diff",
+                "--unified=0",
+                base_ref,
+                "--",
+                "src/",
+                "config/",
+                "scripts/",
+            ],
             cwd=repo_root,
             text=True,
         )
