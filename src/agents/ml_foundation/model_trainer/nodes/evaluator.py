@@ -30,6 +30,8 @@ from sklearn.metrics import (
     roc_curve,
 )
 
+from src.lifecycle import GateLifecycleState
+
 from .advanced_validation import (
     DEFAULT_PERMUTATION_COUNT,
     apply_post_hoc_calibration,
@@ -42,6 +44,16 @@ from .advanced_validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Plan v4 Gate N2 — lifecycle-state declarations for the two advisory
+# emitters in this module. Both currently in ADVISORY: they emit signals
+# (logs + ``validation_metrics`` keys) but do NOT mutate
+# ``success_criteria_met`` or block the deployer. Transitions to
+# CALIBRATING / ENFORCED require a signed doc at
+# ``docs/calibration/{slug}_lifecycle_change_*.md`` per Gate N2 acceptance #3.
+LIFECYCLE_STATE_T22: GateLifecycleState = GateLifecycleState.ADVISORY
+LIFECYCLE_STATE_T23: GateLifecycleState = GateLifecycleState.ADVISORY
 
 
 _CV_PROMOTED_METRICS: tuple[str, ...] = ("roc_auc", "pr_auc", "mcc", "f1")
