@@ -1,5 +1,12 @@
 name: Tier 1B Gate B2 Experiment (G2)
 
+# Make the workflow run name embed the tag ref so the HIGH-5 (iter-3)
+# durable prior-run check (`scripts/check_g2_prior_runs.py`) can find
+# previous runs of the same S_prespec via `gh run list --json name`.
+# The S_prespec short SHA is appended in the HIGH-5 step's display
+# (best-effort because `run-name` cannot reference a steps.* output).
+run-name: G2 ${{ github.ref }}
+
 # Plan v4 Gate G2 — CI-controlled execution of the Tier 1B Gate B2
 # pre-specified ΔAUC + ECE + CV-stability experiment. The first
 # ATTEMPTED run from S_prespec is the LOAD-BEARING G2 result.
@@ -106,36 +113,42 @@ jobs:
           echo "sha=$S_PRESPEC" >> "$GITHUB_OUTPUT"
           echo "short=$S_PRESPEC_SHORT" >> "$GITHUB_OUTPUT"
 
-      - name: HIGH-5 — Enforce first-attempted-run-is-load-bearing
-        # Maintain a machine-readable run registry at
-        # .github/g2_runs/<S_prespec>.json. The first run against a
-        # given S_prespec writes its tag + SHA into the registry; any
-        # subsequent run sees the registry entry and FAILS LOUDLY so
-        # threshold-shoppers cannot keep tagging child commits until
-        # random split noise produces a favorable manifest.
+      - name: HIGH-5 (iter-3) — Durable prior-run check via GitHub API
+        # The first ATTEMPTED run from a given S_prespec is the
+        # load-bearing G2 result. Threshold-shoppers must NOT be able
+        # to re-tag child commits and accumulate runs until split noise
+        # produces a favorable manifest.
+        #
+        # iter-3 fix (codex pass-2 NOT-CLOSED): the prior in-workspace
+        # registry at .github/g2_runs/<S_prespec>.json was ephemeral —
+        # a fresh checkout in the second run does NOT see the file.
+        # The API-driven script `scripts/check_g2_prior_runs.py` queries
+        # `gh run list` for prior runs of this workflow whose tag
+        # commit message references the same S_prespec SHA, and FAILS
+        # LOUDLY when ANY prior attempt is found.
+        #
+        # The "Verify tag commit references S_prespec" step (below)
+        # ensures every G2 run's tag commit message contains the
+        # S_prespec — so a prior run's headSha commit message is the
+        # durable signal we filter on.
         env:
           S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+          S_PRESPEC_SHORT: ${{ steps.prespec.outputs.short }}
           TAG_REF: ${{ github.ref }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          python scripts/check_g2_prior_runs.py \
+            --s-prespec "$S_PRESPEC" \
+            --s-prespec-short "$S_PRESPEC_SHORT" \
+            --workflow tier1b_b2_experiment.yml \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --current-head-sha "$GITHUB_SHA" \
+            --repo "$GITHUB_REPOSITORY"
+          # Best-effort local registry write (informational; the API
+          # check above is the load-bearing control).
           REGISTRY="$GITHUB_WORKSPACE/.github/g2_runs/${S_PRESPEC}.json"
-          if [ -f "$REGISTRY" ]; then
-            echo "::error::G2 run registry entry already exists at ${REGISTRY}."
-            echo "::error::Per HIGH-5 (first-attempted-run-is-load-bearing), only ONE workflow run from S_prespec=${S_PRESPEC} is permitted."
-            cat "$REGISTRY"
-            exit 1
-          fi
-          # Defensive secondary check: query GitHub API for prior runs
-          # against this S_prespec. If we ever lose the registry file
-          # (e.g., a force-push wipes it), the API record persists.
-          if command -v gh >/dev/null 2>&1; then
-            PRIOR_RUNS=$(gh run list --workflow=tier1b_b2_experiment.yml --json conclusion,headSha,databaseId 2>/dev/null || echo "[]")
-            CURR_RUN_ID="${GITHUB_RUN_ID:-}"
-            # Note: prior-run filtering is best-effort; the registry
-            # file is the load-bearing control.
-            echo "[INFO] prior runs of this workflow: ${PRIOR_RUNS}"
-          fi
           mkdir -p "$(dirname "$REGISTRY")"
           cat > "$REGISTRY" <<EOF
           {
@@ -147,7 +160,7 @@ jobs:
             "first_attempt_timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
-          echo "[OK] registry entry written: ${REGISTRY}"
+          echo "[OK] no prior runs detected; registry entry written: ${REGISTRY}"
 
       - name: Verify commit-graph parent constraint (governance checkout)
         # Second gate: the experiment commit (= the tagged commit)
