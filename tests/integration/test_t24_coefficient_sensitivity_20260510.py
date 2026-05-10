@@ -540,10 +540,7 @@ class TestG5FailurePathCoverage:
         # max_flips_per_feature_significant must be <= 1 in single-strategy
         # mode (T1's tolerance is ≤ 1).
         assert result["aggregate"]["max_flips_per_feature_significant"] == 1
-        assert (
-            result["aggregate"]["max_flips_per_feature_significant"]
-            <= G5_FLIPS_PER_FEATURE_MAX
-        )
+        assert result["aggregate"]["max_flips_per_feature_significant"] <= G5_FLIPS_PER_FEATURE_MAX
 
     @pytest.mark.integration
     def test_t2_can_fail_when_effect_size_cv_exceeds_ceiling(self) -> None:
