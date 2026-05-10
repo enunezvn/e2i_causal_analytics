@@ -22,7 +22,6 @@ from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
     validate_promotion,
 )
 
-
 # --------------------------------------------------------------------------- #
 # Reject-category constants                                                   #
 # --------------------------------------------------------------------------- #
