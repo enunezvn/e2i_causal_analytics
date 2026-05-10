@@ -124,6 +124,49 @@ def test_single_class_y_returns_p95_p99_keys_as_none() -> None:
     assert result["permutation_null_p99"] is None
 
 
+def test_finite_actual_auc_preserved_when_all_shuffles_nan_filtered() -> None:
+    """Codex MEDIUM-1 regression: when actual_auc is finite but every
+    shuffled AUC NaN-filters out (extreme corner case where every
+    shuffle produces a single-class y), the degenerate-return block must
+    still expose the finite actual_auc — discarding it silently hides a
+    real measurement from downstream readers."""
+    # Construct a y/proba where actual_auc is finite but every shuffle
+    # (which has the same class counts as actual y) cannot be NaN; so we
+    # instead patch np.random's permutation to return a single-class y.
+    y = np.array([0] * 5 + [1] * 5)
+    proba = np.linspace(0.05, 0.95, 10)
+
+    # Monkey-patch the random permutation to always return a single-class
+    # array, forcing roc_auc_score → NaN under sklearn 1.4+.
+    import numpy as _np
+
+    real_default_rng = _np.random.default_rng
+
+    class _AlwaysSingleClassRng:
+        def __init__(self, _seed):  # noqa: D401
+            pass
+
+        def permutation(self, _y):
+            # Always return all-zeros, which yields single-class y_shuffled
+            # and triggers the NaN-from-roc_auc_score branch.
+            return _np.zeros_like(_y)
+
+    _np.random.default_rng = lambda _seed: _AlwaysSingleClassRng(_seed)
+    try:
+        result = compute_permutation_test(y, proba, n_permutations=5)
+    finally:
+        _np.random.default_rng = real_default_rng
+
+    # Degenerate output: pvalue/percentiles None, n_effective=0
+    assert result["permutation_pvalue"] is None
+    assert result["permutation_null_p95"] is None
+    assert result["permutation_null_p99"] is None
+    assert result["permutation_n_effective"] == 0
+    # But the actual_auc — observed BEFORE the shuffle loop — is preserved.
+    assert result["actual_auc"] is not None
+    assert _np.isfinite(result["actual_auc"])
+
+
 def test_p95_p99_match_numpy_percentile_on_known_distribution() -> None:
     """Math correctness: percentiles match np.percentile on the exact same
     shuffled-AUC sequence (deterministic seed 42 in the function)."""
