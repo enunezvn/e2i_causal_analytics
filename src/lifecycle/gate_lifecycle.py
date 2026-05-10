@@ -125,10 +125,16 @@ def is_transition_allowed(from_state: GateLifecycleState, to_state: GateLifecycl
     Identity transitions (``X -> X``) are not allowed — the scanner only
     fires on actual changes, so an identity transition has no doc and
     should fail.
+
+    N2 finding L1: a future addition to ``GateLifecycleState`` without a
+    matching entry in ``_ALLOWED_TRANSITIONS`` would have raised KeyError
+    on direct dict access. We use ``.get(..., frozenset())`` so the
+    function safely returns False for unknown ``from_state`` values
+    (no out-transitions allowed by default — fail-closed).
     """
     if from_state == to_state:
         return False
-    return to_state in _ALLOWED_TRANSITIONS[from_state]
+    return to_state in _ALLOWED_TRANSITIONS.get(from_state, frozenset())
 
 
 class LifecycleDeclaration(BaseModel):

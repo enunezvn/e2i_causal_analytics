@@ -182,3 +182,23 @@ class TestIsTransitionAllowed:
             if from_state is GateLifecycleState.DEPRECATED:
                 continue
             assert is_transition_allowed(from_state, GateLifecycleState.DEPRECATED)
+
+    def test_unknown_from_state_returns_false_not_keyerror(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """N2 finding L1: a future enum addition without a matching entry
+        in ``_ALLOWED_TRANSITIONS`` must not raise KeyError. Simulate the
+        gap by removing an existing key and confirming the function
+        returns False (fail-closed) instead of raising.
+        """
+        from src.lifecycle import gate_lifecycle as _gl
+
+        original = dict(_gl._ALLOWED_TRANSITIONS)
+        truncated = {k: v for k, v in original.items() if k is not GateLifecycleState.ADVISORY}
+        monkeypatch.setattr(_gl, "_ALLOWED_TRANSITIONS", truncated)
+        # ADVISORY no longer has out-transitions in the table; must
+        # return False, not KeyError.
+        assert (
+            is_transition_allowed(GateLifecycleState.ADVISORY, GateLifecycleState.CALIBRATING)
+            is False
+        )
