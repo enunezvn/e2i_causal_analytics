@@ -99,6 +99,34 @@ T2_3_HONEST_BAND_NOISE_SIGMA_DEFAULT: float = 1.0
 
 # Plan v4 §6 G4 — T2.3 lifecycle marker.
 #
+# WARNING — DOCUMENTATION-ONLY MARKER.
+#
+# This constant is a documentation-only marker; it is NOT consumed anywhere
+# in the runtime pipeline. Changing its value to "shadow" or "enforced" will
+# NOT alter pipeline behavior, will NOT block the deployer, and will NOT cause
+# any band-violation flag to graduate to a denial. It exists solely so that
+# code-readers can see at a glance the band's intended lifecycle stage and
+# correlate it with the docs at `docs/calibration/t23_cohort_bands_20260510.md`.
+#
+# To make this state actually load-bearing, BOTH of the following are required:
+#   1. Thread the value into `_emit_cohort_derived_honest_band` and emit a
+#      `honest_band_lifecycle_state` key on `validation_metrics` so downstream
+#      consumers (deployer, observability dashboards) can branch on it.
+#   2. Update `compute_deployer_input_metrics` (or a successor) to consume
+#      `honest_band_violated` AND the lifecycle state — denying promotion only
+#      when state == "enforced" AND honest_band_violated is True.
+#
+# Per codex-rescue 2026-05-10 G4 review (Q2): we KEEP this constant
+# module-level and documentation-only until shadow promotion lands. Threading
+# the state into runtime metrics now would create fake state-thread semantics
+# that imply the lifecycle has runtime meaning when it does not.
+#
+# Why kept at all: the marker IS load-bearing as a code-review and
+# documentation-correlation aid — it forces any future PR proposing band
+# promotion to update this constant in lockstep with the runtime change, which
+# in turn forces a code-review pass over the band-derivation constants and the
+# t23_cohort_bands doc. Removing it would lose that lockstep.
+#
 # The honest band is currently advisory-observability-only — the band-derivation
 # constants above (MIN_LIFT, MAX_LIFT, CEILING, NOISE_SIGMA) were calibrated
 # against cohort metrics whose values were used to argue for the band's
