@@ -94,6 +94,16 @@ class GateLifecycleState(str, Enum):
 # (Gate N2 acceptance #3 requires a signed doc for ENFORCED transitions
 # AND the calibration window's drift_summary, which only exists if a
 # CALIBRATING window ran).
+#
+# N2 finding L3: DEVELOPMENT -> CALIBRATING is INTENTIONALLY blocked.
+# The lifecycle order is DEVELOPMENT -> ADVISORY -> CALIBRATING ->
+# ENFORCED. ADVISORY is the operator-feedback window: the gate emits
+# signals so operators can sanity-check the gate logic before any
+# would-be-reject metric is produced. Skipping ADVISORY would mean
+# entering CALIBRATING (which produces the would_be_reject_rate the
+# ENFORCED transition reads from) without ever having shown signals to
+# the operators. We therefore require ADVISORY first; DEVELOPMENT ->
+# CALIBRATING is rejected by ``is_transition_allowed``.
 _ALLOWED_TRANSITIONS: dict[GateLifecycleState, frozenset[GateLifecycleState]] = {
     GateLifecycleState.DEVELOPMENT: frozenset(
         {GateLifecycleState.ADVISORY, GateLifecycleState.DEPRECATED}
