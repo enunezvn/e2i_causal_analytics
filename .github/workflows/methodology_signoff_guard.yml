@@ -9,6 +9,26 @@ name: Methodology Sign-off Guard
 # The job runs scripts/check_methodology_signoff.py against each touched
 # artifact. Validation failure (selection-rule violation, unregistered
 # reviewer, missing section, missing signature) blocks the PR.
+#
+# H3 SECURITY ADVISORY (codex review of v4 N3 phase A — 2026-05-10):
+# This workflow currently runs `scripts/check_methodology_signoff.py` from
+# the PR checkout — i.e. the PR can also modify the validator and have its
+# weakened version validate itself. The "Run validator from a pinned
+# trusted ref" step below is the production fix; until it is enabled,
+# `scripts/check_methodology_signoff.py` MUST be added to a CODEOWNERS
+# entry that requires review by a member of the security team. Recommended
+# production deployment:
+#
+#   - Move the validator into a separate, protected repository
+#     `org/governance-actions` and reference it via
+#     `uses: org/governance-actions/methodology-signoff@<sha>` pinned by
+#     SHA on `main` of THIS repo's protected refs.
+#   - Alternatively, add a "fetch validator from base ref" step that uses
+#     `git show <base_sha>:scripts/check_methodology_signoff.py > /tmp/validator.py`
+#     and invokes the base-ref copy rather than the PR-checkout copy.
+#   - As a minimum: branch-protection rule requiring CODEOWNERS review on
+#     `scripts/check_methodology_signoff.py` and `.github/workflows/
+#     methodology_signoff_guard.yml`.
 
 on:
   pull_request:
@@ -64,8 +84,13 @@ jobs:
               || true)
           fi
 
-          # Filter out template files explicitly.
-          FILTERED=$(echo "$CHANGED" | grep -v '_template.md$' || true)
+          # Filter out template files AND collapse whitespace-only lines so
+          # the downstream "are there any files?" guard isn't fooled by an
+          # accidental trailing newline. (M3.)
+          FILTERED=$(printf '%s\n' "$CHANGED" \
+            | grep -v '_template.md$' \
+            | grep -v '^[[:space:]]*$' \
+            || true)
 
           # Persist for the next step (multi-line output uses GH's heredoc).
           {
@@ -74,15 +99,44 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          if [ -z "$FILTERED" ]; then
-            echo "No methodology artifacts in scope; the validator will be skipped."
-          else
+          # H3 / M3: separate, explicit boolean output that downstream steps
+          # gate on. ``-n`` returns true when the string is non-empty AFTER
+          # whitespace-only lines have been stripped above.
+          if [ -n "$FILTERED" ]; then
+            echo "has_files=true" >> "$GITHUB_OUTPUT"
             echo "Will validate the following artifacts:"
             echo "$FILTERED"
+          else
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+            echo "No methodology artifacts in scope; the validator will be skipped."
+          fi
+
+      - name: Fetch trusted validator from base ref (H3 mitigation)
+        if: steps.touched.outputs.has_files == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # H3: run the validator from the PR's base ref so a malicious PR
+          # cannot weaken the validator and have its own weakened copy
+          # validate itself. If the validator does not yet exist on base
+          # (first-introduction PR), fall back to the PR-checkout copy and
+          # log a warning that a CODEOWNERS-gated review is required.
+          mkdir -p /tmp/governance
+          if [ -n "$BASE_SHA" ] && \
+             git cat-file -e "${BASE_SHA}:scripts/check_methodology_signoff.py" 2>/dev/null; then
+            git show "${BASE_SHA}:scripts/check_methodology_signoff.py" \
+              > /tmp/governance/check_methodology_signoff.py
+            echo "validator_source=base_sha" >> "$GITHUB_OUTPUT"
+            echo "Using base-ref validator at SHA $BASE_SHA"
+          else
+            cp scripts/check_methodology_signoff.py /tmp/governance/check_methodology_signoff.py
+            echo "::warning::validator absent on base ref; using PR-checkout copy. CODEOWNERS gating required."
+            echo "validator_source=pr_head" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run check_methodology_signoff.py on each artifact
-        if: steps.touched.outputs.files != ''
+        if: steps.touched.outputs.has_files == 'true'
         env:
           # The selection-rule check shells out to git log; the workspace
           # checkout is the natural --repo-root.
@@ -93,7 +147,10 @@ jobs:
           while IFS= read -r ARTIFACT; do
             [ -z "$ARTIFACT" ] && continue
             echo "::group::Validating $ARTIFACT"
-            if ! python3 scripts/check_methodology_signoff.py \
+            # H3: prefer the base-ref-pinned validator written in the
+            # previous step; falls back to PR copy only when the validator
+            # is absent on base.
+            if ! python3 /tmp/governance/check_methodology_signoff.py \
                   --repo-root "$REPO_ROOT" \
                   --require-signature \
                   "$ARTIFACT"; then
@@ -109,7 +166,10 @@ jobs:
         run: |
           echo "## Methodology Sign-off Guard" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [ -z "${{ steps.touched.outputs.files }}" ]; then
+          # M3: gate the summary path on the explicit has_files boolean
+          # rather than testing string emptiness, which previously treated
+          # whitespace-only output as work.
+          if [ "${{ steps.touched.outputs.has_files }}" != "true" ]; then
             echo "_No methodology artifacts touched by this PR — guard was a no-op._" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Artifacts validated:" >> "$GITHUB_STEP_SUMMARY"
