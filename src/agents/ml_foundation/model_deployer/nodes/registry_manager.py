@@ -22,7 +22,6 @@ from src.agents.ml_foundation.model_deployer.regulatory_audit import (
     is_adapted_regulatory_candidate,
     is_regulatory_eligible,
 )
-
 from src.lifecycle import GateLifecycleState
 
 logger = logging.getLogger(__name__)
