@@ -252,13 +252,32 @@ def _validate_cohort_for_logreg(X: pd.DataFrame, y: pd.Series) -> None:
     single-class). M4 from G5 codex review: surface these as clear
     ValueError BEFORE the fit fires, so the helper's contract is
     explicit at the call site rather than buried in sklearn internals.
+
+    G5 codex pass-2 NEW MED + M4 PARTIAL closure: pre-emptively reject
+    NaN cells in y. Without this guard, ``pd.Series.nunique(dropna=True)``
+    happily returns 2 even when half the rows have NaN targets (the
+    NaNs are dropped from the unique-count, leaving the {0, 1} pair
+    intact), and the downstream ``y.astype(np.int64)`` cast silently
+    coerces NaN to a large integer. We require y.notna().all() so the
+    contract is "y has no NaN; rows you don't want must be dropped
+    BEFORE calling this helper".
     """
     if len(X) < 2:
         raise ValueError(
             f"Cohort has {len(X)} row(s); LogisticRegression requires at least "
             "2 rows. coefficient-sensitivity audit cannot proceed."
         )
-    n_classes = int(pd.Series(y).nunique(dropna=True))
+    y_series = pd.Series(y) if not isinstance(y, pd.Series) else y
+    if not y_series.notna().all():
+        n_nan = int(y_series.isna().sum())
+        raise ValueError(
+            f"Cohort target y has {n_nan} NaN value(s); "
+            "compute_coefficient_sensitivity requires a fully-observed "
+            "binary target. Drop NaN rows before calling this helper "
+            "(NaN-as-False semantics must be applied by the caller, "
+            "not silently inside the audit)."
+        )
+    n_classes = int(y_series.nunique(dropna=True))
     if n_classes != 2:
         raise ValueError(
             f"Cohort target has {n_classes} unique value(s); "
