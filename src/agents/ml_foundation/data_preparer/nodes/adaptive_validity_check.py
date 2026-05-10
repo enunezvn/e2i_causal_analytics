@@ -443,7 +443,12 @@ def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
     )
 
 
-def _adversarial_input(score: dict[str, Any]) -> dict[str, Any]:
+def _adversarial_input(
+    score: dict[str, Any],
+    *,
+    n_train_pos: Optional[int] = None,
+    layer_1_declared_safe: bool = False,
+) -> dict[str, Any]:
     """Build a Layer 3 ``EnsembleVoter.vote`` input dict from a raw score.
 
     Maps the score dict produced by ``compute_adversarial_score`` (z_score,
@@ -451,15 +456,35 @@ def _adversarial_input(score: dict[str, Any]) -> dict[str, Any]:
     severity-tagged shape the voter expects. Always populates ``z_score``
     so the voter's M3 audit-integrity guard never fires on our own input.
 
-    Severity routing (matches the legacy ``_build_verdict`` thresholds):
+    Severity routing — Plan v4 §2 G3 wiring (post-2026-05-10):
 
-        z > 5σ above null  → severity=high
-        3σ < z ≤ 5σ        → severity=moderate
-        z ≤ 3σ             → severity=info
+    Routes z-score classification through ``hblp_classify``, which:
 
-    Returns None for the degenerate-score case (z is NaN); callers should
-    treat that as "no adversarial signal" and let the voter abstain or the
-    bypass paths emit a legacy info verdict.
+      * Inflates the high (5σ) and moderate (3σ) thresholds by
+        ``sqrt(reference_n / n_train_pos)`` when ``n_train_pos <
+        reference_n`` (default 50). At low N the permutation-null variance
+        scales as ``~1/sqrt(n_pos)``, so a fixed 5σ over-flags legitimate
+        confounders. HBLP's variance-inflation compensates.
+      * Adds a ``declared_safe_prior_multiplier`` (default 1.5x) when
+        ``layer_1_declared_safe=True`` — encoding the prior that a feature
+        whose declared ``knowable_at <= index_date`` (per
+        ``MANIFEST_SOURCES``) needs stronger Layer 3 evidence to be
+        reclassified as a leak.
+      * Returns ``severity ∈ {"high", "moderate", "info"}`` with the
+        post-HBLP effective thresholds annotated in the evidence string.
+
+    The legacy ``if z > HIGH_Z / elif z > MODERATE_Z / else`` ladder is
+    removed — there is no parallel path. Pass ``n_train_pos=None`` and
+    ``layer_1_declared_safe=False`` (the defaults) to reproduce the legacy
+    fixed-threshold behaviour: ``hblp_effective_z_threshold`` falls through
+    to ``base_threshold`` when ``n_train_pos`` is unset (treated as the
+    reference N — no inflation) AND when ``layer_1_declared_safe`` is
+    False (1.0x multiplier).
+
+    Returns the severity-tagged input dict for the degenerate-score case
+    (z is NaN / None / non-finite); callers should treat that as "no
+    adversarial signal" and let the voter abstain or the bypass paths
+    emit a legacy info verdict.
 
     The ``p_value`` propagated into the verdict dict is the empirical
     upper-tail proportion from ``compute_adversarial_score``; it is bounded
@@ -467,6 +492,20 @@ def _adversarial_input(score: dict[str, Any]) -> dict[str, Any]:
     persisted ``p_value=0.0`` means ``< 1/n_permutations``, NOT exact zero
     (backlog #11.b). Severity routing here uses ``z_score`` only, so this
     rounding is purely informational for downstream consumers.
+
+    Args:
+        score: Raw output from ``compute_adversarial_score``.
+        n_train_pos: Training-split positive-class count. When None,
+            HBLP falls through to no variance inflation (reference-N
+            behaviour). Threaded from the orchestrator at
+            ``adaptive_validity_check`` so every per-feature call sees
+            the same cohort positive count.
+        layer_1_declared_safe: True iff the feature's manifest contract
+            declared ``knowable_at <= index_date`` (Layer 1 cleared it).
+            False for features without a manifest entry OR whose contract
+            declared post-anchor inputs (those would have been caught by
+            Layer 1 and never reach this path). Threaded from the
+            orchestrator's ``lookup_feature_contract`` lookup.
     """
     z = score.get("z_score", float("nan"))
     auc = score.get("actual_auc", float("nan"))
@@ -497,31 +536,60 @@ def _adversarial_input(score: dict[str, Any]) -> dict[str, Any]:
             f"Adversarial score undefined (degenerate; actual_auc={auc}, null_mean={null_mean})"
         )
         z_input: Optional[float] = None
-    elif z > HIGH_Z:
-        severity = "high"
-        remediation = "drop"
-        evidence = (
-            f"Layer 3 adversarial discriminator: z={z:.2f}σ above null "
-            f"(actual_auc={auc:.4f}, null_mean={null_mean:.4f}); "
-            f"{HIGH_Z}σ governance threshold exceeded → drop"
-        )
-        z_input = float(z)
-    elif z > MODERATE_Z:
-        severity = "moderate"
-        remediation = "ambiguous"
-        evidence = (
-            f"Layer 3 adversarial discriminator: z={z:.2f}σ "
-            f"(between {MODERATE_Z}σ and {HIGH_Z}σ); ambiguous → "
-            f"queued for Layer 4 causal-role classification"
-        )
-        z_input = float(z)
     else:
-        severity = "info"
-        remediation = "keep"
-        evidence = (
-            f"Layer 3 adversarial discriminator: z={z:.2f}σ "
-            f"(below {MODERATE_Z}σ noise floor); legitimate weak signal"
+        # Plan v4 §2 G3: route through hblp_classify. The classifier
+        # produces severity ∈ {"high", "moderate", "info"} using the
+        # HBLP-effective thresholds; we map severity → remediation +
+        # evidence string. ``n_train_pos`` falls back to the reference
+        # N (no inflation) when unset — preserves legacy 5σ/3σ
+        # behaviour for callers that don't thread cohort metadata.
+        # Tier 1 invariant: ``hblp_classify`` signature is unchanged.
+        effective_n_pos = (
+            int(n_train_pos)
+            if n_train_pos is not None and n_train_pos > 0
+            else T2_1B_HBLP_VARIANCE_INFLATION_REFERENCE_N
         )
+        classification = hblp_classify(
+            z_score=float(z),
+            n_positives=effective_n_pos,
+            layer_1_declared_safe=bool(layer_1_declared_safe),
+        )
+        severity = classification["severity"]
+        high_eff = classification["effective_high_threshold"]
+        moderate_eff = classification["effective_moderate_threshold"]
+        hblp_relaxed = classification["hblp_relaxed"]
+        relaxation_note = (
+            f" [HBLP-relaxed: high_eff={high_eff:.2f}σ "
+            f"(base={HIGH_Z}σ × {classification['variance_inflation_factor']:.2f} "
+            f"× layer_1_factor={classification['layer_1_factor']:.2f}), "
+            f"n_train_pos={effective_n_pos}, "
+            f"layer_1_declared_safe={bool(layer_1_declared_safe)}]"
+            if hblp_relaxed
+            else ""
+        )
+        if severity == "high":
+            remediation = "drop"
+            evidence = (
+                f"Layer 3 adversarial discriminator: z={z:.2f}σ above null "
+                f"(actual_auc={auc:.4f}, null_mean={null_mean:.4f}); "
+                f"{high_eff:.2f}σ HBLP-effective threshold exceeded → drop"
+                f"{relaxation_note}"
+            )
+        elif severity == "moderate":
+            remediation = "ambiguous"
+            evidence = (
+                f"Layer 3 adversarial discriminator: z={z:.2f}σ "
+                f"(between {moderate_eff:.2f}σ and {high_eff:.2f}σ HBLP-effective); "
+                f"ambiguous → queued for Layer 4 causal-role classification"
+                f"{relaxation_note}"
+            )
+        else:  # severity == "info"
+            remediation = "keep"
+            evidence = (
+                f"Layer 3 adversarial discriminator: z={z:.2f}σ "
+                f"(below {moderate_eff:.2f}σ HBLP-effective noise floor); "
+                f"legitimate weak signal{relaxation_note}"
+            )
         z_input = float(z)
 
     return {
@@ -727,6 +795,8 @@ def _compose_legacy_verdict(
     feature_entity_ids: Iterable[str] = (),
     target_entity_ids: Iterable[str] = (),
     kg_mode: Optional[str] = None,
+    n_train_pos: Optional[int] = None,
+    layer_1_declared_safe: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Compose one legacy verdict dict from the per-source inputs.
 
@@ -746,6 +816,20 @@ def _compose_legacy_verdict(
     ``target_entity_ids`` are forwarded to ``voter.vote(...)``. Empty
     defaults preserve Stage 1 behavior — the voter's KG path is a
     no-op.
+
+    Plan v4 §2 G3 wiring (post-2026-05-10): ``n_train_pos`` and
+    ``layer_1_declared_safe`` are threaded from the orchestrator at
+    ``adaptive_validity_check`` so the Layer 3 severity classification
+    routes through ``hblp_classify`` (the HBLP-effective z-thresholds
+    that compensate for low-N permutation null variance and apply the
+    declared-safe prior). Both are optional: when unset, the underlying
+    classifier falls through to legacy 5σ/3σ behaviour (no relaxation).
+    The legacy ``if z > HIGH_Z`` branch is removed — there is no parallel
+    path. ``adversarial_input`` callers may pre-classify (then
+    ``_compose_legacy_verdict`` re-uses the supplied dict as-is) or pass
+    a raw score and let this function drive the classification — the
+    orchestrator threads cohort metadata so the severity is always HBLP-
+    aware.
     """
     if short_circuit_evidence is not None:
         return _legacy_short_circuit_verdict(feature, evidence=short_circuit_evidence)
@@ -1143,15 +1227,29 @@ def _build_verdict(
     score: dict[str, Any],
     *,
     voter: Optional["EnsembleVoter"] = None,
+    n_train_pos: Optional[int] = None,
+    layer_1_declared_safe: bool = False,
 ) -> dict[str, Any]:
     """Backward-compat wrapper for the legacy Layer 3 verdict builder.
 
     Now flows through ``_compose_legacy_verdict`` so both call sites
     (this node's main loop AND any remaining external test importers)
     produce the same shape, including the new audit fields.
+
+    Plan v4 §2 G3 wiring (post-2026-05-10): ``n_train_pos`` and
+    ``layer_1_declared_safe`` are threaded into ``_adversarial_input``
+    so severity classification routes through ``hblp_classify``. Default
+    values (``n_train_pos=None``, ``layer_1_declared_safe=False``)
+    reproduce legacy fixed-threshold behaviour for callers that have not
+    been updated to thread cohort metadata (e.g. ad-hoc tests). The
+    orchestrator at ``adaptive_validity_check`` always threads both.
     """
     voter = voter or _get_ensemble_voter_class()()
-    adv = _adversarial_input(score)
+    adv = _adversarial_input(
+        score,
+        n_train_pos=n_train_pos,
+        layer_1_declared_safe=layer_1_declared_safe,
+    )
     # Degenerate-score case: ``_adversarial_input`` returns severity=info
     # with z_score=None. Route via the bypass info path so the legacy
     # "Adversarial score undefined" evidence is preserved exactly.
@@ -1166,6 +1264,8 @@ def _build_verdict(
         voter=voter,
         layer_1_input=None,
         adversarial_input=adv,
+        n_train_pos=n_train_pos,
+        layer_1_declared_safe=layer_1_declared_safe,
     )
 
 
@@ -1318,6 +1418,13 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             "adaptive_flagged_features": [],
         }
 
+    # Plan v4 §2 G3 wiring: compute n_train_pos once at orchestrator entry
+    # so every per-feature ``_compose_legacy_verdict`` call routes through
+    # ``hblp_classify`` with the same cohort positive count. Counted from
+    # the binary-label mask (sentinels excluded) so HBLP's variance-
+    # inflation factor reflects the actual N used in Layer 3 scoring.
+    n_train_pos = int(np.sum(valid_target_values == 1))
+
     # Use explicit `is not None` checks: `state.get(...) or DEFAULT` silently
     # replaces a legitimate 0 with the default (Python's falsy-zero semantics).
     # `adaptive_seed=0` is a valid seed; the old form returned 7 instead.
@@ -1414,14 +1521,31 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
 
         contract = lookup_feature_contract(feat, data_source=manifest_source)
         edges, feat_ids = _kg_inputs(feat, contract)
+        # Plan v4 §2 G3 wiring: route severity classification through
+        # ``hblp_classify`` by threading cohort metadata into both the
+        # adversarial-input builder AND ``_compose_legacy_verdict``. The
+        # ``layer_1_declared_safe`` boolean reflects the manifest's
+        # ``knowable_at <= index_date`` predicate — True iff Layer 1
+        # cleared the feature (manifest contract present AND pre-or-at
+        # index). Features without a manifest entry default to False
+        # (treat as not-declared-safe; legacy 5σ threshold applies).
+        layer_1_declared_safe = bool(
+            contract is not None and contract.knowable_at.is_pre_or_at_index()
+        )
         verdict = _compose_legacy_verdict(
             feat,
             voter=voter,
-            adversarial_input=_adversarial_input(score),
+            adversarial_input=_adversarial_input(
+                score,
+                n_train_pos=n_train_pos,
+                layer_1_declared_safe=layer_1_declared_safe,
+            ),
             kg_edges=edges,
             feature_entity_ids=feat_ids,
             target_entity_ids=target_ids,
             kg_mode=kg_mode,
+            n_train_pos=n_train_pos,
+            layer_1_declared_safe=layer_1_declared_safe,
         )
         verdicts.append(verdict)
         if verdict["severity"] == "high":
