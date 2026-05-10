@@ -585,7 +585,13 @@ class TestBuildVerdictThreadsHblp:
         assert verdict["severity"] == "info"
 
     def test_compose_legacy_verdict_threads_hblp_args(self) -> None:
-        """``_compose_legacy_verdict`` accepts + forwards the new args."""
+        """``_compose_legacy_verdict`` accepts + forwards the new args.
+
+        Pre-classified path: caller builds the adversarial input via
+        ``_adversarial_input`` (which tags `_hblp_classified=True`) and
+        passes it through. ``_compose_legacy_verdict`` re-uses the dict
+        as-is.
+        """
 
         voter = _get_ensemble_voter_class()()
         score = {
@@ -610,6 +616,103 @@ class TestBuildVerdictThreadsHblp:
         )
         # Optum-style relaxation propagates through the voter.
         assert verdict["severity"] == "info"
+
+    def test_compose_legacy_verdict_owns_classification_via_score(self) -> None:
+        """codex MED-5: ``_compose_legacy_verdict`` OWNS classification.
+
+        When the caller passes a raw ``adversarial_score`` (NOT a
+        pre-classified ``adversarial_input``), this function calls
+        ``_adversarial_input`` itself — that's the call chain the
+        wiring guard's AST scan verifies, and it's the contract that
+        ensures HBLP's effective thresholds always apply.
+
+        The verdict MUST change when threading args change: at z=6 the
+        Optum-style cohort metadata (n_train_pos=22, declared_safe=True)
+        relaxes severity from 'high' to 'info', but the synthetic-
+        baseline cohort metadata (n=200, declared_safe=False) keeps
+        severity at 'high'. Same raw score; different cohort metadata
+        → different severity. That's the load-bearing HBLP behavior
+        threading proves.
+        """
+
+        voter = _get_ensemble_voter_class()()
+        score = {
+            "z_score": 6.0,
+            "actual_auc": 0.78,
+            "null_mean": 0.50,
+            "null_std": 0.05,
+            "p_value": 0.05,
+            "n_permutations": 200,
+        }
+        # Path 1: synthetic baseline → severity stays 'high'.
+        synthetic_verdict = _compose_legacy_verdict(
+            "test_feature_synthetic",
+            voter=voter,
+            adversarial_score=score,  # raw — function calls _adversarial_input
+            n_train_pos=200,
+            layer_1_declared_safe=False,
+        )
+        assert synthetic_verdict["severity"] == "high"
+        # Path 2: Optum-style cohort metadata → severity relaxes to 'info'.
+        optum_verdict = _compose_legacy_verdict(
+            "test_feature_optum",
+            voter=voter,
+            adversarial_score=score,  # SAME raw score
+            n_train_pos=22,  # different cohort metadata
+            layer_1_declared_safe=True,
+        )
+        assert optum_verdict["severity"] == "info"
+
+    def test_compose_legacy_verdict_rejects_unclassified_input(self) -> None:
+        """codex MED-5: pre-classified ``adversarial_input`` lacking the
+        ``_hblp_classified=True`` tag is REJECTED at runtime.
+
+        A determined developer could side-step the HBLP routing chain by
+        building their own adversarial input dict with a hand-rolled
+        legacy classifier — the wiring guard's AST scan only verifies
+        static callsites. The runtime tag check rejects this case.
+        """
+
+        voter = _get_ensemble_voter_class()()
+        # Hand-rolled "legacy" adversarial input — NO _hblp_classified tag.
+        legacy_adv = {
+            "layer": "3",
+            "severity": "high",
+            "remediation": "drop",
+            "evidence": "legacy fixed 5σ threshold exceeded",
+            "z_score": 6.0,
+            "actual_auc": 0.78,
+            "null_mean": 0.50,
+            "null_std": 0.05,
+            "p_value": 0.0,
+            "n_permutations": 200,
+            # NO "_hblp_classified" key.
+        }
+        with pytest.raises(
+            Exception,  # _HblpRoutingViolationError, but it's private.
+            match="_hblp_classified=True",
+        ):
+            _compose_legacy_verdict(
+                "test_feature",
+                voter=voter,
+                adversarial_input=legacy_adv,
+            )
+
+    def test_compose_legacy_verdict_rejects_both_score_and_input(self) -> None:
+        """codex MED-5: passing both ``adversarial_score`` and
+        ``adversarial_input`` is a programmer error → ValueError.
+        """
+
+        voter = _get_ensemble_voter_class()()
+        score = {"z_score": 4.0, "actual_auc": 0.65, "null_mean": 0.5, "null_std": 0.04}
+        adv = _adversarial_input(score, n_train_pos=200, layer_1_declared_safe=False)
+        with pytest.raises(ValueError, match="exactly one"):
+            _compose_legacy_verdict(
+                "test_feature",
+                voter=voter,
+                adversarial_score=score,
+                adversarial_input=adv,
+            )
 
 
 # --------------------------------------------------------------------------- #

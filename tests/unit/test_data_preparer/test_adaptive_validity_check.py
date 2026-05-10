@@ -1877,6 +1877,10 @@ def test_phase29_stage2_adv_moderate_alone_with_unrelated_kg_edges_preserves_leg
         "null_std": 0.04,
         "p_value": 0.001,
         "n_permutations": 200,
+        # codex MED-5: hand-rolled adv dicts in tests need to opt into the
+        # HBLP-classified tag (production code always builds via
+        # _adversarial_input which sets this).
+        "_hblp_classified": True,
     }
     verdict = _compose_legacy_verdict(
         "x",
@@ -2364,6 +2368,10 @@ def test_phase29_stage2_pre_shadow_mode_does_not_cap_adversarial_high():
         "n_permutations": 200,
         "remediation": "drop",
         "evidence": "z=6.0 > 5σ",
+        # codex MED-5: hand-rolled adv dicts in tests need to opt into the
+        # HBLP-classified tag (production code always builds via
+        # _adversarial_input which sets this).
+        "_hblp_classified": True,
     }
     verdict = _compose_legacy_verdict(
         "drug_exposure_days",
