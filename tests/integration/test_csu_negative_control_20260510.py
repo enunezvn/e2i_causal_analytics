@@ -115,11 +115,24 @@ def csu_negative_control_artifact(
     one regresses, both regress, and the failure messages stay legible.
     """
     if not CSU_JOURNEYS_PATH.exists():
-        pytest.skip(
+        # Codex pass-1 HIGH-1: default to hard-fail when real CSU data is
+        # absent. CI green without proving real-cohort regression is the
+        # exact failure mode this gate guards against. To explicitly opt
+        # into a skip (CI environments that intentionally lack data
+        # fixtures), set ``ALLOW_MISSING_REAL_DATA=1``.
+        if os.environ.get("ALLOW_MISSING_REAL_DATA") == "1":
+            pytest.skip(
+                f"CSU journeys file not present at {CSU_JOURNEYS_PATH} "
+                "and ALLOW_MISSING_REAL_DATA=1 set; G1 CSU negative-control "
+                "skip explicitly opted into. Locally: regenerate cohort "
+                "via the documented CSU recipe before re-running."
+            )
+        pytest.fail(
             f"CSU journeys file not present at {CSU_JOURNEYS_PATH}; "
-            "G1 CSU negative-control requires real CSU data. In CI without "
-            "data this is a skip, not a fail. Locally: regenerate cohort "
-            "via the documented CSU recipe before re-running."
+            "G1 CSU negative-control requires real CSU data and "
+            "ALLOW_MISSING_REAL_DATA != '1'. Set the env var to opt into "
+            "skip behaviour, OR regenerate the cohort via the documented "
+            "CSU recipe before re-running."
         )
 
     out_dir = tmp_path_factory.mktemp("csu_g1_neg_control")
