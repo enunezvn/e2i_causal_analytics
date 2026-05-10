@@ -13,9 +13,10 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 
-class NGBoostBinaryClassifier:
+class NGBoostBinaryClassifier(BaseEstimator, ClassifierMixin):
     """Thin wrapper around ngboost.NGBClassifier for binary classification.
 
     Why wrap:
