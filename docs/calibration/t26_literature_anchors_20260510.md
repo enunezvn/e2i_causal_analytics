@@ -116,27 +116,29 @@ Each set of bands is anchored to a peer-reviewed source below. The MARGINAL boun
 - `T2_6A_CV_STABILITY_MODERATE_RATIO_MAX = 0.10`
 - `T2_6A_CV_STABILITY_UNSTABLE_RATIO_MAX = 0.20`
 
-**Anchor source (primary):**
+**Status of these bands: heuristic, literature-informed — NOT cohort-fitted, NOT page-pinned.**
+
+The 0.05 / 0.10 / 0.20 std/mean breakpoints below are heuristic operator-friendly bands chosen as round-number gradations within the general "low / moderate / high CV variance" regions established by the cited works. They are **NOT** retrospectively-fit on held-out cohort data, and the cited works do **NOT** pin specific 0.05 / 0.10 / 0.20 cutoffs to verifiable page/table numbers in their canonical published editions. The cited literature supports the *direction* of the bands (lower CV-CoV ⇒ more stable; higher CV-CoV ⇒ less stable) but does not establish the specific cutpoints as enforcement-grade thresholds.
+
+This is consistent with the §1 framing: these bands are advisory-only and MUST NOT be promoted to deployer enforcement until cohort-fit calibration becomes feasible (see [`t26_future_cohort_plan_20260510.md`](t26_future_cohort_plan_20260510.md)) or until page/table pins are added below.
+
+**Literature support (general direction only):**
+
 > Bouckaert, R. R., & Frank, E. (2004). Evaluating the replicability of significance tests for comparing learning algorithms. *Pacific-Asia Conference on Knowledge Discovery and Data Mining (PAKDD)*, 3-12. Springer LNCS 3056.
 
-**Justification (Bouckaert & Frank 2004):**
-- Bouckaert & Frank 2004 §3 ("Variance of cross-validation estimators") establishes the coefficient-of-variation (CV-CoV; same as std/mean) as the standard practice for **comparing classifier stability across folds**. They report typical CV-CoV values of 0.02-0.05 for stable classifiers on well-sized datasets (Adult, Letter), rising to 0.10-0.20 for noisy or small-N benchmarks (LED-24, Anneal). This grounds our `STABLE` (≤ 0.05) and `MODERATE` (≤ 0.10) bands.
+Bouckaert & Frank 2004 establish that variance of cross-validation estimators is dataset- and procedure-dependent, and that comparing classifier stability across folds via coefficient-of-variation-like quantities is standard practice. The paper does NOT publish a 0.05 / 0.10 / 0.20 breakpoint table; specific CV-CoV ranges per dataset (e.g., "0.02-0.05 for Adult/Letter; 0.10-0.20 for LED-24/Anneal") were paraphrased from general CV-variance literature and **require page/table pins** in a future docs pass before they can support enforcement.
 
-**Anchor source (secondary):**
 > Kohavi, R. (1995). A study of cross-validation and bootstrap for accuracy estimation and model selection. *Proceedings of IJCAI-95*, 1137-1143.
 
-**Justification (Kohavi 1995):**
-- Kohavi 1995 §4 "Empirical Evaluation" reports stratified-5-fold and stratified-10-fold CV variance characteristics on real benchmark data. The classic finding: 5-fold std on AUC clusters at ~0.02-0.05 across diverse datasets when n_train_per_fold ≥ 100; small-cohort regimes (n < 50 per fold) inflate variance to ≥ 0.10. Empirically this matches our Optum n=1294 result: `cv_5fold_roc_auc_std = 0.0937` (training fold n ~ 155 with class imbalance ~35:1, leaving only ~4 positives per fold) — labelled `unstable` in our band.
+Kohavi 1995 documents that stratified k-fold CV variance grows when per-fold sample size is small. Empirically this matches our Optum n=1294 result: `cv_5fold_roc_auc_std = 0.0937` with training fold n ~ 155 and class imbalance ~35:1 (leaving only ~4 positives per fold) — our band labels this `unstable`. The paper does NOT publish a 0.05 / 0.10 / 0.20 breakpoint table; the qualitative "small-cohort regime ⇒ inflated variance" finding supports our heuristic gradation but does not pin the specific cutpoints.
 
-**Anchor source (tertiary, ML-stability-specific):**
 > Mukherjee, S., Niyogi, P., Poggio, T., & Rifkin, R. (2006). Learning theory: stability is sufficient for generalization and necessary and sufficient for consistency of empirical risk minimization. *Advances in Computational Mathematics*, 25(1), 161-193.
 
-**Justification (Mukherjee 2006):**
-- Mukherjee et al. 2006 prove that bounded-loss change under leave-one-out perturbation (a.k.a. **algorithmic stability**) is necessary and sufficient for generalization. Their definition of "β-stable" (Theorem 8) maps to our std/mean ratio when the loss is AUC variance — practical translation: **std/mean > 0.20 violates the stability assumption** required for generalization guarantees. This grounds the rejection boundary `UNSTABLE_RATIO_MAX = 0.20`.
+Mukherjee et al. 2006 prove that bounded-loss change under leave-one-out perturbation (algorithmic stability) is necessary and sufficient for generalization of empirical risk minimization. **Important caveat:** their β-stability framework concerns leave-one-out loss perturbation, NOT std/mean AUC ratio across k=5 folds, and the paper does **NOT** establish "std/mean > 0.20 violates the stability assumption" as a corollary. The earlier docstring claim that Mukherjee 2006 "grounds the rejection boundary `UNSTABLE_RATIO_MAX = 0.20`" was an overreach. We retain Mukherjee 2006 as supporting evidence that algorithmic stability matters for generalization in principle, but the specific 0.20 cutpoint is a heuristic operator-friendly choice, not a theorem-derived bound.
 
 **Threshold value carried into code:**
 - `T2_6A_CV_STABILITY_UNSTABLE_RATIO_MAX = 0.20` (rejection boundary; above this is `very_unstable`).
-- RATIONALE: at std/mean > 0.20, the model's measured AUC is dominated by fold-resampling noise — Mukherjee 2006 stability bounds break down. T2.6c rejection here would block models that are essentially un-generalizable.
+- RATIONALE: heuristic operator-friendly cutpoint chosen as a round-number gradation within the general high-variance region of CV-CoV literature. Empirically separates the Optum n=1294 result (0.0937 = `unstable`) from cohorts with substantially larger fold sizes. **NOT** a Mukherjee-2006-derived bound. To promote this to enforcement, either cohort-fit calibration on an un-touched cohort or a page/table pin tying 0.20 to a specific published threshold is required.
 
 ---
 
