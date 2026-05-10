@@ -669,17 +669,63 @@ class TestIsAdaptedRegulatoryCandidate:
 
 class TestN1H2ThresholdProvenanceRegistry:
     """Codex N1-H2: ``LITERATURE_ANCHORED_THRESHOLDS`` registry pins
-    the canonical threshold values per gate."""
+    the canonical (gate, threshold) → doc-ref mapping.
 
-    def test_minimum_auc_anchored_to_zero_seven_five(self) -> None:
+    Pass-2 sharpening: registry is now ``Dict[Tuple[str, float], str]`` —
+    the key is the EXACT (gate, value) pair so a relaxed threshold can
+    never auto-classify as ``literature_anchored``.
+    """
+
+    def test_minimum_auc_zero_seven_five_pair_registered(self) -> None:
         # Anchored to scope_definer/criteria_validator.py:118-120.
-        assert LITERATURE_ANCHORED_THRESHOLDS["minimum_auc"] == 0.75
+        assert ("minimum_auc", 0.75) in LITERATURE_ANCHORED_THRESHOLDS
+        # Doc-ref must be a non-empty citable string.
+        doc_ref = LITERATURE_ANCHORED_THRESHOLDS[("minimum_auc", 0.75)]
+        assert isinstance(doc_ref, str)
+        assert doc_ref  # non-empty
+
+    def test_relaxed_minimum_auc_pair_NOT_in_registry(self) -> None:
+        """A relaxed (or arbitrarily tightened) minimum_auc threshold
+        is NOT in the registry — pass-2 sharpening pins the exact value."""
+        assert ("minimum_auc", 0.50) not in LITERATURE_ANCHORED_THRESHOLDS
+        assert ("minimum_auc", 0.80) not in LITERATURE_ANCHORED_THRESHOLDS
+
+
+class TestN1H2GetLiteratureAnchorDocRef:
+    """Pass-2 sharpening: ``get_literature_anchor_doc_ref`` returns the
+    canonical doc-ref for a registered (gate, threshold) pair."""
+
+    def test_registered_pair_returns_doc_ref(self) -> None:
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            get_literature_anchor_doc_ref,
+        )
+
+        doc_ref = get_literature_anchor_doc_ref("minimum_auc", 0.75)
+        assert doc_ref is not None
+        assert "criteria_validator" in doc_ref or "Vickers" in doc_ref
+
+    def test_unregistered_pair_returns_none(self) -> None:
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            get_literature_anchor_doc_ref,
+        )
+
+        assert get_literature_anchor_doc_ref("minimum_auc", 0.50) is None
+
+    def test_non_numeric_threshold_returns_none(self) -> None:
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            get_literature_anchor_doc_ref,
+        )
+
+        assert get_literature_anchor_doc_ref("minimum_auc", "not-a-number") is None  # type: ignore[arg-type]
 
 
 class TestN1H2ClassifyThresholdProvenance:
     """Codex N1-H2: ``classify_threshold_provenance`` returns the
-    ``"literature_anchored"`` literal ONLY when (gate, threshold) matches
-    the registered anchor."""
+    ``"literature_anchored"`` literal ONLY when (gate, threshold) is
+    EXACTLY in the registry. Pass-2 sharpening: returns ``"unknown"``
+    by default (no more silent ``None``); ``"cohort_fitted"`` /
+    ``"operator_override"`` require explicit caller opt-in.
+    """
 
     def test_minimum_auc_at_anchor_classifies_literature_anchored(self) -> None:
         assert (
@@ -687,29 +733,41 @@ class TestN1H2ClassifyThresholdProvenance:
             == "literature_anchored"
         )
 
-    def test_minimum_auc_relaxed_does_NOT_classify_literature_anchored(self) -> None:
-        """Relaxed threshold with no provenance hint returns None."""
-        assert classify_threshold_provenance(gate_name="minimum_auc", threshold=0.50) is None
+    def test_minimum_auc_relaxed_classifies_unknown(self) -> None:
+        """Pass-2 sharpening: a relaxed threshold with no caller
+        declaration is ``"unknown"`` (NOT ``None`` and NOT
+        ``"cohort_fitted"`` — the caller MUST explicitly opt into
+        ``cohort_fitted`` if they intend that semantics)."""
+        assert classify_threshold_provenance(gate_name="minimum_auc", threshold=0.50) == "unknown"
 
-    def test_unregistered_gate_returns_none(self) -> None:
-        assert classify_threshold_provenance(gate_name="some_other_gate", threshold=0.75) is None
+    def test_minimum_auc_arbitrarily_tightened_classifies_unknown(self) -> None:
+        """Even a tighter-than-anchor threshold (0.85 vs 0.75) is NOT
+        ``literature_anchored`` — the registry pins the exact signed-off
+        value, not a floor."""
+        assert classify_threshold_provenance(gate_name="minimum_auc", threshold=0.85) == "unknown"
+
+    def test_unregistered_gate_returns_unknown(self) -> None:
+        assert (
+            classify_threshold_provenance(gate_name="some_other_gate", threshold=0.75) == "unknown"
+        )
 
     def test_relaxed_threshold_with_declared_literature_does_not_launder(self) -> None:
         """A caller declaring ``threshold_provenance="literature_anchored"``
-        on a relaxed threshold is NOT trusted — the classifier checks the
-        registry, not the caller's declaration."""
+        on a non-registered (gate, value) pair is NOT trusted — the
+        classifier ignores the declaration and returns ``"unknown"``."""
         assert (
             classify_threshold_provenance(
                 gate_name="minimum_auc",
                 threshold=0.50,
                 declared_provenance="literature_anchored",
             )
-            is None
+            == "unknown"
         )
 
-    def test_cohort_fitted_provenance_passes_through(self) -> None:
-        """Caller-declared cohort_fitted is recorded for audit but
-        does not satisfy the literature_anchored requirement."""
+    def test_cohort_fitted_provenance_requires_explicit_opt_in(self) -> None:
+        """Pass-2 sharpening: ``cohort_fitted`` is recorded for audit ONLY
+        when the caller explicitly declares it. The registry-mismatch path
+        never returns ``cohort_fitted`` silently."""
         result = classify_threshold_provenance(
             gate_name="minimum_auc",
             threshold=0.50,
@@ -717,7 +775,7 @@ class TestN1H2ClassifyThresholdProvenance:
         )
         assert result == "cohort_fitted"
 
-    def test_operator_override_provenance_passes_through(self) -> None:
+    def test_operator_override_provenance_requires_explicit_opt_in(self) -> None:
         result = classify_threshold_provenance(
             gate_name="minimum_auc",
             threshold=0.50,
@@ -725,21 +783,51 @@ class TestN1H2ClassifyThresholdProvenance:
         )
         assert result == "operator_override"
 
-    def test_invalid_declared_provenance_returns_none(self) -> None:
-        """Garbage provenance is dropped entirely."""
+    def test_invalid_declared_provenance_returns_unknown(self) -> None:
+        """Pass-2 sharpening: garbage provenance falls back to
+        ``"unknown"`` (NOT ``None``)."""
         assert (
             classify_threshold_provenance(
                 gate_name="minimum_auc",
                 threshold=0.50,
                 declared_provenance="garbage_value",
             )
-            is None
+            == "unknown"
         )
 
-    def test_non_numeric_threshold_returns_none(self) -> None:
+    def test_non_numeric_threshold_returns_unknown(self) -> None:
         assert (
-            classify_threshold_provenance(gate_name="minimum_auc", threshold="not-a-number") is None
+            classify_threshold_provenance(gate_name="minimum_auc", threshold="not-a-number")
+            == "unknown"
         )
+
+    def test_classifier_never_returns_none(self) -> None:
+        """Pass-2 sharpening contract: every code path returns a string
+        from ALLOWED_THRESHOLD_PROVENANCE — None is no longer reachable."""
+        from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+            ALLOWED_THRESHOLD_PROVENANCE,
+        )
+
+        # Sweep representative cases — no None results.
+        cases = [
+            ("minimum_auc", 0.75, None),
+            ("minimum_auc", 0.50, None),
+            ("minimum_auc", 0.50, "cohort_fitted"),
+            ("minimum_auc", 0.50, "operator_override"),
+            ("minimum_auc", 0.50, "literature_anchored"),
+            ("minimum_auc", 0.50, "garbage"),
+            ("minimum_auc", "not-a-number", None),
+            ("some_other_gate", 0.75, None),
+        ]
+        for gate_name, threshold, declared in cases:
+            result = classify_threshold_provenance(
+                gate_name=gate_name, threshold=threshold, declared_provenance=declared
+            )
+            assert result is not None, (
+                f"classify_threshold_provenance returned None for "
+                f"({gate_name=}, {threshold=}, {declared=})"
+            )
+            assert result in ALLOWED_THRESHOLD_PROVENANCE
 
 
 class TestN1H2EligibilityRequiresLiteratureAnchored:
