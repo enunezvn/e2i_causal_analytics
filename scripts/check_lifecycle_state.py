@@ -239,20 +239,55 @@ def _read_python_module_constants(path: Path) -> dict[str, Optional[str]]:
 def _iter_lifecycle_scopes(tree: ast.Module) -> list[ast.Module | ast.ClassDef]:
     """Return every scope where a ``LIFECYCLE_STATE_*`` constant is
     considered a stable declaration: the module itself + every class body
-    (including nested classes).
+    transitively, EXCEPT classes whose ancestor chain includes a
+    ``FunctionDef`` or ``AsyncFunctionDef`` (i.e., function-nested
+    classes).
 
     Function bodies are excluded — a constant defined inside a function is
-    a runtime value, not a gate declaration.
+    a runtime value, not a gate declaration. A class nested inside a
+    function is similarly a runtime construct: even though Python permits
+    ``def f(): class C: LIFECYCLE_STATE_X = ...``, ``C`` is re-built on
+    every call to ``f`` and is not addressable from module-import scope, so
+    its lifecycle constant is not a stable declaration the scanner can
+    rely on (N2 pass-2 finding H2 PARTIAL + new MED).
+
+    Implementation: walk the tree top-down via ``ast.NodeVisitor`` while
+    maintaining a stack of enclosing functions; only emit ``ClassDef``
+    nodes whose ancestor chain contains zero functions. Top-level classes
+    and arbitrarily-nested *class*-in-*class* constructs are accepted.
     """
     scopes: list[ast.Module | ast.ClassDef] = [tree]
-    # Walk all class definitions transitively. ``ast.walk`` yields every
-    # node; we keep ClassDef regardless of nesting depth because a
-    # nested-class lifecycle constant is still a stable identifier, just
-    # one we'd need to spell as ``Outer.Inner.LIFECYCLE_STATE_*`` to
-    # reference. Coverage is still better than silently dropping it.
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            scopes.append(node)
+
+    class _Collector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self._function_depth = 0
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._function_depth += 1
+            self.generic_visit(node)
+            self._function_depth -= 1
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._function_depth += 1
+            self.generic_visit(node)
+            self._function_depth -= 1
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            # Lambdas have no body for class definitions, but be defensive.
+            self._function_depth += 1
+            self.generic_visit(node)
+            self._function_depth -= 1
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            if self._function_depth == 0:
+                scopes.append(node)
+            # Recurse regardless: a class nested in a function may itself
+            # contain another class — but since we're inside a function,
+            # the function_depth counter keeps us from accepting any of
+            # them. A class-in-class-in-function chain stays excluded.
+            self.generic_visit(node)
+
+    _Collector().visit(tree)
     return scopes
 
 

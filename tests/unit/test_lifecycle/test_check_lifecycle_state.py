@@ -257,6 +257,112 @@ class TestScanPythonModules:
         assert len(findings) == 1
         assert findings[0].code == "missing_lifecycle_constant"
 
+    # ----------------------------------------------------------------------
+    # N2 pass-2 finding H2 PARTIAL + new MED: a class nested inside a
+    # function body is a runtime construct (the class is rebuilt on every
+    # call to the enclosing function and is not addressable from
+    # module-import scope). Its LIFECYCLE_STATE_* must NOT count as a
+    # stable declaration.
+    # ----------------------------------------------------------------------
+
+    def test_function_nested_class_constant_not_detected(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rel = "src/test_module/gate_func_nested_class.py"
+        (fake_repo / rel).write_text(
+            "from src.lifecycle import GateLifecycleState\n"
+            "def _factory():\n"
+            "    class InnerCfg:\n"
+            "        LIFECYCLE_STATE_INNER = GateLifecycleState.ADVISORY\n"
+            "    return InnerCfg\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _scanner_mod,
+            "GATE_RELEVANT_PYTHON_MODULES",
+            {rel: frozenset({"LIFECYCLE_STATE_INNER"})},
+        )
+        findings = scan_python_modules(fake_repo)
+        assert len(findings) == 1
+        assert findings[0].code == "missing_lifecycle_constant", (
+            "function-nested class LIFECYCLE_STATE_* must not be picked up "
+            "as a stable declaration; got "
+            f"{[f.to_dict() for f in findings]}"
+        )
+
+    def test_async_function_nested_class_constant_not_detected(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same exclusion applies to ``async def`` factories."""
+        rel = "src/test_module/gate_async_func_nested_class.py"
+        (fake_repo / rel).write_text(
+            "from src.lifecycle import GateLifecycleState\n"
+            "async def _factory():\n"
+            "    class InnerCfg:\n"
+            "        LIFECYCLE_STATE_INNER = GateLifecycleState.ADVISORY\n"
+            "    return InnerCfg\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _scanner_mod,
+            "GATE_RELEVANT_PYTHON_MODULES",
+            {rel: frozenset({"LIFECYCLE_STATE_INNER"})},
+        )
+        findings = scan_python_modules(fake_repo)
+        assert len(findings) == 1
+        assert findings[0].code == "missing_lifecycle_constant"
+
+    def test_class_in_class_in_function_constant_not_detected(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A class-in-class chain enclosed by a function is still inside
+        a function scope, so the lifecycle constant must remain
+        excluded.
+        """
+        rel = "src/test_module/gate_deep_func_nest.py"
+        (fake_repo / rel).write_text(
+            "from src.lifecycle import GateLifecycleState\n"
+            "def _factory():\n"
+            "    class Outer:\n"
+            "        class Inner:\n"
+            "            LIFECYCLE_STATE_DEEP = GateLifecycleState.ADVISORY\n"
+            "    return Outer\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _scanner_mod,
+            "GATE_RELEVANT_PYTHON_MODULES",
+            {rel: frozenset({"LIFECYCLE_STATE_DEEP"})},
+        )
+        findings = scan_python_modules(fake_repo)
+        assert len(findings) == 1
+        assert findings[0].code == "missing_lifecycle_constant"
+
+    def test_top_level_class_in_class_constant_detected(
+        self, fake_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sanity counter-test: a class-in-class chain at module scope
+        (no function ancestor) IS still a stable declaration.
+        """
+        rel = "src/test_module/gate_class_in_class.py"
+        (fake_repo / rel).write_text(
+            "from src.lifecycle import GateLifecycleState\n"
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        LIFECYCLE_STATE_NESTED = GateLifecycleState.ADVISORY\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _scanner_mod,
+            "GATE_RELEVANT_PYTHON_MODULES",
+            {rel: frozenset({"LIFECYCLE_STATE_NESTED"})},
+        )
+        findings = scan_python_modules(fake_repo)
+        assert findings == [], (
+            "top-level class-in-class LIFECYCLE_STATE_* must remain "
+            f"detected; got {[f.to_dict() for f in findings]}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Acceptance #3 + #5: gate-shaped YAML without lifecycle_state fails;
