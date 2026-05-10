@@ -70,6 +70,33 @@ _PERMUTATION_PROMOTED_KEYS: tuple[str, ...] = (
 # `success_criteria` and do NOT block the deployer.
 T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT: float = 0.05
 
+# Plan v3 §4 T2.3 — Cohort-derived honest band defaults.
+# The "honest band" is the cohort-conditional range of test AUCs that a
+# deployable model could plausibly achieve without leakage. Pre-T2.3 the
+# band was a hardcoded `[0.62, 0.68]` literal in
+# `synthetic_rwd_realistic.py` (calibrated for one synthetic regime); T2.3
+# replaces it with a per-cohort derivation from `permutation_auc_std` +
+# `baseline_test_auc` + the configured lift bounds.
+#
+# Lower bound (`honest_band_lo`) is the larger of:
+#   1. baseline_test_auc + T2_3_HONEST_BAND_MIN_LIFT_DEFAULT (5pp lift over
+#      the stratified-dummy baseline = "operationally meaningful").
+#   2. permutation_null_p99 + T2_3_HONEST_BAND_NOISE_SIGMA_DEFAULT *
+#      permutation_auc_std (statistically distinguishable from noise).
+#
+# Upper bound (`honest_band_hi`) is the smaller of:
+#   3. baseline_test_auc + T2_3_HONEST_BAND_MAX_LIFT_DEFAULT (30pp lift =
+#      "above this is suspicious for leakage on RWD claims data").
+#   4. T2_3_HONEST_BAND_CEILING_DEFAULT (absolute cap; AUC > 0.95 on real
+#      RWD is essentially never honest per published claims-only research).
+#
+# Constants are calibration-anchored defaults, NOT regulatory floors. A
+# caller (T2.6c enforcement phase) can override per cohort.
+T2_3_HONEST_BAND_MIN_LIFT_DEFAULT: float = 0.05
+T2_3_HONEST_BAND_MAX_LIFT_DEFAULT: float = 0.30
+T2_3_HONEST_BAND_CEILING_DEFAULT: float = 0.95
+T2_3_HONEST_BAND_NOISE_SIGMA_DEFAULT: float = 1.0
+
 # Backlog #20 Gap 2: F1-fallback fires when validation MCC at the
 # canonically-chosen threshold falls below this floor. 0.20 is the band
 # below which the canonical Youden's J / cost-optimal pick is treated as
@@ -222,6 +249,155 @@ def _promote_permutation_summary_to_validation_metrics(
     for key in _PERMUTATION_PROMOTED_KEYS:
         if key in permutation_result:
             val_metrics[key] = permutation_result[key]
+
+
+def _emit_cohort_derived_honest_band(
+    metrics_result: Dict[str, Any],
+    test_metrics: Dict[str, Any],
+    permutation_result: Dict[str, Any],
+    *,
+    min_lift: float = T2_3_HONEST_BAND_MIN_LIFT_DEFAULT,
+    max_lift: float = T2_3_HONEST_BAND_MAX_LIFT_DEFAULT,
+    ceiling: float = T2_3_HONEST_BAND_CEILING_DEFAULT,
+    noise_sigma: float = T2_3_HONEST_BAND_NOISE_SIGMA_DEFAULT,
+) -> None:
+    """Plan v3 §4 T2.3 — cohort-derived honest band (advisory mode only).
+
+    Surfaces the cohort-conditional honest range of test AUC values onto
+    ``validation_metrics``. An "honest" AUC is large enough to be
+    statistically distinguishable from random label-shuffle noise AND
+    operationally meaningful relative to a stratified-dummy baseline,
+    but not so large that leakage is implausible to rule out.
+
+    Surface keys (all on ``validation_metrics``):
+
+      * ``honest_band_lo`` — lower bound of the honest range, or None when
+        either ``baseline_test_auc`` (from `_compute_baseline_test_metrics`)
+        or ``permutation_null_p99`` is missing. Computed as
+        ``max(baseline + min_lift, perm_null_p99 + noise_sigma * perm_auc_std)``.
+      * ``honest_band_hi`` — upper bound, computed as
+        ``min(ceiling, baseline + max_lift)``. None when baseline is missing.
+      * ``honest_band_baseline_test_auc`` — the input from ``test_metrics``.
+      * ``honest_band_perm_null_p99`` — the input from ``permutation_result``.
+      * ``honest_band_perm_auc_std`` — the input from ``permutation_result``.
+      * ``honest_band_min_lift`` / ``honest_band_max_lift`` /
+        ``honest_band_ceiling`` / ``honest_band_noise_sigma`` — the configured
+        thresholds. Always emitted for operator audit, even when the band
+        cannot be evaluated.
+      * ``honest_band_violated`` — bool. True iff test_auc lies OUTSIDE
+        ``[lo, hi]`` AND all required inputs are present. None when
+        evaluation cannot proceed.
+      * ``honest_band_position`` — Literal[``"below"``, ``"in_band"``, ``"above"``],
+        or None. Operator triage signal.
+
+    Pure observability — does NOT mutate ``success_criteria``,
+    ``success_criteria_met``, or ``success_criteria_results``. Plan §4 T2.3:
+    this replaces the hardcoded ``[0.62, 0.68]`` literal in
+    ``synthetic_rwd_realistic.py`` with a per-cohort derivation; the band
+    is emitted for downstream consumption (T2.6c enforcement phase, the
+    integration test ``test_csu_val_auc_measurement.py``, observability
+    dashboards), not enforced.
+
+    No-ops gracefully when any required input is missing — preserves
+    backward compat with callers that pre-date the perm-null surface
+    (Tier 1B step 1) or the baseline_test_auc emit.
+    """
+    val_metrics = metrics_result.setdefault("validation_metrics", {})
+
+    val_metrics["honest_band_min_lift"] = float(min_lift)
+    val_metrics["honest_band_max_lift"] = float(max_lift)
+    val_metrics["honest_band_ceiling"] = float(ceiling)
+    val_metrics["honest_band_noise_sigma"] = float(noise_sigma)
+
+    baseline_auc = test_metrics.get("baseline_test_auc")
+    perm_null_p99 = permutation_result.get("permutation_null_p99")
+    perm_auc_std = permutation_result.get("permutation_auc_std")
+    test_auc = test_metrics.get("roc_auc")
+
+    val_metrics["honest_band_baseline_test_auc"] = baseline_auc
+    val_metrics["honest_band_perm_null_p99"] = perm_null_p99
+    val_metrics["honest_band_perm_auc_std"] = perm_auc_std
+
+    if baseline_auc is None:
+        val_metrics["honest_band_lo"] = None
+        val_metrics["honest_band_hi"] = None
+        val_metrics["honest_band_violated"] = None
+        val_metrics["honest_band_position"] = None
+        return
+
+    baseline_auc_f = float(baseline_auc)
+
+    # Upper bound: cap at ceiling OR baseline + max_lift, whichever is lower.
+    hi = min(float(ceiling), baseline_auc_f + float(max_lift))
+
+    # Lower bound: max of operationally-meaningful lift OR statistical
+    # distinguishability above the perm-null upper tail. When the perm-null
+    # inputs are missing, fall back to baseline + min_lift only.
+    lo_meaningful = baseline_auc_f + float(min_lift)
+    if perm_null_p99 is not None and perm_auc_std is not None:
+        lo_distinguishable = float(perm_null_p99) + float(noise_sigma) * float(perm_auc_std)
+        lo = max(lo_meaningful, lo_distinguishable)
+    else:
+        lo = lo_meaningful
+
+    # Pathological: lo > hi (cohort with high baseline, narrow ceiling).
+    # Surface as None for both bounds so downstream consumers don't see an
+    # empty band.
+    if lo > hi:
+        val_metrics["honest_band_lo"] = None
+        val_metrics["honest_band_hi"] = None
+        val_metrics["honest_band_violated"] = None
+        val_metrics["honest_band_position"] = None
+        logger.warning(
+            "T2.3 honest band collapsed: derived lo=%.4f > hi=%.4f "
+            "(baseline=%.4f, perm_null_p99=%s, perm_auc_std=%s). "
+            "Likely cause: very high baseline + tight ceiling. Caller "
+            "may need to relax max_lift or raise ceiling for this cohort.",
+            lo,
+            hi,
+            baseline_auc_f,
+            perm_null_p99,
+            perm_auc_std,
+        )
+        return
+
+    val_metrics["honest_band_lo"] = float(lo)
+    val_metrics["honest_band_hi"] = float(hi)
+
+    if test_auc is None:
+        val_metrics["honest_band_violated"] = None
+        val_metrics["honest_band_position"] = None
+        return
+
+    test_auc_f = float(test_auc)
+    if test_auc_f < lo:
+        position = "below"
+        violated = True
+    elif test_auc_f > hi:
+        position = "above"
+        violated = True
+    else:
+        position = "in_band"
+        violated = False
+
+    val_metrics["honest_band_violated"] = violated
+    val_metrics["honest_band_position"] = position
+
+    if violated:
+        logger.warning(
+            "T2.3 ADVISORY: test AUC=%.4f is %s honest band [%.4f, %.4f] "
+            "(baseline=%.4f, perm_null_p99=%s). NOT enforced (advisory mode "
+            "per plan v3 §4 T2.3); deployer is unaffected. Position=%s — "
+            "if 'below', signal is too weak relative to baseline OR noise; "
+            "if 'above', leakage is harder to rule out for this cohort.",
+            test_auc_f,
+            "below" if position == "below" else "above",
+            lo,
+            hi,
+            baseline_auc_f,
+            perm_null_p99,
+            position,
+        )
 
 
 def _compute_baseline_test_metrics(
@@ -460,6 +636,16 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
         # Uses the test_metrics computed above (within metrics_result). Pure
         # observability: no success_criteria mutation, no deployer impact.
         _emit_permutation_anchored_auc_advisory(
+            metrics_result,
+            metrics_result.get("test_metrics", {}),
+            permutation_result,
+        )
+        # Plan v3 §4 T2.3 — Cohort-derived honest band (advisory mode).
+        # Replaces the hardcoded `[0.62, 0.68]` literal in
+        # `synthetic_rwd_realistic.py` with a per-cohort derivation from
+        # baseline_test_auc + perm_null_p99 + perm_auc_std. Pure observability:
+        # no success_criteria mutation, no deployer impact.
+        _emit_cohort_derived_honest_band(
             metrics_result,
             metrics_result.get("test_metrics", {}),
             permutation_result,
