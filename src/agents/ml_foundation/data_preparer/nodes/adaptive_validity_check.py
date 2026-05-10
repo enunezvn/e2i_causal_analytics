@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd
@@ -106,6 +106,258 @@ DEFAULT_PERMUTATIONS = 200
 # and is left for downstream review. Promoted from a hardcoded `30` per
 # backlog item #11.c so future tightening can change one place.
 MIN_LAYER3_SAMPLES = 30
+
+
+# ============================================================================
+# Plan v3 §3 Tier 1B step 2 — Hierarchical Bayesian Leakage Prior (HBLP)
+# variance-inflation helpers + step 5 derivation-lineage audit.
+#
+# HBLP rationale: at low n_positives the permutation null variance scales as
+# ~1/√n_positives. With ~22 train positives σ_null≈0.04 makes legitimate
+# confounders look like 3-5σ leaks even when Layer 1 cleared them. HBLP
+# inflates the Layer 3 z-threshold proportionally so the perm test does
+# not over-drop at small N.
+#
+# Prior structure: when Layer 1 manifest CLEARED a feature (knowable_at <=
+# index_date per the manifest), require STRONGER Layer 3 evidence to override
+# (i.e., a higher z-threshold). Conversely, when Layer 1 dropped the feature,
+# Layer 3 inherits the standard threshold.
+#
+# Plan §6 Tier 1B Gate B1 acceptance: HBLP can ship as DIAGNOSTIC with this
+# helper alone (no enforcement). Gate B2 (quality uplift claim) requires
+# pre-specified ΔAUC≥0.03 + ECE/2 + stability/0.7 — a separate measurement.
+# ============================================================================
+
+# Variance-inflation reference. At n_positives=50 the inflation factor is
+# 1.0 (no relaxation); at n_positives=22 it's sqrt(50/22)≈1.51 (51% wider
+# threshold); at n_positives=200 it's sqrt(50/200)=0.5 (tightening, but
+# capped at 1.0 so we never tighten below the base 5σ).
+T2_1B_HBLP_VARIANCE_INFLATION_REFERENCE_N: int = 50
+
+# Layer-1-conditional inflation: a feature that Layer 1 manifest declared
+# safe (knowable_at <= index_date) gets an ADDITIONAL z-threshold buffer on
+# top of variance inflation. This encodes the structural prior: declared-
+# safe features need stronger statistical evidence to be reclassified as
+# leaks. Default 1.5x base threshold (so 5σ → 7.5σ for declared-safe at
+# any N >= 50; further inflated for low-N).
+T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER: float = 1.5
+
+
+def hblp_effective_z_threshold(
+    n_positives: int,
+    layer_1_declared_safe: bool,
+    base_threshold: float = HIGH_Z,
+    variance_inflation_reference_n: int = T2_1B_HBLP_VARIANCE_INFLATION_REFERENCE_N,
+    declared_safe_prior_multiplier: float = T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER,
+) -> float:
+    """Plan v3 §3 Tier 1B step 2 — HBLP variance-inflation z-threshold.
+
+    Computes an effective Layer 3 z-threshold that:
+      1. Inflates by ``sqrt(reference_n / n_positives)`` when n_positives <
+         reference_n (so 5σ at n=22 becomes ~7.5σ to compensate for the
+         small-N null variance).
+      2. Multiplies by ``declared_safe_prior_multiplier`` (default 1.5x)
+         when ``layer_1_declared_safe=True`` — encoding the prior that a
+         feature whose declared knowable_at <= index_date needs stronger
+         Layer 3 evidence to be reclassified as a leak.
+      3. Capped at ``base_threshold`` from below (HBLP never tightens; it
+         only relaxes for low-N or declared-safe features).
+
+    Args:
+        n_positives: Training-split positive-class count (the binding
+            constraint for permutation-null variance).
+        layer_1_declared_safe: True iff the feature's manifest contract
+            declared knowable_at <= index_date (Layer 1 cleared it).
+        base_threshold: Pre-HBLP Layer 3 z-threshold (default 5.0).
+        variance_inflation_reference_n: N at which inflation factor = 1.0.
+        declared_safe_prior_multiplier: Additional multiplier when Layer 1
+            cleared the feature.
+
+    Returns:
+        Effective z-threshold to use for Layer 3 decisioning. Always
+        ``>= base_threshold`` (HBLP only relaxes, never tightens).
+    """
+    if n_positives <= 0:
+        # Degenerate: no positives → no permutation signal possible.
+        # Return base threshold; caller will likely short-circuit anyway.
+        return float(base_threshold)
+
+    variance_inflation = max(
+        1.0,
+        (float(variance_inflation_reference_n) / float(n_positives)) ** 0.5,
+    )
+    layer_1_factor = float(declared_safe_prior_multiplier) if layer_1_declared_safe else 1.0
+    return float(base_threshold) * variance_inflation * layer_1_factor
+
+
+def hblp_classify(
+    z_score: float,
+    n_positives: int,
+    layer_1_declared_safe: bool,
+    base_threshold: float = HIGH_Z,
+    moderate_base_threshold: float = MODERATE_Z,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Plan v3 §3 Tier 1B step 2 — HBLP-aware Layer 3 severity classifier.
+
+    Wraps the legacy ``HIGH_Z`` / ``MODERATE_Z`` ladder with HBLP
+    variance-inflation. Returns a dict matching the legacy verdict shape:
+
+      * ``severity`` ∈ {"high", "moderate", "info"}
+      * ``effective_high_threshold``: float, post-HBLP threshold used
+      * ``effective_moderate_threshold``: float, post-HBLP moderate band
+      * ``base_threshold``: float, original 5σ
+      * ``variance_inflation_factor``: float, sqrt(50/n_pos) clipped at 1.0
+      * ``layer_1_factor``: float, 1.5x for declared-safe else 1.0
+      * ``hblp_relaxed``: bool, True iff effective > base
+      * ``rationale``: str, explanation
+    """
+    high_eff = hblp_effective_z_threshold(
+        n_positives=n_positives,
+        layer_1_declared_safe=layer_1_declared_safe,
+        base_threshold=base_threshold,
+        **kwargs,
+    )
+    # Moderate threshold scales by the same factor as high to preserve
+    # the band proportions.
+    relaxation_factor = high_eff / float(base_threshold)
+    moderate_eff = float(moderate_base_threshold) * relaxation_factor
+
+    if not _is_finite_z(z_score):
+        severity = "info"
+        rationale = "z_score is non-finite; HBLP defaults to severity=info"
+    elif z_score > high_eff:
+        severity = "high"
+        rationale = (
+            f"z={z_score:.2f}σ > HBLP-effective {high_eff:.2f}σ "
+            f"(base={base_threshold}σ × inflation={relaxation_factor:.2f})"
+        )
+    elif z_score > moderate_eff:
+        severity = "moderate"
+        rationale = (
+            f"z={z_score:.2f}σ between moderate {moderate_eff:.2f}σ and "
+            f"high {high_eff:.2f}σ (HBLP-inflated)"
+        )
+    else:
+        severity = "info"
+        rationale = f"z={z_score:.2f}σ ≤ HBLP-effective moderate {moderate_eff:.2f}σ"
+
+    variance_inflation = max(
+        1.0,
+        (float(T2_1B_HBLP_VARIANCE_INFLATION_REFERENCE_N) / max(n_positives, 1)) ** 0.5,
+    )
+    layer_1_factor = (
+        float(T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER) if layer_1_declared_safe else 1.0
+    )
+    return {
+        "severity": severity,
+        "effective_high_threshold": high_eff,
+        "effective_moderate_threshold": moderate_eff,
+        "base_threshold": float(base_threshold),
+        "variance_inflation_factor": variance_inflation,
+        "layer_1_factor": layer_1_factor,
+        "hblp_relaxed": high_eff > float(base_threshold),
+        "n_positives": int(n_positives),
+        "layer_1_declared_safe": layer_1_declared_safe,
+        "rationale": rationale,
+    }
+
+
+def _is_finite_z(z: Any) -> bool:
+    try:
+        return bool(np.isfinite(float(z)))
+    except (TypeError, ValueError):
+        return False
+
+
+# ----------------------------------------------------------------------------
+# Plan v3 §3 Tier 1B step 5 — Derivation-lineage audit (declared-path only).
+#
+# IMPORTANT scope: this audit proves DECLARED-PATH validity only — i.e., the
+# feature's manifest contract names only pre-anchor data sources. It does
+# NOT detect (a) false declarations (a manifest entry that lies about its
+# inputs), (b) hidden post-anchor dependencies inside the derivation
+# function, or (c) leakage encoded through legitimate-looking pre-anchor
+# paths. Per plan §7 risk register, broader leakage mitigation requires
+# lineage + leakage-injection regression + AdversarialProbe (already shipped
+# Phase 2.4 / PR #90) + conditional MI (deferred Tier 3).
+# ----------------------------------------------------------------------------
+
+
+def lineage_audit_declared_path(
+    feature_name: str,
+    data_source: Optional[str],
+) -> Dict[str, Any]:
+    """Plan v3 §3 Tier 1B step 5 — Declared-path lineage validity check.
+
+    Looks up the feature's ``FeatureContract`` from ``MANIFEST_SOURCES``
+    and confirms its declared ``knowable_at`` reference is pre-anchor
+    (i.e., ``"index_date"`` or earlier). Returns a structured audit
+    record with:
+
+      * ``feature_name``, ``data_source`` — inputs.
+      * ``contract_found`` — bool, True iff the manifest registry returned
+        a contract for this feature.
+      * ``knowable_at_reference`` — str, the contract's reference (e.g.
+        ``"index_date"``, ``"post_index"``).
+      * ``declared_path_valid`` — bool, True iff the reference is
+        pre-anchor. None when contract_found is False.
+      * ``rationale`` — str, human-readable explanation.
+
+    SCOPE NOTE (per plan §7 risk register): this audit proves DECLARED-PATH
+    validity only. A feature whose manifest entry lies about its inputs
+    will pass this audit AND be a leak. Broader leakage mitigation needs
+    lineage + leakage-injection regression + AdversarialProbe (Phase 2.4)
+    + conditional MI (deferred Tier 3).
+    """
+    from src.data.manifests import MANIFEST_SOURCES
+
+    if data_source is None or data_source not in MANIFEST_SOURCES:
+        return {
+            "feature_name": feature_name,
+            "data_source": data_source,
+            "contract_found": False,
+            "knowable_at_reference": None,
+            "declared_path_valid": None,
+            "rationale": (
+                f"data_source={data_source!r} not in MANIFEST_SOURCES "
+                "registry; cannot audit declared-path validity"
+            ),
+        }
+
+    contract = MANIFEST_SOURCES[data_source](feature_name)
+    if contract is None:
+        return {
+            "feature_name": feature_name,
+            "data_source": data_source,
+            "contract_found": False,
+            "knowable_at_reference": None,
+            "declared_path_valid": None,
+            "rationale": (
+                f"manifest for source={data_source!r} returned no contract "
+                f"for feature={feature_name!r}; cannot audit declared-path "
+                "validity"
+            ),
+        }
+
+    knowable_at_ref = getattr(contract.knowable_at, "reference", None)
+    # Pre-anchor references: index_date and any earlier marker. Per
+    # plan §3 Tier 1B step 5, MANIFEST_SOURCES is the single source of
+    # truth for what's pre-anchor.
+    pre_anchor_refs = {"index_date", "lookback_start_date", "eligeff"}
+    declared_path_valid = knowable_at_ref in pre_anchor_refs
+
+    return {
+        "feature_name": feature_name,
+        "data_source": data_source,
+        "contract_found": True,
+        "knowable_at_reference": knowable_at_ref,
+        "declared_path_valid": declared_path_valid,
+        "rationale": (
+            f"contract knowable_at.reference={knowable_at_ref!r} "
+            f"{'IS pre-anchor (audit pass)' if declared_path_valid else 'is NOT pre-anchor (audit fail)'}"
+        ),
+    }
 
 
 # =============================================================================
