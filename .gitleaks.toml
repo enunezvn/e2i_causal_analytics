@@ -68,6 +68,8 @@ commits = [
   "b61404cec6cfe3668ab6a14d8177d442eea5d471",  # INFRASTRUCTURE.md + .env.template (3 hits)
   "3e1c70cf40efb46c0b3cf59b14e8bb27de2bd53f",  # docs/FEATURE_STORE_QUICKSTART.md (2 hits)
   "2aa69645e490ef6c522ed2f0fc0ad1e2c08212f1",  # PR #118 perm-null surface — Plan v3 Tier 1B step 1 docstring lists `permutation_null_p95` etc. as result-mapping keys; generic-api-key false-positive
+  "58cfb93227191950a7cf77c38ffb5242e83a73b5",  # PR #119 perm-null surface (rebased SHA) — same docstring false positive
+  "3cf522aa39bb16dffa50aef8a72b6d59345c2eaa",  # PR #121 perm-null surface (rebased SHA) — same docstring false positive
 ]
 
 # ---------------------------------------------------------------------------
