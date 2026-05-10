@@ -320,6 +320,122 @@ def test_placeholder_constant_matches_memo_token() -> None:
 
 
 # ---------------------------------------------------------------------------
+# HIGH-3 (iter-3) — structured fingerprint extraction.
+# ---------------------------------------------------------------------------
+
+
+def _make_canonical_memo(
+    *,
+    t1: str = "0.03",
+    t2: str = "0.5",
+    t3: str = "0.7",
+    seeds: str = "(42, 43, 44, 45, 46)",
+    n_default: str = "1294",
+    n_relaxed: str = "1697",
+    target: str = "treatment_initiated",
+    journeys_hash: str = "TODO_PIN_AT_FIRST_GREEN_RUN",
+    events_hash: str = "TODO_PIN_AT_FIRST_GREEN_RUN",
+) -> str:
+    """Synthesize a memo whose load-bearing fingerprint matches the
+    canonical pre-spec memo. Used to test that drift detection
+    triggers on value changes but NOT on whitespace / ordering."""
+    return f"""# Gate G2 Pre-Spec
+| **T1** | dAUC | `Δ_AUC ≥ {t1}` | held-out lift |
+| **T2** | ECE  | `ECE_post ≤ {t2} × ECE_pre` | calibration halving |
+| **T3** | CV   | `(std/mean)_post ≤ {t3} × (std/mean)_pre` | CV stability |
+
+- **Cohort label:** `optum_initiation_default`
+- **Patient-journey count:** {n_default}
+- **Target column:** `{target}`
+
+- **Cohort label:** `optum_initiation_relaxed`
+- **Patient-journey count:** {n_relaxed}
+- **Target column:** `{target}`
+
+```python
+G2_DELTA_AUC_MIN: float = {t1}           # T1
+G2_ECE_RATIO_MAX: float = {t2}            # T2
+G2_CV_STABILITY_RATIO_MAX: float = {t3}   # T3
+G2_SEEDS: tuple[int, ...] = {seeds}
+```
+
+```yaml
+g2_dataset_hashes:
+  optum_initiation_patient_journeys_parquet:
+    path: "data/rwd/optum/initiation/x.parquet"
+    sha256: "{journeys_hash}"
+  optum_initiation_treatment_events_parquet:
+    path: "data/rwd/optum/initiation/y.parquet"
+    sha256: "{events_hash}"
+```
+"""
+
+
+class TestStructuredFingerprintExtraction:
+    """HIGH-3 (iter-3): the fingerprint extracts canonical values for
+    thresholds, seeds, cohort identifiers, and pinned hashes — making
+    multi-line load-bearing edits visible while ignoring whitespace
+    and prose changes."""
+
+    def test_extracts_thresholds_and_seeds_and_cohort_identifiers(self) -> None:
+        memo = _make_canonical_memo()
+        fp = V._extract_load_bearing_fingerprint(memo)
+        assert fp["t1_code"] == 0.03
+        assert fp["t2_code"] == 0.5
+        assert fp["t3_code"] == 0.7
+        assert fp["seeds"] == [42, 43, 44, 45, 46]
+        assert "optum_initiation_default" in fp["cohort_labels"]
+        assert "optum_initiation_relaxed" in fp["cohort_labels"]
+        assert "1294" in fp["cohort_patient_counts"]
+        assert "1697" in fp["cohort_patient_counts"]
+        assert "treatment_initiated" in fp["target_columns"]
+
+    def test_whitespace_and_ordering_does_not_change_fingerprint(self) -> None:
+        memo_a = _make_canonical_memo()
+        # Deliberately reorder + add whitespace — same load-bearing
+        # values, structurally reorganized.
+        memo_b = _make_canonical_memo()
+        memo_b = memo_b.replace("```python\n", "```python\n\n\n").replace("# T1", "# T1   ")
+        fp_a = V._extract_load_bearing_fingerprint(memo_a)
+        fp_b = V._extract_load_bearing_fingerprint(memo_b)
+        assert fp_a == fp_b
+
+    def test_threshold_value_change_changes_fingerprint(self) -> None:
+        memo_a = _make_canonical_memo(t1="0.03")
+        memo_b = _make_canonical_memo(t1="0.02")  # threshold edit
+        fp_a = V._extract_load_bearing_fingerprint(memo_a)
+        fp_b = V._extract_load_bearing_fingerprint(memo_b)
+        assert fp_a != fp_b
+        assert fp_a["t1_code"] != fp_b["t1_code"]
+        assert fp_a["t1_prose"] != fp_b["t1_prose"]
+
+    def test_seeds_change_changes_fingerprint(self) -> None:
+        memo_a = _make_canonical_memo()
+        memo_b = _make_canonical_memo(seeds="(42, 43, 44, 45, 47)")
+        fp_a = V._extract_load_bearing_fingerprint(memo_a)
+        fp_b = V._extract_load_bearing_fingerprint(memo_b)
+        assert fp_a != fp_b
+        assert fp_a["seeds"] != fp_b["seeds"]
+
+    def test_pinned_hash_change_changes_fingerprint(self) -> None:
+        memo_a = _make_canonical_memo(journeys_hash="0" * 64)
+        memo_b = _make_canonical_memo(journeys_hash="f" * 64)
+        fp_a = V._extract_load_bearing_fingerprint(memo_a)
+        fp_b = V._extract_load_bearing_fingerprint(memo_b)
+        assert fp_a != fp_b
+
+    def test_cohort_count_change_changes_fingerprint(self) -> None:
+        """A memo edit that swaps n=1294 for some other count
+        (e.g. n=1300) constitutes load-bearing drift."""
+        memo_a = _make_canonical_memo(n_default="1294")
+        memo_b = _make_canonical_memo(n_default="1300")
+        fp_a = V._extract_load_bearing_fingerprint(memo_a)
+        fp_b = V._extract_load_bearing_fingerprint(memo_b)
+        assert fp_a != fp_b
+        assert fp_a["cohort_patient_counts"] != fp_b["cohort_patient_counts"]
+
+
+# ---------------------------------------------------------------------------
 # NEW HIGH-2 (iter-3) — REPO_ROOT resolution when staged into a governance
 # checkout. The workflow copies this script into
 # governance_checkout/scripts/ and runs from there, so
