@@ -60,6 +60,16 @@ _PERMUTATION_PROMOTED_KEYS: tuple[str, ...] = (
     "permutation_auc_std",
 )
 
+# Plan v3 §4 T2.2 — Permutation-anchored AUC floor (advisory mode).
+# Default buffer above the empirical permutation null p99 that a deployable
+# model's test AUC must exceed. 0.05 (5pp) is a domain-typical "above-noise"
+# margin; calibration on synthetic [0.55, 0.85] regimes + retrospective
+# held-out cohorts will refine this in the T2.6c enforcement phase.
+# Until then, this is an OBSERVABILITY threshold only — violations emit a
+# structured warning and a flag on validation_metrics, but do NOT enter
+# `success_criteria` and do NOT block the deployer.
+T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT: float = 0.05
+
 # Backlog #20 Gap 2: F1-fallback fires when validation MCC at the
 # canonically-chosen threshold falls below this floor. 0.20 is the band
 # below which the canonical Youden's J / cost-optimal pick is treated as
@@ -112,6 +122,74 @@ def _promote_cv_summary_to_validation_metrics(
             src_key = f"cv_{metric}_{stat}"
             if src_key in cv_result:
                 val_metrics[f"cv_5fold_{metric}_{stat}"] = cv_result[src_key]
+
+
+def _emit_permutation_anchored_auc_advisory(
+    metrics_result: Dict[str, Any],
+    test_metrics: Dict[str, Any],
+    permutation_result: Dict[str, Any],
+    buffer: float = T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT,
+) -> None:
+    """Plan v3 §4 T2.2 — Permutation-anchored AUC floor (advisory mode only).
+
+    Computes ``auc_above_permutation_null = test_auc - permutation_null_p99``
+    and emits an observability advisory when the lift is smaller than
+    ``buffer``. Surfaces three keys on ``validation_metrics``:
+
+      * ``auc_above_permutation_null`` — float, the signed margin (test AUC
+        minus the empirical permutation null p99). Negative ⇒ test AUC is
+        below the upper tail of the null; positive but small ⇒ in the
+        gray zone of "barely above noise".
+      * ``permutation_anchored_auc_buffer`` — the buffer (default 0.05).
+        Ships on the artifact so an operator reading
+        ``validation_metrics`` can audit the threshold even when the
+        advisory is not violated.
+      * ``permutation_anchored_auc_advisory_violated`` — bool. True when
+        ``auc_above_permutation_null < buffer`` AND both inputs are
+        finite. False when the criterion is met. None when either input
+        is missing (perm test was degenerate or test AUC is missing).
+
+    Pure observability: does NOT mutate ``success_criteria_met`` and does
+    NOT add a key to ``success_criteria``. Plan §6 T2.2: "emitted in
+    advisory mode for one quarter before enforcement". The T2.6c
+    enforcement phase (separate work) is where this graduates to a
+    deployer gate.
+
+    No-ops gracefully when ``permutation_result`` is empty or its
+    ``permutation_null_p99`` key is None / absent — preserves backward
+    compat with callers that have not yet adopted plan §3 Tier 1B step 1.
+    """
+    val_metrics = metrics_result.setdefault("validation_metrics", {})
+    null_p99 = permutation_result.get("permutation_null_p99")
+    test_auc = test_metrics.get("roc_auc")
+
+    val_metrics["permutation_anchored_auc_buffer"] = float(buffer)
+
+    if null_p99 is None or test_auc is None:
+        # Degenerate perm run OR no test AUC — surface as None so
+        # operators can distinguish "advisory not evaluated" from
+        # "advisory evaluated and met".
+        val_metrics["auc_above_permutation_null"] = None
+        val_metrics["permutation_anchored_auc_advisory_violated"] = None
+        return
+
+    margin = float(test_auc) - float(null_p99)
+    val_metrics["auc_above_permutation_null"] = margin
+    violated = margin < float(buffer)
+    val_metrics["permutation_anchored_auc_advisory_violated"] = violated
+
+    if violated:
+        logger.warning(
+            "T2.2 ADVISORY: test AUC=%.4f only %+.4f above permutation "
+            "null p99 (=%.4f); below the %.2f buffer. NOT enforced "
+            "(advisory mode per plan v3 §4 T2.2); deployer is unaffected. "
+            "If this persists across cohorts, the model's signal is "
+            "indistinguishable from label permutation noise.",
+            test_auc,
+            margin,
+            null_p99,
+            buffer,
+        )
 
 
 def _promote_permutation_summary_to_validation_metrics(
@@ -376,6 +454,16 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         metrics_result["permutation_test"] = permutation_result
         _promote_permutation_summary_to_validation_metrics(metrics_result, permutation_result)
+        # Plan v3 §4 T2.2 — Permutation-anchored AUC floor (advisory mode).
+        # Emits `auc_above_permutation_null`, `permutation_anchored_auc_buffer`,
+        # `permutation_anchored_auc_advisory_violated` on validation_metrics.
+        # Uses the test_metrics computed above (within metrics_result). Pure
+        # observability: no success_criteria mutation, no deployer impact.
+        _emit_permutation_anchored_auc_advisory(
+            metrics_result,
+            metrics_result.get("test_metrics", {}),
+            permutation_result,
+        )
         if permutation_result.get("signal_genuine") is not None:
             p95 = permutation_result.get("permutation_null_p95")
             p99 = permutation_result.get("permutation_null_p99")
