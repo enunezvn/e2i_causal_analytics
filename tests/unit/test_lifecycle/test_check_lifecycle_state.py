@@ -221,8 +221,7 @@ class TestScanPythonModules:
     ) -> None:
         rel = "src/test_module/gate_class_invalid.py"
         (fake_repo / rel).write_text(
-            "class Cfg:\n"
-            '    LIFECYCLE_STATE_BAD = "not_a_real_state"\n',
+            'class Cfg:\n    LIFECYCLE_STATE_BAD = "not_a_real_state"\n',
             encoding="utf-8",
         )
         monkeypatch.setattr(
