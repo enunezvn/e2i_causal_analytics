@@ -22,8 +22,10 @@ from __future__ import annotations
 import pytest
 
 from src.agents.ml_foundation.model_deployer.regulatory_audit import (
+    LITERATURE_ANCHORED_THRESHOLDS,
     RegulatoryAuditMutationError,
     RegulatoryEligibilityAudit,
+    classify_threshold_provenance,
     is_adapted_regulatory_candidate,
     is_regulatory_eligible,
 )
@@ -485,12 +487,14 @@ class TestIsRegulatoryEligible:
     """``is_regulatory_eligible`` returns True iff all 3 preconditions hold."""
 
     def _gate_pass(self, audit: RegulatoryEligibilityAudit, gate_name: str) -> None:
+        # Codex N1-H2: passing gates require literature_anchored provenance.
         audit.append_gate_evaluation(
             timestamp="t",
             gate_name=gate_name,
             threshold=0.75,
             value=0.80,
             outcome="pass",
+            threshold_provenance="literature_anchored",
         )
 
     def _gate_fail(self, audit: RegulatoryEligibilityAudit, gate_name: str) -> None:
@@ -500,6 +504,7 @@ class TestIsRegulatoryEligible:
             threshold=0.75,
             value=0.50,
             outcome="fail",
+            threshold_provenance="literature_anchored",
         )
 
     def test_eligible_when_all_three_preconditions_hold(self) -> None:
@@ -575,6 +580,7 @@ class TestIsAdaptedRegulatoryCandidate:
             threshold=0.75,
             value=0.80,
             outcome="pass",
+            threshold_provenance="literature_anchored",
         )
         audit.append_adaptation(
             commit_sha="sha",
@@ -595,6 +601,7 @@ class TestIsAdaptedRegulatoryCandidate:
             threshold=0.75,
             value=0.80,
             outcome="pass",
+            threshold_provenance="literature_anchored",
         )
         assert is_adapted_regulatory_candidate(audit, ["minimum_auc"]) is False
 
@@ -623,6 +630,7 @@ class TestIsAdaptedRegulatoryCandidate:
             threshold=0.75,
             value=0.80,
             outcome="pass",
+            threshold_provenance="literature_anchored",
         )
         assert is_regulatory_eligible(audit, ["minimum_auc"]) is True
         assert is_adapted_regulatory_candidate(audit, ["minimum_auc"]) is False
@@ -648,6 +656,169 @@ class TestIsAdaptedRegulatoryCandidate:
             threshold=0.75,
             value=0.50,
             outcome="fail",
+            threshold_provenance="literature_anchored",
         )
         assert is_regulatory_eligible(audit_c, ["minimum_auc"]) is False
         assert is_adapted_regulatory_candidate(audit_c, ["minimum_auc"]) is False
+
+
+# --------------------------------------------------------------------------- #
+# Codex N1-H2: threshold-provenance enforcement.                               #
+# --------------------------------------------------------------------------- #
+
+
+class TestN1H2ThresholdProvenanceRegistry:
+    """Codex N1-H2: ``LITERATURE_ANCHORED_THRESHOLDS`` registry pins
+    the canonical threshold values per gate."""
+
+    def test_minimum_auc_anchored_to_zero_seven_five(self) -> None:
+        # Anchored to scope_definer/criteria_validator.py:118-120.
+        assert LITERATURE_ANCHORED_THRESHOLDS["minimum_auc"] == 0.75
+
+
+class TestN1H2ClassifyThresholdProvenance:
+    """Codex N1-H2: ``classify_threshold_provenance`` returns the
+    ``"literature_anchored"`` literal ONLY when (gate, threshold) matches
+    the registered anchor."""
+
+    def test_minimum_auc_at_anchor_classifies_literature_anchored(self) -> None:
+        assert (
+            classify_threshold_provenance(gate_name="minimum_auc", threshold=0.75)
+            == "literature_anchored"
+        )
+
+    def test_minimum_auc_relaxed_does_NOT_classify_literature_anchored(self) -> None:
+        """Relaxed threshold with no provenance hint returns None."""
+        assert classify_threshold_provenance(gate_name="minimum_auc", threshold=0.50) is None
+
+    def test_unregistered_gate_returns_none(self) -> None:
+        assert classify_threshold_provenance(gate_name="some_other_gate", threshold=0.75) is None
+
+    def test_relaxed_threshold_with_declared_literature_does_not_launder(self) -> None:
+        """A caller declaring ``threshold_provenance="literature_anchored"``
+        on a relaxed threshold is NOT trusted — the classifier checks the
+        registry, not the caller's declaration."""
+        assert (
+            classify_threshold_provenance(
+                gate_name="minimum_auc",
+                threshold=0.50,
+                declared_provenance="literature_anchored",
+            )
+            is None
+        )
+
+    def test_cohort_fitted_provenance_passes_through(self) -> None:
+        """Caller-declared cohort_fitted is recorded for audit but
+        does not satisfy the literature_anchored requirement."""
+        result = classify_threshold_provenance(
+            gate_name="minimum_auc",
+            threshold=0.50,
+            declared_provenance="cohort_fitted",
+        )
+        assert result == "cohort_fitted"
+
+    def test_operator_override_provenance_passes_through(self) -> None:
+        result = classify_threshold_provenance(
+            gate_name="minimum_auc",
+            threshold=0.50,
+            declared_provenance="operator_override",
+        )
+        assert result == "operator_override"
+
+    def test_invalid_declared_provenance_returns_none(self) -> None:
+        """Garbage provenance is dropped entirely."""
+        assert (
+            classify_threshold_provenance(
+                gate_name="minimum_auc",
+                threshold=0.50,
+                declared_provenance="garbage_value",
+            )
+            is None
+        )
+
+    def test_non_numeric_threshold_returns_none(self) -> None:
+        assert (
+            classify_threshold_provenance(gate_name="minimum_auc", threshold="not-a-number") is None
+        )
+
+
+class TestN1H2EligibilityRequiresLiteratureAnchored:
+    """Codex N1-H2: ``is_regulatory_eligible`` denies eligibility when the
+    required gate's ``threshold_provenance`` is not ``"literature_anchored"``."""
+
+    def test_passing_gate_without_provenance_is_NOT_eligible(self) -> None:
+        """A gate appended without any provenance defaults to None — must
+        deny eligibility."""
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.75,
+            value=0.80,
+            outcome="pass",
+            # threshold_provenance not provided
+        )
+        assert is_regulatory_eligible(audit, ["minimum_auc"]) is False
+
+    def test_passing_gate_with_cohort_fitted_provenance_NOT_eligible(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.50,  # relaxed
+            value=0.55,
+            outcome="pass",
+            threshold_provenance="cohort_fitted",
+        )
+        assert is_regulatory_eligible(audit, ["minimum_auc"]) is False
+
+    def test_passing_gate_with_operator_override_NOT_eligible(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.50,
+            value=0.55,
+            outcome="pass",
+            threshold_provenance="operator_override",
+        )
+        assert is_regulatory_eligible(audit, ["minimum_auc"]) is False
+
+    def test_passing_gate_with_literature_anchored_IS_eligible(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.75,
+            value=0.80,
+            outcome="pass",
+            threshold_provenance="literature_anchored",
+        )
+        assert is_regulatory_eligible(audit, ["minimum_auc"]) is True
+
+
+class TestN1H2CandidateRequiresLiteratureAnchored:
+    """Codex N1-H2: ``is_adapted_regulatory_candidate`` likewise requires
+    literature_anchored provenance for required gates."""
+
+    def test_candidate_denied_without_literature_anchored(self) -> None:
+        audit = RegulatoryEligibilityAudit()
+        audit.append_gate_evaluation(
+            timestamp="t",
+            gate_name="minimum_auc",
+            threshold=0.50,
+            value=0.55,
+            outcome="pass",
+            threshold_provenance="cohort_fitted",
+        )
+        audit.append_adaptation(
+            commit_sha="sha",
+            justification_doc="doc",
+            gate_name="minimum_auc",
+            before_threshold=0.85,
+            after_threshold=0.50,
+            timestamp="t",
+        )
+        # Even with adaptation history, the candidate flag is denied
+        # because the required gate's threshold isn't literature-anchored.
+        assert is_adapted_regulatory_candidate(audit, ["minimum_auc"]) is False

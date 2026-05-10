@@ -78,6 +78,15 @@ class GateEvaluationEntry:
     direct access to the underlying list, callers cannot mutate
     individual entries in place. This is the per-entry analog to the
     list-level read-only-tuple-property guard.
+
+    Codex N1-H2: ``threshold_provenance`` is the load-bearing field for
+    the (1) "absolute thresholds cleared" precondition. Only
+    ``"literature_anchored"`` thresholds count toward eligibility;
+    ``"cohort_fitted"`` / ``"operator_override"`` / ``None`` cause the
+    gate to be SKIPPED for the eligibility check even if the value
+    happens to clear the threshold.
+    Codex N1-M2: ``reason`` is an optional human-readable string
+    explaining a ``"skipped"`` outcome (e.g. ``"malformed_metric"``).
     """
 
     timestamp: str
@@ -85,15 +94,108 @@ class GateEvaluationEntry:
     threshold: Any
     value: Any
     outcome: str
+    threshold_provenance: Any = None
+    reason: Any = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "timestamp": self.timestamp,
             "gate_name": self.gate_name,
             "threshold": copy.deepcopy(self.threshold),
             "value": copy.deepcopy(self.value),
             "outcome": self.outcome,
         }
+        # Include optional fields only when set so existing on-disk
+        # snapshots (without provenance / reason) round-trip identically.
+        if self.threshold_provenance is not None:
+            out["threshold_provenance"] = self.threshold_provenance
+        if self.reason is not None:
+            out["reason"] = self.reason
+        return out
+
+
+# --------------------------------------------------------------------------- #
+# Threshold-provenance registry — codex-rescue N1-H2.                         #
+# --------------------------------------------------------------------------- #
+
+# Allowed values for ``GateEvaluationEntry.threshold_provenance``. Only
+# ``"literature_anchored"`` lets a gate count toward the (1) precondition
+# in ``is_regulatory_eligible``. Other values are recorded for audit
+# purposes but cause the gate to be SKIPPED for eligibility decisions.
+THRESHOLD_PROVENANCE_LITERATURE_ANCHORED: str = "literature_anchored"
+THRESHOLD_PROVENANCE_COHORT_FITTED: str = "cohort_fitted"
+THRESHOLD_PROVENANCE_OPERATOR_OVERRIDE: str = "operator_override"
+
+ALLOWED_THRESHOLD_PROVENANCE: frozenset[str] = frozenset(
+    {
+        THRESHOLD_PROVENANCE_LITERATURE_ANCHORED,
+        THRESHOLD_PROVENANCE_COHORT_FITTED,
+        THRESHOLD_PROVENANCE_OPERATOR_OVERRIDE,
+    }
+)
+
+# Registry of gates whose literature-anchored threshold is signed off.
+# Codex-rescue N1-H2: only thresholds whose value is registered here as
+# the canonical literature anchor are eligible for the (1) precondition.
+# A registered gate uses ``threshold_provenance="literature_anchored"``
+# only if the success_criteria value matches the registered anchor (see
+# ``classify_threshold_provenance``).
+#
+# Sources:
+#   - minimum_auc=0.75: scope_definer/nodes/criteria_validator.py:118-120,
+#     anchored to the binary-classification floor for clinical-decision
+#     models (Vickers 2019; Cook 2007). Specifically the floor below
+#     which the literature treats the model as ineligible regardless of
+#     other quality signals.
+LITERATURE_ANCHORED_THRESHOLDS: Dict[str, float] = {
+    "minimum_auc": 0.75,
+}
+
+
+def classify_threshold_provenance(
+    gate_name: str,
+    threshold: Any,
+    declared_provenance: Any = None,
+) -> str | None:
+    """Return the provenance literal for a (gate, threshold) pair.
+
+    Codex-rescue N1-H2: the deployer cannot trust caller-declared
+    provenance blindly — a relaxed threshold tagged "literature_anchored"
+    must STILL match the registered anchor. The classifier:
+
+    * If ``gate_name`` is in ``LITERATURE_ANCHORED_THRESHOLDS`` AND the
+      threshold matches the registered anchor, returns
+      ``"literature_anchored"`` (auto-detected from the registry — the
+      declared_provenance argument is informational only on this path).
+    * Else if ``declared_provenance`` is ``"literature_anchored"`` but
+      the threshold does NOT match the registry, returns ``None`` —
+      blocks the laundering attack.
+    * Else if ``declared_provenance`` is in
+      ``ALLOWED_THRESHOLD_PROVENANCE`` (cohort_fitted /
+      operator_override), returns that — recorded for audit but counts
+      as non-literature for eligibility.
+    * Otherwise returns ``None`` — the gate is SKIPPED for eligibility.
+    """
+    anchor = LITERATURE_ANCHORED_THRESHOLDS.get(gate_name)
+    if anchor is not None and threshold is not None:
+        try:
+            if float(threshold) == float(anchor):
+                return THRESHOLD_PROVENANCE_LITERATURE_ANCHORED
+        except (TypeError, ValueError):
+            return None
+
+    # If caller declared "literature_anchored" but the threshold does
+    # not match the registry, drop it on the floor (do not launder).
+    if declared_provenance == THRESHOLD_PROVENANCE_LITERATURE_ANCHORED:
+        return None
+
+    if declared_provenance in ALLOWED_THRESHOLD_PROVENANCE:
+        # Pass through caller-declared provenance for non-literature
+        # values — the eligibility check only counts
+        # ``literature_anchored``, so this still SKIPs eligibility.
+        return str(declared_provenance)
+
+    return None
 
 
 @dataclass(frozen=True)
@@ -186,6 +288,8 @@ class RegulatoryEligibilityAudit:
         threshold: Any,
         value: Any,
         outcome: str,
+        threshold_provenance: Any = None,
+        reason: Any = None,
     ) -> None:
         """Append one gate-evaluation entry to ``gate_history``.
 
@@ -193,6 +297,15 @@ class RegulatoryEligibilityAudit:
         dataclass so its fields are immutable post-append. The dict
         snapshot stored in ``_gate_history`` is also deep-copied so
         callers can't retain a mutable reference into the audit list.
+
+        ``threshold_provenance`` (codex-rescue N1-H2): one of
+        ``"literature_anchored" | "cohort_fitted" | "operator_override" |
+        None``. Only ``"literature_anchored"`` lets the gate count
+        toward the (1) "absolute thresholds cleared" precondition in
+        ``is_regulatory_eligible``. Other values cause the gate to be
+        SKIPPED for the eligibility check.
+        ``reason`` (codex-rescue N1-M2): optional human-readable string
+        explaining a ``"skipped"`` outcome (e.g. ``"malformed_metric"``).
         """
         entry_obj = GateEvaluationEntry(
             timestamp=timestamp,
@@ -200,6 +313,8 @@ class RegulatoryEligibilityAudit:
             threshold=copy.deepcopy(threshold),
             value=copy.deepcopy(value),
             outcome=outcome,
+            threshold_provenance=threshold_provenance,
+            reason=reason,
         )
         self._gate_history.append(entry_obj.to_dict())
 
@@ -334,7 +449,11 @@ def is_regulatory_eligible(
     The three preconditions per plan v4 §2 Gate N1:
 
     1. Every gate in ``required_gates`` appears in ``audit.gate_history``
-       with outcome ``"pass"`` (no advisory bypasses).
+       with outcome ``"pass"`` AND ``threshold_provenance ==
+       "literature_anchored"``. Codex-rescue N1-H2: cohort-fitted /
+       operator-override / unknown-provenance thresholds do NOT count
+       toward eligibility — eligibility requires the threshold be
+       signed-off literature-anchored.
     2. ``audit.adaptation_history == []`` — no adaptive relaxation
        happened during this model's lifecycle.
     3. Every gate evaluation's ``outcome == "pass"`` — no failed gates
@@ -342,15 +461,12 @@ def is_regulatory_eligible(
        re-check the whole history to catch any out-of-band gates that
        still fired and failed).
 
-    NOTE: this function does NOT check that the literature-anchored
-    thresholds themselves are correct — that is the caller's
-    responsibility. It only checks that the gates were evaluated and
-    passed.
-
     Args:
         audit: the audit trail
         required_gates: list of gate names that MUST be present in
-            gate_history with outcome="pass" (e.g. ["minimum_auc"]).
+            gate_history with outcome="pass" AND
+            threshold_provenance="literature_anchored"
+            (e.g. ["minimum_auc"]).
 
     Returns:
         True iff all three preconditions hold; False otherwise.
@@ -359,17 +475,24 @@ def is_regulatory_eligible(
     if audit.adaptation_history:
         return False
 
-    # Precondition 1: every required gate evaluated AND passed.
-    gate_outcomes: Dict[str, str] = {}
+    # Precondition 1: every required gate evaluated AND passed AND its
+    # threshold is literature-anchored (codex-rescue N1-H2). Build a
+    # "latest entry per gate" view then check the latest outcome +
+    # provenance.
+    gate_latest: Dict[str, Dict[str, Any]] = {}
     for entry in audit.gate_history:
         gate = entry.get("gate_name")
-        outcome = entry.get("outcome")
-        if isinstance(gate, str) and isinstance(outcome, str):
+        if isinstance(gate, str):
             # Latest entry wins if a gate appears multiple times.
-            gate_outcomes[gate] = outcome
+            gate_latest[gate] = entry
 
     for gate in required_gates:
-        if gate_outcomes.get(gate) != "pass":
+        latest = gate_latest.get(gate)
+        if latest is None:
+            return False
+        if latest.get("outcome") != "pass":
+            return False
+        if latest.get("threshold_provenance") != THRESHOLD_PROVENANCE_LITERATURE_ANCHORED:
             return False
 
     # Precondition 3: every gate evaluation in the history passed.
@@ -387,34 +510,54 @@ def is_adapted_regulatory_candidate(
     """Return True iff (1) holds but (2) does not.
 
     Plan v4 §2: when absolute thresholds clear (every required gate
-    passed in ``gate_history``) but the audit recorded an adaptive
-    relaxation, the model is flagged ``adapted_regulatory_candidate``
-    — "would be eligible if external validation cohort confirms".
+    passed in ``gate_history`` against a literature-anchored threshold)
+    AND every gate evaluation passed (so the model is otherwise clean),
+    but the audit recorded an adaptive relaxation, the model is flagged
+    ``adapted_regulatory_candidate`` — "would be eligible if external
+    validation cohort confirms".
 
     This is NOT a regulatory-deployment authorization. It signals
     that the model met its absolute thresholds at promotion time but
     its threshold history is not clean.
+
+    Codex-rescue N1-M1: the candidate flag must mirror
+    ``is_regulatory_eligible`` precondition 3 — if any gate evaluation
+    failed (even a non-required gate), the candidate flag is False.
+    Codex-rescue N1-H2: required gates must clear with
+    ``threshold_provenance="literature_anchored"`` to count toward
+    candidate status.
 
     Args:
         audit: the audit trail
         required_gates: same definition as ``is_regulatory_eligible``.
 
     Returns:
-        True iff every required gate passed AND adaptation_history is
-        non-empty.
+        True iff every required gate passed (with literature-anchored
+        provenance) AND every other gate evaluation passed AND
+        adaptation_history is non-empty.
     """
     if not audit.adaptation_history:
         return False
 
-    gate_outcomes: Dict[str, str] = {}
+    gate_latest: Dict[str, Dict[str, Any]] = {}
     for entry in audit.gate_history:
         gate = entry.get("gate_name")
-        outcome = entry.get("outcome")
-        if isinstance(gate, str) and isinstance(outcome, str):
-            gate_outcomes[gate] = outcome
+        if isinstance(gate, str):
+            gate_latest[gate] = entry
 
     for gate in required_gates:
-        if gate_outcomes.get(gate) != "pass":
+        latest = gate_latest.get(gate)
+        if latest is None:
+            return False
+        if latest.get("outcome") != "pass":
+            return False
+        if latest.get("threshold_provenance") != THRESHOLD_PROVENANCE_LITERATURE_ANCHORED:
+            return False
+
+    # Codex-rescue N1-M1: every gate evaluation in the history must
+    # pass. Mirrors precondition 3 from is_regulatory_eligible.
+    for entry in audit.gate_history:
+        if entry.get("outcome") != "pass":
             return False
 
     return True

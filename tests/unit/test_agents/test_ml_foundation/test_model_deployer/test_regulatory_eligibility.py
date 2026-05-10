@@ -348,3 +348,72 @@ class TestEvaluateRegulatoryEligibilityDirect:
         original_audit = state["validation_metrics"]["regulatory_eligibility_audit"]
         assert original_audit["gate_history"] == []
         assert original_audit["adaptation_history"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Codex N1-H2: validate_promotion blocks eligibility for non-literature-      #
+# anchored thresholds. The ``_evaluate_absolute_threshold_gates`` helper      #
+# classifies the (gate, threshold) pair against the literature registry      #
+# and SKIPS gates that don't match.                                          #
+# --------------------------------------------------------------------------- #
+
+
+class TestN1H2ValidatePromotionRejectsNonLiteratureThresholds:
+    """Pre-fix: a relaxed ``minimum_auc=0.50`` could pass because the
+    evaluator only checked value >= threshold.
+    Post-fix: the gate is SKIPPED because 0.50 is not the literature-
+    anchored anchor (0.75)."""
+
+    @pytest.mark.asyncio
+    async def test_relaxed_minimum_auc_skipped_and_eligibility_denied(self) -> None:
+        state: Dict[str, Any] = {
+            "current_stage": "None",
+            "target_environment": "staging",
+            # Relaxed threshold below the literature anchor.
+            "success_criteria": {"minimum_auc": 0.50},
+            "validation_metrics": {
+                "roc_auc": 0.55,  # technically clears 0.50
+                "regulatory_eligibility_audit": {},
+            },
+        }
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        gate_history = result["regulatory_eligibility_audit"]["gate_history"]
+        minimum_auc_entry = next(e for e in gate_history if e["gate_name"] == "minimum_auc")
+        assert minimum_auc_entry["outcome"] == "skipped"
+        assert minimum_auc_entry.get("reason") == "non_literature_threshold"
+        failures = result["regulatory_eligibility_failures"]
+        assert any("not in literature-anchored registry" in f for f in failures)
+
+    @pytest.mark.asyncio
+    async def test_anchor_match_keeps_eligibility(self) -> None:
+        """Sanity check: the anchor value (0.75) still passes."""
+        state = _state_with_passing_minimum_auc()
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is True
+        gate_history = result["regulatory_eligibility_audit"]["gate_history"]
+        minimum_auc_entry = next(e for e in gate_history if e["gate_name"] == "minimum_auc")
+        assert minimum_auc_entry["outcome"] == "pass"
+        assert minimum_auc_entry.get("threshold_provenance") == "literature_anchored"
+
+    @pytest.mark.asyncio
+    async def test_caller_declared_literature_anchored_does_not_launder(self) -> None:
+        """Caller cannot pass ``threshold_provenance.minimum_auc =
+        "literature_anchored"`` to relax the gate — the classifier
+        cross-checks against the registry."""
+        state: Dict[str, Any] = {
+            "current_stage": "None",
+            "target_environment": "staging",
+            "success_criteria": {"minimum_auc": 0.50},
+            "threshold_provenance": {"minimum_auc": "literature_anchored"},
+            "validation_metrics": {
+                "roc_auc": 0.55,
+                "regulatory_eligibility_audit": {},
+            },
+        }
+        result = await validate_promotion(state)
+        assert result["regulatory_eligible"] is False
+
+
