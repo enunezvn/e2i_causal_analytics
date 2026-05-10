@@ -487,3 +487,53 @@ class TestInputValidation:
         y = pd.Series([0, 1] * 25)
         with pytest.raises(ValueError, match="no numeric columns"):
             compute_coefficient_sensitivity(X, y, {"string_feat": "drop_row_or_mean"})
+
+    def test_nan_in_y_raises(self) -> None:
+        """G5 codex pass-2 MED + M4 PARTIAL closure: y with NaN cells
+        must FAIL preflight (not bypass via nunique(dropna=True)).
+
+        Without the y.notna().all() guard, NaN survives nunique() and
+        the helper silently coerces NaN to a large int via
+        astype(np.int64), producing nonsense fits. The new validator
+        rejects loudly with a clear ValueError citing the NaN count.
+        """
+        n = 100
+        rng = np.random.default_rng(seed=2)
+        X = pd.DataFrame(
+            {
+                "feat_a": rng.standard_normal(size=n),
+                "feat_b": rng.standard_normal(size=n),
+            }
+        )
+        # Build a y with a {0, 1} mix BUT inject NaN into 5 rows.
+        # nunique(dropna=True) would return 2 here (NaNs are excluded
+        # from the unique-count), so the OLD validator would accept
+        # this silently. The new validator MUST raise.
+        y_vals = np.array([0, 1] * (n // 2), dtype=np.float64)
+        nan_idx = rng.choice(n, size=5, replace=False)
+        y_vals[nan_idx] = np.nan
+        y = pd.Series(y_vals)
+        recs = {"feat_a": "drop_row_or_mean", "feat_b": "drop_row_or_mean"}
+
+        with pytest.raises(ValueError, match=r"y has \d+ NaN value"):
+            compute_coefficient_sensitivity(X, y, recs)
+
+    def test_y_with_no_nan_passes_validation(self) -> None:
+        """Sanity: a fully-observed y (no NaN) must NOT raise the new
+        notna() check. Catches a regression where the new guard fires
+        on legitimate cohorts."""
+        n = 80
+        rng = np.random.default_rng(seed=3)
+        X = pd.DataFrame(
+            {
+                "feat_a": rng.standard_normal(size=n),
+                "feat_b": rng.standard_normal(size=n),
+            }
+        )
+        y = pd.Series([0, 1] * (n // 2))  # no NaN
+        recs = {"feat_a": "drop_row_or_mean", "feat_b": "drop_row_or_mean"}
+
+        # Must not raise. The result's contract is verified elsewhere;
+        # this test only verifies the validator does not over-fire.
+        result = compute_coefficient_sensitivity(X, y, recs, seed=3)
+        assert "passes_pre_spec" in result
