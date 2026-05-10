@@ -923,6 +923,79 @@ def test_parse_registry_supports_email_aliases(tmp_path: Path):
     assert rows[0].emails == ("alice@example.com", "alice@oldjob.com")
 
 
+# --------------------------------------------------------------------------- #
+# M2: sign-off age limit — reject artifacts older than max_age_days vs today.
+# --------------------------------------------------------------------------- #
+
+
+def test_signoff_age_passes_within_window():
+    """Doc dated 2026-05-01 vs today 2026-05-10 is 9 days old → PASS at 30d."""
+
+    result = cms.check_signoff_age(
+        Path("/x/optum_methodology_signoff_20260501.md"),
+        today="2026-05-10",
+        max_age_days=30,
+    )
+    assert result.ok is True
+
+
+def test_signoff_age_fails_outside_window():
+    """Doc dated 2026-04-01 vs today 2026-05-10 is 39 days old → FAIL at 30d."""
+
+    result = cms.check_signoff_age(
+        Path("/x/optum_methodology_signoff_20260401.md"),
+        today="2026-05-10",
+        max_age_days=30,
+    )
+    assert result.ok is False
+    assert "older than today" in result.detail
+
+
+def test_signoff_age_passes_for_future_dated():
+    """Doc dated tomorrow → still PASS (negative age, < max)."""
+
+    result = cms.check_signoff_age(
+        Path("/x/optum_methodology_signoff_20260601.md"),
+        today="2026-05-10",
+        max_age_days=30,
+    )
+    assert result.ok is True
+
+
+def test_signoff_age_rejects_unparseable_filename():
+    result = cms.check_signoff_age(
+        Path("/x/optum_methodology_signoff_99999999.md"),
+        today="2026-05-10",
+    )
+    assert result.ok is False
+
+
+def test_signoff_age_rejects_random_filename():
+    result = cms.check_signoff_age(
+        Path("/x/random.md"),
+        today="2026-05-10",
+    )
+    assert result.ok is False
+
+
+def test_check_signoff_includes_age_check_failure(fixture_repo: Path):
+    """A stale-dated sign-off artifact (40 days old) FAILS the age check
+    even when every other field is valid."""
+
+    real_sha = _coi_sha(fixture_repo)
+    signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260301.md"
+    signoff_path.write_text(_signoff_doc(handle="alice", coi_sha=real_sha), encoding="utf-8")
+    results = cms.check_signoff(
+        signoff_path,
+        fixture_repo,
+        require_signature=False,
+        today="2026-05-10",
+        max_age_days=30,
+    )
+    age_failures = [r for r in results if r.name == "signoff_age" and not r.ok]
+    assert age_failures, f"expected signoff_age failure, got {[r.name for r in results]}"
+
+
 def test_selection_rule_catches_alias_commit(tmp_path: Path):
     """A reviewer with an alias declared in the registry whose alias
     authored a commit in-window is caught by the selection rule."""
