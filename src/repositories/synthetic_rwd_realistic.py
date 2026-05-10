@@ -201,6 +201,7 @@ def _generate_target(
     Calibrated so that single-feature AUC for any demographic stays in
     [0.50, 0.65] and joint AUC achievable by a vanilla classifier is
     [0.62, 0.68] — matching the published claims-only ceiling.
+    T2.3 derives this range dynamically per-cohort (see evaluator._emit_cohort_derived_honest_band).
     """
     n = len(df)
     # Coefficients tuned so signal is REAL but WEAK
