@@ -125,11 +125,21 @@ class CheckResult:
 
 @dataclasses.dataclass
 class ReviewerInfo:
-    """Subset of the registry row needed for selection-rule checks."""
+    """Subset of the registry row needed for selection-rule checks.
+
+    M1: ``email`` is the canonical primary email (single value, used for
+    log lines / summaries). ``emails`` is the full set of aliases parsed
+    from the registry's email cell; the cell may contain a single address
+    OR a comma/semicolon-separated list (e.g.
+    ``"alice@example.com, alice@oldjob.com"``). Each alias is checked by
+    the selection rule's ``git log --author=<email>`` filter so a reviewer
+    who committed under an alternate identity is still detected.
+    """
 
     handle: str
     email: str
     status: str
+    emails: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------- #
@@ -186,10 +196,23 @@ def parse_registry(registry_path: Path) -> List[ReviewerInfo]:
             in_table = False
             continue
         if in_table and saw_separator and len(cells) == len(_REGISTRY_HEADERS):
-            handle, email, status = cells[2], cells[1], cells[6]
+            handle, email_cell, status = cells[2], cells[1], cells[6]
             # Strip Markdown emphasis (e.g. _PLACEHOLDER_).
             handle = handle.strip("_*`")
-            rows.append(ReviewerInfo(handle=handle, email=email, status=status))
+            # M1: split the email cell on comma/semicolon to support alias
+            # lists like "alice@example.com, alice@oldjob.com". The first
+            # address is treated as canonical; all addresses go into the
+            # emails tuple for the selection rule's git-log probes.
+            aliases = tuple(a.strip() for a in re.split(r"[,;]", email_cell) if a.strip())
+            primary = aliases[0] if aliases else email_cell
+            rows.append(
+                ReviewerInfo(
+                    handle=handle,
+                    email=primary,
+                    status=status,
+                    emails=aliases or (email_cell,),
+                )
+            )
     return rows
 
 
@@ -680,20 +703,26 @@ def check_selection_rule(
             False,
             f"reviewer {handle!r} not in registry — cannot resolve email",
         )
-    email = matching[0].email
+    row = matching[0]
+    email = row.email
+    # M1: iterate over ALL declared aliases so a commit authored under an
+    # alternate identity is still caught by `git log --author=`. Falls back
+    # to the primary email if the row predates the alias-aware schema.
+    aliases = row.emails or (email,)
     violations: List[str] = []
     warnings: List[str] = []
 
     for subject in SUBJECT_FILES:
-        has_touches, output = _git_log_touches(
-            repo_root,
-            email,
-            subject,
-            NAMED_PERIOD_START,
-            NAMED_PERIOD_END,
-        )
-        if has_touches:
-            violations.append(f"git({subject}): {output}")
+        for alias in aliases:
+            has_touches, output = _git_log_touches(
+                repo_root,
+                alias,
+                subject,
+                NAMED_PERIOD_START,
+                NAMED_PERIOD_END,
+            )
+            if has_touches:
+                violations.append(f"git({subject}, {alias}): {output}")
 
     # Best-effort gh queries — both author and reviewer roles.
     for role in ("author", "reviewer"):

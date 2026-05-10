@@ -897,6 +897,95 @@ def test_coi_referenced_no_repo_root_warns_only(fixture_repo: Path):
     assert "WARN" in result.detail
 
 
+# --------------------------------------------------------------------------- #
+# M1: registry email-alias support — selection rule checks every alias.
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_registry_supports_email_aliases(tmp_path: Path):
+    """A registry email cell with comma-separated addresses produces
+    a `ReviewerInfo` whose `emails` tuple contains every alias."""
+
+    registry_text = (
+        "# Reviewers\n\n"
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| Alice | alice@example.com, alice@oldjob.com | alice | "
+        "clinician | 2026-05-10 | methodology | active |\n"
+    )
+    reg = tmp_path / "registry.md"
+    reg.write_text(registry_text, encoding="utf-8")
+
+    rows = cms.parse_registry(reg)
+    assert len(rows) == 1
+    assert rows[0].email == "alice@example.com"
+    assert rows[0].emails == ("alice@example.com", "alice@oldjob.com")
+
+
+def test_selection_rule_catches_alias_commit(tmp_path: Path):
+    """A reviewer with an alias declared in the registry whose alias
+    authored a commit in-window is caught by the selection rule."""
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "--initial-branch=main", "-q", cwd=repo)
+    _git("config", "user.email", "ci@example.com", cwd=repo)
+    _git("config", "user.name", "CI", cwd=repo)
+    _git("config", "commit.gpgsign", "false", cwd=repo)
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "convert_optum_rwd.py").write_text("# stub\n", encoding="utf-8")
+    (repo / "docs" / "governance").mkdir(parents=True)
+
+    # Registry with TWO email aliases for alice.
+    registry_text = (
+        "# Reviewers\n\n"
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| Alice | alice@example.com; alice@oldjob.com | alice | "
+        "clinician | 2026-05-10 | methodology | active |\n"
+    )
+    (repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
+        registry_text, encoding="utf-8"
+    )
+    _git("add", "-A", cwd=repo)
+    _git(
+        "-c",
+        "user.email=ci@example.com",
+        "-c",
+        "user.name=CI",
+        "commit",
+        "--date=2026-04-01T12:00:00",
+        "-m",
+        "initial",
+        cwd=repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-01T12:00:00"},
+    )
+
+    # Alice commits under her ALIAS (alice@oldjob.com), NOT the primary.
+    (repo / "scripts" / "convert_optum_rwd.py").write_text("# touched\n", encoding="utf-8")
+    _git("add", "scripts/convert_optum_rwd.py", cwd=repo)
+    _git(
+        "-c",
+        "user.email=alice@oldjob.com",
+        "-c",
+        "user.name=Alice",
+        "commit",
+        "--date=2026-04-20T12:00:00",
+        "-m",
+        "alice touched via alias",
+        cwd=repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-20T12:00:00"},
+    )
+
+    rows = cms.parse_registry(repo / "docs" / "governance" / "methodology_reviewer_registry.md")
+    text = _signoff_doc(handle="alice")
+    result = cms.check_selection_rule(text, repo, rows)
+    assert result.ok is False
+    assert "alice@oldjob.com" in result.detail
+
+
 def test_selection_rule_gh_missing_emits_warning(fixture_repo: Path, monkeypatch):
     """When gh is unavailable, selection rule still PASSES (with WARN in detail)."""
 
