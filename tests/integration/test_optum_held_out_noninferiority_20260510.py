@@ -118,6 +118,21 @@ OPTUM_INITIATION_TARGET = "initiated_biologic_180d"
 # windows or upstream data changes fires this gate.
 OPTUM_EXPECTED_DEFAULT_COHORT_SIZE = 1294
 
+# Codex pass-1 MED-9 (PR #137 v4 G1): the baseline artifact at
+# docs/calibration/g1_optum_baseline_20260510.md is the single source
+# of truth for the empirical anchor. test_optum_baseline_artifact_present
+# validates the document exists + contains required fields. The numeric
+# constants above must match the artifact's "Baseline metrics" table.
+OPTUM_BASELINE_ARTIFACT_PATH = REPO_ROOT / "docs" / "calibration" / "g1_optum_baseline_20260510.md"
+OPTUM_BASELINE_REQUIRED_FIELDS = (
+    "auc_value",
+    "split_name",
+    "cohort_n",
+    "target",
+    "window_regime",
+    "pr_reference",
+)
+
 
 @pytest.fixture(scope="module")
 def optum_held_out_artifact(tmp_path_factory: pytest.TempPathFactory) -> dict:
@@ -279,6 +294,60 @@ def test_optum_held_out_auc_non_inferior(
         f"If the regression is intentional (e.g., a deliberate Layer 1 "
         f"tightening), update OPTUM_BASELINE_HELDOUT_AUC IN THIS COMMIT "
         f"with a PR/SHA reference + signed update memo."
+    )
+
+
+# Codex pass-1 MED-9: baseline-artifact integrity test runs in CI without
+# real data (no fixture dep). Marked integration only; not real_data.
+@pytest.mark.integration
+def test_optum_baseline_artifact_present_and_complete() -> None:
+    """Codex pass-1 MED-9 (PR #137 v4 G1): baseline artifact must exist
+    and carry all required fields.
+
+    The hardcoded magic baseline number (``OPTUM_BASELINE_HELDOUT_AUC``)
+    is now anchored to a documented artifact at
+    ``docs/calibration/g1_optum_baseline_20260510.md``. This test
+    validates the artifact is present and carries the required fields
+    so a future caller can triage a non-inferiority failure against
+    documented metadata, not a magic number.
+
+    Required fields (per the baseline artifact's "Baseline metrics" table):
+      - auc_value (numeric, must match OPTUM_BASELINE_HELDOUT_AUC)
+      - split_name (held_out_test)
+      - cohort_n (1294, must match OPTUM_EXPECTED_DEFAULT_COHORT_SIZE)
+      - target (initiated_biologic_180d, must match OPTUM_INITIATION_TARGET)
+      - window_regime (default)
+      - pr_reference (PR #116)
+    """
+    assert OPTUM_BASELINE_ARTIFACT_PATH.exists(), (
+        f"G1 MED-9: baseline artifact missing at "
+        f"{OPTUM_BASELINE_ARTIFACT_PATH}. The non-inferiority test reads "
+        f"this document for empirical-anchor metadata; without it the "
+        f"hardcoded baseline magic number is un-anchored."
+    )
+    text = OPTUM_BASELINE_ARTIFACT_PATH.read_text()
+    missing = [f for f in OPTUM_BASELINE_REQUIRED_FIELDS if f not in text]
+    assert not missing, (
+        f"G1 MED-9: baseline artifact at {OPTUM_BASELINE_ARTIFACT_PATH} "
+        f"is missing required fields: {missing}.\n"
+        f"Add a row for each missing field in the Baseline metrics "
+        f"table. Required: {list(OPTUM_BASELINE_REQUIRED_FIELDS)}"
+    )
+    # Confirm the AUC value, cohort size, and target match the test
+    # constants — the artifact is the source of truth, but the test's
+    # constants must not silently drift.
+    assert "0.4347" in text, (
+        "G1 MED-9: baseline artifact does not record auc_value=0.4347. "
+        "Constants in the test file must match the artifact."
+    )
+    assert "1294" in text, (
+        "G1 MED-9: baseline artifact does not record cohort_n=1294. "
+        "Constants in the test file must match the artifact."
+    )
+    assert OPTUM_INITIATION_TARGET in text, (
+        f"G1 MED-9: baseline artifact does not record "
+        f"target={OPTUM_INITIATION_TARGET!r}. Constants in the test "
+        f"file must match the artifact."
     )
 
 
