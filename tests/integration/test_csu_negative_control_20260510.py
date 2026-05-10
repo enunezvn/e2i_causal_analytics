@@ -100,6 +100,16 @@ CSU_POST_INDEX_JOURNEY_FEATURES = [
     "journey_status",
 ]
 
+# Codex pass-1 HIGH-2 + MED-10 (PR #137 v4 G1): canonical deployer
+# verdict the CSU negative-control run MUST emit. Plan v4 §2 G1 cites
+# "MARGINAL" as the verdict label, but the empirical anchor at PR #106
+# (val_AUC=0.6592, recall ≈ 0.30+, precision ≥ 0.05) maps to "ACCEPTABLE"
+# under the runner's _compute_verdict logic at scripts/run_tier0_test.py:
+# auc_roc >= 0.65 + recall >= 0.3 + precision >= 0.05 → "ACCEPTABLE".
+# We pin EXACT match here so the verdict assertion is decoupled from
+# numerical AUC tolerance (codex MED-10).
+CSU_EXPECTED_DEPLOYER_VERDICT = "ACCEPTABLE"
+
 
 @pytest.fixture(scope="module")
 def csu_negative_control_artifact(
@@ -274,6 +284,58 @@ def test_csu_permutation_p_at_genuine_floor(
         f"control ceiling {PERMUTATION_P_MAX} (plan v4 §2 G1 pin: "
         f"perm p=0.0). Statistical signal regression — re-audit the "
         f"surviving feature set + leakage_dropped_features."
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.real_data
+@pytest.mark.timeout(2000)
+def test_csu_deployer_verdict_unchanged(
+    csu_negative_control_artifact: dict,
+) -> None:
+    """Codex pass-1 HIGH-2 (PR #137 v4 G1): deployer verdict EXACT pin.
+
+    Plan v4 §2 G1 demands "deployer verdict UNCHANGED" — the canonical
+    closure of the negative-control invariant. The artifact carries the
+    label emitted by ``_compute_verdict`` (one of EXCELLENT, GOOD,
+    ACCEPTABLE, THRESHOLD_NEEDED, MARGINAL, POOR). Any shift here is a
+    deployer-class regression independent of AUC magnitude.
+
+    Failure modes this gate catches:
+    - Plan v4 G3 HBLP wiring causes recall to drop below 0.3 → verdict
+      shifts ACCEPTABLE → MARGINAL.
+    - Layer 1 over-aggression drops a useful feature → AUC < 0.65 →
+      verdict shifts ACCEPTABLE → MARGINAL.
+    - Test-set leakage that wasn't there at PR #106 surfaces → AUC > 0.85
+      and recall > 0.7 → verdict shifts ACCEPTABLE → EXCELLENT or GOOD.
+
+    Decoupled from numerical AUC tolerance per codex MED-10: the AUC
+    band [0.62, 0.68] is the documented numerical tolerance; this gate
+    pins the verdict label only.
+    """
+    actual = csu_negative_control_artifact.get("deployer_verdict")
+    assert actual is not None, (
+        "deployer_verdict missing from artifact — runner did not "
+        "compute the canonical verdict label. Either test_metrics is "
+        "empty (early halt) or the runner's artifact-emission block "
+        "regressed. Re-audit scripts/run_tier0_test.py artifact emission."
+    )
+    assert actual == CSU_EXPECTED_DEPLOYER_VERDICT, (
+        f"G1 negative-control: deployer verdict shifted from "
+        f"{CSU_EXPECTED_DEPLOYER_VERDICT!r} (PR #106 baseline) to "
+        f"{actual!r}. Plan v4 §2 G1 demands the verdict UNCHANGED.\n"
+        f"This is a deployer-class regression independent of AUC. "
+        f"Triage:\n"
+        f"  - artifact.validation_metrics: "
+        f"{csu_negative_control_artifact.get('validation_metrics')}\n"
+        f"  - artifact.test_metrics: "
+        f"{csu_negative_control_artifact.get('test_metrics')}\n"
+        f"  - artifact.deployer_verdict_description: "
+        f"{csu_negative_control_artifact.get('deployer_verdict_description')!r}\n"
+        f"If the shift is intentional, update "
+        f"CSU_EXPECTED_DEPLOYER_VERDICT IN THIS COMMIT with PR/SHA "
+        f"reference + signed memo."
     )
 
 

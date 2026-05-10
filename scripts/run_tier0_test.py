@@ -5943,6 +5943,41 @@ async def run_pipeline(
     if e2e_out:
         import json
         sc_state = state.get("success_criteria") or {}
+        # Codex pass-1 HIGH-2 (PR #137 v4 G1): canonical deployer
+        # verdict label, computed via _compute_verdict using the same
+        # inputs as print_detailed_summary (test_metrics primary,
+        # validation_metrics fallback for early-halt runs). One of
+        # {EXCELLENT, GOOD, ACCEPTABLE, THRESHOLD_NEEDED, MARGINAL,
+        # POOR, LEAKAGE_SUSPECTED}, or None when metrics absent.
+        _eval_metrics = state.get("test_metrics") or state.get("validation_metrics") or {}
+        _deployer_verdict: Optional[str] = None
+        _deployer_description: Optional[str] = None
+        _deployer_recommendation: Optional[str] = None
+        _auc_roc = _eval_metrics.get("roc_auc")
+        _recall = _eval_metrics.get("recall")
+        _precision = _eval_metrics.get("precision")
+        if (
+            isinstance(_auc_roc, (int, float))
+            and isinstance(_recall, (int, float))
+            and isinstance(_precision, (int, float))
+        ):
+            _train_auc = (state.get("train_metrics") or {}).get("roc_auc")
+            _val_auc = (state.get("validation_metrics") or {}).get("roc_auc")
+            _train_val_delta = (
+                float(_train_auc) - float(_val_auc)
+                if isinstance(_train_auc, (int, float)) and isinstance(_val_auc, (int, float))
+                else None
+            )
+            _v, _icon, _desc, _rec = _compute_verdict(
+                auc_roc=float(_auc_roc),
+                recall=float(_recall),
+                precision=float(_precision),
+                overfitting_severity=state.get("overfitting_severity"),
+                train_val_delta=_train_val_delta,
+            )
+            _deployer_verdict = _v
+            _deployer_description = _desc
+            _deployer_recommendation = _rec
         artifact = {
             "regime": regime,
             "seed": seed,
@@ -5988,6 +6023,10 @@ async def run_pipeline(
             "pipeline_halted": bool(state.get("pipeline_halted", False)),
             "halt_reason": state.get("halt_reason"),
             "model_usefulness": state.get("model_usefulness"),
+            # Codex pass-1 HIGH-2 (PR #137 v4 G1)
+            "deployer_verdict": _deployer_verdict,
+            "deployer_verdict_description": _deployer_description,
+            "deployer_verdict_recommendation": _deployer_recommendation,
             "trained_model_present": state.get("trained_model") is not None,
             "class_imbalance_info": state.get("class_imbalance_info") or {},
             # Layer 3 / Layer 5 audit surface used by the CSU val_AUC
