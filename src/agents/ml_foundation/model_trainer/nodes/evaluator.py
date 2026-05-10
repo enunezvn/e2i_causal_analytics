@@ -132,6 +132,13 @@ def _promote_permutation_summary_to_validation_metrics(
     permutation run (single-class y, missing y_proba) ARE promoted as
     None — downstream consumers must distinguish "perm test ran but null
     is degenerate" from "perm test was never executed" (key absent).
+
+    Asymmetric with ``_promote_cv_summary_to_validation_metrics``: this
+    helper guards each promotion with ``if key in permutation_result``
+    (forward-compat for older callers that emit a partial dict on
+    NaN-degenerate runs), whereas the CV promoter unconditionally reads
+    each ``cv_result`` key (the CV result dict has a fixed contract).
+    Both patterns are intentional and codex-flagged in pass-1.
     """
     val_metrics = metrics_result.setdefault("validation_metrics", {})
     for key in _PERMUTATION_PROMOTED_KEYS:
