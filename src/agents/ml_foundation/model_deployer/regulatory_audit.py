@@ -12,11 +12,22 @@ trail is load-bearing for the eligibility flag — see
 
 Design choices:
 
-* The runtime guard is a thin wrapper around two ``list[dict]`` fields.
-  ``__setitem__`` (i.e., ``audit["gate_history"] = [...]``) raises
-  ``RegulatoryAuditMutationError``; only ``append_gate_evaluation`` and
-  ``append_adaptation`` mutate the lists. Once an entry lands it is
-  immutable for the lifetime of this object.
+* The runtime guard stores history in PRIVATE fields ``_gate_history``
+  and ``_adaptation_history``. Public read-only access is via
+  ``audit.gate_history`` / ``audit.adaptation_history`` properties that
+  return ``tuple(...)`` snapshots, so callers cannot mutate the lists in
+  place (``.append()``, ``[i] = ...``, ``.clear()``, slice assignment,
+  list reassignment). Codex-rescue N1-H1: a public list bypassed the
+  ``__setitem__`` guard because callers could call
+  ``audit.gate_history.append({...})`` or ``audit.gate_history[0]
+  ["outcome"] = "pass"`` and corrupt the audit trail.
+* Mutation goes through ``append_gate_evaluation`` /
+  ``append_adaptation`` only. Both methods build a frozen dataclass
+  entry (``GateEvaluationEntry`` / ``AdaptationEntry``) so individual
+  entries are also immutable post-append.
+* ``__setitem__`` (i.e., ``audit["gate_history"] = [...]``) raises
+  ``RegulatoryAuditMutationError`` for backward-compat with callers
+  that may not have migrated to the property interface yet.
 * ``to_dict()`` returns a fresh deep-copy snapshot for serialization —
   the on-disk representation is plain JSON, but reads via the guard
   expose only the append-only API.
@@ -32,7 +43,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Tuple
 
 
 class RegulatoryAuditMutationError(RuntimeError):
@@ -54,19 +65,72 @@ class RegulatoryAuditMutationError(RuntimeError):
     """
 
 
+# --------------------------------------------------------------------------- #
+# Frozen entry dataclasses — individual audit entries are immutable.          #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class GateEvaluationEntry:
+    """One gate-evaluation entry in ``gate_history`` — frozen.
+
+    The frozen dataclass enforces per-entry immutability: even with
+    direct access to the underlying list, callers cannot mutate
+    individual entries in place. This is the per-entry analog to the
+    list-level read-only-tuple-property guard.
+    """
+
+    timestamp: str
+    gate_name: str
+    threshold: Any
+    value: Any
+    outcome: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "timestamp": self.timestamp,
+            "gate_name": self.gate_name,
+            "threshold": copy.deepcopy(self.threshold),
+            "value": copy.deepcopy(self.value),
+            "outcome": self.outcome,
+        }
+
+
+@dataclass(frozen=True)
+class AdaptationEntry:
+    """One adaptation entry in ``adaptation_history`` — frozen."""
+
+    commit_sha: str
+    justification_doc: str
+    gate_name: str
+    before_threshold: Any
+    after_threshold: Any
+    timestamp: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "commit_sha": self.commit_sha,
+            "justification_doc": self.justification_doc,
+            "gate_name": self.gate_name,
+            "before_threshold": copy.deepcopy(self.before_threshold),
+            "after_threshold": copy.deepcopy(self.after_threshold),
+            "timestamp": self.timestamp,
+        }
+
+
 @dataclass
 class RegulatoryEligibilityAudit:
     """Append-only audit trail for regulatory-eligibility evaluation.
 
     Two sub-fields:
 
-    * ``gate_history`` — list of dicts, each documenting one gate
+    * ``gate_history`` — tuple of dicts, each documenting one gate
       evaluation with keys ``timestamp``, ``gate_name``, ``threshold``,
       ``value``, ``outcome``. Outcome is typically ``"pass" | "fail" |
       "advisory"`` but is not enforced by this layer (the
       ``validate_promotion`` consumer enforces the schema; this layer
       enforces append-only semantics).
-    * ``adaptation_history`` — list of dicts, each documenting one
+    * ``adaptation_history`` — tuple of dicts, each documenting one
       threshold adaptation that happened during the model's lifecycle.
       Keys: ``commit_sha``, ``justification_doc``, ``gate_name``,
       ``before_threshold``, ``after_threshold``, ``timestamp``.
@@ -77,10 +141,39 @@ class RegulatoryEligibilityAudit:
     literature-anchored absolute threshold (no advisory bypasses) AND all
     absolute thresholds were cleared. See ``validate_promotion`` for the
     full check sequence.
+
+    Codex-rescue N1-H1: storage is via private fields (``_gate_history`` /
+    ``_adaptation_history``) — public read access is the
+    ``gate_history`` / ``adaptation_history`` properties returning
+    ``tuple(...)`` snapshots so callers cannot mutate the lists in place.
     """
 
-    gate_history: List[Dict[str, Any]] = field(default_factory=list)
-    adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
+    _gate_history: List[Dict[str, Any]] = field(default_factory=list)
+    _adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
+
+    # ----------------------------------------------------------------- #
+    # Read-only properties returning tuple(...) snapshots.              #
+    # ----------------------------------------------------------------- #
+
+    @property
+    def gate_history(self) -> Tuple[Dict[str, Any], ...]:
+        """Read-only snapshot of the gate-evaluation history.
+
+        Returns a ``tuple`` of deep-copied dicts so callers cannot mutate
+        the audit's source list (``.append()``, ``[i] = ...``,
+        ``.clear()``, slice assignment).
+        """
+        return tuple(copy.deepcopy(entry) for entry in self._gate_history)
+
+    @property
+    def adaptation_history(self) -> Tuple[Dict[str, Any], ...]:
+        """Read-only snapshot of the adaptation history.
+
+        Returns a ``tuple`` of deep-copied dicts so callers cannot mutate
+        the audit's source list (``.append()``, ``[i] = ...``,
+        ``.clear()``, slice assignment).
+        """
+        return tuple(copy.deepcopy(entry) for entry in self._adaptation_history)
 
     # ----------------------------------------------------------------- #
     # Append API — the only sanctioned mutation surface.                #
@@ -96,17 +189,19 @@ class RegulatoryEligibilityAudit:
     ) -> None:
         """Append one gate-evaluation entry to ``gate_history``.
 
-        The entry is deep-copied before storage so callers can't retain
-        a mutable reference into the audit list.
+        The entry is constructed as a frozen ``GateEvaluationEntry``
+        dataclass so its fields are immutable post-append. The dict
+        snapshot stored in ``_gate_history`` is also deep-copied so
+        callers can't retain a mutable reference into the audit list.
         """
-        entry = {
-            "timestamp": timestamp,
-            "gate_name": gate_name,
-            "threshold": copy.deepcopy(threshold),
-            "value": copy.deepcopy(value),
-            "outcome": outcome,
-        }
-        self.gate_history.append(entry)
+        entry_obj = GateEvaluationEntry(
+            timestamp=timestamp,
+            gate_name=gate_name,
+            threshold=copy.deepcopy(threshold),
+            value=copy.deepcopy(value),
+            outcome=outcome,
+        )
+        self._gate_history.append(entry_obj.to_dict())
 
     def append_adaptation(
         self,
@@ -126,32 +221,32 @@ class RegulatoryEligibilityAudit:
         clear at promotion time — i.e. "would be eligible if external
         validation cohort confirms".
         """
-        entry = {
-            "commit_sha": commit_sha,
-            "justification_doc": justification_doc,
-            "gate_name": gate_name,
-            "before_threshold": copy.deepcopy(before_threshold),
-            "after_threshold": copy.deepcopy(after_threshold),
-            "timestamp": timestamp,
-        }
-        self.adaptation_history.append(entry)
+        entry_obj = AdaptationEntry(
+            commit_sha=commit_sha,
+            justification_doc=justification_doc,
+            gate_name=gate_name,
+            before_threshold=copy.deepcopy(before_threshold),
+            after_threshold=copy.deepcopy(after_threshold),
+            timestamp=timestamp,
+        )
+        self._adaptation_history.append(entry_obj.to_dict())
 
     # ----------------------------------------------------------------- #
     # Mapping-like access — read-only.                                  #
     # ----------------------------------------------------------------- #
 
-    def __getitem__(self, key: str) -> List[Dict[str, Any]]:
-        """Read-only ``audit[key]`` access. Returns a deep-copy snapshot.
+    def __getitem__(self, key: str) -> Tuple[Dict[str, Any], ...]:
+        """Read-only ``audit[key]`` access. Returns a tuple snapshot.
 
-        The snapshot semantics ensure mutation of the returned list
-        does not leak back into the guarded state. Callers that want
-        live append must use ``append_gate_evaluation`` /
-        ``append_adaptation``.
+        The tuple-of-deep-copies semantics ensure mutation of the
+        returned sequence does not leak back into the guarded state.
+        Callers that want live append must use ``append_gate_evaluation``
+        / ``append_adaptation``.
         """
         if key == "gate_history":
-            return copy.deepcopy(self.gate_history)
+            return self.gate_history
         if key == "adaptation_history":
-            return copy.deepcopy(self.adaptation_history)
+            return self.adaptation_history
         raise KeyError(
             f"RegulatoryEligibilityAudit has no field '{key}'. "
             "Allowed: 'gate_history', 'adaptation_history'."
@@ -195,8 +290,8 @@ class RegulatoryEligibilityAudit:
         mutate the lists post-snapshot and corrupt the audit.
         """
         return {
-            "gate_history": copy.deepcopy(self.gate_history),
-            "adaptation_history": copy.deepcopy(self.adaptation_history),
+            "gate_history": [copy.deepcopy(entry) for entry in self._gate_history],
+            "adaptation_history": [copy.deepcopy(entry) for entry in self._adaptation_history],
         }
 
     @classmethod
@@ -220,8 +315,8 @@ class RegulatoryEligibilityAudit:
                 f"adaptation_history must be a list, got {type(adaptation_history_raw).__name__}"
             )
         return cls(
-            gate_history=copy.deepcopy(gate_history_raw),
-            adaptation_history=copy.deepcopy(adaptation_history_raw),
+            _gate_history=copy.deepcopy(gate_history_raw),
+            _adaptation_history=copy.deepcopy(adaptation_history_raw),
         )
 
 
