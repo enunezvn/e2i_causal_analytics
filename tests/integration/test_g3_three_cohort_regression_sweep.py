@@ -1070,9 +1070,7 @@ class TestOrchestratorThreadingHigh4:
             adaptive_validity_check as avc_module,
         )
 
-        def _fake_adversarial_score(
-            *args: Any, **kwargs: Any
-        ) -> dict[str, Any]:
+        def _fake_adversarial_score(*args: Any, **kwargs: Any) -> dict[str, Any]:
             return {
                 "z_score": 5.5,  # boundary value: legacy=high, low-N-HBLP=info
                 "actual_auc": 0.72,
