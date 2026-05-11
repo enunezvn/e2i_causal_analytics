@@ -16,23 +16,24 @@
       ]
     },
     "engineered": {
-      "mean": 0.9058266176543299,
-      "std": 0.002102367268680723,
+      "mean": 0.9047048313263886,
+      "std": 0.002714993492612531,
       "n_folds": 5,
       "per_fold": [
-        0.9044358871136677,
-        0.9054459476444369,
-        0.9089876946460018,
-        0.9030030836457169,
-        0.9072604752218261
+        0.9055852977447143,
+        0.9058057077072446,
+        0.9054637890844788,
+        0.8994271141606565,
+        0.9072422479348483
       ]
     },
     "engineered_features_added": [
+      "age_x_insurance_interaction",
       "engagement_per_visit",
       "treatment_diversity_intensity",
       "severity_engagement_product"
     ],
-    "delta_mean_auc": 8.417617411948797e-05,
+    "delta_mean_auc": -0.0010376101538218663,
     "verdict": "null",
     "acceptance_threshold": 0.02
   },

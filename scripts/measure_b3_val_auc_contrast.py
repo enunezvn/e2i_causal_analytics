@@ -155,16 +155,27 @@ def _measure_cohort(
         f"(+/- {baseline_metrics['std']:.4f}, n_folds={baseline_metrics['n_folds']})"
     )
 
-    # Build engineered surface = baseline + B3 candidates.
-    # engineer_features needs the raw column set to detect inputs (some
-    # B3 inputs like insurance_type may be filtered out of baseline as
-    # non-numeric; we re-apply on X_raw).
-    X_eng_raw, materialized = engineer_features(X_raw.copy(), manifest_source)
-    # The engineered columns are now on X_eng_raw; build the B3 surface
-    # by concatenating baseline + materialized columns.
-    eng_cols = [c for c in materialized if c in X_eng_raw.columns]
+    # H2 (codex): build engineered features from the RAW df (which
+    # still has categorical columns like insurance_type) rather than
+    # from X_raw (which has been numeric-filtered by
+    # _build_features_and_target). This is required for
+    # age_x_insurance_interaction whose insurance_type input is
+    # categorical/object dtype. Previously the engineered feature was
+    # silently dropped at audit time, masquerading as a
+    # missing-input skip in the INFO log; the resulting val_AUC
+    # contrast was on 3 of 4 CSU candidates rather than 4.
+    df_for_engineering = df.copy()
+    df_with_engineered, materialized = engineer_features(
+        df_for_engineering, manifest_source
+    )
+    eng_cols = [c for c in materialized if c in df_with_engineered.columns]
+    # Concat materialized engineered columns (only) onto the
+    # production-parity baseline surface.
     X_engineered = pd.concat(
-        [X_baseline.reset_index(drop=True), X_eng_raw[eng_cols].reset_index(drop=True)],
+        [
+            X_baseline.reset_index(drop=True),
+            df_with_engineered[eng_cols].reset_index(drop=True),
+        ],
         axis=1,
     )
     print(

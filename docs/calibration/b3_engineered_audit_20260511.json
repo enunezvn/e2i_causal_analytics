@@ -2,8 +2,6 @@
   "csu": {
     "n_permutations": 100,
     "z_scores_base": {
-      "journey_duration_days": 24.2571189384471,
-      "data_quality_score": 74.71090642729794,
       "disease_severity": 9.781054347670027,
       "engagement_score": 94.10019743978572,
       "days_on_therapy": 9.78083392496129,
@@ -27,8 +25,6 @@
   "optum_initiation": {
     "n_permutations": 100,
     "z_scores_base": {
-      "data_quality_score": -1.1992489583169925,
-      "initiated_biologic_180d": 57.224376745163546,
       "age_at_index": 3.234464351573657,
       "dx_l50_1_count": 5.187268937186832,
       "dx_l50_8_count": 0.23989072262485997,
