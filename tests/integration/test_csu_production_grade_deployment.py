@@ -21,7 +21,6 @@ focuses on the manifest emission contract.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict
 
 import pytest
@@ -318,9 +317,14 @@ class TestRegulatoryDeploymentManifestBuilder:
 
 
 class TestValidatePromotionEmitsManifest:
-    def test_csu_promotion_emits_authorized_manifest(self) -> None:
+    # NOTE: tests use ``async def`` to compose under pytest-asyncio's
+    # asyncio_mode="auto". The earlier ``asyncio.run(...)`` form
+    # collided with nest_asyncio.run's "Event loop is closed" behavior
+    # when xdist-loadscope sibling tests had already started a loop.
+
+    async def test_csu_promotion_emits_authorized_manifest(self) -> None:
         state = _csu_state()
-        result = asyncio.run(validate_promotion(state))
+        result = await validate_promotion(state)
         assert "regulatory_deployment_manifest" in result
         m = result["regulatory_deployment_manifest"]
         assert m["cohort"] == "csu"
@@ -329,10 +333,10 @@ class TestValidatePromotionEmitsManifest:
         # independently by validate_promotion's path-level logic.
         assert result["promotion_allowed"] is True
 
-    def test_optum_promotion_emits_blocked_manifest(self) -> None:
+    async def test_optum_promotion_emits_blocked_manifest(self) -> None:
         state = _csu_state()
         state["scope_spec"]["feature_manifest_source"] = "optum"
-        result = asyncio.run(validate_promotion(state))
+        result = await validate_promotion(state)
         m = result["regulatory_deployment_manifest"]
         assert m["cohort"] == "optum"
         assert m["t2_6c_authorization_status"] == "blocked"
@@ -342,11 +346,11 @@ class TestValidatePromotionEmitsManifest:
         # deployer-input signal for T2.6c, not a promotion blocker.
         assert result["promotion_allowed"] is True
 
-    def test_manifest_serializable_as_json(self) -> None:
+    async def test_manifest_serializable_as_json(self) -> None:
         import json
 
         state = _csu_state()
-        result = asyncio.run(validate_promotion(state))
+        result = await validate_promotion(state)
         manifest_dict = result["regulatory_deployment_manifest"]
         # Round-trip through JSON to confirm no non-serializable types.
         round_trip = json.loads(json.dumps(manifest_dict, default=str))
@@ -354,7 +358,7 @@ class TestValidatePromotionEmitsManifest:
         # honest_auc_band serializes as list (per to_dict).
         assert round_trip["honest_auc_band"] == [0.62, 0.68]
 
-    def test_malformed_audit_payload_emits_blocked_manifest_not_crash(self) -> None:
+    async def test_malformed_audit_payload_emits_blocked_manifest_not_crash(self) -> None:
         """v5 codex pass-1 HIGH-2: a malformed
         ``validation_metrics["regulatory_eligibility_audit"]`` (non-list
         fields) must produce a BLOCKED manifest with the N1 reconstruction
@@ -366,7 +370,7 @@ class TestValidatePromotionEmitsManifest:
             "gate_history": [],
             "adaptation_history": "not_a_list",
         }
-        result = asyncio.run(validate_promotion(state))
+        result = await validate_promotion(state)
         # The integration path must NOT clobber to a generic error.
         assert "regulatory_deployment_manifest" in result, (
             "Malformed audit should still emit a manifest (blocked), "
@@ -422,7 +426,7 @@ class TestValidatePromotionEmitsManifest:
         assert state_obj.scope_spec == {"feature_manifest_source": "csu"}
         assert state_obj.feature_manifest_source == "csu"
 
-    def test_non_dict_audit_payload_emits_blocked_manifest(self) -> None:
+    async def test_non_dict_audit_payload_emits_blocked_manifest(self) -> None:
         """v5 codex pass-2 HIGH-2: a non-mapping
         ``validation_metrics["regulatory_eligibility_audit"]`` (e.g.
         list, string, int) raises AttributeError inside
@@ -433,7 +437,7 @@ class TestValidatePromotionEmitsManifest:
         state = _csu_state()
         # Replace the audit with a list (non-mapping payload).
         state["validation_metrics"]["regulatory_eligibility_audit"] = ["not_a_mapping"]
-        result = asyncio.run(validate_promotion(state))
+        result = await validate_promotion(state)
         assert "regulatory_deployment_manifest" in result, (
             "Non-mapping audit payload should still emit a blocked manifest "
             "via the AttributeError catch (codex pass-2 HIGH-2)."
@@ -441,7 +445,7 @@ class TestValidatePromotionEmitsManifest:
         m = result["regulatory_deployment_manifest"]
         assert m["t2_6c_authorization_status"] == "blocked"
 
-    def test_validate_promotion_sees_fresh_n1_audit_for_manifest(self) -> None:
+    async def test_validate_promotion_sees_fresh_n1_audit_for_manifest(self) -> None:
         """v5 codex pass-1 HIGH-1: the manifest must read the FRESH N1
         audit (with gate_history entries N1 just appended), not the
         stale incoming state's audit. Verify by passing a state with
@@ -451,7 +455,7 @@ class TestValidatePromotionEmitsManifest:
         # Confirm the incoming audit has empty gate_history.
         incoming_audit = state["validation_metrics"]["regulatory_eligibility_audit"]
         assert incoming_audit["gate_history"] == []
-        result = asyncio.run(validate_promotion(state))
+        result = await validate_promotion(state)
         m = result["regulatory_deployment_manifest"]
         # N1 must have appended a gate_history entry. The manifest
         # reads the FRESH audit, not the stale incoming one.
