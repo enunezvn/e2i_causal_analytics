@@ -1,13 +1,12 @@
 """Plan v4 Gate G2 / N1 — append G2 manifest to gate_history.
 
-Codex MED-10 fix: previously the G2 workflow uploaded the manifest as
+MED-10 (pass-2): the G2 workflow previously uploaded the manifest as
 a CI artifact only — the regulatory eligibility audit trail
-(``gate_history``) never saw the G2 outcome. This script reads the
-manifest emitted by ``run_tier1b_b2_experiment.py``, builds three
-``GateEvaluationEntry``-shaped records (one per pre-spec threshold
-T1/T2/T3 + the combined ``g2_passes_pre_spec``), and writes them to
-the ``gate_history`` JSONL file for downstream ingest by the N1 audit
-trail.
+(``gate_history``) never saw the G2 outcome.  This script now calls
+``RegulatoryEligibilityAudit.append_gate_evaluation`` for each
+per-threshold record, making the N1 audit trail the **load-bearing**
+append path.  The standalone JSON artifact is kept as a back-compat
+shim for downstream consumers that read the raw entry list.
 
 Usage
 -----
@@ -18,14 +17,25 @@ Usage
         --tag-sha abc123def \\
         --s-prespec-sha 7f616f6f \\
         --workflow-run-id 12345 \\
-        --output g2_gate_history_entry.json
+        --output g2_gate_history_entry.json \\
+        [--audit-state existing_audit.json] \\
+        [--audit-output updated_audit.json]
+
+``--audit-state`` (optional): path to an existing
+``RegulatoryEligibilityAudit.to_dict()`` JSON checkpoint. When
+supplied, G2 entries are appended to that audit object. When omitted,
+a fresh audit is created.
+
+``--audit-output`` (optional): path to write the updated
+``audit.to_dict()`` snapshot after appending G2 entries. The file is
+written even when G2 fails — the failed outcome is captured inside the
+entry itself.
 
 Schema
 ------
 
-The output is a list of ``GateEvaluationEntry`` dicts (matching
-``src.agents.ml_foundation.model_deployer.regulatory_audit.GateEvaluationEntry``)
-with extra G2-specific provenance fields:
+The JSON artifact (``--output``) is a list of
+``GateEvaluationEntry``-shaped dicts with extra G2-specific provenance:
 
     {
         "timestamp": "2026-05-10T17:55:00Z",
@@ -45,10 +55,9 @@ with extra G2-specific provenance fields:
         }
     }
 
-The N1 audit trail consumer (regulatory_audit.RegulatoryEligibilityAudit)
-appends each entry to ``gate_history`` via ``audit.append_gate_entry``.
-
-This script is stdlib-only by design.
+The ``g2_provenance`` field is stored verbatim in the ``reason``
+parameter of ``append_gate_evaluation`` so N1 can surface it without
+schema changes.
 """
 
 from __future__ import annotations
@@ -60,6 +69,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# ---------------------------------------------------------------------------
+# N1 audit API — load-bearing import.  The script intentionally imports from
+# src/ so the canonical ``RegulatoryEligibilityAudit`` append-only guard is
+# the single writer for gate_history.  ``--audit-output`` persists the updated
+# audit snapshot; ``--output`` retains the flat entry list for back-compat.
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+
+from src.agents.ml_foundation.model_deployer.regulatory_audit import (  # noqa: E402
+    RegulatoryEligibilityAudit,
+)
 
 
 def _utc_timestamp() -> str:
@@ -177,6 +199,46 @@ def build_audit_entries(
     return entries
 
 
+def append_to_n1_audit(
+    audit: "RegulatoryEligibilityAudit",
+    entries: List[Dict[str, Any]],
+) -> None:
+    """Call ``audit.append_gate_evaluation`` for each entry in *entries*.
+
+    This is the load-bearing N1 API path.  Each entry's ``g2_provenance``
+    dict is serialised into the ``reason`` field so the provenance block
+    is preserved inside the append-only guard without widening the
+    ``GateEvaluationEntry`` schema.
+
+    ``threshold_provenance`` is always ``"literature_anchored"`` for G2
+    entries — the thresholds are fixed in the S_prespec memo which is
+    the canonical sign-off document.
+    """
+    for entry in entries:
+        # Encode g2_provenance as a JSON string inside reason so it
+        # survives the frozen-dataclass serialisation round-trip.
+        reason_parts: List[str] = []
+        raw_reason = entry.get("reason")
+        if raw_reason:
+            reason_parts.append(str(raw_reason))
+        prov = entry.get("g2_provenance")
+        if prov:
+            reason_parts.append(
+                "g2_provenance=" + json.dumps(prov, sort_keys=True, default=str)
+            )
+        combined_reason: Optional[str] = "; ".join(reason_parts) if reason_parts else None
+
+        audit.append_gate_evaluation(
+            timestamp=entry["timestamp"],
+            gate_name=entry["gate_name"],
+            threshold=entry.get("threshold"),
+            value=entry.get("value"),
+            outcome=entry["outcome"],
+            threshold_provenance=entry.get("threshold_provenance"),
+            reason=combined_reason,
+        )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -199,7 +261,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--output",
         required=True,
-        help="Output path for the gate_history entries JSON.",
+        help="Output path for the back-compat flat gate_history entries JSON.",
+    )
+    parser.add_argument(
+        "--audit-state",
+        default=None,
+        help=(
+            "Optional path to an existing RegulatoryEligibilityAudit.to_dict() "
+            "JSON checkpoint. When supplied, G2 entries are appended to the "
+            "loaded audit. When omitted, a fresh audit is created."
+        ),
+    )
+    parser.add_argument(
+        "--audit-output",
+        default=None,
+        help=(
+            "Optional path to write the updated audit.to_dict() snapshot "
+            "after appending G2 entries. Written even when G2 fails — the "
+            "failed outcome is captured inside the entry."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -220,18 +300,51 @@ def main(argv: Optional[List[str]] = None) -> int:
         s_prespec_sha=args.s_prespec_sha,
         workflow_run_id=args.workflow_run_id,
     )
+
+    # --- N1 audit API (load-bearing path) -----------------------------------
+    if args.audit_state:
+        audit_state_path = Path(args.audit_state)
+        if not audit_state_path.exists():
+            print(
+                f"FATAL: audit-state checkpoint not found at {audit_state_path}",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            audit_payload = json.loads(audit_state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(
+                f"FATAL: audit-state at {audit_state_path} is not valid JSON: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        audit = RegulatoryEligibilityAudit.from_dict(audit_payload)
+        print(
+            f"[INFO] loaded audit checkpoint from {audit_state_path} "
+            f"({len(audit.gate_history)} existing gate entries)"
+        )
+    else:
+        audit = RegulatoryEligibilityAudit()
+
+    append_to_n1_audit(audit, entries)
+    print(f"[OK] appended {len(entries)} G2 entries to N1 RegulatoryEligibilityAudit")
+
+    if args.audit_output:
+        audit_output_path = Path(args.audit_output)
+        audit_output_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_output_path.write_text(
+            json.dumps(audit.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+        )
+        print(f"[OK] wrote updated audit snapshot to {audit_output_path}")
+
+    # --- Back-compat flat JSON artifact (shim) -------------------------------
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(entries, indent=2, sort_keys=True), encoding="utf-8")
-    print(f"[OK] wrote {len(entries)} gate_history entries to {output_path}")
+    print(f"[OK] wrote {len(entries)} gate_history entries (shim) to {output_path}")
 
-    # Exit code mirrors the combined G2 verdict so the workflow's
-    # `set -euo pipefail` behavior is preserved.
-    if not bool(manifest.get("g2_passes_pre_spec", False)):
-        # G2 failed — return 0 anyway (we always want the audit append
-        # to succeed even when G2 fails; the failed outcome is captured
-        # IN the entry).
-        return 0
+    # Exit code is always 0 — we always want the audit append to succeed
+    # even when G2 fails; the failed outcome is captured IN the entries.
     return 0
 
 
