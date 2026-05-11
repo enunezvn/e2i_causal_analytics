@@ -64,10 +64,16 @@ script on every PR that adds or modifies a file matching
 |---|---|---|---|---|---|---|
 | _PLACEHOLDER_ | placeholder@example.com | placeholder | placeholder_role | 2026-05-10 | methodology, biostatistics | inactive |
 | E. Nunez | etn3724@gmail.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active |
+| E. Nunez (GitHub no-reply) | 64854959+enunezvn@users.noreply.github.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active |
 
 > The placeholder row remains `inactive` for back-compat with the registry's
-> parse-test fixtures. The `enunezvn` row is the load-bearing `active`
-> reviewer of record for the v4 Phase B/C G1+G2+G3 engineering signoffs.
+> parse-test fixtures. Both `enunezvn` rows are the load-bearing `active`
+> reviewers of record for the v4 Phase B/C G1+G2+G3 engineering signoffs —
+> two rows because the GitHub rebase-merge writes the committer field as
+> the `<user-id>+<handle>@users.noreply.github.com` no-reply address even
+> when the author field stays the human-readable address. The G3 wiring
+> guard reads committer (not author) email, so both must appear here for
+> signoff-introducing commits to satisfy the email-parity check.
 >
 > **N3 INTERIM status:** This row attests engineering completeness only.
 > The Plan v4 §N3 cryptographic-signature requirement (PGP / sigstore +
