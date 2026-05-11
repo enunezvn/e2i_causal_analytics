@@ -326,9 +326,7 @@ class TestV5GateB1AutoPolicy:
         # ``arr == 1`` count? No — only "1" matches, so n_pos=200 > 100
         # → isotonic without the binary guard. With the guard, the
         # presence of "2" triggers the fallback to sigmoid.
-        y_multi = np.concatenate(
-            [np.ones(200, dtype=np.int64), np.full(100, 2, dtype=np.int64)]
-        )
+        y_multi = np.concatenate([np.ones(200, dtype=np.int64), np.full(100, 2, dtype=np.int64)])
         assert select_calibration_method(y_multi) == "sigmoid"
 
     def test_select_empty_y_falls_back_to_sigmoid(self) -> None:
