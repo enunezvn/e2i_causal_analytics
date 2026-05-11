@@ -1013,7 +1013,29 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
         # signal; the gate-passing decision is upstream. This keeps the
         # rollout signal-only and lets ``deployment_orchestrator`` /
         # downstream consumers make the final shipping decision.
-        regulatory_result = _evaluate_regulatory_eligibility(state)
+        # Codex pass-1 HIGH-2: a malformed
+        # ``validation_metrics["regulatory_eligibility_audit"]`` raises
+        # ``TypeError`` inside ``_load_regulatory_audit_from_state``,
+        # which used to bubble to the outer except and clobber the
+        # promotion-validation return with a generic error (no
+        # ``regulatory_deployment_manifest`` emitted). Catch the loader
+        # error here, surface a structured "audit malformed" regulatory
+        # result, and continue so the manifest emission below still
+        # produces a "blocked" payload with the N1-malformed reason.
+        try:
+            regulatory_result = _evaluate_regulatory_eligibility(state)
+        except (TypeError, ValueError) as audit_exc:
+            regulatory_result = {
+                "regulatory_eligible": False,
+                "adapted_regulatory_candidate": False,
+                "regulatory_eligibility_audit": None,
+                "regulatory_eligibility_failures": [
+                    "Gate N1: regulatory_eligibility_audit payload "
+                    f"failed reconstruction: {audit_exc}. The audit's "
+                    "list fields must be JSON arrays — see "
+                    "RegulatoryEligibilityAudit.from_dict contract."
+                ],
+            }
 
         # Plan v5 §2 Gate C1 — CSU regulatory deployment manifest emission.
         # Build the cohort-scoped T2.6c-authorization payload from the
@@ -1025,12 +1047,34 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
         # The manifest's regulatory_eligible field is sourced from the N1
         # verdict computed in this same call, so state mutation order is
         # deterministic: regulatory_result first, then manifest emission.
+        # Codex pass-1 HIGH-1: the manifest reads the audit from
+        # ``state["validation_metrics"]["regulatory_eligibility_audit"]``;
+        # ``regulatory_result["regulatory_eligibility_audit"]`` is the
+        # FRESH audit (N1 just appended gate-evaluation entries). We
+        # mirror the fresh audit BACK into the nested validation_metrics
+        # location so the manifest builder sees it. Without this, the
+        # manifest evaluated audit cleanliness against stale data (or
+        # falsely reported "missing audit" when N1 had just created one).
         from src.agents.ml_foundation.model_deployer.nodes.regulatory_deployment_manifest import (
             build_regulatory_deployment_manifest,
         )
 
         state_for_manifest = dict(state)
         state_for_manifest.update(regulatory_result)
+
+        # Mirror fresh N1 audit into nested validation_metrics location.
+        fresh_audit = regulatory_result.get("regulatory_eligibility_audit")
+        if fresh_audit is not None:
+            existing_vm = state_for_manifest.get("validation_metrics") or {}
+            if hasattr(existing_vm, "model_dump"):
+                existing_vm = existing_vm.model_dump()
+            if not isinstance(existing_vm, dict):
+                existing_vm = {}
+            # Shallow-copy then patch — don't mutate the caller's dict.
+            patched_vm = dict(existing_vm)
+            patched_vm["regulatory_eligibility_audit"] = fresh_audit
+            state_for_manifest["validation_metrics"] = patched_vm
+
         regulatory_deployment_manifest = build_regulatory_deployment_manifest(
             state_for_manifest
         ).to_dict()
