@@ -17,6 +17,7 @@ from .nodes import (
     audit_sampling_frame,
     compute_baseline_metrics,
     detect_leakage,
+    engineer_features_node,
     load_data,
     register_features_in_feast,
     review_and_remediate_leakage,
@@ -126,6 +127,7 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_node("run_schema_validation", run_schema_validation)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("run_quality_checks", run_quality_checks)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("run_ge_validation", run_ge_validation)  # type: ignore[type-var,arg-type,call-overload]
+    graph.add_node("engineer_features", engineer_features_node)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("detect_leakage", detect_leakage)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("adaptive_validity_check", adaptive_validity_check)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("leakage_remediation", review_and_remediate_leakage)  # type: ignore[type-var,arg-type,call-overload]
@@ -141,7 +143,14 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_edge("audit_sampling_frame", "run_schema_validation")
     graph.add_edge("run_schema_validation", "run_quality_checks")
     graph.add_edge("run_quality_checks", "run_ge_validation")
-    graph.add_edge("run_ge_validation", "detect_leakage")
+    # v5 Gate B3: engineer_features runs AFTER GE validation (on base
+    # schema) and BEFORE detect_leakage / adaptive_validity_check so the
+    # engineered columns are audited by Layer 3 alongside base features.
+    # Gated on state["enable_feature_engineering"] (default False); when
+    # False the node returns an empty patch and the pipeline is
+    # behaviorally identical to its pre-B3 form.
+    graph.add_edge("run_ge_validation", "engineer_features")
+    graph.add_edge("engineer_features", "detect_leakage")
 
     # Layer 5 wiring: detect_leakage emits hardcoded findings; adaptive_validity_check
     # then runs Layer 3 (data-derived adversarial discriminator) on every numeric

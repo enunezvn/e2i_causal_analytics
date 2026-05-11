@@ -581,6 +581,56 @@ _DATES = [
 
 
 # =============================================================================
+# v5 Gate B3 — engineered features (derived from pre-anchor inputs)
+# =============================================================================
+#
+# Each engineered feature is computed by
+# ``src.agents.ml_foundation.data_preparer.nodes.feature_engineering``
+# (see ``OPTUM_ENGINEERED_FEATURES`` there) and inherits pre-anchor status
+# from its declared ``derivation_inputs`` — every input listed below is
+# itself declared pre-anchor in this manifest.
+#
+# Pre-spec: ``docs/specs/v5_b3_feature_engineering_prespec_2026-05-11.md``.
+# Audit gate: Layer 1 traces the derivation chain (this declaration);
+# Layer 3 (production adversarial probe) runs on the materialized column
+# during ``adaptive_validity_check``. Both must pass before the feature
+# is permitted to influence val_AUC.
+
+_ENGINEERED_B3 = [
+    FeatureContract(
+        name="comorbidity_load_total",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=tuple(f"has_{c}" for c in COMORBIDITY_NAMES),
+    ),
+    FeatureContract(
+        name="csu_dx_intensity",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=("dx_total_csu", "months_since_first_dx"),
+    ),
+    FeatureContract(
+        name="polypharmacy_breadth",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=tuple(f"{d}_ever_filled" for d in DRUG_CLASS_NAMES),
+    ),
+    FeatureContract(
+        name="lab_workup_completeness",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=tuple(f"{lab}_tested" for lab in LAB_NAMES),
+    ),
+    FeatureContract(
+        name="specialist_visit_interaction",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=("office_visits_allergist", "office_visits_dermatology"),
+    ),
+]
+
+
+# =============================================================================
 # Post-index — FORBIDDEN as features (journey metadata + targets)
 # =============================================================================
 
@@ -672,6 +722,7 @@ OPTUM_FEATURES: list[FeatureContract] = (
     + _LABS
     + _PROVIDER
     + _DATES
+    + _ENGINEERED_B3
     + _POST_INDEX_FORBIDDEN
 )
 

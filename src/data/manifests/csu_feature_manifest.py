@@ -174,6 +174,60 @@ _WINDOWED_AGG = [
 
 
 # =============================================================================
+# v5 Gate B3 — engineered features (derived from pre-anchor inputs)
+# =============================================================================
+#
+# Each engineered feature is computed by
+# ``src.agents.ml_foundation.data_preparer.nodes.feature_engineering``
+# (see ``CSU_ENGINEERED_FEATURES`` there) and inherits pre-anchor status
+# from its declared ``derivation_inputs`` — every input listed below is
+# itself declared pre-anchor in this manifest.
+#
+# Pre-spec: ``docs/specs/v5_b3_feature_engineering_prespec_2026-05-11.md``.
+# Audit gate: Layer 1 traces the derivation chain (this declaration);
+# Layer 3 (production adversarial probe) runs on the materialized column
+# during ``adaptive_validity_check``. Both must pass before the feature
+# is permitted to influence val_AUC.
+
+_ENGINEERED_B3 = [
+    FeatureContract(
+        name="age_x_insurance_interaction",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=("age_continuous", "insurance_type"),
+    ),
+    FeatureContract(
+        name="claim_intensity_ratio",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=(
+            "medication_claim_count",
+            "procedure_claim_count",
+            "eligibility_duration_days",
+        ),
+    ),
+    FeatureContract(
+        name="engagement_per_visit",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=("engagement_score", "hcp_visits"),
+    ),
+    FeatureContract(
+        name="treatment_diversity_intensity",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=("prior_treatments", "days_on_therapy"),
+    ),
+    FeatureContract(
+        name="severity_engagement_product",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=("disease_severity", "engagement_score"),
+    ),
+]
+
+
+# =============================================================================
 # Post-index — FORBIDDEN as features (journey metadata + targets)
 # =============================================================================
 # These columns appear in patient_journeys.json but MUST NOT be used as
@@ -238,7 +292,7 @@ _POST_INDEX_FORBIDDEN = [
 
 # Public registry: every CSU patient_journeys column is here.
 CSU_FEATURES: list[FeatureContract] = (
-    _DEMO_ENROLLMENT + _ELIGIBILITY + _WINDOWED_AGG + _POST_INDEX_FORBIDDEN
+    _DEMO_ENROLLMENT + _ELIGIBILITY + _WINDOWED_AGG + _ENGINEERED_B3 + _POST_INDEX_FORBIDDEN
 )
 
 
