@@ -83,9 +83,11 @@ if not os.environ.get("OPIK_ENABLED"):
 # CONFIGURATION
 # =============================================================================
 
+
 @dataclass
 class TestConfig:
     """Test configuration."""
+
     brand: str = "Kisqali"
     problem_type: str = "binary_classification"
     target_outcome: str = "discontinuation_flag"
@@ -116,6 +118,7 @@ CONFIG = TestConfig()
 @dataclass
 class StepResult:
     """Result from a pipeline step with enhanced format data."""
+
     step_num: int | str  # int for main steps (1-8), str for sub-steps ("2b", "2c")
     step_name: str
     status: str  # "success", "warning", "failed"
@@ -151,6 +154,7 @@ class StepResult:
 # UTILITIES
 # =============================================================================
 
+
 def print_header(step_num: int, title: str) -> None:
     """Print step header."""
     print("\n" + "=" * 70)
@@ -174,6 +178,7 @@ def print_result(key: str, value: Any, indent: int = 2) -> None:
 # =============================================================================
 # STANDARDIZED STEP OUTPUT HELPERS
 # =============================================================================
+
 
 def print_step_banner(step_num: int, title: str, duration: float = 0.0) -> None:
     """Print standardized step banner with duration."""
@@ -233,7 +238,7 @@ def print_metrics_table(metrics: list[tuple[str, Any, str | None, bool | None]])
     """
     print("\n  📊 Key Metrics:")
     print(f"    {'Metric':<25} {'Value':<15} {'Threshold':<15} {'Status':<10}")
-    print(f"    {'-'*65}")
+    print(f"    {'-' * 65}")
 
     for name, value, threshold, passed in metrics:
         # Format value
@@ -255,7 +260,9 @@ def print_metrics_table(metrics: list[tuple[str, Any, str | None, bool | None]])
         print(f"    {name:<25} {value_str:<15} {threshold_str:<15} {status_str:<10}")
 
 
-def print_interpretation(title: str, observations: list[str], recommendations: list[str] = None) -> None:
+def print_interpretation(
+    title: str, observations: list[str], recommendations: list[str] = None
+) -> None:
     """Print interpretation section with observations and recommendations.
 
     Args:
@@ -364,10 +371,7 @@ def interpret_class_imbalance(imbalance_info: dict) -> tuple[list[str], list[str
 
 
 def interpret_model_performance(
-    metrics: dict,
-    accuracy_analysis: dict,
-    min_recall: float,
-    min_precision: float
+    metrics: dict, accuracy_analysis: dict, min_recall: float, min_precision: float
 ) -> tuple[list[str], list[str]]:
     """Generate interpretation for model performance.
 
@@ -404,7 +408,7 @@ def interpret_model_performance(
         recommendations.append("Verify class_weight='balanced' is applied during training")
     elif recall < min_recall:
         observations.append(f"Recall ({recall:.2%}) below minimum threshold ({min_recall:.0%})")
-        observations.append(f"    Model will miss {(1-recall)*100:.0f}% of actual positives")
+        observations.append(f"    Model will miss {(1 - recall) * 100:.0f}% of actual positives")
         recommendations.append("Lower prediction threshold to catch more positives")
     else:
         observations.append(f"Recall ({recall:.2%}) meets threshold ({min_recall:.0%})")
@@ -458,7 +462,9 @@ def interpret_confusion_matrix(cm_data: dict) -> list[str]:
 
     if pred_pos > 0:
         precision = tp / pred_pos
-        observations.append(f"Of {pred_pos} predicted positives, {tp} correct ({precision:.1%} precision)")
+        observations.append(
+            f"Of {pred_pos} predicted positives, {tp} correct ({precision:.1%} precision)"
+        )
     elif tp == 0 and fn > 0:
         observations.append(f"⚠️  No positive predictions made (all {fn} positives missed)")
 
@@ -489,7 +495,7 @@ def print_confusion_matrix(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     y_proba: np.ndarray | None = None,
-    title: str = "Confusion Matrix"
+    title: str = "Confusion Matrix",
 ) -> dict:
     """Print formatted confusion matrix with detailed metrics.
 
@@ -538,9 +544,18 @@ def print_confusion_matrix(
     print(f"      • FNR:         {fnr:.4f} (miss rate)")
 
     return {
-        "tn": tn, "fp": fp, "fn": fn, "tp": tp,
-        "accuracy": accuracy, "precision": precision, "recall": recall,
-        "specificity": specificity, "f1": f1, "npv": npv, "fpr": fpr, "fnr": fnr
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+        "tp": tp,
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "specificity": specificity,
+        "f1": f1,
+        "npv": npv,
+        "fpr": fpr,
+        "fnr": fnr,
     }
 
 
@@ -549,12 +564,16 @@ def print_classification_report(y_true: np.ndarray, y_pred: np.ndarray) -> None:
     from sklearn.metrics import classification_report
 
     print("\n  Classification Report (per-class):")
-    report = classification_report(y_true, y_pred, target_names=["Class 0 (No Discont.)", "Class 1 (Discont.)"])
-    for line in report.split('\n'):
+    report = classification_report(
+        y_true, y_pred, target_names=["Class 0 (No Discont.)", "Class 1 (Discont.)"]
+    )
+    for line in report.split("\n"):
         print(f"    {line}")
 
 
-def print_threshold_analysis(y_true: np.ndarray, y_proba: np.ndarray, optimal_threshold: float = 0.5) -> None:
+def print_threshold_analysis(
+    y_true: np.ndarray, y_proba: np.ndarray, optimal_threshold: float = 0.5
+) -> None:
     """Analyze model performance at different probability thresholds."""
     from sklearn.metrics import precision_score, recall_score, f1_score
 
@@ -567,11 +586,13 @@ def print_threshold_analysis(y_true: np.ndarray, y_proba: np.ndarray, optimal_th
     print(f"    Mean: {y_proba.mean():.4f}, Median: {np.median(y_proba):.4f}")
     percentiles = [10, 25, 50, 75, 90, 95, 99]
     pct_values = np.percentile(y_proba, percentiles)
-    print(f"    Percentiles: " + ", ".join([f"P{p}={v:.3f}" for p, v in zip(percentiles, pct_values)]))
+    print(
+        f"    Percentiles: " + ", ".join([f"P{p}={v:.3f}" for p, v in zip(percentiles, pct_values)])
+    )
 
     print("\n  Threshold Analysis:")
     print(f"    {'Threshold':<12} {'Precision':<12} {'Recall':<12} {'F1':<12} {'Pred Pos':<12}")
-    print(f"    {'-'*56}")
+    print(f"    {'-' * 56}")
 
     for thresh in thresholds:
         y_pred_at_thresh = (y_proba >= thresh).astype(int)
@@ -585,7 +606,9 @@ def print_threshold_analysis(y_true: np.ndarray, y_proba: np.ndarray, optimal_th
             marker = " ◄── default"
         elif abs(thresh - optimal_threshold) < 0.01:
             marker = " ◄── optimal"
-        print(f"    {thresh:<12.2f} {prec:<12.4f} {rec:<12.4f} {f1:<12.4f} {n_pred_pos:<12}{marker}")
+        print(
+            f"    {thresh:<12.2f} {prec:<12.4f} {rec:<12.4f} {f1:<12.4f} {n_pred_pos:<12}{marker}"
+        )
 
 
 def print_model_coefficients(model: Any, feature_names: list[str]) -> None:
@@ -593,9 +616,9 @@ def print_model_coefficients(model: Any, feature_names: list[str]) -> None:
     print("\n  Model Coefficients/Weights:")
 
     # Handle different model types
-    if hasattr(model, 'coef_'):
+    if hasattr(model, "coef_"):
         coefs = model.coef_.flatten()
-        intercept = getattr(model, 'intercept_', [0])[0]
+        intercept = getattr(model, "intercept_", [0])[0]
 
         print(f"    Intercept: {intercept:.4f}")
         print(f"    Feature Coefficients:")
@@ -608,7 +631,7 @@ def print_model_coefficients(model: Any, feature_names: list[str]) -> None:
             direction = "↑" if coef > 0 else "↓" if coef < 0 else "○"
             print(f"      {direction} {name}: {coef:+.4f}")
 
-    elif hasattr(model, 'feature_importances_'):
+    elif hasattr(model, "feature_importances_"):
         importances = model.feature_importances_
         print(f"    Feature Importances (tree-based):")
 
@@ -622,7 +645,9 @@ def print_model_coefficients(model: Any, feature_names: list[str]) -> None:
         print(f"    (Model type {type(model).__name__} does not expose coefficients)")
 
 
-def print_data_distribution_analysis(y_train: np.ndarray, y_val: np.ndarray, y_test: np.ndarray = None) -> None:
+def print_data_distribution_analysis(
+    y_train: np.ndarray, y_val: np.ndarray, y_test: np.ndarray = None
+) -> None:
     """Print data distribution across splits."""
     print("\n  Data Distribution Analysis:")
 
@@ -659,9 +684,8 @@ def _compute_verdict(
     Returns:
         (verdict, icon, description, deploy_recommendation)
     """
-    severe_overfit = (
-        overfitting_severity == "severe"
-        or (train_val_delta is not None and train_val_delta > 0.15)
+    severe_overfit = overfitting_severity == "severe" or (
+        train_val_delta is not None and train_val_delta > 0.15
     )
 
     if auc_roc >= 0.85 and recall >= 0.7 and not severe_overfit:
@@ -715,9 +739,7 @@ def _compute_verdict(
 
 
 def print_detailed_summary(
-    experiment_id: str,
-    step_results: list[StepResult],
-    state: dict[str, Any]
+    experiment_id: str, step_results: list[StepResult], state: dict[str, Any]
 ) -> None:
     """Print detailed results from each tier0 step using enhanced format.
 
@@ -726,15 +748,17 @@ def print_detailed_summary(
         step_results: List of StepResult objects from each step
         state: Pipeline state with all collected data
     """
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("DETAILED STEP RESULTS")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     for result in step_results:
-        status_icon = "✅" if result.status == "success" else "⚠️" if result.status == "warning" else "❌"
-        print(f"\n{'-'*70}")
+        status_icon = (
+            "✅" if result.status == "success" else "⚠️" if result.status == "warning" else "❌"
+        )
+        print(f"\n{'-' * 70}")
         print(f"STEP {result.step_num}: {result.step_name} [{status_icon} {result.status.upper()}]")
-        print(f"{'-'*70}")
+        print(f"{'-' * 70}")
 
         if result.duration_seconds > 0:
             print(f"  Duration: {result.duration_seconds:.2f}s")
@@ -762,7 +786,9 @@ def print_detailed_summary(
 
         # Enhanced format: Result
         if result.result_message:
-            print_step_result(result.status, f"{result.result_message} ({result.duration_seconds:.1f}s)")
+            print_step_result(
+                result.status, f"{result.result_message} ({result.duration_seconds:.1f}s)"
+            )
 
         # Fallback: Print key metrics if no enhanced data
         if not result.metrics_table and result.key_metrics:
@@ -792,9 +818,9 @@ def print_detailed_summary(
     # Cohort Construction Analysis
     cohort_result = state.get("cohort_result")
     if cohort_result:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("COHORT CONSTRUCTION ANALYSIS")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         patient_df = state.get("patient_df")
         eligible_df = state.get("eligible_df")
@@ -809,7 +835,7 @@ def print_detailed_summary(
         if input_count > 0:
             print(f"    • Retention Rate:    {eligible_count / input_count:.1%}")
 
-        if hasattr(cohort_result, 'eligibility_stats') and cohort_result.eligibility_stats:
+        if hasattr(cohort_result, "eligibility_stats") and cohort_result.eligibility_stats:
             stats = cohort_result.eligibility_stats
             print(f"\n  📋 Eligibility Statistics:")
             for key, value in stats.items():
@@ -827,13 +853,15 @@ def print_detailed_summary(
     # Class Imbalance Section
     class_imbalance_info = state.get("class_imbalance_info", {})
     if class_imbalance_info.get("imbalance_detected"):
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("CLASS IMBALANCE REMEDIATION")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         print("\n  📊 Imbalance Analysis:")
         print(f"    • Imbalance Detected: Yes")
-        print(f"    • Severity: {class_imbalance_info.get('imbalance_severity', 'unknown').upper()}")
+        print(
+            f"    • Severity: {class_imbalance_info.get('imbalance_severity', 'unknown').upper()}"
+        )
         print(f"    • Minority Ratio: {class_imbalance_info.get('minority_ratio', 0):.2%}")
         print(f"    • Imbalance Ratio: {class_imbalance_info.get('imbalance_ratio', 1):.1f}:1")
 
@@ -851,11 +879,11 @@ def print_detailed_summary(
         resampling_info = state.get("resampling_info", {})
         if resampling_info.get("resampling_applied"):
             print("\n  📊 Resampling Results:")
-            orig_samples = resampling_info.get('original_samples')
-            resamp_samples = resampling_info.get('resampled_samples')
+            orig_samples = resampling_info.get("original_samples")
+            resamp_samples = resampling_info.get("resampled_samples")
             print(f"    • Original Samples: {orig_samples}")
             print(f"    • Resampled Samples: {resamp_samples}")
-            new_ratio = resampling_info.get('new_minority_ratio')
+            new_ratio = resampling_info.get("new_minority_ratio")
             if new_ratio is not None:
                 print(f"    • New Minority Ratio: {new_ratio:.2%}")
             else:
@@ -881,9 +909,9 @@ def print_detailed_summary(
     # Feature Importance Section
     feature_importance = state.get("feature_importance")
     if feature_importance:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("FEATURE IMPORTANCE (SHAP)")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print("\n  Top Features:")
         for i, fi in enumerate(feature_importance[:10], 1):
             if isinstance(fi, dict):
@@ -896,12 +924,20 @@ def print_detailed_summary(
     # Validation Metrics Section
     validation_metrics = state.get("validation_metrics", {})
     if validation_metrics:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("FINAL MODEL PERFORMANCE")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         # Key metrics
-        key_metrics = ["roc_auc", "accuracy", "precision", "recall", "f1_score", "pr_auc", "brier_score"]
+        key_metrics = [
+            "roc_auc",
+            "accuracy",
+            "precision",
+            "recall",
+            "f1_score",
+            "pr_auc",
+            "brier_score",
+        ]
         print("\n  Primary Metrics:")
         for metric in key_metrics:
             value = validation_metrics.get(metric)
@@ -924,12 +960,22 @@ def print_detailed_summary(
     # numbers" — they do via state — to "human-visible printer block missing").
     test_metrics = state.get("test_metrics", {})
     if test_metrics:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("TEST-SET HOLDOUT PERFORMANCE")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         # Key metrics (same set as validation for direct comparison)
-        test_key_metrics = ["roc_auc", "accuracy", "precision", "recall", "f1_score", "pr_auc", "brier_score", "mcc", "business_utility"]
+        test_key_metrics = [
+            "roc_auc",
+            "accuracy",
+            "precision",
+            "recall",
+            "f1_score",
+            "pr_auc",
+            "brier_score",
+            "mcc",
+            "business_utility",
+        ]
         print("\n  Primary Metrics (held-out test set):")
         for metric in test_key_metrics:
             value = test_metrics.get(metric)
@@ -940,7 +986,14 @@ def print_detailed_summary(
                     print(f"    • {metric}: {value}")
 
         # Calibration + threshold provenance
-        cal_metrics = ["ece_pre_isotonic", "ece_post_isotonic", "calibration_slope", "calibration_intercept", "chosen_threshold", "chosen_threshold_source"]
+        cal_metrics = [
+            "ece_pre_isotonic",
+            "ece_post_isotonic",
+            "calibration_slope",
+            "calibration_intercept",
+            "chosen_threshold",
+            "chosen_threshold_source",
+        ]
         print("\n  Calibration + Threshold:")
         for metric in cal_metrics:
             value = test_metrics.get(metric)
@@ -966,15 +1019,19 @@ def print_detailed_summary(
     # =========================================================================
     accuracy_data = state.get("accuracy_analysis", {})
     if accuracy_data:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("ENHANCED ACCURACY ANALYSIS")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         # Confusion Matrix
         if accuracy_data.get("y_true") is not None and accuracy_data.get("y_pred") is not None:
             y_true = np.array(accuracy_data["y_true"])
             y_pred = np.array(accuracy_data["y_pred"])
-            y_proba = np.array(accuracy_data["y_proba"]) if accuracy_data.get("y_proba") is not None else None
+            y_proba = (
+                np.array(accuracy_data["y_proba"])
+                if accuracy_data.get("y_proba") is not None
+                else None
+            )
 
             # Print confusion matrix with all derived metrics
             print_confusion_matrix(y_true, y_pred, y_proba, "Validation Set Confusion Matrix")
@@ -990,7 +1047,9 @@ def print_detailed_summary(
         # Model coefficients/weights
         trained_model = state.get("trained_model")
         if trained_model is not None:
-            feature_cols = accuracy_data.get("feature_columns", ["days_on_therapy", "hcp_visits", "prior_treatments"])
+            feature_cols = accuracy_data.get(
+                "feature_columns", ["days_on_therapy", "hcp_visits", "prior_treatments"]
+            )
             print_model_coefficients(trained_model, feature_cols)
 
         # Data distribution across splits
@@ -998,7 +1057,7 @@ def print_detailed_summary(
             print_data_distribution_analysis(
                 np.array(accuracy_data.get("y_train", [])),
                 np.array(accuracy_data.get("y_val", [])),
-                np.array(accuracy_data.get("y_test", []))
+                np.array(accuracy_data.get("y_test", [])),
             )
 
         # Train vs Validation comparison (overfitting check)
@@ -1006,8 +1065,10 @@ def print_detailed_summary(
         val_metrics = accuracy_data.get("val_metrics", {})
         if train_metrics and val_metrics:
             print("\n  Overfitting Analysis (Train vs Validation):")
-            print(f"    {'Metric':<15} {'Train':<12} {'Validation':<12} {'Delta':<12} {'Status':<15}")
-            print(f"    {'-'*60}")
+            print(
+                f"    {'Metric':<15} {'Train':<12} {'Validation':<12} {'Delta':<12} {'Status':<15}"
+            )
+            print(f"    {'-' * 60}")
 
             for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
                 train_val = train_metrics.get(metric)
@@ -1022,7 +1083,9 @@ def print_detailed_summary(
                         status = "❓ Unusual"
                     else:
                         status = "✅ Good"
-                    print(f"    {metric:<15} {train_val:<12.4f} {val_val:<12.4f} {delta:+<12.4f} {status:<15}")
+                    print(
+                        f"    {metric:<15} {train_val:<12.4f} {val_val:<12.4f} {delta:+<12.4f} {status:<15}"
+                    )
 
     # =========================================================================
     # MODEL USEFULNESS VERDICT
@@ -1037,13 +1100,14 @@ def print_detailed_summary(
             "status": "useless" if n_pos_pred == 0 else "needs_review",
             "reason": "predicts_all_negative" if n_pos_pred == 0 else "unknown",
             "minority_recall": state.get("minority_recall") or eval_test_metrics.get("recall", 0),
-            "minority_precision": state.get("minority_precision") or eval_test_metrics.get("precision", 0),
+            "minority_precision": state.get("minority_precision")
+            or eval_test_metrics.get("precision", 0),
         }
 
     if model_usefulness or accuracy_data:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("⚠️  MODEL USEFULNESS VERDICT")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         y_pred = accuracy_data.get("y_pred", []) if accuracy_data else []
         n_pos_pred = sum(y_pred) if y_pred else 0
@@ -1085,9 +1149,9 @@ def print_detailed_summary(
             leakage_findings = state.get("leakage_findings", [])
             investigation_recs = state.get("investigation_recommendations", [])
 
-            is_leakage_suspected = (
-                suspicion_level in ("high", "critical")
-                or leakage_severity in ("high", "critical")
+            is_leakage_suspected = suspicion_level in ("high", "critical") or leakage_severity in (
+                "high",
+                "critical",
             )
 
             # --- VALIDATION DIAGNOSTICS ---
@@ -1101,16 +1165,18 @@ def print_detailed_summary(
             cal_ece_post = state.get("calibrated_ece")
             pr_auc_val = state.get("pr_auc") or val_metrics.get("pr_auc") or 0
 
-            print(f"\n  {'─'*60}")
+            print(f"\n  {'─' * 60}")
             print(f"  Validation Diagnostics:")
-            print(f"  {'─'*60}")
+            print(f"  {'─' * 60}")
 
             # Permutation test
             if permutation.get("signal_genuine") is not None:
                 sig = "GENUINE" if permutation["signal_genuine"] else "RANDOM"
                 pval = permutation.get("permutation_pvalue", 0)
                 shuf_mean = permutation.get("permutation_auc_mean", 0)
-                print(f"    Permutation test:  signal={sig} (p={pval:.4f}, shuffled AUC={shuf_mean:.4f})")
+                print(
+                    f"    Permutation test:  signal={sig} (p={pval:.4f}, shuffled AUC={shuf_mean:.4f})"
+                )
 
             # Cross-validation
             if cv_res.get("cv_completed"):
@@ -1163,7 +1229,7 @@ def print_detailed_summary(
                     f"test={ratios.get('test', 0):.3f})"
                 )
 
-            print(f"  {'─'*60}")
+            print(f"  {'─' * 60}")
 
             if is_leakage_suspected:
                 verdict = "LEAKAGE_SUSPECTED"
@@ -1236,26 +1302,30 @@ def print_detailed_summary(
             print(f"\n  Key Metrics:")
             print(f"    • AUC-ROC:   {auc_roc:.4f}")
             print(f"    • PR-AUC:    {pr_auc_val:.4f}")
-            print(f"    • Recall:    {recall:.4f} ({recall*100:.1f}% of positives detected)")
-            print(f"    • Precision: {precision:.4f} ({precision*100:.1f}% of predictions correct)")
+            print(f"    • Recall:    {recall:.4f} ({recall * 100:.1f}% of positives detected)")
+            print(
+                f"    • Precision: {precision:.4f} ({precision * 100:.1f}% of predictions correct)"
+            )
             print(f"    • F1 Score:  {f1:.4f}")
             if mcc_val is not None:
                 print(f"    • MCC:       {mcc_val:.4f}")
-            print(f"    • Positive Predictions: {n_pos_pred}/{total_pred} ({n_pos_pred/total_pred*100:.1f}%)")
+            print(
+                f"    • Positive Predictions: {n_pos_pred}/{total_pred} ({n_pos_pred / total_pred * 100:.1f}%)"
+            )
             print(f"\n  Recommendation: {deploy_recommendation}")
 
     # Deployment Info
     deployment_manifest = state.get("deployment_manifest", {})
     if deployment_manifest:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("DEPLOYMENT STATUS")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"\n  • Deployment ID: {deployment_manifest.get('deployment_id', 'N/A')}")
         print(f"  • Environment: {deployment_manifest.get('environment', 'N/A')}")
         print(f"  • Status: {deployment_manifest.get('status', 'N/A')}")
         print(f"  • Endpoint: {deployment_manifest.get('endpoint_url', 'N/A')}")
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
 
 
 def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
@@ -1306,8 +1376,13 @@ def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
     # Coerce new generic numeric columns from converter
-    for col in ["age_continuous", "eligibility_duration_days",
-                "medication_claim_count", "procedure_claim_count", "lab_claim_count"]:
+    for col in [
+        "age_continuous",
+        "eligibility_duration_days",
+        "medication_claim_count",
+        "procedure_claim_count",
+        "lab_claim_count",
+    ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
@@ -1319,9 +1394,7 @@ def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
 
     # Handle discontinuation_flag (may be None for non-medicated patients)
     if "discontinuation_flag" in df.columns:
-        df["discontinuation_flag"] = pd.to_numeric(
-            df["discontinuation_flag"], errors="coerce"
-        )
+        df["discontinuation_flag"] = pd.to_numeric(df["discontinuation_flag"], errors="coerce")
 
     # Ensure journey_status exists
     if "journey_status" not in df.columns:
@@ -1333,10 +1406,7 @@ def load_rwd_data(data_dir: str, target: str) -> pd.DataFrame:
     # If targeting discontinuation_flag, filter to medicated patients only
     if target == "discontinuation_flag":
         pre_filter = len(df)
-        df = df[
-            (df["treatment_initiated"] == 1)
-            & df["discontinuation_flag"].notna()
-        ].copy()
+        df = df[(df["treatment_initiated"] == 1) & df["discontinuation_flag"].notna()].copy()
         df["discontinuation_flag"] = df["discontinuation_flag"].astype(int)
         print(f"  Filtered to medicated patients: {pre_filter} -> {len(df)}")
 
@@ -1589,7 +1659,7 @@ async def register_model_in_docker_bentoml(
         # Extract the internal sklearn ColumnTransformer — the custom
         # ModelTrainerPreprocessor wrapper can't be unpickled in the
         # BentoML container (it doesn't have the E2I project on PYTHONPATH).
-        sklearn_pipeline = getattr(fitted_preprocessor, '_pipeline', fitted_preprocessor)
+        sklearn_pipeline = getattr(fitted_preprocessor, "_pipeline", fitted_preprocessor)
         artifact = {
             "model": trained_model,
             "preprocessor": sklearn_pipeline,
@@ -1645,7 +1715,10 @@ async def register_model_in_docker_bentoml(
             timeout=30,
         )
         if exec_result.returncode != 0:
-            return {"success": False, "error": f"docker exec failed: {exec_result.stderr.strip()[:300]}"}
+            return {
+                "success": False,
+                "error": f"docker exec failed: {exec_result.stderr.strip()[:300]}",
+            }
 
         model_tag = exec_result.stdout.strip()
         return {"success": True, "model_tag": model_tag}
@@ -1822,6 +1895,7 @@ async def stop_bentoml_service(pid: int) -> dict:
 # STEP IMPLEMENTATIONS
 # =============================================================================
 
+
 async def step_1_scope_definer(
     experiment_id: str,
     adaptive_inputs: Optional[Dict[str, Any]] = None,
@@ -1839,6 +1913,7 @@ async def step_1_scope_definer(
             criteria are not desired.
     """
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(1, "SCOPE DEFINER")
@@ -1882,25 +1957,25 @@ async def step_1_scope_definer(
             "Problem type defined",
             bool(scope_spec.get("problem_type")),
             "problem_type present",
-            scope_spec.get("problem_type", "missing")
+            scope_spec.get("problem_type", "missing"),
         ),
         (
             "Prediction target set",
             bool(scope_spec.get("prediction_target")),
             "prediction_target present",
-            scope_spec.get("prediction_target", "missing")
+            scope_spec.get("prediction_target", "missing"),
         ),
         (
             "Minimum samples specified",
             bool(scope_spec.get("minimum_samples")),
             "minimum_samples > 0",
-            str(scope_spec.get("minimum_samples", "missing"))
+            str(scope_spec.get("minimum_samples", "missing")),
         ),
         (
             "Scope validation",
             validation_passed,
             "validation_passed = True",
-            f"validation_passed = {validation_passed}"
+            f"validation_passed = {validation_passed}",
         ),
     ]
 
@@ -1930,9 +2005,13 @@ async def step_1_scope_definer(
         observations.append("⚠️  Minimum samples is low for reliable ML training")
         recommendations.append("Consider increasing minimum_samples to 500+")
     else:
-        observations.append(f"Sample requirement ({scope_spec.get('minimum_samples')}) appropriate for ML")
+        observations.append(
+            f"Sample requirement ({scope_spec.get('minimum_samples')}) appropriate for ML"
+        )
 
-    print_interpretation("Scope Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Scope Analysis", observations, recommendations if recommendations else None
+    )
 
     # Final result
     duration = time_mod.time() - step_start
@@ -1969,6 +2048,7 @@ async def step_2_data_preparer(
     fire on the on-disk JSON. Backlog item #12.
     """
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(2, "DATA PREPARER")
@@ -1977,7 +2057,8 @@ async def step_2_data_preparer(
 
     # Override required_features with actual columns from sample data
     available_features = [
-        col for col in sample_df.columns
+        col
+        for col in sample_df.columns
         if col not in ["patient_journey_id", CONFIG.target_outcome, "brand"]
     ]
 
@@ -2007,15 +2088,18 @@ async def step_2_data_preparer(
         try:
             if manifest_source == "csu":
                 from src.data.manifests import CSU_FEATURES
+
                 manifest_names = {c.name for c in CSU_FEATURES}
             elif manifest_source == "optum":
                 from src.data.manifests import OPTUM_FEATURES
+
                 manifest_names = {c.name for c in OPTUM_FEATURES}
             else:
                 manifest_names = set()
             if manifest_names:
                 excluded_features = [
-                    col for col in sample_df.columns
+                    col
+                    for col in sample_df.columns
                     if col not in manifest_names and col != CONFIG.target_outcome
                 ]
         except ImportError:
@@ -2024,17 +2108,19 @@ async def step_2_data_preparer(
     # Ensure scope_spec has required fields with realistic values.
     # ``sampling_frame_max_drift`` is forwarded so the audit node and the
     # runner gate use the same threshold.
-    scope_spec.update({
-        "experiment_id": experiment_id,
-        "use_sample_data": not is_rwd_run,
-        "sample_size": sample_size,
-        "prediction_target": CONFIG.target_outcome,
-        "problem_type": CONFIG.problem_type,
-        "required_features": available_features,
-        "excluded_features": excluded_features,
-        "max_staleness_days": 90,
-        "sampling_frame_max_drift": CONFIG.sampling_frame_max_drift,
-    })
+    scope_spec.update(
+        {
+            "experiment_id": experiment_id,
+            "use_sample_data": not is_rwd_run,
+            "sample_size": sample_size,
+            "prediction_target": CONFIG.target_outcome,
+            "problem_type": CONFIG.problem_type,
+            "required_features": available_features,
+            "excluded_features": excluded_features,
+            "max_staleness_days": 90,
+            "sampling_frame_max_drift": CONFIG.sampling_frame_max_drift,
+        }
+    )
 
     input_data = {
         "scope_spec": scope_spec,
@@ -2043,12 +2129,14 @@ async def step_2_data_preparer(
         "skip_leakage_check": skip_leakage_check,
     }
 
-    print_input_section({
-        "data_source": data_source if is_rwd_run else "patient_journeys",
-        "brand": CONFIG.brand,
-        "sample_size": len(sample_df),
-        "features": f"{len(available_features)} available",
-    })
+    print_input_section(
+        {
+            "data_source": data_source if is_rwd_run else "patient_journeys",
+            "brand": CONFIG.brand,
+            "sample_size": len(sample_df),
+            "features": f"{len(available_features)} available",
+        }
+    )
 
     # Processing
     processing_steps = []
@@ -2079,30 +2167,17 @@ async def step_2_data_preparer(
     val_samples = data_readiness.get("validation_samples", 0)
 
     checks = [
-        (
-            "QC Gate",
-            gate_passed,
-            "gate_passed = True",
-            f"gate_passed = {gate_passed}"
-        ),
+        ("QC Gate", gate_passed, "gate_passed = True", f"gate_passed = {gate_passed}"),
         (
             "Overall QC Score",
             overall_score >= 0.7 if isinstance(overall_score, (int, float)) else False,
             ">= 0.70",
-            f"{overall_score:.2f}" if isinstance(overall_score, (int, float)) else str(overall_score)
+            f"{overall_score:.2f}"
+            if isinstance(overall_score, (int, float))
+            else str(overall_score),
         ),
-        (
-            "QC training samples",
-            train_samples >= 100,
-            ">= 100",
-            str(train_samples)
-        ),
-        (
-            "QC validation samples",
-            val_samples >= 30,
-            ">= 30",
-            str(val_samples)
-        ),
+        ("QC training samples", train_samples >= 100, ">= 100", str(train_samples)),
+        ("QC validation samples", val_samples >= 30, ">= 30", str(val_samples)),
     ]
 
     print_validation_checks(checks)
@@ -2115,14 +2190,54 @@ async def step_2_data_preparer(
     timeliness = qc_report.get("timeliness_score", 0)
 
     metrics = [
-        ("overall_score", overall_score, ">= 0.70", overall_score >= 0.7 if isinstance(overall_score, (int, float)) else None),
-        ("completeness", completeness, ">= 0.90", completeness >= 0.9 if isinstance(completeness, (int, float)) else None),
-        ("validity", validity, ">= 0.90", validity >= 0.9 if isinstance(validity, (int, float)) else None),
-        ("consistency", consistency, ">= 0.90", consistency >= 0.9 if isinstance(consistency, (int, float)) else None),
-        ("uniqueness", uniqueness, ">= 0.95", uniqueness >= 0.95 if isinstance(uniqueness, (int, float)) else None),
-        ("timeliness", timeliness, ">= 0.80", timeliness >= 0.8 if isinstance(timeliness, (int, float)) else None),
-        ("qc_train_samples", train_samples, ">= 100", train_samples >= 100 if isinstance(train_samples, (int, float)) else None),
-        ("qc_validation_samples", val_samples, ">= 30", val_samples >= 30 if isinstance(val_samples, (int, float)) else None),
+        (
+            "overall_score",
+            overall_score,
+            ">= 0.70",
+            overall_score >= 0.7 if isinstance(overall_score, (int, float)) else None,
+        ),
+        (
+            "completeness",
+            completeness,
+            ">= 0.90",
+            completeness >= 0.9 if isinstance(completeness, (int, float)) else None,
+        ),
+        (
+            "validity",
+            validity,
+            ">= 0.90",
+            validity >= 0.9 if isinstance(validity, (int, float)) else None,
+        ),
+        (
+            "consistency",
+            consistency,
+            ">= 0.90",
+            consistency >= 0.9 if isinstance(consistency, (int, float)) else None,
+        ),
+        (
+            "uniqueness",
+            uniqueness,
+            ">= 0.95",
+            uniqueness >= 0.95 if isinstance(uniqueness, (int, float)) else None,
+        ),
+        (
+            "timeliness",
+            timeliness,
+            ">= 0.80",
+            timeliness >= 0.8 if isinstance(timeliness, (int, float)) else None,
+        ),
+        (
+            "qc_train_samples",
+            train_samples,
+            ">= 100",
+            train_samples >= 100 if isinstance(train_samples, (int, float)) else None,
+        ),
+        (
+            "qc_validation_samples",
+            val_samples,
+            ">= 30",
+            val_samples >= 30 if isinstance(val_samples, (int, float)) else None,
+        ),
     ]
 
     print_metrics_table(metrics)
@@ -2134,7 +2249,10 @@ async def step_2_data_preparer(
     if train_samples and val_samples:
         total = train_samples + val_samples
         train_pct = train_samples / total * 100 if total > 0 else 0
-        observations.insert(0, f"QC sample split: {train_samples} QC-train ({train_pct:.0f}%), {val_samples} QC-validation (full training split in Step 5)")
+        observations.insert(
+            0,
+            f"QC sample split: {train_samples} QC-train ({train_pct:.0f}%), {val_samples} QC-validation (full training split in Step 5)",
+        )
 
     # Add remediation info if present
     if remediation.get("status") and remediation.get("status") != "not_needed":
@@ -2143,7 +2261,9 @@ async def step_2_data_preparer(
             for action in remediation.get("actions_taken", [])[:2]:
                 observations.append(f"  - {action}")
 
-    print_interpretation("Data Quality Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Data Quality Analysis", observations, recommendations if recommendations else None
+    )
 
     # Show blocking issues if gate failed
     if not gate_passed:
@@ -2163,11 +2283,10 @@ async def step_2_data_preparer(
     return result
 
 
-async def step_2b_feast_registration(
-    experiment_id: str, state: dict[str, Any]
-) -> dict[str, Any]:
+async def step_2b_feast_registration(experiment_id: str, state: dict[str, Any]) -> dict[str, Any]:
     """Step 2b: Register features with Feast feature store (gracefully degrading)."""
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header("2b", "FEAST FEATURE REGISTRATION")
@@ -2202,8 +2321,7 @@ async def step_2b_feast_registration(
             }
             # Build generated_features metadata (required by adapter)
             feature_state["generated_features"] = [
-                {"name": col, "description": f"Feature: {col}"}
-                for col in train_df.columns
+                {"name": col, "description": f"Feature: {col}"} for col in train_df.columns
             ]
 
         # Register features
@@ -2218,24 +2336,38 @@ async def step_2b_feast_registration(
         features_registered = reg_result.get("features_registered", 0)
         features_skipped = reg_result.get("features_skipped", 0)
         reg_errors = reg_result.get("errors", [])
-        processing_steps.append((
-            "Features registered with Feast",
-            features_registered > 0 or features_skipped > 0,
-            f"{features_registered} registered, {features_skipped} skipped",
-        ))
+        processing_steps.append(
+            (
+                "Features registered with Feast",
+                features_registered > 0 or features_skipped > 0,
+                f"{features_registered} registered, {features_skipped} skipped",
+            )
+        )
 
-        print_input_section({
-            "experiment_id": experiment_id,
-            "entity_key": "hcp_id",
-            "feature_count": len(feature_state.get("selected_features", [])),
-        })
+        print_input_section(
+            {
+                "experiment_id": experiment_id,
+                "entity_key": "hcp_id",
+                "feature_count": len(feature_state.get("selected_features", [])),
+            }
+        )
         print_processing_steps(processing_steps)
 
         # Validation
         checks = [
-            ("Feature group created", reg_result.get("feature_group_created", False), "True", str(reg_result.get("feature_group_created", False))),
+            (
+                "Feature group created",
+                reg_result.get("feature_group_created", False),
+                "True",
+                str(reg_result.get("feature_group_created", False)),
+            ),
             ("Features registered", features_registered > 0, "> 0", str(features_registered)),
-            ("No registration errors", len(reg_errors) == 0, "0 errors", f"{len(reg_errors)} errors"),
+            (
+                "No registration errors",
+                len(reg_errors) == 0,
+                "0 errors",
+                f"{len(reg_errors)} errors",
+            ),
         ]
         print_validation_checks(checks)
 
@@ -2249,9 +2381,14 @@ async def step_2b_feast_registration(
 
         duration = time_mod.time() - step_start
         if features_registered > 0:
-            print_step_result("success", f"Feast registration complete: {features_registered} features ({duration:.1f}s)")
+            print_step_result(
+                "success",
+                f"Feast registration complete: {features_registered} features ({duration:.1f}s)",
+            )
         else:
-            print_step_result("warning", f"Feast registration: 0 features registered ({duration:.1f}s)")
+            print_step_result(
+                "warning", f"Feast registration: 0 features registered ({duration:.1f}s)"
+            )
 
     except Exception as e:
         duration = time_mod.time() - step_start
@@ -2262,11 +2399,10 @@ async def step_2b_feast_registration(
     return result
 
 
-async def step_2c_feast_freshness_check(
-    state: dict[str, Any]
-) -> dict[str, Any]:
+async def step_2c_feast_freshness_check(state: dict[str, Any]) -> dict[str, Any]:
     """Step 2c: Check feature freshness in Feast (gracefully degrading)."""
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header("2c", "FEAST FRESHNESS CHECK")
@@ -2305,22 +2441,31 @@ async def step_2c_feast_freshness_check(
 
         is_fresh = freshness_result.get("fresh", False)
         stale_features = freshness_result.get("stale_features", [])
-        processing_steps.append((
-            "Freshness check completed",
-            True,
-            f"{'fresh' if is_fresh else f'{len(stale_features)} stale'}",
-        ))
+        processing_steps.append(
+            (
+                "Freshness check completed",
+                True,
+                f"{'fresh' if is_fresh else f'{len(stale_features)} stale'}",
+            )
+        )
 
-        print_input_section({
-            "feature_refs_count": len(feature_refs),
-            "max_staleness_hours": 24.0,
-        })
+        print_input_section(
+            {
+                "feature_refs_count": len(feature_refs),
+                "max_staleness_hours": 24.0,
+            }
+        )
         print_processing_steps(processing_steps)
 
         # Validation
         checks = [
             ("Freshness check executed", True, "completed", "completed"),
-            ("Features fresh", is_fresh, "all fresh", f"{len(stale_features)} stale" if stale_features else "all fresh"),
+            (
+                "Features fresh",
+                is_fresh,
+                "all fresh",
+                f"{len(stale_features)} stale" if stale_features else "all fresh",
+            ),
         ]
         print_validation_checks(checks)
 
@@ -2336,7 +2481,9 @@ async def step_2c_feast_freshness_check(
         if is_fresh:
             print_step_result("success", f"All features fresh ({duration:.1f}s)")
         else:
-            print_step_result("warning", f"{len(stale_features)} stale features detected ({duration:.1f}s)")
+            print_step_result(
+                "warning", f"{len(stale_features)} stale features detected ({duration:.1f}s)"
+            )
 
     except Exception as e:
         duration = time_mod.time() - step_start
@@ -2350,6 +2497,7 @@ async def step_2c_feast_freshness_check(
 async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFrame, Any]:
     """Step 3: Build patient cohort."""
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(3, "COHORT CONSTRUCTOR")
@@ -2363,12 +2511,14 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
         TemporalRequirements,
     )
 
-    print_input_section({
-        "input_patients": len(patient_df),
-        "brand": CONFIG.brand,
-        "inclusion_criteria": "data_quality_score >= 0.5",
-        "exclusion_criteria": "None (maximize sample size)",
-    })
+    print_input_section(
+        {
+            "input_patients": len(patient_df),
+            "brand": CONFIG.brand,
+            "inclusion_criteria": "data_quality_score >= 0.5",
+            "exclusion_criteria": "None (maximize sample size)",
+        }
+    )
 
     # Processing
     processing_steps = []
@@ -2422,20 +2572,10 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
             "Minimum cohort size",
             eligible_count >= CONFIG.min_eligible_patients,
             f">= {CONFIG.min_eligible_patients}",
-            str(eligible_count)
+            str(eligible_count),
         ),
-        (
-            "Retention rate",
-            retention_rate >= 0.5,
-            ">= 50%",
-            f"{retention_rate:.1%}"
-        ),
-        (
-            "Cohort status",
-            result.status == "completed",
-            "completed",
-            result.status
-        ),
+        ("Retention rate", retention_rate >= 0.5, ">= 50%", f"{retention_rate:.1%}"),
+        ("Cohort status", result.status == "completed", "completed", result.status),
     ]
 
     print_validation_checks(checks)
@@ -2443,7 +2583,12 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
     # Metrics
     metrics = [
         ("input_patients", input_count, None, None),
-        ("eligible_patients", eligible_count, f">= {CONFIG.min_eligible_patients}", eligible_count >= CONFIG.min_eligible_patients),
+        (
+            "eligible_patients",
+            eligible_count,
+            f">= {CONFIG.min_eligible_patients}",
+            eligible_count >= CONFIG.min_eligible_patients,
+        ),
         ("excluded_patients", excluded_count, None, None),
         ("retention_rate", retention_rate, ">= 0.50", retention_rate >= 0.5),
         ("cohort_id", result.cohort_id, None, None),
@@ -2455,18 +2600,24 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
     observations = []
     recommendations = []
 
-    observations.append(f"Patient flow: {input_count} → {eligible_count} ({retention_rate:.1%} retention)")
+    observations.append(
+        f"Patient flow: {input_count} → {eligible_count} ({retention_rate:.1%} retention)"
+    )
     observations.append(f"Excluded {excluded_count} patients based on eligibility criteria")
 
     if eligible_count < CONFIG.min_eligible_patients:
-        observations.append(f"⚠️  Cohort size ({eligible_count}) below minimum ({CONFIG.min_eligible_patients})")
+        observations.append(
+            f"⚠️  Cohort size ({eligible_count}) below minimum ({CONFIG.min_eligible_patients})"
+        )
         recommendations.append("Relax eligibility criteria or generate more sample data")
         recommendations.append("Consider lowering data_quality_score threshold")
     else:
         observations.append(f"Cohort size ({eligible_count}) sufficient for ML training")
 
     if retention_rate < 0.5:
-        observations.append(f"⚠️  High exclusion rate ({1-retention_rate:.1%}) may indicate data quality issues")
+        observations.append(
+            f"⚠️  High exclusion rate ({1 - retention_rate:.1%}) may indicate data quality issues"
+        )
         recommendations.append("Review exclusion criteria for potential over-filtering")
 
     # Target distribution in cohort
@@ -2477,14 +2628,21 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
         if minority_ratio < 0.2:
             observations.append(f"⚠️  Class imbalance detected ({minority_ratio:.1%} minority)")
 
-    print_interpretation("Cohort Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Cohort Analysis", observations, recommendations if recommendations else None
+    )
 
     # Final result
     duration = time_mod.time() - step_start
     if eligible_count >= CONFIG.min_eligible_patients:
-        print_step_result("success", f"Cohort constructed ({eligible_count} patients, {duration:.1f}s)")
+        print_step_result(
+            "success", f"Cohort constructed ({eligible_count} patients, {duration:.1f}s)"
+        )
     else:
-        print_step_result("warning", f"Cohort below minimum size ({eligible_count}/{CONFIG.min_eligible_patients}, {duration:.1f}s)")
+        print_step_result(
+            "warning",
+            f"Cohort below minimum size ({eligible_count}/{CONFIG.min_eligible_patients}, {duration:.1f}s)",
+        )
 
     return eligible_df, result
 
@@ -2497,6 +2655,7 @@ async def step_4_model_selector(
 ) -> dict[str, Any]:
     """Step 4: Select model candidate."""
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(4, "MODEL SELECTOR")
@@ -2516,11 +2675,13 @@ async def step_4_model_selector(
     if feature_characteristics:
         input_data["feature_characteristics"] = feature_characteristics
 
-    print_input_section({
-        "problem_type": scope_spec.get("problem_type", "binary_classification"),
-        "qc_passed": qc_report.get("qc_passed"),
-        "skip_benchmarks": False,
-    })
+    print_input_section(
+        {
+            "problem_type": scope_spec.get("problem_type", "binary_classification"),
+            "qc_passed": qc_report.get("qc_passed"),
+            "skip_benchmarks": False,
+        }
+    )
 
     # Processing
     processing_steps = []
@@ -2573,25 +2734,25 @@ async def step_4_model_selector(
             "Model candidate selected",
             has_candidate,
             "candidate present",
-            algo_name if has_candidate else "missing (will use fallback)"
+            algo_name if has_candidate else "missing (will use fallback)",
         ),
         (
             "Selection rationale provided",
             has_rationale,
             "rationale present",
-            primary_reason[:50] if primary_reason else "none"
+            primary_reason[:50] if primary_reason else "none",
         ),
         (
             "Alternatives evaluated",
             len(alternatives) > 0 or len(alternatives_considered) > 0,
             "> 0 alternatives",
-            f"{max(len(alternatives), len(alternatives_considered))} evaluated"
+            f"{max(len(alternatives), len(alternatives_considered))} evaluated",
         ),
         (
             "No selection errors",
             not has_error,
             "no errors",
-            result.get("error", "none")[:50] if has_error else "none"
+            result.get("error", "none")[:50] if has_error else "none",
         ),
     ]
 
@@ -2600,10 +2761,25 @@ async def step_4_model_selector(
     # Metrics table
     metrics = [
         ("algorithm", algo_name, None, None),
-        ("selection_score", f"{selection_score:.3f}" if selection_score else "N/A", "> 0.5", selection_score > 0.5 if selection_score else None),
-        ("interpretability_score", f"{interpretability:.2f}" if interpretability else "N/A", None, None),
+        (
+            "selection_score",
+            f"{selection_score:.3f}" if selection_score else "N/A",
+            "> 0.5",
+            selection_score > 0.5 if selection_score else None,
+        ),
+        (
+            "interpretability_score",
+            f"{interpretability:.2f}" if interpretability else "N/A",
+            None,
+            None,
+        ),
         ("hyperparameters", f"{len(hyperparams)} default params", None, None),
-        ("alternatives_evaluated", len(alternatives) if alternatives else len(alternatives_considered), "> 0", len(alternatives) > 0 or len(alternatives_considered) > 0),
+        (
+            "alternatives_evaluated",
+            len(alternatives) if alternatives else len(alternatives_considered),
+            "> 0",
+            len(alternatives) > 0 or len(alternatives_considered) > 0,
+        ),
     ]
 
     print_metrics_table(metrics)
@@ -2637,7 +2813,11 @@ async def step_4_model_selector(
     recommendations = []
 
     if has_candidate:
-        observations.append(f"Selected: {algo_name} (score: {selection_score:.3f})" if selection_score else f"Selected: {algo_name}")
+        observations.append(
+            f"Selected: {algo_name} (score: {selection_score:.3f})"
+            if selection_score
+            else f"Selected: {algo_name}"
+        )
 
         # Primary selection reason
         if primary_reason:
@@ -2669,7 +2849,9 @@ async def step_4_model_selector(
     elif "LightGBM" in algo_name:
         observations.append("LightGBM: Fast training, memory efficient")
 
-    print_interpretation("Model Selection Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Model Selection Analysis", observations, recommendations if recommendations else None
+    )
 
     # Final result
     duration = time_mod.time() - step_start
@@ -2739,6 +2921,7 @@ async def step_5_model_trainer(
         re-derive splits.
     """
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(5, "MODEL TRAINER")
@@ -2783,13 +2966,9 @@ async def step_5_model_trainer(
             f"split_mode must be one of 'auto'|'random'|'combined', got {split_mode!r}"
         )
     if split_mode == "combined" and not have_entity_and_date:
-        raise ValueError(
-            "split_mode='combined' requires both entity_ids and dates to be passed"
-        )
+        raise ValueError("split_mode='combined' requires both entity_ids and dates to be passed")
 
-    use_combined = split_mode == "combined" or (
-        split_mode == "auto" and have_entity_and_date
-    )
+    use_combined = split_mode == "combined" or (split_mode == "auto" and have_entity_and_date)
 
     split_assignments: Dict[Any, str] = {}
     split_strategy = "random_stratified_4way"
@@ -2815,9 +2994,7 @@ async def step_5_model_trainer(
             )
         # Realign labels to X.index so the row-mask comparisons line up
         # with X / y exactly (4-IMP-2: mirror branch 2's index alignment).
-        labels = pd.Series(entity_ids.values, index=X.index).map(
-            pre_assigned_splits
-        )
+        labels = pd.Series(entity_ids.values, index=X.index).map(pre_assigned_splits)
         if labels.isna().any():
             missing = int(labels.isna().sum())
             raise ValueError(
@@ -2862,15 +3039,11 @@ async def step_5_model_trainer(
         # masks can be applied directly to X / y without losing the
         # globally-unique indices that downstream split-validation needs.)
         if entity_ids is not None:
-            eids_aligned = pd.Series(
-                entity_ids.values, index=X.index, dtype=entity_ids.dtype
-            )
+            eids_aligned = pd.Series(entity_ids.values, index=X.index, dtype=entity_ids.dtype)
         else:  # pragma: no cover - defensive
             eids_aligned = pd.Series([None] * len(X), index=X.index)
         if dates is not None:
-            dates_aligned = pd.Series(
-                pd.to_datetime(dates.values), index=X.index
-            )
+            dates_aligned = pd.Series(pd.to_datetime(dates.values), index=X.index)
         else:  # pragma: no cover - defensive
             dates_aligned = pd.Series(pd.NaT, index=X.index)
 
@@ -2980,12 +3153,20 @@ async def step_5_model_trainer(
             )
             # Stratified random over rest_X (preserves original indices).
             stage1_X, test_X, stage1_y, test_y, stage1_eids, test_eids = train_test_split(
-                rest_X, rest_y, rest_eids,
-                test_size=0.15 / 0.95, stratify=rest_y, random_state=42,
+                rest_X,
+                rest_y,
+                rest_eids,
+                test_size=0.15 / 0.95,
+                stratify=rest_y,
+                random_state=42,
             )
             train_X, val_X, train_y, val_y, train_eids, val_eids = train_test_split(
-                stage1_X, stage1_y, stage1_eids,
-                test_size=0.25, stratify=stage1_y, random_state=42,
+                stage1_X,
+                stage1_y,
+                stage1_eids,
+                test_size=0.25,
+                stratify=stage1_y,
+                random_state=42,
             )
             for eid in train_eids:
                 split_assignments[eid] = "train"
@@ -3006,26 +3187,34 @@ async def step_5_model_trainer(
         # ----- branch 3: legacy stratified random 4-way --------------------
         # Stage 1: peel off 5% holdout, stratified on y -> trainval_test (95%) + holdout (5%)
         trainval_test_X, holdout_X, trainval_test_y, holdout_y = train_test_split(
-            X, y, test_size=0.05, stratify=y, random_state=42,
+            X,
+            y,
+            test_size=0.05,
+            stratify=y,
+            random_state=42,
         )
         # Stage 2: from trainval_test (95%), peel off test -> trainval (80%) + test (15% of total)
         trainval_X, test_X, trainval_y, test_y = train_test_split(
-            trainval_test_X, trainval_test_y,
-            test_size=0.15 / 0.95, stratify=trainval_test_y, random_state=42,
+            trainval_test_X,
+            trainval_test_y,
+            test_size=0.15 / 0.95,
+            stratify=trainval_test_y,
+            random_state=42,
         )
         # Stage 3: from trainval (80%), split into train (60%) + val (20%)
         train_X, val_X, train_y, val_y = train_test_split(
-            trainval_X, trainval_y,
-            test_size=0.25, stratify=trainval_y, random_state=42,
+            trainval_X,
+            trainval_y,
+            test_size=0.25,
+            stratify=trainval_y,
+            random_state=42,
         )
         if entity_ids is not None:
             # Even on the random path, record entity → split mapping so the
             # cache can persist split_assignments for re-runs.
             # Note: entity_ids is keyed by X's original index, which the
             # train_test_split splits preserve.
-            eids_aligned = pd.Series(
-                entity_ids.values, index=X.index, dtype=entity_ids.dtype
-            )
+            eids_aligned = pd.Series(entity_ids.values, index=X.index, dtype=entity_ids.dtype)
             for idx in train_X.index:
                 split_assignments[eids_aligned.loc[idx]] = "train"
             for idx in val_X.index:
@@ -3054,16 +3243,18 @@ async def step_5_model_trainer(
     feature_columns = list(X.columns)
 
     # Input section
-    print_input_section({
-        "algorithm": model_candidate["algorithm_name"],
-        "total_samples": n,
-        "train_samples": f"{train_size} ({train_size / n:.0%})",
-        "validation_samples": f"{val_size} ({val_size / n:.0%})",
-        "test_samples": f"{test_size} ({test_size / n:.0%})",
-        "holdout_samples": f"{holdout_size} ({holdout_size / n:.0%})",
-        "hpo_trials": CONFIG.hpo_trials,
-        "enable_mlflow": CONFIG.enable_mlflow,
-    })
+    print_input_section(
+        {
+            "algorithm": model_candidate["algorithm_name"],
+            "total_samples": n,
+            "train_samples": f"{train_size} ({train_size / n:.0%})",
+            "validation_samples": f"{val_size} ({val_size / n:.0%})",
+            "test_samples": f"{test_size} ({test_size / n:.0%})",
+            "holdout_samples": f"{holdout_size} ({holdout_size / n:.0%})",
+            "hpo_trials": CONFIG.hpo_trials,
+            "enable_mlflow": CONFIG.enable_mlflow,
+        }
+    )
 
     # Processing
     processing_steps = []
@@ -3099,10 +3290,16 @@ async def step_5_model_trainer(
     # Check class imbalance
     imbalance_detected = result.get("imbalance_detected", False)
     if imbalance_detected:
-        processing_steps.append(("Class imbalance detected", True, result.get("imbalance_severity", "unknown")))
-        processing_steps.append(("Remediation applied", True, result.get("recommended_strategy", "N/A")))
+        processing_steps.append(
+            ("Class imbalance detected", True, result.get("imbalance_severity", "unknown"))
+        )
+        processing_steps.append(
+            ("Remediation applied", True, result.get("recommended_strategy", "N/A"))
+        )
 
-    processing_steps.append(("Model training complete", True, f"AUC={result.get('auc_roc', 'N/A')}"))
+    processing_steps.append(
+        ("Model training complete", True, f"AUC={result.get('auc_roc', 'N/A')}")
+    )
 
     model_uri = result.get("model_artifact_uri") or result.get("mlflow_model_uri")
     if CONFIG.enable_mlflow and model_uri:
@@ -3162,7 +3359,7 @@ async def step_5_model_trainer(
 
         # Make predictions at evaluator's optimal threshold (no adaptive override)
         y_val_proba = None
-        if hasattr(trained_model, 'predict_proba'):
+        if hasattr(trained_model, "predict_proba"):
             y_val_proba = trained_model.predict_proba(X_val)[:, 1]
 
         if y_val_proba is not None:
@@ -3174,12 +3371,12 @@ async def step_5_model_trainer(
 
         # Store accuracy analysis data (using evaluator's metrics, val predictions for display)
         result["accuracy_analysis"] = {
-            "y_true": y_val.tolist() if hasattr(y_val, 'tolist') else list(y_val),
-            "y_pred": y_val_pred.tolist() if hasattr(y_val_pred, 'tolist') else list(y_val_pred),
+            "y_true": y_val.tolist() if hasattr(y_val, "tolist") else list(y_val),
+            "y_pred": y_val_pred.tolist() if hasattr(y_val_pred, "tolist") else list(y_val_pred),
             "y_proba": y_val_proba.tolist() if y_val_proba is not None else None,
-            "y_train": y_train.tolist() if hasattr(y_train, 'tolist') else list(y_train),
-            "y_val": y_val.tolist() if hasattr(y_val, 'tolist') else list(y_val),
-            "y_test": y_test.tolist() if hasattr(y_test, 'tolist') else list(y_test),
+            "y_train": y_train.tolist() if hasattr(y_train, "tolist") else list(y_train),
+            "y_val": y_val.tolist() if hasattr(y_val, "tolist") else list(y_val),
+            "y_test": y_test.tolist() if hasattr(y_test, "tolist") else list(y_test),
             "train_metrics": train_metrics,
             "val_metrics": val_metrics,
             "feature_columns": feature_columns,
@@ -3209,7 +3406,9 @@ async def step_5_model_trainer(
             overfitting_severity = "moderate"
         elif max_train_test_delta > 0.05:
             overfitting_severity = "mild"
-        print(f"\n  Overfitting severity: {overfitting_severity} (max AUC train-test delta: {max_train_test_delta:.3f})")
+        print(
+            f"\n  Overfitting severity: {overfitting_severity} (max AUC train-test delta: {max_train_test_delta:.3f})"
+        )
     result["overfitting_severity"] = overfitting_severity
     result["max_train_test_delta"] = max_train_test_delta
 
@@ -3225,31 +3424,31 @@ async def step_5_model_trainer(
             "Model trained successfully",
             trained_model is not None,
             "trained_model present",
-            "present" if trained_model is not None else "missing"
+            "present" if trained_model is not None else "missing",
         ),
         (
             "AUC-ROC threshold",
             auc >= CONFIG.min_auc_threshold if auc else False,
             f">= {CONFIG.min_auc_threshold}",
-            f"{auc:.3f}" if auc else "N/A"
+            f"{auc:.3f}" if auc else "N/A",
         ),
         (
             "Minority recall threshold",
             minority_recall >= CONFIG.min_minority_recall,
             f">= {CONFIG.min_minority_recall:.0%}",
-            f"{minority_recall:.2%}"
+            f"{minority_recall:.2%}",
         ),
         (
             "Minority precision threshold",
             minority_precision >= CONFIG.min_minority_precision,
             f">= {CONFIG.min_minority_precision:.0%}",
-            f"{minority_precision:.2%}"
+            f"{minority_precision:.2%}",
         ),
         (
             "Positive predictions made",
             n_positive_predictions > 0,
             "> 0",
-            str(n_positive_predictions)
+            str(n_positive_predictions),
         ),
     ]
 
@@ -3259,10 +3458,25 @@ async def step_5_model_trainer(
     # METRICS TABLE
     # =========================================================================
     metrics_list = [
-        ("auc_roc", auc, f">= {CONFIG.min_auc_threshold}", auc >= CONFIG.min_auc_threshold if auc else None),
+        (
+            "auc_roc",
+            auc,
+            f">= {CONFIG.min_auc_threshold}",
+            auc >= CONFIG.min_auc_threshold if auc else None,
+        ),
         ("accuracy", val_metrics.get("accuracy"), None, None),
-        ("precision", minority_precision, f">= {CONFIG.min_minority_precision:.0%}", minority_precision >= CONFIG.min_minority_precision),
-        ("recall", minority_recall, f">= {CONFIG.min_minority_recall:.0%}", minority_recall >= CONFIG.min_minority_recall),
+        (
+            "precision",
+            minority_precision,
+            f">= {CONFIG.min_minority_precision:.0%}",
+            minority_precision >= CONFIG.min_minority_precision,
+        ),
+        (
+            "recall",
+            minority_recall,
+            f">= {CONFIG.min_minority_recall:.0%}",
+            minority_recall >= CONFIG.min_minority_recall,
+        ),
         ("f1_score", val_metrics.get("f1_score"), None, None),
         ("optimal_threshold", optimal_threshold, None, None),
         ("positive_predictions", n_positive_predictions, "> 0", n_positive_predictions > 0),
@@ -3283,12 +3497,14 @@ async def step_5_model_trainer(
             np.array(y_true_list),
             np.array(y_pred_list),
             np.array(y_proba_list) if y_proba_list else None,
-            "Validation Confusion Matrix"
+            "Validation Confusion Matrix",
         )
 
         # Threshold analysis
         if y_proba_list:
-            print_threshold_analysis(np.array(y_true_list), np.array(y_proba_list), optimal_threshold)
+            print_threshold_analysis(
+                np.array(y_true_list), np.array(y_proba_list), optimal_threshold
+            )
 
     # =========================================================================
     # INTERPRETATION
@@ -3302,19 +3518,21 @@ async def step_5_model_trainer(
             {"roc_auc": auc},
             result.get("accuracy_analysis", {}),
             CONFIG.min_minority_recall,
-            CONFIG.min_minority_precision
+            CONFIG.min_minority_precision,
         )
         observations.extend(perf_obs)
         recommendations.extend(perf_rec)
 
         # Class imbalance interpretation
         if imbalance_detected:
-            imb_obs, imb_rec = interpret_class_imbalance({
-                "imbalance_detected": True,
-                "minority_ratio": result.get("minority_ratio", 0),
-                "imbalance_severity": result.get("imbalance_severity", "unknown"),
-                "recommended_strategy": result.get("recommended_strategy", "none"),
-            })
+            imb_obs, imb_rec = interpret_class_imbalance(
+                {
+                    "imbalance_detected": True,
+                    "minority_ratio": result.get("minority_ratio", 0),
+                    "imbalance_severity": result.get("imbalance_severity", "unknown"),
+                    "recommended_strategy": result.get("recommended_strategy", "none"),
+                }
+            )
             observations.extend(imb_obs)
             recommendations.extend(imb_rec)
 
@@ -3322,18 +3540,22 @@ async def step_5_model_trainer(
         if result.get("accuracy_analysis"):
             y_pred_list = result["accuracy_analysis"]["y_pred"]
             y_true_list = result["accuracy_analysis"]["y_true"]
-            cm_obs = interpret_confusion_matrix({
-                "tp": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 1 and p == 1),
-                "tn": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 0 and p == 0),
-                "fp": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 0 and p == 1),
-                "fn": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 1 and p == 0),
-            })
+            cm_obs = interpret_confusion_matrix(
+                {
+                    "tp": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 1 and p == 1),
+                    "tn": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 0 and p == 0),
+                    "fp": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 0 and p == 1),
+                    "fn": sum(1 for t, p in zip(y_true_list, y_pred_list) if t == 1 and p == 0),
+                }
+            )
             observations.extend(cm_obs)
     else:
         observations.append("⚠️  No trained model returned - training may have failed")
         recommendations.append("Check agent logs for training errors")
 
-    print_interpretation("Model Training Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Model Training Analysis", observations, recommendations if recommendations else None
+    )
 
     # =========================================================================
     # DETERMINE MODEL USEFULNESS
@@ -3354,7 +3576,9 @@ async def step_5_model_trainer(
             # The test set IS the generalization check — if test metrics
             # pass thresholds, the model is useful despite training overfitting.
             if overfitting_severity == "severe":
-                result["usefulness_warning"] = f"severe_overfitting_delta_{max_train_test_delta:.3f}"
+                result["usefulness_warning"] = (
+                    f"severe_overfitting_delta_{max_train_test_delta:.3f}"
+                )
 
     # =========================================================================
     # FINAL RESULT
@@ -3365,11 +3589,18 @@ async def step_5_model_trainer(
     if model_usefulness == "useless":
         print_step_result("failed", f"Model USELESS - predicts all negatives ({duration:.1f}s)")
     elif model_usefulness == "poor":
-        print_step_result("warning", f"Model has poor metrics ({result.get('usefulness_reason', '')}) ({duration:.1f}s)")
+        print_step_result(
+            "warning",
+            f"Model has poor metrics ({result.get('usefulness_reason', '')}) ({duration:.1f}s)",
+        )
     elif model_usefulness == "acceptable":
-        print_step_result("success", f"Model trained successfully - usefulness validated ({duration:.1f}s)")
+        print_step_result(
+            "success", f"Model trained successfully - usefulness validated ({duration:.1f}s)"
+        )
     else:
-        print_step_result("warning", f"Model training completed with unknown status ({duration:.1f}s)")
+        print_step_result(
+            "warning", f"Model training completed with unknown status ({duration:.1f}s)"
+        )
 
     # Persist the entity → split mapping so the tier0 cache can refuse to
     # re-split on reload (Block 4, Finding #12). Empty when caller provided
@@ -3385,10 +3616,11 @@ async def step_6_feature_analyzer(
     trained_model: Any,
     X_sample: pd.DataFrame,
     y_sample: pd.Series,
-    model_uri: Optional[str] = None
+    model_uri: Optional[str] = None,
 ) -> dict[str, Any]:
     """Step 6: Analyze feature importance."""
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(6, "FEATURE ANALYZER")
@@ -3397,12 +3629,14 @@ async def step_6_feature_analyzer(
 
     feature_columns = list(X_sample.columns)
 
-    print_input_section({
-        "sample_size": len(X_sample),
-        "features": feature_columns,
-        "max_samples": min(100, len(X_sample)),
-        "model_uri": model_uri[:50] + "..." if model_uri and len(model_uri) > 50 else model_uri,
-    })
+    print_input_section(
+        {
+            "sample_size": len(X_sample),
+            "features": feature_columns,
+            "max_samples": min(100, len(X_sample)),
+            "model_uri": model_uri[:50] + "..." if model_uri and len(model_uri) > 50 else model_uri,
+        }
+    )
 
     # Processing
     processing_steps = []
@@ -3441,13 +3675,13 @@ async def step_6_feature_analyzer(
             "Feature importance computed",
             has_importance,
             "feature_importance present",
-            "present" if has_importance else "missing"
+            "present" if has_importance else "missing",
         ),
         (
             "Samples analyzed",
             samples_analyzed > 0 if samples_analyzed else False,
             "> 0",
-            str(samples_analyzed) if samples_analyzed else "0"
+            str(samples_analyzed) if samples_analyzed else "0",
         ),
     ]
 
@@ -3457,7 +3691,7 @@ async def step_6_feature_analyzer(
     if has_importance:
         print("\n  📊 Feature Importance (SHAP):")
         print(f"    {'Feature':<25} {'Importance':<15} {'Rank':<10}")
-        print(f"    {'-'*50}")
+        print(f"    {'-' * 50}")
 
         for i, fi in enumerate(result["feature_importance"][:10], 1):
             if isinstance(fi, dict):
@@ -3474,7 +3708,10 @@ async def step_6_feature_analyzer(
     if has_importance:
         top_features = result["feature_importance"][:3]
         if top_features:
-            top_names = [str(fi.get("feature", "unknown")) if isinstance(fi, dict) else str(fi) for fi in top_features]
+            top_names = [
+                str(fi.get("feature", "unknown")) if isinstance(fi, dict) else str(fi)
+                for fi in top_features
+            ]
             observations.append(f"Top predictive features: {', '.join(top_names)}")
 
             # Feature-specific insights
@@ -3483,9 +3720,13 @@ async def step_6_feature_analyzer(
                     name = str(fi.get("feature", ""))
                     imp = fi.get("importance", 0)
                     if "days_on_therapy" in name.lower():
-                        observations.append(f"  • Duration on therapy ({imp:.3f}) is a strong predictor")
+                        observations.append(
+                            f"  • Duration on therapy ({imp:.3f}) is a strong predictor"
+                        )
                     elif "hcp_visits" in name.lower():
-                        observations.append(f"  • HCP engagement ({imp:.3f}) influences discontinuation")
+                        observations.append(
+                            f"  • HCP engagement ({imp:.3f}) influences discontinuation"
+                        )
                     elif "prior_treatments" in name.lower():
                         observations.append(f"  • Treatment history ({imp:.3f}) affects outcomes")
 
@@ -3497,7 +3738,9 @@ async def step_6_feature_analyzer(
         recommendations.append("Verify model is compatible with SHAP explainer")
         recommendations.append("Check if model_uri is valid and accessible")
 
-    print_interpretation("Feature Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Feature Analysis", observations, recommendations if recommendations else None
+    )
 
     # Final result
     duration = time_mod.time() - step_start
@@ -3520,9 +3763,11 @@ async def step_7_model_deployer(
     include_bentoml: bool = True,
     fitted_preprocessor: Any = None,
     feature_columns: list[str] | None = None,
+    scope_spec: Any = None,
 ) -> dict[str, Any]:
     """Step 7: Deploy model."""
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(7, "MODEL DEPLOYER")
@@ -3531,13 +3776,15 @@ async def step_7_model_deployer(
 
     deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"
 
-    print_input_section({
-        "deployment_name": deployment_name,
-        "model_uri": model_uri[:50] + "..." if model_uri and len(model_uri) > 50 else model_uri,
-        "success_criteria_met": success_criteria_met,
-        "deployment_action": "register",
-        "include_bentoml": include_bentoml,
-    })
+    print_input_section(
+        {
+            "deployment_name": deployment_name,
+            "model_uri": model_uri[:50] + "..." if model_uri and len(model_uri) > 50 else model_uri,
+            "success_criteria_met": success_criteria_met,
+            "deployment_action": "register",
+            "include_bentoml": include_bentoml,
+        }
+    )
 
     # Processing
     processing_steps = []
@@ -3554,6 +3801,14 @@ async def step_7_model_deployer(
         "deployment_name": deployment_name,
         "deployment_action": "register",
     }
+    # v5 Gate C1 (2026-05-11): thread cohort identity to deployer so
+    # validate_promotion's regulatory_deployment_manifest builder
+    # resolves the cohort authorization policy (CSU in scope; Optum
+    # blocked; unknown → out_of_scope).
+    if scope_spec is not None:
+        input_data["scope_spec"] = scope_spec
+        if isinstance(scope_spec, dict) and scope_spec.get("feature_manifest_source"):
+            input_data["feature_manifest_source"] = scope_spec.get("feature_manifest_source")
 
     try:
         result = await agent.run(input_data)
@@ -3579,7 +3834,9 @@ async def step_7_model_deployer(
     print_processing_steps(processing_steps)
 
     # Validation checks
-    deployment_successful = result.get("deployment_successful", False) or result.get("status") == "completed"
+    deployment_successful = (
+        result.get("deployment_successful", False) or result.get("status") == "completed"
+    )
     manifest = result.get("deployment_manifest", {})
 
     checks = [
@@ -3587,19 +3844,19 @@ async def step_7_model_deployer(
             "Deployment successful",
             deployment_successful,
             "deployment_successful = True",
-            f"{result.get('status', 'unknown')}"
+            f"{result.get('status', 'unknown')}",
         ),
         (
             "Deployment manifest",
             bool(manifest),
             "manifest present",
-            "present" if manifest else "missing"
+            "present" if manifest else "missing",
         ),
         (
             "Success criteria met",
             success_criteria_met,
             "success_criteria_met = True",
-            str(success_criteria_met)
+            str(success_criteria_met),
         ),
     ]
 
@@ -3678,10 +3935,14 @@ async def step_7_model_deployer(
                     # Display results
                     print("\n    BentoML Serving Verification:")
                     health_icon = "✓" if verification.get("health_check") else "✗"
-                    print(f"      health_check: {health_icon} {'healthy' if verification.get('health_check') else 'unhealthy'}")
+                    print(
+                        f"      health_check: {health_icon} {'healthy' if verification.get('health_check') else 'unhealthy'}"
+                    )
 
                     pred_icon = "✓" if verification.get("prediction_test") else "✗"
-                    print(f"      prediction_test: {pred_icon} {'passed' if verification.get('prediction_test') else 'failed'}")
+                    print(
+                        f"      prediction_test: {pred_icon} {'passed' if verification.get('prediction_test') else 'failed'}"
+                    )
                     if not verification.get("prediction_test"):
                         if verification.get("prediction_error"):
                             print(f"      error: {verification['prediction_error']}")
@@ -3719,6 +3980,7 @@ async def step_7_model_deployer(
             print(f"    ✗ BentoML error: {e}")
             result["bentoml_serving"] = {"error": str(e)}
             import traceback
+
             traceback.print_exc()
 
     elif include_bentoml and trained_model is None:
@@ -3729,7 +3991,9 @@ async def step_7_model_deployer(
     recommendations = []
 
     if deployment_successful:
-        observations.append(f"Model registered with deployment ID: {manifest.get('deployment_id', 'N/A')}")
+        observations.append(
+            f"Model registered with deployment ID: {manifest.get('deployment_id', 'N/A')}"
+        )
         observations.append(f"Environment: {manifest.get('environment', 'staging')}")
     else:
         observations.append("⚠️  Model deployment encountered issues")
@@ -3753,11 +4017,17 @@ async def step_7_model_deployer(
         observations.append(f"⚠️  BentoML serving failed: {bentoml_serving['error'][:50]}")
         recommendations.append("Check BentoML installation and model compatibility")
 
-    print_interpretation("Deployment Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Deployment Analysis", observations, recommendations if recommendations else None
+    )
 
     # Final result
     duration = time_mod.time() - step_start
-    bentoml_ok = bentoml_serving.get("health_check") and bentoml_serving.get("prediction_test") if include_bentoml else True
+    bentoml_ok = (
+        bentoml_serving.get("health_check") and bentoml_serving.get("prediction_test")
+        if include_bentoml
+        else True
+    )
 
     if deployment_successful and bentoml_ok:
         print_step_result("success", f"Model deployed successfully ({duration:.1f}s)")
@@ -3769,9 +4039,12 @@ async def step_7_model_deployer(
     return result
 
 
-async def step_8_observability_connector(experiment_id: str, stages_completed: int) -> dict[str, Any]:
+async def step_8_observability_connector(
+    experiment_id: str, stages_completed: int
+) -> dict[str, Any]:
     """Step 8: Log to observability."""
     import time as time_mod
+
     step_start = time_mod.time()
 
     print_header(8, "OBSERVABILITY CONNECTOR")
@@ -3791,13 +4064,15 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
         }
     ]
 
-    print_input_section({
-        "events_to_log": 1,
-        "event_type": "pipeline_completed",
-        "experiment_id": experiment_id,
-        "stages_completed": stages_completed,
-        "time_window": "1h",
-    })
+    print_input_section(
+        {
+            "events_to_log": 1,
+            "event_type": "pipeline_completed",
+            "experiment_id": experiment_id,
+            "stages_completed": stages_completed,
+            "time_window": "1h",
+        }
+    )
 
     # Processing
     processing_steps = []
@@ -3814,7 +4089,9 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
     result = await agent.run(input_data)
 
     emission_successful = result.get("emission_successful", False)
-    processing_steps.append(("Event emission", emission_successful, f"{result.get('events_logged', 0)} events"))
+    processing_steps.append(
+        ("Event emission", emission_successful, f"{result.get('events_logged', 0)} events")
+    )
 
     # Feast online feature retrieval check (gracefully degrading)
     feast_online_ok = False
@@ -3830,7 +4107,9 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
         processing_steps.append(("Feast online retrieval", feast_online_ok, feast_online_detail))
     except Exception as e:
         feast_online_detail = str(e)[:80]
-        processing_steps.append(("Feast online retrieval", False, f"skipped: {feast_online_detail}"))
+        processing_steps.append(
+            ("Feast online retrieval", False, f"skipped: {feast_online_detail}")
+        )
 
     print_processing_steps(processing_steps)
 
@@ -3843,13 +4122,13 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
             "Emission successful",
             emission_successful,
             "emission_successful = True",
-            str(emission_successful)
+            str(emission_successful),
         ),
         (
             "Events logged",
             events_logged > 0 if events_logged else False,
             "> 0",
-            str(events_logged) if events_logged else "0"
+            str(events_logged) if events_logged else "0",
         ),
         (
             "Feast online retrieval",
@@ -3884,7 +4163,9 @@ async def step_8_observability_connector(experiment_id: str, stages_completed: i
         recommendations.append("Check observability service connectivity")
         recommendations.append("Verify event schema compliance")
 
-    print_interpretation("Observability Analysis", observations, recommendations if recommendations else None)
+    print_interpretation(
+        "Observability Analysis", observations, recommendations if recommendations else None
+    )
 
     # Attach Feast results for pipeline StepResult access
     result["feast_online_ok"] = feast_online_ok
@@ -4007,9 +4288,7 @@ def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
             "seed": seed,
         }
     else:
-        raise ValueError(
-            f"regime must be one of {_VALID_REGIMES}, got {regime!r}"
-        )
+        raise ValueError(f"regime must be one of {_VALID_REGIMES}, got {regime!r}")
 
     # Internal invariants — guard against a misroute that would silently
     # suppress signal (e.g. clean signal_strength accidentally combined
@@ -4023,10 +4302,9 @@ def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
             "sample_data.py:602 suppresses signal at low rates"
         )
     if regime == "adverse":
-        assert (
-            kwargs["signal_strength"] == 1.0
-            and not kwargs["signalize_extra_features"]
-        ), "adverse regime must preserve historical generator behavior"
+        assert kwargs["signal_strength"] == 1.0 and not kwargs["signalize_extra_features"], (
+            "adverse regime must preserve historical generator behavior"
+        )
     return kwargs
 
 
@@ -4056,9 +4334,7 @@ def _compute_adaptive_state_inputs(
     }
 
 
-_DEMO_COST_MATRIX_PATH = (
-    Path(__file__).resolve().parent.parent / "config" / "cost_matrix_demo.yaml"
-)
+_DEMO_COST_MATRIX_PATH = Path(__file__).resolve().parent.parent / "config" / "cost_matrix_demo.yaml"
 _REQUIRED_DEMO_COST_KEYS = ("tp", "fn", "fp", "tn")
 
 
@@ -4337,17 +4613,13 @@ async def run_pipeline(
     pipeline_start_time = time.time()
 
     if regime not in _VALID_REGIMES:
-        raise ValueError(
-            f"regime must be one of {_VALID_REGIMES}, got {regime!r}"
-        )
+        raise ValueError(f"regime must be one of {_VALID_REGIMES}, got {regime!r}")
     if split_mode not in {"auto", "random", "combined"}:
-        raise ValueError(
-            f"split_mode must be 'auto'|'random'|'combined', got {split_mode!r}"
-        )
+        raise ValueError(f"split_mode must be 'auto'|'random'|'combined', got {split_mode!r}")
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"TIER 0 MLOPS WORKFLOW TEST")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"  Experiment ID: {experiment_id}")
     print(f"  Brand: {CONFIG.brand}")
     print(f"  Target: {CONFIG.target_outcome}")
@@ -4451,9 +4723,7 @@ async def run_pipeline(
             # run produced no business_utility number to verify against.
             # Decision logic extracted to ``_should_inject_demo_cost_matrix``
             # so unit tests exercise the real branch (5B-I-2).
-            if _should_inject_demo_cost_matrix(
-                state["scope_spec"], inject_demo_cost_matrix
-            ):
+            if _should_inject_demo_cost_matrix(state["scope_spec"], inject_demo_cost_matrix):
                 state["scope_spec"]["cost_matrix"] = _default_demo_cost_matrix()
             duration = time.time() - step_start
             scope_spec = state["scope_spec"]
@@ -4461,52 +4731,76 @@ async def run_pipeline(
             state["success_criteria"] = success_criteria
             validation_passed = result.get("validation_passed", True)
 
-            step_results.append(StepResult(
-                step_num=1,
-                step_name="SCOPE DEFINER",
-                status="success" if validation_passed else "warning",
-                duration_seconds=duration,
-                key_metrics={
-                    "experiment_id": result.get("experiment_id", experiment_id),
-                    "problem_type": scope_spec.get("problem_type"),
-                    "prediction_target": scope_spec.get("prediction_target"),
-                    "minimum_samples": scope_spec.get("minimum_samples"),
-                },
-                details={
-                    "brand": CONFIG.brand,
-                    "success_criteria": success_criteria,
-                },
-                # Enhanced format fields
-                input_summary={
-                    "problem_description": scope_spec.get("problem_description", "Predict patient discontinuation risk"),
-                    "business_objective": scope_spec.get("business_objective", "Identify high-risk patients"),
-                    "target_outcome": scope_spec.get("prediction_target", CONFIG.target_outcome),
-                    "problem_type_hint": CONFIG.problem_type,
-                    "brand": CONFIG.brand,
-                },
-                validation_checks=[
-                    ("Problem type defined", scope_spec.get("problem_type") is not None,
-                     "problem_type present", scope_spec.get("problem_type", "None")),
-                    ("Prediction target set", scope_spec.get("prediction_target") is not None,
-                     "prediction_target present", scope_spec.get("prediction_target", "None")),
-                    ("Minimum samples specified", (scope_spec.get("minimum_samples") or 0) > 0,
-                     "minimum_samples > 0", scope_spec.get("minimum_samples", 0)),
-                    ("Scope validation", validation_passed,
-                     "validation_passed = True", f"validation_passed = {validation_passed}"),
-                ],
-                metrics_table=[
-                    ("experiment_id", result.get("experiment_id", experiment_id), None, None),
-                    ("problem_type", scope_spec.get("problem_type"), None, None),
-                    ("prediction_target", scope_spec.get("prediction_target"), None, None),
-                    ("minimum_samples", scope_spec.get("minimum_samples"), None, None),
-                ],
-                interpretation=[
-                    f"Binary classification scope defined for patient risk prediction",
-                    f"Target outcome: {scope_spec.get('prediction_target', CONFIG.target_outcome)}",
-                    f"Sample requirement ({scope_spec.get('minimum_samples', 'N/A')}) appropriate for ML",
-                ],
-                result_message="Scope definition complete",
-            ))
+            step_results.append(
+                StepResult(
+                    step_num=1,
+                    step_name="SCOPE DEFINER",
+                    status="success" if validation_passed else "warning",
+                    duration_seconds=duration,
+                    key_metrics={
+                        "experiment_id": result.get("experiment_id", experiment_id),
+                        "problem_type": scope_spec.get("problem_type"),
+                        "prediction_target": scope_spec.get("prediction_target"),
+                        "minimum_samples": scope_spec.get("minimum_samples"),
+                    },
+                    details={
+                        "brand": CONFIG.brand,
+                        "success_criteria": success_criteria,
+                    },
+                    # Enhanced format fields
+                    input_summary={
+                        "problem_description": scope_spec.get(
+                            "problem_description", "Predict patient discontinuation risk"
+                        ),
+                        "business_objective": scope_spec.get(
+                            "business_objective", "Identify high-risk patients"
+                        ),
+                        "target_outcome": scope_spec.get(
+                            "prediction_target", CONFIG.target_outcome
+                        ),
+                        "problem_type_hint": CONFIG.problem_type,
+                        "brand": CONFIG.brand,
+                    },
+                    validation_checks=[
+                        (
+                            "Problem type defined",
+                            scope_spec.get("problem_type") is not None,
+                            "problem_type present",
+                            scope_spec.get("problem_type", "None"),
+                        ),
+                        (
+                            "Prediction target set",
+                            scope_spec.get("prediction_target") is not None,
+                            "prediction_target present",
+                            scope_spec.get("prediction_target", "None"),
+                        ),
+                        (
+                            "Minimum samples specified",
+                            (scope_spec.get("minimum_samples") or 0) > 0,
+                            "minimum_samples > 0",
+                            scope_spec.get("minimum_samples", 0),
+                        ),
+                        (
+                            "Scope validation",
+                            validation_passed,
+                            "validation_passed = True",
+                            f"validation_passed = {validation_passed}",
+                        ),
+                    ],
+                    metrics_table=[
+                        ("experiment_id", result.get("experiment_id", experiment_id), None, None),
+                        ("problem_type", scope_spec.get("problem_type"), None, None),
+                        ("prediction_target", scope_spec.get("prediction_target"), None, None),
+                        ("minimum_samples", scope_spec.get("minimum_samples"), None, None),
+                    ],
+                    interpretation=[
+                        f"Binary classification scope defined for patient risk prediction",
+                        f"Target outcome: {scope_spec.get('prediction_target', CONFIG.target_outcome)}",
+                        f"Sample requirement ({scope_spec.get('minimum_samples', 'N/A')}) appropriate for ML",
+                    ],
+                    result_message="Scope definition complete",
+                )
+            )
 
         # Step 2: Data Preparer
         if 2 in steps_to_run:
@@ -4542,9 +4836,7 @@ async def run_pipeline(
             # the data_preparer's adaptive_verdicts list never reaches the
             # tier0 state dict that ``run_pipeline`` returns.
             state["adaptive_verdicts"] = result.get("adaptive_verdicts", [])
-            state["leakage_dropped_features"] = result.get(
-                "leakage_dropped_features", []
-            )
+            state["leakage_dropped_features"] = result.get("leakage_dropped_features", [])
 
             # Propagate leakage remediation state (from LLM-assisted remediation node)
             if result.get("leakage_remediation_status"):
@@ -4575,52 +4867,92 @@ async def run_pipeline(
             train_samples = data_readiness.get("train_samples", 0)
             val_samples = data_readiness.get("validation_samples", 0)
             overall_score = qc_report.get("overall_score", 0)
-            step_results.append(StepResult(
-                step_num=2,
-                step_name="DATA PREPARER",
-                status="success" if state["gate_passed"] else "failed",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "qc_status": qc_report.get("status", "unknown"),
-                    "overall_score": overall_score,
-                    "gate_passed": state["gate_passed"],
-                    "qc_train_samples": train_samples,
-                    "qc_validation_samples": val_samples,
-                },
-                details={
-                    "completeness_score": qc_report.get("completeness_score"),
-                    "validity_score": qc_report.get("validity_score"),
-                    "consistency_score": qc_report.get("consistency_score"),
-                    "uniqueness_score": qc_report.get("uniqueness_score"),
-                    "timeliness_score": qc_report.get("timeliness_score"),
-                },
-                # Enhanced format fields
-                input_summary={
-                    "experiment_id": experiment_id,
-                    "scope_spec_problem_type": scope_spec.get("problem_type", CONFIG.problem_type),
-                    "input_samples": len(patient_df),
-                },
-                validation_checks=[
-                    ("QC gate passed", state["gate_passed"], "gate_passed = True", f"gate_passed = {state['gate_passed']}"),
-                    ("Overall score acceptable", (overall_score or 0) >= 0.7, "≥ 0.70", f"{overall_score:.2f}" if overall_score else "N/A"),
-                    ("QC training samples sufficient", train_samples >= 50, "≥ 50", train_samples),
-                    ("QC validation samples present", val_samples > 0, "> 0", val_samples),
-                ],
-                metrics_table=[
-                    ("overall_score", f"{overall_score:.2f}" if overall_score else "N/A", "≥ 0.70", (overall_score or 0) >= 0.7),
-                    ("completeness_score", f"{qc_report.get('completeness_score', 0):.2f}", None, None),
-                    ("validity_score", f"{qc_report.get('validity_score', 0):.2f}", None, None),
-                    ("consistency_score", f"{qc_report.get('consistency_score', 0):.2f}", None, None),
-                    ("qc_train_samples", train_samples, "≥ 50", train_samples >= 50),
-                    ("qc_validation_samples", val_samples, "> 0", val_samples > 0),
-                ],
-                interpretation=[
-                    f"Data quality score: {overall_score:.2f}" if overall_score else "Data quality score: N/A",
-                    f"QC sample split: {train_samples} QC-train, {val_samples} QC-validation (full training split in Step 5)",
-                    "QC gate PASSED - data ready for modeling" if state["gate_passed"] else "QC gate FAILED - data quality issues detected",
-                ],
-                result_message="Data preparation complete" if state["gate_passed"] else "Data preparation failed QC gate",
-            ))
+            step_results.append(
+                StepResult(
+                    step_num=2,
+                    step_name="DATA PREPARER",
+                    status="success" if state["gate_passed"] else "failed",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "qc_status": qc_report.get("status", "unknown"),
+                        "overall_score": overall_score,
+                        "gate_passed": state["gate_passed"],
+                        "qc_train_samples": train_samples,
+                        "qc_validation_samples": val_samples,
+                    },
+                    details={
+                        "completeness_score": qc_report.get("completeness_score"),
+                        "validity_score": qc_report.get("validity_score"),
+                        "consistency_score": qc_report.get("consistency_score"),
+                        "uniqueness_score": qc_report.get("uniqueness_score"),
+                        "timeliness_score": qc_report.get("timeliness_score"),
+                    },
+                    # Enhanced format fields
+                    input_summary={
+                        "experiment_id": experiment_id,
+                        "scope_spec_problem_type": scope_spec.get(
+                            "problem_type", CONFIG.problem_type
+                        ),
+                        "input_samples": len(patient_df),
+                    },
+                    validation_checks=[
+                        (
+                            "QC gate passed",
+                            state["gate_passed"],
+                            "gate_passed = True",
+                            f"gate_passed = {state['gate_passed']}",
+                        ),
+                        (
+                            "Overall score acceptable",
+                            (overall_score or 0) >= 0.7,
+                            "≥ 0.70",
+                            f"{overall_score:.2f}" if overall_score else "N/A",
+                        ),
+                        (
+                            "QC training samples sufficient",
+                            train_samples >= 50,
+                            "≥ 50",
+                            train_samples,
+                        ),
+                        ("QC validation samples present", val_samples > 0, "> 0", val_samples),
+                    ],
+                    metrics_table=[
+                        (
+                            "overall_score",
+                            f"{overall_score:.2f}" if overall_score else "N/A",
+                            "≥ 0.70",
+                            (overall_score or 0) >= 0.7,
+                        ),
+                        (
+                            "completeness_score",
+                            f"{qc_report.get('completeness_score', 0):.2f}",
+                            None,
+                            None,
+                        ),
+                        ("validity_score", f"{qc_report.get('validity_score', 0):.2f}", None, None),
+                        (
+                            "consistency_score",
+                            f"{qc_report.get('consistency_score', 0):.2f}",
+                            None,
+                            None,
+                        ),
+                        ("qc_train_samples", train_samples, "≥ 50", train_samples >= 50),
+                        ("qc_validation_samples", val_samples, "> 0", val_samples > 0),
+                    ],
+                    interpretation=[
+                        f"Data quality score: {overall_score:.2f}"
+                        if overall_score
+                        else "Data quality score: N/A",
+                        f"QC sample split: {train_samples} QC-train, {val_samples} QC-validation (full training split in Step 5)",
+                        "QC gate PASSED - data ready for modeling"
+                        if state["gate_passed"]
+                        else "QC gate FAILED - data quality issues detected",
+                    ],
+                    result_message="Data preparation complete"
+                    if state["gate_passed"]
+                    else "Data preparation failed QC gate",
+                )
+            )
 
             if not state["gate_passed"]:
                 print_failure("QC Gate blocked training. Pipeline stopped.")
@@ -4653,20 +4985,20 @@ async def run_pipeline(
                 if sf_blocking_detail
                 else f"max_drift_score={sf_max_drift!r} <= {sf_threshold:.4f}"
             )
-            step_results.append(StepResult(
-                step_num="2a",
-                step_name="SAMPLING FRAME AUDIT",
-                status="failed" if sf_exceeded else "success",
-                key_metrics={
-                    "max_drift_score": sf_max_drift,
-                    "threshold": sf_threshold,
-                    "columns_with_drift": sampling_frame_report.get(
-                        "columns_with_drift", []
-                    ),
-                },
-                details={"blocking_detail": sf_blocking_detail},
-                result_message=sf_message,
-            ))
+            step_results.append(
+                StepResult(
+                    step_num="2a",
+                    step_name="SAMPLING FRAME AUDIT",
+                    status="failed" if sf_exceeded else "success",
+                    key_metrics={
+                        "max_drift_score": sf_max_drift,
+                        "threshold": sf_threshold,
+                        "columns_with_drift": sampling_frame_report.get("columns_with_drift", []),
+                    },
+                    details={"blocking_detail": sf_blocking_detail},
+                    result_message=sf_message,
+                )
+            )
             if sf_exceeded:
                 print_failure(f"Sampling-frame audit blocked training: {sf_message}")
                 # See QC-gate halt above — set pipeline_halted instead of
@@ -4681,36 +5013,56 @@ async def run_pipeline(
             feast_reg_result = await step_2b_feast_registration(experiment_id, state)
             feast_reg_status = feast_reg_result.get("status", "skipped")
             features_registered = feast_reg_result.get("features_registered", 0)
-            step_results.append(StepResult(
-                step_num="2b",
-                step_name="FEAST FEATURE REGISTRATION",
-                status=feast_reg_status if feast_reg_status != "skipped" else "warning",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "features_registered": features_registered,
-                    "features_skipped": feast_reg_result.get("features_skipped", 0),
-                    "feature_group_created": feast_reg_result.get("feature_group_created", False),
-                },
-                details={"errors": feast_reg_result.get("errors", [])},
-                input_summary={
-                    "experiment_id": experiment_id,
-                    "entity_key": "hcp_id",
-                },
-                validation_checks=[
-                    ("Feast registration attempted", feast_reg_status != "skipped", "not skipped", feast_reg_status),
-                    ("Features registered", features_registered > 0, "> 0", str(features_registered)),
-                ],
-                metrics_table=[
-                    ("features_registered", features_registered, "> 0", features_registered > 0),
-                    ("status", feast_reg_status, None, None),
-                ],
-                interpretation=[
-                    f"Feast feature registration: {feast_reg_status}",
-                    f"{features_registered} features registered to feature store",
-                ],
-                result_message=f"Feast registration: {feast_reg_status} ({features_registered} features)"
-                if feast_reg_status != "skipped" else "Feast registration skipped (service unavailable)",
-            ))
+            step_results.append(
+                StepResult(
+                    step_num="2b",
+                    step_name="FEAST FEATURE REGISTRATION",
+                    status=feast_reg_status if feast_reg_status != "skipped" else "warning",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "features_registered": features_registered,
+                        "features_skipped": feast_reg_result.get("features_skipped", 0),
+                        "feature_group_created": feast_reg_result.get(
+                            "feature_group_created", False
+                        ),
+                    },
+                    details={"errors": feast_reg_result.get("errors", [])},
+                    input_summary={
+                        "experiment_id": experiment_id,
+                        "entity_key": "hcp_id",
+                    },
+                    validation_checks=[
+                        (
+                            "Feast registration attempted",
+                            feast_reg_status != "skipped",
+                            "not skipped",
+                            feast_reg_status,
+                        ),
+                        (
+                            "Features registered",
+                            features_registered > 0,
+                            "> 0",
+                            str(features_registered),
+                        ),
+                    ],
+                    metrics_table=[
+                        (
+                            "features_registered",
+                            features_registered,
+                            "> 0",
+                            features_registered > 0,
+                        ),
+                        ("status", feast_reg_status, None, None),
+                    ],
+                    interpretation=[
+                        f"Feast feature registration: {feast_reg_status}",
+                        f"{features_registered} features registered to feature store",
+                    ],
+                    result_message=f"Feast registration: {feast_reg_status} ({features_registered} features)"
+                    if feast_reg_status != "skipped"
+                    else "Feast registration skipped (service unavailable)",
+                )
+            )
 
         # Step 2c: Feast Freshness Check (gracefully degrading)
         if 2 in steps_to_run and not state.get("pipeline_halted"):
@@ -4719,35 +5071,54 @@ async def run_pipeline(
             freshness_status = freshness_result.get("status", "skipped")
             is_fresh = freshness_result.get("fresh", None)
             stale_count = len(freshness_result.get("stale_features", []))
-            step_results.append(StepResult(
-                step_num="2c",
-                step_name="FEAST FRESHNESS CHECK",
-                status=freshness_status if freshness_status != "skipped" else "warning",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "fresh": is_fresh,
-                    "stale_features_count": stale_count,
-                },
-                details={"errors": freshness_result.get("errors", [])},
-                input_summary={
-                    "max_staleness_hours": 24.0,
-                },
-                validation_checks=[
-                    ("Freshness check attempted", freshness_status != "skipped", "not skipped", freshness_status),
-                    ("Features fresh", is_fresh is True, "all fresh", f"{stale_count} stale" if stale_count else "all fresh"),
-                ],
-                metrics_table=[
-                    ("fresh", str(is_fresh) if is_fresh is not None else "N/A", "True", is_fresh is True),
-                    ("stale_features", stale_count, "0", stale_count == 0),
-                ],
-                interpretation=[
-                    f"Feast freshness check: {freshness_status}",
-                    f"{'All features fresh' if is_fresh else f'{stale_count} stale features detected'}"
-                    if is_fresh is not None else "Freshness check was skipped",
-                ],
-                result_message=f"Freshness: {'all fresh' if is_fresh else f'{stale_count} stale'}"
-                if freshness_status != "skipped" else "Freshness check skipped (service unavailable)",
-            ))
+            step_results.append(
+                StepResult(
+                    step_num="2c",
+                    step_name="FEAST FRESHNESS CHECK",
+                    status=freshness_status if freshness_status != "skipped" else "warning",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "fresh": is_fresh,
+                        "stale_features_count": stale_count,
+                    },
+                    details={"errors": freshness_result.get("errors", [])},
+                    input_summary={
+                        "max_staleness_hours": 24.0,
+                    },
+                    validation_checks=[
+                        (
+                            "Freshness check attempted",
+                            freshness_status != "skipped",
+                            "not skipped",
+                            freshness_status,
+                        ),
+                        (
+                            "Features fresh",
+                            is_fresh is True,
+                            "all fresh",
+                            f"{stale_count} stale" if stale_count else "all fresh",
+                        ),
+                    ],
+                    metrics_table=[
+                        (
+                            "fresh",
+                            str(is_fresh) if is_fresh is not None else "N/A",
+                            "True",
+                            is_fresh is True,
+                        ),
+                        ("stale_features", stale_count, "0", stale_count == 0),
+                    ],
+                    interpretation=[
+                        f"Feast freshness check: {freshness_status}",
+                        f"{'All features fresh' if is_fresh else f'{stale_count} stale features detected'}"
+                        if is_fresh is not None
+                        else "Freshness check was skipped",
+                    ],
+                    result_message=f"Freshness: {'all fresh' if is_fresh else f'{stale_count} stale'}"
+                    if freshness_status != "skipped"
+                    else "Freshness check skipped (service unavailable)",
+                )
+            )
 
         # Step 3: Cohort Constructor
         if 3 in steps_to_run and not state.get("pipeline_halted"):
@@ -4759,51 +5130,76 @@ async def run_pipeline(
             eligible_count = len(eligible_df)
             excluded_count = input_count - eligible_count
             exclusion_rate = excluded_count / input_count if input_count > 0 else 0
-            step_results.append(StepResult(
-                step_num=3,
-                step_name="COHORT CONSTRUCTOR",
-                status="success" if eligible_count >= CONFIG.min_eligible_patients else "warning",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "cohort_id": cohort_result.cohort_id,
-                    "input_patients": input_count,
-                    "eligible_patients": eligible_count,
-                    "excluded_patients": excluded_count,
-                    "exclusion_rate": f"{exclusion_rate:.1%}",
-                },
-                details={
-                    "execution_id": cohort_result.execution_id,
-                    "status": cohort_result.status,
-                },
-                # Enhanced format fields
-                input_summary={
-                    "input_patients": input_count,
-                    "brand": CONFIG.brand,
-                    "min_eligible_required": CONFIG.min_eligible_patients,
-                },
-                validation_checks=[
-                    ("Sufficient eligible patients", eligible_count >= CONFIG.min_eligible_patients,
-                     f"≥ {CONFIG.min_eligible_patients}", eligible_count),
-                    ("Exclusion rate reasonable", exclusion_rate <= 0.5,
-                     "≤ 50%", f"{exclusion_rate:.1%}"),
-                    ("Cohort ID generated", cohort_result.cohort_id is not None,
-                     "cohort_id present", cohort_result.cohort_id or "None"),
-                    ("Cohort status valid", cohort_result.status in ["completed", "success"],
-                     "completed/success", cohort_result.status),
-                ],
-                metrics_table=[
-                    ("input_patients", input_count, None, None),
-                    ("eligible_patients", eligible_count, f"≥ {CONFIG.min_eligible_patients}", eligible_count >= CONFIG.min_eligible_patients),
-                    ("excluded_patients", excluded_count, None, None),
-                    ("exclusion_rate", f"{exclusion_rate:.1%}", "≤ 50%", exclusion_rate <= 0.5),
-                ],
-                interpretation=[
-                    f"Cohort constructed with {eligible_count} eligible patients from {input_count} total",
-                    f"Exclusion rate: {exclusion_rate:.1%} ({excluded_count} patients excluded)",
-                    f"Cohort size {'meets' if eligible_count >= CONFIG.min_eligible_patients else 'below'} minimum threshold of {CONFIG.min_eligible_patients}",
-                ],
-                result_message=f"Cohort '{cohort_result.cohort_id}' constructed with {eligible_count} patients",
-            ))
+            step_results.append(
+                StepResult(
+                    step_num=3,
+                    step_name="COHORT CONSTRUCTOR",
+                    status="success"
+                    if eligible_count >= CONFIG.min_eligible_patients
+                    else "warning",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "cohort_id": cohort_result.cohort_id,
+                        "input_patients": input_count,
+                        "eligible_patients": eligible_count,
+                        "excluded_patients": excluded_count,
+                        "exclusion_rate": f"{exclusion_rate:.1%}",
+                    },
+                    details={
+                        "execution_id": cohort_result.execution_id,
+                        "status": cohort_result.status,
+                    },
+                    # Enhanced format fields
+                    input_summary={
+                        "input_patients": input_count,
+                        "brand": CONFIG.brand,
+                        "min_eligible_required": CONFIG.min_eligible_patients,
+                    },
+                    validation_checks=[
+                        (
+                            "Sufficient eligible patients",
+                            eligible_count >= CONFIG.min_eligible_patients,
+                            f"≥ {CONFIG.min_eligible_patients}",
+                            eligible_count,
+                        ),
+                        (
+                            "Exclusion rate reasonable",
+                            exclusion_rate <= 0.5,
+                            "≤ 50%",
+                            f"{exclusion_rate:.1%}",
+                        ),
+                        (
+                            "Cohort ID generated",
+                            cohort_result.cohort_id is not None,
+                            "cohort_id present",
+                            cohort_result.cohort_id or "None",
+                        ),
+                        (
+                            "Cohort status valid",
+                            cohort_result.status in ["completed", "success"],
+                            "completed/success",
+                            cohort_result.status,
+                        ),
+                    ],
+                    metrics_table=[
+                        ("input_patients", input_count, None, None),
+                        (
+                            "eligible_patients",
+                            eligible_count,
+                            f"≥ {CONFIG.min_eligible_patients}",
+                            eligible_count >= CONFIG.min_eligible_patients,
+                        ),
+                        ("excluded_patients", excluded_count, None, None),
+                        ("exclusion_rate", f"{exclusion_rate:.1%}", "≤ 50%", exclusion_rate <= 0.5),
+                    ],
+                    interpretation=[
+                        f"Cohort constructed with {eligible_count} eligible patients from {input_count} total",
+                        f"Exclusion rate: {exclusion_rate:.1%} ({excluded_count} patients excluded)",
+                        f"Cohort size {'meets' if eligible_count >= CONFIG.min_eligible_patients else 'below'} minimum threshold of {CONFIG.min_eligible_patients}",
+                    ],
+                    result_message=f"Cohort '{cohort_result.cohort_id}' constructed with {eligible_count} patients",
+                )
+            )
 
         # Step 4: Model Selector
         if 4 in steps_to_run and not state.get("pipeline_halted"):
@@ -4814,23 +5210,53 @@ async def run_pipeline(
             # Compute feature characteristics for model selector scoring
             _step4_df = state.get("eligible_df", patient_df)
             _step4_exclude = {
-                "patient_journey_id", "patient_id", "patient_hash", "brand",
-                "journey_start_date", "journey_end_date", "created_at", "updated_at",
-                "source_timestamp", "ingestion_timestamp", "data_split", "split_config_id",
-                "data_source", "data_sources_matched", "source_match_confidence",
-                "source_combination_method", "source_stacking_flag", "data_lag_hours",
+                "patient_journey_id",
+                "patient_id",
+                "patient_hash",
+                "brand",
+                "journey_start_date",
+                "journey_end_date",
+                "created_at",
+                "updated_at",
+                "source_timestamp",
+                "ingestion_timestamp",
+                "data_split",
+                "split_config_id",
+                "data_source",
+                "data_sources_matched",
+                "source_match_confidence",
+                "source_combination_method",
+                "source_stacking_flag",
+                "data_lag_hours",
                 # data_quality_score encodes data-source archetype (A/B/C);
                 # after cohort filtering it nearly separates treated from untreated
                 "data_quality_score",
-                "primary_diagnosis_desc", "secondary_diagnosis_codes",
-                "state", "zip_code", "comorbidities", "risk_score",
-                "journey_stage", "journey_status",
-                CONFIG.target_outcome, "discontinuation_flag", "treatment_initiated",
+                "primary_diagnosis_desc",
+                "secondary_diagnosis_codes",
+                "state",
+                "zip_code",
+                "comorbidities",
+                "risk_score",
+                "journey_stage",
+                "journey_status",
+                CONFIG.target_outcome,
+                "discontinuation_flag",
+                "treatment_initiated",
             }
-            _s4_numeric = [c for c in _step4_df.columns if c not in _step4_exclude
-                           and _step4_df[c].dtype.kind in "iufb" and _step4_df[c].nunique() > 1]
-            _s4_categorical = [c for c in _step4_df.columns if c not in _step4_exclude
-                               and _step4_df[c].dtype == object and 2 <= _step4_df[c].nunique() <= 50]
+            _s4_numeric = [
+                c
+                for c in _step4_df.columns
+                if c not in _step4_exclude
+                and _step4_df[c].dtype.kind in "iufb"
+                and _step4_df[c].nunique() > 1
+            ]
+            _s4_categorical = [
+                c
+                for c in _step4_df.columns
+                if c not in _step4_exclude
+                and _step4_df[c].dtype == object
+                and 2 <= _step4_df[c].nunique() <= 50
+            ]
             _s4_total = len(_s4_numeric) + len(_s4_categorical)
             _cat_ratio = len(_s4_categorical) / _s4_total if _s4_total > 0 else 0.0
             _target_counts = _step4_df[CONFIG.target_outcome].value_counts()
@@ -4843,76 +5269,153 @@ async def run_pipeline(
                 _imb_sev = "severe"
             else:
                 _imb_sev = "extreme"
-            feature_characteristics = {"categorical_ratio": _cat_ratio,
-                                       "num_numeric": len(_s4_numeric),
-                                       "num_categorical": len(_s4_categorical),
-                                       "class_imbalance_severity": _imb_sev}
+            feature_characteristics = {
+                "categorical_ratio": _cat_ratio,
+                "num_numeric": len(_s4_numeric),
+                "num_categorical": len(_s4_categorical),
+                "class_imbalance_severity": _imb_sev,
+            }
             state["feature_characteristics"] = feature_characteristics
 
-            result = await step_4_model_selector(experiment_id, scope_spec, qc_report,
-                                                 feature_characteristics=feature_characteristics)
-            state["model_candidate"] = result.get("model_candidate") or result.get("primary_candidate")
+            result = await step_4_model_selector(
+                experiment_id,
+                scope_spec,
+                qc_report,
+                feature_characteristics=feature_characteristics,
+            )
+            state["model_candidate"] = result.get("model_candidate") or result.get(
+                "primary_candidate"
+            )
             state["alternative_candidates"] = result.get("alternative_candidates", [])
 
             candidate = state["model_candidate"]
-            algo_name = candidate.get("algorithm_name") if isinstance(candidate, dict) else getattr(candidate, "algorithm_name", "Unknown")
+            algo_name = (
+                candidate.get("algorithm_name")
+                if isinstance(candidate, dict)
+                else getattr(candidate, "algorithm_name", "Unknown")
+            )
             # Extract selection_score from model_candidate (not selection_rationale)
-            selection_score = candidate.get("selection_score", 0) if isinstance(candidate, dict) else 0
+            selection_score = (
+                candidate.get("selection_score", 0) if isinstance(candidate, dict) else 0
+            )
             # Use default_hyperparameters from agent output
-            hyperparams = candidate.get("default_hyperparameters", {}) if isinstance(candidate, dict) else {}
-            interpretability = candidate.get("interpretability_score", 0) if isinstance(candidate, dict) else 0
+            hyperparams = (
+                candidate.get("default_hyperparameters", {}) if isinstance(candidate, dict) else {}
+            )
+            interpretability = (
+                candidate.get("interpretability_score", 0) if isinstance(candidate, dict) else 0
+            )
 
             # Extract selection rationale details
             selection_rationale = result.get("selection_rationale", {})
-            primary_reason = selection_rationale.get("primary_reason", "") if isinstance(selection_rationale, dict) else ""
-            supporting_factors = selection_rationale.get("supporting_factors", []) if isinstance(selection_rationale, dict) else []
+            primary_reason = (
+                selection_rationale.get("primary_reason", "")
+                if isinstance(selection_rationale, dict)
+                else ""
+            )
+            supporting_factors = (
+                selection_rationale.get("supporting_factors", [])
+                if isinstance(selection_rationale, dict)
+                else []
+            )
 
             # Extract alternative candidates
             alternatives = result.get("alternative_candidates", [])
-            alternatives_considered = selection_rationale.get("alternatives_considered", []) if isinstance(selection_rationale, dict) else []
+            alternatives_considered = (
+                selection_rationale.get("alternatives_considered", [])
+                if isinstance(selection_rationale, dict)
+                else []
+            )
             all_alternatives = alternatives if alternatives else alternatives_considered
 
-            step_results.append(StepResult(
-                step_num=4,
-                step_name="MODEL SELECTOR",
-                status="success" if candidate else "warning",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "selected_algorithm": algo_name,
-                    "selection_score": selection_score,
-                    "alternatives_evaluated": len(all_alternatives),
-                },
-                details={
-                    "selection_rationale": selection_rationale,
-                    "alternative_candidates": all_alternatives,
-                },
-                # Enhanced format fields
-                input_summary={
-                    "experiment_id": experiment_id,
-                    "problem_type": scope_spec.get("problem_type", CONFIG.problem_type),
-                    "qc_gate_passed": qc_report.get("gate_passed", True),
-                },
-                validation_checks=[
-                    ("Algorithm selected", candidate is not None, "candidate present", algo_name or "None"),
-                    ("Selection score computed", selection_score > 0, "> 0", f"{selection_score:.3f}" if selection_score else "N/A"),
-                    ("Rationale provided", bool(primary_reason), "reason present", primary_reason[:30] if primary_reason else "None"),
-                    ("Alternatives evaluated", len(all_alternatives) > 0, "> 0", f"{len(all_alternatives)} candidates"),
-                ],
-                metrics_table=[
-                    ("algorithm", algo_name, None, None),
-                    ("selection_score", f"{selection_score:.3f}" if selection_score else "N/A", "> 0.5", selection_score > 0.5 if selection_score else None),
-                    ("interpretability", f"{interpretability:.2f}" if interpretability else "N/A", None, None),
-                    ("default_hyperparameters", len(hyperparams), None, None),
-                    ("alternatives_evaluated", len(all_alternatives), "> 0", len(all_alternatives) > 0),
-                ],
-                interpretation=[
-                    f"Selected {algo_name} (score: {selection_score:.3f})" if selection_score else f"Selected {algo_name}",
-                    f"Reason: {primary_reason}" if primary_reason else "Selection based on problem type and data characteristics",
-                    f"Evaluated {len(all_alternatives)} alternative{'s' if len(all_alternatives) != 1 else ''}: {', '.join([a.get('algorithm_name', str(a)) if isinstance(a, dict) else str(a) for a in all_alternatives[:3]])}" if all_alternatives else "No alternatives evaluated",
-                    f"HPO will tune {len(hyperparams)} hyperparameters in Step 5" if hyperparams else "HPO will use default search space",
-                ],
-                result_message=f"Model selection complete: {algo_name} (score={selection_score:.3f})" if selection_score else f"Model selection complete: {algo_name}",
-            ))
+            step_results.append(
+                StepResult(
+                    step_num=4,
+                    step_name="MODEL SELECTOR",
+                    status="success" if candidate else "warning",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "selected_algorithm": algo_name,
+                        "selection_score": selection_score,
+                        "alternatives_evaluated": len(all_alternatives),
+                    },
+                    details={
+                        "selection_rationale": selection_rationale,
+                        "alternative_candidates": all_alternatives,
+                    },
+                    # Enhanced format fields
+                    input_summary={
+                        "experiment_id": experiment_id,
+                        "problem_type": scope_spec.get("problem_type", CONFIG.problem_type),
+                        "qc_gate_passed": qc_report.get("gate_passed", True),
+                    },
+                    validation_checks=[
+                        (
+                            "Algorithm selected",
+                            candidate is not None,
+                            "candidate present",
+                            algo_name or "None",
+                        ),
+                        (
+                            "Selection score computed",
+                            selection_score > 0,
+                            "> 0",
+                            f"{selection_score:.3f}" if selection_score else "N/A",
+                        ),
+                        (
+                            "Rationale provided",
+                            bool(primary_reason),
+                            "reason present",
+                            primary_reason[:30] if primary_reason else "None",
+                        ),
+                        (
+                            "Alternatives evaluated",
+                            len(all_alternatives) > 0,
+                            "> 0",
+                            f"{len(all_alternatives)} candidates",
+                        ),
+                    ],
+                    metrics_table=[
+                        ("algorithm", algo_name, None, None),
+                        (
+                            "selection_score",
+                            f"{selection_score:.3f}" if selection_score else "N/A",
+                            "> 0.5",
+                            selection_score > 0.5 if selection_score else None,
+                        ),
+                        (
+                            "interpretability",
+                            f"{interpretability:.2f}" if interpretability else "N/A",
+                            None,
+                            None,
+                        ),
+                        ("default_hyperparameters", len(hyperparams), None, None),
+                        (
+                            "alternatives_evaluated",
+                            len(all_alternatives),
+                            "> 0",
+                            len(all_alternatives) > 0,
+                        ),
+                    ],
+                    interpretation=[
+                        f"Selected {algo_name} (score: {selection_score:.3f})"
+                        if selection_score
+                        else f"Selected {algo_name}",
+                        f"Reason: {primary_reason}"
+                        if primary_reason
+                        else "Selection based on problem type and data characteristics",
+                        f"Evaluated {len(all_alternatives)} alternative{'s' if len(all_alternatives) != 1 else ''}: {', '.join([a.get('algorithm_name', str(a)) if isinstance(a, dict) else str(a) for a in all_alternatives[:3]])}"
+                        if all_alternatives
+                        else "No alternatives evaluated",
+                        f"HPO will tune {len(hyperparams)} hyperparameters in Step 5"
+                        if hyperparams
+                        else "HPO will use default search space",
+                    ],
+                    result_message=f"Model selection complete: {algo_name} (score={selection_score:.3f})"
+                    if selection_score
+                    else f"Model selection complete: {algo_name}",
+                )
+            )
 
         # Step 5: Model Trainer
         if 5 in steps_to_run and not state.get("pipeline_halted"):
@@ -4927,21 +5430,41 @@ async def run_pipeline(
             else:
                 # Discover features, excluding IDs, dates, targets, metadata
                 _exclude = {
-                    "patient_journey_id", "patient_id", "patient_hash", "brand",
-                    "journey_start_date", "journey_end_date", "created_at", "updated_at",
-                    "source_timestamp", "ingestion_timestamp", "data_split", "split_config_id",
-                    "data_source", "data_sources_matched", "source_match_confidence",
-                    "source_combination_method", "source_stacking_flag", "data_lag_hours",
+                    "patient_journey_id",
+                    "patient_id",
+                    "patient_hash",
+                    "brand",
+                    "journey_start_date",
+                    "journey_end_date",
+                    "created_at",
+                    "updated_at",
+                    "source_timestamp",
+                    "ingestion_timestamp",
+                    "data_split",
+                    "split_config_id",
+                    "data_source",
+                    "data_sources_matched",
+                    "source_match_confidence",
+                    "source_combination_method",
+                    "source_stacking_flag",
+                    "data_lag_hours",
                     # data_quality_score encodes data-source archetype (A/B/C);
                     # after cohort filtering it nearly separates treated from untreated
                     "data_quality_score",
                     # primary_diagnosis_code removed — it's a legitimate low-cardinality
                     # feature; leakage detector will vet it
-                    "primary_diagnosis_desc", "secondary_diagnosis_codes",
-                    "state", "zip_code", "comorbidities", "risk_score",
+                    "primary_diagnosis_desc",
+                    "secondary_diagnosis_codes",
+                    "state",
+                    "zip_code",
+                    "comorbidities",
+                    "risk_score",
                     # Derived from target — potential leakers
-                    "journey_stage", "journey_status",
-                    CONFIG.target_outcome, "discontinuation_flag", "treatment_initiated",
+                    "journey_stage",
+                    "journey_status",
+                    CONFIG.target_outcome,
+                    "discontinuation_flag",
+                    "treatment_initiated",
                 }
                 # Merge scope_definer's canonical excluded_features (PII, temporal
                 # leakage, pipeline construction metadata like index_date /
@@ -4950,7 +5473,8 @@ async def run_pipeline(
                 _exclude |= set(state.get("scope_spec", {}).get("excluded_features", []) or [])
                 # Phase 1: Numeric features
                 numeric_cols = [
-                    c for c in eligible_df.columns
+                    c
+                    for c in eligible_df.columns
                     if c not in _exclude
                     and eligible_df[c].dtype.kind in "iufb"
                     and eligible_df[c].nunique() > 1
@@ -4958,7 +5482,8 @@ async def run_pipeline(
                 ]
                 # Phase 2: Low-cardinality categoricals (e.g. demo_product, demo_lis_dual)
                 categorical_cols = [
-                    c for c in eligible_df.columns
+                    c
+                    for c in eligible_df.columns
                     if c not in _exclude
                     and eligible_df[c].dtype == object
                     and 2 <= eligible_df[c].nunique() <= 50
@@ -4979,6 +5504,7 @@ async def run_pipeline(
             _cat_cols = [c for c in feature_cols if X[c].dtype == object]
             if _cat_cols:
                 from sklearn.preprocessing import OrdinalEncoder
+
                 _oe = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
                 X[_cat_cols] = _oe.fit_transform(X[_cat_cols].fillna("__missing__"))
                 state["categorical_encoding"] = {"encoder": _oe, "columns": _cat_cols}
@@ -5004,11 +5530,27 @@ async def run_pipeline(
                 _all_findings = []
 
                 if len(_numeric_feats) > 0 and len(_combined) >= 30:
-                    _all_findings.extend(check_perfect_class_separation(_combined, CONFIG.target_outcome, _numeric_feats))
-                    _all_findings.extend(check_zero_variance_within_class(_combined, CONFIG.target_outcome, _numeric_feats))
-                    _all_findings.extend(check_mutual_information(_combined, CONFIG.target_outcome, _numeric_feats))
-                    _all_findings.extend(check_feature_target_logical_dependency(_combined, CONFIG.target_outcome, _numeric_feats))
-                    _all_findings.extend(check_single_feature_auc(_combined, CONFIG.target_outcome, _numeric_feats))
+                    _all_findings.extend(
+                        check_perfect_class_separation(
+                            _combined, CONFIG.target_outcome, _numeric_feats
+                        )
+                    )
+                    _all_findings.extend(
+                        check_zero_variance_within_class(
+                            _combined, CONFIG.target_outcome, _numeric_feats
+                        )
+                    )
+                    _all_findings.extend(
+                        check_mutual_information(_combined, CONFIG.target_outcome, _numeric_feats)
+                    )
+                    _all_findings.extend(
+                        check_feature_target_logical_dependency(
+                            _combined, CONFIG.target_outcome, _numeric_feats
+                        )
+                    )
+                    _all_findings.extend(
+                        check_single_feature_auc(_combined, CONFIG.target_outcome, _numeric_feats)
+                    )
 
                 if _all_findings:
                     state["leakage_severity"] = _aggregate_severity(_all_findings)
@@ -5018,15 +5560,21 @@ async def run_pipeline(
                     print(f"     Severity: {state['leakage_severity']}")
                     print(f"     Leaked features: {state['leaked_features']}")
                     for _f in _all_findings:
-                        print(f"     [{_f.severity.value.upper()}] {_f.check_name}: {_f.description}")
+                        print(
+                            f"     [{_f.severity.value.upper()}] {_f.check_name}: {_f.description}"
+                        )
             except Exception as _e:
                 print(f"  ⚠️  Pre-training leakage check error: {_e}")
 
             # === LEAKAGE REMEDIATION (Step 5a) ===
             # When critical/high leakage is detected, invoke the LLM-assisted
             # remediation node to reason about alternatives and rebuild features.
-            if state.get("leakage_severity") in ("critical", "high") and not state.get("leakage_remediated_features"):
-                print(f"\n  🔧 LEAKAGE REMEDIATION: Analyzing {len(state.get('leaked_features', []))} leaked feature(s)...")
+            if state.get("leakage_severity") in ("critical", "high") and not state.get(
+                "leakage_remediated_features"
+            ):
+                print(
+                    f"\n  🔧 LEAKAGE REMEDIATION: Analyzing {len(state.get('leaked_features', []))} leaked feature(s)..."
+                )
                 _rem_start = time.time()
                 try:
                     from src.agents.ml_foundation.data_preparer.nodes.leakage_remediation import (
@@ -5041,10 +5589,13 @@ async def run_pipeline(
                         "leakage_findings": state["leakage_findings"],
                         "leakage_remediation_attempts": 0,
                         "train_df": eligible_df,
-                        "scope_spec": state.get("scope_spec", {
-                            "prediction_target": CONFIG.target_outcome,
-                            "problem_type": CONFIG.problem_type,
-                        }),
+                        "scope_spec": state.get(
+                            "scope_spec",
+                            {
+                                "prediction_target": CONFIG.target_outcome,
+                                "problem_type": CONFIG.problem_type,
+                            },
+                        ),
                     }
                     _rem_result = await review_and_remediate_leakage(_rem_state)
                     _rem_status = _rem_result.get("leakage_remediation_status", "error")
@@ -5073,36 +5624,54 @@ async def run_pipeline(
                         print(f"     Reasoning: {_rem_reasoning}")
 
                     # Emit Step 5a result
-                    step_results.append(StepResult(
-                        step_num="5a",
-                        step_name="LEAKAGE REMEDIATION",
-                        status="success" if _rem_viable else "failed",
-                        duration_seconds=_rem_duration,
-                        key_metrics={
-                            "status": _rem_status,
-                            "leaked_features_count": len(state.get("leaked_features", [])),
-                            "dropped_features": _rem_dropped,
-                            "clean_features": _rem_features,
-                            "viable": _rem_viable,
-                        },
-                        input_summary={
-                            "leakage_severity": state["leakage_severity"],
-                            "leaked_features": state["leaked_features"],
-                            "initial_feature_count": len(feature_cols),
-                        },
-                        validation_checks=[
-                            ("Leaked features identified", bool(state.get("leaked_features")), "present", str(state.get("leaked_features", []))),
-                            ("Clean alternatives found", bool(_rem_features), "present", str(_rem_features)),
-                            ("Feature set viable", _rem_viable, "True", str(_rem_viable)),
-                        ],
-                        interpretation=[
-                            f"Leakage severity: {state['leakage_severity']}",
-                            f"Dropped {len(_rem_dropped)} leaked features: {_rem_dropped}" if _rem_dropped else "No features dropped",
-                            f"Recommended {len(_rem_features)} clean features: {_rem_features}" if _rem_features else "No viable replacement features found",
-                            _rem_reasoning or "No reasoning provided",
-                        ],
-                        result_message=f"Remediated: {len(_rem_features)} clean features" if _rem_viable else "FAILED — no viable features",
-                    ))
+                    step_results.append(
+                        StepResult(
+                            step_num="5a",
+                            step_name="LEAKAGE REMEDIATION",
+                            status="success" if _rem_viable else "failed",
+                            duration_seconds=_rem_duration,
+                            key_metrics={
+                                "status": _rem_status,
+                                "leaked_features_count": len(state.get("leaked_features", [])),
+                                "dropped_features": _rem_dropped,
+                                "clean_features": _rem_features,
+                                "viable": _rem_viable,
+                            },
+                            input_summary={
+                                "leakage_severity": state["leakage_severity"],
+                                "leaked_features": state["leaked_features"],
+                                "initial_feature_count": len(feature_cols),
+                            },
+                            validation_checks=[
+                                (
+                                    "Leaked features identified",
+                                    bool(state.get("leaked_features")),
+                                    "present",
+                                    str(state.get("leaked_features", [])),
+                                ),
+                                (
+                                    "Clean alternatives found",
+                                    bool(_rem_features),
+                                    "present",
+                                    str(_rem_features),
+                                ),
+                                ("Feature set viable", _rem_viable, "True", str(_rem_viable)),
+                            ],
+                            interpretation=[
+                                f"Leakage severity: {state['leakage_severity']}",
+                                f"Dropped {len(_rem_dropped)} leaked features: {_rem_dropped}"
+                                if _rem_dropped
+                                else "No features dropped",
+                                f"Recommended {len(_rem_features)} clean features: {_rem_features}"
+                                if _rem_features
+                                else "No viable replacement features found",
+                                _rem_reasoning or "No reasoning provided",
+                            ],
+                            result_message=f"Remediated: {len(_rem_features)} clean features"
+                            if _rem_viable
+                            else "FAILED — no viable features",
+                        )
+                    )
 
                     if _rem_viable and _rem_features:
                         # Update feature set and rebuild X
@@ -5115,34 +5684,67 @@ async def run_pipeline(
                         _cat_cols2 = [c for c in feature_cols if X[c].dtype == object]
                         if _cat_cols2:
                             from sklearn.preprocessing import OrdinalEncoder as _OE2
+
                             _oe2 = _OE2(handle_unknown="use_encoded_value", unknown_value=-1)
                             X[_cat_cols2] = _oe2.fit_transform(X[_cat_cols2].fillna("__missing__"))
                             state["categorical_encoding"] = {"encoder": _oe2, "columns": _cat_cols2}
-                            print(f"     Re-encoded {len(_cat_cols2)} categorical features: {_cat_cols2}")
+                            print(
+                                f"     Re-encoded {len(_cat_cols2)} categorical features: {_cat_cols2}"
+                            )
 
                         # Impute numeric NaN (RWD demographics ~27% missing)
-                        _nan_cols = [c for c in X.columns if X[c].dtype.kind in "iufb" and X[c].isnull().any()]
+                        _nan_cols = [
+                            c
+                            for c in X.columns
+                            if X[c].dtype.kind in "iufb" and X[c].isnull().any()
+                        ]
                         if _nan_cols:
                             X[_nan_cols] = X[_nan_cols].fillna(X[_nan_cols].median())
-                            print(f"     Imputed NaN in {len(_nan_cols)} numeric features: {_nan_cols}")
+                            print(
+                                f"     Imputed NaN in {len(_nan_cols)} numeric features: {_nan_cols}"
+                            )
 
                         # Update leakage state (re-check on the new feature set)
                         _combined2 = _pd.concat([X, y], axis=1)
-                        _numeric_feats2 = [c for c in feature_cols if _combined2[c].dtype.kind in "iufb"]
+                        _numeric_feats2 = [
+                            c for c in feature_cols if _combined2[c].dtype.kind in "iufb"
+                        ]
                         _recheck_findings = []
                         if len(_numeric_feats2) > 0 and len(_combined2) >= 30:
-                            _recheck_findings.extend(check_perfect_class_separation(_combined2, CONFIG.target_outcome, _numeric_feats2))
-                            _recheck_findings.extend(check_zero_variance_within_class(_combined2, CONFIG.target_outcome, _numeric_feats2))
-                            _recheck_findings.extend(check_mutual_information(_combined2, CONFIG.target_outcome, _numeric_feats2))
-                            _recheck_findings.extend(check_feature_target_logical_dependency(_combined2, CONFIG.target_outcome, _numeric_feats2))
-                            _recheck_findings.extend(check_single_feature_auc(_combined2, CONFIG.target_outcome, _numeric_feats2))
+                            _recheck_findings.extend(
+                                check_perfect_class_separation(
+                                    _combined2, CONFIG.target_outcome, _numeric_feats2
+                                )
+                            )
+                            _recheck_findings.extend(
+                                check_zero_variance_within_class(
+                                    _combined2, CONFIG.target_outcome, _numeric_feats2
+                                )
+                            )
+                            _recheck_findings.extend(
+                                check_mutual_information(
+                                    _combined2, CONFIG.target_outcome, _numeric_feats2
+                                )
+                            )
+                            _recheck_findings.extend(
+                                check_feature_target_logical_dependency(
+                                    _combined2, CONFIG.target_outcome, _numeric_feats2
+                                )
+                            )
+                            _recheck_findings.extend(
+                                check_single_feature_auc(
+                                    _combined2, CONFIG.target_outcome, _numeric_feats2
+                                )
+                            )
 
                         if _recheck_findings:
                             _recheck_sev = _aggregate_severity(_recheck_findings)
                             state["leakage_severity"] = _recheck_sev
                             state["leaked_features"] = _get_leaked_features(_recheck_findings)
                             state["leakage_findings"] = [f.to_dict() for f in _recheck_findings]
-                            print(f"     Re-check: {_recheck_sev} severity on {len(_recheck_findings)} finding(s)")
+                            print(
+                                f"     Re-check: {_recheck_sev} severity on {len(_recheck_findings)} finding(s)"
+                            )
                         else:
                             state["leakage_severity"] = "none"
                             state["leaked_features"] = []
@@ -5155,31 +5757,41 @@ async def run_pipeline(
                         # No viable features — halt pipeline
                         print(f"\n  🚨 REMEDIATION FAILED: No viable feature set found")
                         state["pipeline_halted"] = True
-                        state["halt_reason"] = _rem_reasoning or "No viable features after leakage remediation"
+                        state["halt_reason"] = (
+                            _rem_reasoning or "No viable features after leakage remediation"
+                        )
 
-                        step_results.append(StepResult(
-                            step_num=5,
-                            step_name="MODEL TRAINER",
-                            status="failed",
-                            duration_seconds=time.time() - step_start,
-                            key_metrics={"status": "skipped"},
-                            interpretation=["Training SKIPPED — no viable features after leakage remediation"],
-                            result_message="Training SKIPPED — no viable features",
-                        ))
+                        step_results.append(
+                            StepResult(
+                                step_num=5,
+                                step_name="MODEL TRAINER",
+                                status="failed",
+                                duration_seconds=time.time() - step_start,
+                                key_metrics={"status": "skipped"},
+                                interpretation=[
+                                    "Training SKIPPED — no viable features after leakage remediation"
+                                ],
+                                result_message="Training SKIPPED — no viable features",
+                            )
+                        )
 
                 except Exception as _rem_err:
                     print(f"  ⚠️  Leakage remediation error: {_rem_err}")
                     import traceback
+
                     traceback.print_exc()
 
             # Skip training if pipeline was halted by remediation
             if state.get("pipeline_halted"):
                 pass  # Steps 6-8 guards will also skip
             else:
-                model_candidate = state.get("model_candidate", {
-                    "algorithm_name": "LogisticRegression",
-                    "hyperparameters": {"C": 1.0, "max_iter": 100}
-                })
+                model_candidate = state.get(
+                    "model_candidate",
+                    {
+                        "algorithm_name": "LogisticRegression",
+                        "hyperparameters": {"C": 1.0, "max_iter": 100},
+                    },
+                )
                 qc_report = state.get("qc_report", {"gate_passed": True})
 
                 # Resolve entity + date columns for the combined split.
@@ -5209,7 +5821,11 @@ async def run_pipeline(
                 )
 
                 result = await step_5_model_trainer(
-                    experiment_id, model_candidate, qc_report, X, y,
+                    experiment_id,
+                    model_candidate,
+                    qc_report,
+                    X,
+                    y,
                     success_criteria=state.get("success_criteria", {}),
                     entity_ids=_entity_ids,
                     dates=_dates,
@@ -5261,9 +5877,7 @@ async def run_pipeline(
                 # outcomes). Without this, the JSON artifact at line 5430
                 # and the integration assertions at test_adaptive_criteria_e2e
                 # see a stale / empty dict from scope_definer.
-                state["success_criteria_results"] = result.get(
-                    "success_criteria_results", {}
-                )
+                state["success_criteria_results"] = result.get("success_criteria_results", {})
                 state["model_usefulness"] = result.get("model_usefulness", "unknown")
 
                 # Capture class imbalance information
@@ -5282,7 +5896,11 @@ async def run_pipeline(
                 # Calculate new minority ratio from resampled distribution
                 if resampled_dist:
                     total_resampled = sum(resampled_dist.values())
-                    new_minority_ratio = min(resampled_dist.values()) / total_resampled if total_resampled > 0 else None
+                    new_minority_ratio = (
+                        min(resampled_dist.values()) / total_resampled
+                        if total_resampled > 0
+                        else None
+                    )
                 else:
                     new_minority_ratio = None
                 state["resampling_info"] = {
@@ -5303,7 +5921,9 @@ async def run_pipeline(
                 state["leakage_suspected"] = result.get("leakage_suspected", False)
                 state["suspicion_level"] = result.get("suspicion_level", "none")
                 state["suspicion_reasons"] = result.get("suspicion_reasons", [])
-                state["investigation_recommendations"] = result.get("investigation_recommendations", [])
+                state["investigation_recommendations"] = result.get(
+                    "investigation_recommendations", []
+                )
 
                 # Propagate advanced validation results
                 state["permutation_test"] = result.get("permutation_test", {})
@@ -5332,62 +5952,100 @@ async def run_pipeline(
                 success_met = result.get("success_criteria_met", False)
                 imbalance_detected = result.get("imbalance_detected", False)
                 resampling_applied = result.get("resampling_applied", False)
-                step_results.append(StepResult(
-                    step_num=5,
-                    step_name="MODEL TRAINER",
-                    status=step_5_status,
-                    duration_seconds=time.time() - step_start,
-                    key_metrics={
-                        "training_run_id": result.get("training_run_id"),
-                        "model_id": result.get("model_id"),
-                        "auc_roc": auc_roc,
-                        "precision": precision,
-                        "recall": recall,
-                        "f1_score": f1,
-                        "success_criteria_met": success_met,
-                        "hpo_trials_run": result.get("hpo_trials_run"),
-                        "model_usefulness": model_usefulness,
-                    },
-                    details={
-                        "mlflow_run_id": result.get("mlflow_run_id"),
-                        "model_uri": state.get("model_uri"),
-                        "training_duration_seconds": result.get("training_duration_seconds"),
-                        "imbalance_detected": imbalance_detected,
-                        "imbalance_severity": result.get("imbalance_severity"),
-                        "remediation_strategy": result.get("recommended_strategy"),
-                        "usefulness_reason": result.get("usefulness_reason"),
-                    },
-                    # Enhanced format fields
-                    input_summary={
-                        "experiment_id": experiment_id,
-                        "algorithm": model_candidate.get("algorithm_name") if isinstance(model_candidate, dict) else "Unknown",
-                        "training_samples": len(X),
-                        "features": list(X.columns),
-                        "target": CONFIG.target_outcome,
-                    },
-                    validation_checks=[
-                        ("AUC-ROC above threshold", auc_roc >= 0.6, "≥ 0.60", f"{auc_roc:.3f}" if auc_roc else "N/A"),
-                        ("Model not useless", model_usefulness != "useless", "not useless", model_usefulness),
-                        ("Success criteria met", success_met, "True", str(success_met)),
-                        ("Both classes predicted", model_usefulness not in ["useless", "poor"], "multi-class output", model_usefulness),
-                    ],
-                    metrics_table=[
-                        ("auc_roc", f"{auc_roc:.3f}" if auc_roc else "N/A", "≥ 0.60", auc_roc >= 0.6 if auc_roc else False),
-                        ("precision", f"{precision:.3f}" if precision else "N/A", None, None),
-                        ("recall", f"{recall:.3f}" if recall else "N/A", None, None),
-                        ("f1_score", f"{f1:.3f}" if f1 else "N/A", None, None),
-                        ("model_usefulness", model_usefulness, "good/acceptable", model_usefulness in ["good", "acceptable"]),
-                        ("imbalance_detected", imbalance_detected, None, None),
-                        ("resampling_applied", resampling_applied, None, None),
-                    ],
-                    interpretation=[
-                        f"Model trained with AUC-ROC: {auc_roc:.3f}" if auc_roc else "Model training completed",
-                        f"Model usefulness: {model_usefulness}" + (f" - {result.get('usefulness_reason', '')}" if result.get('usefulness_reason') else ""),
-                        f"Class imbalance {'detected and remediated via ' + result.get('recommended_strategy', 'resampling') if imbalance_detected else 'not detected'}",
-                        f"Success criteria {'MET' if success_met else 'NOT MET'}",
-                    ],
-                    result_message=f"Training complete: {model_usefulness} model with AUC={auc_roc:.3f}" if auc_roc else "Training complete",
-                ))
+                step_results.append(
+                    StepResult(
+                        step_num=5,
+                        step_name="MODEL TRAINER",
+                        status=step_5_status,
+                        duration_seconds=time.time() - step_start,
+                        key_metrics={
+                            "training_run_id": result.get("training_run_id"),
+                            "model_id": result.get("model_id"),
+                            "auc_roc": auc_roc,
+                            "precision": precision,
+                            "recall": recall,
+                            "f1_score": f1,
+                            "success_criteria_met": success_met,
+                            "hpo_trials_run": result.get("hpo_trials_run"),
+                            "model_usefulness": model_usefulness,
+                        },
+                        details={
+                            "mlflow_run_id": result.get("mlflow_run_id"),
+                            "model_uri": state.get("model_uri"),
+                            "training_duration_seconds": result.get("training_duration_seconds"),
+                            "imbalance_detected": imbalance_detected,
+                            "imbalance_severity": result.get("imbalance_severity"),
+                            "remediation_strategy": result.get("recommended_strategy"),
+                            "usefulness_reason": result.get("usefulness_reason"),
+                        },
+                        # Enhanced format fields
+                        input_summary={
+                            "experiment_id": experiment_id,
+                            "algorithm": model_candidate.get("algorithm_name")
+                            if isinstance(model_candidate, dict)
+                            else "Unknown",
+                            "training_samples": len(X),
+                            "features": list(X.columns),
+                            "target": CONFIG.target_outcome,
+                        },
+                        validation_checks=[
+                            (
+                                "AUC-ROC above threshold",
+                                auc_roc >= 0.6,
+                                "≥ 0.60",
+                                f"{auc_roc:.3f}" if auc_roc else "N/A",
+                            ),
+                            (
+                                "Model not useless",
+                                model_usefulness != "useless",
+                                "not useless",
+                                model_usefulness,
+                            ),
+                            ("Success criteria met", success_met, "True", str(success_met)),
+                            (
+                                "Both classes predicted",
+                                model_usefulness not in ["useless", "poor"],
+                                "multi-class output",
+                                model_usefulness,
+                            ),
+                        ],
+                        metrics_table=[
+                            (
+                                "auc_roc",
+                                f"{auc_roc:.3f}" if auc_roc else "N/A",
+                                "≥ 0.60",
+                                auc_roc >= 0.6 if auc_roc else False,
+                            ),
+                            ("precision", f"{precision:.3f}" if precision else "N/A", None, None),
+                            ("recall", f"{recall:.3f}" if recall else "N/A", None, None),
+                            ("f1_score", f"{f1:.3f}" if f1 else "N/A", None, None),
+                            (
+                                "model_usefulness",
+                                model_usefulness,
+                                "good/acceptable",
+                                model_usefulness in ["good", "acceptable"],
+                            ),
+                            ("imbalance_detected", imbalance_detected, None, None),
+                            ("resampling_applied", resampling_applied, None, None),
+                        ],
+                        interpretation=[
+                            f"Model trained with AUC-ROC: {auc_roc:.3f}"
+                            if auc_roc
+                            else "Model training completed",
+                            f"Model usefulness: {model_usefulness}"
+                            + (
+                                f" - {result.get('usefulness_reason', '')}"
+                                if result.get("usefulness_reason")
+                                else ""
+                            ),
+                            f"Class imbalance {'detected and remediated via ' + result.get('recommended_strategy', 'resampling') if imbalance_detected else 'not detected'}",
+                            f"Success criteria {'MET' if success_met else 'NOT MET'}",
+                        ],
+                        result_message=f"Training complete: {model_usefulness} model with AUC={auc_roc:.3f}"
+                        if auc_roc
+                        else "Training complete",
+                    )
+                )
 
                 # ================================================================
                 # Step 5b: Algorithm Comparison — always train alternatives
@@ -5406,17 +6064,23 @@ async def run_pipeline(
                 )
                 primary_auc = result.get("auc_roc", 0) or 0
                 candidate_results[primary_algo] = result
-                comparison_history.append({
-                    "algorithm": primary_algo,
-                    "auc_roc": primary_auc,
-                    "model_usefulness": model_usefulness,
-                    "is_primary": True,
-                })
+                comparison_history.append(
+                    {
+                        "algorithm": primary_algo,
+                        "auc_roc": primary_auc,
+                        "model_usefulness": model_usefulness,
+                        "is_primary": True,
+                    }
+                )
 
                 alternatives = list(state.get("alternative_candidates", []))
                 if alternatives and not state.get("pipeline_halted"):
-                    from src.agents.ml_foundation.model_selector.nodes.candidate_ranker import _get_algorithm_class
-                    from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import REGULARIZATION_SEARCH_SPACE
+                    from src.agents.ml_foundation.model_selector.nodes.candidate_ranker import (
+                        _get_algorithm_class,
+                    )
+                    from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import (
+                        REGULARIZATION_SEARCH_SPACE,
+                    )
 
                     imb_sev = state.get("class_imbalance_info", {}).get("imbalance_severity")
 
@@ -5437,26 +6101,37 @@ async def run_pipeline(
                         # Without this, calibration-native + conformal-wrapped algorithms
                         # (NGBoost*, *_Conformal) re-enter the post-hoc isotonic path and
                         # crash predict_proba on the regressor-shaped FrozenEstimator.
-                        for _flag in ("skip_post_hoc_calibration", "distribution_predictor",
-                                      "conformal_wrapper", "base_estimator"):
+                        for _flag in (
+                            "skip_post_hoc_calibration",
+                            "distribution_predictor",
+                            "conformal_wrapper",
+                            "base_estimator",
+                        ):
                             if _flag in alt:
                                 new_candidate[_flag] = alt[_flag]
                         # Force class_weight for imbalanced tree/linear models
-                        if imb_sev in ("severe", "extreme") and alt["name"] in ("RandomForest", "LogisticRegression"):
+                        if imb_sev in ("severe", "extreme") and alt["name"] in (
+                            "RandomForest",
+                            "LogisticRegression",
+                        ):
                             new_candidate["default_hyperparameters"] = {
                                 **new_candidate["default_hyperparameters"],
                                 "class_weight": "balanced",
                             }
 
-                        print(f"\n  {'='*60}")
+                        print(f"\n  {'=' * 60}")
                         print(f"  Step 5b: Algorithm comparison: training {alt['name']}")
-                        print(f"  {'='*60}")
+                        print(f"  {'=' * 60}")
 
                         # Reuse the same split mapping from the primary run so
                         # comparison candidates train on identical data partitions.
                         _alt_pre_splits = state.get("split_assignments") or pre_assigned_splits
                         alt_result = await step_5_model_trainer(
-                            experiment_id, new_candidate, qc_report, X, y,
+                            experiment_id,
+                            new_candidate,
+                            qc_report,
+                            X,
+                            y,
                             success_criteria=state.get("success_criteria", {}),
                             entity_ids=_entity_ids,
                             dates=_dates,
@@ -5467,13 +6142,15 @@ async def run_pipeline(
 
                         alt_auc = alt_result.get("auc_roc", 0) or 0
                         candidate_results[alt["name"]] = alt_result
-                        comparison_history.append({
-                            "algorithm": alt["name"],
-                            "auc_roc": alt_auc,
-                            "model_usefulness": alt_result.get("model_usefulness", "unknown"),
-                            "overfitting_severity": alt_result.get("overfitting_severity"),
-                            "is_primary": False,
-                        })
+                        comparison_history.append(
+                            {
+                                "algorithm": alt["name"],
+                                "auc_roc": alt_auc,
+                                "model_usefulness": alt_result.get("model_usefulness", "unknown"),
+                                "overfitting_severity": alt_result.get("overfitting_severity"),
+                                "is_primary": False,
+                            }
+                        )
 
                     # Pick best model across all candidates by AUC
                     best = max(comparison_history, key=lambda h: h["auc_roc"])
@@ -5511,11 +6188,21 @@ async def run_pipeline(
                         )
                         state["model_candidate"] = {"algorithm_name": best["algorithm"]}
                         # Propagate advanced validation from winner
-                        for _key in ("permutation_test", "cv_results", "calibration_analysis",
-                                     "calibration_error", "calibrated_ece", "f1_threshold_analysis",
-                                     "split_validation", "mcc", "pr_auc", "leakage_suspected",
-                                     "suspicion_level", "suspicion_reasons",
-                                     "investigation_recommendations"):
+                        for _key in (
+                            "permutation_test",
+                            "cv_results",
+                            "calibration_analysis",
+                            "calibration_error",
+                            "calibrated_ece",
+                            "f1_threshold_analysis",
+                            "split_validation",
+                            "mcc",
+                            "pr_auc",
+                            "leakage_suspected",
+                            "suspicion_level",
+                            "suspicion_reasons",
+                            "investigation_recommendations",
+                        ):
                             if _key in _winner:
                                 state[_key] = _winner[_key]
                         if _winner.get("accuracy_analysis"):
@@ -5526,43 +6213,64 @@ async def run_pipeline(
                     _best = max(comparison_history, key=lambda h: h["auc_roc"])
                     _sorted = sorted(comparison_history, key=lambda h: h["auc_roc"], reverse=True)
                     _ranking = ", ".join(f"{h['algorithm']}={h['auc_roc']:.3f}" for h in _sorted)
-                    step_results.append(StepResult(
-                        step_num="5b",
-                        step_name="ALGORITHM COMPARISON",
-                        status="success",
-                        duration_seconds=0.0,
-                        key_metrics={
-                            "candidates_trained": len(comparison_history),
-                            "best_algorithm": _best["algorithm"],
-                            "best_auc": _best["auc_roc"],
-                            "winner_is_primary": _best.get("is_primary", False),
-                        },
-                        details={"comparison_history": comparison_history},
-                        input_summary={"candidates": [h["algorithm"] for h in comparison_history]},
-                        validation_checks=[
-                            ("Multiple algorithms compared", len(comparison_history) > 1, "> 1", f"{len(comparison_history)} trained"),
-                            ("Best model selected", True, "highest AUC", f"{_best['algorithm']} ({_best['auc_roc']:.3f})"),
-                        ],
-                        metrics_table=[
-                            ("candidates_trained", len(comparison_history), None, None),
-                            ("best_algorithm", _best["algorithm"], None, None),
-                            ("best_auc", f"{_best['auc_roc']:.3f}", ">= 0.60", _best["auc_roc"] >= 0.60),
-                            ("ranking", _ranking, None, None),
-                        ],
-                        interpretation=[
-                            f"Trained {len(comparison_history)} candidate algorithms: {', '.join(h['algorithm'] for h in comparison_history)}",
-                            f"Ranking by AUC: {_ranking}",
-                            f"Selected {_best['algorithm']} as best model (AUC={_best['auc_roc']:.3f})",
-                        ],
-                        result_message=f"Algorithm comparison: {_best['algorithm']} wins ({_ranking})",
-                    ))
+                    step_results.append(
+                        StepResult(
+                            step_num="5b",
+                            step_name="ALGORITHM COMPARISON",
+                            status="success",
+                            duration_seconds=0.0,
+                            key_metrics={
+                                "candidates_trained": len(comparison_history),
+                                "best_algorithm": _best["algorithm"],
+                                "best_auc": _best["auc_roc"],
+                                "winner_is_primary": _best.get("is_primary", False),
+                            },
+                            details={"comparison_history": comparison_history},
+                            input_summary={
+                                "candidates": [h["algorithm"] for h in comparison_history]
+                            },
+                            validation_checks=[
+                                (
+                                    "Multiple algorithms compared",
+                                    len(comparison_history) > 1,
+                                    "> 1",
+                                    f"{len(comparison_history)} trained",
+                                ),
+                                (
+                                    "Best model selected",
+                                    True,
+                                    "highest AUC",
+                                    f"{_best['algorithm']} ({_best['auc_roc']:.3f})",
+                                ),
+                            ],
+                            metrics_table=[
+                                ("candidates_trained", len(comparison_history), None, None),
+                                ("best_algorithm", _best["algorithm"], None, None),
+                                (
+                                    "best_auc",
+                                    f"{_best['auc_roc']:.3f}",
+                                    ">= 0.60",
+                                    _best["auc_roc"] >= 0.60,
+                                ),
+                                ("ranking", _ranking, None, None),
+                            ],
+                            interpretation=[
+                                f"Trained {len(comparison_history)} candidate algorithms: {', '.join(h['algorithm'] for h in comparison_history)}",
+                                f"Ranking by AUC: {_ranking}",
+                                f"Selected {_best['algorithm']} as best model (AUC={_best['auc_roc']:.3f})",
+                            ],
+                            result_message=f"Algorithm comparison: {_best['algorithm']} wins ({_ranking})",
+                        )
+                    )
 
         # Step 6: Feature Analyzer
         if 6 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
             eligible_df = state.get("eligible_df", patient_df)
             # Use whatever features the model was trained on
-            feature_cols = state.get("feature_names", ["days_on_therapy", "hcp_visits", "prior_treatments"])
+            feature_cols = state.get(
+                "feature_names", ["days_on_therapy", "hcp_visits", "prior_treatments"]
+            )
             X = eligible_df[[c for c in feature_cols if c in eligible_df.columns]].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
 
@@ -5577,22 +6285,31 @@ async def run_pipeline(
                 _cat_cols = [c for c in cat_enc["columns"] if c in X_for_shap.columns]
                 if _cat_cols:
                     X_for_shap = X_for_shap.copy()
-                    X_for_shap[_cat_cols] = _oe.transform(X_for_shap[_cat_cols].fillna("__missing__"))
+                    X_for_shap[_cat_cols] = _oe.transform(
+                        X_for_shap[_cat_cols].fillna("__missing__")
+                    )
 
             fitted_preprocessor = state.get("fitted_preprocessor")
             if fitted_preprocessor is not None:
                 try:
                     X_transformed = fitted_preprocessor.transform(X_for_shap)
                     # Check the ATTRIBUTE (sklearn convention uses trailing underscore)
-                    feature_names_out = getattr(fitted_preprocessor, 'feature_names_out_', None)
-                    if feature_names_out is not None and len(feature_names_out) == X_transformed.shape[1]:
-                        X_for_shap = pd.DataFrame(X_transformed, columns=feature_names_out, index=X_for_shap.index)
+                    feature_names_out = getattr(fitted_preprocessor, "feature_names_out_", None)
+                    if (
+                        feature_names_out is not None
+                        and len(feature_names_out) == X_transformed.shape[1]
+                    ):
+                        X_for_shap = pd.DataFrame(
+                            X_transformed, columns=feature_names_out, index=X_for_shap.index
+                        )
                     else:
                         # Fallback: use original column names if shape matches
                         # (OrdinalEncoder preserves column count unlike OneHotEncoder)
                         original_cols = list(X_for_shap.columns)
                         if len(original_cols) == X_transformed.shape[1]:
-                            X_for_shap = pd.DataFrame(X_transformed, columns=original_cols, index=X_for_shap.index)
+                            X_for_shap = pd.DataFrame(
+                                X_transformed, columns=original_cols, index=X_for_shap.index
+                            )
                         else:
                             X_for_shap = pd.DataFrame(X_transformed, index=X_for_shap.index)
                 except Exception as e:
@@ -5603,7 +6320,7 @@ async def run_pipeline(
                 state.get("trained_model"),
                 X_for_shap,
                 y.iloc[:50],
-                model_uri=state.get("model_uri")
+                model_uri=state.get("model_uri"),
             )
             state["feature_importance"] = result.get("feature_importance")
 
@@ -5618,47 +6335,77 @@ async def run_pipeline(
             compute_time = result.get("computation_time_seconds", 0)
             explainer_type = result.get("explainer_type", "SHAP")
             top_feature_name = list(top_features.keys())[0] if top_features else None
-            top_feature_importance = top_features.get(top_feature_name, 0) if top_feature_name else 0
-            step_results.append(StepResult(
-                step_num=6,
-                step_name="FEATURE ANALYZER",
-                status="success" if result.get("feature_importance") else "warning",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "samples_analyzed": samples_analyzed,
-                    "computation_time": compute_time,
-                    "top_feature": top_feature_name,
-                },
-                details={
-                    "top_features": top_features,
-                    "explainer_type": explainer_type,
-                },
-                # Enhanced format fields
-                input_summary={
-                    "experiment_id": experiment_id,
-                    "model_uri": state.get("model_uri", "N/A"),
-                    "samples_for_analysis": 50,
-                    "features_analyzed": feature_cols,
-                },
-                validation_checks=[
-                    ("Feature importance computed", result.get("feature_importance") is not None, "importance present", "Yes" if result.get("feature_importance") else "No"),
-                    ("Sufficient samples analyzed", samples_analyzed >= 10, "≥ 10", samples_analyzed),
-                    ("Computation completed", compute_time > 0, "compute_time > 0", f"{compute_time:.2f}s"),
-                ],
-                metrics_table=[
-                    ("samples_analyzed", samples_analyzed, "≥ 10", samples_analyzed >= 10),
-                    ("computation_time", f"{compute_time:.2f}s", None, None),
-                    ("explainer_type", explainer_type, None, None),
-                    ("top_feature", top_feature_name or "N/A", None, None),
-                    ("top_importance", f"{top_feature_importance:.3f}" if top_feature_importance else "N/A", None, None),
-                ],
-                interpretation=[
-                    f"SHAP analysis completed on {samples_analyzed} samples in {compute_time:.2f}s",
-                    f"Top driver: {top_feature_name} (importance: {top_feature_importance:.3f})" if top_feature_name else "No dominant feature identified",
-                    f"Feature ranking: {', '.join(str(k) for k in list(top_features.keys())[:3])}" if len(top_features) >= 3 else f"Features analyzed: {len(top_features)}",
-                ],
-                result_message=f"Feature analysis complete: {top_feature_name} is top predictor" if top_feature_name else "Feature analysis complete",
-            ))
+            top_feature_importance = (
+                top_features.get(top_feature_name, 0) if top_feature_name else 0
+            )
+            step_results.append(
+                StepResult(
+                    step_num=6,
+                    step_name="FEATURE ANALYZER",
+                    status="success" if result.get("feature_importance") else "warning",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "samples_analyzed": samples_analyzed,
+                        "computation_time": compute_time,
+                        "top_feature": top_feature_name,
+                    },
+                    details={
+                        "top_features": top_features,
+                        "explainer_type": explainer_type,
+                    },
+                    # Enhanced format fields
+                    input_summary={
+                        "experiment_id": experiment_id,
+                        "model_uri": state.get("model_uri", "N/A"),
+                        "samples_for_analysis": 50,
+                        "features_analyzed": feature_cols,
+                    },
+                    validation_checks=[
+                        (
+                            "Feature importance computed",
+                            result.get("feature_importance") is not None,
+                            "importance present",
+                            "Yes" if result.get("feature_importance") else "No",
+                        ),
+                        (
+                            "Sufficient samples analyzed",
+                            samples_analyzed >= 10,
+                            "≥ 10",
+                            samples_analyzed,
+                        ),
+                        (
+                            "Computation completed",
+                            compute_time > 0,
+                            "compute_time > 0",
+                            f"{compute_time:.2f}s",
+                        ),
+                    ],
+                    metrics_table=[
+                        ("samples_analyzed", samples_analyzed, "≥ 10", samples_analyzed >= 10),
+                        ("computation_time", f"{compute_time:.2f}s", None, None),
+                        ("explainer_type", explainer_type, None, None),
+                        ("top_feature", top_feature_name or "N/A", None, None),
+                        (
+                            "top_importance",
+                            f"{top_feature_importance:.3f}" if top_feature_importance else "N/A",
+                            None,
+                            None,
+                        ),
+                    ],
+                    interpretation=[
+                        f"SHAP analysis completed on {samples_analyzed} samples in {compute_time:.2f}s",
+                        f"Top driver: {top_feature_name} (importance: {top_feature_importance:.3f})"
+                        if top_feature_name
+                        else "No dominant feature identified",
+                        f"Feature ranking: {', '.join(str(k) for k in list(top_features.keys())[:3])}"
+                        if len(top_features) >= 3
+                        else f"Features analyzed: {len(top_features)}",
+                    ],
+                    result_message=f"Feature analysis complete: {top_feature_name} is top predictor"
+                    if top_feature_name
+                    else "Feature analysis complete",
+                )
+            )
 
         # Step 7: Model Deployer
         if 7 in steps_to_run and not state.get("pipeline_halted"):
@@ -5677,27 +6424,37 @@ async def run_pipeline(
                 print(f"\n  🚨 DEPLOYMENT BLOCKED: Model quality insufficient")
                 print(f"     Model usefulness: {_model_usefulness}")
                 print(f"     Success criteria met: {_success_criteria_met}")
-                step_results.append(StepResult(
-                    step_num=7,
-                    step_name="MODEL DEPLOYER",
-                    status="failed",
-                    duration_seconds=time.time() - step_start,
-                    key_metrics={
-                        "deployment_id": "BLOCKED",
-                        "environment": "N/A",
-                        "status": "blocked_quality",
-                        "deployment_successful": False,
-                    },
-                    details={"reason": f"Model quality insufficient — {_quality_reason}"},
-                    input_summary={"model_usefulness": _model_usefulness, "success_criteria_met": _success_criteria_met},
-                    validation_checks=[
-                        ("Model quality gate", False, "acceptable+", f"{_model_usefulness}"),
-                        ("Success criteria", _success_criteria_met, "met", str(_success_criteria_met)),
-                    ],
-                    metrics_table=[],
-                    interpretation=[f"Deployment blocked: {_quality_reason}"],
-                    result_message=f"Deployment BLOCKED — {_quality_reason}",
-                ))
+                step_results.append(
+                    StepResult(
+                        step_num=7,
+                        step_name="MODEL DEPLOYER",
+                        status="failed",
+                        duration_seconds=time.time() - step_start,
+                        key_metrics={
+                            "deployment_id": "BLOCKED",
+                            "environment": "N/A",
+                            "status": "blocked_quality",
+                            "deployment_successful": False,
+                        },
+                        details={"reason": f"Model quality insufficient — {_quality_reason}"},
+                        input_summary={
+                            "model_usefulness": _model_usefulness,
+                            "success_criteria_met": _success_criteria_met,
+                        },
+                        validation_checks=[
+                            ("Model quality gate", False, "acceptable+", f"{_model_usefulness}"),
+                            (
+                                "Success criteria",
+                                _success_criteria_met,
+                                "met",
+                                str(_success_criteria_met),
+                            ),
+                        ],
+                        metrics_table=[],
+                        interpretation=[f"Deployment blocked: {_quality_reason}"],
+                        result_message=f"Deployment BLOCKED — {_quality_reason}",
+                    )
+                )
             # Block deployment if leakage suspected
             elif (
                 state.get("leakage_suspected", False)
@@ -5710,26 +6467,31 @@ async def run_pipeline(
                 print(f"     Leakage severity: {_leakage_severity}")
                 print(f"     Suspicion level: {_suspicion_level}")
                 print(f"     Leaked features: {state.get('leaked_features', [])}")
-                step_results.append(StepResult(
-                    step_num=7,
-                    step_name="MODEL DEPLOYER",
-                    status="failed",
-                    duration_seconds=time.time() - step_start,
-                    key_metrics={
-                        "deployment_id": "BLOCKED",
-                        "environment": "N/A",
-                        "status": "blocked_leakage",
-                        "deployment_successful": False,
-                    },
-                    details={"reason": "Data leakage detected — deployment blocked"},
-                    input_summary={"leakage_severity": _leakage_severity, "suspicion_level": _suspicion_level},
-                    validation_checks=[
-                        ("Leakage check", False, "no leakage", f"severity={_leakage_severity}"),
-                    ],
-                    metrics_table=[],
-                    interpretation=["Deployment blocked due to data leakage detection"],
-                    result_message="Deployment BLOCKED — data leakage suspected",
-                ))
+                step_results.append(
+                    StepResult(
+                        step_num=7,
+                        step_name="MODEL DEPLOYER",
+                        status="failed",
+                        duration_seconds=time.time() - step_start,
+                        key_metrics={
+                            "deployment_id": "BLOCKED",
+                            "environment": "N/A",
+                            "status": "blocked_leakage",
+                            "deployment_successful": False,
+                        },
+                        details={"reason": "Data leakage detected — deployment blocked"},
+                        input_summary={
+                            "leakage_severity": _leakage_severity,
+                            "suspicion_level": _suspicion_level,
+                        },
+                        validation_checks=[
+                            ("Leakage check", False, "no leakage", f"severity={_leakage_severity}"),
+                        ],
+                        metrics_table=[],
+                        interpretation=["Deployment blocked due to data leakage detection"],
+                        result_message="Deployment BLOCKED — data leakage suspected",
+                    )
+                )
             else:
                 result = await step_7_model_deployer(
                     experiment_id,
@@ -5740,8 +6502,18 @@ async def run_pipeline(
                     include_bentoml=include_bentoml,
                     fitted_preprocessor=state.get("fitted_preprocessor"),
                     feature_columns=state.get("feature_names"),
+                    scope_spec=state.get("scope_spec"),
                 )
                 state["deployment_manifest"] = result.get("deployment_manifest")
+                # v5 Gate C1 (2026-05-11): surface the regulatory
+                # deployment manifest from the deployer agent's output
+                # onto runner state. validate_promotion populates this
+                # field; the runner persists it on state so the
+                # TIER0_E2E_JSON_OUT artifact carries the payload that
+                # the v5 C1 integration test pins.
+                state["regulatory_deployment_manifest"] = result.get(
+                    "regulatory_deployment_manifest"
+                )
                 # Track BentoML PID for cleanup (ephemeral mode only)
                 if include_bentoml and result.get("bentoml_pid"):
                     state["bentoml_pid"] = result["bentoml_pid"]
@@ -5767,102 +6539,163 @@ async def run_pipeline(
                 environment = manifest.get("environment", "staging")
                 deployment_status = manifest.get("status", "unknown")
                 deployment_successful = result.get("deployment_successful", False)
-                bentoml_verified = bentoml_serving.get("prediction_test", False) if bentoml_serving else None
+                bentoml_verified = (
+                    bentoml_serving.get("prediction_test", False) if bentoml_serving else None
+                )
                 # Overall step success requires both the deploy flag AND the validation checks to hold.
                 _deployment_id_valid = bool(deployment_id) and deployment_id != "N/A"
                 _status_healthy = deployment_status == "healthy"
                 _all_checks_pass = (
-                    deployment_successful
-                    and _deployment_id_valid
-                    and _status_healthy
+                    deployment_successful and _deployment_id_valid and _status_healthy
                 )
-                step_results.append(StepResult(
-                    step_num=7,
-                    step_name="MODEL DEPLOYER",
-                    status="success" if _all_checks_pass else "warning",
-                    duration_seconds=time.time() - step_start,
-                    key_metrics={
-                        "deployment_id": deployment_id,
-                        "environment": environment,
-                        "status": deployment_status,
-                        "deployment_successful": deployment_successful,
-                        "bentoml_verified": bentoml_verified,
-                    },
-                    details=step_details,
-                    # Enhanced format fields
-                    input_summary={
-                        "experiment_id": experiment_id,
-                        "model_uri": state.get("model_uri", "N/A"),
-                        "validation_metrics": state.get("validation_metrics", {}),
-                        "success_criteria_met": state.get("success_criteria_met", False),
-                        "include_bentoml": include_bentoml,
-                    },
-                    validation_checks=[
-                        ("Deployment successful", deployment_successful, "True", str(deployment_successful)),
-                        ("Deployment ID assigned", _deployment_id_valid, "ID present", deployment_id),
-                        ("Environment set", environment is not None, "env specified", environment),
-                        ("BentoML verified", bentoml_verified if include_bentoml else True, "True", str(bentoml_verified) if include_bentoml else "N/A (not enabled)"),
-                    ],
-                    metrics_table=[
-                        ("deployment_id", deployment_id, None, None),
-                        ("environment", environment, None, None),
-                        ("status", deployment_status, "healthy", _status_healthy),
-                        ("bentoml_verified", str(bentoml_verified) if include_bentoml else "N/A", None, None),
-                        ("latency_ms", f"{bentoml_serving.get('latency_ms', 'N/A')}" if bentoml_serving else "N/A", None, None),
-                    ],
-                    interpretation=[
-                        f"Model deployed to {environment} environment" if deployment_successful else "Deployment pending or failed",
-                        f"Deployment ID: {deployment_id}",
-                        f"BentoML serving {'verified with live prediction test' if bentoml_verified else 'not verified' if include_bentoml else 'not enabled'}",
-                    ],
-                    result_message=f"Deployment complete: {deployment_id} to {environment}" if deployment_successful else "Deployment incomplete",
-                ))
+                step_results.append(
+                    StepResult(
+                        step_num=7,
+                        step_name="MODEL DEPLOYER",
+                        status="success" if _all_checks_pass else "warning",
+                        duration_seconds=time.time() - step_start,
+                        key_metrics={
+                            "deployment_id": deployment_id,
+                            "environment": environment,
+                            "status": deployment_status,
+                            "deployment_successful": deployment_successful,
+                            "bentoml_verified": bentoml_verified,
+                        },
+                        details=step_details,
+                        # Enhanced format fields
+                        input_summary={
+                            "experiment_id": experiment_id,
+                            "model_uri": state.get("model_uri", "N/A"),
+                            "validation_metrics": state.get("validation_metrics", {}),
+                            "success_criteria_met": state.get("success_criteria_met", False),
+                            "include_bentoml": include_bentoml,
+                        },
+                        validation_checks=[
+                            (
+                                "Deployment successful",
+                                deployment_successful,
+                                "True",
+                                str(deployment_successful),
+                            ),
+                            (
+                                "Deployment ID assigned",
+                                _deployment_id_valid,
+                                "ID present",
+                                deployment_id,
+                            ),
+                            (
+                                "Environment set",
+                                environment is not None,
+                                "env specified",
+                                environment,
+                            ),
+                            (
+                                "BentoML verified",
+                                bentoml_verified if include_bentoml else True,
+                                "True",
+                                str(bentoml_verified) if include_bentoml else "N/A (not enabled)",
+                            ),
+                        ],
+                        metrics_table=[
+                            ("deployment_id", deployment_id, None, None),
+                            ("environment", environment, None, None),
+                            ("status", deployment_status, "healthy", _status_healthy),
+                            (
+                                "bentoml_verified",
+                                str(bentoml_verified) if include_bentoml else "N/A",
+                                None,
+                                None,
+                            ),
+                            (
+                                "latency_ms",
+                                f"{bentoml_serving.get('latency_ms', 'N/A')}"
+                                if bentoml_serving
+                                else "N/A",
+                                None,
+                                None,
+                            ),
+                        ],
+                        interpretation=[
+                            f"Model deployed to {environment} environment"
+                            if deployment_successful
+                            else "Deployment pending or failed",
+                            f"Deployment ID: {deployment_id}",
+                            f"BentoML serving {'verified with live prediction test' if bentoml_verified else 'not verified' if include_bentoml else 'not enabled'}",
+                        ],
+                        result_message=f"Deployment complete: {deployment_id} to {environment}"
+                        if deployment_successful
+                        else "Deployment incomplete",
+                    )
+                )
 
         # Step 8: Observability Connector
         if 8 in steps_to_run and not state.get("pipeline_halted"):
             step_start = time.time()
-            result = await step_8_observability_connector(
-                experiment_id,
-                len(steps_to_run)
-            )
+            result = await step_8_observability_connector(experiment_id, len(steps_to_run))
             emission_successful = result.get("emission_successful", False)
             events_logged = result.get("events_logged", 0)
             quality_score = result.get("quality_score", 0)
-            step_results.append(StepResult(
-                step_num=8,
-                step_name="OBSERVABILITY CONNECTOR",
-                status="success" if emission_successful else "warning",
-                duration_seconds=time.time() - step_start,
-                key_metrics={
-                    "emission_successful": emission_successful,
-                    "events_logged": events_logged,
-                    "quality_score": quality_score,
-                },
-                details={},
-                # Enhanced format fields
-                input_summary={
-                    "experiment_id": experiment_id,
-                    "total_steps": len(steps_to_run),
-                    "pipeline_complete": True,
-                },
-                validation_checks=[
-                    ("Metrics emitted", emission_successful, "True", str(emission_successful)),
-                    ("Events logged", events_logged > 0, "> 0", events_logged),
-                    ("Quality score computed", quality_score is not None, "present", f"{quality_score:.2f}" if quality_score else "N/A"),
-                    ("Feast online retrieval", result.get("feast_online_ok", False), "accessible", result.get("feast_online_detail", "skipped")),
-                ],
-                metrics_table=[
-                    ("emission_successful", str(emission_successful), "True", emission_successful),
-                    ("events_logged", events_logged, "> 0", events_logged > 0),
-                    ("quality_score", f"{quality_score:.2f}" if quality_score else "N/A", None, None),
-                ],
-                interpretation=[
-                    f"Observability metrics {'successfully' if emission_successful else 'NOT'} emitted to monitoring systems",
-                    f"{events_logged} events logged for pipeline tracking",
-                    f"Overall pipeline quality score: {quality_score:.2f}" if quality_score else "Quality score not computed",
-                ],
-                result_message=f"Observability complete: {events_logged} events logged" if emission_successful else "Observability emission incomplete",
-            ))
+            step_results.append(
+                StepResult(
+                    step_num=8,
+                    step_name="OBSERVABILITY CONNECTOR",
+                    status="success" if emission_successful else "warning",
+                    duration_seconds=time.time() - step_start,
+                    key_metrics={
+                        "emission_successful": emission_successful,
+                        "events_logged": events_logged,
+                        "quality_score": quality_score,
+                    },
+                    details={},
+                    # Enhanced format fields
+                    input_summary={
+                        "experiment_id": experiment_id,
+                        "total_steps": len(steps_to_run),
+                        "pipeline_complete": True,
+                    },
+                    validation_checks=[
+                        ("Metrics emitted", emission_successful, "True", str(emission_successful)),
+                        ("Events logged", events_logged > 0, "> 0", events_logged),
+                        (
+                            "Quality score computed",
+                            quality_score is not None,
+                            "present",
+                            f"{quality_score:.2f}" if quality_score else "N/A",
+                        ),
+                        (
+                            "Feast online retrieval",
+                            result.get("feast_online_ok", False),
+                            "accessible",
+                            result.get("feast_online_detail", "skipped"),
+                        ),
+                    ],
+                    metrics_table=[
+                        (
+                            "emission_successful",
+                            str(emission_successful),
+                            "True",
+                            emission_successful,
+                        ),
+                        ("events_logged", events_logged, "> 0", events_logged > 0),
+                        (
+                            "quality_score",
+                            f"{quality_score:.2f}" if quality_score else "N/A",
+                            None,
+                            None,
+                        ),
+                    ],
+                    interpretation=[
+                        f"Observability metrics {'successfully' if emission_successful else 'NOT'} emitted to monitoring systems",
+                        f"{events_logged} events logged for pipeline tracking",
+                        f"Overall pipeline quality score: {quality_score:.2f}"
+                        if quality_score
+                        else "Quality score not computed",
+                    ],
+                    result_message=f"Observability complete: {events_logged} events logged"
+                    if emission_successful
+                    else "Observability emission incomplete",
+                )
+            )
 
         # Print detailed step results
         print_detailed_summary(experiment_id, step_results, state)
@@ -5874,9 +6707,9 @@ async def run_pipeline(
         failed_steps = [r for r in step_results if r.status == "failed"]
         warning_steps = [r for r in step_results if r.status == "warning"]
 
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("PIPELINE SUMMARY")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"  Experiment ID: {experiment_id}")
         print(f"  Steps Completed: {len(steps_to_run)}")
         print(f"  Total Duration: {pipeline_duration:.1f}s")
@@ -5898,13 +6731,17 @@ async def run_pipeline(
                 n_num = feat_chars.get("num_numeric", 0)
                 n_cat = feat_chars.get("num_categorical", 0)
                 cat_ratio = feat_chars.get("categorical_ratio", 0.0)
-                print(f"    Features Discovered: {n_num + n_cat} ({n_num} numeric, {n_cat} categorical)")
+                print(
+                    f"    Features Discovered: {n_num + n_cat} ({n_num} numeric, {n_cat} categorical)"
+                )
                 print(f"    Categorical Ratio: {cat_ratio:.2f}")
             if cat_enc:
                 enc_cols = cat_enc.get("columns", [])
                 print(f"    Categorical Encoded: {len(enc_cols)} ({', '.join(enc_cols)})")
             if leaked:
-                print(f"    Leakage Detected: {len(leaked)} features (severity: {leakage_sev or 'unknown'})")
+                print(
+                    f"    Leakage Detected: {len(leaked)} features (severity: {leakage_sev or 'unknown'})"
+                )
                 print(f"    Leaked: {', '.join(sorted(leaked))}")
             if leakage_dropped:
                 print(f"    Dropped: {', '.join(sorted(leakage_dropped))}")
@@ -5919,7 +6756,9 @@ async def run_pipeline(
 
         # Print step status summary
         success_count = len([r for r in step_results if r.status == "success"])
-        print(f"\n  Step Status: {success_count} success, {len(warning_steps)} warnings, {len(failed_steps)} failed")
+        print(
+            f"\n  Step Status: {success_count} success, {len(warning_steps)} warnings, {len(failed_steps)} failed"
+        )
 
         if failed_steps:
             print_failure(f"PIPELINE FAILED - {len(failed_steps)} step(s) failed:")
@@ -5933,6 +6772,7 @@ async def run_pipeline(
     except Exception as e:
         print_failure(f"Pipeline failed: {e}")
         import traceback
+
         traceback.print_exc()
         raise
 
@@ -5950,6 +6790,7 @@ async def run_pipeline(
     e2e_out = os.environ.get("TIER0_E2E_JSON_OUT")
     if e2e_out:
         import json
+
         sc_state = state.get("success_criteria") or {}
         # Codex pass-1 HIGH-2 (PR #137 v4 G1): canonical deployer
         # verdict label, computed via _compute_verdict using the same
@@ -6024,13 +6865,9 @@ async def run_pipeline(
             "n_total": n_total if regime not in _LEGACY_REGIMES else None,
             "criteria_source": sc_state.get("criteria_source", "fixed"),
             "success_criteria": {
-                k: v
-                for k, v in sc_state.items()
-                if not (isinstance(k, str) and k.startswith("_"))
+                k: v for k, v in sc_state.items() if not (isinstance(k, str) and k.startswith("_"))
             },
-            "success_criteria_results": dict(
-                state.get("success_criteria_results") or {}
-            ),
+            "success_criteria_results": dict(state.get("success_criteria_results") or {}),
             "success_criteria_met": bool(state.get("success_criteria_met", False)),
             "validation_metrics": {
                 k: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
@@ -6070,9 +6907,7 @@ async def run_pipeline(
             # opaque str() coercions that would defeat downstream readers.
             "permutation_test": _to_jsonable(state.get("permutation_test") or {}),
             "adaptive_verdicts": _to_jsonable(state.get("adaptive_verdicts") or []),
-            "leakage_dropped_features": list(
-                state.get("leakage_dropped_features") or []
-            ),
+            "leakage_dropped_features": list(state.get("leakage_dropped_features") or []),
             "feature_manifest_source": (
                 (state.get("scope_spec") or {}).get("feature_manifest_source")
             ),
@@ -6081,6 +6916,16 @@ async def run_pipeline(
                 for k, v in (state.get("split_assignments") or {}).items()
                 if isinstance(v, str)
             },
+            # v5 Gate C1: regulatory_deployment_manifest surfaces from
+            # validate_promotion. The deployer-agent's run() composes it
+            # into the final state when promotion validation fires. We
+            # serialize it verbatim so integration tests can pin the
+            # T2.6c authorization payload emitted by a real CSU run.
+            # Codex pass-1 MED-1: real-CSU-runner coverage of the
+            # manifest emission contract.
+            "regulatory_deployment_manifest": _to_jsonable(
+                state.get("regulatory_deployment_manifest")
+            ),
         }
         e2e_path = Path(e2e_out)
         e2e_path.parent.mkdir(parents=True, exist_ok=True)
@@ -6097,30 +6942,18 @@ def _build_parser() -> argparse.ArgumentParser:
     ``--help`` output. The previous subprocess-based test was
     needlessly slow and brittle to PATH / venv differences.
     """
-    parser = argparse.ArgumentParser(
-        description="Run Tier 0 MLOps workflow test"
-    )
+    parser = argparse.ArgumentParser(description="Run Tier 0 MLOps workflow test")
     parser.add_argument(
-        "--step",
-        type=int,
-        choices=range(1, 9),
-        help="Run only a specific step (1-8)"
+        "--step", type=int, choices=range(1, 9), help="Run only a specific step (1-8)"
     )
     parser.add_argument(
         "--disable-mlflow",
         action="store_true",
-        help="Disable MLflow tracking (enabled by default for model_uri generation)"
+        help="Disable MLflow tracking (enabled by default for model_uri generation)",
     )
+    parser.add_argument("--enable-opik", action="store_true", help="Enable Opik tracing")
     parser.add_argument(
-        "--enable-opik",
-        action="store_true",
-        help="Enable Opik tracing"
-    )
-    parser.add_argument(
-        "--hpo-trials",
-        type=int,
-        default=10,
-        help="Number of HPO trials (default: 10)"
+        "--hpo-trials", type=int, default=10, help="Number of HPO trials (default: 10)"
     )
     parser.add_argument(
         "--min-samples-per-split",
@@ -6132,56 +6965,49 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without executing"
+        "--dry-run", action="store_true", help="Show what would be done without executing"
     )
     parser.add_argument(
         "--imbalanced",
         type=float,
         default=None,
         metavar="RATIO",
-        help="Create imbalanced data with specified minority ratio (e.g., 0.1 for 10%% minority class)"
+        help="Create imbalanced data with specified minority ratio (e.g., 0.1 for 10%% minority class)",
     )
     parser.add_argument(
         "--no-bentoml",
         action="store_true",
-        help="Skip BentoML model serving verification (enabled by default)"
+        help="Skip BentoML model serving verification (enabled by default)",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default="docs/results",
-        help="Directory to save results MD file (default: docs/results)"
+        help="Directory to save results MD file (default: docs/results)",
     )
     parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Do not save results to file (only print to console)"
+        "--no-save", action="store_true", help="Do not save results to file (only print to console)"
     )
     parser.add_argument(
         "--data-dir",
         type=str,
         default=None,
-        help="Load real-world data from this directory instead of generating synthetic data"
+        help="Load real-world data from this directory instead of generating synthetic data",
     )
     parser.add_argument(
-        "--brand",
-        type=str,
-        default=None,
-        help="Override CONFIG.brand (e.g. 'competitor')"
+        "--brand", type=str, default=None, help="Override CONFIG.brand (e.g. 'competitor')"
     )
     parser.add_argument(
         "--target",
         type=str,
         default=None,
-        help="Override CONFIG.target_outcome (e.g. 'treatment_initiated')"
+        help="Override CONFIG.target_outcome (e.g. 'treatment_initiated')",
     )
     parser.add_argument(
         "--indication",
         type=str,
         default=None,
-        help="Override CONFIG.indication (e.g. 'Chronic Spontaneous Urticaria (CSU)')"
+        help="Override CONFIG.indication (e.g. 'Chronic Spontaneous Urticaria (CSU)')",
     )
     parser.add_argument(
         "--feature-manifest-source",
@@ -6379,21 +7205,23 @@ def main():
 
     try:
         # Run pipeline
-        asyncio.run(run_pipeline(
-            step=args.step,
-            dry_run=args.dry_run,
-            imbalance_ratio=args.imbalanced,
-            include_bentoml=not args.no_bentoml,
-            data_dir=args.data_dir,
-            regime=args.regime,
-            split_mode=args.split,
-            inject_demo_cost_matrix=not args.no_demo_cost_matrix,
-            feature_manifest_source=_resolve_feature_manifest_source(
-                args.data_dir, args.feature_manifest_source
-            ),
-            n_total=args.n_total,
-            seed=args.seed,
-        ))
+        asyncio.run(
+            run_pipeline(
+                step=args.step,
+                dry_run=args.dry_run,
+                imbalance_ratio=args.imbalanced,
+                include_bentoml=not args.no_bentoml,
+                data_dir=args.data_dir,
+                regime=args.regime,
+                split_mode=args.split,
+                inject_demo_cost_matrix=not args.no_demo_cost_matrix,
+                feature_manifest_source=_resolve_feature_manifest_source(
+                    args.data_dir, args.feature_manifest_source
+                ),
+                n_total=args.n_total,
+                seed=args.seed,
+            )
+        )
     finally:
         # Restore stdout
         sys.stdout = original_stdout
