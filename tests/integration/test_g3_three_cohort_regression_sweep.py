@@ -1198,25 +1198,84 @@ SYNTHETIC_REGIMES: list[tuple[str, int, str | None, bool]] = [
     ("synthetic_optum_default_window_n22", 22, "optum", True),
 ]
 
-# Baseline z grid + expected severity per regime. The expected severity
-# is computed from HBLP's effective thresholds at that (n_train_pos,
-# declared_safe) regime — never higher than the legacy 5σ classification.
-LOW8_PARAMS = []
-for regime, n_pos, manifest, declared in SYNTHETIC_REGIMES:
-    for z, _ in [
-        (2.0, "info"),
-        (4.0, "moderate"),
-        (6.0, "high"),
-        (10.0, "high"),
-    ]:
-        # Compute the post-G3 expected severity by querying hblp_classify
-        # directly (the load-bearing helper).
-        expected = hblp_classify(
-            z_score=z,
-            n_positives=n_pos,
-            layer_1_declared_safe=declared,
-        )["severity"]
-        LOW8_PARAMS.append((regime, n_pos, manifest, declared, z, expected))
+# Pre-computed per-regime expected severity table.
+#
+# How these values were derived (HBLP math — Plan v3 §3 Tier 1B step 2):
+#
+#   HIGH_Z = 5.0, MODERATE_Z = 3.0, REFERENCE_N = 50
+#   variance_inflation = max(1.0, sqrt(REFERENCE_N / n_train_pos))
+#   layer_1_factor     = 1.5 if layer_1_declared_safe else 1.0
+#   high_eff           = HIGH_Z × variance_inflation × layer_1_factor
+#   moderate_eff       = MODERATE_Z × (high_eff / HIGH_Z)
+#   severity = "high"     if z > high_eff
+#            = "moderate" if z > moderate_eff
+#            = "info"     otherwise
+#
+# Per-regime thresholds:
+#   synthetic_no_manifest_n200 (n=200, declared=False):
+#     variance_inflation = max(1.0, sqrt(50/200)) = max(1.0, 0.5)  = 1.0
+#     layer_1_factor     = 1.0
+#     high_eff           = 5.0 × 1.0 × 1.0 = 5.000
+#     moderate_eff       = 3.0 × 1.0       = 3.000
+#
+#   synthetic_csu_n50_pre_index (n=25, declared=True):
+#     variance_inflation = max(1.0, sqrt(50/25)) = sqrt(2) ≈ 1.4142
+#     layer_1_factor     = 1.5
+#     high_eff           = 5.0 × 1.4142 × 1.5 ≈ 10.607
+#     moderate_eff       = 3.0 × 2.1213       ≈  6.364
+#
+#   synthetic_optum_n50_pre_index (n=22, declared=True):
+#   synthetic_optum_default_window_n22 (n=22, declared=True):  [same N]
+#     variance_inflation = max(1.0, sqrt(50/22)) ≈ 1.5076
+#     layer_1_factor     = 1.5
+#     high_eff           = 5.0 × 1.5076 × 1.5 ≈ 11.307
+#     moderate_eff       = 3.0 × 2.2614       ≈  6.784
+#
+# To update this table: re-run the HBLP formula above with the new
+# constants from adaptive_validity_check.py (HIGH_Z, MODERATE_Z,
+# T2_1B_HBLP_VARIANCE_INFLATION_REFERENCE_N,
+# T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER) and recompute each cell.
+# The test will then catch any production-wiring divergence from the
+# updated pinned values.
+#
+# fmt: off
+EXPECTED_BY_REGIME: dict[str, dict[float, str]] = {
+    # high_eff=5.00, moderate_eff=3.00 — legacy fixed thresholds (no inflation)
+    "synthetic_no_manifest_n200": {
+        2.0: "info",      # 2.0 ≤ 3.0
+        4.0: "moderate",  # 3.0 < 4.0 ≤ 5.0
+        6.0: "high",      # 6.0 > 5.0
+        10.0: "high",     # 10.0 > 5.0
+    },
+    # high_eff≈10.607, moderate_eff≈6.364 — sqrt(2) × 1.5x layer-1 inflation
+    "synthetic_csu_n50_pre_index": {
+        2.0: "info",      # 2.0 ≤ 6.364
+        4.0: "info",      # 4.0 ≤ 6.364
+        6.0: "info",      # 6.0 ≤ 6.364
+        10.0: "moderate", # 6.364 < 10.0 ≤ 10.607
+    },
+    # high_eff≈11.307, moderate_eff≈6.784 — sqrt(50/22) × 1.5x inflation
+    "synthetic_optum_n50_pre_index": {
+        2.0: "info",      # 2.0 ≤ 6.784
+        4.0: "info",      # 4.0 ≤ 6.784
+        6.0: "info",      # 6.0 ≤ 6.784
+        10.0: "moderate", # 6.784 < 10.0 ≤ 11.307
+    },
+    # identical N and declared_safe to synthetic_optum_n50_pre_index
+    "synthetic_optum_default_window_n22": {
+        2.0: "info",      # 2.0 ≤ 6.784
+        4.0: "info",      # 4.0 ≤ 6.784
+        6.0: "info",      # 6.0 ≤ 6.784
+        10.0: "moderate", # 6.784 < 10.0 ≤ 11.307
+    },
+}
+# fmt: on
+
+# Build parametrize list from the static table (no hblp_classify re-call).
+LOW8_PARAMS: list[tuple[str, int, str | None, bool, float, str]] = []
+for _regime, _n_pos, _manifest, _declared in SYNTHETIC_REGIMES:
+    for _z, _expected_severity in EXPECTED_BY_REGIME[_regime].items():
+        LOW8_PARAMS.append((_regime, _n_pos, _manifest, _declared, _z, _expected_severity))
 
 
 class TestRegimeSweepLow8:
@@ -1224,11 +1283,18 @@ class TestRegimeSweepLow8:
 
     The acceptance criterion is the invariant:
       "no baseline MARGINAL/non-high becomes high under G3 wiring"
-    i.e. HBLP relaxation NEVER tightens. We compute the expected
-    severity from hblp_classify directly and assert _adversarial_input
-    matches it; then assert the expected severity is never STRICTLY
-    higher than the legacy 5σ/3σ classification (the "no
-    MARGINAL→GENUINE flips" rule).
+    i.e. HBLP relaxation NEVER tightens. Expected outcomes are pinned in
+    ``EXPECTED_BY_REGIME`` (pre-computed from HBLP math, NOT derived by
+    re-calling hblp_classify — that would be tautological). The test
+    checks that the production orchestrator path (``_adversarial_input``)
+    agrees with the table AND that no regime tightens relative to legacy.
+
+    Distinct HBLP code paths exercised:
+      - synthetic_no_manifest_n200: no inflation path (n>=ref_N, declared=False)
+      - synthetic_csu_n50_pre_index: sqrt(2) inflation + 1.5x declared_safe
+      - synthetic_optum_*: sqrt(50/22) inflation + 1.5x declared_safe
+    If the HBLP formula changes (constants or branching), the pinned table
+    will diverge from production output and the test will fail loudly.
     """
 
     @pytest.mark.parametrize(
@@ -1246,8 +1312,13 @@ class TestRegimeSweepLow8:
         expected_severity: str,
     ) -> None:
         """For each (regime, z) cell, assert post-G3 severity matches
-        the HBLP-computed expected severity AND is NOT stricter than
-        legacy.
+        the pre-computed expected severity in EXPECTED_BY_REGIME AND
+        is NOT stricter than legacy.
+
+        ``expected_severity`` is sourced from the static EXPECTED_BY_REGIME
+        table — it is NOT recomputed from hblp_classify. This ensures the
+        test verifies production wiring rather than tautologically re-invoking
+        the same helper that production calls.
         """
 
         score = {
@@ -1266,8 +1337,9 @@ class TestRegimeSweepLow8:
         assert adv["severity"] == expected_severity, (
             f"regime={regime!r} z={z_score} n_pos={n_train_pos} "
             f"declared={layer_1_declared_safe}: post-G3 severity="
-            f"{adv['severity']!r}, hblp_classify expected "
-            f"{expected_severity!r}"
+            f"{adv['severity']!r} != EXPECTED_BY_REGIME pin "
+            f"{expected_severity!r}. "
+            f"Update EXPECTED_BY_REGIME if HBLP semantics changed."
         )
 
         # Invariant guard: HBLP relaxation NEVER tightens. Compute the
