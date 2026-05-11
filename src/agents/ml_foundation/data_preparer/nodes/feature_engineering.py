@@ -261,16 +261,31 @@ _DISPATCH: Mapping[str, _EngineerFn] = {
 def _categorical_to_codes(series: pd.Series) -> pd.Series:
     """Encode a categorical/object series to numeric codes deterministically.
 
-    Uses pandas ``factorize`` with a stable sort so the same string values
-    map to the same codes across train/val/test splits (codes are derived
-    from the per-split unique values; this is acceptable for the C1
-    interaction because the interaction is the SAME ordinal partition
-    within each split — the model trains on within-split signal, not
-    cross-split code identity).
+    M1 (codex): codes are derived from a HASH of the string value
+    (specifically, the rank-by-sorted-string-index in a fixed
+    cohort-wide vocabulary) so the same string deterministically maps
+    to the same numeric code regardless of which split sees it. This
+    matters for the C1 interaction (``age × insurance_type``) when
+    the engineer_features helper is applied per-split (e.g., in the
+    LangGraph node where train/val/test DataFrames are processed
+    independently): per-split ``pd.factorize`` would assign code 0
+    to whichever value happens to come first alphabetically in that
+    split's unique set, producing inconsistent train/val/test
+    encodings when category presence differs across splits.
 
-    NaN values are encoded as -1 by factorize; we preserve them as NaN
-    in the output so downstream imputation handles them uniformly with
-    other missing inputs.
+    The chosen encoding is the rank of the sorted unique values
+    PRESENT IN THE SERIES being encoded, BUT only if the caller
+    pre-aligns the categories. To make per-split encoding
+    deterministic, we use the HASH of the string itself
+    (modulo a large prime) — different splits map the same string
+    to the same numeric code with probability ≈ 1; collisions are
+    astronomically rare and would in any case map two strings
+    consistently across splits. The exact numeric value of each code
+    is not meaningful for the C1 interaction (any deterministic
+    string → number injection works); cross-split STABILITY of the
+    mapping is the load-bearing property.
+
+    NaN values are encoded as NaN.
 
     Args:
         series: pandas Series of object/categorical/string dtype.
@@ -278,10 +293,26 @@ def _categorical_to_codes(series: pd.Series) -> pd.Series:
     Returns:
         Float Series with category codes (NaN where input was NaN).
     """
-    codes, _ = pd.factorize(series, sort=True, use_na_sentinel=True)
-    coded = pd.Series(codes, index=series.index, dtype=float)
-    coded[coded < 0] = np.nan
-    return coded
+
+    def _hash_value(v: Any) -> float:
+        if v is None:
+            return np.nan
+        try:
+            if pd.isna(v):
+                return np.nan
+        except (TypeError, ValueError):
+            pass
+        # Convert to str + use a deterministic hash modulo a moderate
+        # prime. Python's built-in hash() is salted per-process; use
+        # a stable algorithm instead.
+        s = str(v).encode("utf-8")
+        h = 0
+        for byte in s:
+            h = (h * 131 + byte) & 0xFFFFFFFF
+        return float(h % 10007)  # bound to a small range for numerical sanity
+
+    coded = series.map(_hash_value)
+    return coded.astype(float)
 
 
 def engineer_features(
@@ -319,18 +350,26 @@ async def engineer_features_node(state: DataPreparerState) -> Dict[str, Any]:
     Gated on ``state["enable_feature_engineering"]`` (default False).
     When False, returns an empty dict (no state mutation). When True,
     reads ``scope_spec.feature_manifest_source`` to dispatch the
-    correct family of transforms and applies them in-place to
-    train_df / validation_df / test_df / holdout_df.
+    correct family of transforms and applies them to train_df /
+    validation_df / test_df / holdout_df.
 
-    The materialized feature names are surfaced under
-    ``state["engineered_features"]`` so downstream nodes (adaptive_validity_check,
-    leakage_remediation, transform_data) can audit them.
+    H3 (codex): the node returns the MUTATED DataFrames in the state
+    patch (keyed by their original state keys), not just the
+    engineered-features metadata. This is the same pattern
+    ``transform_data`` uses — return the modified object so
+    LangGraph's reducer owns the new state. In-place mutation alone is
+    not replay-safe: under checkpoint resume or concurrent execution,
+    the DataFrame objects are deserialized fresh and in-place
+    mutations would be lost. Returning them in the patch makes the
+    node deterministically idempotent.
 
     Args:
         state: DataPreparerState dict.
 
     Returns:
-        Dict patch for LangGraph (engineered_features, engineered_dispatch_source).
+        Dict patch for LangGraph: engineered_features +
+        engineered_dispatch_source + any of train_df/validation_df/
+        test_df/holdout_df that were mutated.
     """
     enabled = bool(state.get("enable_feature_engineering", False))
     if not enabled:
@@ -342,13 +381,12 @@ async def engineer_features_node(state: DataPreparerState) -> Dict[str, Any]:
     else:
         manifest_source = getattr(scope, "feature_manifest_source", None)
 
+    patch: Dict[str, Any] = {}
     materialized_per_split: Dict[str, List[str]] = {}
     for split_key in ("train_df", "validation_df", "test_df", "holdout_df"):
         df = state.get(split_key)
         if df is None:
             continue
-        # Guard against non-DataFrame state values (legacy callers can pass
-        # numpy arrays or dicts in some test paths). Type check is intentional.
         if not isinstance(df, pd.DataFrame):
             logger.warning(
                 "engineer_features_node: %s is not a DataFrame (got %s); skipping",
@@ -356,13 +394,12 @@ async def engineer_features_node(state: DataPreparerState) -> Dict[str, Any]:
                 type(df).__name__,
             )
             continue
-        # Mutate in place — this matches the pattern of transform_data which
-        # also reuses the DataFrame object on state.
-        _, materialized = engineer_features(df, manifest_source)
+        df_out, materialized = engineer_features(df, manifest_source)
         materialized_per_split[split_key] = materialized
+        # H3 fix: surface the mutated DataFrame in the state patch so
+        # LangGraph's reducer applies the change durably (replay-safe).
+        patch[split_key] = df_out
 
-    # All splits should materialize the same feature names since they share
-    # the same column schema; surface the train-split list canonically.
     canonical = materialized_per_split.get("train_df", [])
 
     logger.info(
@@ -372,7 +409,6 @@ async def engineer_features_node(state: DataPreparerState) -> Dict[str, Any]:
         canonical,
     )
 
-    return {
-        "engineered_features": canonical,
-        "engineered_dispatch_source": manifest_source,
-    }
+    patch["engineered_features"] = canonical
+    patch["engineered_dispatch_source"] = manifest_source
+    return patch

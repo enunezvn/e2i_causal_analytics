@@ -149,7 +149,12 @@ class DataPreparerState(BaseAgentSchema):
     # manifest_source used to dispatch the engineering family — useful for
     # audit-trail reconstruction when a run later asks "which transforms
     # ran?". Pre-spec: docs/specs/v5_b3_feature_engineering_prespec_2026-05-11.md.
-    enable_feature_engineering: Optional[bool] = None
+    # L2 (codex): bool=False (not Optional[bool]=None) so the documented
+    # "default False" matches the declared default. Callers that did
+    # ``if state["enable_feature_engineering"]:`` previously got None
+    # which evaluates to False but is type-confusing; bool=False is
+    # type-honest.
+    enable_feature_engineering: bool = False
     engineered_features: Optional[List[str]] = None
     engineered_dispatch_source: Optional[str] = None
 
