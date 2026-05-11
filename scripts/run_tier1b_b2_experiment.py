@@ -391,6 +391,12 @@ def _train_val_test_split(
 DEFAULT_HARNESS_N_PERMUTATIONS = 200
 DEFAULT_HARNESS_ADVERSARIAL_SEED = 7
 
+# v5 A1 iter-1 codex pass-1 HIGH-1: production at
+# ``adaptive_validity_check._adaptive_validity_check_node`` skips Layer 3
+# scoring when ``mask.sum() < MIN_LAYER3_SAMPLES`` (= 30). Mirror the
+# same guard in the harness so parity covers sparse-feature behaviour.
+_HARNESS_MIN_LAYER3_SAMPLES = 30
+
 
 def _compute_marginal_z_scores(
     X: pd.DataFrame,
@@ -404,14 +410,29 @@ def _compute_marginal_z_scores(
     Production-parity implementation (v5 Gate A1): calls
     ``src.data.adversarial_leakage.compute_adversarial_score`` per
     feature, returning the permutation-null z-score that
-    ``adaptive_validity_check`` consumes in production. Constant
-    features and degenerate targets return z=0.0 (consistent with the
-    production probe's degenerate-score handling).
+    ``adaptive_validity_check`` consumes in production. Mirrors
+    production's pre-scoring guards so the harness's verdict surface
+    matches what the pipeline would produce on the same matrix:
 
-    Per-feature cost is ``n_permutations`` AUC computations. At Optum
-    n=1294 with default n_permutations=200 + ~8 candidate features
-    × 5 seeds, total runtime is ~30-90 sec — acceptable for the G2
-    harness's offline evaluation cadence.
+    * Per-feature NaN mask (``pd.Series.notna()``), matching the
+      production ``col.notna() & binary_label_mask`` form at
+      ``adaptive_validity_check.py``. Non-finite cells (``+inf`` /
+      ``-inf``) are passed through to ``compute_adversarial_score``,
+      which converts them to ``NaN`` z via its degenerate-score path
+      (matching the production exception fallback to severity=info).
+    * Minimum-sample guard ``mask.sum() < _HARNESS_MIN_LAYER3_SAMPLES``
+      (= 30, production constant). Below this the permutation null is
+      too noisy to score and the harness emits z=0.0 (= retain),
+      matching production's short-circuit-to-info behaviour.
+    * Per-class minimums (≥2 positives + ≥2 negatives after masking).
+      Required by ``roc_auc_score`` which raises ValueError otherwise.
+      Production catches the same ValueError in its exception path.
+
+    On Optum n=1294 with 81 retained features × 5 seeds at
+    ``n_permutations=200``, the empirical wall time is ~4 minutes
+    (see ``docs/results/g2_harness_a1_parity_run_optum_20260511.md``).
+    For routine CI / smoke runs prefer ``--n-permutations=50``;
+    production-parity claims require the full 200.
     """
     from src.data.adversarial_leakage import compute_adversarial_score
 
@@ -425,13 +446,23 @@ def _compute_marginal_z_scores(
         return dict.fromkeys(X.columns, 0.0)
 
     for col in X.columns:
-        x = X[col].to_numpy(dtype=np.float64)
-        finite_mask = np.isfinite(x)
-        if not finite_mask.any():
+        # Production parity: NaN-only mask (NOT a broader isfinite
+        # filter) — matches ``col.notna() & binary_label_mask`` at
+        # ``adaptive_validity_check.py``. ``+inf`` / ``-inf`` values
+        # flow through to ``compute_adversarial_score``, which folds
+        # them into the degenerate-score (NaN-z) path via the inner
+        # ``roc_auc_score`` exception handler.
+        col_series = X[col]
+        mask = col_series.notna()
+        if int(mask.sum()) < _HARNESS_MIN_LAYER3_SAMPLES:
+            # Production short-circuits to a severity=info verdict
+            # (= retain) when fewer than MIN_LAYER3_SAMPLES rows pass
+            # the mask. Emit z=0.0 so both arms keep the feature —
+            # mirroring "no Layer 3 signal" semantics.
             z_scores[col] = 0.0
             continue
-        xv = x[finite_mask]
-        yv = y_arr[finite_mask]
+        xv = col_series[mask].to_numpy(dtype=np.float64)
+        yv = y_arr[mask.to_numpy()]
         if (yv == 1).sum() < 2 or (yv == 0).sum() < 2:
             z_scores[col] = 0.0
             continue
