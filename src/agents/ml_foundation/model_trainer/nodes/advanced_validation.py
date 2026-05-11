@@ -602,18 +602,45 @@ def select_calibration_method(
     """v5 B1: auto-select calibration method from validation positive count.
 
     Returns ``"isotonic"`` when ``(y_val == 1).sum() > n_pos_crossover``,
-    else ``"sigmoid"`` (Platt). Treats non-finite / non-binary ``y_val`` as
-    "too sparse to commit to isotonic" → falls back to sigmoid (safer).
+    else ``"sigmoid"`` (Platt). Treats degenerate inputs as "too sparse
+    to commit to isotonic" → falls back to sigmoid (safer):
+
+    * Empty arrays (``size == 0``).
+    * Non-1D shape.
+    * Cast failures (``TypeError`` / ``ValueError``).
+    * **Non-finite values** in the original float dtype (NaN / inf
+      survive the int64 cast as the int sentinel
+      ``-9223372036854775808``, which would otherwise skew the
+      ``== 1`` count without an explicit ``np.isfinite`` guard —
+      codex pass-1 MED-1).
+    * **Non-binary labels** — any unique value outside ``{0, 1}`` after
+      the ``np.isfinite`` filter means the array isn't a binary target;
+      cannot legitimately compute a "positive count."
 
     The crossover constant defaults to ``B1_AUTO_POLICY_N_POS_CROSSOVER``
     (= 100) per v5 §2 B1; callers MAY override via the kwarg but the
     default lands disease-agnostic per the plan.
     """
+    # Codex pass-1 MED-1: run finite-ness + binary-label guards BEFORE
+    # the int64 cast (which silently turns NaN into a huge negative int).
     try:
-        arr = np.asarray(y_val).astype(np.int64, copy=False)
+        raw = np.asarray(y_val)
     except (TypeError, ValueError):
         return _CALIBRATION_METHOD_PLATT
-    if arr.ndim != 1:
+    if raw.ndim != 1 or raw.size == 0:
+        return _CALIBRATION_METHOD_PLATT
+    try:
+        raw_float = raw.astype(np.float64, copy=False)
+    except (TypeError, ValueError):
+        return _CALIBRATION_METHOD_PLATT
+    if not np.all(np.isfinite(raw_float)):
+        return _CALIBRATION_METHOD_PLATT
+    try:
+        arr = raw_float.astype(np.int64, copy=False)
+    except (TypeError, ValueError):
+        return _CALIBRATION_METHOD_PLATT
+    unique = np.unique(arr)
+    if unique.size == 0 or not np.all(np.isin(unique, [0, 1])):
         return _CALIBRATION_METHOD_PLATT
     n_pos = int((arr == 1).sum())
     return (
