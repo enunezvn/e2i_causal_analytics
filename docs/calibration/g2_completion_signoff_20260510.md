@@ -9,6 +9,12 @@ its presence does NOT promote the G2 lifecycle state from `ADVISORY` to
 **Plan reference:** `.claude/plans/disease_agnostic_quality_uplift_v4.md`
 §2 Gate G2 + §3 sequencing + §8 acceptance summary.
 
+**Branch / commit:** `e75c99170d0e9fb31710a47303f90e11647e40cc`
+(G2 merge commit on `origin/main`, merged 2026-05-11 11:07:17Z via
+`--rebase`; originally from branch `v4-g2-phase-b`).
+The G3 wiring-guard CI workflow verifies this SHA is an ancestor of
+the wiring-PR HEAD per the v4 §3 sequencing rule.
+
 ---
 
 ## 1. Pre-spec memo
@@ -38,7 +44,7 @@ its presence does NOT promote the G2 lifecycle state from `ADVISORY` to
 constraint" step here)*
 ```
 
-- **Commit-graph parent verified:** *(YES/NO)*
+- **Parent-graph check verified:** *(YES/NO)* (renamed from "Commit-graph parent verified" to avoid collision with the G3 wiring-guard's commit-field regex)
 - **Verifier evidence:**
   - `scripts/check_g2_commit_graph.py` exit code: *(0 = pass)*
   - `git merge-base --is-ancestor S_prespec experiment_sha` exit code:

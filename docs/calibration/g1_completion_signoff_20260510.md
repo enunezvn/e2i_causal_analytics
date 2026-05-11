@@ -20,11 +20,11 @@ held-out non-inferiority + lineage audit per Plan v4 §2 G1.
 
 **Date:** 2026-05-10
 
-**Branch / commit:** `v4-g1-phase-b` HEAD at codex pass-1 closure;
-exact SHA recorded by the final commit that updates this field.
-The G3 wiring-guard CI workflow (scheduled to land with G3 PR)
-verifies this SHA is an ancestor of the wiring-PR HEAD; until G3,
-this field is recorded but not yet enforced.
+**Branch / commit:** `ad3118a6699b541bc4e04724dff8a6b5eb389a83`
+(G1 merge commit on `origin/main`, merged 2026-05-11 11:06:40Z via
+`--rebase`; originally from branch `v4-g1-phase-b`).
+The G3 wiring-guard CI workflow verifies this SHA is an ancestor of
+the wiring-PR HEAD per the v4 §3 sequencing rule.
 
 > **WARNING:** This signoff is INTERIM. The cryptographic signature
 > requirement is gated on the N3 reviewer registry + CoI infrastructure
