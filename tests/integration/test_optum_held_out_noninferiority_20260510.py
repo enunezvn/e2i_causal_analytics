@@ -109,8 +109,36 @@ _BASELINE_SIDECAR = (
     REPO_ROOT / "docs" / "calibration" / "g1_optum_baseline_20260510.json"
 )
 _REQUIRED_SIDECAR_KEYS = frozenset(
-    {"auc", "split", "cohort_n", "target", "window_regime", "pr_number", "commit_sha"}
+    {
+        "auc",
+        "split",
+        "cohort_n",
+        "target",
+        "window_regime",
+        "pr_number",
+        "commit_sha",
+        "noninferiority_epsilon",
+        "_schema_version",
+    }
 )
+
+# Independent pinned anchors — NOT derived from the sidecar at runtime.
+# These literals are the load-bearing regression pins for the PR #116
+# baseline. If the sidecar is updated, these constants must be changed
+# IN THE SAME COMMIT with a PR reference + domain-expert sign-off.
+# They exist so test_g1_baseline_sidecar_field_types can verify the
+# sidecar has not been silently downgraded without a code review.
+_EXPECTED_SIDECAR_VALUES: dict = {
+    "auc": 0.4347,
+    "split": "held_out_test",
+    "cohort_n": 1294,
+    "target": "initiated_biologic_180d",
+    "window_regime": "PRE=360d/POST=180d",
+    "pr_number": 116,
+    "commit_sha": "0dc85a4",
+    "noninferiority_epsilon": 0.02,
+    "_schema_version": 1,
+}
 
 
 def _load_baseline() -> dict:
@@ -554,6 +582,29 @@ def test_g1_baseline_sidecar_field_types() -> None:
         f"sidecar 'window_regime' must be a non-empty string; "
         f"got {data['window_regime']!r}"
     )
+    # Codex pass-3 LOW-1 fix: independent pinned invariants, separate from
+    # sidecar-derived runtime constants. These literal values are the
+    # regression pins for the PR #116 baseline. A tester cannot satisfy
+    # these by editing only the sidecar (both constants AND sidecar must
+    # change, which forces a code review).
+    for key, expected in _EXPECTED_SIDECAR_VALUES.items():
+        actual = data.get(key)
+        if isinstance(expected, float):
+            assert actual == pytest.approx(expected, abs=1e-9), (
+                f"Sidecar field {key!r} = {actual!r} does not match the "
+                f"independent expected value {expected!r} (PR #116 anchor). "
+                f"To update the baseline, change _EXPECTED_SIDECAR_VALUES "
+                f"in this file AND the sidecar JSON in the same commit with "
+                f"a PR reference + domain-expert sign-off."
+            )
+        else:
+            assert actual == expected, (
+                f"Sidecar field {key!r} = {actual!r} does not match the "
+                f"independent expected value {expected!r} (PR #116 anchor). "
+                f"To update the baseline, change _EXPECTED_SIDECAR_VALUES "
+                f"in this file AND the sidecar JSON in the same commit with "
+                f"a PR reference + domain-expert sign-off."
+            )
 
 
 def test_g1_baseline_sidecar_consistent_with_module_constants() -> None:
@@ -561,6 +612,13 @@ def test_g1_baseline_sidecar_consistent_with_module_constants() -> None:
 
     Guards against a future edit that updates the sidecar but forgets
     to reload the module, or a cached import with stale values.
+
+    Note: this test is NOT a substitute for the independent pinned
+    invariants in ``test_g1_baseline_sidecar_field_types`` —
+    ``OPTUM_BASELINE_HELDOUT_AUC`` et al. are derived from the sidecar,
+    so asserting ``constant == sidecar field`` only checks self-consistency.
+    The load-bearing regression pin is the ``_EXPECTED_SIDECAR_VALUES``
+    dict in ``test_g1_baseline_sidecar_field_types``.
     """
     data = json.loads(_BASELINE_SIDECAR.read_text())
     assert OPTUM_BASELINE_HELDOUT_AUC == float(data["auc"]), (
