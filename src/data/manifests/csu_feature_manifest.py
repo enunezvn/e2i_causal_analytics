@@ -189,22 +189,16 @@ _WINDOWED_AGG = [
 # during ``adaptive_validity_check``. Both must pass before the feature
 # is permitted to influence val_AUC.
 
+# Post-audit: claim_intensity_ratio dropped (z=40.83 amplified to 4.2x of
+# max input z on CSU; the amplification heuristic flags ratio-style
+# transforms that manufacture signal not present in either component as
+# leakage-suspect). 4 candidates remain.
 _ENGINEERED_B3 = [
     FeatureContract(
         name="age_x_insurance_interaction",
         knowable_at=KnowableAt(reference="index_date"),
         source="derived",
         derivation_inputs=("age_continuous", "insurance_type"),
-    ),
-    FeatureContract(
-        name="claim_intensity_ratio",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="derived",
-        derivation_inputs=(
-            "medication_claim_count",
-            "procedure_claim_count",
-            "eligibility_duration_days",
-        ),
     ),
     FeatureContract(
         name="engagement_per_visit",

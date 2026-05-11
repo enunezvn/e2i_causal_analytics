@@ -156,13 +156,13 @@ def test_engineer_csu_features_materializes_all_five():
         assert name in out.columns
 
 
-def test_csu_claim_intensity_ratio_correctness():
-    df = _make_csu_df()
-    out, _ = engineer_features(df, "csu")
-    # Row 0: (5+2)/180 = 0.0389
-    # Row 3: (0+0)/max(0, 1) = 0/1 = 0
-    np.testing.assert_allclose(out["claim_intensity_ratio"].iloc[0], 7 / 180.0, rtol=1e-6)
-    np.testing.assert_allclose(out["claim_intensity_ratio"].iloc[3], 0.0)
+# claim_intensity_ratio DROPPED post-audit (b3_engineered_audit_20260511).
+# Test removed; module docstring + manifest comment cite the audit JSON.
+
+
+def test_csu_claim_intensity_ratio_dropped_from_module():
+    """Regression pin: the dropped candidate is no longer exported."""
+    assert "claim_intensity_ratio" not in CSU_ENGINEERED_FEATURES
 
 
 def test_csu_engagement_per_visit_clamps_zero_visits():
@@ -322,17 +322,19 @@ def test_optum_missing_drug_class_columns_skips_polypharmacy():
 # =============================================================================
 
 
-def test_csu_nan_inputs_propagate_through_ratio():
+def test_csu_nan_engagement_score_propagates_through_ratio():
+    """engagement_per_visit handles NaN engagement_score gracefully."""
     df = pd.DataFrame(
         {
-            "medication_claim_count": [5],
-            "procedure_claim_count": [np.nan],
-            "eligibility_duration_days": [180.0],
+            "engagement_score": [np.nan, 10.0],
+            "hcp_visits": [3, 5],
         }
     )
     out, _ = engineer_features(df, "csu")
-    # NaN procedure_claim_count is fillna(0.0) before sum -> 5/180
-    np.testing.assert_allclose(out["claim_intensity_ratio"].iloc[0], 5 / 180.0)
+    # NaN engagement_score / clipped denominator -> NaN
+    assert pd.isna(out["engagement_per_visit"].iloc[0])
+    # Row 1: 10 / 5 = 2.0
+    np.testing.assert_allclose(out["engagement_per_visit"].iloc[1], 2.0)
 
 
 # =============================================================================
