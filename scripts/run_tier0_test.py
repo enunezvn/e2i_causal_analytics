@@ -1132,7 +1132,15 @@ def print_detailed_summary(
             if cal_ece is not None:
                 ece_str = f"{cal_ece:.4f}"
                 if cal_ece_post is not None:
-                    ece_str += f" → {cal_ece_post:.4f} (after isotonic calibration)"
+                    # v5 B1 (2026-05-11): the post-hoc method is now
+                    # auto-selected (isotonic OR Platt). Read the resolved
+                    # method from the post_hoc_calibration audit dict so
+                    # the user-facing string reflects what actually ran.
+                    cal_info_for_label = state.get("post_hoc_calibration") or {}
+                    resolved_method = cal_info_for_label.get(
+                        "calibration_method_resolved"
+                    ) or cal_info_for_label.get("calibration_method", "post-hoc")
+                    ece_str += f" → {cal_ece_post:.4f} (after {resolved_method} calibration)"
                 print(f"    ECE:               {ece_str}")
 
             # F1-optimal threshold
