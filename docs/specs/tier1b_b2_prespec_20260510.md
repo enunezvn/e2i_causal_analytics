@@ -212,6 +212,32 @@ parent-check protocol prevents this:
 
 ---
 
+## 4.1 Governance verifier SHA (PINNED — HIGH-6 iter-3)
+
+The verifier scripts (`check_g2_commit_graph.py`, `verify_g2_prespec_dataset_hashes.py`,
+`check_g2_prior_runs.py`) are the load-bearing trust boundary for G2. Pulling
+them from `origin/main` (mutable protected ref) means a re-run of an old tag
+could pick up newer verifier semantics than the original load-bearing run.
+
+To close that gap, the workflow checks out the verifier scripts from a
+SHA-pinned governance commit recorded HERE. The pinned SHA is the immutable
+identity of the verifier code that was reviewed and committed as part of
+S_prespec.
+
+```yaml
+# Governance verifier source SHA — pinned at S_prespec time.
+# When this is the placeholder, the workflow falls back to origin/main
+# (the prior, less-strict trust boundary). The first green run pins
+# this to S_prespec itself (or a later commit on origin/main that
+# CODEOWNERS has signed off on).
+governance_verifier_sha: "TODO_PIN_AT_FIRST_GREEN_RUN"
+```
+
+The workflow records the SHA actually checked out in the run manifest's
+`governance_verifier_sha` field for downstream audit.
+
+---
+
 ## 5. Dataset content hashes (PINNED at the time of this memo)
 
 The experiment harness references the following cohort artifacts. Their

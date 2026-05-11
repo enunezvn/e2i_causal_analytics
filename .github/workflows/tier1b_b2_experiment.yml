@@ -83,22 +83,6 @@ jobs:
           # needs sklearn/numpy/pandas + the project's local packages.
           pip install -e .
 
-      - name: HIGH-6 — Stage protected verifier scripts from origin/main
-        # The tagged commit could include weakened versions of the
-        # verifiers. We check out a clean copy from origin/main into
-        # governance_checkout/ and run the verifiers from there.
-        # CODEOWNERS gating on origin/main (configured in
-        # .github/CODEOWNERS) is the trust boundary.
-        run: |
-          set -euo pipefail
-          mkdir -p governance_checkout/scripts
-          git fetch origin main --depth=1
-          for s in check_g2_commit_graph.py verify_g2_prespec_dataset_hashes.py; do
-            git show "${GOVERNANCE_REF}:scripts/${s}" > "governance_checkout/scripts/${s}"
-            chmod +x "governance_checkout/scripts/${s}"
-          done
-          echo "[OK] staged $(ls governance_checkout/scripts/) from ${GOVERNANCE_REF}"
-
       - name: Discover S_prespec SHA
         id: prespec
         run: |
@@ -112,6 +96,50 @@ jobs:
           echo "S_prespec=$S_PRESPEC ($S_PRESPEC_SHORT)"
           echo "sha=$S_PRESPEC" >> "$GITHUB_OUTPUT"
           echo "short=$S_PRESPEC_SHORT" >> "$GITHUB_OUTPUT"
+
+      - name: HIGH-6 (iter-3) — Resolve governance verifier SHA from pre-spec memo
+        # The pre-spec memo's `governance_verifier_sha:` field pins the
+        # immutable governance commit whose verifier scripts the
+        # workflow trusts. Falls back to origin/main if the memo
+        # carries the placeholder (back-compat).
+        id: gov_sha
+        env:
+          S_PRESPEC: ${{ steps.prespec.outputs.sha }}
+        run: |
+          set -euo pipefail
+          GOV_SHA=$(python scripts/extract_governance_verifier_sha.py --prespec-sha "$S_PRESPEC")
+          echo "Governance verifier SHA: ${GOV_SHA}"
+          echo "sha=${GOV_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: HIGH-6 — Stage protected verifier scripts from pinned governance SHA
+        # iter-3: stage from the SHA pinned in the pre-spec memo
+        # (immutable). When the memo holds the placeholder, fall back
+        # to origin/main (the prior, less-strict trust boundary).
+        # The SHA actually checked out is recorded into the run
+        # manifest's `governance_verifier_sha` field so the audit
+        # trail captures which verifier semantics gated the run.
+        env:
+          GOV_SHA: ${{ steps.gov_sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p governance_checkout/scripts
+          if [ "$GOV_SHA" = "ORIGIN_MAIN_FALLBACK" ]; then
+            echo "[INFO] memo placeholder set — falling back to ${GOVERNANCE_REF}"
+            git fetch origin main --depth=1
+            ACTUAL_REF="${GOVERNANCE_REF}"
+            ACTUAL_SHA=$(git rev-parse "${GOVERNANCE_REF}")
+          else
+            echo "[INFO] using pinned governance SHA: ${GOV_SHA}"
+            git fetch origin "${GOV_SHA}" --depth=1 || git fetch --unshallow || true
+            ACTUAL_REF="${GOV_SHA}"
+            ACTUAL_SHA="${GOV_SHA}"
+          fi
+          for s in check_g2_commit_graph.py verify_g2_prespec_dataset_hashes.py check_g2_prior_runs.py extract_governance_verifier_sha.py; do
+            git show "${ACTUAL_REF}:scripts/${s}" > "governance_checkout/scripts/${s}"
+            chmod +x "governance_checkout/scripts/${s}"
+          done
+          echo "$ACTUAL_SHA" > governance_checkout/.governance_verifier_sha
+          echo "[OK] staged $(ls governance_checkout/scripts/) from ${ACTUAL_REF} (sha=${ACTUAL_SHA})"
 
       - name: HIGH-5 (iter-3) — Durable prior-run check via GitHub API
         # The first ATTEMPTED run from a given S_prespec is the
@@ -237,6 +265,29 @@ jobs:
             --cohort-label optum_initiation_default \
             --manifest-out g2_run_manifest.json \
             | tee g2_stdout.log
+
+      - name: HIGH-6 (iter-3) — Inject governance_verifier_sha into manifest
+        # The verifier source SHA pinned in the pre-spec memo (or the
+        # origin/main fallback SHA) is recorded in the manifest so the
+        # audit trail captures which verifier semantics gated the run.
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f g2_run_manifest.json ]; then
+            echo "::warning::manifest missing; skipping governance_verifier_sha injection"
+            exit 0
+          fi
+          GOV_SHA="$(cat governance_checkout/.governance_verifier_sha 2>/dev/null || echo unknown)"
+          python -c "
+import json, sys
+p = 'g2_run_manifest.json'
+with open(p) as f:
+    m = json.load(f)
+m['governance_verifier_sha'] = '$GOV_SHA'
+with open(p, 'w') as f:
+    json.dump(m, f, indent=2, sort_keys=True)
+print(f'[OK] injected governance_verifier_sha={m[\"governance_verifier_sha\"]} into manifest')
+"
 
       - name: Append G2 outcome to gate_history (MED-10)
         # MED-10 fix: the manifest is appended to the N1 audit trail

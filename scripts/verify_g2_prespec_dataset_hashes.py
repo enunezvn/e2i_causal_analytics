@@ -146,6 +146,31 @@ def _sha256_of(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def parse_governance_verifier_sha(memo_text: str) -> Optional[str]:
+    """Extract the ``governance_verifier_sha:`` value from the memo.
+
+    HIGH-6 (iter-3) fix: the verifier scripts must be pinned to a
+    reviewed governance SHA (committed in the pre-spec memo) rather
+    than ``origin/main`` (mutable). This parser returns the pinned
+    value, or None if the memo carries the TODO placeholder (in which
+    case the workflow falls back to ``origin/main``).
+
+    The function is module-public so the workflow can shell out to
+    extract the value before staging the verifier copy.
+    """
+    pattern = re.compile(
+        r'^\s*governance_verifier_sha\s*:\s*"([^"]*)"',
+        re.MULTILINE,
+    )
+    m = pattern.search(memo_text)
+    if m is None:
+        return None
+    value = m.group(1).strip()
+    if not value or value == PLACEHOLDER:
+        return None
+    return value
+
+
 def _parse_pinned_hashes(memo_text: str) -> Dict[str, Optional[str]]:
     """Parse the YAML-ish pinned-hashes block from the memo. Returns
     {memo_key: pinned_sha256_or_None_if_placeholder}.
