@@ -73,11 +73,11 @@ LeakagePattern = Literal[
 # a manifest-declared-safe feature is exactly 5σ × 1.5 = 7.5σ.
 #
 # The injection adds a single normally-distributed feature with class-
-# conditional means tuned so the resulting feature AUC ≈ 0.72-0.76, which
-# produces z ≈ 5.5-7σ under the permutation null at n=20000. The default
-# constants below were calibrated against compute_adversarial_score with
-# n_permutations=200 and seed=42; the integration test pins the empirical
-# z-value AND the legacy-drops vs HBLP-retains contrast.
+# conditional means tuned so the resulting feature AUC ≈ 0.55 (~6σ of
+# permutation-null evidence) at n=20000. The default constants below were
+# calibrated against compute_adversarial_score with n_permutations=200 and
+# seed=42; the integration test pins the empirical z-value AND the
+# legacy-drops vs HBLP-retains contrast.
 #
 # This is a v5 Gate C2 ENGINEERING CI SANITY-CHECK, not RWD positive
 # evidence (v5 plan §2 C2 + codex pass-3 MEDIUM-7). The synthetic generator
@@ -86,9 +86,10 @@ LeakagePattern = Literal[
 # ============================================================================
 BORDERLINE_GENUINE_FEATURE_NAME = "borderline_genuine_feature"
 # Class-conditional Gaussian offset. Calibrated empirically against
-# ``compute_adversarial_score(n_permutations=200, seed=42)`` at
+# ``adaptive_validity_check`` defaults (n_permutations=200, seed=7) at
 # n_patients=20000, prevalence=0.024, generator seed=42:
-#   AUC ≈ 0.553, z ≈ 6.8σ — comfortably in (5.0, 7.5) band.
+#   AUC ≈ 0.553, z ≈ 6.10σ via the pipeline path — comfortably in
+#   (5.0, 7.5) band.
 # Different injection seeds (passed to RwdRealisticConfig.seed) shift the
 # observed z by ±1.5σ via the small-positive-class sample variance; the
 # integration test pins a single seed for reproducibility.

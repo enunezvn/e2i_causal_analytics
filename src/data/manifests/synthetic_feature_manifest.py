@@ -33,7 +33,11 @@ _SYNTHETIC_FEATURES = [
         name=BORDERLINE_GENUINE_FEATURE_NAME,
         knowable_at=KnowableAt(reference="index_date"),
         source="derived",
-        derivation_inputs=("treatment_initiated_pre_anchor_proxy",),
+        # No derivation_inputs declared — the synthetic feature is sampled
+        # at-index from a class-conditional Gaussian (no upstream column).
+        # Declaring a fictitious input would risk breaking future contract-
+        # chain validation that checks input existence (codex pass-1 LOW).
+        derivation_inputs=(),
     ),
 ]
 
