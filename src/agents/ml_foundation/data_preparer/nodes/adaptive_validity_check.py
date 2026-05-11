@@ -62,6 +62,7 @@ from src.data.manifests import (
     CSU_FORBIDDEN_AS_FEATURES,
     OPTUM_FEATURES,
     OPTUM_FORBIDDEN_AS_FEATURES,
+    SYNTHETIC_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
 )
 
@@ -1346,6 +1347,10 @@ def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
 _MANIFEST_FORBIDDEN_BY_SOURCE: dict[str, list[str]] = {
     "csu": CSU_FORBIDDEN_AS_FEATURES,
     "optum": OPTUM_FORBIDDEN_AS_FEATURES,
+    # v5 Gate C2: synthetic manifest has no forbidden columns by design.
+    # Registered explicitly so ``_select_features`` does NOT log the
+    # "unknown manifest_source" warning when synthetic runs opt in.
+    "synthetic": SYNTHETIC_FORBIDDEN_AS_FEATURES,
 }
 
 
@@ -1379,18 +1384,19 @@ def _select_features(
     excluded_set = set(excluded or [])
     excluded_set.add(target)
     if manifest_source is not None:
-        forbidden = _MANIFEST_FORBIDDEN_BY_SOURCE.get(manifest_source)
-        if forbidden:
-            excluded_set.update(forbidden)
+        # Codex M1 (PR #92 review): a typo or future-cohort value would
+        # silently fall through to legacy behaviour, defeating the
+        # defense-in-depth objective with no operator signal. Warn once
+        # per call so an operator who misspelt ``feature_manifest_source``
+        # in scope_spec can spot the issue before the run completes.
+        #
+        # v5 Gate C2: distinguish "known manifest with no forbidden
+        # columns by design" (e.g., the synthetic manifest) from "unknown
+        # manifest source typo" by membership check, not truthiness — an
+        # empty list is a valid registration.
+        if manifest_source in _MANIFEST_FORBIDDEN_BY_SOURCE:
+            excluded_set.update(_MANIFEST_FORBIDDEN_BY_SOURCE[manifest_source])
         else:
-            # Codex M1 (PR #92 review): a typo or future-cohort value
-            # would silently fall through to legacy behaviour, defeating
-            # the defense-in-depth objective with no operator signal.
-            # Warn once per call so an operator who misspelt
-            # ``feature_manifest_source`` in scope_spec can spot the issue
-            # before the run completes. The reactive Layer 1 audit still
-            # catches forbidden columns downstream — this warning is the
-            # only signal the proactive layer was bypassed.
             logger.warning(
                 "_select_features: unknown manifest_source %r — no "
                 "manifest forbidden-list applied (known sources: %s). "
