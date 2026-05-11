@@ -821,11 +821,22 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             # the method (isotonic vs Platt) is chosen from the val-set
             # positive count. ``state["calibration_method"]`` overrides
             # the default — accepted values: "auto" (= default), "isotonic",
-            # "sigmoid" (Platt). Anything else falls through to "auto".
+            # "sigmoid" (Platt). A None value (e.g., YAML `null`) means
+            # "use the default" and is silently coerced to "auto" without
+            # a warning. Unknown string values warn + fall back to "auto".
+            # NOTE: this is NOT an off-switch — the disable toggle lives at
+            # ``model_candidate.skip_post_hoc_calibration`` which short-
+            # circuits BEFORE this block. Setting calibration_method to a
+            # falsey value cannot disable post-hoc calibration on its own.
             requested_method = state.get("calibration_method", "auto")
-            if requested_method not in ("auto", "isotonic", "sigmoid"):
+            if requested_method is None:
+                requested_method = "auto"
+            elif requested_method not in ("auto", "isotonic", "sigmoid"):
                 logger.warning(
-                    "Unknown calibration_method=%r in state; falling back to 'auto'.",
+                    "Unknown calibration_method=%r in state; falling back to 'auto'. "
+                    "Use 'auto' (default), 'isotonic', or 'sigmoid' (Platt). To DISABLE "
+                    "post-hoc calibration entirely, set the model_candidate's "
+                    "skip_post_hoc_calibration=True flag.",
                     requested_method,
                 )
                 requested_method = "auto"
