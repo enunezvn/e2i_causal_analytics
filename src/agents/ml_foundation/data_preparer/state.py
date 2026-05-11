@@ -139,6 +139,20 @@ class DataPreparerState(BaseAgentSchema):
     # job (see model_deployer/nodes/registry_manager.py).
     regulatory_adaptation_entry: Optional[Dict[str, Any]] = None
 
+    # v5 Gate B3: feature engineering on the clean pre-anchor surface.
+    # ``enable_feature_engineering`` gates the engineer_features_node; when
+    # False (default), the node is a no-op and existing production runs are
+    # unaffected. ``engineered_features`` is the canonical (train-split)
+    # list of engineered feature names that were materialized; downstream
+    # nodes (adaptive_validity_check, leakage_remediation) audit these
+    # alongside base features. ``engineered_dispatch_source`` echoes the
+    # manifest_source used to dispatch the engineering family — useful for
+    # audit-trail reconstruction when a run later asks "which transforms
+    # ran?". Pre-spec: docs/specs/v5_b3_feature_engineering_prespec_2026-05-11.md.
+    enable_feature_engineering: Optional[bool] = None
+    engineered_features: Optional[List[str]] = None
+    engineered_dispatch_source: Optional[str] = None
+
     # Baseline computation
     feature_stats: Optional[Dict[str, Dict[str, Any]]] = None  # Per-feature statistics
     target_rate: Optional[float] = None  # For classification

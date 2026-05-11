@@ -5,6 +5,7 @@ from .baseline_computer import compute_baseline_metrics
 from .data_loader import load_data
 from .data_transformer import transform_data
 from .feast_registrar import register_features_in_feast
+from .feature_engineering import engineer_features, engineer_features_node
 from .ge_validator import run_ge_validation
 from .imputation_audit import compute_imputation_audit, summarize_recommendations
 from .leakage_detector import detect_leakage
@@ -22,6 +23,8 @@ __all__ = [
     "run_ge_validation",
     "detect_leakage",
     "adaptive_validity_check",
+    "engineer_features",
+    "engineer_features_node",
     "review_and_remediate_leakage",
     "transform_data",
     "register_features_in_feast",
