@@ -520,6 +520,73 @@ def _resolve_layer_1_declared_safe_lookup(
     return out
 
 
+def _layer_1_post_anchor_feature_drop(
+    X: pd.DataFrame,
+    *,
+    manifest_source: Optional[str],
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Drop features declared ``knowable_at=post_index`` (or any
+    non-pre-anchor reference) per the cohort manifest.
+
+    Returns ``(X_filtered, dropped_feature_names)``.
+
+    When ``manifest_source`` is None or the manifest is unavailable,
+    returns X unchanged with an empty dropped list — the harness then
+    falls back to whatever filtering the per-seed Layer 3 path provides.
+    When the manifest IS available, this is a deterministic pre-filter
+    that catches target-derived columns (e.g., ``initiated_biologic_180d``
+    in Optum) BEFORE they reach the model fit or the marginal-z scorer
+    (which has a degenerate-variance blind spot on perfect-binary proxies).
+
+    The pre-anchor allow-list mirrors
+    ``_resolve_layer_1_declared_safe_lookup``'s
+    ``pre_anchor_refs = {"index_date", "lookback_start_date", "eligeff"}``.
+    A feature is dropped iff ALL of the following hold:
+      1. The manifest has a contract for it.
+      2. The contract's ``knowable_at`` is NOT pre-or-at-index
+         (``is_pre_or_at_index()`` returns False).
+
+    Features with NO manifest contract are KEPT (unknown ≠ forbidden).
+    This is the conservative fail-open policy: manifest-declared
+    post-anchor features are dropped; everything else is left for the
+    per-seed Layer 3 scorer.
+
+    Case matching is exact (manifest contract names are already
+    lower-snake-case; the converter emits the same convention).
+    """
+    if manifest_source is None:
+        return X, []
+
+    try:
+        from src.data.manifests import MANIFEST_SOURCES
+    except ImportError:
+        return X, []
+
+    if manifest_source not in MANIFEST_SOURCES:
+        return X, []
+
+    lookup_fn = MANIFEST_SOURCES[manifest_source]
+    dropped: List[str] = []
+    for col in X.columns:
+        try:
+            contract = lookup_fn(col)
+        except Exception:  # noqa: BLE001 — defensive against manifest bugs
+            contract = None
+        if contract is None:
+            # No manifest entry — keep (unknown ≠ post-anchor).
+            continue
+        knowable = getattr(contract, "knowable_at", None)
+        if knowable is None:
+            continue
+        if not knowable.is_pre_or_at_index():
+            dropped.append(col)
+
+    if not dropped:
+        return X, []
+
+    return X.drop(columns=dropped), dropped
+
+
 def _build_baseline_feature_surface(
     X_train: pd.DataFrame,
     y_train: pd.Series,
@@ -1109,6 +1176,7 @@ class ExperimentManifest:
     lifecycle_state: str = LIFECYCLE_STATE_G2.value
     ece_method_metadata: Dict[str, Any] = field(default_factory=lambda: dict(ECE_METHOD_METADATA))
     seed_completeness: Dict[str, Any] = field(default_factory=dict)
+    layer_1_dropped_features: List[str] = field(default_factory=list)
     notes: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1129,6 +1197,7 @@ class ExperimentManifest:
             "lifecycle_state": self.lifecycle_state,
             "ece_method_metadata": self.ece_method_metadata,
             "seed_completeness": self.seed_completeness,
+            "layer_1_dropped_features": list(self.layer_1_dropped_features),
             "notes": self.notes,
         }
 
@@ -1140,6 +1209,7 @@ def build_manifest(
     experiment_commit_sha: str,
     dataset_hashes: Optional[Mapping[str, str]] = None,
     cohort_observed_n: Optional[int] = None,
+    layer_1_dropped_features: Optional[List[str]] = None,
     notes: str = "",
 ) -> ExperimentManifest:
     """Aggregate seed results, evaluate T1/T2/T3, build the manifest.
@@ -1185,6 +1255,7 @@ def build_manifest(
             thresholds=[],
             g2_passes_pre_spec=False,
             seed_completeness=completeness,
+            layer_1_dropped_features=list(layer_1_dropped_features or []),
             notes=(notes + " | " if notes else "") + diag,
         )
 
@@ -1225,6 +1296,7 @@ def build_manifest(
         thresholds=[t1.to_dict(), t2.to_dict(), t3.to_dict()],
         g2_passes_pre_spec=g2_passes,
         seed_completeness=completeness,
+        layer_1_dropped_features=list(layer_1_dropped_features or []),
         notes=notes,
     )
 
@@ -1372,6 +1444,26 @@ def run_experiment(
 
     X, y = _build_features_and_target(df, cohort.target)
 
+    # Layer 1 manifest pre-filter — applied ONCE per cohort, before the
+    # per-seed split loop. Drops every feature whose manifest contract
+    # declares ``knowable_at=post_index`` (or any non-pre-anchor reference).
+    # This catches target-derived columns (e.g., ``initiated_biologic_180d``
+    # in Optum) BEFORE they reach the model fit or the marginal-z scorer,
+    # which has a degenerate-variance blind spot on perfect-binary proxies
+    # (within-group variance = 0 → Welch SE = 0 → z = 0 → feature kept).
+    # The filter is deterministic per manifest — it does not depend on the
+    # seed. The dropped list is surfaced in the manifest for audit traceability.
+    X, layer_1_dropped = _layer_1_post_anchor_feature_drop(
+        X,
+        manifest_source=cohort.manifest_source,
+    )
+    if layer_1_dropped:
+        logger.info(
+            "Layer 1 pre-filter dropped %d post-anchor features: %s",
+            len(layer_1_dropped),
+            sorted(layer_1_dropped),
+        )
+
     # HIGH-1 (iter-3) — resolve the Layer-1 declared-safe lookup via
     # the cohort's manifest_source registry entry. For a load-bearing
     # run, fail loudly when the resolved lookup has zero declared-safe
@@ -1410,6 +1502,7 @@ def run_experiment(
         cohort_observed_n=observed_n,
         experiment_commit_sha=_resolve_head_sha(),
         dataset_hashes=_hash_artifacts(cohort, project_root=project_root),
+        layer_1_dropped_features=layer_1_dropped,
     )
 
 

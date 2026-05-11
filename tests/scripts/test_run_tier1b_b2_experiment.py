@@ -808,6 +808,153 @@ class TestResolveLayerOneDeclaredSafeLookup:
 
 
 # ---------------------------------------------------------------------------
+# _layer_1_post_anchor_feature_drop — Layer 1 manifest pre-filter
+# ---------------------------------------------------------------------------
+
+
+class TestLayer1PostAnchorFeatureDrop:
+    """Unit tests for the Layer 1 manifest pre-filter helper.
+
+    These tests pin the exact feature names that must be dropped (Optum
+    post-anchor columns) and prove the fail-open contract (unknown features
+    kept, None manifest_source is a no-op).
+    """
+
+    def test_drops_optum_post_index_features(self) -> None:
+        """Post-anchor Optum features must be dropped when manifest_source='optum'.
+
+        The specific features tested are the load-bearing ones that caused
+        AUC=1.0: ``initiated_biologic_180d`` (r=+1.0 with target) plus the
+        other post-anchor targets and journey-metadata columns.
+        """
+        # Build a DataFrame that includes the known post-anchor Optum columns
+        # alongside some legitimate pre-anchor numeric features.
+        n = 20
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame(
+            {
+                # Legitimate pre-anchor features (should be KEPT)
+                "charlson_score": rng.normal(size=n),
+                "age_at_index": rng.normal(size=n),
+                "months_since_first_dx": rng.normal(size=n),
+                # Post-anchor Optum columns (should be DROPPED)
+                "initiated_biologic_180d": rng.integers(0, 2, size=n).astype(float),
+                "discontinued_180d": rng.integers(0, 2, size=n).astype(float),
+                "persistent_at_180d": rng.integers(0, 2, size=n).astype(float),
+            }
+        )
+        X_filtered, dropped = H._layer_1_post_anchor_feature_drop(df, manifest_source="optum")
+        # Exact dropped list — must include all known post-anchor columns.
+        assert "initiated_biologic_180d" in dropped, (
+            "initiated_biologic_180d is the primary AUC=1.0 leak; must be dropped"
+        )
+        assert "discontinued_180d" in dropped
+        assert "persistent_at_180d" in dropped
+        # Pre-anchor features must be retained.
+        assert "charlson_score" in X_filtered.columns
+        assert "age_at_index" in X_filtered.columns
+        assert "months_since_first_dx" in X_filtered.columns
+        # Dropped columns must not appear in filtered matrix.
+        for col in dropped:
+            assert col not in X_filtered.columns, (
+                f"dropped column {col!r} still present in filtered X"
+            )
+
+    def test_keeps_pre_anchor_features(self) -> None:
+        """Pre-anchor features with index_date/enrollment knowable_at must be kept."""
+        n = 10
+        rng = np.random.default_rng(1)
+        # Use a representative sample of pre-anchor Optum features.
+        pre_anchor_cols = [
+            "charlson_score",
+            "elixhauser_score",
+            "months_since_first_dx",
+            "office_visits_total",
+            "unique_providers",
+            "age_at_index",
+        ]
+        df = pd.DataFrame({col: rng.normal(size=n) for col in pre_anchor_cols})
+        X_filtered, dropped = H._layer_1_post_anchor_feature_drop(df, manifest_source="optum")
+        assert dropped == [], f"expected no pre-anchor features to be dropped; got {dropped}"
+        assert set(X_filtered.columns) == set(pre_anchor_cols)
+
+    def test_manifest_unavailable_returns_unchanged(self) -> None:
+        """When manifest_source=None, the filter is a no-op."""
+        n = 5
+        rng = np.random.default_rng(2)
+        df = pd.DataFrame(
+            {
+                "initiated_biologic_180d": rng.integers(0, 2, size=n).astype(float),
+                "some_feature": rng.normal(size=n),
+            }
+        )
+        X_filtered, dropped = H._layer_1_post_anchor_feature_drop(df, manifest_source=None)
+        assert dropped == []
+        assert set(X_filtered.columns) == {"initiated_biologic_180d", "some_feature"}, (
+            "manifest_source=None must return X unchanged"
+        )
+
+    def test_unknown_manifest_source_returns_unchanged(self) -> None:
+        """An unregistered manifest_source is treated as no-op (fail-open)."""
+        n = 5
+        rng = np.random.default_rng(3)
+        df = pd.DataFrame(
+            {
+                "initiated_biologic_180d": rng.integers(0, 2, size=n).astype(float),
+                "some_feature": rng.normal(size=n),
+            }
+        )
+        X_filtered, dropped = H._layer_1_post_anchor_feature_drop(
+            df, manifest_source="not_a_real_source"
+        )
+        assert dropped == []
+        assert set(X_filtered.columns) == {"initiated_biologic_180d", "some_feature"}
+
+    def test_unknown_feature_not_in_manifest_is_kept(self) -> None:
+        """A feature with no manifest contract must be kept (unknown != forbidden)."""
+        n = 5
+        rng = np.random.default_rng(4)
+        df = pd.DataFrame(
+            {
+                "charlson_score": rng.normal(size=n),  # in manifest, pre-anchor
+                "totally_unknown_col_xyz": rng.normal(size=n),  # not in manifest
+            }
+        )
+        X_filtered, dropped = H._layer_1_post_anchor_feature_drop(df, manifest_source="optum")
+        assert "totally_unknown_col_xyz" in X_filtered.columns, (
+            "features absent from the manifest must not be dropped (unknown != forbidden)"
+        )
+        assert "charlson_score" in X_filtered.columns
+
+    def test_manifest_drops_surfaced_in_build_manifest(self) -> None:
+        """layer_1_dropped_features propagates from build_manifest into the manifest JSON."""
+        cohort = H.COHORTS["optum_initiation_default"]
+        seed_results = [
+            H.SeedResult(
+                seed=s,
+                baseline_auc=0.62,
+                hblp_auc=0.65,
+                baseline_ece=0.10,
+                hblp_ece=0.04,
+                baseline_cv_stability=0.10,
+                hblp_cv_stability=0.06,
+            )
+            for s in H.G2_SEEDS
+        ]
+        dropped = ["initiated_biologic_180d", "discontinued_180d"]
+        manifest = H.build_manifest(
+            cohort=cohort,
+            seed_results=seed_results,
+            experiment_commit_sha="abc",
+            layer_1_dropped_features=dropped,
+        )
+        assert manifest.layer_1_dropped_features == dropped
+        # Round-trip through JSON.
+        payload = manifest.to_dict()
+        assert payload["layer_1_dropped_features"] == dropped
+
+
+# ---------------------------------------------------------------------------
 # main() — argument plumbing + data_snooped guard
 # ---------------------------------------------------------------------------
 
