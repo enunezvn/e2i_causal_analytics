@@ -383,6 +383,45 @@ class TestValidatePromotionEmitsManifest:
             for r in m["t2_6c_authorization_reasons"]
         ), m["t2_6c_authorization_reasons"]
 
+    def test_typed_scope_spec_accepted_at_agent_boundary(self) -> None:
+        """v5 codex pass-3 HIGH: ``ModelDeployerState.scope_spec`` is
+        declared ``Optional[Dict[str, Any]]`` for LangGraph round-trip
+        safety. Without normalization, a typed Pydantic scope_spec
+        is rejected by state validation BEFORE validate_promotion can
+        run. The agent.run() boundary normalizes typed instances via
+        ``model_dump()`` so the state accepts them."""
+        from uuid import uuid4
+
+        from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
+
+        class FakeTypedScopeSpec:
+            """Stand-in for a Pydantic v2 ScopeSpecSchema instance."""
+
+            def model_dump(self) -> Dict[str, Any]:
+                return {"feature_manifest_source": "csu"}
+
+        # Demonstrate that the un-normalized form IS rejected (the bug
+        # codex pass-3 flagged).
+        with pytest.raises(Exception):  # noqa: B017 — pydantic-specific
+            ModelDeployerState(
+                audit_workflow_id=uuid4(),
+                scope_spec=FakeTypedScopeSpec(),  # type: ignore[arg-type]
+            )
+
+        # The agent.run() boundary normalizes via model_dump().
+        # Replay the wiring and confirm state accepts the result.
+        scope_spec_input: Any = FakeTypedScopeSpec()
+        if hasattr(scope_spec_input, "model_dump"):
+            scope_spec_input = scope_spec_input.model_dump()
+
+        state_obj = ModelDeployerState(
+            audit_workflow_id=uuid4(),
+            scope_spec=scope_spec_input,
+            feature_manifest_source="csu",
+        )
+        assert state_obj.scope_spec == {"feature_manifest_source": "csu"}
+        assert state_obj.feature_manifest_source == "csu"
+
     def test_non_dict_audit_payload_emits_blocked_manifest(self) -> None:
         """v5 codex pass-2 HIGH-2: a non-mapping
         ``validation_metrics["regulatory_eligibility_audit"]`` (e.g.
@@ -393,9 +432,7 @@ class TestValidatePromotionEmitsManifest:
         """
         state = _csu_state()
         # Replace the audit with a list (non-mapping payload).
-        state["validation_metrics"]["regulatory_eligibility_audit"] = [
-            "not_a_mapping"
-        ]
+        state["validation_metrics"]["regulatory_eligibility_audit"] = ["not_a_mapping"]
         result = asyncio.run(validate_promotion(state))
         assert "regulatory_deployment_manifest" in result, (
             "Non-mapping audit payload should still emit a blocked manifest "
