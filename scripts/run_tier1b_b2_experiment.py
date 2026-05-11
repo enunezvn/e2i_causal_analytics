@@ -1538,8 +1538,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "v5 A1: per-feature permutation-null sample size for the "
             "production Layer 3 adversarial probe. Default matches "
-            f"production ({DEFAULT_HARNESS_N_PERMUTATIONS}). Lower "
-            "values trade detection power for runtime."
+            f"production ({DEFAULT_HARNESS_N_PERMUTATIONS}); use this "
+            "value for production-parity claims. For routine CI / smoke "
+            "jobs prefer --n-permutations=50 (faster; weaker detection "
+            "but adequate for regression-pin tests). Production-parity "
+            "claims MUST run at the default 200 — lower values produce "
+            "harness output that does NOT match what the pipeline "
+            "would emit."
         ),
     )
     parser.add_argument(
