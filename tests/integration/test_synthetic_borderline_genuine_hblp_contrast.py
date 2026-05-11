@@ -19,15 +19,22 @@ variance-relaxation band boundary:
     retained (severity drops to ``moderate`` — queued for Layer 4 causal
     review, not dropped).
 
-The injected feature's z-value is also pinned within a tolerance band so
-a drift in either ``compute_adversarial_score`` or the generator's
-calibration constants surfaces in this test before it can cause a silent
-regression in the contrast.
+The test asserts:
+1. Decision contract — legacy DROPS, HBLP RETAINS, same z across arms.
+2. Calibration sanity — z is in a wide band [4.5, 8.0] so platform
+   drift in numpy/scipy/permutation impl doesn't flake CI on a 0.1σ
+   shift, but a real regression in the generator constants (e.g.,
+   AUC drift > 1σ) surfaces.
+3. HBLP relaxation actually fired — verified by calling production
+   ``hblp_classify`` directly with the observed z and asserting it
+   would reclassify ``high → moderate`` at the manifest threshold.
+   This replaces the prior brittle ``"HBLP-relaxed" in evidence``
+   string-match (codex pass-1 LOW).
 
 Reference:
 - ``.claude/plans/disease_agnostic_quality_uplift_v5.md`` §2 C2
 - ``src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py``
-  ``hblp_effective_z_threshold`` + ``T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER``
+  ``hblp_classify`` + ``T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER``
 """
 
 from __future__ import annotations
@@ -42,19 +49,27 @@ from src.repositories.synthetic_rwd_realistic import (
     generate_rwd_realistic,
 )
 
-# Z-value calibration record from 2026-05-11 (treated_mean=0.06,
-# n_patients=20000, generator seed=42, n_permutations=200, adversarial
-# seed=7 — adaptive_validity_check's default). The contrast band is
-# (5.0, 7.5); the empirical value lands at ~6.10σ. Use a generous
-# tolerance (±1.0σ) so minor numpy / scipy version drift doesn't flake
-# the test, but tight enough to catch a real regression.
-EXPECTED_Z_LOW = 5.1
-EXPECTED_Z_HIGH = 7.4
-HBLP_EFFECTIVE_THRESHOLD = 7.5  # 5σ × 1.5 (declared_safe prior) at n_pos>=50
+# Wide calibration sanity band. A real regression in either
+# ``compute_adversarial_score`` or the generator constants moves z by
+# >>1σ; minor numpy/scipy version drift moves z by ≤0.3σ. Band wide
+# enough for the latter, tight enough to catch the former. Separate
+# from the decision-contract assertion (legacy 5σ < z < HBLP 7.5σ),
+# which is what really matters per codex pass-1 MEDIUM.
+EXPECTED_Z_LOW = 4.5
+EXPECTED_Z_HIGH = 8.0
 LEGACY_THRESHOLD = 5.0
+HBLP_DECLARED_SAFE_MULTIPLIER = 1.5  # mirrors T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER
+HBLP_EFFECTIVE_THRESHOLD = LEGACY_THRESHOLD * HBLP_DECLARED_SAFE_MULTIPLIER  # = 7.5
 
 
-def _build_train_df():
+@pytest.fixture(scope="module")
+def borderline_train_df():
+    """Shared train_df for the C2 contrast suite.
+
+    Module-scoped to keep the integration suite under 30s wall-clock per
+    codex pass-1 MEDIUM-1. The in-memory DataFrame is immutable across
+    tests so sharing is safe.
+    """
     df = generate_rwd_realistic(
         RwdRealisticConfig(
             n_patients=BORDERLINE_GENUINE_DEFAULT_N_PATIENTS,
@@ -79,176 +94,186 @@ def _scope_spec(numeric_cols, *, manifest_source: str | None):
     return spec
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_v5_c2_legacy_arm_drops_borderline_genuine_feature():
-    """Legacy arm (no manifest): borderline_genuine feature is dropped.
+@pytest.fixture(scope="module")
+def borderline_arms_results(borderline_train_df):
+    """Run ``adaptive_validity_check`` once per arm; cache results.
 
-    ENGINEERING CI SANITY-CHECK — NOT RWD positive-evidence.
+    The expensive 200-permutation scan over the ~10 numeric columns runs
+    twice total (legacy + HBLP), not four times. Both arm results are
+    re-used by ``test_v5_c2_*`` consumers. Per codex pass-1 MEDIUM-1.
 
-    Without ``feature_manifest_source`` in scope_spec, Layer 1 cannot
-    declare any feature as ``knowable_at=index_date``, so HBLP's
-    ``layer_1_declared_safe`` prior is False. The effective threshold
-    collapses to the base 5σ; the injected feature's z (~6σ) crosses it
-    and the feature is flagged with ``severity=high``.
+    Returns a dict with keys ``legacy`` and ``hblp``, each carrying the
+    full state-update dict that ``adaptive_validity_check`` returned.
     """
+    import asyncio
+
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         adaptive_validity_check,
     )
 
-    train_df, numeric_cols = _build_train_df()
-    state = {
-        "experiment_id": "v5-c2-legacy",
-        "train_df": train_df,
-        "scope_spec": _scope_spec(numeric_cols, manifest_source=None),
-    }
-    result = await adaptive_validity_check(state)
+    train_df, numeric_cols = borderline_train_df
 
+    async def _run_both():
+        legacy = await adaptive_validity_check(
+            {
+                "experiment_id": "v5-c2-fx-legacy",
+                "train_df": train_df,
+                "scope_spec": _scope_spec(numeric_cols, manifest_source=None),
+            }
+        )
+        hblp = await adaptive_validity_check(
+            {
+                "experiment_id": "v5-c2-fx-hblp",
+                "train_df": train_df,
+                "scope_spec": _scope_spec(numeric_cols, manifest_source="synthetic"),
+            }
+        )
+        return legacy, hblp
+
+    # Fresh event loop so the module-scoped fixture doesn't collide with
+    # pytest-asyncio's per-test loop. Same nest_asyncio mitigation pattern
+    # as PR #106's test_layer_5_pipeline_integration.py rationale.
+    loop = asyncio.new_event_loop()
+    try:
+        legacy_result, hblp_result = loop.run_until_complete(_run_both())
+    finally:
+        loop.close()
+    return {"legacy": legacy_result, "hblp": hblp_result}
+
+
+@pytest.mark.integration
+def test_v5_c2_legacy_drops_hblp_retains_borderline_genuine(
+    borderline_train_df, borderline_arms_results
+):
+    """v5 §2 C2 acceptance — legacy DROPS, HBLP RETAINS at z in (5σ, 7.5σ).
+
+    ENGINEERING CI SANITY-CHECK — NOT RWD positive-evidence.
+
+    Both arm results come from the module-scoped fixture so
+    ``adaptive_validity_check`` runs at most twice across the whole
+    contrast suite. Asserts opposite verdicts at identical z.
+    """
+    train_df, _ = borderline_train_df
     feature = BORDERLINE_GENUINE_FEATURE_NAME
     assert feature in train_df.columns, "fixture: generator must produce the borderline feature"
 
-    flagged = set(result.get("adaptive_flagged_features") or [])
-    assert feature in flagged, (
-        f"Legacy arm should flag {feature!r} at z > 5σ; flagged={flagged}"
+    legacy_result = borderline_arms_results["legacy"]
+    hblp_result = borderline_arms_results["hblp"]
+    legacy_flagged = set(legacy_result.get("adaptive_flagged_features") or [])
+    hblp_flagged = set(hblp_result.get("adaptive_flagged_features") or [])
+    assert feature in legacy_flagged, (
+        f"v5 C2 contract: legacy arm should DROP {feature!r} at z > 5σ; flagged={legacy_flagged}"
+    )
+    assert feature not in hblp_flagged, (
+        f"v5 C2 contract: HBLP arm should RETAIN {feature!r} at z < 7.5σ; flagged={hblp_flagged}"
     )
 
-    verdicts = result.get("adaptive_verdicts") or []
-    verdict = next(v for v in verdicts if v["feature"] == feature)
-    assert verdict["severity"] == "high", (
-        f"Legacy arm should classify {feature!r} as severity=high; got {verdict['severity']}"
+    legacy_verdict = next(v for v in legacy_result["adaptive_verdicts"] if v["feature"] == feature)
+    hblp_verdict = next(v for v in hblp_result["adaptive_verdicts"] if v["feature"] == feature)
+    z_legacy = legacy_verdict["z_score"]
+    z_hblp = hblp_verdict["z_score"]
+    assert z_legacy == pytest.approx(z_hblp, rel=1e-6), (
+        f"z_score must be identical across arms (threshold is the only difference). "
+        f"legacy={z_legacy}, hblp={z_hblp}"
     )
-    assert verdict["layer"] == "3", (
-        f"Legacy arm verdict should come from Layer 3 (adversarial); got layer={verdict['layer']}"
+    # Decision contract: severity differs across arms even though z is identical.
+    assert legacy_verdict["severity"] == "high"
+    assert hblp_verdict["severity"] in {"moderate", "info"}
+    assert legacy_verdict["layer"] == "3"
+    assert hblp_verdict["layer"] == "3"
+
+
+@pytest.mark.integration
+def test_v5_c2_z_lands_in_calibration_band(borderline_arms_results):
+    """v5 §2 C2 calibration drift guard — z stays in wide sanity band.
+
+    ENGINEERING CI SANITY-CHECK — NOT RWD positive-evidence.
+
+    Band [4.5, 8.0] tolerates minor numpy/scipy version drift (≤0.3σ in
+    practice) but catches a real regression in either the generator
+    constants or ``compute_adversarial_score`` (which shift z by >>1σ).
+    The narrow decision-contract assertion (legacy 5σ < z < HBLP 7.5σ)
+    is enforced by the contrast test above; this test isolates the
+    calibration concern from the decision concern.
+
+    Reuses the legacy-arm result from the module fixture (z is
+    threshold-invariant — same value in both arms).
+    """
+    legacy_result = borderline_arms_results["legacy"]
+    verdict = next(
+        v
+        for v in legacy_result["adaptive_verdicts"]
+        if v["feature"] == BORDERLINE_GENUINE_FEATURE_NAME
     )
     z = verdict.get("z_score")
     assert z is not None and EXPECTED_Z_LOW <= z <= EXPECTED_Z_HIGH, (
         f"Calibration drift: z={z} fell outside expected band "
         f"[{EXPECTED_Z_LOW}, {EXPECTED_Z_HIGH}] — re-tune generator constants"
     )
+    # Also assert z is in the in-band decision window for the contrast
+    # test to make sense. If this fails, the contrast test will fail too.
+    assert LEGACY_THRESHOLD < z < HBLP_EFFECTIVE_THRESHOLD, (
+        f"v5 C2 invariant: z={z} must satisfy {LEGACY_THRESHOLD} < z < "
+        f"{HBLP_EFFECTIVE_THRESHOLD} for the legacy-DROPS / HBLP-RETAINS "
+        f"contrast to be possible"
+    )
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_v5_c2_hblp_arm_retains_borderline_genuine_feature():
-    """HBLP arm (synthetic manifest): borderline_genuine feature is retained.
+def test_v5_c2_hblp_relaxation_actually_fired(borderline_train_df, borderline_arms_results):
+    """v5 §2 C2 — verify HBLP variance-relaxation logic ran (not silent fallthrough).
 
     ENGINEERING CI SANITY-CHECK — NOT RWD positive-evidence.
 
-    With ``feature_manifest_source="synthetic"``, the synthetic manifest
-    declares the feature ``knowable_at=index_date``; HBLP applies the
-    1.5× ``layer_1_declared_safe`` multiplier; the effective high
-    threshold becomes 5σ × 1.5 = 7.5σ at the cohort's n_pos. The
-    injected z (~6σ) is below 7.5σ so the feature is NOT in the
-    flagged set; its verdict downgrades to ``moderate`` (queued for
-    Layer 4 causal review) rather than ``high``/drop.
+    Calls production ``hblp_classify`` directly with the verdict's z_score
+    and the cohort positive-class count, with ``layer_1_declared_safe=
+    True``, and asserts it returns the expected 7.5σ effective threshold
+    and ``severity != "high"`` — i.e., the relaxation we expect from
+    the HBLP arm. Structured verification replaces the brittle
+    ``"HBLP-relaxed" in evidence`` string match (codex pass-1 LOW).
+
+    Reuses the HBLP-arm result from the module fixture; runs only the
+    cheap ``hblp_classify`` calls in-test.
     """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
-        adaptive_validity_check,
+        T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER,
+        hblp_classify,
     )
 
-    train_df, numeric_cols = _build_train_df()
-    state = {
-        "experiment_id": "v5-c2-hblp",
-        "train_df": train_df,
-        "scope_spec": _scope_spec(numeric_cols, manifest_source="synthetic"),
-    }
-    result = await adaptive_validity_check(state)
-
+    train_df, _ = borderline_train_df
     feature = BORDERLINE_GENUINE_FEATURE_NAME
-    flagged = set(result.get("adaptive_flagged_features") or [])
-    assert feature not in flagged, (
-        f"HBLP arm should NOT flag {feature!r} at z < 7.5σ; flagged={flagged}"
+
+    hblp_result = borderline_arms_results["hblp"]
+    verdict = next(v for v in hblp_result["adaptive_verdicts"] if v["feature"] == feature)
+    z = float(verdict["z_score"])
+    n_pos = int((train_df["treatment_initiated"] == 1).sum())
+
+    # Re-run hblp_classify directly against the observed z + cohort
+    # positives + declared_safe=True. The expected effective threshold
+    # at n_pos >> 50 is exactly base × declared_safe_multiplier = 7.5σ.
+    classification = hblp_classify(z_score=z, n_positives=n_pos, layer_1_declared_safe=True)
+    assert classification["hblp_relaxed"] is True
+    assert classification["layer_1_factor"] == pytest.approx(
+        T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER
+    )
+    assert classification["effective_high_threshold"] == pytest.approx(
+        LEGACY_THRESHOLD * T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER
+    )
+    assert classification["severity"] != "high", (
+        f"HBLP relaxation should reclassify z={z} away from 'high' at the "
+        f"declared-safe 7.5σ threshold; got severity={classification['severity']}"
     )
 
-    verdicts = result.get("adaptive_verdicts") or []
-    verdict = next(v for v in verdicts if v["feature"] == feature)
-    assert verdict["severity"] in {"moderate", "info"}, (
-        f"HBLP arm should classify {feature!r} as moderate (queued for L4) or info "
-        f"(below moderate threshold); got severity={verdict['severity']}"
-    )
-    assert verdict["layer"] == "3", (
-        f"HBLP arm verdict should come from Layer 3 (adversarial); got layer={verdict['layer']}"
-    )
-
-    # The HBLP-effective threshold annotation should reflect the 1.5×
-    # declared-safe multiplier; pull from the evidence string. This is
-    # a sanity check that we're actually exercising the HBLP-relaxed
-    # branch and not silently routing through the legacy fallback.
-    evidence = verdict.get("evidence", "")
-    assert "HBLP-relaxed" in evidence or "HBLP-effective" in evidence, (
-        f"HBLP arm verdict evidence should annotate HBLP relaxation; got {evidence!r}"
-    )
+    # And the same call with declared_safe=False should give the legacy
+    # 5σ threshold and severity=high — proving the relaxation is the
+    # specific mechanism that flipped the verdict in the HBLP arm.
+    legacy_classification = hblp_classify(z_score=z, n_positives=n_pos, layer_1_declared_safe=False)
+    assert legacy_classification["effective_high_threshold"] == pytest.approx(LEGACY_THRESHOLD)
+    assert legacy_classification["severity"] == "high"
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_v5_c2_contrast_pin_legacy_drops_hblp_retains():
-    """Pin the full contrast: same data + same z, opposite verdicts.
-
-    ENGINEERING CI SANITY-CHECK — NOT RWD positive-evidence.
-
-    Runs both arms against the same train_df and asserts:
-      * Legacy arm: in ``adaptive_flagged_features`` (dropped)
-      * HBLP arm: NOT in ``adaptive_flagged_features`` (retained)
-      * Both arms see the same z_score (the difference is the threshold,
-        not the statistic — proves the contrast is about the manifest
-        declaration, not data noise).
-
-    The single-test framing is what closes v5 §2 C2 acceptance: "HBLP
-    arm RETAINS the feature; legacy arm DROPS it. Integration test pins
-    this contrast." (plan acceptance language).
-    """
-    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
-        adaptive_validity_check,
-    )
-
-    train_df, numeric_cols = _build_train_df()
-    feature = BORDERLINE_GENUINE_FEATURE_NAME
-
-    legacy_state = {
-        "experiment_id": "v5-c2-contrast-legacy",
-        "train_df": train_df,
-        "scope_spec": _scope_spec(numeric_cols, manifest_source=None),
-    }
-    hblp_state = {
-        "experiment_id": "v5-c2-contrast-hblp",
-        "train_df": train_df,
-        "scope_spec": _scope_spec(numeric_cols, manifest_source="synthetic"),
-    }
-
-    legacy_result = await adaptive_validity_check(legacy_state)
-    hblp_result = await adaptive_validity_check(hblp_state)
-
-    legacy_flagged = set(legacy_result.get("adaptive_flagged_features") or [])
-    hblp_flagged = set(hblp_result.get("adaptive_flagged_features") or [])
-
-    assert feature in legacy_flagged, (
-        f"v5 C2 contrast violation: legacy arm should DROP {feature!r}; "
-        f"flagged={legacy_flagged}"
-    )
-    assert feature not in hblp_flagged, (
-        f"v5 C2 contrast violation: HBLP arm should RETAIN {feature!r}; "
-        f"flagged={hblp_flagged}"
-    )
-
-    # Both arms must see the same underlying statistic. The contrast is
-    # threshold-driven, not data-driven.
-    legacy_verdict = next(
-        v for v in legacy_result["adaptive_verdicts"] if v["feature"] == feature
-    )
-    hblp_verdict = next(v for v in hblp_result["adaptive_verdicts"] if v["feature"] == feature)
-    assert legacy_verdict["z_score"] == pytest.approx(hblp_verdict["z_score"], rel=1e-6), (
-        f"z_score must be identical across arms (threshold is the only difference). "
-        f"legacy={legacy_verdict['z_score']}, hblp={hblp_verdict['z_score']}"
-    )
-    # Severities differ across arms even though z is identical.
-    assert legacy_verdict["severity"] == "high"
-    assert hblp_verdict["severity"] in {"moderate", "info"}
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_v5_c2_synthetic_manifest_registers_borderline_feature():
+def test_v5_c2_synthetic_manifest_registers_borderline_feature():
     """The synthetic manifest must register the borderline feature as pre-anchor.
 
     Direct unit-style assertion against the manifest registry. Guards
@@ -261,9 +286,7 @@ async def test_v5_c2_synthetic_manifest_registers_borderline_feature():
         "v5 C2: 'synthetic' must be registered in MANIFEST_SOURCES"
     )
 
-    contract = lookup_feature_contract(
-        BORDERLINE_GENUINE_FEATURE_NAME, data_source="synthetic"
-    )
+    contract = lookup_feature_contract(BORDERLINE_GENUINE_FEATURE_NAME, data_source="synthetic")
     assert contract is not None, (
         f"v5 C2: synthetic manifest must register {BORDERLINE_GENUINE_FEATURE_NAME!r}"
     )
