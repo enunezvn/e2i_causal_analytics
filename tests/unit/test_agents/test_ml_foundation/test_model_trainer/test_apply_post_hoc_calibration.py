@@ -251,7 +251,11 @@ class TestV5GateB1AutoPolicy:
         assert info["calibration_auto_n_pos_crossover"] is None
 
     def test_explicit_sigmoid_bypasses_auto_policy(self) -> None:
-        """Symmetric: explicit "sigmoid" keeps Platt even at high n_pos."""
+        """Symmetric: explicit "sigmoid" keeps Platt even at high n_pos.
+
+        Codex pass-1 MED-3: pin requested_method == "sigmoid" + the
+        `calibration_auto_n_pos_crossover` field == None (matches the
+        isotonic counterpart's pinning)."""
         rng = np.random.default_rng(0)
         n = 400
         y = np.concatenate([np.ones(150, dtype=np.int64), np.zeros(n - 150, dtype=np.int64)])
@@ -259,7 +263,9 @@ class TestV5GateB1AutoPolicy:
         X = rng.normal(size=(n, 3))
         model = LogisticRegression(max_iter=200).fit(X, y)
         _, info = apply_post_hoc_calibration(model, X, y, method="sigmoid")
+        assert info["calibration_method"] == "sigmoid"
         assert info["calibration_method_resolved"] == "sigmoid"
+        assert info["calibration_auto_n_pos_crossover"] is None
 
     def test_invalid_method_raises_value_error(self) -> None:
         """Unknown method names must fail loudly, not silently fall
@@ -272,16 +278,75 @@ class TestV5GateB1AutoPolicy:
         with pytest.raises(ValueError, match="is not one of"):
             apply_post_hoc_calibration(model, X, y, method="platt")
 
-    def test_auto_records_resolved_even_when_skip_non_classifier(self, binary_dataset) -> None:
+    def test_auto_records_resolved_even_when_skip_non_classifier(self) -> None:
         """When the base model isn't a classifier, the skip path still
         records the resolved method so audit consumers see what WOULD
-        have been applied."""
-        X, y = binary_dataset
+        have been applied.
+
+        Codex pass-1 MED-2: use a deterministically constructed y so
+        the assertion can pin the expected resolution exactly (not
+        the previous tautological ``in {"sigmoid", "isotonic"}``)."""
+        rng = np.random.default_rng(0)
+        n = 250
+        # 50 positives → below crossover 100 → resolves to sigmoid.
+        y = np.concatenate([np.ones(50, dtype=np.int64), np.zeros(n - 50, dtype=np.int64)])
+        rng.shuffle(y)
+        X = rng.normal(size=(n, 3))
         not_a_classifier = _NotAClassifier().fit(X, y)
         _, info = apply_post_hoc_calibration(not_a_classifier, X, y, method="auto")
         assert info["calibration_applied"] is False
         assert info["calibration_method"] == "auto"
-        # 60 positives in binary_dataset (n=120, ~50% prevalence) →
-        # resolves to sigmoid under default crossover 100.
-        assert info["calibration_method_resolved"] in {"sigmoid", "isotonic"}
+        assert info["calibration_method_resolved"] == "sigmoid"
         assert info["skip_reason"] == "base_model_not_a_classifier"
+
+    def test_select_degenerate_nan_y_falls_back_to_sigmoid(self) -> None:
+        """Codex pass-1 MED-1: y_val with NaN values must fall back
+        to sigmoid. Pre-fix, NaN survived int64 cast as the sentinel
+        ``-9223372036854775808`` and was silently treated as a non-1
+        label, potentially miscounting positives."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        # 150 finite "1" labels plus a NaN — pre-fix this might still
+        # have resolved to isotonic; post-fix it falls back to sigmoid.
+        y_nan = np.concatenate(
+            [np.ones(150, dtype=np.float64), np.zeros(100, dtype=np.float64), np.array([np.nan])]
+        )
+        assert select_calibration_method(y_nan) == "sigmoid"
+
+    def test_select_degenerate_non_binary_falls_back_to_sigmoid(self) -> None:
+        """Codex pass-1 MED-1: multiclass / non-{0,1} labels fall back
+        to sigmoid. The function's contract is binary classification."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        # 200 "1" + 100 "2" — both treated as positive under naive
+        # ``arr == 1`` count? No — only "1" matches, so n_pos=200 > 100
+        # → isotonic without the binary guard. With the guard, the
+        # presence of "2" triggers the fallback to sigmoid.
+        y_multi = np.concatenate(
+            [np.ones(200, dtype=np.int64), np.full(100, 2, dtype=np.int64)]
+        )
+        assert select_calibration_method(y_multi) == "sigmoid"
+
+    def test_select_empty_y_falls_back_to_sigmoid(self) -> None:
+        """Codex pass-1 MED-1: empty arrays fall back to sigmoid."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        assert select_calibration_method(np.array([], dtype=np.int64)) == "sigmoid"
+
+    def test_select_all_one_y_resolves_correctly(self) -> None:
+        """All-one y_val: n_pos = n. If n > 100 → isotonic; if n ≤ 100
+        → sigmoid. Pure positive-count logic with no binary-violation."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        y_all_one = np.ones(150, dtype=np.int64)
+        assert select_calibration_method(y_all_one) == "isotonic"
+        y_all_one_small = np.ones(50, dtype=np.int64)
+        assert select_calibration_method(y_all_one_small) == "sigmoid"
