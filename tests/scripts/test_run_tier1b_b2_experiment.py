@@ -838,6 +838,99 @@ class TestV5GateA1ProductionParity:
             "or document the divergence."
         )
 
+    def test_min_layer3_samples_guard_matches_production(self) -> None:
+        """v5 A1 codex HIGH-1: ``_HARNESS_MIN_LAYER3_SAMPLES`` must
+        equal production ``MIN_LAYER3_SAMPLES`` (= 30). Drift detector."""
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            MIN_LAYER3_SAMPLES,
+        )
+
+        assert H._HARNESS_MIN_LAYER3_SAMPLES == MIN_LAYER3_SAMPLES, (
+            "Harness MIN_LAYER3_SAMPLES drifted from production. "
+            "Sparse features (rows < 30) would diverge silently."
+        )
+
+    def test_below_min_samples_emits_zero_z(self) -> None:
+        """v5 A1 codex HIGH-1: a feature with fewer than
+        ``_HARNESS_MIN_LAYER3_SAMPLES`` non-null rows must short-circuit
+        to z=0.0 (= retain), mirroring production's severity=info
+        short-circuit for sparse features."""
+        rng = np.random.default_rng(0)
+        n = 100
+        y = pd.Series(rng.integers(0, 2, size=n).astype(np.int64))
+        # Build a feature with only 5 non-null rows — well below the
+        # 30-sample guard.
+        sparse_values = np.full(n, np.nan, dtype=np.float64)
+        sparse_values[:5] = rng.normal(size=5)
+        X = pd.DataFrame(
+            {
+                "sparse_feature": sparse_values,
+                "dense_noise": rng.normal(size=n),
+            }
+        )
+        z = H._compute_marginal_z_scores(X, y, n_permutations=50, adversarial_seed=7)
+        assert z["sparse_feature"] == 0.0, (
+            "v5 A1 regression: sparse feature should short-circuit to "
+            "z=0.0 below MIN_LAYER3_SAMPLES, but got "
+            f"z={z['sparse_feature']:.3f}. Production parity broken."
+        )
+
+    def test_infinity_values_routed_to_degenerate_path(self) -> None:
+        """v5 A1 codex HIGH-2: ``+inf`` / ``-inf`` rows must flow
+        through to ``compute_adversarial_score``'s exception path
+        (not be silently filtered out), matching production's mask
+        behavior. The downstream call returns NaN z → harness emits
+        z=0.0 (= retain)."""
+        rng = np.random.default_rng(0)
+        n = 200
+        y = pd.Series(rng.integers(0, 2, size=n).astype(np.int64))
+        inf_values = rng.normal(size=n)
+        # Inject a few +inf entries — they should NOT be filtered out
+        # before the probe sees them. Production passes them through.
+        inf_values[0] = np.inf
+        inf_values[1] = -np.inf
+        X = pd.DataFrame({"inf_feature": inf_values})
+        z = H._compute_marginal_z_scores(X, y, n_permutations=50, adversarial_seed=7)
+        # The presence of +/-inf in the feature column causes
+        # roc_auc_score to raise a ValueError; the probe catches it
+        # and returns NaN z; the harness floors that to 0.0.
+        assert z["inf_feature"] == 0.0, (
+            "v5 A1 regression: +/-inf entries should route through the "
+            "production exception path (returning NaN-z → 0.0), but got "
+            f"z={z['inf_feature']:.3f}."
+        )
+
+    def test_single_class_after_mask_emits_zero_z(self) -> None:
+        """v5 A1: feature mask that leaves only one target class after
+        filtering must short-circuit to z=0.0 (cannot fit ROC AUC
+        with a single class). Production's ValueError catch produces
+        the same effective outcome."""
+        n = 100
+        # All-zero target → impossible to compute AUC
+        y = pd.Series(np.zeros(n, dtype=np.int64))
+        rng = np.random.default_rng(0)
+        X = pd.DataFrame({"any_feature": rng.normal(size=n)})
+        z = H._compute_marginal_z_scores(X, y, n_permutations=50, adversarial_seed=7)
+        assert z["any_feature"] == 0.0
+
+    def test_constant_feature_emits_zero_z(self) -> None:
+        """v5 A1: a constant-value feature has zero discriminative
+        signal. Production's ``compute_adversarial_score`` returns
+        z=0.0 (null_std=0, actual_auc=null_mean fallthrough) — harness
+        must preserve this."""
+        rng = np.random.default_rng(0)
+        n = 200
+        y = pd.Series(rng.integers(0, 2, size=n).astype(np.int64))
+        X = pd.DataFrame(
+            {
+                "constant_zero": np.zeros(n, dtype=np.float64),
+                "constant_seven": np.full(n, 7.0, dtype=np.float64),
+            }
+        )
+        z = H._compute_marginal_z_scores(X, y, n_permutations=50, adversarial_seed=7)
+        assert z["constant_zero"] == 0.0
+        assert z["constant_seven"] == 0.0
+
     def test_legacy_strict_drop_uses_high_z_constant(self) -> None:
         """Pin that the baseline arm drops EXACTLY at z > HIGH_Z."""
         from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
