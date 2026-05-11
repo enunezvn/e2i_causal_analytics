@@ -1,0 +1,15 @@
+{
+  "_schema_version": 1,
+  "_description": "Canonical G1 baseline values for Optum held-out non-inferiority test (Plan v4 §2 Gate G1).",
+  "_source_doc": "docs/results/optum_initiation_revalidation_20260510.md",
+  "auc": 0.4347,
+  "split": "held_out_test",
+  "cohort_n": 1294,
+  "n_train_positives": 22,
+  "target": "initiated_biologic_180d",
+  "window_regime": "PRE=360d/POST=180d",
+  "noninferiority_epsilon": 0.02,
+  "pr_number": 116,
+  "commit_sha": "0dc85a4",
+  "_note": "AUC=0.4347 is the best-of-4-algorithms held-out test AUC (LightGBM) from the n=1294 default-window run at PR #116 closure (see source_doc table row 'Test AUC'). The implied floor for non-inferiority is auc - noninferiority_epsilon = 0.4147. Do NOT update this file without a domain-expert sign-off and a corresponding PR reference."
+}
