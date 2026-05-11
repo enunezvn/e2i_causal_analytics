@@ -45,13 +45,24 @@ from .optum_feature_manifest import (
     OPTUM_TARGETS,
     optum_contract_for,
 )
+from .synthetic_feature_manifest import (
+    SYNTHETIC_FEATURES,
+    SYNTHETIC_FORBIDDEN_AS_FEATURES,
+    synthetic_contract_for,
+)
 
 # Tag each registered manifest with the canonical data_source string the
 # pipeline runner uses to opt in. Adding a new data source is two lines:
 # import its ``<source>_contract_for`` above and add the entry below.
+#
+# v5 Gate C2 note: the ``synthetic`` source is the v5 engineering CI
+# manifest that registers only the ``borderline_genuine_feature`` injected
+# by ``synthetic_rwd_realistic`` for HBLP-contrast testing. It is NOT a
+# disease cohort and emits NO RWD positive-evidence claim (plan §2 C2).
 MANIFEST_SOURCES: Mapping[str, Callable[[str], FeatureContract | None]] = {
     "csu": csu_contract_for,
     "optum": optum_contract_for,
+    "synthetic": synthetic_contract_for,
 }
 
 
@@ -96,5 +107,8 @@ __all__ = [
     "OPTUM_SAFE_FEATURES",
     "OPTUM_TARGETS",
     "optum_contract_for",
+    "SYNTHETIC_FEATURES",
+    "SYNTHETIC_FORBIDDEN_AS_FEATURES",
+    "synthetic_contract_for",
     "lookup_feature_contract",
 ]
