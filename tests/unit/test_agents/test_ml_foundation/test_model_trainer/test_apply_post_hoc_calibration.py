@@ -118,3 +118,170 @@ def test_evaluator_guard_compatible_with_skip_path(binary_dataset):
     not_a_classifier = _NotAClassifier().fit(X, y)
     _, skip_info = apply_post_hoc_calibration(not_a_classifier, X, y)
     assert skip_info.get("calibration_applied") is False
+
+
+# ---------------------------------------------------------------------------
+# v5 Gate B1 (2026-05-11): auto-policy regression tests.
+# ---------------------------------------------------------------------------
+
+
+class TestV5GateB1AutoPolicy:
+    """Pins the v5 §2 B1 default auto-policy for calibration method.
+
+    The policy: ``select_calibration_method`` returns ``"isotonic"`` when
+    ``(y_val == 1).sum() > 100`` (= B1_AUTO_POLICY_N_POS_CROSSOVER), else
+    ``"sigmoid"`` (Platt). This is the disease-agnostic default per the
+    plan; tests pin the crossover constant + both branches + the audit-
+    trail fields ``apply_post_hoc_calibration`` records.
+    """
+
+    def test_crossover_constant_pinned_at_100(self) -> None:
+        """v5 §2 B1 declared the crossover at n_pos > 100."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            B1_AUTO_POLICY_N_POS_CROSSOVER,
+        )
+
+        assert B1_AUTO_POLICY_N_POS_CROSSOVER == 100, (
+            "v5 B1 regression: crossover constant drifted from 100. "
+            "Per plan §2 B1: 'isotonic for n_pos > 100; Platt for sparser'."
+        )
+
+    def test_select_isotonic_when_n_pos_above_crossover(self) -> None:
+        """101+ positives → isotonic."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        y_val = np.concatenate([np.ones(150, dtype=np.int64), np.zeros(100, dtype=np.int64)])
+        assert select_calibration_method(y_val) == "isotonic"
+
+    def test_select_sigmoid_when_n_pos_below_crossover(self) -> None:
+        """≤100 positives → sigmoid (Platt)."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        y_val = np.concatenate([np.ones(30, dtype=np.int64), np.zeros(200, dtype=np.int64)])
+        assert select_calibration_method(y_val) == "sigmoid"
+
+    def test_select_sigmoid_at_exact_crossover_boundary(self) -> None:
+        """Exactly 100 positives → sigmoid (not isotonic — strict `>`)."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        y_val = np.concatenate([np.ones(100, dtype=np.int64), np.zeros(200, dtype=np.int64)])
+        assert select_calibration_method(y_val) == "sigmoid"
+
+    def test_select_isotonic_just_above_boundary(self) -> None:
+        """101 positives → isotonic."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        y_val = np.concatenate([np.ones(101, dtype=np.int64), np.zeros(200, dtype=np.int64)])
+        assert select_calibration_method(y_val) == "isotonic"
+
+    def test_select_respects_custom_crossover(self) -> None:
+        """Caller can override the crossover for cohort-specific policies."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        y_val = np.concatenate([np.ones(50, dtype=np.int64), np.zeros(200, dtype=np.int64)])
+        assert select_calibration_method(y_val, n_pos_crossover=30) == "isotonic"
+        assert select_calibration_method(y_val, n_pos_crossover=80) == "sigmoid"
+
+    def test_select_degenerate_y_falls_back_to_sigmoid(self) -> None:
+        """Non-binary / non-1D inputs → sigmoid (safer at low N)."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        # 2D input
+        y_2d = np.ones((50, 2), dtype=np.int64)
+        assert select_calibration_method(y_2d) == "sigmoid"
+        # All zeros (no positives)
+        y_zero = np.zeros(200, dtype=np.int64)
+        assert select_calibration_method(y_zero) == "sigmoid"
+
+    def test_auto_method_records_resolved_in_cal_info(self) -> None:
+        """The audit-trail field ``calibration_method_resolved`` is
+        always populated, even when the requested method is "auto"."""
+        rng = np.random.default_rng(0)
+        # 110 positives → policy resolves to isotonic
+        n = 250
+        y = np.concatenate([np.ones(110, dtype=np.int64), np.zeros(n - 110, dtype=np.int64)])
+        rng.shuffle(y)
+        X = rng.normal(size=(n, 3))
+        model = LogisticRegression(max_iter=200).fit(X, y)
+        _, info = apply_post_hoc_calibration(model, X, y, method="auto")
+        assert info["calibration_applied"] is True
+        assert info["calibration_method"] == "auto"
+        assert info["calibration_method_resolved"] == "isotonic"
+        assert info["calibration_fit_positives"] == 110
+        assert info["calibration_auto_n_pos_crossover"] == 100
+
+    def test_auto_method_resolves_to_sigmoid_at_low_n_pos(self) -> None:
+        """50 positives → resolved to sigmoid under default crossover."""
+        rng = np.random.default_rng(0)
+        n = 200
+        y = np.concatenate([np.ones(50, dtype=np.int64), np.zeros(n - 50, dtype=np.int64)])
+        rng.shuffle(y)
+        X = rng.normal(size=(n, 3))
+        model = LogisticRegression(max_iter=200).fit(X, y)
+        _, info = apply_post_hoc_calibration(model, X, y, method="auto")
+        assert info["calibration_method"] == "auto"
+        assert info["calibration_method_resolved"] == "sigmoid"
+        assert info["calibration_fit_positives"] == 50
+
+    def test_explicit_isotonic_bypasses_auto_policy(self) -> None:
+        """Legacy callers that pass explicit "isotonic" keep that method
+        even when the auto-policy would have chosen sigmoid."""
+        rng = np.random.default_rng(0)
+        n = 200
+        y = np.concatenate([np.ones(30, dtype=np.int64), np.zeros(n - 30, dtype=np.int64)])
+        rng.shuffle(y)
+        X = rng.normal(size=(n, 3))
+        model = LogisticRegression(max_iter=200).fit(X, y)
+        _, info = apply_post_hoc_calibration(model, X, y, method="isotonic")
+        assert info["calibration_method"] == "isotonic"
+        assert info["calibration_method_resolved"] == "isotonic"
+        # No auto-crossover field for non-auto calls
+        assert info["calibration_auto_n_pos_crossover"] is None
+
+    def test_explicit_sigmoid_bypasses_auto_policy(self) -> None:
+        """Symmetric: explicit "sigmoid" keeps Platt even at high n_pos."""
+        rng = np.random.default_rng(0)
+        n = 400
+        y = np.concatenate([np.ones(150, dtype=np.int64), np.zeros(n - 150, dtype=np.int64)])
+        rng.shuffle(y)
+        X = rng.normal(size=(n, 3))
+        model = LogisticRegression(max_iter=200).fit(X, y)
+        _, info = apply_post_hoc_calibration(model, X, y, method="sigmoid")
+        assert info["calibration_method_resolved"] == "sigmoid"
+
+    def test_invalid_method_raises_value_error(self) -> None:
+        """Unknown method names must fail loudly, not silently fall
+        through. Protects future authors from typos like "platt"
+        (correct: "sigmoid") or "isotonic_regression"."""
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(50, 2))
+        y = (X[:, 0] > 0).astype(int)
+        model = LogisticRegression(max_iter=200).fit(X, y)
+        with pytest.raises(ValueError, match="is not one of"):
+            apply_post_hoc_calibration(model, X, y, method="platt")
+
+    def test_auto_records_resolved_even_when_skip_non_classifier(self, binary_dataset) -> None:
+        """When the base model isn't a classifier, the skip path still
+        records the resolved method so audit consumers see what WOULD
+        have been applied."""
+        X, y = binary_dataset
+        not_a_classifier = _NotAClassifier().fit(X, y)
+        _, info = apply_post_hoc_calibration(not_a_classifier, X, y, method="auto")
+        assert info["calibration_applied"] is False
+        assert info["calibration_method"] == "auto"
+        # 60 positives in binary_dataset (n=120, ~50% prevalence) →
+        # resolves to sigmoid under default crossover 100.
+        assert info["calibration_method_resolved"] in {"sigmoid", "isotonic"}
+        assert info["skip_reason"] == "base_model_not_a_classifier"
