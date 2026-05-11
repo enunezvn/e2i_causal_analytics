@@ -530,50 +530,86 @@ def _layer_1_post_anchor_feature_drop(
 
     Returns ``(X_filtered, dropped_feature_names)``.
 
-    When ``manifest_source`` is None or the manifest is unavailable,
-    returns X unchanged with an empty dropped list — the harness then
-    falls back to whatever filtering the per-seed Layer 3 path provides.
-    When the manifest IS available, this is a deterministic pre-filter
-    that catches target-derived columns (e.g., ``initiated_biologic_180d``
-    in Optum) BEFORE they reach the model fit or the marginal-z scorer
-    (which has a degenerate-variance blind spot on perfect-binary proxies).
+    When ``manifest_source`` is None, returns X unchanged with an
+    empty dropped list (back-compat for callers that have no cohort
+    manifest; the per-seed Layer 3 scorer is the fallback).
 
-    The pre-anchor allow-list mirrors
-    ``_resolve_layer_1_declared_safe_lookup``'s
-    ``pre_anchor_refs = {"index_date", "lookback_start_date", "eligeff"}``.
-    A feature is dropped iff ALL of the following hold:
-      1. The manifest has a contract for it.
-      2. The contract's ``knowable_at`` is NOT pre-or-at-index
-         (``is_pre_or_at_index()`` returns False).
+    When ``manifest_source`` IS provided, the filter FAILS CLOSED:
+      - An import failure of ``MANIFEST_SOURCES`` raises RuntimeError.
+      - An unregistered ``manifest_source`` raises RuntimeError.
+      - Manifest lookup exceptions per feature are also raised (not
+        silently swallowed), so a manifest bug causes a hard failure
+        rather than silently keeping a post-anchor leak feature.
+    This fail-closed contract prevents a typo in ``manifest_source``
+    or a manifest-registry regression from silently reintroducing the
+    AUC=1.0 failure mode that Layer 3 cannot detect (zero-variance
+    blind spot on perfect binary proxies).
+
+    A feature is dropped iff a manifest contract is found AND the
+    contract's ``knowable_at`` is NOT pre-or-at-index
+    (``is_pre_or_at_index()`` returns False).
 
     Features with NO manifest contract are KEPT (unknown ≠ forbidden).
-    This is the conservative fail-open policy: manifest-declared
-    post-anchor features are dropped; everything else is left for the
-    per-seed Layer 3 scorer.
+    This is the conservative behaviour: only manifest-declared
+    post-anchor features are dropped; unknown derivations are left for
+    the per-seed Layer 3 scorer.
 
-    Case matching is exact (manifest contract names are already
-    lower-snake-case; the converter emits the same convention).
+    Case handling: column names are looked up against the manifest by
+    their exact (already lower-snake-case) name.  If a column has NO
+    exact-match contract but a case-folded version would match a
+    manifest name, a RuntimeError is raised — this catches upstream
+    casing drift before it silently bypasses the filter.
     """
     if manifest_source is None:
         return X, []
 
     try:
         from src.data.manifests import MANIFEST_SOURCES
-    except ImportError:
-        return X, []
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Layer 1 pre-filter: failed to import MANIFEST_SOURCES "
+            f"(manifest_source={manifest_source!r}). "
+            "This import must succeed for the filter to be fail-closed."
+        ) from exc
 
     if manifest_source not in MANIFEST_SOURCES:
-        return X, []
+        raise RuntimeError(
+            f"Layer 1 pre-filter: manifest_source={manifest_source!r} is not "
+            f"registered in MANIFEST_SOURCES (known: {sorted(MANIFEST_SOURCES.keys())}). "
+            "Fix the cohort spec or register the manifest."
+        )
 
     lookup_fn = MANIFEST_SOURCES[manifest_source]
+
+    # Build a lower-case → original-name map for case-drift detection.
+    lower_to_col: Dict[str, str] = {}
+    for col in X.columns:
+        lc = col.lower()
+        if lc in lower_to_col and lower_to_col[lc] != col:
+            raise RuntimeError(
+                f"Layer 1 pre-filter: ambiguous case collision in feature matrix: "
+                f"{col!r} and {lower_to_col[lc]!r} both fold to {lc!r}. "
+                "Resolve before running the harness."
+            )
+        lower_to_col[lc] = col
+
     dropped: List[str] = []
     for col in X.columns:
-        try:
-            contract = lookup_fn(col)
-        except Exception:  # noqa: BLE001 — defensive against manifest bugs
-            contract = None
+        contract = lookup_fn(col)
         if contract is None:
-            # No manifest entry — keep (unknown ≠ post-anchor).
+            # Exact-name miss — check for case-drift.
+            lc = col.lower()
+            if lc != col:
+                # col is not already lower-case; try lower-case lookup.
+                contract_lc = lookup_fn(lc)
+                if contract_lc is not None:
+                    raise RuntimeError(
+                        f"Layer 1 pre-filter: column {col!r} has no exact manifest "
+                        f"contract but its lower-case form {lc!r} does. This indicates "
+                        "upstream casing drift that would silently bypass the filter. "
+                        "Fix the converter to emit lower-snake-case column names."
+                    )
+            # No manifest entry (exact or case-folded) — keep.
             continue
         knowable = getattr(contract, "knowable_at", None)
         if knowable is None:

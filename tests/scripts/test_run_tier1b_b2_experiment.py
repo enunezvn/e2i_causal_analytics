@@ -894,8 +894,14 @@ class TestLayer1PostAnchorFeatureDrop:
             "manifest_source=None must return X unchanged"
         )
 
-    def test_unknown_manifest_source_returns_unchanged(self) -> None:
-        """An unregistered manifest_source is treated as no-op (fail-open)."""
+    def test_unknown_manifest_source_raises(self) -> None:
+        """An unregistered manifest_source must raise RuntimeError (fail-closed).
+
+        HIGH fix: the filter cannot silently return unchanged when a
+        manifest_source is set but unregistered — that would let a typo
+        in the cohort spec silently bypass the filter and reintroduce the
+        AUC=1.0 leak.
+        """
         n = 5
         rng = np.random.default_rng(3)
         df = pd.DataFrame(
@@ -904,11 +910,59 @@ class TestLayer1PostAnchorFeatureDrop:
                 "some_feature": rng.normal(size=n),
             }
         )
-        X_filtered, dropped = H._layer_1_post_anchor_feature_drop(
-            df, manifest_source="not_a_real_source"
+        with pytest.raises(RuntimeError, match="not registered in MANIFEST_SOURCES"):
+            H._layer_1_post_anchor_feature_drop(df, manifest_source="not_a_real_source")
+
+    def test_case_drift_in_column_name_raises(self) -> None:
+        """MEDIUM fix: if a column has no exact-match but its lower-case form
+        matches a post-anchor manifest contract, a RuntimeError is raised
+        to surface casing drift before it silently bypasses the filter."""
+        n = 5
+        rng = np.random.default_rng(5)
+        df = pd.DataFrame(
+            {
+                # Upper-cased version of the load-bearing post-anchor column.
+                "Initiated_Biologic_180d": rng.integers(0, 2, size=n).astype(float),
+                "charlson_score": rng.normal(size=n),
+            }
         )
-        assert dropped == []
-        assert set(X_filtered.columns) == {"initiated_biologic_180d", "some_feature"}
+        with pytest.raises(RuntimeError, match="casing drift"):
+            H._layer_1_post_anchor_feature_drop(df, manifest_source="optum")
+
+    def test_all_optum_forbidden_post_anchor_cols_are_dropped(self) -> None:
+        """LOW fix (exhaustive): every manifest-declared non-pre-anchor Optum
+        column that is also numeric (and thus reachable via _build_features_and_target)
+        must be dropped by the filter. Uses OPTUM_FORBIDDEN_AS_FEATURES from the
+        manifest registry to avoid hardcoding the list.
+
+        This guards against a future harness change that adds a new post-anchor
+        Optum column while the per-test assertions still pass on the old list.
+        """
+        from src.data.manifests import OPTUM_FORBIDDEN_AS_FEATURES
+
+        n = 20
+        rng = np.random.default_rng(6)
+        # Build a frame with ALL known post-anchor columns (as float numerics,
+        # mirroring what _build_features_and_target emits) plus some pre-anchor.
+        post_anchor_numeric = list(OPTUM_FORBIDDEN_AS_FEATURES)
+        pre_anchor_cols = ["charlson_score", "age_at_index", "months_since_first_dx"]
+        data = {}
+        for col in post_anchor_numeric:
+            data[col] = rng.integers(0, 2, size=n).astype(float)
+        for col in pre_anchor_cols:
+            data[col] = rng.normal(size=n)
+        df = pd.DataFrame(data)
+        X_filtered, dropped = H._layer_1_post_anchor_feature_drop(df, manifest_source="optum")
+        # Every post-anchor column must appear in the dropped list.
+        for col in post_anchor_numeric:
+            assert col in dropped, (
+                f"post-anchor Optum column {col!r} was NOT dropped by the Layer 1 "
+                "pre-filter. This is a false-negative — the column will reach the "
+                "model fit and may produce inflated AUC."
+            )
+        # Pre-anchor columns must be retained.
+        for col in pre_anchor_cols:
+            assert col in X_filtered.columns, f"pre-anchor column {col!r} was incorrectly dropped"
 
     def test_unknown_feature_not_in_manifest_is_kept(self) -> None:
         """A feature with no manifest contract must be kept (unknown != forbidden)."""
