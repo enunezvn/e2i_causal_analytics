@@ -268,3 +268,67 @@ def test_post_index_aggregation_leak_is_zero_for_untreated():
     treated = df[df["treatment_initiated"] == 1]
     assert (treated["post_index_med_count_LEAK"] >= 1).all()
     assert (treated["post_index_med_count_LEAK"] <= 9).all()
+
+
+# --- v5 Gate C2 borderline_genuine injection ---------------------------------
+
+
+def test_borderline_genuine_pattern_emits_named_feature():
+    """v5 C2: the borderline_genuine pattern must emit
+    ``BORDERLINE_GENUINE_FEATURE_NAME`` as the canonical column.
+
+    ENGINEERING CI SANITY-CHECK — NOT RWD positive-evidence.
+    """
+    from src.repositories.synthetic_rwd_realistic import (
+        BORDERLINE_GENUINE_FEATURE_NAME,
+        RwdRealisticConfig,
+        generate_rwd_realistic,
+    )
+
+    df = generate_rwd_realistic(
+        RwdRealisticConfig(n_patients=2000, leakage_pattern="borderline_genuine", seed=42)
+    )
+    assert BORDERLINE_GENUINE_FEATURE_NAME in df.columns
+    # Both classes get nonzero draws — the feature is class-conditional but
+    # not target-deterministic (which is what distinguishes "genuine causal"
+    # from "post_index_aggregation" where untreated == 0 by construction).
+    assert (df.loc[df["treatment_initiated"] == 0, BORDERLINE_GENUINE_FEATURE_NAME] != 0).any()
+    assert (df.loc[df["treatment_initiated"] == 1, BORDERLINE_GENUINE_FEATURE_NAME] != 0).any()
+
+
+def test_borderline_genuine_pattern_produces_intermediate_auc():
+    """v5 C2: the injected feature's effective AUC at default parameters
+    must land in the [0.54, 0.58] band so the permutation-null z falls
+    inside the (5σ, 7.5σ) HBLP variance-relaxation window at n=20000.
+
+    The integration test pins the full z-band; this unit test pins the
+    upstream AUC so regressions in the generator constants surface here
+    before they propagate into the integration suite's longer permutation
+    runtime.
+    """
+    from src.data.adversarial_leakage import compute_adversarial_score
+    from src.repositories.synthetic_rwd_realistic import (
+        BORDERLINE_GENUINE_DEFAULT_N_PATIENTS,
+        BORDERLINE_GENUINE_DEFAULT_SEED,
+        BORDERLINE_GENUINE_FEATURE_NAME,
+        RwdRealisticConfig,
+        generate_rwd_realistic,
+    )
+
+    df = generate_rwd_realistic(
+        RwdRealisticConfig(
+            n_patients=BORDERLINE_GENUINE_DEFAULT_N_PATIENTS,
+            leakage_pattern="borderline_genuine",
+            seed=BORDERLINE_GENUINE_DEFAULT_SEED,
+        )
+    )
+    score = compute_adversarial_score(
+        df[BORDERLINE_GENUINE_FEATURE_NAME].to_numpy(),
+        df["treatment_initiated"].to_numpy(),
+        n_permutations=200,
+        seed=42,
+    )
+    assert 0.54 <= score["actual_auc"] <= 0.58, (
+        f"borderline_genuine AUC calibration drift: got {score['actual_auc']:.4f}; "
+        f"expected [0.54, 0.58] at default n + seed"
+    )
