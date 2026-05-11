@@ -219,6 +219,16 @@ def test_g1_every_post_anchor_feature_fails_lineage_audit(
 # here because the WINDOWED aggregations in the manifest already enforce
 # pre-anchor selection (window_days param). The raw column itself is
 # not pre/post-anchor; the windowed feature is.
+#
+# Codex pass-2 MED-8 PARTIAL closure (PR #137 v4 G1): post-anchor
+# target columns (``treatment_initiated``, ``discontinuation_flag``,
+# ``initiated_biologic_180d``) MUST NOT appear here. They live in
+# POST_ANCHOR_DERIVATION_INPUTS (below) and are accepted as derivation
+# inputs ONLY when the audited PARENT feature is itself post_index.
+# Putting them in PRE_ANCHOR_RAW_COLUMNS allowed an undeclared
+# derivation input that referenced a target column to silently pass
+# the audit even on a pre-anchor parent — that is the exact leak this
+# audit must catch.
 PRE_ANCHOR_RAW_COLUMNS: dict[str, frozenset[str]] = {
     "csu": frozenset(
         {
@@ -243,14 +253,6 @@ PRE_ANCHOR_RAW_COLUMNS: dict[str, frozenset[str]] = {
             "brand_normalised",
             "proc_code",
             "abnl_cd",
-            # Post-anchor target columns: included as raw inputs because
-            # post-anchor features legitimately list them as derivation
-            # inputs (e.g., journey_status uses treatment_initiated).
-            # The post-anchor feature itself is correctly flagged
-            # post_index by Layer 1; this registry's job is only to
-            # confirm the input IS a known column, not to re-classify it.
-            "treatment_initiated",
-            "discontinuation_flag",
         }
     ),
     "optum": frozenset(
@@ -290,7 +292,34 @@ PRE_ANCHOR_RAW_COLUMNS: dict[str, frozenset[str]] = {
             "brand_normalised",
             "proc_code",
             "abnl_cd",
-            # Post-anchor target columns (same rationale as CSU)
+        }
+    ),
+}
+
+
+# Codex pass-2 MED-8 PARTIAL closure (PR #137 v4 G1): post-anchor
+# target columns that may legitimately appear as derivation inputs
+# of POST-INDEX features ONLY (e.g., ``journey_status`` uses
+# ``treatment_initiated`` to compute its label-derived value). Those
+# parent features are themselves correctly flagged post_index by
+# Layer 1 and are dropped before training; the audit's job here is
+# merely to confirm the post-anchor input is a recognized target
+# column rather than an arbitrary undeclared post-anchor leak.
+#
+# An undeclared derivation input that names one of these target
+# columns ON A PRE-ANCHOR PARENT feature MUST FAIL the audit (because
+# a pre-anchor feature reading a target column is exactly the leak
+# pattern v4 G1 forbids). The recursive auditor enforces the
+# parent-must-be-post_index gate at the call site.
+POST_ANCHOR_DERIVATION_INPUTS: dict[str, frozenset[str]] = {
+    "csu": frozenset(
+        {
+            "treatment_initiated",
+            "discontinuation_flag",
+        }
+    ),
+    "optum": frozenset(
+        {
             "treatment_initiated",
             "discontinuation_flag",
             "initiated_biologic_180d",
@@ -315,6 +344,14 @@ def _audit_derivation_inputs_recursively(
     ``PRE_ANCHOR_RAW_COLUMNS[data_source]`` — otherwise the audit
     fails. Previously such inputs were silently skipped, masking
     undeclared post-anchor leaks.
+
+    Codex pass-2 MED-8 PARTIAL closure: post-anchor target columns
+    (``treatment_initiated``, ``discontinuation_flag``,
+    ``initiated_biologic_180d``) live in
+    ``POST_ANCHOR_DERIVATION_INPUTS`` and are accepted ONLY when the
+    audited PARENT feature is itself post_index. A pre-anchor parent
+    that names a target column as a derivation input MUST FAIL — that
+    is the exact leak pattern v4 G1 forbids.
     """
     if visited is None:
         visited = set()
@@ -328,24 +365,59 @@ def _audit_derivation_inputs_recursively(
         return True, []
 
     raw_registry = PRE_ANCHOR_RAW_COLUMNS.get(data_source, frozenset())
+    post_anchor_targets = POST_ANCHOR_DERIVATION_INPUTS.get(data_source, frozenset())
+
+    # Codex pass-2 MED-8: parent's pre/post-anchor status governs
+    # whether post-anchor target columns are admissible as
+    # derivation inputs. Pre-anchor parents MUST NOT reference any
+    # post-anchor target column; post-anchor parents may.
+    parent_is_pre_anchor = (
+        contract.knowable_at is not None and contract.knowable_at.is_pre_or_at_index()
+    )
+
     violations: list[str] = []
     for input_name in contract.derivation_inputs:
         input_contract = contracts_by_name.get(input_name)
         if input_contract is None:
             # Codex pass-1 MED-8: previously raw columns were assumed
             # safe-by-convention. Now we require every undeclared input
-            # to be in the source-level raw-column registry; otherwise
-            # an undeclared post-anchor column would silently slip past
-            # the audit.
-            if input_name not in raw_registry:
-                violations.append(
-                    f"{feature_name} -> {input_name}: undeclared "
-                    f"derivation input — not a manifest-declared "
-                    f"feature AND not in PRE_ANCHOR_RAW_COLUMNS"
-                    f"[{data_source!r}]. Either declare a manifest "
-                    f"contract for it, or add it to the raw-column "
-                    f"registry with rationale."
-                )
+            # to be in the source-level raw-column registry OR (when
+            # the parent is post-anchor) the post-anchor target
+            # registry — otherwise an undeclared post-anchor column
+            # would silently slip past the audit.
+            if input_name in raw_registry:
+                # Pre-anchor raw column — admissible for any parent.
+                continue
+            if input_name in post_anchor_targets:
+                # Codex pass-2 MED-8 PARTIAL closure: post-anchor
+                # target columns admissible ONLY on post-anchor
+                # parents. A pre-anchor parent reading a target
+                # column is the exact leak v4 G1 forbids.
+                if parent_is_pre_anchor:
+                    violations.append(
+                        f"{feature_name} -> {input_name}: pre-anchor "
+                        f"parent feature references a POST-ANCHOR "
+                        f"TARGET column from POST_ANCHOR_DERIVATION_INPUTS"
+                        f"[{data_source!r}]. This is exactly the leak "
+                        f"pattern v4 G1 forbids: pre-anchor features "
+                        f"MUST NOT reference target columns. Either "
+                        f"re-declare the parent as post_index, OR "
+                        f"re-shape the derivation to use a "
+                        f"pre-anchor intermediate."
+                    )
+                # Else parent is post-anchor → admissible; the parent
+                # feature is itself dropped by Layer 1 before training.
+                continue
+            violations.append(
+                f"{feature_name} -> {input_name}: undeclared "
+                f"derivation input — not a manifest-declared "
+                f"feature AND not in PRE_ANCHOR_RAW_COLUMNS"
+                f"[{data_source!r}] AND not in "
+                f"POST_ANCHOR_DERIVATION_INPUTS[{data_source!r}]. "
+                f"Either declare a manifest contract for it, or "
+                f"add it to the appropriate raw-column registry "
+                f"with rationale."
+            )
             continue
         # Recursively audit the input.
         if not input_contract.knowable_at.is_pre_or_at_index():
@@ -858,6 +930,147 @@ def test_g1_undeclared_derivation_input_fails_med_8() -> None:
             PRE_ANCHOR_RAW_COLUMNS.pop(fake_source, None)
         else:
             PRE_ANCHOR_RAW_COLUMNS[fake_source] = original
+
+
+def test_g1_pre_anchor_feature_with_target_input_fails_med_8_partial() -> None:
+    """Codex pass-2 MED-8 PARTIAL closure (PR #137 v4 G1): a pre-anchor
+    feature whose ``derivation_inputs`` reference a post-anchor target
+    column MUST FAIL the audit.
+
+    This is the load-bearing v4 G1 invariant the pass-1 fix did NOT
+    cover: putting target columns (``treatment_initiated``,
+    ``discontinuation_flag``, ``initiated_biologic_180d``) in
+    ``PRE_ANCHOR_RAW_COLUMNS`` allowed an undeclared input on a
+    pre-anchor parent to silently pass — exactly the leak pattern
+    v4 G1 forbids. The pass-2 fix splits the registry: target columns
+    move to ``POST_ANCHOR_DERIVATION_INPUTS`` and are accepted as
+    inputs ONLY when the audited parent is itself post_index.
+
+    This regression test enforces the invariant by:
+    1. Building a synthetic feature with ``knowable_at=enrollment``
+       (i.e., pre-anchor) whose ``derivation_inputs=("treatment_initiated",)``.
+    2. Asserting the auditor emits a violation that points at the
+       POST_ANCHOR_DERIVATION_INPUTS gate.
+
+    Under the OLD (pass-1) registry this case would have PASSED
+    silently because ``treatment_initiated`` was whitelisted in
+    PRE_ANCHOR_RAW_COLUMNS. Under the NEW (pass-2) split, it FAILS
+    loudly.
+    """
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fake_source = "med8_partial_synthetic"
+
+    # Synthetic pre-anchor feature with a target-column input. This
+    # is the exact leak pattern v4 G1 forbids.
+    leaky_pre_anchor = FeatureContract(
+        name="leaky_demographic_referencing_target",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="synthetic",
+        derivation_inputs=("treatment_initiated",),  # post-anchor target
+    )
+
+    # Synthetic post-anchor feature with the same input. This SHOULD
+    # pass — the parent is post-anchor and the input is in the
+    # POST_ANCHOR_DERIVATION_INPUTS registry. This mirrors the real
+    # csu/optum manifests (e.g., journey_status, journey_end_date).
+    post_anchor_using_target = FeatureContract(
+        name="legitimate_journey_status",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="synthetic",
+        derivation_inputs=("treatment_initiated",),
+    )
+
+    # Piggy-back on the CSU registries — they're the single source of
+    # truth for which target columns are recognized.
+    original_pre = PRE_ANCHOR_RAW_COLUMNS.get(fake_source)
+    original_post = POST_ANCHOR_DERIVATION_INPUTS.get(fake_source)
+    PRE_ANCHOR_RAW_COLUMNS[fake_source] = PRE_ANCHOR_RAW_COLUMNS["csu"]
+    POST_ANCHOR_DERIVATION_INPUTS[fake_source] = POST_ANCHOR_DERIVATION_INPUTS["csu"]
+    try:
+        # Bad: pre-anchor parent reading a target column.
+        contracts_bad = {leaky_pre_anchor.name: leaky_pre_anchor}
+        ok_bad, violations_bad = _audit_derivation_inputs_recursively(
+            leaky_pre_anchor.name, fake_source, contracts_bad
+        )
+        assert not ok_bad, (
+            "MED-8 PARTIAL regression: pre-anchor feature referencing a "
+            "post-anchor target column passed the audit. This is the exact "
+            "leak pattern v4 G1 forbids; the auditor must catch it."
+        )
+        assert any("treatment_initiated" in v for v in violations_bad), (
+            f"expected violation to name the offending target column, got: "
+            f"{violations_bad}"
+        )
+        assert any("POST_ANCHOR_DERIVATION_INPUTS" in v for v in violations_bad), (
+            f"expected violation to point at POST_ANCHOR_DERIVATION_INPUTS "
+            f"gate, got: {violations_bad}"
+        )
+        assert any("pre-anchor parent" in v.lower() for v in violations_bad), (
+            f"expected violation to surface 'pre-anchor parent' framing for "
+            f"triage, got: {violations_bad}"
+        )
+
+        # Good: post-anchor parent reading a target column → admissible.
+        contracts_good = {post_anchor_using_target.name: post_anchor_using_target}
+        ok_good, violations_good = _audit_derivation_inputs_recursively(
+            post_anchor_using_target.name, fake_source, contracts_good
+        )
+        assert ok_good, (
+            f"MED-8 PARTIAL regression: post-anchor parent legitimately "
+            f"referencing a target column failed the audit. Got violations: "
+            f"{violations_good}. Real-manifest equivalents (journey_status, "
+            f"journey_end_date) would also fail spuriously."
+        )
+        assert violations_good == []
+    finally:
+        # Restore registries to avoid test-order pollution.
+        if original_pre is None:
+            PRE_ANCHOR_RAW_COLUMNS.pop(fake_source, None)
+        else:
+            PRE_ANCHOR_RAW_COLUMNS[fake_source] = original_pre
+        if original_post is None:
+            POST_ANCHOR_DERIVATION_INPUTS.pop(fake_source, None)
+        else:
+            POST_ANCHOR_DERIVATION_INPUTS[fake_source] = original_post
+
+
+def test_g1_target_columns_excluded_from_pre_anchor_raw_columns_med_8() -> None:
+    """Codex pass-2 MED-8 PARTIAL closure (PR #137 v4 G1): no
+    post-anchor target column appears in ``PRE_ANCHOR_RAW_COLUMNS``.
+
+    The pass-1 registry whitelisted ``treatment_initiated``,
+    ``discontinuation_flag``, and ``initiated_biologic_180d`` in
+    ``PRE_ANCHOR_RAW_COLUMNS`` — that is the exact code path that
+    allowed a pre-anchor feature to reference a target column and
+    silently pass. The pass-2 split moves them to
+    ``POST_ANCHOR_DERIVATION_INPUTS``. This test pins the invariant
+    so a future PR cannot regress the registry.
+    """
+    forbidden_in_pre_anchor = {
+        "treatment_initiated",
+        "discontinuation_flag",
+        "initiated_biologic_180d",
+    }
+    for source, raw_cols in PRE_ANCHOR_RAW_COLUMNS.items():
+        regressed = forbidden_in_pre_anchor & raw_cols
+        assert not regressed, (
+            f"MED-8 PARTIAL regression: PRE_ANCHOR_RAW_COLUMNS[{source!r}] "
+            f"contains post-anchor target columns: {sorted(regressed)}. "
+            f"These belong in POST_ANCHOR_DERIVATION_INPUTS instead. A "
+            f"target column in PRE_ANCHOR_RAW_COLUMNS allows a pre-anchor "
+            f"feature to silently reference a label-derived value — the "
+            f"exact leak pattern v4 G1 forbids."
+        )
+
+    # Spot-check the post-anchor registry is populated for both
+    # production sources (otherwise the legitimate post-anchor
+    # parents like journey_status would fail their own audit).
+    assert "treatment_initiated" in POST_ANCHOR_DERIVATION_INPUTS["csu"]
+    assert "discontinuation_flag" in POST_ANCHOR_DERIVATION_INPUTS["csu"]
+    assert "treatment_initiated" in POST_ANCHOR_DERIVATION_INPUTS["optum"]
+    assert "discontinuation_flag" in POST_ANCHOR_DERIVATION_INPUTS["optum"]
+    assert "initiated_biologic_180d" in POST_ANCHOR_DERIVATION_INPUTS["optum"]
 
 
 def test_g1_lineage_helper_signature_unchanged_from_pr_127() -> None:
