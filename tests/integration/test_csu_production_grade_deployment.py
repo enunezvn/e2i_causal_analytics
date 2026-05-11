@@ -156,19 +156,30 @@ class TestRegulatoryDeploymentManifestBuilder:
         assert manifest.n3_signature is None
 
     def test_csu_with_auc_below_honest_band_blocked(self) -> None:
+        """v5 codex pass-1 LOW-1: below-band reason mentions 'under-performing'."""
         state = _csu_state(roc_auc=0.55)
         m = build_regulatory_deployment_manifest(state)
         assert m.t2_6c_authorization_status == "blocked"
-        assert any("outside CSU honest band" in r for r in m.t2_6c_authorization_reasons)
+        assert any("BELOW CSU honest band" in r for r in m.t2_6c_authorization_reasons)
+        assert any("under-performing" in r for r in m.t2_6c_authorization_reasons)
         assert m.auc_in_band is False
 
     def test_csu_with_auc_above_honest_band_blocked(self) -> None:
-        # AUC=0.78 above honest band → blocked. The deliberate point of
-        # the cohort-specific band: even a "great" CSU AUC is a flag
-        # for leakage / overfitting until investigated.
+        """v5 codex pass-1 LOW-1: above-band reason flags suspicious — operator
+        should investigate leakage or cohort shift, not treat as authorization.
+
+        AUC=0.78 above honest band → blocked. The deliberate point of
+        the cohort-specific band: even a "great" CSU AUC is a flag
+        for leakage / overfitting until investigated.
+        """
         state = _csu_state(roc_auc=0.78)
         m = build_regulatory_deployment_manifest(state)
         assert m.t2_6c_authorization_status == "blocked"
+        assert any("ABOVE CSU honest band" in r for r in m.t2_6c_authorization_reasons)
+        assert any(
+            "suspicious" in r.lower() or "investigate leakage" in r
+            for r in m.t2_6c_authorization_reasons
+        )
         assert m.auc_in_band is False
 
     def test_csu_with_adaptation_history_blocked(self) -> None:
@@ -242,6 +253,55 @@ class TestRegulatoryDeploymentManifestBuilder:
         m_b = build_regulatory_deployment_manifest(state_blocked)
         assert m_a.manifest_sha256 != m_b.manifest_sha256
 
+    def test_manifest_sha_distinguishes_different_audit_contents(self) -> None:
+        """v5 codex pass-1 MED-2: two manifests with different non-empty
+        adaptation_history payloads must produce DIFFERENT hashes even
+        if they generate identical t2_6c_authorization_reasons. Without
+        the audit-fingerprint hash binding, hashes could collapse."""
+        state_a = _csu_state(
+            adaptation_history=[
+                {
+                    "commit_sha": "aaa111",
+                    "justification_doc": "docs/a.md",
+                    "gate_name": "cv_stability",
+                    "before_threshold": 0.5,
+                    "after_threshold": 0.7,
+                    "timestamp": "2026-05-11T00:00:00",
+                }
+            ]
+        )
+        state_b = _csu_state(
+            adaptation_history=[
+                {
+                    "commit_sha": "bbb222",
+                    "justification_doc": "docs/b.md",
+                    "gate_name": "minimum_auc",
+                    "before_threshold": 0.75,
+                    "after_threshold": 0.66,
+                    "timestamp": "2026-05-11T01:00:00",
+                }
+            ]
+        )
+        m_a = build_regulatory_deployment_manifest(state_a)
+        m_b = build_regulatory_deployment_manifest(state_b)
+        # Both blocked + same authorization reason text format.
+        assert m_a.t2_6c_authorization_status == "blocked"
+        assert m_b.t2_6c_authorization_status == "blocked"
+        # Hashes must differ because audit fingerprints differ.
+        assert m_a.manifest_sha256 != m_b.manifest_sha256
+        assert m_a.regulatory_eligibility_audit_fingerprint != (
+            m_b.regulatory_eligibility_audit_fingerprint
+        )
+
+    def test_audit_fingerprint_null_when_audit_absent(self) -> None:
+        """When the audit is missing entirely, fingerprint is None
+        (not an empty-string sha)."""
+        state = _csu_state()
+        state["validation_metrics"].pop("regulatory_eligibility_audit", None)
+        m = build_regulatory_deployment_manifest(state)
+        assert m.regulatory_eligibility_audit_present is False
+        assert m.regulatory_eligibility_audit_fingerprint is None
+
 
 # ---------------------------------------------------------------------------
 # validate_promotion integration — manifest emission as state key.
@@ -285,6 +345,58 @@ class TestValidatePromotionEmitsManifest:
         # honest_auc_band serializes as list (per to_dict).
         assert round_trip["honest_auc_band"] == [0.62, 0.68]
 
+    def test_malformed_audit_payload_emits_blocked_manifest_not_crash(self) -> None:
+        """v5 codex pass-1 HIGH-2: a malformed
+        ``validation_metrics["regulatory_eligibility_audit"]`` (non-list
+        fields) must produce a BLOCKED manifest with the N1 reconstruction
+        failure cited — NOT a generic promotion-validation crash."""
+        state = _csu_state()
+        # Inject a malformed payload — adaptation_history must be a list,
+        # but we give it a string. from_dict raises TypeError.
+        state["validation_metrics"]["regulatory_eligibility_audit"] = {
+            "gate_history": [],
+            "adaptation_history": "not_a_list",
+        }
+        result = asyncio.run(validate_promotion(state))
+        # The integration path must NOT clobber to a generic error.
+        assert "regulatory_deployment_manifest" in result, (
+            "Malformed audit should still emit a manifest (blocked), "
+            "not a generic promotion-validation error."
+        )
+        m = result["regulatory_deployment_manifest"]
+        assert m["t2_6c_authorization_status"] == "blocked"
+        # The builder's malformed-audit guard fires first and surfaces
+        # "payload malformed" in reasons. The regulatory_result-level
+        # fallback catches the same condition but its message stays in
+        # state["regulatory_eligibility_failures"] (not the manifest).
+        assert any(
+            "regulatory_eligibility_audit payload malformed" in r
+            for r in m["t2_6c_authorization_reasons"]
+        ), m["t2_6c_authorization_reasons"]
+
+    def test_validate_promotion_sees_fresh_n1_audit_for_manifest(self) -> None:
+        """v5 codex pass-1 HIGH-1: the manifest must read the FRESH N1
+        audit (with gate_history entries N1 just appended), not the
+        stale incoming state's audit. Verify by passing a state with
+        an EMPTY incoming audit; after validate_promotion runs, the
+        manifest's regulatory_eligibility_audit_present is True."""
+        state = _csu_state()
+        # Confirm the incoming audit has empty gate_history.
+        incoming_audit = state["validation_metrics"]["regulatory_eligibility_audit"]
+        assert incoming_audit["gate_history"] == []
+        result = asyncio.run(validate_promotion(state))
+        m = result["regulatory_deployment_manifest"]
+        # N1 must have appended a gate_history entry. The manifest
+        # reads the FRESH audit, not the stale incoming one.
+        fresh_audit = result["regulatory_eligibility_audit"]
+        assert len(fresh_audit["gate_history"]) >= 1, (
+            "N1 should have appended at least one gate_history entry."
+        )
+        # Manifest sees audit as present.
+        assert m["regulatory_eligibility_audit_present"] is True
+        # Fingerprint binds to fresh audit contents.
+        assert m["regulatory_eligibility_audit_fingerprint"] is not None
+
 
 # ---------------------------------------------------------------------------
 # Plan v5 §2 C1 acceptance — the manifest LISTS the load-bearing fields.
@@ -317,6 +429,9 @@ class TestC1ManifestFieldCoverage:
             "t2_6c_authorization_status",
             "t2_6c_authorization_reasons",
             "regulatory_eligibility_audit_present",
+            # Codex pass-1 MED-2: audit fingerprint binds the hash
+            # to audit contents, not just presence.
+            "regulatory_eligibility_audit_fingerprint",
             "manifest_sha256",
         }
         missing = required_fields - set(m.keys())
