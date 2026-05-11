@@ -999,8 +999,7 @@ def test_g1_pre_anchor_feature_with_target_input_fails_med_8_partial() -> None:
             "leak pattern v4 G1 forbids; the auditor must catch it."
         )
         assert any("treatment_initiated" in v for v in violations_bad), (
-            f"expected violation to name the offending target column, got: "
-            f"{violations_bad}"
+            f"expected violation to name the offending target column, got: {violations_bad}"
         )
         assert any("POST_ANCHOR_DERIVATION_INPUTS" in v for v in violations_bad), (
             f"expected violation to point at POST_ANCHOR_DERIVATION_INPUTS "
