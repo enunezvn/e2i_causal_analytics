@@ -193,6 +193,8 @@ class TestMain:
                 "1",
                 "--output",
                 str(output_path),
+                "--audit-output",
+                str(tmp_path / "audit_state.json"),
             ]
         )
         assert rc == 0
@@ -218,6 +220,8 @@ class TestMain:
                 "1",
                 "--output",
                 str(tmp_path / "audit.json"),
+                "--audit-output",
+                str(tmp_path / "audit_state.json"),
             ]
         )
         assert rc == 1
@@ -239,6 +243,8 @@ class TestMain:
                 "1",
                 "--output",
                 str(tmp_path / "audit.json"),
+                "--audit-output",
+                str(tmp_path / "audit_state.json"),
             ]
         )
         assert rc == 1
@@ -387,6 +393,8 @@ class TestMain:
                 "1",
                 "--output",
                 str(tmp_path / "shim.json"),
+                "--audit-output",
+                str(tmp_path / "audit_state.json"),
                 "--audit-state",
                 str(tmp_path / "nonexistent_audit.json"),
             ]

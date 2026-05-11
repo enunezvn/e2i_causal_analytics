@@ -18,18 +18,19 @@ Usage
         --s-prespec-sha 7f616f6f \\
         --workflow-run-id 12345 \\
         --output g2_gate_history_entry.json \\
-        [--audit-state existing_audit.json] \\
-        [--audit-output updated_audit.json]
+        --audit-output updated_audit.json \\
+        [--audit-state existing_audit.json]
+
+``--audit-output`` (required): path to write the updated
+``audit.to_dict()`` snapshot after appending G2 entries.  Required so
+the N1 audit trail is durably persisted on disk, not only in memory.
+Written even when G2 fails — the failed outcome is captured inside the
+entry itself.
 
 ``--audit-state`` (optional): path to an existing
 ``RegulatoryEligibilityAudit.to_dict()`` JSON checkpoint. When
 supplied, G2 entries are appended to that audit object. When omitted,
 a fresh audit is created.
-
-``--audit-output`` (optional): path to write the updated
-``audit.to_dict()`` snapshot after appending G2 entries. The file is
-written even when G2 fails — the failed outcome is captured inside the
-entry itself.
 
 Schema
 ------
@@ -274,11 +275,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--audit-output",
-        default=None,
+        required=True,
         help=(
-            "Optional path to write the updated audit.to_dict() snapshot "
-            "after appending G2 entries. Written even when G2 fails — the "
-            "failed outcome is captured inside the entry."
+            "Path to write the updated audit.to_dict() snapshot after "
+            "appending G2 entries. Written even when G2 fails — the failed "
+            "outcome is captured inside the entry. Required so the N1 audit "
+            "trail is durably persisted, not only held in memory."
         ),
     )
     args = parser.parse_args(argv)
@@ -329,18 +331,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     append_to_n1_audit(audit, entries)
     print(f"[OK] appended {len(entries)} G2 entries to N1 RegulatoryEligibilityAudit")
 
-    if args.audit_output:
-        audit_output_path = Path(args.audit_output)
-        audit_output_path.parent.mkdir(parents=True, exist_ok=True)
-        audit_output_path.write_text(
-            json.dumps(audit.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
-        )
-        print(f"[OK] wrote updated audit snapshot to {audit_output_path}")
-
-    # --- Back-compat flat JSON artifact (shim) -------------------------------
+    # --- Atomic writes: serialise both outputs before touching the filesystem.
+    # Both JSON payloads are prepared in memory first; then written via temp
+    # files + Path.replace() so a mid-write crash cannot leave either file in
+    # a partial state that mismatches the other.
+    audit_output_path = Path(args.audit_output)
     output_path = Path(args.output)
+    audit_json = json.dumps(audit.to_dict(), indent=2, sort_keys=True)
+    shim_json = json.dumps(entries, indent=2, sort_keys=True)
+
+    # Serialisation succeeded for both — now write atomically.
+    audit_output_path.parent.mkdir(parents=True, exist_ok=True)
+    _tmp_audit = audit_output_path.parent / (audit_output_path.name + ".tmp")
+    _tmp_audit.write_text(audit_json, encoding="utf-8")
+    _tmp_audit.replace(audit_output_path)
+    print(f"[OK] wrote updated audit snapshot to {audit_output_path}")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(entries, indent=2, sort_keys=True), encoding="utf-8")
+    _tmp_shim = output_path.parent / (output_path.name + ".tmp")
+    _tmp_shim.write_text(shim_json, encoding="utf-8")
+    _tmp_shim.replace(output_path)
     print(f"[OK] wrote {len(entries)} gate_history entries (shim) to {output_path}")
 
     # Exit code is always 0 — we always want the audit append to succeed
