@@ -572,25 +572,112 @@ def _check_regression_suspicion(metrics_result: Dict[str, Any]) -> Dict[str, Any
 # =============================================================================
 
 
+# v5 Gate B1 (2026-05-11): auto-policy for calibration method selection.
+# Isotonic regression learns a non-parametric monotonic step function and
+# can overfit when the validation set has few positives (Niculescu-Mizil &
+# Caruana 2005 §5 recommend ≥1000 samples; Duan et al. 2020 §4 lower the
+# practical bound to ~100 positives before the variance of the learned
+# step function exceeds Platt's two-parameter sigmoid). Platt scaling
+# (sklearn method="sigmoid") has 2 parameters → stable in the small-N regime.
+# The crossover at n_pos ≈ 100 is the v5 §2 B1 default policy:
+#   * n_pos > 100  → isotonic (non-parametric, follows ECE-minimizing curve).
+#   * n_pos ≤ 100  → sigmoid / Platt (parametric, low variance at low N).
+B1_AUTO_POLICY_N_POS_CROSSOVER = 100
+
+_CALIBRATION_METHOD_AUTO = "auto"
+_CALIBRATION_METHOD_ISOTONIC = "isotonic"
+_CALIBRATION_METHOD_PLATT = "sigmoid"
+_VALID_CALIBRATION_METHODS: Tuple[str, ...] = (
+    _CALIBRATION_METHOD_AUTO,
+    _CALIBRATION_METHOD_ISOTONIC,
+    _CALIBRATION_METHOD_PLATT,
+)
+
+
+def select_calibration_method(
+    y_val: np.ndarray,
+    *,
+    n_pos_crossover: int = B1_AUTO_POLICY_N_POS_CROSSOVER,
+) -> str:
+    """v5 B1: auto-select calibration method from validation positive count.
+
+    Returns ``"isotonic"`` when ``(y_val == 1).sum() > n_pos_crossover``,
+    else ``"sigmoid"`` (Platt). Treats non-finite / non-binary ``y_val`` as
+    "too sparse to commit to isotonic" → falls back to sigmoid (safer).
+
+    The crossover constant defaults to ``B1_AUTO_POLICY_N_POS_CROSSOVER``
+    (= 100) per v5 §2 B1; callers MAY override via the kwarg but the
+    default lands disease-agnostic per the plan.
+    """
+    try:
+        arr = np.asarray(y_val).astype(np.int64, copy=False)
+    except (TypeError, ValueError):
+        return _CALIBRATION_METHOD_PLATT
+    if arr.ndim != 1:
+        return _CALIBRATION_METHOD_PLATT
+    n_pos = int((arr == 1).sum())
+    return (
+        _CALIBRATION_METHOD_ISOTONIC
+        if n_pos > int(n_pos_crossover)
+        else _CALIBRATION_METHOD_PLATT
+    )
+
+
 def apply_post_hoc_calibration(
     model: Any,
     X_val: np.ndarray,
     y_val: np.ndarray,
-    method: str = "isotonic",
+    method: str = _CALIBRATION_METHOD_AUTO,
+    *,
+    auto_n_pos_crossover: int = B1_AUTO_POLICY_N_POS_CROSSOVER,
 ) -> Tuple[Any, Dict[str, Any]]:
     """Apply post-hoc calibration without retraining the base model.
 
     Uses CalibratedClassifierCV with cv="prefit" — fits a calibration
     mapping on validation data, preserving the base model's ranking.
 
+    v5 Gate B1 (2026-05-11): ``method`` now accepts a third value
+    ``"auto"`` (the new default) in addition to ``"isotonic"`` and
+    ``"sigmoid"`` (Platt). Under ``"auto"`` the policy at
+    ``select_calibration_method`` chooses isotonic when
+    ``(y_val == 1).sum() > auto_n_pos_crossover`` (= 100) else Platt.
+    Legacy callers passing explicit ``"isotonic"`` / ``"sigmoid"`` keep
+    their pre-B1 behaviour exactly; only the default changes.
+
     Args:
         model: Trained sklearn-compatible model
         X_val: Validation features (for fitting calibration)
         y_val: Validation labels
+        method: ``"auto"`` (default; v5 B1 policy), ``"isotonic"``, or
+            ``"sigmoid"``. Other values raise ValueError.
+        auto_n_pos_crossover: Validation-positive-count crossover for
+            the "auto" policy. Default 100 (v5 §2 B1).
 
     Returns:
-        Tuple of (calibrated_model, calibration_info_dict)
+        Tuple of (calibrated_model, calibration_info_dict). The
+        ``calibration_info_dict`` records BOTH the requested ``method``
+        (e.g. ``"auto"``) AND the actually-applied
+        ``calibration_method_resolved`` (e.g. ``"isotonic"``) so the
+        downstream audit trail captures the policy outcome.
     """
+    if method not in _VALID_CALIBRATION_METHODS:
+        raise ValueError(
+            f"apply_post_hoc_calibration: method={method!r} is not one of "
+            f"{_VALID_CALIBRATION_METHODS}. Pass 'auto' (default), "
+            f"'isotonic', or 'sigmoid' (Platt)."
+        )
+
+    # v5 B1: resolve method BEFORE the is_classifier guard so the
+    # cal_info dict carries the resolved method even when calibration
+    # is skipped. Downstream audit consumers expect a deterministic
+    # `calibration_method_resolved` field on every call.
+    if method == _CALIBRATION_METHOD_AUTO:
+        resolved_method = select_calibration_method(
+            y_val, n_pos_crossover=auto_n_pos_crossover
+        )
+    else:
+        resolved_method = method
+
     # Defense-in-depth: CalibratedClassifierCV.fit() does NOT validate that the
     # underlying estimator is a classifier — sklearn only catches the mismatch
     # later when predict_proba is called, by which time the caller has stored
@@ -606,6 +693,7 @@ def apply_post_hoc_calibration(
         )
         return model, {
             "calibration_method": method,
+            "calibration_method_resolved": resolved_method,
             "calibration_applied": False,
             "skip_reason": "base_model_not_a_classifier",
         }
@@ -614,19 +702,30 @@ def apply_post_hoc_calibration(
         try:
             from sklearn.frozen import FrozenEstimator
 
-            calibrated = CalibratedClassifierCV(estimator=FrozenEstimator(model), method=method)
+            calibrated = CalibratedClassifierCV(
+                estimator=FrozenEstimator(model), method=resolved_method
+            )
         except ImportError:
-            calibrated = CalibratedClassifierCV(estimator=model, method=method, cv="prefit")
+            calibrated = CalibratedClassifierCV(
+                estimator=model, method=resolved_method, cv="prefit"
+            )
         calibrated.fit(X_val, y_val)
+        n_val_pos = int((np.asarray(y_val).astype(np.int64, copy=False) == 1).sum())
         return calibrated, {
             "calibration_method": method,
+            "calibration_method_resolved": resolved_method,
             "calibration_applied": True,
             "calibration_fit_samples": len(y_val),
+            "calibration_fit_positives": n_val_pos,
+            "calibration_auto_n_pos_crossover": (
+                int(auto_n_pos_crossover) if method == _CALIBRATION_METHOD_AUTO else None
+            ),
         }
     except Exception as e:
         logger.warning(f"Post-hoc calibration failed: {e}")
         return model, {
             "calibration_method": method,
+            "calibration_method_resolved": resolved_method,
             "calibration_applied": False,
             "calibration_error": str(e),
         }
