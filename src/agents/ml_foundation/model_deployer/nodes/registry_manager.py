@@ -1015,6 +1015,26 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
         # downstream consumers make the final shipping decision.
         regulatory_result = _evaluate_regulatory_eligibility(state)
 
+        # Plan v5 §2 Gate C1 — CSU regulatory deployment manifest emission.
+        # Build the cohort-scoped T2.6c-authorization payload from the
+        # T2.6a categories + N1 verdict. CSU-scope cohorts that clear all
+        # gates produce ``t2_6c_authorization_status="authorized"``; Optum
+        # produces ``"blocked"`` with a reason citing v4 backlog #32/#33;
+        # other manifest sources produce ``"out_of_scope"``. Pure compute —
+        # signal-only payload; does NOT mutate promotion_allowed.
+        # The manifest's regulatory_eligible field is sourced from the N1
+        # verdict computed in this same call, so state mutation order is
+        # deterministic: regulatory_result first, then manifest emission.
+        from src.agents.ml_foundation.model_deployer.nodes.regulatory_deployment_manifest import (
+            build_regulatory_deployment_manifest,
+        )
+
+        state_for_manifest = dict(state)
+        state_for_manifest.update(regulatory_result)
+        regulatory_deployment_manifest = build_regulatory_deployment_manifest(
+            state_for_manifest
+        ).to_dict()
+
         # Promotion is allowed
         return {
             "promotion_target_stage": target_stage,
@@ -1024,6 +1044,7 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
             "promotion_validation_errors": [],
             "t26_deployer_input_metrics": t26_deployer_input_metrics,
             "t26_advisory_warnings": t26_advisory_warnings,
+            "regulatory_deployment_manifest": regulatory_deployment_manifest,
             **regulatory_result,
         }
 
