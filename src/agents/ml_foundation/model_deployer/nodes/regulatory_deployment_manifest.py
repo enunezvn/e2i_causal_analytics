@@ -222,6 +222,11 @@ class RegulatoryDeploymentManifest:
     cv_stability_category: Optional[str]
     feature_surface_count: Optional[int]
     regulatory_eligibility_audit_present: bool
+    # Codex pass-1 MED-2: sha256 of the canonical audit dict (or None
+    # when audit absent / malformed). Binds the manifest hash to the
+    # audit contents so different non-empty adaptation_history payloads
+    # cannot collapse to the same hash.
+    regulatory_eligibility_audit_fingerprint: Optional[str]
     regulatory_eligible: bool
     adapted_regulatory_candidate: bool
     manifest_sha256: str = field(default="")
@@ -306,10 +311,13 @@ def _hash_manifest(payload: Mapping[str, Any]) -> str:
     """SHA-256 of the canonical JSON form (sort_keys=True, no whitespace).
 
     Hash excludes the ``manifest_sha256``, ``emitted_at``, and
-    ``n3_signature`` fields — those are emitted-time metadata. Hashing
-    only the load-bearing payload means two manifests built from the
-    same validation_metrics + audit produce the same hash regardless of
-    when they were emitted.
+    ``n3_signature`` fields — those are emitted-time metadata. The
+    hashed payload includes the audit fingerprint
+    (``regulatory_eligibility_audit_fingerprint`` — sha256 of the
+    canonical audit dict), so two manifests built from the same
+    validation_metrics + audit-contents produce the same hash regardless
+    of when they were emitted, and two manifests with different audit
+    contents but identical blocked-reasons produce DIFFERENT hashes.
     """
     canonical = {
         k: v
@@ -418,10 +426,18 @@ def build_regulatory_deployment_manifest(
     # Sanity-check the payload shape; mirrors registry_manager's loader
     # contract. A non-dict / malformed payload counts as "present but
     # unusable" — we surface a blocked manifest rather than crash.
+    audit_fingerprint: Optional[str] = None
     if audit_present and isinstance(audit_payload, dict):
         try:
-            RegulatoryEligibilityAudit.from_dict(audit_payload)
+            audit_obj_for_hash = RegulatoryEligibilityAudit.from_dict(audit_payload)
             audit_well_formed = True
+            # Codex pass-1 MED-2: bind the manifest hash to the audit
+            # contents (not just presence). Without this, two manifests
+            # with different non-empty adaptation_history payloads can
+            # collapse to the same hash if they produce the same
+            # blocked reason. Use sha256 of the canonical to_dict form.
+            audit_canonical = json.dumps(audit_obj_for_hash.to_dict(), sort_keys=True, default=str)
+            audit_fingerprint = hashlib.sha256(audit_canonical.encode("utf-8")).hexdigest()
         except (TypeError, ValueError):
             audit_well_formed = False
     else:
@@ -453,10 +469,25 @@ def build_regulatory_deployment_manifest(
                 "AUC missing from validation_metrics; cannot evaluate honest band."
             )
         elif not auc_in_band:
+            # Codex pass-1 LOW-1: distinguish high-side vs low-side
+            # failures. A legitimately improved model lands above the
+            # band — operator should know to investigate leakage/cohort
+            # shift or request a fresh signoff. An under-performing
+            # model lands below; operator should iterate on the model.
             lo, hi = honest_band  # type: ignore[misc]
-            failure_reasons.append(
-                f"AUC={roc_auc:.4f} outside CSU honest band [{lo:.2f}, {hi:.2f}]."
-            )
+            if roc_auc > hi:
+                failure_reasons.append(
+                    f"AUC={roc_auc:.4f} ABOVE CSU honest band "
+                    f"[{lo:.2f}, {hi:.2f}]; suspicious — investigate leakage "
+                    "or cohort shift or request a fresh signoff before "
+                    "authorizing T2.6c against a relaxed band."
+                )
+            else:
+                failure_reasons.append(
+                    f"AUC={roc_auc:.4f} BELOW CSU honest band "
+                    f"[{lo:.2f}, {hi:.2f}]; model is under-performing — "
+                    "iterate before T2.6c authorization."
+                )
 
         sig_cat = t26.get("signal_genuineness_category")
         if sig_cat in T2_6B_SIGNAL_GENUINENESS_REJECT_CATEGORIES:
@@ -526,6 +557,10 @@ def build_regulatory_deployment_manifest(
         "cv_stability_category": t26.get("cv_stability_category"),
         "feature_surface_count": feature_surface_count,
         "regulatory_eligibility_audit_present": audit_present,
+        # Codex pass-1 MED-2: bind hash to audit contents so different
+        # non-empty adaptation_history payloads cannot collapse to the
+        # same hash even when they produce identical blocked reasons.
+        "regulatory_eligibility_audit_fingerprint": audit_fingerprint,
         "regulatory_eligible": regulatory_eligible,
         "adapted_regulatory_candidate": adapted_candidate,
     }
@@ -555,6 +590,9 @@ def build_regulatory_deployment_manifest(
         feature_surface_count=pre_hash_payload["feature_surface_count"],
         regulatory_eligibility_audit_present=pre_hash_payload[
             "regulatory_eligibility_audit_present"
+        ],
+        regulatory_eligibility_audit_fingerprint=pre_hash_payload[
+            "regulatory_eligibility_audit_fingerprint"
         ],
         regulatory_eligible=pre_hash_payload["regulatory_eligible"],
         adapted_regulatory_candidate=pre_hash_payload["adapted_regulatory_candidate"],
