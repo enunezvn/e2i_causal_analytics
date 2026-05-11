@@ -140,6 +140,8 @@ docs/results/*
 # Gate N3 methodology sign-off templates + dated artifacts (Tier 1A governance)
 !docs/results/optum_methodology_signoff_*.md
 !docs/results/optum_methodology_rejection_*.md
+# v5 Gate A1 harness production-parity re-run evidence
+!docs/results/g2_harness_a1_parity_run_*.md
 
 # OS
 Thumbs.db
