@@ -617,9 +617,7 @@ def select_calibration_method(
         return _CALIBRATION_METHOD_PLATT
     n_pos = int((arr == 1).sum())
     return (
-        _CALIBRATION_METHOD_ISOTONIC
-        if n_pos > int(n_pos_crossover)
-        else _CALIBRATION_METHOD_PLATT
+        _CALIBRATION_METHOD_ISOTONIC if n_pos > int(n_pos_crossover) else _CALIBRATION_METHOD_PLATT
     )
 
 
@@ -672,9 +670,7 @@ def apply_post_hoc_calibration(
     # is skipped. Downstream audit consumers expect a deterministic
     # `calibration_method_resolved` field on every call.
     if method == _CALIBRATION_METHOD_AUTO:
-        resolved_method = select_calibration_method(
-            y_val, n_pos_crossover=auto_n_pos_crossover
-        )
+        resolved_method = select_calibration_method(y_val, n_pos_crossover=auto_n_pos_crossover)
     else:
         resolved_method = method
 
