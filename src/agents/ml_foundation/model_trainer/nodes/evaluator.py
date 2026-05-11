@@ -781,16 +781,20 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     f"±{cv_result.get('cv_pr_auc_std', 0):.4f}"
                 )
 
-        # 6. Post-hoc calibration (isotonic) — better probability estimates.
+        # 6. Post-hoc calibration — better probability estimates.
+        # v5 B1 (2026-05-11): default method is now "auto" (isotonic
+        # vs Platt chosen at runtime from val-set positive count) via
+        # ``apply_post_hoc_calibration``. ``state["calibration_method"]``
+        # overrides the default.
         # Phase 1 W2 day-2 (shard 19 §A.7): calibration-native algorithms
         # (NGBoost, MAPIE-conformal) ship pre-calibrated predict_proba; layering
-        # isotonic on top tends to over-fit small validation sets and degrade
-        # test calibration (Duan et al. 2020 §4). Gate the block on the
-        # `skip_post_hoc_calibration` flag propagated from the model_selector
-        # registry entry. Default False preserves legacy behavior.
+        # post-hoc calibration on top tends to over-fit small validation sets
+        # and degrade test calibration (Duan et al. 2020 §4). Gate the block
+        # on the `skip_post_hoc_calibration` flag propagated from the
+        # model_selector registry entry. Default False preserves legacy behavior.
         model_candidate_meta = state.get("model_candidate") or {}
-        skip_isotonic = bool(model_candidate_meta.get("skip_post_hoc_calibration", False))
-        if skip_isotonic:
+        skip_calibration = bool(model_candidate_meta.get("skip_post_hoc_calibration", False))
+        if skip_calibration:
             metrics_result["post_hoc_calibration"] = {
                 "calibration_applied": False,
                 "skip_reason": "skip_post_hoc_calibration_flag",
@@ -812,7 +816,7 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     native_ece if native_ece is not None else float("nan")
                 )
             logger.info(
-                "Skipping post-hoc isotonic calibration "
+                "Skipping post-hoc calibration "
                 "(skip_post_hoc_calibration=True from model_candidate); "
                 "using native calibration_error as calibrated_ece alias"
             )
