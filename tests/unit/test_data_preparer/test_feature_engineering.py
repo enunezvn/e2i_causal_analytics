@@ -409,6 +409,41 @@ async def test_node_enabled_csu_applies_to_all_splits():
 
 
 @pytest.mark.asyncio
+async def test_node_returns_mutated_dataframes_in_state_patch():
+    """Codex pass-2 LOW-1: replay-safety guarantee.
+
+    The patch MUST include the mutated DataFrames keyed by their state
+    keys (train_df, validation_df, test_df, holdout_df) — not just the
+    engineered_features metadata. Without this, in-place mutations are
+    lost on LangGraph checkpoint replay because deserialized DataFrame
+    objects are fresh.
+
+    This test catches a silent revert of the H3 fix.
+    """
+    state = {
+        "enable_feature_engineering": True,
+        "scope_spec": {"feature_manifest_source": "csu"},
+        "train_df": _make_csu_df(),
+        "validation_df": _make_csu_df(),
+        "test_df": _make_csu_df(),
+        "holdout_df": _make_csu_df(),
+    }
+    patch = await engineer_features_node(state)
+    # The patch MUST surface the mutated DataFrames so LangGraph's
+    # reducer applies them durably.
+    for split_key in ("train_df", "validation_df", "test_df", "holdout_df"):
+        assert split_key in patch, (
+            f"H3 fix regression: {split_key} not returned in patch — "
+            "LangGraph checkpoint replay would lose engineered columns."
+        )
+        df_in_patch = patch[split_key]
+        for name in CSU_ENGINEERED_FEATURES:
+            assert name in df_in_patch.columns, (
+                f"H3 fix regression: patch[{split_key!r}] missing engineered column {name!r}."
+            )
+
+
+@pytest.mark.asyncio
 async def test_node_enabled_optum_dispatches_optum_family():
     state = {
         "enable_feature_engineering": True,
