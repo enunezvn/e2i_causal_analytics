@@ -1024,7 +1024,13 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
         # produces a "blocked" payload with the N1-malformed reason.
         try:
             regulatory_result = _evaluate_regulatory_eligibility(state)
-        except (TypeError, ValueError) as audit_exc:
+        except (TypeError, ValueError, AttributeError) as audit_exc:
+            # Codex pass-2 HIGH-2: AttributeError catches the case where
+            # ``regulatory_eligibility_audit`` is a non-mapping (list,
+            # string, int, ...) — ``from_dict`` calls ``.get()`` on it
+            # which raises AttributeError, not TypeError. Without this
+            # catch, the outer except clobbers to a generic
+            # promotion_validation_error with no manifest emission.
             regulatory_result = {
                 "regulatory_eligible": False,
                 "adapted_regulatory_candidate": False,
