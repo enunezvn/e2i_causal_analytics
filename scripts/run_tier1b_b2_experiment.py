@@ -55,9 +55,15 @@ harness is a **feature-retention** difference materialized BEFORE the
 classifier sees the matrix:
 
   1. For each numeric feature, the harness computes a marginal
-     z-score against the binary target (the same statistic the
-     production Layer 3 detector uses, simplified to a single-pass
-     Welch's-t-style z over the standardized correlation).
+     z-score against the binary target via the production Layer 3
+     probe (``src.data.adversarial_leakage.compute_adversarial_score``).
+     The z-score measures how many SD the feature's effective AUC
+     (folded) sits above the permutation-shuffled-target null. v5
+     Gate A1 (2026-05-11) replaced the pre-A1 Welch-t surrogate,
+     which was mathematically inert on binary perfect-correlation
+     features (within-group variance=0 → SE=0 → z=0.0). The
+     production probe correctly returns z >> 5σ on such features
+     because the permutation null has non-zero spread.
   2. The **baseline arm** applies the legacy strict policy from
      ``adaptive_validity_check.py``: any feature with ``z > HIGH_Z``
      (= 5.0σ) is treated as a leak and DROPPED. ``HIGH_Z`` is the
@@ -363,65 +369,83 @@ def _train_val_test_split(
 # ---------------------------------------------------------------------------
 
 
+# v5 Gate A1 (2026-05-11) — Layer 3 production-parity. The harness's
+# per-feature z-score must match the production Layer 3 probe so the
+# baseline-vs-HBLP contrast at the verdict-classifier level operates on
+# the same statistic the pipeline produces. The pre-A1 Welch's-t z was
+# mathematically inert on binary perfect-correlation features (within-
+# group variance = 0 → SE = 0 → z = 0.0), which let leak features pass
+# both the strict legacy threshold AND the HBLP-relaxed threshold —
+# producing a silently inflated AUC. The production permutation-null
+# probe (``compute_adversarial_score``) correctly returns z >> 5σ on
+# such features because the permutation null distribution has non-zero
+# spread (folded AUC under shuffled labels clusters around 0.5-0.6
+# instead of 1.0).
+#
+# DEFAULT_HARNESS_N_PERMUTATIONS deliberately matches production
+# (``DEFAULT_PERMUTATIONS = 200`` in ``adaptive_validity_check``).
+# DEFAULT_HARNESS_ADVERSARIAL_SEED is held constant across the 5
+# train/test seeds (G2_SEEDS) so the z-score map is reproducible per
+# cohort regardless of which train/test seed is being scored.
+
+DEFAULT_HARNESS_N_PERMUTATIONS = 200
+DEFAULT_HARNESS_ADVERSARIAL_SEED = 7
+
+
 def _compute_marginal_z_scores(
     X: pd.DataFrame,
     y: pd.Series,
+    *,
+    n_permutations: int = DEFAULT_HARNESS_N_PERMUTATIONS,
+    adversarial_seed: int = DEFAULT_HARNESS_ADVERSARIAL_SEED,
 ) -> Dict[str, float]:
     """Compute a per-feature marginal z-score against the binary target.
 
-    Implementation: Welch's-t-style two-sample standardized difference
-    between feature means in y=1 vs y=0, expressed as a z-statistic.
-    This is a simplified, deterministic surrogate for the production
-    Layer 3 permutation-baseline z-score (which is computationally
-    heavier and depends on a permutation null). The harness uses the
-    Welch z because:
-      (a) it agrees with the production permutation z in regime — both
-          rank-correlate with the leakage signal;
-      (b) it is deterministic per (X, y) so the contrast is reproducible
-          across CI runs;
-      (c) it matches the threshold semantics the legacy strict policy
-          uses (``z > HIGH_Z`` is the drop boundary).
+    Production-parity implementation (v5 Gate A1): calls
+    ``src.data.adversarial_leakage.compute_adversarial_score`` per
+    feature, returning the permutation-null z-score that
+    ``adaptive_validity_check`` consumes in production. Constant
+    features and degenerate targets return z=0.0 (consistent with the
+    production probe's degenerate-score handling).
 
-    Constant features and degenerate y produce z=0.0 (kept by both
-    arms — neither classifier learns anything from a constant).
+    Per-feature cost is ``n_permutations`` AUC computations. At Optum
+    n=1294 with default n_permutations=200 + ~8 candidate features
+    × 5 seeds, total runtime is ~30-90 sec — acceptable for the G2
+    harness's offline evaluation cadence.
     """
+    from src.data.adversarial_leakage import compute_adversarial_score
+
     z_scores: Dict[str, float] = {}
-    y_arr = y.to_numpy(dtype=np.float64)
-    pos_mask = y_arr > 0.5
-    neg_mask = ~pos_mask
+    y_arr = y.to_numpy(dtype=np.int64)
+    pos_mask = y_arr == 1
+    neg_mask = y_arr == 0
     n_pos = int(pos_mask.sum())
     n_neg = int(neg_mask.sum())
     if n_pos < 2 or n_neg < 2:
-        # Degenerate target — every z is 0.0 so neither arm drops
-        # anything based on the marginal-z policy.
         return dict.fromkeys(X.columns, 0.0)
 
     for col in X.columns:
         x = X[col].to_numpy(dtype=np.float64)
-        # Drop NaN rows symmetrically across feature + target.
         finite_mask = np.isfinite(x)
         if not finite_mask.any():
             z_scores[col] = 0.0
             continue
         xv = x[finite_mask]
         yv = y_arr[finite_mask]
-        pmask = yv > 0.5
-        nmask = ~pmask
-        if pmask.sum() < 2 or nmask.sum() < 2:
+        if (yv == 1).sum() < 2 or (yv == 0).sum() < 2:
             z_scores[col] = 0.0
             continue
-        x_pos = xv[pmask]
-        x_neg = xv[nmask]
-        var_pos = float(np.var(x_pos, ddof=1)) if x_pos.size > 1 else 0.0
-        var_neg = float(np.var(x_neg, ddof=1)) if x_neg.size > 1 else 0.0
-        # Welch SE on the difference of means.
-        se = float(np.sqrt(var_pos / max(x_pos.size, 1) + var_neg / max(x_neg.size, 1)))
-        if se <= 1e-12 or not np.isfinite(se):
+        score = compute_adversarial_score(
+            xv,
+            yv,
+            n_permutations=int(n_permutations),
+            seed=int(adversarial_seed),
+        )
+        z = score.get("z_score")
+        if z is None or not isinstance(z, (int, float)) or not np.isfinite(z):
             z_scores[col] = 0.0
-            continue
-        diff = float(np.mean(x_pos) - np.mean(x_neg))
-        z = abs(diff) / se
-        z_scores[col] = float(z) if np.isfinite(z) else 0.0
+        else:
+            z_scores[col] = float(z)
     return z_scores
 
 
@@ -523,13 +547,21 @@ def _resolve_layer_1_declared_safe_lookup(
 def _build_baseline_feature_surface(
     X_train: pd.DataFrame,
     y_train: pd.Series,
+    *,
+    n_permutations: int = DEFAULT_HARNESS_N_PERMUTATIONS,
+    adversarial_seed: int = DEFAULT_HARNESS_ADVERSARIAL_SEED,
 ) -> Tuple[List[str], Dict[str, float], List[str]]:
     """Baseline arm's retained feature list + the z-score map +
     the explicit drop list (kept for manifest provenance).
 
     Returns ``(retained_features, z_scores, dropped_features)``.
     """
-    z_scores = _compute_marginal_z_scores(X_train, y_train)
+    z_scores = _compute_marginal_z_scores(
+        X_train,
+        y_train,
+        n_permutations=n_permutations,
+        adversarial_seed=adversarial_seed,
+    )
     dropped = _legacy_strict_drop(z_scores)
     retained = [c for c in X_train.columns if c not in set(dropped)]
     return retained, z_scores, dropped
@@ -541,6 +573,8 @@ def _build_hblp_relaxed_feature_surface(
     *,
     layer_1_declared_safe_lookup: Mapping[str, bool],
     z_scores: Optional[Mapping[str, float]] = None,
+    n_permutations: int = DEFAULT_HARNESS_N_PERMUTATIONS,
+    adversarial_seed: int = DEFAULT_HARNESS_ADVERSARIAL_SEED,
 ) -> Tuple[List[str], Dict[str, float], List[str]]:
     """HBLP arm's retained feature list + the z-score map +
     the explicit drop list.
@@ -551,7 +585,12 @@ def _build_hblp_relaxed_feature_surface(
     same statistic and the contrast is purely at the policy layer).
     """
     if z_scores is None:
-        z_scores = _compute_marginal_z_scores(X_train, y_train)
+        z_scores = _compute_marginal_z_scores(
+            X_train,
+            y_train,
+            n_permutations=n_permutations,
+            adversarial_seed=adversarial_seed,
+        )
     n_train_pos = int((y_train > 0.5).sum())
     dropped = _hblp_drop(
         z_scores,
@@ -749,6 +788,8 @@ def run_seed(
     *,
     layer_1_declared_safe_lookup: Optional[Mapping[str, bool]] = None,
     manifest_source: Optional[str] = None,
+    n_permutations: int = DEFAULT_HARNESS_N_PERMUTATIONS,
+    adversarial_seed: int = DEFAULT_HARNESS_ADVERSARIAL_SEED,
 ) -> SeedResult:
     """Execute one seed: split, build baseline + HBLP feature surfaces
     via the legacy strict / ``hblp_classify`` policies, fit, and
@@ -771,13 +812,18 @@ def run_seed(
         )
 
         baseline_features, z_scores, baseline_dropped = _build_baseline_feature_surface(
-            X_train, y_train
+            X_train,
+            y_train,
+            n_permutations=n_permutations,
+            adversarial_seed=adversarial_seed,
         )
         hblp_features, _, hblp_dropped = _build_hblp_relaxed_feature_surface(
             X_train,
             y_train,
             layer_1_declared_safe_lookup=lookup,
             z_scores=z_scores,
+            n_permutations=n_permutations,
+            adversarial_seed=adversarial_seed,
         )
 
         result.baseline_n_features_retained = len(baseline_features)
@@ -1296,6 +1342,8 @@ def run_experiment(
     seeds: Optional[Sequence[int]] = None,
     layer_1_declared_safe_lookup: Optional[Mapping[str, bool]] = None,
     load_bearing: Optional[bool] = None,
+    n_permutations: int = DEFAULT_HARNESS_N_PERMUTATIONS,
+    adversarial_seed: int = DEFAULT_HARNESS_ADVERSARIAL_SEED,
 ) -> ExperimentManifest:
     """Run the full G2 experiment for ``cohort_label`` and return the
     aggregated manifest. Caller is responsible for serialization +
@@ -1400,7 +1448,14 @@ def run_experiment(
 
     seeds_to_run = tuple(seeds) if seeds is not None else G2_SEEDS
     seed_results = [
-        run_seed(X, y, seed=seed, layer_1_declared_safe_lookup=resolved_lookup)
+        run_seed(
+            X,
+            y,
+            seed=seed,
+            layer_1_declared_safe_lookup=resolved_lookup,
+            n_permutations=n_permutations,
+            adversarial_seed=adversarial_seed,
+        )
         for seed in seeds_to_run
     ]
 
@@ -1445,6 +1500,27 @@ def main(argv: Optional[List[str]] = None) -> int:
             "collapses to baseline when no manifest contracts apply."
         ),
     )
+    parser.add_argument(
+        "--n-permutations",
+        type=int,
+        default=DEFAULT_HARNESS_N_PERMUTATIONS,
+        help=(
+            "v5 A1: per-feature permutation-null sample size for the "
+            "production Layer 3 adversarial probe. Default matches "
+            f"production ({DEFAULT_HARNESS_N_PERMUTATIONS}). Lower "
+            "values trade detection power for runtime."
+        ),
+    )
+    parser.add_argument(
+        "--adversarial-seed",
+        type=int,
+        default=DEFAULT_HARNESS_ADVERSARIAL_SEED,
+        help=(
+            "v5 A1: deterministic seed for the permutation-null shuffler. "
+            "Held constant across G2_SEEDS train/test splits so the "
+            "z-score map is reproducible per cohort."
+        ),
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
@@ -1462,7 +1538,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # HIGH-1 (iter-3): default load_bearing to None (auto-detect via
     # CI env) unless the operator explicitly opts out via the flag.
     load_bearing_flag: Optional[bool] = False if args.no_fail_on_empty_declared_safe else None
-    manifest = run_experiment(args.cohort_label, load_bearing=load_bearing_flag)
+    manifest = run_experiment(
+        args.cohort_label,
+        load_bearing=load_bearing_flag,
+        n_permutations=int(args.n_permutations),
+        adversarial_seed=int(args.adversarial_seed),
+    )
     payload = json.dumps(manifest.to_dict(), indent=2, sort_keys=True)
     print(payload)
     if args.manifest_out:
