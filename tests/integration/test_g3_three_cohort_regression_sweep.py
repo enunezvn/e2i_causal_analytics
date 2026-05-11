@@ -49,7 +49,6 @@ G1 test pattern (PR #137).
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
