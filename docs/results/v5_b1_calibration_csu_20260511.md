@@ -19,17 +19,17 @@
 | `isotonic` (legacy) | `isotonic` | 0.4093 → 0.0000 | +100.0% | 0.4153 → 0.0373 | +91.0% |
 | `sigmoid` (Platt) | `sigmoid` | 0.4093 → 0.0078 | +98.1% | 0.4153 → 0.0029 | +99.3% |
 
-**Auto-policy resolution**: val n_pos = 324 > 100 (B1_AUTO_POLICY_N_POS_CROSSOVER), so the policy correctly chose `isotonic`. Test ECE drop = **+91.0%**, far above the v5 §2 B1 observability assertion of "≥30% on val set after calibration."
+**Auto-policy resolution**: val n_pos = 324 > 100 (B1_AUTO_POLICY_N_POS_CROSSOVER), so the policy correctly chose `isotonic`. Val ECE drop is +100.0% (= meets the v5 §2 B1 val-set acceptance "≥30% on val set after calibration"). The held-out **test ECE drop of +91.0%** is the production-relevant corroboration — fitting on val and evaluating on val is partially self-fit, so the test number is the honest delta the deployer would see.
 
 ## Honest framing
 
 - Val ECE drop is partly self-fit (calibration fit on val → near-zero ECE on val by construction). The **test ECE drop** is the production-relevant number.
-- Both methods (isotonic + sigmoid) far exceed the 30% acceptance threshold on this CSU subset. The plan's default policy (isotonic at n_pos > 100) is correct in direction but sigmoid happens to win on this specific train/val/test split (99.3% vs 91.0% test drop). This is a single-dataset observation; policy default is anchored on the established literature (Niculescu-Mizil & Caruana 2005; Duan et al. 2020), not on this one split.
+- Both methods (isotonic + sigmoid) far exceed the 30% acceptance threshold on this CSU subset. The plan's default auto-policy (isotonic at n_pos > 100) is **retained** based on the established literature (Niculescu-Mizil & Caruana 2005; Duan et al. 2020), NOT validated as optimal by this single split. The sigmoid-beats-isotonic observation on this specific split (99.3% vs 91.0% test drop) is a **single-dataset signal that should trigger re-checking the crossover across more cohorts/seeds** before declaring the auto-policy default empirically optimal. v4 backlog #29 (HBLP coefficient sensitivity) already covers the parametric sweep pattern; a parallel v5 backlog item for calibration-policy sensitivity at multiple n_pos / prevalence regimes is the right follow-up.
 - The pre-calibration ECE of 0.41 is large because the LR was trained with `class_weight="balanced"` which biases probabilities away from the true ~93% prevalence (the model outputs probabilities near 0.5 while observed accuracy is ~0.93). Post-hoc calibration corrects this by remapping the rank-preserved scores.
 
 ## Conclusion
 
-v5 §2 B1 acceptance criterion ("ECE drops by ≥30% on val set after calibration") is **MET** on real CSU. The auto-policy correctly routes to isotonic at n_pos = 324. Test-set ECE drop of 91.0% confirms post-hoc calibration is a load-bearing lever for the v5 C1 deployment manifest emission.
+v5 §2 B1 acceptance criterion ("ECE drops by ≥30% on val set after calibration") is **MET on a filtered 1,743-row discontinuation-flag subset of CSU** (prevalence ~93%). This is NOT the full 9,607-row CSU production target — the target column there is `treatment_initiated` per the model_deployer regulatory-eligibility-audit contract, not `discontinuation_flag`. The auto-policy correctly routes to isotonic at n_pos = 324. Test-set ECE drop of 91.0% on this subset confirms post-hoc calibration is a load-bearing lever for the v5 C1 deployment manifest emission, conditional on the v5 C1 implementation running the same probe on the production target column. Future v5 B1 follow-up: re-validate on the production CSU pipeline run (target `treatment_initiated`, full 9,607 records) once C1's audit-emission wiring is in place.
 
 ## Artifacts
 
