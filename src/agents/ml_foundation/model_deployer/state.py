@@ -194,10 +194,36 @@ class ModelDeployerState(BaseAgentSchema):
     regulatory_eligible: bool = False
     adapted_regulatory_candidate: bool = False
 
+    # === COHORT IDENTITY (Plan v5 §2 Gate C1 — 2026-05-11) ===
+    #
+    # ``scope_spec`` carries the upstream scope_definer / data_preparer's
+    # contract dict; ``feature_manifest_source`` is the flat fallback for
+    # standalone invocations. Both are read by
+    # ``regulatory_deployment_manifest.build_regulatory_deployment_manifest``
+    # to resolve the cohort authorization policy (CSU in C1 scope; Optum
+    # blocked pending v4 backlog #32/#33; unknown → out_of_scope).
+    #
+    # Codex pass-2 HIGH-1: these fields MUST be declared on
+    # ModelDeployerState because LangGraph's StateGraph drops any extras
+    # at channel boundaries — see BaseAgentSchema's ``extra="ignore"``
+    # config + _pydantic_utils.py:84 commentary. Without the explicit
+    # declarations, the agent.py wiring writes them to initial_state but
+    # the graph drops them before validate_promotion sees them, and the
+    # manifest emitted by validate_promotion gets dropped before
+    # agent.run() reads it.
+    scope_spec: Optional[Dict[str, Any]] = None
+    feature_manifest_source: Optional[str] = None
+
     # === OUTPUT FIELDS (Final) ===
 
-    # Deployment manifest
+    # Deployment manifest (K8s / serving)
     deployment_manifest: Optional[Dict[str, Any]] = None  # DeploymentManifest
+
+    # v5 Gate C1: cohort-scoped regulatory deployment manifest emitted
+    # by validate_promotion. See nodes/regulatory_deployment_manifest.py
+    # for the dataclass shape. Stored as a plain dict (to_dict() form)
+    # so it round-trips through LangGraph's channel-reducer cleanly.
+    regulatory_deployment_manifest: Optional[Dict[str, Any]] = None
 
     # Version record
     version_record: Optional[Dict[str, Any]] = None  # VersionRecord

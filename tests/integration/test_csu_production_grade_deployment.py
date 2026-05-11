@@ -383,6 +383,27 @@ class TestValidatePromotionEmitsManifest:
             for r in m["t2_6c_authorization_reasons"]
         ), m["t2_6c_authorization_reasons"]
 
+    def test_non_dict_audit_payload_emits_blocked_manifest(self) -> None:
+        """v5 codex pass-2 HIGH-2: a non-mapping
+        ``validation_metrics["regulatory_eligibility_audit"]`` (e.g.
+        list, string, int) raises AttributeError inside
+        ``RegulatoryEligibilityAudit.from_dict.get(...)``. The fix at
+        registry_manager catches AttributeError alongside TypeError /
+        ValueError so the manifest still emits as blocked.
+        """
+        state = _csu_state()
+        # Replace the audit with a list (non-mapping payload).
+        state["validation_metrics"]["regulatory_eligibility_audit"] = [
+            "not_a_mapping"
+        ]
+        result = asyncio.run(validate_promotion(state))
+        assert "regulatory_deployment_manifest" in result, (
+            "Non-mapping audit payload should still emit a blocked manifest "
+            "via the AttributeError catch (codex pass-2 HIGH-2)."
+        )
+        m = result["regulatory_deployment_manifest"]
+        assert m["t2_6c_authorization_status"] == "blocked"
+
     def test_validate_promotion_sees_fresh_n1_audit_for_manifest(self) -> None:
         """v5 codex pass-1 HIGH-1: the manifest must read the FRESH N1
         audit (with gate_history entries N1 just appended), not the
