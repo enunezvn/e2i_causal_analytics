@@ -60,6 +60,9 @@ def _audit_cohort(
     inputs; HBLP's declared_safe=True path applies (relax to 7.5sigma)
     and the audit records the case as "inherited_signal" not dropped.
     """
+    import logging
+
+    from scripts.measure_b3_val_auc_contrast import _filter_to_manifest_safe
     from scripts.run_tier1b_b2_experiment import (
         _build_features_and_target,
         _compute_marginal_z_scores,
@@ -70,14 +73,25 @@ def _audit_cohort(
     )
     from src.data.manifests import lookup_feature_contract
 
+    logger = logging.getLogger(__name__)
+
     df = _load_patient_journeys(data_dir)
-    X, y = _build_features_and_target(df, target_col=target_col)
+    X_raw, y = _build_features_and_target(df, target_col=target_col)
+
+    # H1 (codex): Filter to manifest-declared pre-anchor base features
+    # BEFORE computing z_base / engineering. Without this, the baseline
+    # surface contains post-anchor leaky columns
+    # (Optum: initiated_biologic_180d z=57σ; CSU: data_quality_score
+    # z=74σ — undeclared) that contaminate max_input_z and make the
+    # amplification verdict unreliable.
+    X, dropped_pre_filter = _filter_to_manifest_safe(X_raw, manifest_source)
     base_cols = list(X.columns)
 
     X, materialized = engineer_features(X, manifest_source)
 
     print(
-        f"[{cohort_label}] n_rows={len(X)} n_base={len(base_cols)} "
+        f"[{cohort_label}] n_rows={len(X)} n_base_after_filter={len(base_cols)} "
+        f"(dropped {len(dropped_pre_filter)} non-pre-anchor / un-manifested) "
         f"target={target_col} n_pos={int(y.sum())} engineered_added={materialized}"
     )
 
@@ -89,12 +103,27 @@ def _audit_cohort(
     z_eng = _compute_marginal_z_scores(X[materialized], y, n_permutations=n_permutations)
 
     amplifying_drops: List[str] = []
+    missing_manifest: List[str] = []
     for name, z_value in z_eng.items():
         if z_value < _HIGH_Z_THRESHOLD:
             continue
         contract = lookup_feature_contract(name, data_source=manifest_source)
         if contract is None:
-            amplifying_drops.append(name)
+            # M2 (codex): a missing manifest entry is NOT itself
+            # evidence of leakage amplification — it's a manifest
+            # hygiene issue. Surface it loudly but do NOT count it
+            # as an amplifying-drop (which would mis-classify the
+            # feature). The correct resolution is to ADD the manifest
+            # entry; the audit must not silently amplify a docs gap
+            # into a feature drop decision.
+            logger.warning(
+                "[%s] %s: z=%.2f but no manifest contract — add an "
+                "entry before re-running audit. NOT dropped.",
+                cohort_label,
+                name,
+                z_value,
+            )
+            missing_manifest.append(name)
             continue
         input_zs = [
             float(z_base[input_name])
@@ -113,6 +142,12 @@ def _audit_cohort(
                 f"[{cohort_label}] INHERITED: {name} z={z_value:.2f}, "
                 f"max_input_z={max_input_z:.2f}; declared_safe HBLP path applies."
             )
+
+    if missing_manifest:
+        print(
+            f"[{cohort_label}] MISSING MANIFEST: {missing_manifest} "
+            "(add contracts; not amplification-dropped)"
+        )
 
     return z_base, z_eng, amplifying_drops
 
