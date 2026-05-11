@@ -92,6 +92,15 @@ def test_optum_engineered_features_in_safe_view():
         assert name in safe, f"{name} not in OPTUM_SAFE_FEATURES"
 
 
+# L1 (codex): tighten the derivation-chain check from is_pre_or_at_index()
+# to an explicit set membership over the canonical pre-anchor reference
+# strings. is_pre_or_at_index() returns True for any reference with
+# offset_days <= 0, which would silently pass an input declared with an
+# unexpected reference string (e.g., "discharge_date") via the offset-based
+# fallback. The explicit set keeps the test sensitive to schema drift.
+_PRE_ANCHOR_REFERENCES = {"index_date", "enrollment"}
+
+
 def test_csu_engineered_derivation_chain_is_pre_anchor():
     """Every derivation_input is itself declared pre-anchor in CSU manifest."""
     contracts = {c.name: c for c in CSU_FEATURES}
@@ -102,10 +111,11 @@ def test_csu_engineered_derivation_chain_is_pre_anchor():
                 f"{name} derivation input {input_name!r} is not a CSU manifest entry"
             )
             input_contract = contracts[input_name]
-            assert input_contract.knowable_at.is_pre_or_at_index(), (
-                f"{name} pulls from {input_name!r} which is declared "
-                f"knowable_at={input_contract.knowable_at.reference!r} "
-                f"— breaks pre-anchor derivation chain (leakage risk)"
+            ref = input_contract.knowable_at.reference
+            assert ref in _PRE_ANCHOR_REFERENCES, (
+                f"{name} pulls from {input_name!r} declared "
+                f"knowable_at={ref!r}; expected one of "
+                f"{sorted(_PRE_ANCHOR_REFERENCES)} (leakage risk)"
             )
 
 
@@ -119,10 +129,11 @@ def test_optum_engineered_derivation_chain_is_pre_anchor():
                 f"{name} derivation input {input_name!r} is not an Optum manifest entry"
             )
             input_contract = contracts[input_name]
-            assert input_contract.knowable_at.is_pre_or_at_index(), (
-                f"{name} pulls from {input_name!r} which is declared "
-                f"knowable_at={input_contract.knowable_at.reference!r} "
-                f"— breaks pre-anchor derivation chain (leakage risk)"
+            ref = input_contract.knowable_at.reference
+            assert ref in _PRE_ANCHOR_REFERENCES, (
+                f"{name} pulls from {input_name!r} declared "
+                f"knowable_at={ref!r}; expected one of "
+                f"{sorted(_PRE_ANCHOR_REFERENCES)} (leakage risk)"
             )
 
 

@@ -80,6 +80,7 @@ def _filter_to_manifest_safe(
 
 def _cross_val_auc(X: pd.DataFrame, y: pd.Series, seed: int, n_splits: int = 5) -> Dict[str, float]:
     """Return CV AUC mean + std over n_splits folds."""
+    from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import StratifiedKFold
@@ -92,12 +93,17 @@ def _cross_val_auc(X: pd.DataFrame, y: pd.Series, seed: int, n_splits: int = 5) 
         X_train_fold, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
         y_train_fold, y_val_fold = y.iloc[train_idx], y.iloc[val_idx]
 
-        # Fit imputer/scaler ON TRAIN ONLY, apply to val.
-        X_train_imputed = X_train_fold.fillna(X_train_fold.median(numeric_only=True))
-        X_val_imputed = X_val_fold.fillna(X_train_fold.median(numeric_only=True))
-
+        # M3 (codex): use sklearn SimpleImputer rather than pandas
+        # .fillna(median()). pandas .median() drops all-NaN columns
+        # from the result, which means X_val_fold.fillna() leaves
+        # NaN in those columns — StandardScaler would then crash.
+        # SimpleImputer(strategy="median") fits on train and applies
+        # the same column-wise medians (or 0 for all-NaN columns)
+        # to val, with a deterministic fail-loud path if values
+        # cannot be imputed.
         pipe = Pipeline(
             [
+                ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
                 ("scaler", StandardScaler()),
                 (
                     "lr",
@@ -105,8 +111,8 @@ def _cross_val_auc(X: pd.DataFrame, y: pd.Series, seed: int, n_splits: int = 5) 
                 ),
             ]
         )
-        pipe.fit(X_train_imputed.values, y_train_fold.values)
-        scores = pipe.predict_proba(X_val_imputed.values)[:, 1]
+        pipe.fit(X_train_fold.values, y_train_fold.values)
+        scores = pipe.predict_proba(X_val_fold.values)[:, 1]
         if y_val_fold.nunique() < 2:
             # Degenerate fold — skip.
             continue
@@ -165,9 +171,7 @@ def _measure_cohort(
     # missing-input skip in the INFO log; the resulting val_AUC
     # contrast was on 3 of 4 CSU candidates rather than 4.
     df_for_engineering = df.copy()
-    df_with_engineered, materialized = engineer_features(
-        df_for_engineering, manifest_source
-    )
+    df_with_engineered, materialized = engineer_features(df_for_engineering, manifest_source)
     eng_cols = [c for c in materialized if c in df_with_engineered.columns]
     # Concat materialized engineered columns (only) onto the
     # production-parity baseline surface.
