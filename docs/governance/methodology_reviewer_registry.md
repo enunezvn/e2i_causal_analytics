@@ -63,10 +63,20 @@ script on every PR that adds or modifies a file matching
 | name | email | github_handle | role | date_added | areas_of_expertise | status |
 |---|---|---|---|---|---|---|
 | _PLACEHOLDER_ | placeholder@example.com | placeholder | placeholder_role | 2026-05-10 | methodology, biostatistics | inactive |
+| E. Nunez | etn3724@gmail.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active |
 
-> The placeholder row is `inactive` so the registry parses correctly but does
-> not satisfy any selection rule. Replace it with one or more `active` rows
-> before requesting a sign-off.
+> The placeholder row remains `inactive` for back-compat with the registry's
+> parse-test fixtures. The `enunezvn` row is the load-bearing `active`
+> reviewer of record for the v4 Phase B/C G1+G2+G3 engineering signoffs.
+>
+> **N3 INTERIM status:** This row attests engineering completeness only.
+> The Plan v4 §N3 cryptographic-signature requirement (PGP / sigstore +
+> CoI declaration) is gated on backlog item `v4-N3-signature-infra` and
+> remains deferred per `docs/governance/n3_known_limitations_20260510.md`.
+> Until that infra lands, this row satisfies the G3 wiring guard's
+> `--require-signature-registry-match` precondition for the G1/G2
+> engineering signoffs by establishing committer-email parity; it does
+> NOT promote any gate's lifecycle state from `ADVISORY` to `ENFORCED`.
 
 ## Inactive / historical reviewers
 
