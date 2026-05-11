@@ -253,6 +253,18 @@ jobs:
       MKL_NUM_THREADS: '1'
       OPENBLAS_NUM_THREADS: '1'
       NUMEXPR_NUM_THREADS: '1'
+      # Opt into the symmetric writer/reader skip policy for fixtures
+      # that require real CSU / Optum cohort data — the GitHub Actions
+      # runner has no access to those files. Without this, the producer
+      # fixtures in test_csu_negative_control_20260510.py and
+      # test_optum_held_out_noninferiority_20260510.py hard-fail (codex
+      # pass-1 HIGH-1 default-hard-fail policy), AND the consumer
+      # test_g1_lineage_audit_sweep.py::test_g1_lineage_audit_on_actual_relaxed_features
+      # hard-fails because g1_artifact_registry is empty (codex pass-2
+      # HIGH-4 default-hard-fail when no upstream fixture registered an
+      # artifact). The env var opts CI into the documented skip path so
+      # both writer and reader stay silent in the no-real-data environment.
+      ALLOW_MISSING_REAL_DATA: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
