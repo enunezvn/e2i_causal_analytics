@@ -1,0 +1,235 @@
+{
+  "aggregate": {
+    "baseline_auc_mean": 0.6620181405895692,
+    "baseline_cv_stability_mean": 0.13095310017739348,
+    "baseline_ece_mean": 0.39684672628761863,
+    "hblp_auc_mean": 0.6621315192743764,
+    "hblp_cv_stability_mean": 0.13052910233761061,
+    "hblp_ece_mean": 0.3965234068371063
+  },
+  "cohort_data_dir": "data/rwd/optum/initiation",
+  "cohort_data_snooped": false,
+  "cohort_expected_n_exact": 1294,
+  "cohort_label": "optum_initiation_default",
+  "cohort_observed_n": 1294,
+  "cohort_target": "treatment_initiated",
+  "dataset_hashes": {
+    "patient_journeys_parquet": "7e334ca26e64a7e42d317876c9eee58189aa756afd46c70ab8464474e1cb68cd",
+    "treatment_events_parquet": "2449d7fb460c71e506e526e699f84d76fee46e8d5cc82060fef3033e3bc9cf67"
+  },
+  "ece_method_metadata": {
+    "binning_strategy": "equal-width",
+    "helper_function": "compute_calibration_analysis",
+    "helper_module": "src.agents.ml_foundation.model_trainer.nodes.advanced_validation",
+    "n_bins": 10,
+    "notes": "ECE = sum(|empirical_freq - mean_pred_prob|) over equal-width bins of predicted probability. Helper version is captured by the experiment commit SHA in the manifest's experiment_commit_sha field."
+  },
+  "experiment_commit_sha": "d382520b9061a142650c5ae392654c4d35fdb2ee",
+  "g2_passes_pre_spec": false,
+  "layer_1_dropped_features": [
+    "initiated_biologic_180d"
+  ],
+  "lifecycle_state": "advisory",
+  "notes": "",
+  "seed_completeness": {
+    "all_seeds_complete": true,
+    "expected_seeds": [
+      42,
+      43,
+      44,
+      45,
+      46
+    ],
+    "incomplete_seeds": [],
+    "missing_seeds": [],
+    "observed_seeds": [
+      42,
+      43,
+      44,
+      45,
+      46
+    ],
+    "per_seed_diagnostic": [
+      {
+        "complete": true,
+        "error": null,
+        "has_baseline_auc": true,
+        "has_baseline_cv": true,
+        "has_baseline_ece": true,
+        "has_hblp_auc": true,
+        "has_hblp_cv": true,
+        "has_hblp_ece": true,
+        "seed": 42
+      },
+      {
+        "complete": true,
+        "error": null,
+        "has_baseline_auc": true,
+        "has_baseline_cv": true,
+        "has_baseline_ece": true,
+        "has_hblp_auc": true,
+        "has_hblp_cv": true,
+        "has_hblp_ece": true,
+        "seed": 43
+      },
+      {
+        "complete": true,
+        "error": null,
+        "has_baseline_auc": true,
+        "has_baseline_cv": true,
+        "has_baseline_ece": true,
+        "has_hblp_auc": true,
+        "has_hblp_cv": true,
+        "has_hblp_ece": true,
+        "seed": 44
+      },
+      {
+        "complete": true,
+        "error": null,
+        "has_baseline_auc": true,
+        "has_baseline_cv": true,
+        "has_baseline_ece": true,
+        "has_hblp_auc": true,
+        "has_hblp_cv": true,
+        "has_hblp_ece": true,
+        "seed": 45
+      },
+      {
+        "complete": true,
+        "error": null,
+        "has_baseline_auc": true,
+        "has_baseline_cv": true,
+        "has_baseline_ece": true,
+        "has_hblp_auc": true,
+        "has_hblp_cv": true,
+        "has_hblp_ece": true,
+        "seed": 46
+      }
+    ]
+  },
+  "seed_results": [
+    {
+      "baseline_auc": 0.5782312925170068,
+      "baseline_cv_stability": 0.16558214637836235,
+      "baseline_ece": 0.40142958620800967,
+      "baseline_features_dropped": [
+        "elixhauser_score"
+      ],
+      "baseline_n_features_retained": 80,
+      "error": null,
+      "features_diverged": [
+        "elixhauser_score"
+      ],
+      "hblp_auc": 0.5787981859410432,
+      "hblp_cv_stability": 0.16346215717944806,
+      "hblp_ece": 0.39981298895544776,
+      "hblp_features_dropped": [],
+      "hblp_n_features_retained": 81,
+      "n_train_pos": 22,
+      "seed": 42
+    },
+    {
+      "baseline_auc": 0.6992630385487528,
+      "baseline_cv_stability": 0.10532198092322563,
+      "baseline_ece": 0.4052567844164343,
+      "baseline_features_dropped": [],
+      "baseline_n_features_retained": 81,
+      "error": null,
+      "features_diverged": [],
+      "hblp_auc": 0.6992630385487528,
+      "hblp_cv_stability": 0.10532198092322563,
+      "hblp_ece": 0.4052567844164343,
+      "hblp_features_dropped": [],
+      "hblp_n_features_retained": 81,
+      "n_train_pos": 22,
+      "seed": 43
+    },
+    {
+      "baseline_auc": 0.5683106575963718,
+      "baseline_cv_stability": 0.17662640443319677,
+      "baseline_ece": 0.40165588950849357,
+      "baseline_features_dropped": [],
+      "baseline_n_features_retained": 81,
+      "error": null,
+      "features_diverged": [],
+      "hblp_auc": 0.5683106575963718,
+      "hblp_cv_stability": 0.17662640443319677,
+      "hblp_ece": 0.40165588950849357,
+      "hblp_features_dropped": [],
+      "hblp_n_features_retained": 81,
+      "n_train_pos": 22,
+      "seed": 44
+    },
+    {
+      "baseline_auc": 0.8044217687074829,
+      "baseline_cv_stability": 0.1505713996430121,
+      "baseline_ece": 0.37319344705587537,
+      "baseline_features_dropped": [],
+      "baseline_n_features_retained": 81,
+      "error": null,
+      "features_diverged": [],
+      "hblp_auc": 0.8044217687074829,
+      "hblp_cv_stability": 0.1505713996430121,
+      "hblp_ece": 0.37319344705587537,
+      "hblp_features_dropped": [],
+      "hblp_n_features_retained": 81,
+      "n_train_pos": 22,
+      "seed": 45
+    },
+    {
+      "baseline_auc": 0.6598639455782314,
+      "baseline_cv_stability": 0.05666356950917051,
+      "baseline_ece": 0.40269792424928036,
+      "baseline_features_dropped": [],
+      "baseline_n_features_retained": 81,
+      "error": null,
+      "features_diverged": [],
+      "hblp_auc": 0.6598639455782314,
+      "hblp_cv_stability": 0.05666356950917051,
+      "hblp_ece": 0.40269792424928036,
+      "hblp_features_dropped": [],
+      "hblp_n_features_retained": 81,
+      "n_train_pos": 22,
+      "seed": 46
+    }
+  ],
+  "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46
+  ],
+  "thresholds": [
+    {
+      "delta": 0.00011337868480720825,
+      "description": "dAUC >= 0.03",
+      "name": "T1",
+      "passes": false,
+      "post_value": 0.6621315192743764,
+      "pre_value": 0.6620181405895692,
+      "rationale": "dAUC = 0.0001 < 0.03; pre=0.6620, post=0.6621",
+      "threshold": 0.03
+    },
+    {
+      "delta": 0.9991852787761741,
+      "description": "ECE_post <= 0.5 * ECE_pre",
+      "name": "T2",
+      "passes": false,
+      "post_value": 0.3965234068371063,
+      "pre_value": 0.39684672628761863,
+      "rationale": "ECE ratio = 0.9992 > 0.5; pre=0.3968, post=0.3965",
+      "threshold": 0.5
+    },
+    {
+      "delta": 0.9967622160971485,
+      "description": "(std/mean)_post <= 0.7 * (std/mean)_pre",
+      "name": "T3",
+      "passes": false,
+      "post_value": 0.13052910233761061,
+      "pre_value": 0.13095310017739348,
+      "rationale": "CV-stability ratio = 0.9968 > 0.7; pre=0.1310, post=0.1305",
+      "threshold": 0.7
+    }
+  ]
+}
