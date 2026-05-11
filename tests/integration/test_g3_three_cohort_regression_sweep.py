@@ -1293,6 +1293,13 @@ class TestRegimeSweepLow8:
       - synthetic_no_manifest_n200: no inflation path (n>=ref_N, declared=False)
       - synthetic_csu_n50_pre_index: sqrt(2) inflation + 1.5x declared_safe
       - synthetic_optum_*: sqrt(50/22) inflation + 1.5x declared_safe
+    NOTE: ``synthetic_optum_n50_pre_index`` and
+    ``synthetic_optum_default_window_n22`` share the same HBLP inputs
+    (n=22, declared=True) and therefore produce identical HBLP outcomes.
+    Both rows are kept because they represent distinct orchestrator regimes
+    (different manifest_source / window configurations) whose non-HBLP
+    wiring is covered by the TestOrchestratorThreadingHigh4 suite. The
+    regime sweep here is intentionally limited to the HBLP code path.
     If the HBLP formula changes (constants or branching), the pinned table
     will diverge from production output and the test will fail loudly.
     """
