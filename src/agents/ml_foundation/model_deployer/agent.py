@@ -140,6 +140,20 @@ class ModelDeployerAgent:
             "shadow_mode_error_rate": input_data.get("shadow_mode_error_rate", 1.0),
             "shadow_mode_latency_p99_ms": input_data.get("shadow_mode_latency_p99_ms", 999),
         }
+        # v5 Gate C1 (2026-05-11): thread cohort identity through to
+        # the deployer state so validate_promotion's
+        # build_regulatory_deployment_manifest can resolve the cohort
+        # authorization policy. The two accepted shapes:
+        # - state["scope_spec"]["feature_manifest_source"] (matches the
+        #   upstream data_preparer / model_trainer state contract).
+        # - state["feature_manifest_source"] (flat fallback for
+        #   standalone invocations or checkpoint replays).
+        # Both are stashed on the initial_state when present so the
+        # manifest builder finds them in either shape.
+        if "scope_spec" in input_data:
+            initial_state["scope_spec"] = input_data["scope_spec"]
+        if "feature_manifest_source" in input_data:
+            initial_state["feature_manifest_source"] = input_data["feature_manifest_source"]
 
         # Execute LangGraph workflow with optional Opik tracing
         start_time = datetime.now(timezone.utc)
@@ -229,6 +243,13 @@ class ModelDeployerAgent:
             "rollback_available": final_state.get("rollback_available", False),
             # Overall status
             "status": overall_status,
+            # v5 Gate C1 (2026-05-11): surface the cohort-scoped
+            # regulatory deployment manifest that validate_promotion
+            # produced. This is the load-bearing v5 deliverable —
+            # the payload the deployer operator attaches to a deployment
+            # PR for T2.6c authorization. Signal-only; does NOT mutate
+            # promotion_successful.
+            "regulatory_deployment_manifest": final_state.get("regulatory_deployment_manifest"),
         }
 
         # Store to database (ml_deployments and ml_model_registry)

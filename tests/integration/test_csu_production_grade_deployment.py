@@ -37,6 +37,15 @@ from src.agents.ml_foundation.model_deployer.nodes.regulatory_deployment_manifes
     resolve_cohort_authorization_policy,
 )
 
+# v5 C1 codex pass-1 MED-1 — re-import the CSU runner fixture from the
+# negative-control test file so the real-CSU-runner pin in this file can
+# share its module-scoped subprocess. Pytest treats fixtures referenced
+# via direct import the same as fixtures from conftest, provided the
+# import lands in the test module (here).
+from tests.integration.test_csu_negative_control_20260510 import (  # noqa: F401
+    csu_negative_control_artifact,
+)
+
 # ---------------------------------------------------------------------------
 # Cohort policy invariants — pinned per v5 §2 C1.
 # ---------------------------------------------------------------------------
@@ -401,6 +410,69 @@ class TestValidatePromotionEmitsManifest:
 # ---------------------------------------------------------------------------
 # Plan v5 §2 C1 acceptance — the manifest LISTS the load-bearing fields.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Real CSU runner — pin manifest emission on a full tier0 e2e run.
+# Codex pass-1 MED-1: plan v5 §2 C1 requires "Integration test pins the
+# deployment-manifest emission on a real CSU run." Synthetic-state tests
+# above pin the contract; this one pins the production pipeline path.
+# ---------------------------------------------------------------------------
+
+
+class TestRealCSURunnerEmitsManifest:
+    """Pin v5 C1 manifest emission on a real CSU tier0 pipeline run.
+
+    Imports the existing ``csu_negative_control_artifact`` fixture from
+    ``test_csu_negative_control_20260510`` — it already spawns a tier0
+    subprocess on real CSU data with TIER0_E2E_JSON_OUT set, and the v5
+    C1 wiring extends the runner's JSON output schema to include the
+    ``regulatory_deployment_manifest`` field. Reuses the fixture to
+    amortize the ~5-15 minute subprocess cost across the negative-control
+    + v5 C1 assertions.
+    """
+
+    @pytest.mark.slow
+    @pytest.mark.integration
+    @pytest.mark.real_data
+    @pytest.mark.timeout(2000)
+    def test_csu_runner_emits_regulatory_deployment_manifest(
+        self, csu_negative_control_artifact: dict
+    ) -> None:
+        """The full tier0 + deployer e2e run on real CSU data MUST emit
+        a ``regulatory_deployment_manifest`` field in the JSON artifact."""
+        manifest = csu_negative_control_artifact.get("regulatory_deployment_manifest")
+        # Codex pass-1 MED-1: manifest emission MUST surface in the
+        # TIER0_E2E_JSON_OUT artifact, not just the in-process state.
+        assert manifest is not None, (
+            "regulatory_deployment_manifest missing from CSU runner "
+            "artifact. v5 C1 wiring requires the runner's JSON output "
+            "to include this field — check scripts/run_tier0_test.py "
+            "TIER0_E2E_JSON_OUT serialization + deployer agent's "
+            "output composition."
+        )
+        # Cohort identity threads through from scope_spec.
+        assert manifest.get("cohort") == "csu", (
+            f"Expected cohort='csu' in CSU runner manifest; got "
+            f"{manifest.get('cohort')!r}. scope_spec.feature_manifest_source "
+            "threading is broken."
+        )
+        # Authorization status is one of the three valid values.
+        assert manifest.get("t2_6c_authorization_status") in T2_6C_AUTHORIZATION_STATUSES
+        # The manifest CARRIES the load-bearing fields from v5 §2 C1.
+        for required in (
+            "honest_auc_band",
+            "permutation_pvalue",
+            "calibration_ece",
+            "cv_stability_std_over_mean",
+            "feature_surface_count",
+            "manifest_source",
+        ):
+            assert required in manifest, (
+                f"v5 C1 acceptance: {required} missing from runner manifest"
+            )
+        # The sha256 fingerprint is populated (manifest is signed-off-ready).
+        assert manifest.get("manifest_sha256"), "manifest_sha256 must be non-empty"
 
 
 class TestC1ManifestFieldCoverage:
