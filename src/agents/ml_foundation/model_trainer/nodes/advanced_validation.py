@@ -621,8 +621,11 @@ def select_calibration_method(
     (= 100) per v5 §2 B1; callers MAY override via the kwarg but the
     default lands disease-agnostic per the plan.
     """
-    # Codex pass-1 MED-1: run finite-ness + binary-label guards BEFORE
-    # the int64 cast (which silently turns NaN into a huge negative int).
+    # Codex pass-1 MED-1 + pass-2 MED-residual: run finite-ness AND
+    # binary-label guards on the FLOAT array, BEFORE any int64 cast.
+    # Casting to int64 first would silently truncate fractional values
+    # (e.g. ``[1.9] * 101`` → ``[1] * 101`` → falsely "binary") and turn
+    # NaN/inf into integer sentinels.
     try:
         raw = np.asarray(y_val)
     except (TypeError, ValueError):
@@ -635,14 +638,12 @@ def select_calibration_method(
         return _CALIBRATION_METHOD_PLATT
     if not np.all(np.isfinite(raw_float)):
         return _CALIBRATION_METHOD_PLATT
-    try:
-        arr = raw_float.astype(np.int64, copy=False)
-    except (TypeError, ValueError):
+    # Binary check on the FLOAT array: every value must be exactly 0.0
+    # or 1.0 (codex pass-2 residual). Catches fractional floats that
+    # would pass the post-int-cast check.
+    if not np.all(np.isin(raw_float, [0.0, 1.0])):
         return _CALIBRATION_METHOD_PLATT
-    unique = np.unique(arr)
-    if unique.size == 0 or not np.all(np.isin(unique, [0, 1])):
-        return _CALIBRATION_METHOD_PLATT
-    n_pos = int((arr == 1).sum())
+    n_pos = int(np.sum(raw_float == 1.0))
     return (
         _CALIBRATION_METHOD_ISOTONIC if n_pos > int(n_pos_crossover) else _CALIBRATION_METHOD_PLATT
     )
