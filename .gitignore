@@ -142,6 +142,8 @@ docs/results/*
 !docs/results/optum_methodology_rejection_*.md
 # v5 Gate A1 harness production-parity re-run evidence
 !docs/results/g2_harness_a1_parity_run_*.md
+# v5 Gate B1 calibration validation evidence
+!docs/results/v5_b1_calibration_*.md
 
 # OS
 Thumbs.db
