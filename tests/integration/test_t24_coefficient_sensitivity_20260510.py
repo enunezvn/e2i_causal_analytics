@@ -194,14 +194,31 @@ def _cohort_artifact_missing_action(artifact_path: Path, cohort_name: str) -> No
     test (so the cohort gate cannot be silently elided). Locally,
     skip with a clear pointer.
 
-    Honors:
+    Honors (checked in this order):
+      - ``ALLOW_MISSING_REAL_DATA=1`` → uniform escape hatch shared with
+        the G1/CSU/Optum real-data tests (PR #137 / #146). CI runs that
+        explicitly opt out of all real-data gates set this env var at the
+        workflow level (.github/workflows/backend-tests.yml). When set,
+        skip silently — the operator has documented the opt-out path.
       - ``CI=true`` (GitHub Actions / GitLab CI / generic CI marker)
-        → fail with pytest.fail (artifact missing in CI is unacceptable
-        because the cohort gate is required by v3 §6 T2.4 acceptance).
+        → fail with pytest.fail (artifact missing in CI without the
+        explicit escape hatch is unacceptable because the cohort gate
+        is required by v3 §6 T2.4 acceptance).
       - ``RUN_LOCAL_ONLY=1`` → explicit local-only opt-in; skip with
         a different message identifying the intentional opt-out.
       - default (no env vars) → skip locally.
     """
+    # Uniform escape hatch — checked FIRST so a CI run that opted out
+    # of real-data tests across the board (set in backend-tests.yml env
+    # block) is honored even though ``CI=true`` is also set.
+    if os.environ.get("ALLOW_MISSING_REAL_DATA") == "1":
+        pytest.skip(
+            f"{cohort_name} cohort artifact missing at {artifact_path}; "
+            "ALLOW_MISSING_REAL_DATA=1 set (uniform real-data escape hatch); "
+            "skipping cohort assertion. See .github/workflows/backend-tests.yml "
+            "env block + PR #146 for the documented opt-out rationale."
+        )
+
     is_ci = os.environ.get("CI", "").lower() in ("true", "1", "yes")
     is_local_only = os.environ.get("RUN_LOCAL_ONLY", "") == "1"
 
@@ -211,7 +228,8 @@ def _cohort_artifact_missing_action(artifact_path: Path, cohort_name: str) -> No
             "G5 v3 §6 T2.4 acceptance criterion requires both cohort "
             "assertions to run. Provision the artifact or unset CI to skip "
             "locally. (To explicitly run locally without cohort data, set "
-            "RUN_LOCAL_ONLY=1.)",
+            "RUN_LOCAL_ONLY=1. To opt the entire CI lane out of all "
+            "real-data tests, set ALLOW_MISSING_REAL_DATA=1.)",
             pytrace=False,
         )
 
