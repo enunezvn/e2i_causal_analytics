@@ -57,9 +57,13 @@ _RATIO_DENOM_MIN = 1.0
 # =============================================================================
 
 
+# claim_intensity_ratio was dropped post-audit (b3_engineered_audit_20260511):
+# z=40.83 on CSU n=9607 / n_pos=1743 with max_input_z=9.78 = 4.2x
+# amplification beyond inputs. The amplification heuristic flags this as
+# leakage (ratios can manufacture signal not present in either component).
+# See docs/calibration/b3_engineered_audit_20260511.json + amended pre-spec.
 CSU_ENGINEERED_FEATURES: Tuple[str, ...] = (
     "age_x_insurance_interaction",
-    "claim_intensity_ratio",
     "engagement_per_visit",
     "treatment_diversity_intensity",
     "severity_engagement_product",
@@ -98,19 +102,7 @@ def _engineer_csu_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
             "(missing age_continuous or insurance_type)"
         )
 
-    # C2: claim intensity ratio
-    if all(
-        c in df.columns
-        for c in ("medication_claim_count", "procedure_claim_count", "eligibility_duration_days")
-    ):
-        med = pd.to_numeric(df["medication_claim_count"], errors="coerce").fillna(0.0)
-        proc = pd.to_numeric(df["procedure_claim_count"], errors="coerce").fillna(0.0)
-        elig = pd.to_numeric(df["eligibility_duration_days"], errors="coerce")
-        denom = elig.clip(lower=_RATIO_DENOM_MIN)
-        df["claim_intensity_ratio"] = (med + proc) / denom
-        materialized.append("claim_intensity_ratio")
-    else:
-        logger.info("csu FE: skipping claim_intensity_ratio (missing inputs)")
+    # C2 (claim_intensity_ratio) DROPPED post-audit — see module docstring.
 
     # C3: engagement per visit
     if "engagement_score" in df.columns and "hcp_visits" in df.columns:
