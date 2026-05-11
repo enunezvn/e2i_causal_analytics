@@ -732,12 +732,22 @@ class TestRealBaselineVsHblpContrast:
         assert result.features_diverged == []
 
     def test_compute_marginal_z_scores_returns_finite(self) -> None:
-        """Sanity: the z-score helper produces non-negative finite values."""
+        """Sanity: the z-score helper produces finite values per feature.
+
+        v5 Gate A1: switched to the production permutation-null probe
+        (``compute_adversarial_score``). Unlike the pre-A1 Welch's-t
+        surrogate which used ``abs(diff)/se`` (non-negative by
+        construction), the production probe returns
+        ``(actual_auc - null_mean) / null_std`` which can be small and
+        negative for noise features when the actual AUC happens to land
+        slightly below the folded permutation null's mean. Negative
+        noise z is correct production semantics; the leak threshold
+        ``z > HIGH_Z`` still fires.
+        """
         X, y = self._make_xy_with_high_z_feature(n=400, seed=0)
         z = H._compute_marginal_z_scores(X, y)
         assert set(z.keys()) == set(X.columns)
         for col, val in z.items():
-            assert val >= 0.0
             assert np.isfinite(val)
         # Leak feature has z > 5 (the legacy HIGH_Z drop threshold).
         from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
@@ -745,6 +755,88 @@ class TestRealBaselineVsHblpContrast:
         )
 
         assert z["leakage_proxy"] > HIGH_Z
+
+
+class TestV5GateA1ProductionParity:
+    """v5 Gate A1 regression pin: harness Layer 3 z-score MUST match the
+    production permutation-null probe, not the pre-A1 Welch's-t surrogate.
+
+    The load-bearing pin: a binary perfect-correlation feature (r=1.0 with
+    target) MUST return z >> 5σ under the harness's z-score helper. The
+    pre-A1 Welch implementation returned z=0.0 on this case (within-group
+    variance=0 → SE=0 → fall-through), letting the leak pass both baseline
+    AND HBLP arms — silently inflating AUC. The production
+    ``compute_adversarial_score`` correctly returns z >> 5σ because the
+    permutation-shuffled-label null distribution has non-zero spread
+    (folded AUC clusters around 0.5-0.6 instead of 1.0).
+    """
+
+    def test_binary_perfect_correlation_returns_z_above_high_z(self) -> None:
+        """The HARDCODED regression: a binary y-copy feature must trip
+        the legacy 5σ drop threshold. If this test ever fails because
+        someone reverts to a Welch surrogate, the harness silently
+        regresses to retaining perfect-correlation leaks."""
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            HIGH_Z,
+        )
+
+        rng = np.random.default_rng(0)
+        y = pd.Series(rng.integers(0, 2, size=300).astype(np.int64))
+        X = pd.DataFrame(
+            {
+                "leak_perfect": y.astype(float),
+                "leak_anti": (1 - y).astype(float),
+                "noise": rng.normal(size=300),
+            }
+        )
+        z = H._compute_marginal_z_scores(X, y, n_permutations=200, adversarial_seed=7)
+        # The two perfectly-correlated features (r=+1 and r=-1) both fold
+        # to AUC=1.0 vs a null clustered near 0.5-0.6 → z very large.
+        assert z["leak_perfect"] > HIGH_Z, (
+            f"v5 A1 regression: binary perfect-correlation feature returned "
+            f"z={z['leak_perfect']:.3f}, expected z > HIGH_Z={HIGH_Z}. Pre-A1 "
+            f"Welch returned z=0.0 here — DO NOT revert to a Welch surrogate."
+        )
+        assert z["leak_anti"] > HIGH_Z
+        # The noise feature must NOT trip the drop threshold (sanity).
+        assert z["noise"] < HIGH_Z
+
+    def test_binary_perfect_correlation_baseline_drops_via_legacy_strict(self) -> None:
+        """Round-trip: with the production probe wired in, the legacy
+        strict policy actually drops the perfect-correlation feature.
+        Pre-A1 it did NOT (Welch z=0 fell below HIGH_Z, retained)."""
+        rng = np.random.default_rng(0)
+        y = pd.Series(rng.integers(0, 2, size=300).astype(np.int64))
+        X = pd.DataFrame(
+            {
+                "leak_perfect": y.astype(float),
+                "noise_1": rng.normal(size=300),
+                "noise_2": rng.normal(size=300),
+            }
+        )
+        retained, _, dropped = H._build_baseline_feature_surface(
+            X, y, n_permutations=200, adversarial_seed=7
+        )
+        assert "leak_perfect" in dropped, (
+            "v5 A1 regression: baseline (legacy strict) should drop "
+            "the perfect-correlation feature, but retained it. This "
+            "is the silent-leak signature the pre-A1 Welch surrogate "
+            "produced."
+        )
+        assert "leak_perfect" not in retained
+
+    def test_harness_constants_match_production(self) -> None:
+        """v5 A1: harness defaults must match production
+        ``DEFAULT_PERMUTATIONS=200`` and shouldn't drift silently."""
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            DEFAULT_PERMUTATIONS,
+        )
+
+        assert H.DEFAULT_HARNESS_N_PERMUTATIONS == DEFAULT_PERMUTATIONS, (
+            "Harness permutation default drifted from production "
+            "(adaptive_validity_check.DEFAULT_PERMUTATIONS). Update both "
+            "or document the divergence."
+        )
 
     def test_legacy_strict_drop_uses_high_z_constant(self) -> None:
         """Pin that the baseline arm drops EXACTLY at z > HIGH_Z."""
