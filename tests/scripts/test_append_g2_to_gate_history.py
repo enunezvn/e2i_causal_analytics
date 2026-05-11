@@ -311,9 +311,7 @@ class TestMain:
         assert "g2_provenance=" in g2_t1["reason"]
         assert "optum_initiation_default" in g2_t1["reason"]
 
-    def test_main_audit_state_roundtrip(
-        self, passing_manifest: dict, tmp_path: Path
-    ) -> None:
+    def test_main_audit_state_roundtrip(self, passing_manifest: dict, tmp_path: Path) -> None:
         """MED-10 (pass-2): when --audit-state is provided with pre-existing
         entries, G2 entries are appended to the loaded audit — not to a fresh one.
         The round-trip verifies that prior entries survive the load+append cycle."""
@@ -328,9 +326,7 @@ class TestMain:
             threshold_provenance="literature_anchored",
         )
         audit_state_path = tmp_path / "prior_audit.json"
-        audit_state_path.write_text(
-            json.dumps(prior_audit.to_dict(), indent=2), encoding="utf-8"
-        )
+        audit_state_path.write_text(json.dumps(prior_audit.to_dict(), indent=2), encoding="utf-8")
 
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps(passing_manifest), encoding="utf-8")
@@ -409,9 +405,7 @@ class TestN1AuditIntegration:
     surface — no file I/O — so they are fast and isolated.
     """
 
-    def test_append_to_n1_audit_populates_gate_history(
-        self, passing_manifest: dict
-    ) -> None:
+    def test_append_to_n1_audit_populates_gate_history(self, passing_manifest: dict) -> None:
         """MED-10 (pass-2) core invariant: after ``append_to_n1_audit`` the
         audit's ``gate_history`` must contain the G2 fields where N1 expects them."""
         entries = A.build_audit_entries(
@@ -459,9 +453,7 @@ class TestN1AuditIntegration:
         # Original audit is unaffected.
         assert len(audit.gate_history) == 4
 
-    def test_append_to_n1_audit_fails_on_setitem(
-        self, passing_manifest: dict
-    ) -> None:
+    def test_append_to_n1_audit_fails_on_setitem(self, passing_manifest: dict) -> None:
         """The N1 API's __setitem__ guard must raise RegulatoryAuditMutationError
         — verifies the append-only invariant is enforced end-to-end."""
         from src.agents.ml_foundation.model_deployer.regulatory_audit import (
