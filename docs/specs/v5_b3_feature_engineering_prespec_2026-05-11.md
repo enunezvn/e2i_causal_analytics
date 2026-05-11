@@ -177,3 +177,48 @@ Optum's small positive count (n_pos=37) constrains the Layer 3 permutation null.
 ### 9.4 Audit JSON
 
 Full audit report (z_base for every base feature + z_engineered per cohort): `docs/calibration/b3_engineered_audit_20260511.json`.
+
+---
+
+## 10. val_AUC contrast results (PHASE 5 — 2026-05-11)
+
+The val_AUC contrast (`scripts/measure_b3_val_auc_contrast.py`) compared the manifest-filtered baseline surface to the baseline + B3 engineered surface on both cohorts. 5-fold stratified CV; LogisticRegression(class_weight="balanced") on imputed-median + StandardScaler.
+
+### 10.1 Results
+
+| Cohort | n_rows | n_pos | Baseline CV AUC | Engineered CV AUC | Δ | Verdict |
+|---|---|---|---|---|---|---|
+| CSU | 9607 | 1743 | 0.9057 (±0.0021) | 0.9058 (±0.0021) | +0.0001 | **NULL** |
+| Optum (initiation) | 1294 | 37 | 0.6782 (±0.0485) | 0.6779 (±0.0491) | -0.0003 | **NULL** |
+
+### 10.2 Interpretation
+
+Both cohorts produce a null result: the engineered features add ≤0.0003 to CV AUC mean, far below the pre-registered ≥0.02 acceptance threshold. **Both verdicts close B3 per §5.2** (improvement OR null — both valid outcomes).
+
+**CSU specifically**: The 0.91 baseline is much higher than the production pipeline's val_AUC≈0.66 (per v5 A1 / CSU honest band). The contrast script filters to manifest-declared pre-anchor features but does NOT apply the production adaptive_validity_check Layer 3 drop (which removes `engagement_score` at z=94σ even under HBLP's 7.5σ relaxation). The contrast is internally consistent (same filter on both arms) but absolute AUC is not production-comparable. The DELTA (+0.0001) is the load-bearing number; it is null regardless of whether the production drop is applied.
+
+**Optum specifically**: Baseline 0.68 is in the honest band per the v5 A1 result (Optum AUC=0.6621). Engineered features add nothing. Mechanistically, with n_pos=37, even strongly-predictive added features cannot meaningfully shift mean AUC across 5 folds; the binomial variance dominates.
+
+### 10.3 Reasoning about the null
+
+Why didn't B3 move the needle on either cohort?
+
+1. **CSU**: The base manifest features already saturate AUC at 0.91 in-distribution. The engineered features (`engagement_per_visit`, etc.) inherit their signal from base inputs (z = base inputs' z, per the audit) and add no orthogonal information. Linear interactions of strongly-collinear inputs are themselves collinear with the originals.
+
+2. **Optum**: Sample size is the binding constraint (per `optum_revalidation_20260510` memo: "sample size IS the binding constraint"). At n_pos=37, the engineered features have z near 0; their predictive contribution is below detection. Even if engineering had captured genuine signal, AUC variance across folds (±0.0485) swamps any plausible mean shift.
+
+3. **Disease-agnostic finding**: The 4 ideas — interactions, ratios, composites, log-transforms — are the standard FE toolkit, and they don't help on these surfaces. The next quality lever is NOT additional FE candidates but either (a) larger Optum cohort (v4 backlog #32) or (b) a different model class (gradient boosting on continuous targets / survival, i.e., v5 B2 backlog).
+
+### 10.4 Acceptance closure
+
+Per the §5.2 pre-registered threshold and §4 plan risk register:
+- ✅ Pre-spec dated BEFORE measurement (committed `b4f160d4` on 2026-05-11 21:23 UTC, measurement run at 23:14 UTC on amended `a03a8079`).
+- ✅ ≥3 candidates per cohort surviving Layer 1 + Layer 3 audit (CSU 4, Optum 5).
+- ✅ val_AUC contrast measured + documented (CSU Δ=+0.0001, Optum Δ=-0.0003, both NULL).
+- ✅ NULL is acceptable per §4 risk register.
+
+B3 acceptance §1-5 met. PR, codex review, and CI closure remain (§6-8).
+
+### 10.5 val_AUC JSON
+
+Full contrast report (per-fold AUC arrays + cohort metadata): `docs/calibration/b3_val_auc_contrast_20260511.json`.

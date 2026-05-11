@@ -1,0 +1,78 @@
+{
+  "csu": {
+    "cohort": "csu",
+    "n_rows": 9607,
+    "n_pos": 1743,
+    "baseline": {
+      "mean": 0.9057424414802104,
+      "std": 0.0021249106073075496,
+      "n_folds": 5,
+      "per_fold": [
+        0.9044413518234826,
+        0.9050779905169068,
+        0.9089913482546711,
+        0.902972027972028,
+        0.907229488833964
+      ]
+    },
+    "engineered": {
+      "mean": 0.9058266176543299,
+      "std": 0.002102367268680723,
+      "n_folds": 5,
+      "per_fold": [
+        0.9044358871136677,
+        0.9054459476444369,
+        0.9089876946460018,
+        0.9030030836457169,
+        0.9072604752218261
+      ]
+    },
+    "engineered_features_added": [
+      "engagement_per_visit",
+      "treatment_diversity_intensity",
+      "severity_engagement_product"
+    ],
+    "delta_mean_auc": 8.417617411948797e-05,
+    "verdict": "null",
+    "acceptance_threshold": 0.02
+  },
+  "optum_initiation": {
+    "cohort": "optum_initiation",
+    "n_rows": 1294,
+    "n_pos": 37,
+    "baseline": {
+      "mean": 0.6782467635128421,
+      "std": 0.048450979409094944,
+      "n_folds": 5,
+      "per_fold": [
+        0.6292517006802723,
+        0.7514172335600906,
+        0.6501494023904383,
+        0.7201195219123505,
+        0.6402959590210585
+      ]
+    },
+    "engineered": {
+      "mean": 0.6779066274584202,
+      "std": 0.04908672197752443,
+      "n_folds": 5,
+      "per_fold": [
+        0.626984126984127,
+        0.751984126984127,
+        0.6501494023904383,
+        0.7201195219123505,
+        0.6402959590210585
+      ]
+    },
+    "engineered_features_added": [
+      "comorbidity_load_total",
+      "csu_dx_intensity",
+      "polypharmacy_breadth",
+      "lab_workup_completeness",
+      "specialist_visit_interaction"
+    ],
+    "delta_mean_auc": -0.0003401360544218468,
+    "verdict": "null",
+    "acceptance_threshold": 0.02
+  }
+}
