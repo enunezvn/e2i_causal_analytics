@@ -798,10 +798,19 @@ class TestHblpClassifyInvariant:
 # the threading works without requiring data-dir access.
 
 
-def _run_orchestrator(state: dict[str, Any]) -> dict[str, Any]:
-    """Drive ``adaptive_validity_check`` synchronously."""
+async def _run_orchestrator(state: dict[str, Any]) -> dict[str, Any]:
+    """Drive ``adaptive_validity_check`` (async caller).
 
-    return asyncio.run(adaptive_validity_check(state))
+    Callers must be ``async def`` + ``@pytest.mark.asyncio``. The prior
+    ``asyncio.run(...)`` form collided with ``nest_asyncio.apply()`` that
+    earlier tests in the same xdist worker triggered (e.g., via
+    ``experiment_designer.graph``), producing ``RuntimeError: Event loop
+    is closed`` here. Same mitigation as PR #106's
+    ``test_layer_5_pipeline_integration.py`` and PR #144's
+    ``test_csu_production_grade_deployment.py``.
+    """
+
+    return await adaptive_validity_check(state)
 
 
 def _make_synthetic_csu_state(
@@ -988,11 +997,12 @@ class TestOrchestratorThreadingHigh4:
     layer_1_declared_safe threading would surface here.
     """
 
-    def test_csu_shaped_orchestrator_runs_end_to_end(self) -> None:
+    @pytest.mark.asyncio
+    async def test_csu_shaped_orchestrator_runs_end_to_end(self) -> None:
         """Orchestrator on CSU-shaped fixture emits verdicts + flagged set."""
 
         state = _make_synthetic_csu_state(n_patients=50)
-        result = _run_orchestrator(state)
+        result = await _run_orchestrator(state)
 
         assert "adaptive_verdicts" in result
         assert "adaptive_flagged_features" in result
@@ -1007,22 +1017,24 @@ class TestOrchestratorThreadingHigh4:
             f"got {[v.get('layer') for v in verdicts]}"
         )
 
-    def test_csu_shaped_orchestrator_layer_1_catches_post_index(self) -> None:
+    @pytest.mark.asyncio
+    async def test_csu_shaped_orchestrator_layer_1_catches_post_index(self) -> None:
         """journey_duration_days is post-index per CSU manifest → flagged."""
 
         state = _make_synthetic_csu_state(n_patients=50)
-        result = _run_orchestrator(state)
+        result = await _run_orchestrator(state)
 
         flagged = result["adaptive_flagged_features"]
         # journey_duration_days is post-index per CSU manifest → must be
         # caught by Layer 1 (severity=high, remediation=drop).
         assert "journey_duration_days" in flagged
 
-    def test_optum_shaped_orchestrator_runs_end_to_end(self) -> None:
+    @pytest.mark.asyncio
+    async def test_optum_shaped_orchestrator_runs_end_to_end(self) -> None:
         """Orchestrator on Optum-shaped fixture runs without crashing."""
 
         state = _make_synthetic_optum_state(n_patients=50)
-        result = _run_orchestrator(state)
+        result = await _run_orchestrator(state)
 
         assert "adaptive_verdicts" in result
         assert "adaptive_flagged_features" in result
@@ -1035,7 +1047,10 @@ class TestOrchestratorThreadingHigh4:
         # without raising _HblpRoutingViolationError.
         assert verdicts, "Expected at least one verdict from Optum orchestrator path"
 
-    def test_optum_shaped_low_n_threads_to_hblp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_optum_shaped_low_n_threads_to_hblp(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """codex pass-2 HIGH-4 PARTIAL: deterministic boundary-z assertion
         on the orchestrator threading.
 
@@ -1066,8 +1081,17 @@ class TestOrchestratorThreadingHigh4:
         # The real adversarial scorer's z-score depends on permutation-
         # null seeding which makes "land near boundary z" too fragile
         # for a regression test.
-        from src.agents.ml_foundation.data_preparer.nodes import (
-            adaptive_validity_check as avc_module,
+        #
+        # Import the MODULE explicitly via importlib — the bare
+        # ``from .nodes import adaptive_validity_check`` form resolves
+        # to the FUNCTION (re-exported by ``nodes/__init__.py``), not
+        # the submodule, and ``monkeypatch.setattr`` then fails with
+        # AttributeError. ``importlib.import_module`` returns the
+        # module unambiguously regardless of __init__ re-exports.
+        import importlib
+
+        avc_module = importlib.import_module(
+            "src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check"
         )
 
         def _fake_adversarial_score(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -1092,12 +1116,12 @@ class TestOrchestratorThreadingHigh4:
         low_n_state = _make_synthetic_optum_state_with_deterministic_pos_count(
             n_train_pos=22, seed=11
         )
-        low_n_result = _run_orchestrator(low_n_state)
+        low_n_result = await _run_orchestrator(low_n_state)
         # High-N path: n_train_pos=200, same manifest path.
         high_n_state = _make_synthetic_optum_state_with_deterministic_pos_count(
             n_train_pos=200, seed=11
         )
-        high_n_result = _run_orchestrator(high_n_state)
+        high_n_result = await _run_orchestrator(high_n_state)
 
         # Find the age_at_index Layer 3 verdict in each run. Layer 3
         # verdicts are emitted only for numeric columns the orchestrator
@@ -1143,7 +1167,8 @@ class TestOrchestratorThreadingHigh4:
             f"{low_n_verdict['severity']!r}."
         )
 
-    def test_no_manifest_orchestrator_uses_legacy_thresholds(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_manifest_orchestrator_uses_legacy_thresholds(self) -> None:
         """No-manifest synthetic regime: layer_1_declared_safe=False
         for every feature; HBLP at reference-N → no relaxation.
 
@@ -1153,7 +1178,7 @@ class TestOrchestratorThreadingHigh4:
         """
 
         state = _make_synthetic_no_manifest_state(n_patients=200)
-        result = _run_orchestrator(state)
+        result = await _run_orchestrator(state)
         verdicts = result["adaptive_verdicts"]
         # No Layer 1 verdicts expected (no manifest).
         layer_1_verdicts = [v for v in verdicts if v.get("layer") == "1"]
