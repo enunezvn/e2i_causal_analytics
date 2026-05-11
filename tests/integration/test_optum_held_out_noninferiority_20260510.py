@@ -105,9 +105,7 @@ OPTUM_DATA_DIR = REPO_ROOT / "data" / "rwd" / "optum" / "initiation"
 #
 # To update the baseline, edit the sidecar JSON (with a PR reference and
 # domain-expert sign-off), not this test file.
-_BASELINE_SIDECAR = (
-    REPO_ROOT / "docs" / "calibration" / "g1_optum_baseline_20260510.json"
-)
+_BASELINE_SIDECAR = REPO_ROOT / "docs" / "calibration" / "g1_optum_baseline_20260510.json"
 _REQUIRED_SIDECAR_KEYS = frozenset(
     {
         "auc",
@@ -409,8 +407,7 @@ def test_optum_baseline_artifact_present_and_complete() -> None:
         f"OPTUM_EXPECTED_DEFAULT_COHORT_SIZE={OPTUM_EXPECTED_DEFAULT_COHORT_SIZE}."
     )
     assert data["target"] == OPTUM_INITIATION_TARGET, (
-        f"Sidecar target={data['target']!r} != "
-        f"OPTUM_INITIATION_TARGET={OPTUM_INITIATION_TARGET!r}."
+        f"Sidecar target={data['target']!r} != OPTUM_INITIATION_TARGET={OPTUM_INITIATION_TARGET!r}."
     )
 
 
@@ -548,8 +545,7 @@ def test_g1_baseline_sidecar_field_types() -> None:
         f"sidecar 'auc' must be numeric; got {type(data['auc'])}"
     )
     assert 0.0 < data["auc"] < 1.0, (
-        f"sidecar 'auc' = {data['auc']} is outside (0, 1); likely a "
-        "placeholder or corrupt value."
+        f"sidecar 'auc' = {data['auc']} is outside (0, 1); likely a placeholder or corrupt value."
     )
     assert isinstance(data["noninferiority_epsilon"], (int, float)), (
         f"sidecar 'noninferiority_epsilon' must be numeric; got "
@@ -562,15 +558,12 @@ def test_g1_baseline_sidecar_field_types() -> None:
     assert isinstance(data["cohort_n"], int), (
         f"sidecar 'cohort_n' must be int; got {type(data['cohort_n'])}"
     )
-    assert data["cohort_n"] > 0, (
-        f"sidecar 'cohort_n' = {data['cohort_n']} must be positive."
-    )
+    assert data["cohort_n"] > 0, f"sidecar 'cohort_n' = {data['cohort_n']} must be positive."
     assert isinstance(data["pr_number"], int), (
         f"sidecar 'pr_number' must be int; got {type(data['pr_number'])}"
     )
     assert isinstance(data["commit_sha"], str) and len(data["commit_sha"]) >= 7, (
-        f"sidecar 'commit_sha' must be a non-empty string (≥7 chars); "
-        f"got {data['commit_sha']!r}"
+        f"sidecar 'commit_sha' must be a non-empty string (≥7 chars); got {data['commit_sha']!r}"
     )
     assert isinstance(data["target"], str) and data["target"], (
         f"sidecar 'target' must be a non-empty string; got {data['target']!r}"
@@ -579,8 +572,7 @@ def test_g1_baseline_sidecar_field_types() -> None:
         f"sidecar 'split' must be a non-empty string; got {data['split']!r}"
     )
     assert isinstance(data["window_regime"], str) and data["window_regime"], (
-        f"sidecar 'window_regime' must be a non-empty string; "
-        f"got {data['window_regime']!r}"
+        f"sidecar 'window_regime' must be a non-empty string; got {data['window_regime']!r}"
     )
     # Codex pass-3 LOW-1 fix: independent pinned invariants, separate from
     # sidecar-derived runtime constants. These literal values are the
