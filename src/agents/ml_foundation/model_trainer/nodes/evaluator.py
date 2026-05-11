@@ -817,8 +817,20 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 "using native calibration_error as calibrated_ece alias"
             )
         elif X_val_np is not None and y_val_np is not None:
+            # v5 Gate B1 (2026-05-11): use the auto-policy by default so
+            # the method (isotonic vs Platt) is chosen from the val-set
+            # positive count. ``state["calibration_method"]`` overrides
+            # the default — accepted values: "auto" (= default), "isotonic",
+            # "sigmoid" (Platt). Anything else falls through to "auto".
+            requested_method = state.get("calibration_method", "auto")
+            if requested_method not in ("auto", "isotonic", "sigmoid"):
+                logger.warning(
+                    "Unknown calibration_method=%r in state; falling back to 'auto'.",
+                    requested_method,
+                )
+                requested_method = "auto"
             calibrated_model, cal_info = apply_post_hoc_calibration(
-                trained_model, X_val_np, y_val_np, method="isotonic"
+                trained_model, X_val_np, y_val_np, method=requested_method
             )
             metrics_result["post_hoc_calibration"] = cal_info
             if cal_info.get("calibration_applied") and X_test_np is not None:
@@ -851,7 +863,8 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 if uncal_ece is not None and cal_ece.get("calibration_ece") is not None:
                     logger.info(
                         f"Calibration: ECE {uncal_ece:.4f} → "
-                        f"{cal_ece['calibration_ece']:.4f} (isotonic)"
+                        f"{cal_ece['calibration_ece']:.4f} "
+                        f"({cal_info.get('calibration_method_resolved', 'isotonic')})"
                     )
 
         # 7. Stratified split validation — check class ratio preservation
