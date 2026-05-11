@@ -151,7 +151,18 @@ class ModelDeployerAgent:
         # Both are stashed on the initial_state when present so the
         # manifest builder finds them in either shape.
         if "scope_spec" in input_data:
-            initial_state["scope_spec"] = input_data["scope_spec"]
+            # Codex pass-3 HIGH: ModelDeployerState declares
+            # ``scope_spec: Optional[Dict[str, Any]]`` to match LangGraph's
+            # channel-reducer round-trip requirements. Typed
+            # ``ScopeSpecSchema`` Pydantic instances are rejected at
+            # state validation time, so we normalize to dict here at
+            # the agent boundary. Plain dicts pass through unchanged;
+            # ``None`` is excluded by the outer ``if "scope_spec" in
+            # input_data`` guard.
+            scope_spec_input = input_data["scope_spec"]
+            if hasattr(scope_spec_input, "model_dump"):
+                scope_spec_input = scope_spec_input.model_dump()
+            initial_state["scope_spec"] = scope_spec_input
         if "feature_manifest_source" in input_data:
             initial_state["feature_manifest_source"] = input_data["feature_manifest_source"]
 
