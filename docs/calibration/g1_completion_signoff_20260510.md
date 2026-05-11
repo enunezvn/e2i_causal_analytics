@@ -104,6 +104,12 @@ data fixtures), the CSU + Optum tests pin the empirical anchors:
 - CSU: `val_AUC ∈ [0.62, 0.68]`, perm p ≤ 0.01, deployer MARGINAL
 - Optum: held-out AUC ≥ 0.4147 (= 0.4347 baseline − 0.02 epsilon)
 
+The Optum baseline values are sourced from the structured sidecar
+`docs/calibration/g1_optum_baseline_20260510.json` (canonical) rather
+than hardcoded in the test. The .md file is documentation only; the
+sidecar is the single source of truth. To update the baseline, edit the
+sidecar JSON with a PR reference and domain-expert sign-off.
+
 ## Pre-condition for G3 (HBLP default-path wiring)
 
 Plan v4 §3 sequencing rule:
