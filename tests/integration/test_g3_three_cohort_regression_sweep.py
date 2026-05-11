@@ -896,6 +896,53 @@ def _make_synthetic_optum_state(
     }
 
 
+def _make_synthetic_optum_state_with_deterministic_pos_count(
+    n_train_pos: int,
+    seed: int = 7,
+) -> dict[str, Any]:
+    """Build an Optum-shaped state whose `y` has EXACTLY ``n_train_pos``
+    positives and ``n_train_pos`` negatives (50/50 split).
+
+    This makes the orchestrator's
+    ``n_train_pos = int(np.sum(valid_target_values == 1))`` derivation
+    deterministic so HBLP's variance-inflation factor is exactly the
+    same on every test run. The numeric column ``age_at_index`` is the
+    Optum-manifest "enrollment"-knowable feature (declared_safe=True);
+    Layer 3 will score it under HBLP.
+    """
+
+    rng = np.random.default_rng(seed)
+    n_total = n_train_pos * 2  # 50/50 split → simple deterministic count
+    y = np.concatenate([np.ones(n_train_pos), np.zeros(n_train_pos)]).astype(int)
+    # Shuffle so positive-class rows aren't trivially clustered (which
+    # would change the orchestrator's downstream binary-mask handling).
+    perm = rng.permutation(n_total)
+    df = pd.DataFrame(
+        {
+            "age_at_index": rng.normal(60, 12, n_total).astype(float),
+            "gender": rng.choice(["M", "F"], n_total),
+            "free_numeric_covariate": rng.standard_normal(n_total),
+            "y": y[perm],
+        }
+    )
+    return {
+        "experiment_id": f"g3-orchestrator-optum-n_pos-{n_train_pos}",
+        "train_df": df,
+        "validation_df": None,
+        "test_df": None,
+        "scope_spec": {
+            "prediction_target": "y",
+            "required_features": [c for c in df.columns if c != "y"],
+            "excluded_features": [],
+            "feature_manifest_source": "optum",
+        },
+        "leakage_findings": [],
+        "leaked_features": [],
+        "adaptive_seed": seed,
+        "adaptive_n_permutations": 50,
+    }
+
+
 def _make_synthetic_no_manifest_state(
     n_patients: int = 200,
     seed: int = 7,
@@ -988,32 +1035,115 @@ class TestOrchestratorThreadingHigh4:
         # without raising _HblpRoutingViolationError.
         assert verdicts, "Expected at least one verdict from Optum orchestrator path"
 
-    def test_optum_shaped_low_n_threads_to_hblp(self) -> None:
-        """Low-N Optum orchestrator path threads cohort metadata.
+    def test_optum_shaped_low_n_threads_to_hblp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """codex pass-2 HIGH-4 PARTIAL: deterministic boundary-z assertion
+        on the orchestrator threading.
 
-        With n_patients=50 → ~25 train_pos (binary). HBLP's variance-
-        inflation factor at n=25 is sqrt(50/25) ≈ 1.41 — relaxation kicks
-        in. This test asserts the orchestrator's n_train_pos derivation
-        flows to _adversarial_input without dropping the threading.
+        z=5.5 sits BETWEEN legacy 5σ (would classify "high") and HBLP-
+        relaxed 7.5σ at high-N+declared_safe (would classify "moderate").
+        At low-N (n_train_pos=22) + declared_safe=True, HBLP-effective
+        high=11.31σ and moderate=6.78σ → z=5.5 classifies "info".
+
+        Differential outcome under correct threading:
+          * low_n=22 + manifest-safe → severity = "info"
+          * high_n=200 + manifest-safe → severity = "moderate"
+
+        If `n_train_pos` were dropped (defaulted to None in the
+        orchestrator → falls through to reference-N=50 in
+        ``_adversarial_input`` → variance_inflation=1.0 in BOTH paths)
+        OR `layer_1_declared_safe` were dropped (defaulted to False
+        → layer_1_factor=1.0 in BOTH paths), the two runs would
+        produce IDENTICAL severities — and this test would fail.
+
+        We monkeypatch ``compute_adversarial_score`` so the engineered
+        z=5.5 score is returned deterministically; the real Layer 3
+        scorer doesn't reliably land on a target z without seed
+        fragility.
         """
 
-        state = _make_synthetic_optum_state(n_patients=50, seed=11)
-        result = _run_orchestrator(state)
-        verdicts = result["adaptive_verdicts"]
-        # Find a layer="3" verdict — that's where HBLP routing is exercised.
-        layer_3_verdicts = [v for v in verdicts if v.get("layer") == "3"]
-        if not layer_3_verdicts:
-            # Possible if all numeric features got short-circuited; the
-            # orchestrator's path-not-taken still proves the threading
-            # didn't crash, which is the load-bearing claim of HIGH-4.
-            return
-        # Each layer="3" verdict carries the post-HBLP severity (info /
-        # moderate / high). The mere presence proves the call chain
-        # ``orchestrator → _adversarial_input → hblp_classify`` ran end-
-        # to-end without _HblpRoutingViolationError.
-        for v in layer_3_verdicts:
-            assert v["severity"] in {"info", "moderate", "high"}
-            assert "z_score" in v
+        # codex HIGH-4 PARTIAL fix: monkeypatch the orchestrator's
+        # ``compute_adversarial_score`` import so we can pin z=5.5.
+        # The real adversarial scorer's z-score depends on permutation-
+        # null seeding which makes "land near boundary z" too fragile
+        # for a regression test.
+        from src.agents.ml_foundation.data_preparer.nodes import (
+            adaptive_validity_check as avc_module,
+        )
+
+        def _fake_adversarial_score(
+            *args: Any, **kwargs: Any
+        ) -> dict[str, Any]:
+            return {
+                "z_score": 5.5,  # boundary value: legacy=high, low-N-HBLP=info
+                "actual_auc": 0.72,
+                "null_mean": 0.50,
+                "null_std": 0.04,
+                "p_value": 0.001,
+                "n_permutations": 50,
+                "suspicious": True,
+            }
+
+        monkeypatch.setattr(
+            avc_module,
+            "compute_adversarial_score",
+            _fake_adversarial_score,
+        )
+
+        # Low-N path: n_train_pos=22, manifest-safe (age_at_index has
+        # Optum-manifest knowable_at=enrollment → declared_safe=True).
+        low_n_state = _make_synthetic_optum_state_with_deterministic_pos_count(
+            n_train_pos=22, seed=11
+        )
+        low_n_result = _run_orchestrator(low_n_state)
+        # High-N path: n_train_pos=200, same manifest path.
+        high_n_state = _make_synthetic_optum_state_with_deterministic_pos_count(
+            n_train_pos=200, seed=11
+        )
+        high_n_result = _run_orchestrator(high_n_state)
+
+        # Find the age_at_index Layer 3 verdict in each run. Layer 3
+        # verdicts are emitted only for numeric columns the orchestrator
+        # scored — age_at_index is the Optum-cleared numeric column.
+        def _layer_3_verdict_for(result: dict[str, Any], feature: str) -> dict[str, Any]:
+            for v in result["adaptive_verdicts"]:
+                if v.get("feature") == feature and v.get("layer") == "3":
+                    return v
+            raise AssertionError(
+                f"No layer=3 verdict for {feature!r} in orchestrator result. "
+                f"verdicts={[(v.get('feature'), v.get('layer')) for v in result['adaptive_verdicts']]}"
+            )
+
+        low_n_verdict = _layer_3_verdict_for(low_n_result, "age_at_index")
+        high_n_verdict = _layer_3_verdict_for(high_n_result, "age_at_index")
+
+        # Both runs hit the same z=5.5; the only distinguishing input
+        # is n_train_pos (22 vs 200) which is derived inside the
+        # orchestrator from the binary y vector. If threading is
+        # broken, both verdicts produce IDENTICAL severities.
+        assert low_n_verdict["severity"] == "info", (
+            f"codex HIGH-4 PARTIAL: at low_n_train_pos=22 + manifest-safe, "
+            f"z=5.5 must classify 'info' (HBLP-effective moderate=6.78σ); "
+            f"got severity={low_n_verdict['severity']!r}. "
+            f"This indicates n_train_pos was NOT threaded from orchestrator."
+        )
+        assert high_n_verdict["severity"] == "moderate", (
+            f"codex HIGH-4 PARTIAL: at high_n_train_pos=200 + manifest-safe, "
+            f"z=5.5 must classify 'moderate' (HBLP-effective high=7.5σ, "
+            f"moderate=4.5σ); got severity={high_n_verdict['severity']!r}. "
+            f"This indicates layer_1_declared_safe was NOT threaded from "
+            f"orchestrator (declared_safe=False would yield 'high' at z=5.5)."
+        )
+
+        # Severities MUST DIFFER. This is the load-bearing assertion:
+        # if either threading drops, both severities collapse to the
+        # same value.
+        assert low_n_verdict["severity"] != high_n_verdict["severity"], (
+            f"codex HIGH-4 PARTIAL: severities IDENTICAL across (n=22, "
+            f"safe=True) and (n=200, safe=True) at boundary z=5.5 — "
+            f"this indicates `n_train_pos` is NOT threaded from "
+            f"orchestrator. Both got severity="
+            f"{low_n_verdict['severity']!r}."
+        )
 
     def test_no_manifest_orchestrator_uses_legacy_thresholds(self) -> None:
         """No-manifest synthetic regime: layer_1_declared_safe=False
