@@ -350,3 +350,23 @@ class TestV5GateB1AutoPolicy:
         assert select_calibration_method(y_all_one) == "isotonic"
         y_all_one_small = np.ones(50, dtype=np.int64)
         assert select_calibration_method(y_all_one_small) == "sigmoid"
+
+    def test_select_fractional_floats_fall_back_to_sigmoid(self) -> None:
+        """Codex pass-2 residual: fractional finite floats (e.g. 1.9, 0.5)
+        are NOT binary and must fall back to sigmoid. Pre-fix, the int64
+        cast truncated 1.9 → 1 and falsely satisfied the binary check."""
+        from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (
+            select_calibration_method,
+        )
+
+        # 101 values of 1.9 (truncate to 1) + 10 zeros — would falsely
+        # resolve to isotonic if binary check ran on int-cast array.
+        y_fractional = np.concatenate(
+            [np.full(101, 1.9, dtype=np.float64), np.zeros(10, dtype=np.float64)]
+        )
+        assert select_calibration_method(y_fractional) == "sigmoid"
+
+        # Probability-like floats — also non-binary.
+        rng = np.random.default_rng(0)
+        y_proba = rng.uniform(0.3, 0.8, size=200).astype(np.float64)
+        assert select_calibration_method(y_proba) == "sigmoid"
