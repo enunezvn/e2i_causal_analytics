@@ -278,14 +278,33 @@ def test_manifest_covers_all_csu_feature_columns():
     # (before backlog #17), those columns may still be present —
     # tolerated, not required. If the file was written by the new
     # converter, those columns will be absent — also tolerated.
-    from src.data.manifests.csu_feature_manifest import CSU_FORBIDDEN_NON_TARGET
+    #
+    # Codex pass-1 M2 (2026-05-12): the exemption is narrowed to the
+    # set ``CSU_INTENDED_DROP`` declared in
+    # ``tests/unit/test_scripts/test_cohort_builder_forbidden_gate.py``
+    # — i.e., the catalog of forbidden columns that the converter is
+    # KNOWN to strip. Any future erroneous post_index manifest entry
+    # would land in ``CSU_FORBIDDEN_NON_TARGET`` but NOT in
+    # ``CSU_INTENDED_DROP``, so this assertion would fail loudly —
+    # forcing the author to either (a) verify the converter actually
+    # strips the column and add it to ``CSU_INTENDED_DROP``, or
+    # (b) fix the bogus post_index declaration.
+    from tests.unit.test_scripts.test_cohort_builder_forbidden_gate import (
+        CSU_INTENDED_DROP,
+    )
 
-    extra = manifest_columns - actual_columns - set(CSU_FORBIDDEN_NON_TARGET)
+    extra = manifest_columns - actual_columns - set(CSU_INTENDED_DROP)
     assert extra == set(), (
         f"Manifest declares contracts for columns the converter doesn't emit: {sorted(extra)}. "
-        f"This means the manifest has drifted from the converter; either remove the entry, "
-        f"add the column to CSU_FORBIDDEN_NON_TARGET (so the converter strips it), or "
-        f"fix the converter."
+        f"This means the manifest has drifted from the converter. Resolutions:\n"
+        f"  (a) Add the column to CSU_INTENDED_DROP in "
+        f"tests/unit/test_scripts/test_cohort_builder_forbidden_gate.py "
+        f"AND verify scripts/convert_csu_rwd.py's _drop_forbidden_columns "
+        f"strips it (the companion test "
+        f"test_csu_intended_drop_columns_all_in_non_target will then enforce "
+        f"the manifest membership), OR\n"
+        f"  (b) Remove the entry from the manifest if no longer applicable, OR\n"
+        f"  (c) Add it to the converter so it appears on disk."
     )
 
 
