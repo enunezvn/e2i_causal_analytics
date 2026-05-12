@@ -147,6 +147,7 @@ langgraph-prebuilt==1.0.8
 langgraph-sdk==0.3.1
 langsmith==0.5.0
 librt==0.7.4
+lifelines==0.30.3
 lightgbm==4.6.0
 litellm==1.80.10
 llvmlite==0.46.0
@@ -205,7 +206,7 @@ opik==1.9.60
 optuna==4.6.0
 orjson==3.11.6
 ormsgpack==1.12.1
-osqp==1.0.5
+osqp==1.1.1
 packaging==25.0
 pandas==2.3.3
 pandera==0.28.1
@@ -274,6 +275,7 @@ safetensors==0.7.0
 schema==0.7.8
 scikit-learn==1.6.1
 scikit-network==0.33.5
+scikit-survival==0.26.0
 scipy==1.15.3
 scs==3.2.9
 sentence-transformers==5.2.0
