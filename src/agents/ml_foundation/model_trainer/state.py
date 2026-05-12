@@ -31,6 +31,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
+import numpy as np
 from pydantic import AliasChoices, Field
 
 from src.agents.ml_foundation._pydantic_utils import (
@@ -98,14 +99,16 @@ class ModelTrainerState(BaseAgentSchema):
     # ``enable_survival_modeling`` gates the survival_model_node; when
     # False (default), the node is a no-op and the binary pipeline is
     # unaffected. ``survival_time_days`` and ``survival_event`` are the
-    # cohort-scoped target arrays derived in the node. ``Any`` since
-    # numpy arrays are not pydantic types (arbitrary_types_allowed in
-    # BaseAgentSchema). Default ``bool = False`` for the gate matches
+    # cohort-scoped target arrays derived in the node. ``np.ndarray``
+    # is accepted under ``arbitrary_types_allowed`` from
+    # BaseAgentSchema. Default ``bool = False`` for the gate matches
     # the B3 ``enable_feature_engineering`` codex L2 convention so the
     # ``if state["enable_survival_modeling"]:`` guard does not get None.
+    # L5 codex pass-1: explicit np.ndarray (not Any) so editor tooling
+    # catches list/scalar misuse.
     enable_survival_modeling: bool = False
-    survival_time_days: Optional[Any] = None  # np.ndarray of float days
-    survival_event: Optional[Any] = None  # np.ndarray of bool
+    survival_time_days: Optional[np.ndarray] = None  # float days
+    survival_event: Optional[np.ndarray] = None  # bool
     survival_manifest_source: Optional[str] = None  # echoes the manifest_source used
     survival_target_error: Optional[str] = None  # set if derivation raised
 
