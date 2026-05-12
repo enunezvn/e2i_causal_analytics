@@ -155,9 +155,9 @@ def safe_date(val: Any) -> str | None:
     if isinstance(val, pd.Timestamp):
         if pd.isna(val):
             return None
-        return val.strftime("%Y-%m-%d")
+        return str(val.strftime("%Y-%m-%d"))
     if isinstance(val, datetime):
-        return val.strftime("%Y-%m-%d")
+        return str(val.strftime("%Y-%m-%d"))
     if isinstance(val, str):
         return val[:10]
     return None
@@ -577,7 +577,7 @@ def _none_if_empty(val: Any) -> str | None:
     if isinstance(val, str):
         s = val.strip()
         return s if s else None
-    return val
+    return str(val) if val else None
 
 
 def parse_nppes_api_result(payload: Mapping[str, Any], npi: str) -> NppesRecord | None:
@@ -813,6 +813,7 @@ def lookup_npi(
     npi_str = str(npi).strip()
 
     if _NPI_CACHE_LOADER is not None:
+        cached: NppesRecord | None
         try:
             cached = _NPI_CACHE_LOADER(npi_str)
         except Exception as exc:  # pragma: no cover - defensive
