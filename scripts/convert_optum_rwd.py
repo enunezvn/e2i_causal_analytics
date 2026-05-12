@@ -1560,14 +1560,19 @@ class OptumDataConverter:
           - ``days_to_first_fill``: dict NPI → int days, or None if no on-label
             fill (HCP becomes ``non_adopter`` in classify_rogers_adoption).
           - ``dupixent_offlabel``: dict NPI → bool (True if HCP has any
-            Dupixent fill in scope; Dupixent has NO CSU approval as of
-            2026-05-12 so its CSU-cohort fills are off-label).
+            Dupixent fill BEFORE the CSU approval date 2025-04-18; fills on
+            or after are on-label and counted in the unified CSU curve).
 
-        On-label = CSU biologic mask MINUS Dupixent (matched on brand-name /
-        generic-name / NDC prefix). HCPs whose only fills are off-label
-        Dupixent get ``days_to_first_fill=None`` (→ non_adopter), with the
-        off-label flag preserved separately so downstream consumers can
-        carve them out for cross-indication adoption analysis.
+        On-label CSU = (any Xolair fill on or after 2014-03-21) OR (any
+        Dupixent fill on or after 2025-04-18). Pre-2025-04-18 Dupixent fills
+        flag the HCP as off-label and are EXCLUDED from the on-label adoption
+        calculation (but the on-label flag is still set if the same HCP later
+        had an on-label fill of either drug).
+
+        HCPs whose only fills are pre-approval (off-label) Dupixent get
+        ``days_to_first_fill=None`` → non_adopter, with the off-label flag
+        preserved separately so downstream consumers can carve them out for
+        cross-indication adoption analysis.
         """
         days_out: dict[str, int | None] = dict.fromkeys(npi_rx)
         offlabel: dict[str, bool] = dict.fromkeys(npi_rx, False)
@@ -1615,11 +1620,28 @@ class OptumDataConverter:
             # dupixent_offlabel stays False.
             dupixent_mask = dupixent_mask | (c == "J0517")
 
-        # First on-label fill per NPI (Xolair-equivalent only).
-        onlabel = sub.loc[~dupixent_mask].copy()
-        onlabel["medication_date"] = pd.to_datetime(onlabel["medication_date"], errors="coerce")
-        onlabel = onlabel.dropna(subset=["medication_date"])
+        # Date-aware Dupixent eligibility: fills on or after the CSU approval
+        # date (2025-04-18 per rwdc.BRAND_LAUNCH_DATES["dupixent"]["csu"]) are
+        # on-label; fills before are off-label and excluded from on-label
+        # adoption (but still flag the HCP).
+        dupixent_csu_launch = pd.Timestamp(
+            rwdc.BRAND_LAUNCH_DATES["dupixent"]["csu"]
+        )
+        sub = sub.copy()
+        sub["medication_date"] = pd.to_datetime(sub["medication_date"], errors="coerce")
+
+        # Pre-approval Dupixent = off-label; flags the HCP regardless of whether
+        # they also had a post-approval on-label fill.
+        offlabel_mask = dupixent_mask & (sub["medication_date"] < dupixent_csu_launch)
+
+        # On-label CSU fill = Xolair (any date) OR Dupixent on/after CSU approval.
+        # NaT medication_date drops out via the comparison.
+        onlabel_dupixent_mask = dupixent_mask & (sub["medication_date"] >= dupixent_csu_launch)
+        onlabel_mask = (~dupixent_mask) | onlabel_dupixent_mask
+
+        onlabel = sub.loc[onlabel_mask].dropna(subset=["medication_date"])
         if not onlabel.empty:
+            onlabel = onlabel.copy()
             onlabel["npi"] = onlabel["npi"].astype(str).str.strip()
             first_by_npi = onlabel.groupby("npi")["medication_date"].min()
             for npi_val, first_dt in first_by_npi.items():
@@ -1627,14 +1649,14 @@ class OptumDataConverter:
                 if npi_key not in days_out:
                     continue
                 delta_days = int((first_dt - brand_launch).days)
-                # Negative deltas (fill BEFORE launch — data error or
-                # off-label-prior-approval) clamp to 0 so they still get
-                # an `innovator` rank rather than skewing the curve.
+                # Negative deltas (Xolair fill before launch — data error)
+                # clamp to 0 so they still get an `innovator` rank rather than
+                # skewing the curve.
                 days_out[npi_key] = max(delta_days, 0)
 
-        # Dupixent-offlabel flag — any Dupixent fill flags the HCP.
-        if dupixent_mask.any():
-            dup_npis = sub.loc[dupixent_mask, "npi"].astype(str).str.strip().unique()
+        # Off-label flag — only pre-approval Dupixent fills flag the HCP.
+        if offlabel_mask.any():
+            dup_npis = sub.loc[offlabel_mask, "npi"].astype(str).str.strip().unique()
             for npi_val in dup_npis:
                 if npi_val in offlabel:
                     offlabel[npi_val] = True
@@ -1672,10 +1694,14 @@ class OptumDataConverter:
         # prescribing volume with adoption timing — a high-volume HCP who
         # started late is `late_majority`, not `innovator`).
         #
-        # For CSU, the on-label biologic is Xolair (launched 2014-03-21).
-        # Dupixent has NO CSU approval as of 2026-05-12 — its CSU fills are
-        # OFF-LABEL and excluded from the diffusion curve (flagged separately
-        # via `dupixent_offlabel=True`).
+        # For CSU, the unified on-label adoption curve is anchored at Xolair
+        # launch (2014-03-21, the class-of-modality anchor). Dupixent's CSU
+        # approval came later (2025-04-18); pre-approval Dupixent CSU fills
+        # are OFF-LABEL and excluded from the curve (flagged separately via
+        # `dupixent_offlabel=True`); post-approval Dupixent CSU fills are
+        # on-label and counted in the unified curve via the same Xolair
+        # anchor (so a 2025-05 Dupixent first-fill is a late_majority, not
+        # an innovator — the modality has been around since 2014).
         xolair_launch = pd.Timestamp(rwdc.BRAND_LAUNCH_DATES["xolair"]["csu"])
         hcp_days_to_first_fill, hcp_dupixent_offlabel = self._compute_npi_first_fill(
             kept_patids, npi_rx, xolair_launch
@@ -1906,10 +1932,12 @@ class OptumDataConverter:
                 "source_table": "medication (Dupixent fills) via NPI",
                 "lookback_window": "all CSU biologic fills in scope",
                 "notes": (
-                    "Issue #155 §1 — TRUE if HCP has any Dupixent fill in "
-                    "the CSU cohort. Dupixent is NOT FDA-approved for CSU "
-                    "as of 2026-05-12; flagged for downstream cross-"
-                    "indication adoption analysis."
+                    "Issue #155 §1 — TRUE if HCP has any pre-approval "
+                    "Dupixent fill in the CSU cohort (FDA approved Dupixent "
+                    "for CSU on 2025-04-18; pre-2025-04-18 fills are "
+                    "off-label, post-approval fills are on-label and counted "
+                    "in the on-label adoption curve). Flagged for downstream "
+                    "cross-indication adoption analysis."
                 ),
             },
             {
