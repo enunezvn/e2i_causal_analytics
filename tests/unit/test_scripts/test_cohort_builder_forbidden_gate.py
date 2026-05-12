@@ -35,6 +35,15 @@ def test_csu_drop_filters_forbidden_columns():
             "prior_treatments": 2,
             "disease_severity": 5.5,
             "engagement_score": 7.0,
+            # Backlog #17 — three B3 engineered dependents (post_index
+            # by chain validity). Codex pass-1 L1: prior version of
+            # this test only injected the six raw aggregates, so the
+            # behavioral coverage on the three dependents went through
+            # CSU_INTENDED_DROP membership alone. Injecting them here
+            # pins the actual strip behavior on each.
+            "engagement_per_visit": 1.5,
+            "treatment_diversity_intensity": 4.2,
+            "severity_engagement_product": 38.5,
             # Targets — must be preserved
             "treatment_initiated": 1,
             "discontinuation_flag": 0,
@@ -57,6 +66,10 @@ def test_csu_drop_filters_forbidden_columns():
         "prior_treatments",
         "disease_severity",
         "engagement_score",
+        # Backlog #17 — three B3 engineered dependents (codex pass-1 L1)
+        "engagement_per_visit",
+        "treatment_diversity_intensity",
+        "severity_engagement_product",
     ):
         assert key not in out, f"{key} should have been dropped"
 
