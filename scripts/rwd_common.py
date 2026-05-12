@@ -56,13 +56,16 @@ INSURANCE_TYPE_MAP: dict[str, str] = {
 #                                                                              #
 # Indications mapped per-brand because the same molecule can carry different   #
 # FDA-approval dates across indications (e.g. Dupixent: atopic dermatitis      #
-# 2017-03-28, asthma 2018-10-19, CSU NOT YET APPROVED as of 2026-05-12).       #
+# 2017-03-28, asthma 2018-10-19, CSU 2025-04-18).                              #
 #                                                                              #
-# When an in-scope brand fill lacks an approved indication for the cohort      #
-# (e.g. Dupixent in the CSU cohort), flag with `dupixent_offlabel=TRUE` and    #
-# EXCLUDE from the diffusion curve — off-label fills contaminate Rogers        #
-# rankings because the population of prescribers diverges from the on-label    #
-# adoption funnel.                                                             #
+# When an in-scope brand fill PREDATES the FDA approval date for the cohort    #
+# indication (e.g. a Dupixent CSU fill before 2025-04-18), flag with           #
+# `dupixent_offlabel=TRUE` and EXCLUDE the pre-approval fill from the on-label #
+# diffusion curve — pre-approval fills contaminate Rogers rankings because the #
+# population of prescribers diverges from the on-label adoption funnel. Fills  #
+# on or after the approval date are on-label and counted toward the unified    #
+# CSU on-label adoption curve (anchored at Xolair launch 2014-03-21, the       #
+# class-of-modality anchor).                                                   #
 # --------------------------------------------------------------------------- #
 
 BRAND_LAUNCH_DATES: dict[str, dict[str, date]] = {
@@ -73,7 +76,11 @@ BRAND_LAUNCH_DATES: dict[str, dict[str, date]] = {
     "dupixent": {
         "atopic_dermatitis": date(2017, 3, 28),
         "asthma": date(2018, 10, 19),
-        # csu: NOT YET APPROVED (as of 2026-05-12). Fills are off-label.
+        # FDA approved Dupixent for CSU (adults + adolescents ≥12y) on
+        # 2025-04-18 (Sanofi press release; FDA label 761055s070). Pediatric
+        # extension to ages 2-11 approved April 2026. Fills BEFORE this date
+        # are off-label for CSU; fills on/after are on-label.
+        "csu": date(2025, 4, 18),
     },
 }
 

@@ -255,6 +255,101 @@ def test_build_hcp_profiles_dupixent_offlabel_flag_set():
     assert profiles[0]["adoption_category"] == "non_adopter"
 
 
+def test_build_hcp_profiles_dupixent_pre_approval_csu_is_offlabel():
+    """Regression for codex pass-2 HIGH: Dupixent CSU fills BEFORE the FDA
+    approval date 2025-04-18 are off-label. HCP gets dupixent_offlabel=True
+    and (without other on-label fills) becomes non_adopter."""
+    c = _make_converter()
+    rows = [
+        {
+            "npi": "NPI_PRE",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2020-01-01"),  # pre-approval
+            "Brand_Name": "DUPIXENT",
+            "Generic_Name": None,
+            "code": None,
+        },
+    ]
+    _seed_for_rogers(c, rows)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["dupixent_offlabel"] is True
+    assert profiles[0]["adoption_category"] == "non_adopter"
+
+
+def test_build_hcp_profiles_dupixent_post_approval_csu_is_onlabel():
+    """Regression for codex pass-2 HIGH: Dupixent CSU fills ON OR AFTER the
+    FDA approval date 2025-04-18 are on-label. HCP receives a Rogers adopter
+    category and dupixent_offlabel=False (no pre-approval fills)."""
+    c = _make_converter()
+    rows = [
+        {
+            "npi": "NPI_POST",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2025-05-01"),  # post-approval
+            "Brand_Name": "DUPIXENT",
+            "Generic_Name": None,
+            "code": None,
+        },
+    ]
+    _seed_for_rogers(c, rows)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["dupixent_offlabel"] is False
+    assert profiles[0]["adoption_category"] != "non_adopter"
+
+
+def test_build_hcp_profiles_dupixent_approval_date_boundary_is_inclusive():
+    """Regression: a Dupixent fill ON the exact approval date 2025-04-18 is
+    on-label (inclusive boundary)."""
+    c = _make_converter()
+    rows = [
+        {
+            "npi": "NPI_BOUNDARY",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2025-04-18"),  # exact approval
+            "Brand_Name": "DUPIXENT",
+            "Generic_Name": None,
+            "code": None,
+        },
+    ]
+    _seed_for_rogers(c, rows)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["dupixent_offlabel"] is False
+    assert profiles[0]["adoption_category"] != "non_adopter"
+
+
+def test_build_hcp_profiles_dupixent_pre_and_post_approval_flags_offlabel():
+    """Regression: an HCP with BOTH a pre-approval and a post-approval
+    Dupixent fill is flagged off-label (any pre-approval fill flags) AND
+    receives a Rogers category from the post-approval (on-label) fill."""
+    c = _make_converter()
+    rows = [
+        {
+            "npi": "NPI_BOTH_DATES",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2020-01-01"),  # pre-approval
+            "Brand_Name": "DUPIXENT",
+            "Generic_Name": None,
+            "code": None,
+        },
+        {
+            "npi": "NPI_BOTH_DATES",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2025-06-01"),  # post-approval
+            "Brand_Name": "DUPIXENT",
+            "Generic_Name": None,
+            "code": None,
+        },
+    ]
+    _seed_for_rogers(c, rows)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["dupixent_offlabel"] is True
+    assert profiles[0]["adoption_category"] != "non_adopter"
+
+
 def test_build_hcp_profiles_dupixent_hcpcs_code_only_flagged_offlabel():
     """Regression for codex pass-1 HIGH-1: a row with HCPCS J0517 and NO
     brand/generic/NDC must be flagged dupixent_offlabel=True and excluded
@@ -501,7 +596,9 @@ def test_brand_launch_dates_xolair_csu_is_2014_03_21():
     assert rwdc.BRAND_LAUNCH_DATES["xolair"]["csu"] == date(2014, 3, 21)
 
 
-def test_brand_launch_dates_no_dupixent_csu_entry():
-    """Dupixent has NO CSU approval as of 2026-05-12. The CSU launch date
-    is INTENTIONALLY ABSENT to prevent accidental Rogers curve anchoring."""
-    assert "csu" not in rwdc.BRAND_LAUNCH_DATES["dupixent"]
+def test_brand_launch_dates_dupixent_csu_is_2025_04_18():
+    """FDA approved Dupixent (dupilumab) for CSU in adults and adolescents
+    ≥12y on 2025-04-18 (Sanofi press release; FDA label 761055s070). Issue
+    #155 originally documented Dupixent CSU as "NOT APPROVED" — that was
+    factually wrong and corrected by codex pass-2 review."""
+    assert rwdc.BRAND_LAUNCH_DATES["dupixent"]["csu"] == date(2025, 4, 18)

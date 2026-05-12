@@ -152,7 +152,7 @@ complete, self-documenting list with source-table provenance and null rates.
 | `elixhauser_score`, `charlson_score` | Minimal chapter / high-severity category proxies in lookback | Full scoring algorithms are a separate dependency; approximations are flagged in the data dictionary |
 | Non-inpatient dx codes | Demographics single `diagcode` used as a proxy for baseline condition presence | Optum parquet has no claim-level dx outside inpatient diag1..5 |
 | `source_timestamp` (issue #155 §3) | LAST_DAY of `extract_ym` month at 23:59:59 UTC | Optum vendor drops carry month granularity only; using LAST_DAY is the worst-case estimate and NEVER understates lag. Off by up to 30 days. |
-| `adoption_category` Dupixent-CSU (issue #155 §1) | Dupixent CSU fills EXCLUDED from Rogers diffusion curve; flagged `dupixent_offlabel=TRUE` | Dupixent is NOT FDA-approved for CSU as of 2026-05-12. Treating off-label fills as on-label adoptions would skew Rogers ranks. |
+| `adoption_category` Dupixent-CSU (issue #155 §1) | Dupixent CSU fills BEFORE 2025-04-18 flagged `dupixent_offlabel=TRUE` and EXCLUDED from Rogers diffusion curve; fills on/after are on-label and counted in the unified CSU curve (anchored at Xolair launch 2014-03-21) | FDA approved Dupixent for CSU (adults + adolescents ≥12y) on 2025-04-18 (Sanofi press release; FDA label 761055s070). Pre-approval fills would skew Rogers ranks; post-approval fills are valid on-label adoption. |
 | `journey_stage` (issue #155 §2) | `prescribed` value NOT emitted from Optum converter | Optum claims are dispensed-only; no Rx-written signal. Reserved for cohorts with EHR Rx streams. |
 
 These are documented per-feature in `data_dictionary.csv`.
