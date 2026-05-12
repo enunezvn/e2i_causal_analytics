@@ -450,6 +450,61 @@ RURAL_HEALTH_CLINIC_CODES: tuple[str, ...] = ("261QR1300X",)
 IHS_CODES: tuple[str, ...] = ("282NR1301X",)
 VA_MEDICAL_CENTER_CODES: tuple[str, ...] = ("261QM2500X",)
 
+# NUCC specialty grouping for §7.7 provider-mix sharpening (issue #154).
+# Each tuple is the full 10-char taxonomy code; matching uses exact-equality
+# (no 4-char prefix) so "207K00000X" (Allergy & Immunology) doesn't collide
+# with hypothetical future "207K1xxxxX" subspecialty additions, and so callers
+# can declare which subspecialty codes count as "allergist" via this single
+# source of truth.
+#
+# Source: https://www.nucc.org/index.php/code-sets-mainmenu-41/provider-taxonomy
+# Codes verified against the 24.0 release (2024).
+NUCC_ALLERGY_IMMUNOLOGY_CODES: tuple[str, ...] = (
+    "207K00000X",  # Allergy & Immunology
+    "207KA0200X",  # Clinical & Laboratory Immunology
+    "207KI0005X",  # Clinical & Laboratory Immunology (Allergy & Immunology)
+)
+
+NUCC_DERMATOLOGY_CODES: tuple[str, ...] = (
+    "207N00000X",  # Dermatology
+    "207NI0002X",  # Clinical & Laboratory Dermatological Immunology
+    "207NP0225X",  # Pediatric Dermatology
+    "207ND0900X",  # Dermatopathology
+    "207ND0101X",  # MOHS-Micrographic Surgery
+    "207NS0135X",  # Procedural Dermatology
+)
+
+NUCC_PCP_CODES: tuple[str, ...] = (
+    "207Q00000X",  # Family Medicine
+    "207QA0000X",  # Adolescent Medicine (Family Medicine)
+    "208D00000X",  # General Practice
+    "207R00000X",  # Internal Medicine
+    "208000000X",  # Pediatrics
+    "261QP2300X",  # Primary Care Clinic/Center
+)
+
+
+def taxonomy_in(code: Any, codes: Iterable[str]) -> bool:
+    """Return True if ``code`` matches any code in ``codes`` (exact-equality,
+    case-insensitive, whitespace-stripped).
+
+    Drop-in replacement for the legacy ``str.startswith("207K")`` prefix
+    matching used in §7.7 provider-mix code. Tolerates None / non-string
+    inputs (returns False)."""
+    if code is None:
+        return False
+    if not isinstance(code, str):
+        return False
+    norm = code.strip().upper()
+    if not norm:
+        return False
+    for c in codes:
+        if not isinstance(c, str):
+            continue
+        if norm == c.strip().upper():
+            return True
+    return False
+
 
 @dataclass(frozen=True)
 class NppesTaxonomy:
