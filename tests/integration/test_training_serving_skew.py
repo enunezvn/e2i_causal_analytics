@@ -467,18 +467,28 @@ def _build_step_7_model_deployer_input_dict(
 ) -> dict[str, Any]:
     """Reproduce the input dict `step_7_model_deployer` builds for the deployer.
 
-    Mirrors `scripts/run_tier0_test.py:3796-3811` exactly — including the
-    optional v5 Gate C1 ``scope_spec`` / ``feature_manifest_source`` keys —
-    so that if the deployer's input contract changes to start consuming
-    ``selected_features`` or ``X_train_selected`` from state, this test
-    fails loudly.
+    Mirrors `scripts/run_tier0_test.py:3776-3811` exactly — including the
+    deployment_name prefix the real step uses, the runner's call-site default
+    for `success_criteria_met`, and the optional v5 Gate C1 ``scope_spec`` /
+    ``feature_manifest_source`` keys — so that if the deployer's input
+    contract changes to start consuming ``selected_features`` or
+    ``X_train_selected`` from state, this test fails loudly.
+
+    Note: `test_real_step_7_source_does_not_reference_pruning_artifacts`
+    (above) is the load-bearing drift guard against the runner itself
+    diverging; this helper exists so P2 can assert the dict-key contract
+    on the same state shape the real fixture produces.
     """
-    deployment_name = f"backlog15_skew_{experiment_id[:8]}"
+    # Mirror the real step_7's deployment_name prefix
+    # (scripts/run_tier0_test.py:3776).
+    deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"
     input_data: dict[str, Any] = {
         "experiment_id": experiment_id,
         "model_uri": state.get("model_uri") or f"runs:/{experiment_id}/model",
         "validation_metrics": state.get("validation_metrics", {}),
-        "success_criteria_met": state.get("success_criteria_met", True),
+        # Mirror the runner's call-site default at line 6500:
+        # `state.get("success_criteria_met", False)`.
+        "success_criteria_met": state.get("success_criteria_met", False),
         "deployment_name": deployment_name,
         "deployment_action": "register",
     }
