@@ -863,11 +863,15 @@ class OptumDataConverter:
                 for n in proc_w["npi"].dropna().astype(str):
                     unique_providers.add(n)
                     tax = self._provider_by_npi.get(n, "")
-                    if tax.startswith("207K"):
+                    # Issue #154 §7.7: replace 4-char prefix matching with
+                    # exact full-taxonomy-code matching so subspecialty codes
+                    # are classified deliberately (via rwd_common constants),
+                    # not by accidental string-prefix collision.
+                    if rwdc.taxonomy_in(tax, rwdc.NUCC_ALLERGY_IMMUNOLOGY_CODES):
                         office_allergist += 1
-                    elif tax.startswith("207N"):
+                    elif rwdc.taxonomy_in(tax, rwdc.NUCC_DERMATOLOGY_CODES):
                         office_derm += 1
-                    elif tax.startswith(("207Q", "208D", "261QP2300X")):
+                    elif rwdc.taxonomy_in(tax, rwdc.NUCC_PCP_CODES):
                         office_pcp += 1
 
         if ip is not None:
@@ -950,8 +954,17 @@ class OptumDataConverter:
         else:
             feats["specialist_concentration"] = None
         feats["primary_specialist_type"] = primary_tax
-        feats["saw_allergist_flag"] = int(bool(primary_tax and primary_tax.startswith("207K")))
-        feats["saw_dermatologist_flag"] = int(bool(primary_tax and primary_tax.startswith("207N")))
+        # Issue #154 §7.7: full-taxonomy-code matching against the NUCC
+        # specialty groupings declared in rwd_common. The legacy 4-char
+        # prefix matching ("207K", "207N") collapsed unrelated subspecialty
+        # codes that share a prefix; exact matching against the full code
+        # list is auditable and self-documenting.
+        feats["saw_allergist_flag"] = int(
+            rwdc.taxonomy_in(primary_tax, rwdc.NUCC_ALLERGY_IMMUNOLOGY_CODES)
+        )
+        feats["saw_dermatologist_flag"] = int(
+            rwdc.taxonomy_in(primary_tax, rwdc.NUCC_DERMATOLOGY_CODES)
+        )
 
         return feats
 
@@ -1420,35 +1433,86 @@ class OptumDataConverter:
             practice = "Hospital" if pv > 100 else "Group" if pv >= 50 else "Solo"
 
             taxonomy = self._provider_by_npi.get(obf, "")
-            specialty = (
-                "Allergy/Immunology"
-                if taxonomy.startswith("207K")
-                else "Dermatology"
-                if taxonomy.startswith("207N")
-                else "Other"
-            )
+            # Issue #154 §7.7 / §3: full-taxonomy-code matching for specialty
+            # bucketing (replaces the legacy 4-char prefix). Subspecialty
+            # detail is carried separately in `sub_specialty` once NPPES
+            # enrichment fires (real-NPI cohorts only).
+            if rwdc.taxonomy_in(taxonomy, rwdc.NUCC_ALLERGY_IMMUNOLOGY_CODES):
+                specialty = "Allergy/Immunology"
+            elif rwdc.taxonomy_in(taxonomy, rwdc.NUCC_DERMATOLOGY_CODES):
+                specialty = "Dermatology"
+            elif taxonomy:
+                specialty = "Other"
+            else:
+                specialty = "Other"
+
+            # Issue #154 §3: optional NPPES enrichment. Only fires when the
+            # cohort carries real (non-obfuscated) NPIs AND a cache loader
+            # is registered; for the synthetic / obfuscated Optum extract
+            # this is a no-op (lookup_npi returns None) and the eight
+            # currently-None fields stay None — that's correct behavior
+            # because there is no real provider to look up. When a
+            # real-NPI cohort lands, register the loader before this
+            # converter runs and these fields auto-populate.
+            generated_npi = rwdc.generate_luhn_npi(obf)
+            nppes_rec = rwdc.lookup_npi(generated_npi, use_api_fallback=False)
+            sub_specialty: str | None = None
+            practice_type_resolved = practice
+            practice_size_resolved: str | None = None
+            geographic_region: str | None = None
+            state_val: str | None = None
+            city_val: str | None = None
+            zip_code_val: str | None = None
+            years_experience: int | None = None
+            affiliation_primary: str | None = None
+            first_name: str | None = None
+            last_name: str | None = None
+            if nppes_rec is not None:
+                primary = nppes_rec.primary_taxonomy
+                if primary is not None and primary.desc:
+                    sub_specialty = primary.desc
+                if nppes_rec.practice_address is not None:
+                    addr = nppes_rec.practice_address
+                    state_val = addr.state
+                    city_val = addr.city
+                    zip_code_val = addr.postal_code
+                    geographic_region = rwdc.map_zipcode_to_region(zip_code_val)
+                years_experience = nppes_rec.years_since_enumeration()
+                affiliation_primary = nppes_rec.parent_organization_legal_name
+                first_name = nppes_rec.first_name
+                last_name = nppes_rec.last_name
+                # Org-level providers (entity_type=2) → "Group" / "Hospital"
+                # already covered by `practice` heuristic; the `sole_proprietor`
+                # flag refines individual providers down to "Solo".
+                if nppes_rec.sole_proprietor is True and practice == "Group":
+                    practice_type_resolved = "Solo"
+                # practice_size: bucket via sole-proprietor + entity flag
+                if nppes_rec.sole_proprietor is True:
+                    practice_size_resolved = "Solo"
+                elif nppes_rec.entity_type == "2":
+                    practice_size_resolved = "Group"
 
             profiles.append(
                 {
                     "hcp_id": f"HCP_{seq:06d}",
-                    "npi": rwdc.generate_luhn_npi(obf),
-                    "first_name": None,
-                    "last_name": None,
+                    "npi": generated_npi,
+                    "first_name": first_name,
+                    "last_name": last_name,
                     "specialty": specialty,
-                    "sub_specialty": None,
-                    "practice_type": practice,
-                    "practice_size": None,
-                    "geographic_region": None,
-                    "state": None,
-                    "city": None,
-                    "zip_code": None,
+                    "sub_specialty": sub_specialty,
+                    "practice_type": practice_type_resolved,
+                    "practice_size": practice_size_resolved,
+                    "geographic_region": geographic_region,
+                    "state": state_val,
+                    "city": city_val,
+                    "zip_code": zip_code_val,
                     "priority_tier": None,
                     "decile": None,
                     "total_patient_volume": pv,
                     "target_patient_volume": None,
                     "prescribing_volume": rx,
-                    "years_experience": None,
-                    "affiliation_primary": None,
+                    "years_experience": years_experience,
+                    "affiliation_primary": affiliation_primary,
                     "affiliation_secondary": None,
                     "digital_engagement_score": None,
                     "preferred_channel": None,
@@ -1540,7 +1604,28 @@ class OptumDataConverter:
                 "type": "str (taxonomy1)",
                 "source_table": "provider.taxonomy1 via procedure.npi",
                 "lookback_window": "[index-180, index-1]",
-                "notes": "§7.7",
+                "notes": "§7.7 — full NUCC taxonomy code (issue #154 sharpens 4-char prefix → exact match)",
+            },
+            {
+                "feature": "saw_allergist_flag",
+                "type": "int{0,1}",
+                "source_table": "provider.taxonomy1 via procedure.npi",
+                "lookback_window": "[index-180, index-1]",
+                "notes": "§7.7 — exact-match against NUCC_ALLERGY_IMMUNOLOGY_CODES (issue #154)",
+            },
+            {
+                "feature": "saw_dermatologist_flag",
+                "type": "int{0,1}",
+                "source_table": "provider.taxonomy1 via procedure.npi",
+                "lookback_window": "[index-180, index-1]",
+                "notes": "§7.7 — exact-match against NUCC_DERMATOLOGY_CODES (issue #154)",
+            },
+            {
+                "feature": "specialist_concentration",
+                "type": "float (HHI)",
+                "source_table": "provider.taxonomy1 via procedure.npi",
+                "lookback_window": "[index-180, index-1]",
+                "notes": "§7.7 — Herfindahl over full taxonomy codes (issue #154)",
             },
         ]
 
