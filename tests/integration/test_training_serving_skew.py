@@ -490,6 +490,76 @@ def _build_step_7_model_deployer_input_dict(
     return input_data
 
 
+def test_real_step_7_source_does_not_reference_pruning_artifacts() -> None:
+    """P2-source — pin the REAL `step_7_model_deployer` source against drift.
+
+    Closes the codex pass-1 MEDIUM on `_build_step_7_model_deployer_input_dict`
+    being a hand-copied mirror that cannot detect drift in the runner.
+
+    Parses `scripts/run_tier0_test.py`, locates the `async def step_7_model_deployer`
+    function, and asserts that no `feature_analyzer` pruning artifact name
+    appears anywhere inside the function body. If a future PR wires
+    ``selected_features=state.get("selected_features")`` into the deployer's
+    input_data — or adds it as a kwarg to the function — the substring scan
+    against the function's source span will fail.
+
+    Why an AST-bounded substring scan rather than importing the helper:
+
+    1. `scripts/run_tier0_test.py` is a 7k-line CLI harness with heavy
+       top-level side effects on import (logging config, env probing,
+       argument-parser construction). Importing it from the test lane is
+       brittle and slow.
+    2. We only need to assert that a small, well-defined set of names is
+       ABSENT from the function body — substring scanning the function's
+       textual source is sufficient and robust to formatting changes.
+    3. We bound the scan to the function's source range via `ast.parse` +
+       `ast.get_source_segment` so it cannot leak into unrelated code that
+       legitimately references `selected_features` elsewhere in the file.
+    """
+    import ast
+
+    runner_path = REPO_ROOT / "scripts" / "run_tier0_test.py"
+    assert runner_path.exists(), f"runner script missing at {runner_path}"
+    source = runner_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    step_7_node: ast.AsyncFunctionDef | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "step_7_model_deployer":
+            step_7_node = node
+            break
+    assert step_7_node is not None, (
+        "could not locate `async def step_7_model_deployer` in "
+        "scripts/run_tier0_test.py — has it been renamed? Update this test."
+    )
+
+    function_source = ast.get_source_segment(source, step_7_node)
+    assert function_source is not None, (
+        "ast.get_source_segment returned None for step_7_model_deployer"
+    )
+
+    # The forbidden names. Mirrors the set checked in
+    # `test_model_deployer_input_dict_excludes_pruning_artifacts` so the
+    # two assertions stay in lockstep.
+    forbidden_names = (
+        "selected_features",  # subsumes selected_features_all by substring
+        "X_train_selected",
+        "X_val_selected",
+        "X_test_selected",
+        "removed_features",
+        "feature_importance",  # subsumes feature_importance_ranked
+    )
+    leaked = [name for name in forbidden_names if name in function_source]
+    assert leaked == [], (
+        f"`step_7_model_deployer` source now references feature_analyzer pruning "
+        f"artifacts: {leaked}. The deployer historically consumed only pre-pruning "
+        f"artifacts (fitted_preprocessor + feature_columns). If this wiring is "
+        f"intentional, you must ALSO update: (a) BentoML serving request schema "
+        f"in src/mlops/bentoml_service.py, (b) `fitted_preprocessor` refit story, "
+        f"and (c) the parity assertions in this file. See backlog #15."
+    )
+
+
 def test_model_deployer_input_dict_excludes_pruning_artifacts(
     real_pruning_state: dict[str, Any],
 ) -> None:
