@@ -654,7 +654,15 @@ def parse_nppes_api_result(payload: Mapping[str, Any], npi: str) -> NppesRecord 
     if isinstance(sole_prop_raw, bool):
         sole_prop = sole_prop_raw
     elif isinstance(sole_prop_raw, str):
-        sole_prop = sole_prop_raw.strip().upper() in {"YES", "Y", "TRUE", "1"}
+        normalized = sole_prop_raw.strip().upper()
+        if not normalized:
+            sole_prop = None  # empty / whitespace → unknown, not False
+        elif normalized in {"YES", "Y", "TRUE", "1"}:
+            sole_prop = True
+        elif normalized in {"NO", "N", "FALSE", "0"}:
+            sole_prop = False
+        else:
+            sole_prop = None  # unrecognized → unknown, not False
     else:
         sole_prop = None
 
