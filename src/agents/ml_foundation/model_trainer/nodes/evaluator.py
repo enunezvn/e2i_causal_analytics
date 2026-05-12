@@ -6,6 +6,7 @@ using real sklearn metrics with bootstrap confidence intervals.
 Version: 2.0.0
 """
 
+import copy
 import logging
 import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
@@ -1955,23 +1956,33 @@ def _compute_classification_metrics(
         random_state=bootstrap_random_state,
     )
 
-    # Backlog #37: when the rebinarisation guard at the top of this block
-    # skipped because optimal_threshold ≈ 0.5 (math.isclose), y_test_pred
-    # and y_test_pred_optimal are the same array, so the two
-    # _compute_split_classification_metrics calls above produce equivalent
-    # core metrics. The post-call enrichment (calibration_*, business_utility,
-    # baseline_test_auc, minimum_lift_over_baseline, train_val_auc_delta,
-    # net_benefit_grid, decision_curve_data, NB-area block, anchor-point block)
-    # attaches only to ``test_metrics``, which aliases test_metrics_standard
-    # when imbalance_detected=False or test_metrics_optimal when True — so the
-    # unaliased dict ends up with a strict subset of keys. Mirror the enriched
-    # dict into the other slot so both retain identical keysets, matching
-    # their documented invariant: same y_pred → identical metrics dict.
+    # Backlog #37: when the rebinarisation guard upstream (see the
+    # `not math.isclose(optimal_threshold, 0.5)` check near the top of this
+    # function) skipped, ``y_test_pred`` and ``y_test_pred_optimal`` are the
+    # same array, so the two _compute_split_classification_metrics calls
+    # above produce equivalent core metrics. The post-call enrichment
+    # (calibration_*, business_utility, baseline_test_auc,
+    # minimum_lift_over_baseline, train_val_auc_delta, net_benefit_grid,
+    # decision_curve_data, NB-area block, anchor-point block) attaches only
+    # to ``test_metrics``, which aliases ``test_metrics_standard`` when
+    # imbalance_detected=False or ``test_metrics_optimal`` when True — so
+    # the unaliased dict ends up with a strict subset of keys. Mirror the
+    # enriched dict into the other slot so both retain identical keysets,
+    # matching their documented invariant: same y_pred → identical metrics
+    # dict.
+    #
+    # Codex pass-1 MEDIUM-1: ``copy.deepcopy`` (not shallow ``dict(...)``)
+    # so nested mutable values (``net_benefit_grid``, ``decision_curve_data``)
+    # do not alias between the two output slots; without deep copy, a future
+    # caller mutating a nested value via one slot would silently corrupt the
+    # other. Note that ``test_metrics`` and one of the two slots remain
+    # bound to the same dict object by prior assignment at line ~1755 /
+    # ~1762 — that is a pre-existing identity not introduced by this fix.
     if math.isclose(optimal_threshold, 0.5):
         if imbalance_detected:
-            test_metrics_standard = dict(test_metrics_optimal)
+            test_metrics_standard = copy.deepcopy(test_metrics_optimal)
         else:
-            test_metrics_optimal = dict(test_metrics_standard)
+            test_metrics_optimal = copy.deepcopy(test_metrics_standard)
 
     # Build result dictionary
     result = {
