@@ -82,21 +82,30 @@ jobs:
 
       - name: Resolve experiment inputs
         id: inputs
+        # Semgrep yaml.github-actions.security.run-shell-injection: lift
+        # workflow_dispatch inputs into env vars and reference them as
+        # "$VAR" in the shell.
+        env:
+          INPUT_COHORT: ${{ inputs.cohort_label }}
+          INPUT_ALLOW_SNOOPED: ${{ inputs.allow_data_snooped }}
         run: |
           set -euo pipefail
-          COHORT="${{ inputs.cohort_label }}"
-          ALLOW_SNOOPED="${{ inputs.allow_data_snooped }}"
-          echo "cohort=$COHORT" >> "$GITHUB_OUTPUT"
-          echo "allow_snooped=$ALLOW_SNOOPED" >> "$GITHUB_OUTPUT"
+          echo "cohort=$INPUT_COHORT" >> "$GITHUB_OUTPUT"
+          echo "allow_snooped=$INPUT_ALLOW_SNOOPED" >> "$GITHUB_OUTPUT"
 
       - name: Run experiment harness (diagnostic)
+        # Semgrep yaml.github-actions.security.run-shell-injection: same
+        # env-block lift for steps.inputs.outputs.* values surfaced from
+        # the previous step. CI: 'true' kept on the env block.
         env:
           CI: 'true'
+          STEP_COHORT: ${{ steps.inputs.outputs.cohort }}
+          STEP_ALLOW_SNOOPED: ${{ steps.inputs.outputs.allow_snooped }}
         run: |
           set -euo pipefail
-          ARGS=(--cohort-label "${{ steps.inputs.outputs.cohort }}")
+          ARGS=(--cohort-label "$STEP_COHORT")
           ARGS+=(--manifest-out g2_diagnostic_manifest.json)
-          if [ "${{ steps.inputs.outputs.allow_snooped }}" = "true" ]; then
+          if [ "$STEP_ALLOW_SNOOPED" = "true" ]; then
             ARGS+=(--allow-data-snooped)
           fi
           python scripts/run_tier1b_b2_experiment.py "${ARGS[@]}" \
