@@ -13,7 +13,7 @@ Covers three sub-fixes in scripts/convert_optum_rwd.py and scripts/rwd_common.py
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -21,7 +21,6 @@ import pytest
 
 from scripts import rwd_common as rwdc
 from scripts.convert_optum_rwd import OptumDataConverter
-
 
 # --------------------------------------------------------------------------- #
 # Shared fixtures                                                              #
@@ -166,21 +165,44 @@ def test_build_hcp_profiles_emits_rogers_categories_not_volume_quartiles():
     c = _make_converter()
     rows = [
         # NPI_A: 5 fills, FIRST fill in 2014 (very early adopter)
-        {"npi": "NPI_A", "patid": 1, "medication_date": pd.Timestamp("2014-06-01"),
-         "Brand_Name": "XOLAIR", "Generic_Name": None, "code": None},
-        {"npi": "NPI_A", "patid": 1, "medication_date": pd.Timestamp("2015-01-01"),
-         "Brand_Name": "XOLAIR", "Generic_Name": None, "code": None},
+        {
+            "npi": "NPI_A",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2014-06-01"),
+            "Brand_Name": "XOLAIR",
+            "Generic_Name": None,
+            "code": None,
+        },
+        {
+            "npi": "NPI_A",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2015-01-01"),
+            "Brand_Name": "XOLAIR",
+            "Generic_Name": None,
+            "code": None,
+        },
         # NPI_B: 1 fill in 2024 (very late adopter)
-        {"npi": "NPI_B", "patid": 2, "medication_date": pd.Timestamp("2024-06-01"),
-         "Brand_Name": "XOLAIR", "Generic_Name": None, "code": None},
+        {
+            "npi": "NPI_B",
+            "patid": 2,
+            "medication_date": pd.Timestamp("2024-06-01"),
+            "Brand_Name": "XOLAIR",
+            "Generic_Name": None,
+            "code": None,
+        },
     ]
     _seed_for_rogers(c, rows)
     profiles = c._build_hcp_profiles(kept_patids={1, 2})
-    by_npi_obf = {p["npi"]: p for p in profiles}
     # Both HCPs are adopters; with n=2 the ranks are early_adopter, laggard.
     cats = {p["adoption_category"] for p in profiles}
-    assert cats <= {"innovator", "early_adopter", "early_majority", "late_majority",
-                    "laggard", "non_adopter"}
+    assert cats <= {
+        "innovator",
+        "early_adopter",
+        "early_majority",
+        "late_majority",
+        "laggard",
+        "non_adopter",
+    }
     # The earlier-filing HCP must NOT be classified worse than the later one.
     # We don't know the obfuscated→generated NPI mapping; identify by rx counts.
     assert len(profiles) == 2
@@ -193,8 +215,14 @@ def test_build_hcp_profiles_non_adopter_for_no_xolair_fills():
     c = _make_converter()
     rows = [
         # NPI_X: has a non-biologic prescription, NO Xolair/Dupixent fills.
-        {"npi": "NPI_X", "patid": 1, "medication_date": pd.Timestamp("2020-01-01"),
-         "Brand_Name": "ALLEGRA", "Generic_Name": None, "code": "00378"},
+        {
+            "npi": "NPI_X",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2020-01-01"),
+            "Brand_Name": "ALLEGRA",
+            "Generic_Name": None,
+            "code": "00378",
+        },
     ]
     _seed_for_rogers(c, rows)
     profiles = c._build_hcp_profiles(kept_patids={1})
@@ -210,8 +238,14 @@ def test_build_hcp_profiles_dupixent_offlabel_flag_set():
     c = _make_converter()
     rows = [
         # NPI_D: Dupixent only.
-        {"npi": "NPI_D", "patid": 1, "medication_date": pd.Timestamp("2020-01-01"),
-         "Brand_Name": "DUPIXENT", "Generic_Name": None, "code": None},
+        {
+            "npi": "NPI_D",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2020-01-01"),
+            "Brand_Name": "DUPIXENT",
+            "Generic_Name": None,
+            "code": None,
+        },
     ]
     _seed_for_rogers(c, rows)
     profiles = c._build_hcp_profiles(kept_patids={1})
@@ -226,10 +260,22 @@ def test_build_hcp_profiles_dupixent_and_xolair_classifies_via_xolair():
     flag set AND a Rogers category based on Xolair-only adoption timing."""
     c = _make_converter()
     rows = [
-        {"npi": "NPI_BOTH", "patid": 1, "medication_date": pd.Timestamp("2015-01-01"),
-         "Brand_Name": "XOLAIR", "Generic_Name": None, "code": None},
-        {"npi": "NPI_BOTH", "patid": 1, "medication_date": pd.Timestamp("2020-01-01"),
-         "Brand_Name": "DUPIXENT", "Generic_Name": None, "code": None},
+        {
+            "npi": "NPI_BOTH",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2015-01-01"),
+            "Brand_Name": "XOLAIR",
+            "Generic_Name": None,
+            "code": None,
+        },
+        {
+            "npi": "NPI_BOTH",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2020-01-01"),
+            "Brand_Name": "DUPIXENT",
+            "Generic_Name": None,
+            "code": None,
+        },
     ]
     _seed_for_rogers(c, rows)
     profiles = c._build_hcp_profiles(kept_patids={1})
@@ -276,8 +322,15 @@ def test_derive_journey_stage_returns_only_funnel_values():
     """Every output must be one of the 7 funnel values — no legacy values
     leak through the new derivation (which would defeat the purpose of
     extending the enum)."""
-    funnel = {"aware", "considering", "prescribed", "first_fill",
-              "adherent", "discontinued", "maintained"}
+    funnel = {
+        "aware",
+        "considering",
+        "prescribed",
+        "first_fill",
+        "adherent",
+        "discontinued",
+        "maintained",
+    }
     c = _make_converter()
     for cohort in ("initiation", "discontinuation", "persistence"):
         for init_t in (0, 1):
