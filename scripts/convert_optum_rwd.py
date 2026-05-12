@@ -1920,15 +1920,16 @@ class OptumDataConverter:
             {
                 "feature": "adoption_category",
                 "type": "enum{innovator,early_adopter,early_majority,late_majority,laggard,non_adopter}",
-                "source_table": "medication (Xolair on-label fills) via NPI",
+                "source_table": "medication (CSU on-label fills) via NPI",
                 "lookback_window": "all CSU biologic fills in scope",
                 "notes": (
                     "Issue #155 §1 — Rogers Diffusion of Innovations TIME-to-"
                     "first-fill (anchor: Xolair-CSU launch 2014-03-21). "
-                    "non_adopter for HCPs with no on-label fill. Dupixent "
-                    "fills excluded from curve (off-label for CSU; see "
-                    "dupixent_offlabel flag). Replaces legacy volume "
-                    "quartile classification."
+                    "non_adopter for HCPs with no on-label fill. On-label = "
+                    "Xolair on/after 2014-03-21 OR Dupixent on/after CSU "
+                    "approval 2025-04-18; pre-approval Dupixent fills are "
+                    "excluded (see dupixent_offlabel). Replaces legacy "
+                    "volume quartile classification."
                 ),
             },
             {
