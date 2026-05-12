@@ -271,17 +271,23 @@ class OptumDataConverter:
 
     @staticmethod
     def _infer_extract_ym(parquet_dir: Path) -> str | None:
-        """Search ``parquet_dir.name`` for a YYYYMM substring (199001-209912).
+        """Walk path components RIGHT-TO-LEFT, returning the first YYYYMM hit.
 
         Heuristic fallback for callers that did NOT pass ``--extract-ym``.
+        Right-to-left so the deepest (most-specific) directory wins when the
+        input layout is e.g. ``/vendor/202604/optum`` — the basename "optum"
+        contains no date but the parent "202604" does.
+
         Returns the first match or None — caller treats None as "do not
         populate source_timestamp; leave None and document in
         data_dictionary.csv".
         """
-        match = re.search(r"(19[9]\d|20\d\d)(0[1-9]|1[0-2])", parquet_dir.name)
-        if match is None:
-            return None
-        return match.group(0)
+        pattern = re.compile(r"(19[9]\d|20\d\d)(0[1-9]|1[0-2])")
+        for part in reversed(parquet_dir.parts):
+            match = pattern.search(part)
+            if match is not None:
+                return match.group(0)
+        return None
 
     def _compute_drop_timestamps(self, extract_ym: str) -> None:
         """Populate source_timestamp / ingestion_timestamp / data_lag_hours.
