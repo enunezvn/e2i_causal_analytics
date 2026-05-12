@@ -159,7 +159,9 @@ def _cross_val(
             # from genuine failure (e.g., numerical, dimension mismatch).
             if "constant-time" in str(exc):
                 rsf_constant_time_skips += 1
-                print(f"  fold {fold_idx}: RSF inapplicable (constant-time horizon)", file=sys.stderr)
+                print(
+                    f"  fold {fold_idx}: RSF inapplicable (constant-time horizon)", file=sys.stderr
+                )
             else:
                 print(f"  fold {fold_idx}: RSF fit failed: {exc}", file=sys.stderr)
             c_rsf.append(float("nan"))
@@ -323,10 +325,16 @@ def main() -> int:
     output_path.write_text(json.dumps(report, indent=2, default=str))
     print(f"\nReport written to {output_path}")
 
-    improvements = [k for k, r in report.items() if isinstance(r, dict) and r.get("verdict") == "improvement"]
+    improvements = [
+        k for k, r in report.items() if isinstance(r, dict) and r.get("verdict") == "improvement"
+    ]
     nulls = [k for k, r in report.items() if isinstance(r, dict) and r.get("verdict") == "null"]
-    regressions = [k for k, r in report.items() if isinstance(r, dict) and r.get("verdict") == "regression"]
-    print(f"\nv5 B2 contrast summary: improvements={improvements}, nulls={nulls}, regressions={regressions}")
+    regressions = [
+        k for k, r in report.items() if isinstance(r, dict) and r.get("verdict") == "regression"
+    ]
+    print(
+        f"\nv5 B2 contrast summary: improvements={improvements}, nulls={nulls}, regressions={regressions}"
+    )
     return 0
 
 
