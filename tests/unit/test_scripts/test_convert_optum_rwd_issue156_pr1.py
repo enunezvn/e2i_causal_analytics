@@ -215,6 +215,37 @@ class TestSoftEnrollmentFilter:
         with pytest.raises(ValueError, match="min_data_quality_score"):
             _converter(min_data_quality_score=1.5)
 
+    def test_strict_check_enrollment_window_requires_full_coverage(self) -> None:
+        """Codex pass-1 HIGH-1 fix: in strict (default) mode, partial
+        coverage MUST fail the enrollment-window check."""
+        conv = _converter(soft_enrollment_filter=False, enrollment_regime="research")
+        # Need: eligeff <= index - 180d AND eligend >= index + 90d
+        idx = _ts("2024-06-01")
+        # Eligibility only covers index-30d through index+10d — too narrow
+        demo_row = pd.Series({"eligeff": _ts("2024-05-01"), "eligend": _ts("2024-06-11")})
+        assert conv._check_enrollment_window(demo_row, idx) is False
+
+    def test_soft_check_enrollment_window_accepts_partial(self) -> None:
+        """Codex pass-1 HIGH-1 fix: in soft mode, partial coverage MUST
+        pass the enrollment-window check (DQS gates downstream instead)."""
+        conv = _converter(soft_enrollment_filter=True, enrollment_regime="research")
+        idx = _ts("2024-06-01")
+        # Same narrow window — soft mode accepts it
+        demo_row = pd.Series({"eligeff": _ts("2024-05-01"), "eligend": _ts("2024-06-11")})
+        assert conv._check_enrollment_window(demo_row, idx) is True
+
+    def test_soft_check_enrollment_window_rejects_null_dates(self) -> None:
+        """Soft mode still requires SOME eligibility signal; null dates fail."""
+        conv = _converter(soft_enrollment_filter=True)
+        idx = _ts("2024-06-01")
+        for elig in [
+            {"eligeff": None, "eligend": _ts("2024-12-31")},
+            {"eligeff": _ts("2024-01-01"), "eligend": None},
+            {"eligeff": None, "eligend": None},
+        ]:
+            demo_row = pd.Series(elig)
+            assert conv._check_enrollment_window(demo_row, idx) is False, elig
+
 
 # --------------------------------------------------------------------------- #
 # Item 6: payer_category 8-vocabulary                                         #

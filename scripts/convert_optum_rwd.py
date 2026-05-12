@@ -1446,6 +1446,25 @@ class OptumDataConverter:
 
         self._attrition.append((f"{cohort}: journeys constructed", len(journeys)))
 
+        # 6b. Issue #156 item 5: soft DQS filter. When soft enrollment is on,
+        # apply `min_data_quality_score` as a soft filter rather than a hard
+        # exclusion — patients below threshold are LOGGED in attrition under
+        # "soft-filtered (low DQS)" but remain in the cohort. Analysts choose
+        # whether to drop them at model-training time. When soft mode is off
+        # the legacy behavior is preserved (no DQS-based filtering at ETL).
+        if self.soft_enrollment_filter:
+            low_dqs = [
+                j
+                for j in journeys
+                if (j.get("data_quality_score") or 0.0) < self.min_data_quality_score
+            ]
+            self._attrition.append(
+                (
+                    f"{cohort}: soft-filtered (low DQS, DQS<{self.min_data_quality_score:.2f})",
+                    len(low_dqs),
+                )
+            )
+
         # 7. Chronological split
         split_result = rwdc.apply_chronological_split(
             journeys,
@@ -1647,10 +1666,27 @@ class OptumDataConverter:
     # ------------------------------------------------------------------ #
 
     def _check_enrollment_window(self, demo_row: pd.Series, index_date: pd.Timestamp) -> bool:
+        """Check whether the patient meets the enrollment-window requirement.
+
+        Strict mode (default, `soft_enrollment_filter=False`): require eligeff
+        and eligend non-null AND eligeff ≤ (index - pre_days) AND
+        eligend ≥ (index + post_days). This is the historical hard gate.
+
+        Soft mode (`soft_enrollment_filter=True`, issue #156 item 5): keep
+        partial-enrollment patients in the cohort even if their eligibility
+        window doesn't fully cover pre/post days, as long as eligeff/eligend
+        are non-null (so we at least know SOME enrollment span exists). The
+        downstream data_quality_score will reflect the partial enrollment via
+        `enroll_complete < 1.0`. Patients with null eligibility dates are
+        still dropped — we have no signal at all to score against.
+        """
         eligeff = demo_row.get("eligeff")
         eligend = demo_row.get("eligend")
         if pd.isna(eligeff) or pd.isna(eligend):
             return False
+        if self.soft_enrollment_filter:
+            # In soft mode, accept any non-null eligibility span.
+            return True
         need_start = index_date - timedelta(days=self.enrollment_pre_days)
         need_end = index_date + timedelta(days=self.enrollment_post_days)
         return bool(eligeff <= need_start and eligend >= need_end)
@@ -1870,7 +1906,22 @@ class OptumDataConverter:
             return round(sum(claim_scores) / len(claim_scores), 3)
 
         # Empty window — fall back to legacy feature-completeness fraction.
-        feat_vals = [v for k, v in feats.items() if not k.startswith("_")]
+        # Codex pass-1 LOW: exclude the new payer audit-trail fields
+        # (payer_bus_raw / payer_product_raw / payer_health_exch_raw /
+        # payer_lis_dual_raw) so an empty-window DQS does not shift solely
+        # because this PR added audit-trail columns to `feats`. The derived
+        # `payer_category` IS included because it's a true downstream
+        # feature, not an audit field. Keys starting with `_` were already
+        # excluded.
+        excluded_audit_keys = {
+            "payer_bus_raw",
+            "payer_product_raw",
+            "payer_health_exch_raw",
+            "payer_lis_dual_raw",
+        }
+        feat_vals = [
+            v for k, v in feats.items() if not k.startswith("_") and k not in excluded_audit_keys
+        ]
         non_null = sum(1 for v in feat_vals if v is not None and v != "")
         return round(non_null / max(len(feat_vals), 1), 3)
 
