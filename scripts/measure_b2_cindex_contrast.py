@@ -23,7 +23,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -60,8 +60,8 @@ def _filter_to_manifest_safe(
 def _build_scaled_pipeline():
     """Impute + StandardScaler pipeline for linear models (LR, Cox)."""
     from sklearn.impute import SimpleImputer
-    from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
 
     return Pipeline(
         [

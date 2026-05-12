@@ -20,7 +20,6 @@ from src.agents.ml_foundation.model_trainer.nodes.survival_model import (
     survival_model_node,
 )
 
-
 # === Synthetic fixtures ============================================
 
 
