@@ -318,6 +318,17 @@ celery_app.conf.beat_schedule = {
         "schedule": 86400.0,  # 24 hours
         "options": {"queue": "analytics"},
     },
+    # -------------------------------------------------------------------------
+    # NPPES NPI taxonomy cache refresh (issue #154)
+    # -------------------------------------------------------------------------
+    # Monthly refresh of the npi_taxonomy table from the CMS NPPES bulk dump.
+    # The task is a no-op stub when NPPES_BULK_DUMP_PATH is unset (e.g. in CI),
+    # so the schedule is always wired but only fires real work in production.
+    "nppes-refresh-monthly": {
+        "task": "src.tasks.refresh_npi_taxonomy_cache",
+        "schedule": 2592000.0,  # ~30 days
+        "options": {"queue": "analytics"},
+    },
 }
 
 # =============================================================================
