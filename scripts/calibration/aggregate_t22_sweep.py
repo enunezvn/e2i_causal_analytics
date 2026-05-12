@@ -71,9 +71,7 @@ def _group_by_target(rows: list[dict[str, Any]]) -> dict[float, list[dict[str, A
     return dict(sorted(groups.items()))
 
 
-def _summarize_target(
-    target_auc: float, cells: list[dict[str, Any]]
-) -> dict[str, Any]:
+def _summarize_target(target_auc: float, cells: list[dict[str, Any]]) -> dict[str, Any]:
     realized = np.asarray([c["realized_auc"] for c in cells], dtype=float)
     margins = np.asarray(
         [c["margin_p99"] for c in cells if c["margin_p99"] is not None],
@@ -183,16 +181,14 @@ def _fit_buffer(per_target: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     ≥ 0 fires on that cell).
     """
     all_eligible = [
-        t for t in per_target
-        if not t["margins_degenerate"] and t["margin_p5"] is not None
+        t for t in per_target if not t["margins_degenerate"] and t["margin_p5"] is not None
     ]
     # "Well-conditioned" = even the worst seed (P5 = min) has positive margin.
     # This is the strict reading of "the regime is producing signal the model
     # reliably exceeds noise at" — using margin_mean > 0 would admit cells where
     # the mean is positive but individual seeds still fail to beat noise.
     well_conditioned = [
-        t for t in all_eligible
-        if t["margin_p5"] is not None and t["margin_p5"] > 0
+        t for t in all_eligible if t["margin_p5"] is not None and t["margin_p5"] > 0
     ]
     return {
         "mechanical": _fit_buffer_from(all_eligible),
@@ -233,10 +229,12 @@ def _render_markdown(
     lines.append("Two readings of the §2.3 threshold-fit logic are surfaced:")
     lines.append("")
     lines.append(f"- **Mechanical** (all non-degenerate targets): {_row(mech)}")
-    lines.append(f"- **Well-conditioned** (cells where P5 margin > 0, i.e., even worst seed beats perm null): {_row(wc)}")
+    lines.append(
+        f"- **Well-conditioned** (cells where P5 margin > 0, i.e., even worst seed beats perm null): {_row(wc)}"
+    )
     lines.append("")
     lines.append("**Why two readings:** the mechanical reading enforces the spec's exact words")
-    lines.append("(\"the buffer must pass at every target point\") and clamps to 0.0 when any")
+    lines.append('("the buffer must pass at every target point") and clamps to 0.0 when any')
     lines.append("low-signal target cell has a negative P5 margin — i.e., when the regime can")
     lines.append("produce a nominal AUC the model cannot reliably exceed the perm-null p99 at.")
     lines.append("At small n (≈ 400 held-out), that floor is empirically ≈ 0.55-0.60 AUC, so any")
@@ -259,7 +257,7 @@ def _render_markdown(
             f"(`{wc['buffer_recommended']:.4f}`) — the mechanical reading clamps to 0 not because"
         )
         lines.append(
-            "the calibration says \"no buffer needed\" but because the regime spans target AUCs"
+            'the calibration says "no buffer needed" but because the regime spans target AUCs'
         )
         lines.append(
             "that are sub-noise-floor at the sweep's sample size. The mechanical 0.0 reading is"
@@ -271,9 +269,7 @@ def _render_markdown(
             "the empirically meaningful floor for the cells where the regime produces signal."
         )
     else:
-        lines.append(
-            "**Recommendation:** adopt the **mechanical** buffer (no degenerate cells)."
-        )
+        lines.append("**Recommendation:** adopt the **mechanical** buffer (no degenerate cells).")
     lines.append("")
     lines.append("## 2. Per-target summary")
     lines.append("")
@@ -307,7 +303,9 @@ def _render_markdown(
     lines.append("")
     lines.append(f"**Total cells:** {n_total_cells}")
     lines.append("")
-    lines.append("## 3. Acceptance criteria (`docs/calibration/t22_perm_anchored_synth_20260510.md` §5)")
+    lines.append(
+        "## 3. Acceptance criteria (`docs/calibration/t22_perm_anchored_synth_20260510.md` §5)"
+    )
     lines.append("")
     n_drift_flagged = sum(1 for t in per_target if t["drift_flagged"])
     n_degenerate = sum(1 for t in per_target if t["margins_degenerate"])
@@ -336,8 +334,8 @@ def _render_markdown(
     lines.append("for seed in 0 1 2 3 4; do")
     lines.append("  for auc in 0.55 0.60 0.65 0.70 0.75 0.80 0.85; do")
     lines.append("    PYTHONPATH=. python scripts/calibration/run_t22_synth_sweep.py \\")
-    lines.append("      --seed \"$seed\" --target-auc \"$auc\" \\")
-    lines.append("      --output-jsonl \"calibration_runs/t22_synth_seed${seed}_auc${auc}.jsonl\"")
+    lines.append('      --seed "$seed" --target-auc "$auc" \\')
+    lines.append('      --output-jsonl "calibration_runs/t22_synth_seed${seed}_auc${auc}.jsonl"')
     lines.append("  done")
     lines.append("done")
     lines.append("PYTHONPATH=. python scripts/calibration/aggregate_t22_sweep.py \\")
@@ -374,12 +372,14 @@ def main() -> int:
         f"(limiting target_auc={buffer_fit['well_conditioned']['limiting_target_auc']}, "
         f"clamped={buffer_fit['well_conditioned']['buffer_clamp_zero']})"
     )
-    print("per-target margin_p5: " + ", ".join(
-        f"{t['target_auc']:.2f}=" + (
-            "DEGEN" if t["margin_p5"] is None else f"{t['margin_p5']:+.4f}"
+    print(
+        "per-target margin_p5: "
+        + ", ".join(
+            f"{t['target_auc']:.2f}="
+            + ("DEGEN" if t["margin_p5"] is None else f"{t['margin_p5']:+.4f}")
+            for t in per_target
         )
-        for t in per_target
-    ))
+    )
     print(f"output: {args.output_md}")
     return 0
 
