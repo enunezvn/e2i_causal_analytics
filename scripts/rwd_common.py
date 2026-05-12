@@ -220,10 +220,7 @@ def apply_chronological_split(
             ``data_start``, ``data_end``, ``train_end``, ``validation_end``,
             ``test_end``. Missing keys where applicable.
     """
-    dated = [
-        (rec, pd.to_datetime(rec.get(date_key), errors="coerce"))
-        for rec in records
-    ]
+    dated = [(rec, pd.to_datetime(rec.get(date_key), errors="coerce")) for rec in records]
     # Split into dated vs undated
     dated_valid = [(rec, d) for rec, d in dated if pd.notna(d)]
     undated = [rec for rec, d in dated if pd.isna(d)]
@@ -287,6 +284,7 @@ def build_split_registry(
     Emits a one-element list matching the schema used across the synthetic
     and CSU converters.
     """
+
     def _iso(v: Any) -> str | None:
         if v is None or (isinstance(v, float) and np.isnan(v)):
             return None
