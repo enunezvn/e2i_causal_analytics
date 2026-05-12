@@ -147,6 +147,13 @@ class TestQuanCharlson:
         conv._inpatient_by_pat = _inpatient_fixture(["B20"])
         assert conv._charlson_quan(1, _ts("2024-01-01"), _ts("2025-12-31")) == 6
 
+    def test_c97_any_malignancy_scores_two(self) -> None:
+        """codex pass-1 HIGH-1: C97 (malignant neoplasm of multiple sites) must
+        be present in any_malignancy per Quan 2005 Table 1."""
+        conv = _converter()
+        conv._inpatient_by_pat = _inpatient_fixture(["C97"])
+        assert conv._charlson_quan(1, _ts("2024-01-01"), _ts("2025-12-31")) == 2
+
     def test_code_outside_window_not_counted(self) -> None:
         """Admission BEFORE lb_start must not contribute."""
         conv = _converter()
@@ -180,6 +187,40 @@ class TestVanWalravenElixhauser:
         conv = _converter()
         conv._inpatient_by_pat = _inpatient_fixture(["I50", "K70", "E66"])
         assert conv._elixhauser_quan(1, _ts("2024-01-01"), _ts("2025-12-31")) == 14
+
+    def test_i278_i279_chronic_pulmonary_scores_three(self) -> None:
+        """codex pass-1 HIGH-2: I27.8 / I27.9 belong in chronic_pulmonary_disease
+        per Quan 2005 Table 2. Van Walraven weight = +3.
+
+        Regression guard: Quan reclassifies I27.8/I27.9 from pulmonary_circulation
+        (weight 4) into chronic_pulmonary (weight 3). The pulmonary_circulation
+        prefix list must enumerate I270..I277 explicitly to avoid double-counting.
+        """
+        for code in ("I278", "I279"):
+            conv = _converter()
+            conv._inpatient_by_pat = _inpatient_fixture([code])
+            assert conv._elixhauser_quan(1, _ts("2024-01-01"), _ts("2025-12-31")) == 3, code
+
+    def test_i274_pulmonary_circulation_scores_four(self) -> None:
+        """Counterpart regression: I274 (sub-code of pulmonary circulation, NOT
+        moved to chronic pulmonary in Quan 2005) must still score weight 4."""
+        conv = _converter()
+        conv._inpatient_by_pat = _inpatient_fixture(["I274"])
+        assert conv._elixhauser_quan(1, _ts("2024-01-01"), _ts("2025-12-31")) == 4
+
+    def test_e12_e13_e14_diabetes_present_in_quan_mapping(self) -> None:
+        """codex pass-1 MEDIUM: E12/E13/E14 (deprecated ICD-10 diabetes prefixes)
+        must appear in QUAN_ELIXHAUSER diabetes categories per Quan 2005 Table 2.
+        Numeric score impact is 0 (van Walraven weight = 0) but mapping must be
+        faithful to the published list."""
+        uncomp = QUAN_ELIXHAUSER["diabetes_uncomplicated"]
+        comp = QUAN_ELIXHAUSER["diabetes_complicated"]
+        # Uncomplicated terminal digits 0/1/9 for E12/E13/E14
+        for prefix in ("E120", "E121", "E129", "E130", "E131", "E139", "E140", "E141", "E149"):
+            assert prefix in uncomp, f"uncomp missing {prefix}"
+        # Complicated terminal digits 2-8 for E12/E13/E14
+        for prefix in ("E122", "E123", "E124", "E125", "E126", "E127", "E128"):
+            assert prefix in comp, f"comp missing {prefix}"
 
 
 class TestComorbidityMethodFlag:

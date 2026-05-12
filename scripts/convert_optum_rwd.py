@@ -170,7 +170,7 @@ CSU_LABS_LOINC: dict[str, tuple[str, ...]] = {
 # Charlson weights: original Charlson 1, 2, 3, 6 (no Quan recalibration —      #
 # Quan 2011 weights are an alternative; we expose the classical weights for    #
 # parity with the most-cited literature).                                      #
-# Elixhauser weights: van Walraven et al. J Clin Epidemiol 2009;47(6):626-633. #
+# Elixhauser weights: van Walraven et al. Med Care 2009;47(6):626-633.         #
 # Hierarchies (e.g. metastatic supersedes any-malignancy; severe liver         #
 # supersedes mild liver) are applied at scoring time by _charlson_quan.        #
 #                                                                              #
@@ -251,7 +251,7 @@ QUAN_CHARLSON: dict[str, tuple[str, ...]] = {
         "C60", "C61", "C62", "C63", "C64", "C65", "C66", "C67", "C68", "C69",
         "C70", "C71", "C72", "C73", "C74", "C75", "C76",
         "C81", "C82", "C83", "C84", "C85",
-        "C88", "C90", "C91", "C92", "C93", "C94", "C95", "C96",
+        "C88", "C90", "C91", "C92", "C93", "C94", "C95", "C96", "C97",
     ),
     "metastatic_solid_tumor": ("C77", "C78", "C79", "C80"),
     "aids_hiv": ("B20", "B21", "B22", "B24"),
@@ -271,8 +271,12 @@ QUAN_ELIXHAUSER: dict[str, tuple[str, ...]] = {
         "I36", "I37", "I38", "I39", "Q230", "Q231", "Q232", "Q233",
         "Z952", "Z953", "Z954",
     ),
+    # Quan 2005 Table 2: I27.8 and I27.9 are reclassified into
+    # chronic_pulmonary_disease, so pulmonary_circulation_disorders enumerates
+    # the I27 sub-codes explicitly (I270..I277) plus I26 and I28 leaves.
     "pulmonary_circulation_disorders": (
-        "I26", "I27", "I280", "I288", "I289",
+        "I26", "I270", "I271", "I272", "I273", "I274", "I275", "I276", "I277",
+        "I280", "I288", "I289",
     ),
     "peripheral_vascular_disorders": (
         "I70", "I71", "I731", "I738", "I739", "I771", "I790", "I792",
@@ -292,12 +296,25 @@ QUAN_ELIXHAUSER: dict[str, tuple[str, ...]] = {
     "chronic_pulmonary_disease": (
         "J40", "J41", "J42", "J43", "J44", "J45", "J46", "J47",
         "J60", "J61", "J62", "J63", "J64", "J65", "J66", "J67",
-        "J684", "J701", "J703",
+        "J684", "J701", "J703", "I278", "I279",
     ),
-    "diabetes_uncomplicated": ("E100", "E101", "E109", "E110", "E111", "E119"),
+    # Quan 2005 Table 2 includes E10/E11/E12/E13/E14 prefixes split between
+    # uncomplicated (terminal digits 0, 1, 9) and complicated (2-8) for the
+    # Elixhauser diabetes categories. van Walraven weights for both diabetes
+    # categories are 0, but the mapping is kept faithful to the published list.
+    "diabetes_uncomplicated": (
+        "E100", "E101", "E109",
+        "E110", "E111", "E119",
+        "E120", "E121", "E129",
+        "E130", "E131", "E139",
+        "E140", "E141", "E149",
+    ),
     "diabetes_complicated": (
         "E102", "E103", "E104", "E105", "E106", "E107", "E108",
         "E112", "E113", "E114", "E115", "E116", "E117", "E118",
+        "E122", "E123", "E124", "E125", "E126", "E127", "E128",
+        "E132", "E133", "E134", "E135", "E136", "E137", "E138",
+        "E142", "E143", "E144", "E145", "E146", "E147", "E148",
     ),
     "hypothyroidism": ("E00", "E01", "E02", "E03", "E890"),
     "renal_failure": (
