@@ -799,10 +799,10 @@ def parse_nppes_api_result(payload: Mapping[str, Any], npi: str) -> NppesRecord 
     # API returns "NPI-1" / "NPI-2"; bulk dump returns "1" / "2".
     entity_type: str | None = None
     if isinstance(entity_type_raw, str):
-        if entity_type_raw.endswith("1"):
-            entity_type = "1"
-        elif entity_type_raw.endswith("2"):
-            entity_type = "2"
+        if entity_type_raw.endswith(NPPES_ENTITY_TYPE_INDIVIDUAL):
+            entity_type = NPPES_ENTITY_TYPE_INDIVIDUAL
+        elif entity_type_raw.endswith(NPPES_ENTITY_TYPE_ORGANIZATION):
+            entity_type = NPPES_ENTITY_TYPE_ORGANIZATION
 
     taxonomies_in = payload.get("taxonomies") or []
     taxonomies_out: list[NppesTaxonomy] = []
@@ -896,6 +896,46 @@ def is_valid_npi(npi: Any) -> bool:
 # Backwards-compat alias for callers that imported the private name. New
 # callers should use the public ``is_valid_npi``.
 _is_valid_npi = is_valid_npi
+
+
+# CMS-NPI Luhn standard uses a fixed "80840" prefix when computing the
+# 10th-digit check. ``generate_luhn_npi`` in this module uses *plain* Luhn
+# (no 80840 prefix), so its output is Luhn-valid in the generic sense but
+# fails the CMS-NPI variant — that asymmetry is what lets ``is_real_cms_npi``
+# distinguish a genuine 10-digit CMS NPI from a generated obfuscated one.
+# Source: NPI Final Rule (45 CFR Part 162) + CMS NPI standard FAQ.
+_NPI_LUHN_PREFIX: str = "80840"
+
+
+def is_real_cms_npi(npi: Any) -> bool:
+    """Strict CMS-NPI well-formedness check: 10 digits + Luhn-valid against
+    the CMS "80840"-prefixed Luhn variant.
+
+    Used by converters to distinguish real CMS NPIs (which pass) from
+    obfuscated keys deterministically hashed into 10-digit Luhn numbers by
+    ``generate_luhn_npi`` (which fail this stricter check because they use
+    plain Luhn without the 80840 prefix). Codex PR #165 pass-1 MEDIUM
+    surfaced that the syntactic ``is_valid_npi`` could mis-classify a
+    generated obfuscated NPI as real.
+
+    Returns False on any non-string / non-10-digit / non-Luhn input.
+    """
+    if not is_valid_npi(npi):
+        return False
+    digits_str = str(npi).strip()
+    luhn_input = _NPI_LUHN_PREFIX + digits_str[:9]
+    total = 0
+    # Walk right-to-left, doubling every second digit (positions 0, 2, 4 ...
+    # from the right). Standard Luhn.
+    for i, ch in enumerate(reversed(luhn_input)):
+        d = int(ch)
+        if i % 2 == 0:
+            doubled = d * 2
+            total += doubled - 9 if doubled > 9 else doubled
+        else:
+            total += d
+    check_expected = (10 - (total % 10)) % 10
+    return check_expected == int(digits_str[9])
 
 
 def _api_rate_limit_check() -> None:

@@ -1745,7 +1745,12 @@ class OptumDataConverter:
             # against generated_npi which would silently miss on real-NPI
             # cohorts even after a loader was registered.
             obf_str = str(obf).strip()
-            if rwdc.is_valid_npi(obf_str):
+            # Use the STRICT CMS-NPI Luhn check (80840-prefix variant) so a
+            # coincidentally-10-digit obfuscated key cannot skip the hashing
+            # path. `generate_luhn_npi` uses plain Luhn without the 80840
+            # prefix → its output reliably FAILS this check, so the two
+            # branches partition cleanly. Codex PR #165 pass-1 MEDIUM.
+            if rwdc.is_real_cms_npi(obf_str):
                 generated_npi = obf_str
                 lookup_key = obf_str
             else:
