@@ -74,7 +74,7 @@ After all 35 cells run:
 > **§2.3 fit summary.** Two readings:
 >
 > - **Mechanical** (all targets, no exclusion): `buffer_recommended = 0.0` clamped from `-0.16` raw. At small-n the regime can produce nominal target=0.55 cells whose realized AUC falls below perm-null p99 by ≈0.14; no positive buffer accommodates them. This is a regime+sample-size property, not a calibration one.
-> - **Well-conditioned** (target cells where every seed exceeds perm-null p99): `buffer_recommended = 0.04`. Limiting target=0.70 with P5 margin=+0.0597; `floor(0.06) - 0.01 safety = 0.04`.
+> - **Well-conditioned** (target cells where every seed exceeds perm-null p99): `buffer_recommended = 0.04`. Limiting target=0.70 with P5 margin=+0.0597; `floor(0.0597 * 100)/100 = 0.05 → 0.05 - 0.01 safety = 0.04`.
 >
 > Adopted: **well-conditioned 0.04**. The mechanical 0.0 reading is a tautology when low-signal cells are below the perm-null floor by construction at this sample size; the well-conditioned reading is the empirical floor for the cells where the regime produces signal that the model can reliably capture.
 

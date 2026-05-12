@@ -170,7 +170,13 @@ def main() -> int:
     args = _parse_args()
     row = run_cell(seed=args.seed, target_auc=args.target_auc)
     args.output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    with args.output_jsonl.open("a") as fh:
+    # Codex pass-1 L4: write-mode (NOT append) so re-running a cell
+    # overwrites the prior row. Append-mode would silently produce
+    # duplicate rows when a cell is re-run, which the aggregator's
+    # ``_load_rows`` then double-counts per target_auc. The per-cell
+    # output file name embeds (seed, target_auc) so collisions only
+    # happen on intentional re-runs.
+    with args.output_jsonl.open("w") as fh:
         fh.write(json.dumps(row) + "\n")
     print(json.dumps(row))
     return 0
