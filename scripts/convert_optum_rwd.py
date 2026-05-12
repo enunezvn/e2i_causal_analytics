@@ -37,7 +37,9 @@ import argparse
 import logging
 import sys
 import uuid
-from datetime import datetime, timedelta
+import calendar
+import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -210,6 +212,7 @@ class OptumDataConverter:
         max_patients: int | None = None,
         pilot_audit: bool = False,
         enrollment_regime: str = DEFAULT_ENROLLMENT_REGIME,
+        extract_ym: str | None = None,
     ) -> None:
         if enrollment_regime not in ENROLLMENT_REGIMES:
             allowed = sorted(ENROLLMENT_REGIMES.keys())
@@ -227,6 +230,24 @@ class OptumDataConverter:
         self.enrollment_post_days = ENROLLMENT_REGIMES[enrollment_regime]["post_days"]
         self.now_iso = datetime.now().isoformat()
 
+        # Issue #155 §3: source_timestamp / ingestion_timestamp / data_lag_hours.
+        # `extract_ym` (YYYYMM) is the Optum vendor's drop month — month
+        # granularity only, so we use the LAST_DAY at 23:59:59 UTC as the
+        # WORST-CASE (most conservative) source-timestamp estimate. This
+        # never UNDERSTATES lag.
+        #
+        # If `extract_ym` is not passed, attempt to infer from a YYYYMM
+        # substring in `parquet_dir.name` (e.g. "Optum_202604"). When
+        # neither input nor inference yields a YYYYMM, the source/lag
+        # fields remain None and downstream KPI views document the gap.
+        resolved_ym = extract_ym or self._infer_extract_ym(self.parquet_dir)
+        self.extract_ym: str | None = resolved_ym
+        self.source_timestamp_iso: str | None = None
+        self.ingestion_timestamp_iso: str | None = None
+        self.data_lag_hours: int | None = None
+        if resolved_ym is not None:
+            self._compute_drop_timestamps(resolved_ym)
+
         # Loaded DataFrames, indexed per patient for speed
         self.demo: pd.DataFrame = pd.DataFrame()
         self.med: pd.DataFrame = pd.DataFrame()
@@ -243,6 +264,79 @@ class OptumDataConverter:
 
         # ID maps (regenerated per cohort build so the output is self-contained)
         self._attrition: list[tuple[str, int]] = []
+
+    # ------------------------------------------------------------------ #
+    # Issue #155 §3: source_timestamp from Optum extract_ym               #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _infer_extract_ym(parquet_dir: Path) -> str | None:
+        """Search ``parquet_dir.name`` for a YYYYMM substring (199001-209912).
+
+        Heuristic fallback for callers that did NOT pass ``--extract-ym``.
+        Returns the first match or None — caller treats None as "do not
+        populate source_timestamp; leave None and document in
+        data_dictionary.csv".
+        """
+        match = re.search(r"(19[9]\d|20\d\d)(0[1-9]|1[0-2])", parquet_dir.name)
+        if match is None:
+            return None
+        return match.group(0)
+
+    def _compute_drop_timestamps(self, extract_ym: str) -> None:
+        """Populate source_timestamp / ingestion_timestamp / data_lag_hours.
+
+        Issue #155 §3 derivation:
+          - extract_ym (YYYYMM) → LAST_DAY 23:59:59 UTC. Worst-case (most
+            conservative) source-timestamp estimate — never understates lag.
+          - ingestion_timestamp = mtime of the first parquet found in
+            ``parquet_dir`` (any of {demographics, medication, procedure,
+            lab, inpatientdata, provider}).parquet. When NO parquet exists,
+            fall back to ``datetime.now()`` so the field is still populated.
+          - data_lag_hours = floor((ingestion - source).total_seconds() / 3600).
+            CAN BE NEGATIVE if the parquet predates the nominal extract month
+            (rare but possible for back-dated drops); leave the negative value
+            in place so downstream consumers detect the anomaly.
+        """
+        if len(extract_ym) != 6 or not extract_ym.isdigit():
+            logger.warning(
+                "extract_ym=%r is not YYYYMM — skipping source_timestamp population.",
+                extract_ym,
+            )
+            return
+        year = int(extract_ym[:4])
+        month = int(extract_ym[4:6])
+        if not (1 <= month <= 12):
+            logger.warning(
+                "extract_ym=%r has invalid month — skipping source_timestamp.",
+                extract_ym,
+            )
+            return
+        last_day = calendar.monthrange(year, month)[1]
+        source_ts = datetime(year, month, last_day, 23, 59, 59, tzinfo=UTC)
+
+        # Pick the first parquet that exists for ingestion_timestamp.
+        ingest_ts: datetime | None = None
+        for name in ("demographics", "medication", "procedure", "lab",
+                     "inpatientdata", "provider"):
+            p = self.parquet_dir / f"{name}.parquet"
+            if p.exists():
+                try:
+                    ingest_ts = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
+                    break
+                except OSError:
+                    continue
+        if ingest_ts is None:
+            ingest_ts = datetime.now(tz=UTC)
+            logger.info(
+                "No parquet files in %s — using current UTC time as "
+                "ingestion_timestamp fallback.",
+                self.parquet_dir,
+            )
+
+        self.source_timestamp_iso = source_ts.isoformat()
+        self.ingestion_timestamp_iso = ingest_ts.isoformat()
+        self.data_lag_hours = int((ingest_ts - source_ts).total_seconds() // 3600)
 
     # ------------------------------------------------------------------ #
     # Entry point                                                         #
@@ -1262,9 +1356,9 @@ class OptumDataConverter:
             "source_match_confidence": None,
             "source_stacking_flag": False,
             "source_combination_method": None,
-            "source_timestamp": None,
-            "ingestion_timestamp": self.now_iso,
-            "data_lag_hours": None,
+            "source_timestamp": self.source_timestamp_iso,
+            "ingestion_timestamp": self.ingestion_timestamp_iso or self.now_iso,
+            "data_lag_hours": self.data_lag_hours,
             "data_split": None,  # set by chronological splitter
             "created_at": self.now_iso,
             "updated_at": self.now_iso,
@@ -1356,8 +1450,8 @@ class OptumDataConverter:
                 "previous_treatment": None,
                 "next_treatment": None,
                 "data_source": "RWD_Claims",
-                "source_timestamp": None,
-                "ingestion_timestamp": self.now_iso,
+                "source_timestamp": self.source_timestamp_iso,
+                "ingestion_timestamp": self.ingestion_timestamp_iso or self.now_iso,
                 "data_split": None,
                 "created_at": self.now_iso,
                 "updated_at": self.now_iso,
@@ -1962,6 +2056,17 @@ def main() -> int:
             "sign-off before downstream use)."
         ),
     )
+    parser.add_argument(
+        "--extract-ym",
+        type=str,
+        default=None,
+        help=(
+            "Optum vendor drop month as YYYYMM (e.g. 202604 for April 2026). "
+            "Drives patient_journeys.source_timestamp (LAST_DAY of the month "
+            "at 23:59:59 UTC — worst-case lag estimate; never understates). "
+            "If omitted, inferred from a YYYYMM substring in --input dir name."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
 
@@ -1986,6 +2091,7 @@ def main() -> int:
         max_patients=args.max_patients,
         pilot_audit=args.pilot_audit,
         enrollment_regime=args.enrollment_regime,
+        extract_ym=args.extract_ym,
     )
 
     if args.dry_run:
