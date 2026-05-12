@@ -175,6 +175,76 @@ When the converter is extended to non-biologic chronic therapies (e.g. CSU
 antihistamine adherence, immunosuppressants), the class label is resolved
 from `NON_TARGET_DRUG_CLASSES` at scoring time.
 
+## Weighted data_quality_score (issue #156 item 4)
+
+`data_quality_score` is computed per-claim and averaged per-patient over the
+lookback window. Weights sum to 1.0:
+
+```
+claim_dqs = 0.40 * dx_complete
+          + 0.25 * proc_complete
+          + 0.20 * cost_complete
+          + 0.15 * enroll_complete
+patient_dqs = mean(claim_dqs over all claims in lookback)
+```
+
+Component rules:
+
+- `dx_complete` = 1 if any of `diag1..5` (inpatient) or `diagcode` (demographics)
+  is non-null and not `UNK`, else 0.
+- `proc_complete` = 1 if `proc_code` (CPT/HCPCS) is non-null, else 0.
+- `cost_complete` = 1 if `std_cost` is present; 0.5 if `std_cost` is null but
+  any of `charge`/`copay`/`coins`/`deduct` is present; 0 otherwise. Medical
+  claims are NOT penalized for missing `dispfee` / `avgwhlsl` (pharmacy-only).
+- `enroll_complete` = 1 if both eligibility dates are non-null AND
+  `continuous_enrollment == 1`; 0.5 if dates present but `continuous_enrollment != 1`;
+  0 if any date null.
+
+Patients with zero claims in the lookback window fall back to a feature-
+completeness fraction so they still receive a non-null DQS (cohort eligibility
+is gated elsewhere). The four payer-audit raw fields are excluded from this
+fallback to preserve pre-PR DQS values.
+
+## Soft enrollment filter (issue #156 item 5)
+
+Opt-in via `--soft-enrollment-filter` CLI flag (default off — strict-mode
+behavior preserved bit-for-bit). When enabled:
+
+- The hard `continuous_enrollment == 1` gate is bypassed.
+- `_check_enrollment_window` accepts any non-null eligibility span.
+- Partial-enrollment patients receive a lower DQS via `enroll_complete < 1.0`.
+- `--min-data-quality-score` threshold (default 0.50) is logged in
+  `attrition_report.csv` under `soft-filtered (low DQS)` — patients are NOT
+  dropped at ETL time; analysts choose the cutoff at model-training time.
+
+## payer_category 8-vocabulary (issue #156 item 6)
+
+`payer_category` extends the legacy 3-way `insurance_type` mapping with an
+8-value vocabulary derived from `(bus, product, health_exch, lis_dual)` per
+the priority rules in `scripts/rwd_common.derive_payer_category`:
+
+| Vocab | Trigger |
+|---|---|
+| `commercial_exchange` | bus=COM AND health_exch |
+| `commercial` | bus=COM |
+| `medicare_lis_dual` | bus=MCR AND lis_dual |
+| `medicare_advantage` | bus=MCR AND product∈{MA,MAPD} |
+| `medicare` | bus=MCR |
+| `medicaid` | bus=MCD |
+| `cash` | bus=CASH |
+| `other` | anything else |
+
+The four raw source fields (`payer_bus_raw`, `payer_product_raw`,
+`payer_health_exch_raw`, `payer_lis_dual_raw`) are persisted alongside the
+derived value for re-derivation without re-ETL. Legacy `insurance_type` is
+preserved for back-compat (deprecation in a future PR). Specialty-pharmacy
+sub-vocabulary is out of scope here — requires NPPES taxonomy lookup
+(tracked in #154).
+
+Schema migration: `database/migrations/036_add_payer_category.sql`
+(forward-only; CHECK constraint on the 8 values; partial index on
+`payer_category IS NOT NULL`).
+
 ## Attrition expectations
 
 Given the Optum parquet's fragmented patient panels (5,000 demographics rows,
