@@ -41,7 +41,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -1390,6 +1389,95 @@ class OptumDataConverter:
                     seq += 1
         return events
 
+    def _compute_npi_first_fill(
+        self,
+        kept_patids: set[int],
+        npi_rx: dict[str, int],
+        brand_launch: pd.Timestamp,
+    ) -> tuple[dict[str, int | None], dict[str, bool]]:
+        """Per-NPI: days-to-first on-label brand fill (vs brand_launch_date).
+
+        Issue #155 §1 — Rogers diffusion anchor. Returns:
+
+          - ``days_to_first_fill``: dict NPI → int days, or None if no on-label
+            fill (HCP becomes ``non_adopter`` in classify_rogers_adoption).
+          - ``dupixent_offlabel``: dict NPI → bool (True if HCP has any
+            Dupixent fill in scope; Dupixent has NO CSU approval as of
+            2026-05-12 so its CSU-cohort fills are off-label).
+
+        On-label = CSU biologic mask MINUS Dupixent (matched on brand-name /
+        generic-name / NDC prefix). HCPs whose only fills are off-label
+        Dupixent get ``days_to_first_fill=None`` (→ non_adopter), with the
+        off-label flag preserved separately so downstream consumers can
+        carve them out for cross-indication adoption analysis.
+        """
+        days_out: dict[str, int | None] = {npi: None for npi in npi_rx}
+        offlabel: dict[str, bool] = {npi: False for npi in npi_rx}
+
+        med = self.med
+        if (
+            med is None
+            or med.empty
+            or "patid" not in med.columns
+            or "npi" not in med.columns
+            or "medication_date" not in med.columns
+        ):
+            return days_out, offlabel
+
+        sub = med[med["patid"].isin(kept_patids)].copy()
+        if sub.empty:
+            return days_out, offlabel
+
+        bio_mask = self._csu_biologic_mask(sub)
+        sub = sub.loc[bio_mask]
+        if sub.empty:
+            return days_out, offlabel
+
+        # Dupixent off-label tag: rows matching dupixent brand OR generic OR
+        # NDC prefix. Use parallel boolean test instead of re-running the
+        # full biologic mask so we surface ONLY Dupixent (Xolair has on-label
+        # CSU approval; flagging Xolair as off-label would be wrong).
+        dupixent_mask = pd.Series(False, index=sub.index)
+        if "Brand_Name" in sub.columns:
+            b = sub["Brand_Name"].astype(str).str.upper()
+            dupixent_mask = dupixent_mask | b.str.contains("DUPIXENT", na=False)
+        if "Generic_Name" in sub.columns:
+            g = sub["Generic_Name"].astype(str).str.lower()
+            dupixent_mask = dupixent_mask | g.str.contains("dupilumab", na=False)
+        if "code" in sub.columns:
+            c = sub["code"].astype(str).str.upper()
+            # Dupixent NDC prefix per CSU_BIOLOGIC_NDC_PREFIXES is "00024" / "0024"
+            for pref in ("00024", "0024"):
+                dupixent_mask = dupixent_mask | c.str.startswith(pref)
+
+        # First on-label fill per NPI (Xolair-equivalent only).
+        onlabel = sub.loc[~dupixent_mask].copy()
+        onlabel["medication_date"] = pd.to_datetime(
+            onlabel["medication_date"], errors="coerce"
+        )
+        onlabel = onlabel.dropna(subset=["medication_date"])
+        if not onlabel.empty:
+            onlabel["npi"] = onlabel["npi"].astype(str).str.strip()
+            first_by_npi = onlabel.groupby("npi")["medication_date"].min()
+            for npi_val, first_dt in first_by_npi.items():
+                npi_key = str(npi_val)
+                if npi_key not in days_out:
+                    continue
+                delta_days = int((first_dt - brand_launch).days)
+                # Negative deltas (fill BEFORE launch — data error or
+                # off-label-prior-approval) clamp to 0 so they still get
+                # an `innovator` rank rather than skewing the curve.
+                days_out[npi_key] = max(delta_days, 0)
+
+        # Dupixent-offlabel flag — any Dupixent fill flags the HCP.
+        if dupixent_mask.any():
+            dup_npis = sub.loc[dupixent_mask, "npi"].astype(str).str.strip().unique()
+            for npi_val in dup_npis:
+                if npi_val in offlabel:
+                    offlabel[npi_val] = True
+
+        return days_out, offlabel
+
     def _build_hcp_profiles(self, kept_patids: set[int]) -> list[dict[str, Any]]:
         # Collect obfuscated NPIs from med + proc for kept patients.
         npi_rx: dict[str, int] = {}
@@ -1416,20 +1504,26 @@ class OptumDataConverter:
         if not npi_rx:
             return profiles
 
-        volumes = np.array(list(npi_rx.values()))
-        q25, q50, q75 = np.percentile(volumes, [25, 50, 75])
+        # Issue #155 §1: Rogers Diffusion of Innovations time-to-adoption.
+        # Replaces the legacy volume-quartile classification (which conflated
+        # prescribing volume with adoption timing — a high-volume HCP who
+        # started late is `late_majority`, not `innovator`).
+        #
+        # For CSU, the on-label biologic is Xolair (launched 2014-03-21).
+        # Dupixent has NO CSU approval as of 2026-05-12 — its CSU fills are
+        # OFF-LABEL and excluded from the diffusion curve (flagged separately
+        # via `dupixent_offlabel=True`).
+        xolair_launch = pd.Timestamp(rwdc.BRAND_LAUNCH_DATES["xolair"]["csu"])
+        hcp_days_to_first_fill, hcp_dupixent_offlabel = self._compute_npi_first_fill(
+            kept_patids, npi_rx, xolair_launch
+        )
+        adoption_by_npi = rwdc.classify_rogers_adoption(hcp_days_to_first_fill)
 
         for seq, obf in enumerate(sorted(npi_rx.keys())):
             rx = npi_rx[obf]
             pv = len(npi_pat[obf])
-            if rx >= q75:
-                adoption = "innovator"
-            elif rx >= q50:
-                adoption = "early_adopter"
-            elif rx >= q25:
-                adoption = "early_majority"
-            else:
-                adoption = "late_majority"
+            adoption = adoption_by_npi.get(obf, rwdc.ROGERS_NON_ADOPTER)
+            dupixent_offlabel = hcp_dupixent_offlabel.get(obf, False)
             practice = "Hospital" if pv > 100 else "Group" if pv >= 50 else "Solo"
 
             taxonomy = self._provider_by_npi.get(obf, "")
@@ -1521,6 +1615,7 @@ class OptumDataConverter:
                     "influence_network_size": None,
                     "peer_influence_score": None,
                     "adoption_category": adoption,
+                    "dupixent_offlabel": dupixent_offlabel,
                     "coverage_status": None,
                     "territory_id": None,
                     "sales_rep_id": None,
