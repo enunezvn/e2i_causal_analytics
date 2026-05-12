@@ -1734,16 +1734,24 @@ class OptumDataConverter:
             else:
                 specialty = "Other"
 
-            # Issue #154 §3: optional NPPES enrichment. Only fires when the
-            # cohort carries real (non-obfuscated) NPIs AND a cache loader
-            # is registered; for the synthetic / obfuscated Optum extract
-            # this is a no-op (lookup_npi returns None) and the eight
-            # currently-None fields stay None — that's correct behavior
-            # because there is no real provider to look up. When a
-            # real-NPI cohort lands, register the loader before this
-            # converter runs and these fields auto-populate.
-            generated_npi = rwdc.generate_luhn_npi(obf)
-            nppes_rec = rwdc.lookup_npi(generated_npi, use_api_fallback=False)
+            # Issue #154 §3: optional NPPES enrichment. Lookup uses the RAW
+            # input NPI when it's already a valid 10-digit Luhn NPI (a real
+            # cohort) so the cache is queried with the same key the loader
+            # was populated under. For obfuscated cohorts (Optum / CSU as
+            # shipped) the raw value is NOT a valid NPI; we deterministically
+            # hash it via generate_luhn_npi() to produce a Luhn-valid output
+            # NPI, but the cache lookup correctly misses (no real CMS record
+            # to find). Pre-PR-1 codex post-merge MEDIUM-2: lookup was always
+            # against generated_npi which would silently miss on real-NPI
+            # cohorts even after a loader was registered.
+            obf_str = str(obf).strip()
+            if rwdc.is_valid_npi(obf_str):
+                generated_npi = obf_str
+                lookup_key = obf_str
+            else:
+                generated_npi = rwdc.generate_luhn_npi(obf)
+                lookup_key = generated_npi
+            nppes_rec = rwdc.lookup_npi(lookup_key, use_api_fallback=False)
             sub_specialty: str | None = None
             practice_type_resolved = practice
             practice_size_resolved: str | None = None
@@ -1753,6 +1761,13 @@ class OptumDataConverter:
             zip_code_val: str | None = None
             years_experience: int | None = None
             affiliation_primary: str | None = None
+            # PII fields (first_name / last_name) are intentionally NOT
+            # populated from NppesRecord. Codex PR #162 post-merge MEDIUM-3:
+            # the documented 8-field enrichment contract does not include
+            # named provider PII, so keep them None at the cohort output
+            # boundary even when the NPPES cache has them. A future PR that
+            # explicitly opts into named-provider export must update the data
+            # dictionary + downstream consumer contracts first.
             first_name: str | None = None
             last_name: str | None = None
             if nppes_rec is not None:
@@ -1767,17 +1782,16 @@ class OptumDataConverter:
                     geographic_region = rwdc.map_zipcode_to_region(zip_code_val)
                 years_experience = nppes_rec.years_since_enumeration()
                 affiliation_primary = nppes_rec.parent_organization_legal_name
-                first_name = nppes_rec.first_name
-                last_name = nppes_rec.last_name
-                # Org-level providers (entity_type=2) → "Group" / "Hospital"
-                # already covered by `practice` heuristic; the `sole_proprietor`
-                # flag refines individual providers down to "Solo".
+                # Org-level providers (entity_type=NPPES_ENTITY_TYPE_ORGANIZATION)
+                # → "Group" / "Hospital" already covered by the `practice`
+                # heuristic; the `sole_proprietor` flag refines individual
+                # providers down to "Solo".
                 if nppes_rec.sole_proprietor is True and practice == "Group":
                     practice_type_resolved = "Solo"
                 # practice_size: bucket via sole-proprietor + entity flag
                 if nppes_rec.sole_proprietor is True:
                     practice_size_resolved = "Solo"
-                elif nppes_rec.entity_type == "2":
+                elif nppes_rec.entity_type == rwdc.NPPES_ENTITY_TYPE_ORGANIZATION:
                     practice_size_resolved = "Group"
 
             profiles.append(
