@@ -48,6 +48,55 @@ INSURANCE_TYPE_MAP: dict[str, str] = {
     "MCD": "Medicaid",
 }
 
+# --------------------------------------------------------------------------- #
+# Brand launch dates — anchor for Rogers Diffusion of Innovations time-to-     #
+# adoption analysis (issue #155 §1). days_to_first_fill = first_fill_date -    #
+# brand_launch_date; HCPs are ranked ascending by days_to_first_fill and       #
+# assigned to Rogers categories by ROGERS_CUMULATIVE_THRESHOLDS below.         #
+#                                                                              #
+# Indications mapped per-brand because the same molecule can carry different   #
+# FDA-approval dates across indications (e.g. Dupixent: atopic dermatitis      #
+# 2017-03-28, asthma 2018-10-19, CSU NOT YET APPROVED as of 2026-05-12).       #
+#                                                                              #
+# When an in-scope brand fill lacks an approved indication for the cohort      #
+# (e.g. Dupixent in the CSU cohort), flag with `dupixent_offlabel=TRUE` and    #
+# EXCLUDE from the diffusion curve — off-label fills contaminate Rogers        #
+# rankings because the population of prescribers diverges from the on-label    #
+# adoption funnel.                                                             #
+# --------------------------------------------------------------------------- #
+
+BRAND_LAUNCH_DATES: dict[str, dict[str, date]] = {
+    "xolair": {
+        "asthma": date(2003, 6, 20),
+        "csu": date(2014, 3, 21),
+    },
+    "dupixent": {
+        "atopic_dermatitis": date(2017, 3, 28),
+        "asthma": date(2018, 10, 19),
+        # csu: NOT YET APPROVED (as of 2026-05-12). Fills are off-label.
+    },
+}
+
+
+# Rogers' Diffusion of Innovations (1962, 5th ed. §1.4) cumulative-share        #
+# thresholds. Each tuple is (upper_cumulative_share, category). HCPs are sorted #
+# ascending by days_to_first_fill, then walked through these thresholds.        #
+ROGERS_CUMULATIVE_THRESHOLDS: list[tuple[float, str]] = [
+    (0.025, "innovator"),       # first 2.5%
+    (0.160, "early_adopter"),   # next 13.5% (cum 16%)
+    (0.500, "early_majority"),  # next 34.0% (cum 50%)
+    (0.840, "late_majority"),   # next 34.0% (cum 84%)
+    (1.000, "laggard"),         # last 16.0% (cum 100%)
+]
+
+
+# HCPs with NO in-scope brand fill within the observation window are not part  #
+# of the diffusion curve and must be classified separately — distinct from     #
+# `laggard` (which IS an adopter, just late). Pollutes Rogers ranking if       #
+# folded into the curve.                                                       #
+ROGERS_NON_ADOPTER: str = "non_adopter"
+
+
 # US Census region mapping (3-digit ZIP prefix ranges). Identical table as the
 # CSU converter so region assignments across converters stay consistent.
 REGION_RANGES: dict[str, list[tuple[int, int]]] = {
@@ -186,6 +235,69 @@ def safe_float(val: Any) -> float | None:
         return f
     except (ValueError, TypeError):
         return None
+
+
+# ----------------------------------------------------------------------------- #
+# Rogers Diffusion of Innovations — time-to-adoption categorization             #
+# (issue #155 §1)                                                                #
+# ----------------------------------------------------------------------------- #
+
+
+def classify_rogers_adoption(
+    hcp_days_to_first_fill: Mapping[str, Optional[int]],
+) -> dict[str, str]:
+    """Assign each HCP a Rogers adoption category from time-to-first-fill.
+
+    Pure function — no I/O. Cohort-agnostic; caller computes
+    ``days_to_first_fill = (first_fill_date - brand_launch_date).days`` per
+    HCP and passes the mapping.
+
+    Algorithm:
+      1. HCPs with ``days_to_first_fill is None`` (no in-scope brand fill in
+         the observation window) are classified as ``non_adopter`` and held
+         out of the diffusion curve — they would skew Rogers ranks.
+      2. Remaining HCPs are sorted ascending by (days_to_first_fill, NPI) —
+         NPI is the deterministic tiebreaker for ties on first-fill date.
+      3. Cumulative shares are walked through ROGERS_CUMULATIVE_THRESHOLDS;
+         the first threshold ≥ the HCP's rank-share fixes the category.
+
+    Returns:
+        Dict mapping NPI → one of {innovator, early_adopter, early_majority,
+        late_majority, laggard, non_adopter}.
+
+    Boundary semantics: with N=200 HCPs in the diffusion curve, the
+    cumulative shares of the 5th HCP is 5/200 = 0.025 → assigned
+    ``innovator`` (boundary inclusive). The 32nd HCP is 32/200 = 0.160 →
+    assigned ``early_adopter``. The 100th HCP is 100/200 = 0.500 →
+    ``early_majority``. The 168th HCP is 168/200 = 0.840 →
+    ``late_majority``. The 200th HCP is 1.000 → ``laggard``.
+    """
+    out: dict[str, str] = {}
+    adopters: list[tuple[int, str]] = []
+    for npi, days in hcp_days_to_first_fill.items():
+        if days is None:
+            out[npi] = ROGERS_NON_ADOPTER
+        else:
+            adopters.append((int(days), str(npi)))
+
+    n = len(adopters)
+    if n == 0:
+        return out
+
+    # Sort by (days_to_first_fill ASCENDING, npi ASCENDING) — npi is the
+    # deterministic tiebreaker so the boundary classification is stable
+    # across runs and across orderings of the input mapping.
+    adopters.sort()
+
+    for idx, (_days, npi) in enumerate(adopters, start=1):
+        share = idx / n
+        category = ROGERS_CUMULATIVE_THRESHOLDS[-1][1]  # default to last (laggard)
+        for upper, name in ROGERS_CUMULATIVE_THRESHOLDS:
+            if share <= upper:
+                category = name
+                break
+        out[npi] = category
+    return out
 
 
 # ----------------------------------------------------------------------------- #
