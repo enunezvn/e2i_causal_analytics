@@ -218,8 +218,15 @@ class TestVanWalravenElixhauser:
         # Uncomplicated terminal digits 0/1/9 for E12/E13/E14
         for prefix in ("E120", "E121", "E129", "E130", "E131", "E139", "E140", "E141", "E149"):
             assert prefix in uncomp, f"uncomp missing {prefix}"
-        # Complicated terminal digits 2-8 for E12/E13/E14
-        for prefix in ("E122", "E123", "E124", "E125", "E126", "E127", "E128"):
+        # Complicated terminal digits 2-8 for E12/E13/E14 — codex pass-2
+        # LOW: previously only E12x was asserted. Tighten to also enforce
+        # E13x and E14x complicated buckets so a regression dropping either
+        # is caught.
+        for prefix in (
+            "E122", "E123", "E124", "E125", "E126", "E127", "E128",
+            "E132", "E133", "E134", "E135", "E136", "E137", "E138",
+            "E142", "E143", "E144", "E145", "E146", "E147", "E148",
+        ):
             assert prefix in comp, f"comp missing {prefix}"
 
 
