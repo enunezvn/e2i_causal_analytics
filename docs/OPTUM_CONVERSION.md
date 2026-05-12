@@ -149,13 +149,31 @@ complete, self-documenting list with source-table provenance and null rates.
 |------|---------------|-----|
 | `age_at_index` | Integer age from `demographics.age` (not exact DOB) | Optum provides `age`/`birth_yr` only |
 | `urban_rural_code` | Minimal zip3→{urban,suburban} crosswalk | A full RUCA crosswalk requires a separate reference table — TODO |
-| `elixhauser_score`, `charlson_score` | Minimal chapter / high-severity category proxies in lookback | Full scoring algorithms are a separate dependency; approximations are flagged in the data dictionary |
+| `elixhauser_score`, `charlson_score` | Default path uses Quan (2005) ICD-10 mappings with Charlson weights (1/2/3/6) and van Walraven (2009) Elixhauser weights. Legacy approximations retained behind `comorbidity_method="approx"` for parity testing. See issue #156 item 3. | Validated mappings replace prior chapter-count / high-severity proxies as of v4.2+. |
 | Non-inpatient dx codes | Demographics single `diagcode` used as a proxy for baseline condition presence | Optum parquet has no claim-level dx outside inpatient diag1..5 |
 | `source_timestamp` (issue #155 §3) | LAST_DAY of `extract_ym` month at 23:59:59 UTC | Optum vendor drops carry month granularity only; using LAST_DAY is the worst-case estimate and NEVER understates lag. Off by up to 30 days. |
 | `adoption_category` Dupixent-CSU (issue #155 §1) | Dupixent CSU fills BEFORE 2025-04-18 flagged `dupixent_offlabel=TRUE` and EXCLUDED from Rogers diffusion curve; fills on/after are on-label and counted in the unified CSU curve (anchored at Xolair launch 2014-03-21) | FDA approved Dupixent for CSU (adults + adolescents ≥12y) on 2025-04-18 (Sanofi press release; FDA label 761055s070). Pre-approval fills would skew Rogers ranks; post-approval fills are valid on-label adoption. |
 | `journey_stage` (issue #155 §2) | `prescribed` value NOT emitted from Optum converter | Optum claims are dispensed-only; no Rx-written signal. Reserved for cohorts with EHR Rx streams. |
 
 These are documented per-feature in `data_dictionary.csv`.
+
+## Drug-class-aware gap thresholds (issue #156 item 7)
+
+Discontinuation and persistence detection use class-specific gap thresholds
+via the `GAP_THRESHOLDS` dict in `scripts/convert_optum_rwd.py`. CSU biologics
+(Xolair/Dupixent) use the historical `biologic` entry (90-day discontinuation,
+60-day persistence) — behavior is bit-for-bit unchanged for the CSU cohort.
+
+| Class | Discontinuation (days) | Persistence (days) |
+|-------|------------------------|--------------------|
+| `biologic` | 90 | 60 |
+| `oral_chronic` | 60 | 30 |
+| `specialty_injectable` | 90 | 60 |
+| `default` | 60 | 30 |
+
+When the converter is extended to non-biologic chronic therapies (e.g. CSU
+antihistamine adherence, immunosuppressants), the class label is resolved
+from `NON_TARGET_DRUG_CLASSES` at scoring time.
 
 ## Attrition expectations
 

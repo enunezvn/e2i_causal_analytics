@@ -91,6 +91,36 @@ WASHOUT_DAYS = 30
 BIOLOGIC_DISCONT_GAP_DAYS = 90
 BIOLOGIC_PERSISTENCE_GAP_DAYS = 60
 
+# Drug-class-aware gap thresholds for discontinuation/persistence detection.
+# Keys correspond to drug class labels. CSU biologics (Xolair / Dupixent) use
+# the "biologic" entry, which preserves the historical 90/60 day defaults
+# bit-for-bit (see backward-compat tests in test_convert_optum_rwd.py).
+#
+# Resolution: `_resolve_gap_thresholds(drug_class)` maps a class label to its
+# (discontinuation, persistence) days. Class labels for non-target therapies
+# come from NON_TARGET_DRUG_CLASSES below; biologics are tagged "biologic" by
+# `_csu_biologic_mask`. Unknown classes fall back to "default".
+#
+# Documented in docs/OPTUM_CONVERSION.md.
+GAP_THRESHOLDS: dict[str, dict[str, int]] = {
+    "biologic": {
+        "discontinuation": BIOLOGIC_DISCONT_GAP_DAYS,
+        "persistence": BIOLOGIC_PERSISTENCE_GAP_DAYS,
+    },
+    "oral_chronic": {"discontinuation": 60, "persistence": 30},
+    "specialty_injectable": {"discontinuation": 90, "persistence": 60},
+    "default": {"discontinuation": 60, "persistence": 30},
+}
+
+
+def _resolve_gap_thresholds(drug_class: str) -> tuple[int, int]:
+    """Resolve (discontinuation_gap_days, persistence_gap_days) for a class.
+
+    Returns the "default" entry for any unknown class label.
+    """
+    entry = GAP_THRESHOLDS.get(drug_class, GAP_THRESHOLDS["default"])
+    return entry["discontinuation"], entry["persistence"]
+
 # Qualifying CSU diagnosis codes. Optum codes are stored without the dot
 # (``L509``), so we match on the de-dotted prefix set.
 CSU_DX_PREFIXES = ("L501", "L508", "L509")
@@ -132,6 +162,221 @@ CSU_LABS_LOINC: dict[str, tuple[str, ...]] = {
     "tsh": ("3016-3",),
     "ana": ("14741-9",),
     "cbc": ("26453-1",),
+}
+
+# --------------------------------------------------------------------------- #
+# Comorbidity scoring — Quan (2005) ICD-10 mappings for Charlson + Elixhauser  #
+# Reference: Quan H et al. Med Care 2005;43(11):1130-1139.                     #
+# Charlson weights: original Charlson 1, 2, 3, 6 (no Quan recalibration —      #
+# Quan 2011 weights are an alternative; we expose the classical weights for    #
+# parity with the most-cited literature).                                      #
+# Elixhauser weights: van Walraven et al. J Clin Epidemiol 2009;47(6):626-633. #
+# Hierarchies (e.g. metastatic supersedes any-malignancy; severe liver         #
+# supersedes mild liver) are applied at scoring time by _charlson_quan.        #
+#                                                                              #
+# Codes are stored UPPER-CASE and de-dotted (Optum convention). All prefixes   #
+# here are de-dotted ICD-10-CM.                                                #
+# --------------------------------------------------------------------------- #
+
+# Default comorbidity method. "quan" enables _charlson_quan/_elixhauser_quan;
+# "approx" preserves the legacy approximation used pre-issue-#156 for a clean
+# parity test in CI. Override via OptumDataConverter(comorbidity_method=...).
+COMORBIDITY_METHOD_DEFAULT = "quan"
+COMORBIDITY_METHODS_ALLOWED = ("quan", "approx")
+
+QUAN_CHARLSON: dict[str, tuple[str, ...]] = {
+    "myocardial_infarction": ("I21", "I22", "I252"),
+    "congestive_heart_failure": (
+        "I43", "I50", "I099", "I110", "I130", "I132", "I255", "I420",
+        "I425", "I426", "I427", "I428", "I429", "P290",
+    ),
+    "peripheral_vascular_disease": (
+        "I70", "I71", "I731", "I738", "I739", "I771", "I790", "I792",
+        "K551", "K558", "K559", "Z958", "Z959",
+    ),
+    "cerebrovascular_disease": (
+        "G45", "G46", "I60", "I61", "I62", "I63", "I64", "I65", "I66",
+        "I67", "I68", "I69", "H340",
+    ),
+    "dementia": ("F00", "F01", "F02", "F03", "G30", "F051", "G311"),
+    "chronic_pulmonary_disease": (
+        "J40", "J41", "J42", "J43", "J44", "J45", "J46", "J47",
+        "J60", "J61", "J62", "J63", "J64", "J65", "J66", "J67",
+        "J684", "J701", "J703", "I278", "I279",
+    ),
+    "rheumatic_disease": (
+        "M05", "M06", "M32", "M33", "M34", "M315", "M351", "M353", "M360",
+    ),
+    "peptic_ulcer_disease": ("K25", "K26", "K27", "K28"),
+    "mild_liver_disease": (
+        "B18", "K73", "K74", "K700", "K701", "K702", "K703", "K709",
+        "K717", "K713", "K714", "K715", "K760", "K762", "K763", "K764",
+        "K768", "K769", "Z944",
+    ),
+    "severe_liver_disease": (
+        "I850", "I859", "I864", "I982", "K704", "K711", "K721", "K729",
+        "K765", "K766", "K767",
+    ),
+    "diabetes_no_complications": (
+        "E100", "E101", "E106", "E108", "E109",
+        "E110", "E111", "E116", "E118", "E119",
+        "E120", "E121", "E126", "E128", "E129",
+        "E130", "E131", "E136", "E138", "E139",
+        "E140", "E141", "E146", "E148", "E149",
+    ),
+    "diabetes_complications": (
+        "E102", "E103", "E104", "E105", "E107",
+        "E112", "E113", "E114", "E115", "E117",
+        "E122", "E123", "E124", "E125", "E127",
+        "E132", "E133", "E134", "E135", "E137",
+        "E142", "E143", "E144", "E145", "E147",
+    ),
+    "hemiplegia_paraplegia": (
+        "G81", "G82", "G041", "G114", "G801", "G802", "G830", "G831",
+        "G832", "G833", "G834", "G839",
+    ),
+    "renal_disease": (
+        "N18", "N19", "N052", "N053", "N054", "N055", "N056", "N057",
+        "N250", "I120", "I131", "N032", "N033", "N034", "N035", "N036",
+        "N037", "Z490", "Z491", "Z492", "Z940", "Z992",
+    ),
+    "any_malignancy": (
+        "C00", "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08", "C09",
+        "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19",
+        "C20", "C21", "C22", "C23", "C24", "C25", "C26",
+        "C30", "C31", "C32", "C33", "C34",
+        "C37", "C38", "C39", "C40", "C41", "C43",
+        "C45", "C46", "C47", "C48", "C49",
+        "C50", "C51", "C52", "C53", "C54", "C55", "C56", "C57", "C58",
+        "C60", "C61", "C62", "C63", "C64", "C65", "C66", "C67", "C68", "C69",
+        "C70", "C71", "C72", "C73", "C74", "C75", "C76",
+        "C81", "C82", "C83", "C84", "C85",
+        "C88", "C90", "C91", "C92", "C93", "C94", "C95", "C96",
+    ),
+    "metastatic_solid_tumor": ("C77", "C78", "C79", "C80"),
+    "aids_hiv": ("B20", "B21", "B22", "B24"),
+}
+
+QUAN_ELIXHAUSER: dict[str, tuple[str, ...]] = {
+    "congestive_heart_failure": (
+        "I43", "I50", "I099", "I110", "I130", "I132", "I255", "I420",
+        "I425", "I426", "I427", "I428", "I429", "P290",
+    ),
+    "cardiac_arrhythmias": (
+        "I441", "I442", "I443", "I456", "I459", "I47", "I48", "I49",
+        "R000", "R001", "R008", "T821", "Z450", "Z950",
+    ),
+    "valvular_disease": (
+        "A520", "I05", "I06", "I07", "I08", "I091", "I098", "I34", "I35",
+        "I36", "I37", "I38", "I39", "Q230", "Q231", "Q232", "Q233",
+        "Z952", "Z953", "Z954",
+    ),
+    "pulmonary_circulation_disorders": (
+        "I26", "I27", "I280", "I288", "I289",
+    ),
+    "peripheral_vascular_disorders": (
+        "I70", "I71", "I731", "I738", "I739", "I771", "I790", "I792",
+        "K551", "K558", "K559", "Z958", "Z959",
+    ),
+    "hypertension_uncomplicated": ("I10",),
+    "hypertension_complicated": ("I11", "I12", "I13", "I15"),
+    "paralysis": (
+        "G041", "G114", "G801", "G802", "G81", "G82", "G830", "G831",
+        "G832", "G833", "G834", "G839",
+    ),
+    "other_neurological_disorders": (
+        "G10", "G11", "G12", "G13", "G20", "G21", "G22", "G254", "G255",
+        "G312", "G318", "G319", "G32", "G35", "G36", "G37", "G40", "G41",
+        "G931", "G934", "R470", "R56",
+    ),
+    "chronic_pulmonary_disease": (
+        "J40", "J41", "J42", "J43", "J44", "J45", "J46", "J47",
+        "J60", "J61", "J62", "J63", "J64", "J65", "J66", "J67",
+        "J684", "J701", "J703",
+    ),
+    "diabetes_uncomplicated": ("E100", "E101", "E109", "E110", "E111", "E119"),
+    "diabetes_complicated": (
+        "E102", "E103", "E104", "E105", "E106", "E107", "E108",
+        "E112", "E113", "E114", "E115", "E116", "E117", "E118",
+    ),
+    "hypothyroidism": ("E00", "E01", "E02", "E03", "E890"),
+    "renal_failure": (
+        "I120", "I131", "N18", "N19", "N250", "Z490", "Z491", "Z492",
+        "Z940", "Z992",
+    ),
+    "liver_disease": (
+        "B18", "I85", "I864", "I982", "K70", "K711", "K713", "K714",
+        "K715", "K717", "K72", "K73", "K74", "K760", "K762", "K763",
+        "K764", "K765", "K766", "K767", "K768", "K769", "Z944",
+    ),
+    "peptic_ulcer_disease_excluding_bleeding": ("K257", "K259", "K267", "K269", "K277", "K279", "K287", "K289"),
+    "aids_hiv": ("B20", "B21", "B22", "B24"),
+    "lymphoma": ("C81", "C82", "C83", "C84", "C85", "C88", "C96", "C900", "C902"),
+    "metastatic_cancer": ("C77", "C78", "C79", "C80"),
+    "solid_tumor_without_metastasis": (
+        "C00", "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08", "C09",
+        "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19",
+        "C20", "C21", "C22", "C23", "C24", "C25", "C26",
+        "C30", "C31", "C32", "C33", "C34",
+        "C37", "C38", "C39", "C40", "C41", "C43", "C45", "C46", "C47", "C48",
+        "C49", "C50", "C51", "C52", "C53", "C54", "C55", "C56", "C57", "C58",
+        "C60", "C61", "C62", "C63", "C64", "C65", "C66", "C67", "C68", "C69",
+        "C70", "C71", "C72", "C73", "C74", "C75", "C76",
+        "C97",
+    ),
+    "rheumatoid_arthritis_collagen_vascular": (
+        "L940", "L941", "L943", "M05", "M06", "M08", "M120", "M123",
+        "M30", "M310", "M311", "M312", "M313", "M32", "M33", "M34",
+        "M35", "M45", "M461", "M468", "M469",
+    ),
+    "coagulopathy": (
+        "D65", "D66", "D67", "D68", "D691", "D693", "D694", "D695", "D696",
+    ),
+    "obesity": ("E66",),
+    "weight_loss": ("E40", "E41", "E42", "E43", "E44", "E45", "E46", "R634", "R64"),
+    "fluid_electrolyte_disorders": ("E222", "E86", "E87"),
+    "blood_loss_anemia": ("D500",),
+    "deficiency_anemia": ("D508", "D509", "D51", "D52", "D53"),
+    "alcohol_abuse": ("F10", "E52", "G621", "I426", "K292", "K700", "K703", "K709", "T51", "Z502", "Z714", "Z721"),
+    "drug_abuse": ("F11", "F12", "F13", "F14", "F15", "F16", "F18", "F19", "Z715", "Z722"),
+    "psychoses": ("F20", "F22", "F23", "F24", "F25", "F28", "F29", "F302", "F312", "F315"),
+    "depression": ("F204", "F313", "F314", "F315", "F32", "F33", "F341", "F412", "F432"),
+}
+
+# van Walraven et al. (2009) integer point system for Elixhauser categories.
+# Negative weights are protective in the published model.
+VAN_WALRAVEN_WEIGHTS: dict[str, int] = {
+    "congestive_heart_failure": 7,
+    "cardiac_arrhythmias": 5,
+    "valvular_disease": -1,
+    "pulmonary_circulation_disorders": 4,
+    "peripheral_vascular_disorders": 2,
+    "hypertension_uncomplicated": 0,
+    "hypertension_complicated": 0,
+    "paralysis": 7,
+    "other_neurological_disorders": 6,
+    "chronic_pulmonary_disease": 3,
+    "diabetes_uncomplicated": 0,
+    "diabetes_complicated": 0,
+    "hypothyroidism": 0,
+    "renal_failure": 5,
+    "liver_disease": 11,
+    "peptic_ulcer_disease_excluding_bleeding": 0,
+    "aids_hiv": 0,
+    "lymphoma": 9,
+    "metastatic_cancer": 12,
+    "solid_tumor_without_metastasis": 4,
+    "rheumatoid_arthritis_collagen_vascular": 0,
+    "coagulopathy": 3,
+    "obesity": -4,
+    "weight_loss": 6,
+    "fluid_electrolyte_disorders": 5,
+    "blood_loss_anemia": -2,
+    "deficiency_anemia": -2,
+    "alcohol_abuse": 0,
+    "drug_abuse": -7,
+    "psychoses": 0,
+    "depression": -3,
 }
 
 NON_TARGET_DRUG_CLASSES: dict[str, tuple[str, ...]] = {
@@ -213,6 +458,7 @@ class OptumDataConverter:
         pilot_audit: bool = False,
         enrollment_regime: str = DEFAULT_ENROLLMENT_REGIME,
         extract_ym: str | None = None,
+        comorbidity_method: str = COMORBIDITY_METHOD_DEFAULT,
     ) -> None:
         if enrollment_regime not in ENROLLMENT_REGIMES:
             allowed = sorted(ENROLLMENT_REGIMES.keys())
@@ -220,12 +466,18 @@ class OptumDataConverter:
                 f"enrollment_regime={enrollment_regime!r} not in {allowed}; "
                 f"plan v3 §3 Tier 1A defines exactly two regimes."
             )
+        if comorbidity_method not in COMORBIDITY_METHODS_ALLOWED:
+            raise ValueError(
+                f"comorbidity_method={comorbidity_method!r} not in "
+                f"{COMORBIDITY_METHODS_ALLOWED}; issue #156 item 3."
+            )
         self.parquet_dir = Path(parquet_dir)
         self.output_dir = Path(output_dir)
         self.cohorts = cohorts
         self.max_patients = max_patients
         self.pilot_audit = pilot_audit
         self.enrollment_regime = enrollment_regime
+        self.comorbidity_method = comorbidity_method
         self.enrollment_pre_days = ENROLLMENT_REGIMES[enrollment_regime]["pre_days"]
         self.enrollment_post_days = ENROLLMENT_REGIMES[enrollment_regime]["post_days"]
         self.now_iso = datetime.now().isoformat()
@@ -939,8 +1191,12 @@ class OptumDataConverter:
         feats["mental_health_flag"] = int(
             feats.get("has_anxiety", 0) or feats.get("has_depression", 0)
         )
-        feats["elixhauser_score"] = self._elixhauser_approx(patid, lb_start, lb_end)
-        feats["charlson_score"] = self._charlson_approx(patid, lb_start, lb_end)
+        if self.comorbidity_method == "quan":
+            feats["elixhauser_score"] = self._elixhauser_quan(patid, lb_start, lb_end)
+            feats["charlson_score"] = self._charlson_quan(patid, lb_start, lb_end)
+        else:
+            feats["elixhauser_score"] = self._elixhauser_approx(patid, lb_start, lb_end)
+            feats["charlson_score"] = self._charlson_approx(patid, lb_start, lb_end)
 
         # 7.4 Healthcare utilization (lookback)
         office_total, office_allergist, office_derm, office_pcp = (0, 0, 0, 0)
@@ -1094,26 +1350,42 @@ class OptumDataConverter:
                 has_cond = True
         return has_cond, n_claims
 
-    def _elixhauser_approx(self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp) -> int:
-        """Minimal Elixhauser proxy: count of distinct ICD-10 chapters in lookback."""
+    def _collect_icd_codes_in_window(
+        self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp
+    ) -> list[str]:
+        """Collect upper-cased ICD-10 codes from inpatient claims in the window.
+
+        Empty when no inpatient table or no in-window claims. Returns a flat
+        list of code strings (de-dotted at source by the Optum extracts).
+        """
         ip = self._inpatient_by_pat.get(patid)
         if ip is None:
-            return 0
+            return []
         ip_w = ip[(ip["admit_date"] >= lb_start) & (ip["admit_date"] <= lb_end)]
-        chapters: set[str] = set()
+        codes: list[str] = []
         for c in ("diag1", "diag2", "diag3", "diag4", "diag5"):
             if c in ip_w.columns:
-                codes = ip_w[c].dropna().astype(str).str.upper()
-                for code in codes:
-                    if len(code) >= 1:
-                        chapters.add(code[0])
+                codes.extend(ip_w[c].dropna().astype(str).str.upper().tolist())
+        return codes
+
+    def _elixhauser_approx(self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp) -> int:
+        """Minimal Elixhauser proxy: count of distinct ICD-10 chapters in lookback.
+
+        Retained for backwards compatibility under COMORBIDITY_METHOD == "approx".
+        The "quan" path is the validated Elixhauser/van Walraven score via
+        `_elixhauser_quan`. See issue #156 item 3.
+        """
+        codes = self._collect_icd_codes_in_window(patid, lb_start, lb_end)
+        chapters: set[str] = {code[0] for code in codes if code}
         return len(chapters)
 
     def _charlson_approx(self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp) -> int:
-        """Minimal Charlson proxy: distinct high-severity categories present."""
-        ip = self._inpatient_by_pat.get(patid)
-        if ip is None:
-            return 0
+        """Minimal Charlson proxy: distinct high-severity categories present.
+
+        Retained for backwards compatibility under COMORBIDITY_METHOD == "approx".
+        The "quan" path is the validated Quan-Charlson weighted index via
+        `_charlson_quan`. See issue #156 item 3.
+        """
         cats = {
             "mi": ("I21", "I22", "I252"),
             "chf": ("I099", "I110", "I130", "I132", "I255", "I420", "I425"),
@@ -1121,15 +1393,95 @@ class OptumDataConverter:
             "diabetes": ("E10", "E11", "E12", "E13", "E14"),
             "renal": ("N18", "N19"),
         }
-        ip_w = ip[(ip["admit_date"] >= lb_start) & (ip["admit_date"] <= lb_end)]
+        codes = self._collect_icd_codes_in_window(patid, lb_start, lb_end)
+        if not codes:
+            return 0
+        codes_upper = pd.Series(codes, dtype=object)
         present: set[str] = set()
-        for c in ("diag1", "diag2", "diag3", "diag4", "diag5"):
-            if c in ip_w.columns:
-                codes = ip_w[c].dropna().astype(str).str.upper()
-                for cat_name, prefixes in cats.items():
-                    if codes.str.startswith(prefixes).any():
-                        present.add(cat_name)
+        for cat_name, prefixes in cats.items():
+            if codes_upper.str.startswith(prefixes).any():
+                present.add(cat_name)
         return len(present)
+
+    def _charlson_quan(self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp) -> int:
+        """Quan et al. (2005) Charlson Comorbidity Index over inpatient claims.
+
+        Implements the 17-category ICD-10 mapping from Quan 2005 Med Care
+        43(11):1130-1139 with the original Charlson weights (1, 2, 3, 6).
+        Hierarchies are applied: severe liver disease supersedes mild liver
+        disease; metastatic solid tumor supersedes any malignancy; diabetes
+        with complications supersedes diabetes without complications. The
+        returned score is the sum of weights of distinct categories present.
+        """
+        codes = self._collect_icd_codes_in_window(patid, lb_start, lb_end)
+        if not codes:
+            return 0
+        codes_s = pd.Series(codes, dtype=object)
+
+        def _any(prefixes: tuple[str, ...]) -> bool:
+            return bool(codes_s.str.startswith(prefixes).any())
+
+        present: dict[str, int] = {}
+        # Weight 1
+        if _any(QUAN_CHARLSON["myocardial_infarction"]):
+            present["myocardial_infarction"] = 1
+        if _any(QUAN_CHARLSON["congestive_heart_failure"]):
+            present["congestive_heart_failure"] = 1
+        if _any(QUAN_CHARLSON["peripheral_vascular_disease"]):
+            present["peripheral_vascular_disease"] = 1
+        if _any(QUAN_CHARLSON["cerebrovascular_disease"]):
+            present["cerebrovascular_disease"] = 1
+        if _any(QUAN_CHARLSON["dementia"]):
+            present["dementia"] = 1
+        if _any(QUAN_CHARLSON["chronic_pulmonary_disease"]):
+            present["chronic_pulmonary_disease"] = 1
+        if _any(QUAN_CHARLSON["rheumatic_disease"]):
+            present["rheumatic_disease"] = 1
+        if _any(QUAN_CHARLSON["peptic_ulcer_disease"]):
+            present["peptic_ulcer_disease"] = 1
+        # Liver hierarchy (mild vs severe)
+        severe_liver = _any(QUAN_CHARLSON["severe_liver_disease"])
+        if severe_liver:
+            present["severe_liver_disease"] = 3
+        elif _any(QUAN_CHARLSON["mild_liver_disease"]):
+            present["mild_liver_disease"] = 1
+        # Diabetes hierarchy (with-complications supersedes without)
+        diab_compl = _any(QUAN_CHARLSON["diabetes_complications"])
+        if diab_compl:
+            present["diabetes_complications"] = 2
+        elif _any(QUAN_CHARLSON["diabetes_no_complications"]):
+            present["diabetes_no_complications"] = 1
+        if _any(QUAN_CHARLSON["hemiplegia_paraplegia"]):
+            present["hemiplegia_paraplegia"] = 2
+        if _any(QUAN_CHARLSON["renal_disease"]):
+            present["renal_disease"] = 2
+        # Cancer hierarchy (metastatic supersedes any-malignancy)
+        metastatic = _any(QUAN_CHARLSON["metastatic_solid_tumor"])
+        if metastatic:
+            present["metastatic_solid_tumor"] = 6
+        elif _any(QUAN_CHARLSON["any_malignancy"]):
+            present["any_malignancy"] = 2
+        if _any(QUAN_CHARLSON["aids_hiv"]):
+            present["aids_hiv"] = 6
+
+        return int(sum(present.values()))
+
+    def _elixhauser_quan(self, patid: int, lb_start: pd.Timestamp, lb_end: pd.Timestamp) -> int:
+        """Elixhauser index via Quan (2005) ICD-10 + van Walraven (2009) weights.
+
+        Returns the van Walraven weighted summary score (can be negative for
+        protective categories such as alcohol abuse in some derivations; here
+        we use the published positive/negative weights as-is).
+        """
+        codes = self._collect_icd_codes_in_window(patid, lb_start, lb_end)
+        if not codes:
+            return 0
+        codes_s = pd.Series(codes, dtype=object)
+        score = 0
+        for category, prefixes in QUAN_ELIXHAUSER.items():
+            if bool(codes_s.str.startswith(prefixes).any()):
+                score += VAN_WALRAVEN_WEIGHTS.get(category, 0)
+        return int(score)
 
     def _drug_class_features(
         self,
@@ -1186,7 +1538,12 @@ class OptumDataConverter:
         return int(in_window.any())
 
     def _target_discontinued_180d(self, patid: int, init_date: pd.Timestamp) -> int:
-        """Gap > 90 days between (fill_end) and next fill within 180 days of init."""
+        """Gap > class-specific threshold between (fill_end) and next fill within 180 days.
+
+        For CSU biologics (Xolair/Dupixent) this is the historical 90-day threshold
+        via GAP_THRESHOLDS["biologic"]; behavior is bit-for-bit unchanged.
+        """
+        discont_gap, _ = _resolve_gap_thresholds("biologic")
         end = init_date + timedelta(days=PREDICTION_DAYS)
         grp = self._med_by_pat.get(patid)
         if grp is None:
@@ -1201,16 +1558,21 @@ class OptumDataConverter:
             ds = rwdc.safe_int(bio.iloc[i].get("days_sup")) or 0
             fill_end = fill_date + timedelta(days=ds)
             next_fill = bio.iloc[i + 1]["medication_date"]
-            if (next_fill - fill_end).days > BIOLOGIC_DISCONT_GAP_DAYS:
+            if (next_fill - fill_end).days > discont_gap:
                 return 1
         # Last fill end extends past prediction end? → persistent
         last = bio.iloc[-1]
         ds = rwdc.safe_int(last.get("days_sup")) or 0
         last_end = last["medication_date"] + timedelta(days=ds)
-        return int(last_end < end - timedelta(days=BIOLOGIC_DISCONT_GAP_DAYS))
+        return int(last_end < end - timedelta(days=discont_gap))
 
     def _target_persistent_at_180d(self, patid: int, init_date: pd.Timestamp) -> int:
-        """Any fill active at day 180 (days_supply-based, no gap > 60d)."""
+        """Any fill active at day 180 (days_supply-based, no gap > class threshold).
+
+        For CSU biologics (Xolair/Dupixent) this is the historical 60-day threshold
+        via GAP_THRESHOLDS["biologic"]; behavior is bit-for-bit unchanged.
+        """
+        _, pers_gap = _resolve_gap_thresholds("biologic")
         target_day = init_date + timedelta(days=PREDICTION_DAYS)
         grp = self._med_by_pat.get(patid)
         if grp is None:
@@ -1224,14 +1586,14 @@ class OptumDataConverter:
             ds = rwdc.safe_int(row.get("days_sup")) or 0
             if fd <= target_day <= fd + timedelta(days=ds):
                 return 1
-        # Check gap criterion: fills spaced < 60d apart up to target_day
+        # Check gap criterion: fills spaced < persistence threshold apart up to target_day
         bio = bio[bio["medication_date"] <= target_day]
         if bio.empty:
             return 0
         bio = bio.reset_index(drop=True)
         for i in range(len(bio) - 1):
             gap = (bio.iloc[i + 1]["medication_date"] - bio.iloc[i]["medication_date"]).days
-            if gap > BIOLOGIC_PERSISTENCE_GAP_DAYS:
+            if gap > pers_gap:
                 return 0
         return 1
 
