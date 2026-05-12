@@ -11,7 +11,7 @@ six roles, but the current 12-example compile set covers only four —
 ``collider`` and ``instrument`` are unrepresented. Adding labeled examples
 for them requires domain-expert review (the framing differs from descendant /
 mediator and a wrong label here corrupts the LM training signal). Tracked
-under backlog item #11 as a data-extension follow-up; pin-tests in
+under backlog item #16 as a data-extension follow-up; pin-tests in
 `test_causal_role_classifier.py` enforce the current coverage so an unsigned
 extension to those two roles fires the test and prompts re-review.
 
