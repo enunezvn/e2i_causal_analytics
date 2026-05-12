@@ -434,6 +434,24 @@ def refresh_npi_taxonomy_cache(
     db_url = db_url or os.environ.get("NPPES_DB_URL") or os.environ.get("DATABASE_URL")
     start = datetime.now(timezone.utc)
 
+    # Validate env-var settings FIRST so malformed values fail fast — before
+    # any file is opened or any DB / module imported.
+    commit_chunk_raw = os.environ.get("NPPES_REFRESH_COMMIT_CHUNK", "10000")
+    try:
+        commit_chunk_size = int(commit_chunk_raw)
+    except ValueError:
+        logger.error(
+            "NPPES_REFRESH_COMMIT_CHUNK=%r is not an integer; skipping refresh",
+            commit_chunk_raw,
+        )
+        return {"status": "error", "reason": "invalid_commit_chunk", "rows_upserted": 0}
+    if commit_chunk_size < 1:
+        logger.error(
+            "NPPES_REFRESH_COMMIT_CHUNK=%d must be >= 1; skipping refresh",
+            commit_chunk_size,
+        )
+        return {"status": "error", "reason": "invalid_commit_chunk", "rows_upserted": 0}
+
     if not bulk_dump_path:
         msg = (
             "NPPES_BULK_DUMP_PATH not set; skipping refresh. Download the monthly "
@@ -466,11 +484,10 @@ def refresh_npi_taxonomy_cache(
         fh = open(path, "r", newline="", encoding="utf-8", errors="replace")
 
     rows_upserted = 0
-    # Commit every COMMIT_CHUNK_SIZE rows so worker death / Celery hard-time-
+    # Commit every commit_chunk_size rows so worker death / Celery hard-time-
     # limit hit doesn't discard the entire ~10 GB ingest. UPSERT is idempotent
     # on the `npi` PK, so a fresh retry safely re-runs the already-committed
     # range — no checkpoint table required.
-    commit_chunk_size = int(os.environ.get("NPPES_REFRESH_COMMIT_CHUNK", "10000"))
     try:
         reader = csv.DictReader(fh)
         records_iter = ingest_bulk_dump_csv(reader)
