@@ -122,6 +122,30 @@ def _resolve_gap_thresholds(drug_class: str) -> tuple[int, int]:
     return entry["discontinuation"], entry["persistence"]
 
 
+# --------------------------------------------------------------------------- #
+# Data Quality Score weights — issue #156 item 4                              #
+# --------------------------------------------------------------------------- #
+# Weighted 4-component DQS replaces the legacy uniform feature-completeness
+# fraction. Per-claim DQS is computed across medical/medication/inpatient
+# claims in the lookback window; the patient DQS is the mean over all claims.
+# Weights sum to 1.0.
+DQS_WEIGHT_DX = 0.40
+DQS_WEIGHT_PROC = 0.25
+DQS_WEIGHT_COST = 0.20
+DQS_WEIGHT_ENROLL = 0.15
+
+# Cost fields loaded from the Optum parquet extracts (issue #156 item 4).
+# std_cost is the PRIMARY, most-reliable standardized cost; the remainder
+# are patient/payer breakouts.
+DQS_COST_FIELDS_PRIMARY = ("std_cost",)
+DQS_COST_FIELDS_FALLBACK = ("charge", "copay", "coins", "deduct")
+
+# Soft data-quality filter for downstream model-training (issue #156 item 5).
+# Patients with a DQS below this threshold are flagged in attrition_report
+# under "soft-filtered (low DQS)" rather than hard-dropped from the cohort.
+DEFAULT_MIN_DATA_QUALITY_SCORE = 0.50
+
+
 # Qualifying CSU diagnosis codes. Optum codes are stored without the dot
 # (``L509``), so we match on the de-dotted prefix set.
 CSU_DX_PREFIXES = ("L501", "L508", "L509")
@@ -989,6 +1013,8 @@ class OptumDataConverter:
         enrollment_regime: str = DEFAULT_ENROLLMENT_REGIME,
         extract_ym: str | None = None,
         comorbidity_method: str = COMORBIDITY_METHOD_DEFAULT,
+        soft_enrollment_filter: bool = False,
+        min_data_quality_score: float | None = None,
     ) -> None:
         if enrollment_regime not in ENROLLMENT_REGIMES:
             allowed = sorted(ENROLLMENT_REGIMES.keys())
@@ -1001,6 +1027,12 @@ class OptumDataConverter:
                 f"comorbidity_method={comorbidity_method!r} not in "
                 f"{COMORBIDITY_METHODS_ALLOWED}; issue #156 item 3."
             )
+        if min_data_quality_score is not None:
+            if not 0.0 <= min_data_quality_score <= 1.0:
+                raise ValueError(
+                    f"min_data_quality_score={min_data_quality_score!r} not in [0.0, 1.0]; "
+                    f"issue #156 item 5."
+                )
         self.parquet_dir = Path(parquet_dir)
         self.output_dir = Path(output_dir)
         self.cohorts = cohorts
@@ -1008,6 +1040,15 @@ class OptumDataConverter:
         self.pilot_audit = pilot_audit
         self.enrollment_regime = enrollment_regime
         self.comorbidity_method = comorbidity_method
+        # Issue #156 item 5: soft enrollment filter (opt-in). When False
+        # (default), the historical hard `continuous_enrollment == 1` gate
+        # is preserved bit-for-bit; CSU cohort behavior unchanged.
+        self.soft_enrollment_filter = soft_enrollment_filter
+        self.min_data_quality_score = (
+            min_data_quality_score
+            if min_data_quality_score is not None
+            else DEFAULT_MIN_DATA_QUALITY_SCORE
+        )
         self.enrollment_pre_days = ENROLLMENT_REGIMES[enrollment_regime]["pre_days"]
         self.enrollment_post_days = ENROLLMENT_REGIMES[enrollment_regime]["post_days"]
         self.now_iso = datetime.now().isoformat()
@@ -1298,9 +1339,23 @@ class OptumDataConverter:
         self._attrition.append((f"{cohort}: age 18-89", len(pids)))
 
         # 2. Continuous enrollment flag
-        demo = demo[demo["continuous_enrollment"] == 1]
-        pids = set(demo["patid"])
-        self._attrition.append((f"{cohort}: continuous_enrollment=1", len(pids)))
+        # Issue #156 item 5: when soft_enrollment_filter is True, partially-
+        # enrolled patients are kept in the cohort and their `enroll_complete < 1.0`
+        # propagates into data_quality_score. When False (default, preserves
+        # historical CSU cohort behavior bit-for-bit), the legacy hard filter
+        # applies.
+        if self.soft_enrollment_filter:
+            partial = demo[demo["continuous_enrollment"] != 1]
+            self._attrition.append(
+                (
+                    f"{cohort}: soft-filtered partial-enrollment kept (DQS gates downstream)",
+                    len(partial),
+                )
+            )
+        else:
+            demo = demo[demo["continuous_enrollment"] == 1]
+            pids = set(demo["patid"])
+            self._attrition.append((f"{cohort}: continuous_enrollment=1", len(pids)))
 
         # 3. L50.x diagcode on demographics (necessary for all cohorts)
         demo = demo[demo["diagcode_raw"].str.upper().str.startswith(CSU_DX_PREFIXES)]
@@ -1655,6 +1710,171 @@ class OptumDataConverter:
         )
 
     # ------------------------------------------------------------------ #
+    # Data quality score (§7 + issue #156 item 4)                         #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _dx_complete(row: pd.Series) -> float:
+        """1 if at least one non-null/non-UNK dx code on the row, else 0.
+
+        Checks inpatient diag1..5 and demographics diagcode. The "UNK"
+        placeholder is treated as missing per the issue body.
+        """
+        candidates = ("diag1", "diag2", "diag3", "diag4", "diag5", "diagcode")
+        for col in candidates:
+            v = row.get(col) if hasattr(row, "get") else None
+            if v is None:
+                continue
+            try:
+                if pd.isna(v):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            s = str(v).strip().upper()
+            if s and s != "UNK":
+                return 1.0
+        return 0.0
+
+    @staticmethod
+    def _proc_complete(row: pd.Series) -> float:
+        """1 if `proc_code` non-null/non-empty, else 0."""
+        v = row.get("proc_code") if hasattr(row, "get") else None
+        if v is None:
+            return 0.0
+        try:
+            if pd.isna(v):
+                return 0.0
+        except (TypeError, ValueError):
+            pass
+        return 1.0 if str(v).strip() else 0.0
+
+    @staticmethod
+    def _cost_complete(row: pd.Series, is_pharmacy: bool) -> float:
+        """Cost completeness per issue #156 item 4 component rules.
+
+        - 1.0 if std_cost present.
+        - 0.5 if std_cost absent but any of (charge, copay, coins, deduct) present.
+        - 0.0 otherwise.
+
+        is_pharmacy is reserved for future use (dispfee/avgwhlsl only apply to
+        pharmacy claims and must NOT penalize medical claims when absent).
+        """
+        for field in DQS_COST_FIELDS_PRIMARY:
+            v = row.get(field) if hasattr(row, "get") else None
+            if v is None:
+                continue
+            try:
+                if pd.isna(v):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            return 1.0
+        for field in DQS_COST_FIELDS_FALLBACK:
+            v = row.get(field) if hasattr(row, "get") else None
+            if v is None:
+                continue
+            try:
+                if pd.isna(v):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            return 0.5
+        return 0.0
+
+    @staticmethod
+    def _enroll_complete(demo_row: pd.Series) -> float:
+        """Enrollment completeness from demographics row.
+
+        - 1.0 if eligeff + eligend non-null AND continuous_enrollment == 1.
+        - 0.5 if eligeff + eligend non-null but continuous_enrollment != 1.
+        - 0.0 if any date null.
+        """
+        eligeff = demo_row.get("eligeff")
+        eligend = demo_row.get("eligend")
+        ce = demo_row.get("continuous_enrollment")
+        dates_present = pd.notna(eligeff) and pd.notna(eligend)
+        if not dates_present:
+            return 0.0
+        try:
+            ce_int = int(ce) if ce is not None and not pd.isna(ce) else 0
+        except (TypeError, ValueError):
+            ce_int = 0
+        if ce_int == 1:
+            return 1.0
+        return 0.5
+
+    def _compute_data_quality_score(
+        self,
+        *,
+        patid: int,
+        lb_start: pd.Timestamp,
+        lb_end: pd.Timestamp,
+        demo_row: pd.Series,
+        feats: dict[str, Any],
+    ) -> float:
+        """Per-patient weighted data quality score (issue #156 item 4).
+
+        Averages a per-claim 4-component DQS over all claims in the lookback
+        window:
+            claim_dqs = 0.40 dx + 0.25 proc + 0.20 cost + 0.15 enroll
+        When the patient has zero claims in lookback, falls back to the
+        legacy feature-completeness fraction so empty-window patients still
+        get a non-null DQS (their cohort eligibility is gated elsewhere).
+        """
+        enroll_score = self._enroll_complete(demo_row)
+        claim_scores: list[float] = []
+
+        # Inpatient claims — dx + cost (no proc_code column expected)
+        ip = self._inpatient_by_pat.get(patid)
+        if ip is not None:
+            ip_w = ip[(ip["admit_date"] >= lb_start) & (ip["admit_date"] <= lb_end)]
+            for _, row in ip_w.iterrows():
+                dx = self._dx_complete(row)
+                cost = self._cost_complete(row, is_pharmacy=False)
+                claim_scores.append(
+                    DQS_WEIGHT_DX * dx
+                    + DQS_WEIGHT_PROC * 0.0
+                    + DQS_WEIGHT_COST * cost
+                    + DQS_WEIGHT_ENROLL * enroll_score
+                )
+
+        # Procedure claims — proc + cost
+        proc = self._proc_by_pat.get(patid)
+        if proc is not None:
+            proc_w = proc[(proc["proc_date"] >= lb_start) & (proc["proc_date"] <= lb_end)]
+            for _, row in proc_w.iterrows():
+                pc = self._proc_complete(row)
+                cost = self._cost_complete(row, is_pharmacy=False)
+                claim_scores.append(
+                    DQS_WEIGHT_DX * 0.0
+                    + DQS_WEIGHT_PROC * pc
+                    + DQS_WEIGHT_COST * cost
+                    + DQS_WEIGHT_ENROLL * enroll_score
+                )
+
+        # Medication claims — proc (HCPCS in proc_code if present) + cost (pharmacy)
+        med = self._med_by_pat.get(patid)
+        if med is not None:
+            med_w = med[(med["medication_date"] >= lb_start) & (med["medication_date"] <= lb_end)]
+            for _, row in med_w.iterrows():
+                pc = self._proc_complete(row)
+                cost = self._cost_complete(row, is_pharmacy=True)
+                claim_scores.append(
+                    DQS_WEIGHT_DX * 0.0
+                    + DQS_WEIGHT_PROC * pc
+                    + DQS_WEIGHT_COST * cost
+                    + DQS_WEIGHT_ENROLL * enroll_score
+                )
+
+        if claim_scores:
+            return round(sum(claim_scores) / len(claim_scores), 3)
+
+        # Empty window — fall back to legacy feature-completeness fraction.
+        feat_vals = [v for k, v in feats.items() if not k.startswith("_")]
+        non_null = sum(1 for v in feat_vals if v is not None and v != "")
+        return round(non_null / max(len(feat_vals), 1), 3)
+
+    # ------------------------------------------------------------------ #
     # Feature computation (§7)                                            #
     # ------------------------------------------------------------------ #
 
@@ -1680,6 +1900,36 @@ class OptumDataConverter:
         feats["insurance_product"] = rwdc.insurance_type(demo_row.get("bus"))
         plan = demo_row.get("product")
         feats["plan_type"] = str(plan) if pd.notna(plan) else None
+
+        # Issue #156 item 6: payer_category derivation from demographics.
+        # Persist BOTH the derived 8-vocabulary value AND the raw source
+        # fields (bus / product / health_exch / lis_dual) on the journey
+        # record to enable re-derivation without re-ETL and to preserve the
+        # audit trail. The legacy `insurance_type` field is kept for back-compat.
+        bus_raw = demo_row.get("bus")
+        product_raw = demo_row.get("product")
+        health_exch_raw = demo_row.get("health_exch")
+        lis_dual_raw = demo_row.get("lis_dual")
+        feats["payer_category"] = rwdc.derive_payer_category(
+            bus=bus_raw,
+            product=product_raw,
+            health_exch=health_exch_raw,
+            lis_dual=lis_dual_raw,
+        )
+        feats["payer_bus_raw"] = str(bus_raw).strip().upper() if pd.notna(bus_raw) else None
+        feats["payer_product_raw"] = (
+            str(product_raw).strip().upper() if pd.notna(product_raw) else None
+        )
+        feats["payer_health_exch_raw"] = (
+            rwdc.is_truthy_flag(health_exch_raw)
+            if pd.notna(health_exch_raw) and health_exch_raw is not None
+            else None
+        )
+        feats["payer_lis_dual_raw"] = (
+            rwdc.is_truthy_flag(lis_dual_raw)
+            if pd.notna(lis_dual_raw) and lis_dual_raw is not None
+            else None
+        )
         feats["urban_rural_code"] = "urban" if feats["zip3"] in URBAN_ZIP3_PREFIXES else "suburban"
 
         # 7.2 Disease characteristics (lookback)
@@ -2209,10 +2459,21 @@ class OptumDataConverter:
             else None
         )
 
-        # Data quality score: fraction of §7 features non-null
-        feat_vals = [v for k, v in feats.items() if not k.startswith("_")]
-        non_null = sum(1 for v in feat_vals if v is not None and v != "")
-        dq_score = round(non_null / max(len(feat_vals), 1), 3)
+        # Data quality score — issue #156 item 4. Weighted 4-component
+        # claim-level DQS averaged per-patient over the lookback window:
+        #   claim_dqs = 0.40 dx + 0.25 proc + 0.20 cost + 0.15 enroll
+        # When the patient has zero claims in lookback the score falls back
+        # to the legacy feature-completeness metric so empty-window patients
+        # still get a non-null DQS (their cohort eligibility is gated elsewhere).
+        lb_start_dqs = index_date - timedelta(days=LOOKBACK_DAYS)
+        lb_end_dqs = index_date - timedelta(days=1)
+        dq_score = self._compute_data_quality_score(
+            patid=patid,
+            lb_start=lb_start_dqs,
+            lb_end=lb_end_dqs,
+            demo_row=demo_row,
+            feats=feats,
+        )
 
         # Issue #155 §2: granular 7-stage engagement-funnel value.
         saw_specialist = bool(
