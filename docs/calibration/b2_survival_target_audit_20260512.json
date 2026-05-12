@@ -1,0 +1,22 @@
+{
+  "optum_initiation": {
+    "cohort": "optum_initiation",
+    "n_patients": 1294,
+    "n_positives": 37,
+    "n_post_index_rx_events": 0,
+    "n_unique_patients_with_post_index_rx": 0,
+    "n_positives_with_post_index_rx": 0,
+    "post_index_rx_coverage_of_positives": 0.0,
+    "verdict": "DATA-FIDELITY-BOUND"
+  },
+  "csu": {
+    "cohort": "csu",
+    "n_patients": 9607,
+    "n_positives": 1743,
+    "n_post_index_rx_events": 9223,
+    "n_unique_patients_with_post_index_rx": 1654,
+    "n_positives_with_post_index_rx": 1654,
+    "post_index_rx_coverage_of_positives": 0.948938611589214,
+    "verdict": "REAL"
+  }
+}

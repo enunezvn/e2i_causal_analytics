@@ -222,8 +222,24 @@ def fit_rsf(
     seed: int = 42,
     n_jobs: int = -1,
 ) -> Any:
-    """Fit a Random Survival Forest on (X, time, event)."""
+    """Fit a Random Survival Forest on (X, time, event).
+
+    Raises ValueError when the training-time array has fewer than two
+    unique values. RSF's per-tree Kaplan-Meier survival functions are
+    degenerate on a constant-time horizon (the predict path crashes
+    with an IndexError in sksurv 0.24); we surface this as a domain
+    error so callers can document it cleanly (mirrors Optum
+    initiation cohort per pre-spec §4 — administrative censoring at
+    constant 180d).
+    """
     from sksurv.ensemble import RandomSurvivalForest
+
+    if len(np.unique(np.asarray(time, dtype=float))) < 2:
+        raise ValueError(
+            "fit_rsf: time array has fewer than 2 unique values; RSF is "
+            "degenerate on constant-time horizons. Use Cox or binary "
+            "classifier instead."
+        )
 
     y = _make_structured_target(time, event)
     model = RandomSurvivalForest(

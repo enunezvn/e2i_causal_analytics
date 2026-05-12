@@ -144,6 +144,77 @@ After running `scripts/measure_b2_cindex_contrast.py`:
 
 ---
 
-## 13. Measurement section (PRE-RUN — will be amended with empirical results)
+## 13. Measurement section (post-run, 2026-05-12)
 
-This section is intentionally empty at memo-creation time. Results from `scripts/measure_b2_cindex_contrast.py` will be appended as §13.1 (CSU) + §13.2 (Optum) + §13.3 (verdict).
+Run: `PYTHONPATH=. python scripts/measure_b2_cindex_contrast.py` at branch HEAD after impl commits. Artifact: `docs/calibration/b2_cindex_contrast_20260512.json`. Audit anchor: `docs/calibration/b2_survival_target_audit_20260512.json`.
+
+### 13.1 CSU (primary cohort per §2)
+
+| Metric | Value |
+|---|---|
+| n_rows | 9607 |
+| n_events | 1743 |
+| event time median | 214d |
+| censored time median | 365d (capped) |
+| binary_auc (5-fold CV mean) | **0.9057** ± 0.0021 |
+| cox_cindex (5-fold CV mean) | 0.8790 ± 0.0040 |
+| rsf_cindex (5-fold CV mean) | 0.8721 ± 0.0029 |
+| Δ cox (cox - auc) | **-0.0267** |
+| Δ rsf (rsf - auc) | -0.0336 |
+| Δ best | -0.0267 |
+| **Verdict** | **NULL** (|delta| < 0.03 threshold) |
+
+### 13.2 Optum initiation (secondary per §2)
+
+| Metric | Value |
+|---|---|
+| n_rows | 1294 |
+| n_events | 37 |
+| event time median | 180d (constant administrative censoring) |
+| censored time median | 180d (same) |
+| binary_auc (5-fold CV mean) | **0.6782** ± 0.0485 |
+| cox_cindex (5-fold CV mean) | 0.6800 ± 0.0617 |
+| rsf_cindex (5-fold CV mean) | NaN (5/5 folds: ValueError "constant-time horizon"; see §13.4) |
+| Δ cox | **+0.0018** |
+| Δ rsf | inapplicable |
+| Δ best | +0.0018 |
+| **Verdict** | **NULL** (|delta| < 0.03 threshold) |
+
+### 13.3 B2 closure verdict
+
+**NULL CLOSURE** per pre-spec §9 decision rule + v5 plan §4 risk register: every cohort produced |delta| < 0.03. No threshold shopping; this verdict was reachable under any cohort prioritization (CSU primary or Optum primary).
+
+### 13.4 Reasoning about the NULL
+
+**CSU**: cox_c = 0.879 is materially below binary_auc = 0.906. The base feature surface already saturates the discrimination signal at AUC ≈ 0.91 (in-distribution; production parity = 0.66 because the production pipeline drops the engagement_score leak). Survival framing trades some discrimination capacity for time-to-event modeling, which on a saturated binary surface yields a small REGRESSION (delta = -0.027, still well within ±0.03 null band). The architectural reading: on a strong-binary surface, survival framing cannot lift discrimination further; it produces equivalent ranking at best. RSF underperforms Cox slightly (-0.007) — consistent with the surface being approximately linear in the surviving pre-anchor features.
+
+**Optum**: cox_c = 0.680 ≈ binary_auc = 0.678 (delta = +0.0018, sample-size-bounded by n_events = 37). RSF could not fit due to the all-constant 180d time horizon — pre-spec §4 documented this as expected. The Optum result is **non-load-bearing** per §6: no possible empirical outcome on this cohort would have closed B2 IMPROVEMENT, because the survival framing IS the binary framing when administrative censoring is constant.
+
+### 13.5 Disease-agnostic finding
+
+For B2 to lift discrimination materially, the data needs:
+1. A genuine time-to-event signal (CSU has it; Optum at current ingest does not — backlog item to ingest continuous `time_to_initiation`).
+2. A feature surface NOT already saturated at AUC ≈ 0.9 — i.e., a real-world cohort where binary AUC sits in the marginal [0.62, 0.68] band. Optum is the right cohort topologically; it's just the data-fidelity bound that blocks B2 acceptance.
+
+This rhymes with B3's NULL finding (`docs/specs/v5_b3_feature_engineering_prespec_2026-05-11.md` §10.3): on the current Optum surface, n_events = 37 makes mean shift of any feature/model intervention indistinguishable from binomial fold variance (±0.05).
+
+### 13.6 Forward-looking implications (not B2 deliverables)
+
+- v4 backlog #32 (Optum cohort growth) becomes load-bearing for any future survival re-run.
+- v4 backlog #34 (Optum survival-target re-ingest with continuous `time_to_initiation`) is the prerequisite for Optum RSF being non-degenerate.
+- Cox is a viable model class for Optum at the current cohort size if RSF is dropped — but it does not lift discrimination over binary LR per the empirical contrast.
+- The implementation surface (CoxPHSurvivalAnalysis + RandomSurvivalForest wired through the model_trainer state) is **kept** as engineering infrastructure regardless of the NULL verdict — future cohort-growth or data-fidelity-improvement workstreams can fire B2 contrast without re-implementing.
+
+### 13.7 Closure checklist (per pre-spec §1)
+
+- [x] Pre-spec memo committed BEFORE measurement (commit `52a2aa16`).
+- [x] Cohort feasibility audit published as artifact (b2_survival_target_audit_20260512.json).
+- [x] Survival target derivation declared in state (model_trainer/state.py, 5 new fields).
+- [x] Pure-helper + LangGraph node split (replay-safe per B3 H3 lesson; verified by `test_node_does_not_mutate_state_in_place`).
+- [x] 5-fold CV c-index contrast script wired (scripts/measure_b2_cindex_contrast.py).
+- [x] 25 unit tests passing.
+- [x] Empirical result documented above with verdict locked at pre-spec threshold.
+- [ ] Codex pass-1 review (next phase).
+- [ ] Codex pass-2 review (after pass-1 fixes).
+- [ ] CI green.
+
