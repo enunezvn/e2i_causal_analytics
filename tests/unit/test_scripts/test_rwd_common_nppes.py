@@ -159,10 +159,27 @@ def test_parse_api_result_sole_proprietor_yes_variants():
     assert rec is not None
     assert rec.sole_proprietor is True
 
-    payload["basic"]["sole_proprietor"] = ""
+    payload["basic"]["sole_proprietor"] = "Y"
     rec = parse_nppes_api_result(payload, "1234567893")
     assert rec is not None
-    assert rec.sole_proprietor is False  # empty maps to False per parser semantics
+    assert rec.sole_proprietor is True
+
+    payload["basic"]["sole_proprietor"] = "NO"
+    rec = parse_nppes_api_result(payload, "1234567893")
+    assert rec is not None
+    assert rec.sole_proprietor is False
+
+
+def test_parse_api_result_sole_proprietor_unknown_maps_to_none():
+    """Empty / whitespace / unrecognized sole-proprietor value must map to
+    None (unknown), not False. Otherwise downstream `practice_size` /
+    `academic_hcp` derivation conflates 'unknown' with 'not sole prop'."""
+    for sentinel in ("", "   ", "UNKNOWN", "?", None):
+        payload = _api_fixture()
+        payload["basic"]["sole_proprietor"] = sentinel
+        rec = parse_nppes_api_result(payload, "1234567893")
+        assert rec is not None
+        assert rec.sole_proprietor is None, f"expected None for {sentinel!r}"
 
 
 # --------------------------------------------------------------------------- #
