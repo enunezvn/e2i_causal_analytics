@@ -391,6 +391,26 @@ CSU_POST_INDEX_JOURNEY_FEATURES = [
     "journey_status",
 ]
 
+# Backlog #17 (2026-05-12) — medication-derived aggregates reclassified
+# from ``knowable_at=index_date`` to ``knowable_at=post_index`` because
+# they are structurally coupled to the ``treatment_initiated`` target
+# (target ≡ "patient in medication panel"; aggregates are zero for
+# untreated patients regardless of date windowing). Iter-5 audit
+# (2026-05-09) caught all six at Layer 3 z=14.13–69.18. The
+# reclassification moves the catch from Layer 3 (statistical) to
+# Layer 1 (declarative + deterministic) — cheaper, more auditable.
+# The pin below mirrors ``CSU_POST_INDEX_JOURNEY_FEATURES``: each
+# member must have a Layer 1 high+drop verdict AND end up in
+# ``leakage_dropped_features``.
+CSU_POST_INDEX_MED_AGGREGATES = [
+    "medication_claim_count",
+    "days_on_therapy",
+    "hcp_visits",
+    "prior_treatments",
+    "disease_severity",
+    "engagement_score",
+]
+
 
 @pytest.mark.slow
 @pytest.mark.integration
@@ -482,4 +502,61 @@ def test_csu_post_index_journey_features_dropped_via_layer_1(csu_artifact: dict)
         f"Layer 1 verdicts seen: {sorted(layer_1_drops)}. Either the manifest "
         f"contract was relaxed, the EnsembleVoter no longer emits Layer 1 "
         f"high+drop, or adaptive_validity_check stopped scanning the feature."
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.timeout(2000)
+def test_csu_post_index_med_aggregates_dropped_via_layer_1(csu_artifact: dict) -> None:
+    """Backlog #17 (2026-05-12) closure pin — six medication-derived
+    aggregates that were declared ``knowable_at=index_date`` despite being
+    structurally target-coupled (target ≡ "patient in medication panel",
+    so the aggregates collapse to zero for untreated patients regardless
+    of date windowing) are now declared ``knowable_at=post_index`` and
+    therefore dropped via Layer 1 (declarative + deterministic) rather
+    than Layer 3 (statistical, z=14.13–69.18 in iter-5 audit on real CSU
+    n=9607).
+
+    Each member of ``CSU_POST_INDEX_MED_AGGREGATES`` MUST appear in
+    ``leakage_dropped_features`` AND have a corresponding Layer 1
+    verdict with ``severity=high, remediation=drop``. A regression in
+    the manifest declaration would surface here.
+
+    Same coexistence-vs-causation caveat as
+    ``test_csu_post_index_journey_features_dropped_via_layer_1``: Layer 1
+    catches BEFORE Layer 3 by ``layer_1_caught`` short-circuit in
+    ``adaptive_validity_check``, so there is no Layer 3 verdict on these
+    features to compete with the Layer 1 drop. The artifact carries no
+    per-feature drop provenance, so we assert (a) the Layer 1 verdict
+    exists with the expected severity+remediation AND (b) the feature
+    is in the dropped set."""
+    dropped = set(csu_artifact.get("leakage_dropped_features") or [])
+    verdicts = csu_artifact.get("adaptive_verdicts") or []
+
+    layer_1_drops = {
+        v["feature"]
+        for v in verdicts
+        if isinstance(v, dict)
+        and v.get("layer") == "1"
+        and v.get("severity") == "high"
+        and v.get("remediation") == "drop"
+        and v.get("feature")
+    }
+
+    missing_from_dropped = [f for f in CSU_POST_INDEX_MED_AGGREGATES if f not in dropped]
+    missing_layer_1 = [f for f in CSU_POST_INDEX_MED_AGGREGATES if f not in layer_1_drops]
+
+    assert not missing_from_dropped, (
+        f"CSU post_index medication aggregates missing from "
+        f"leakage_dropped_features: {missing_from_dropped}. Backlog #17 "
+        f"closure relies on these aggregates being dropped via Layer 1. "
+        f"Saw dropped={sorted(dropped)}."
+    )
+
+    assert not missing_layer_1, (
+        f"CSU post_index medication aggregates missing a Layer 1 drop "
+        f"verdict: {missing_layer_1}. Each must have an adaptive_verdict "
+        f"with layer='1', severity='high', remediation='drop'. Layer 1 "
+        f"verdicts seen: {sorted(layer_1_drops)}."
     )

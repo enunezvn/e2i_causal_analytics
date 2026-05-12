@@ -104,16 +104,30 @@ _ELIGIBILITY = [
 # =============================================================================
 # Windowed event aggregations — knowable at index_date (window_days REQUIRED)
 # =============================================================================
+#
+# Backlog #17 (2026-05-12) — the medication-derived aggregates
+# (``medication_claim_count``, ``days_on_therapy``, ``hcp_visits``,
+# ``prior_treatments``, ``disease_severity``, ``engagement_score``) were
+# moved to ``_POST_INDEX_FORBIDDEN`` below. Even when the converter
+# applies the lookback window (``--lookback-days=180``), these features
+# remain structurally target-equivalent because the CSU prediction
+# target ``treatment_initiated`` is defined as "patient appears anywhere
+# in the medication panel". Untreated patients are therefore absent
+# from ``_med_by_pat`` and their windowed aggregates collapse to zero
+# regardless of date filtering. Iter-5 (2026-05-09) empirical audit
+# caught all six at z=14.13–69.18 on real CSU n=9607. Path 2 per
+# backlog #17 — declare ``KnowableAt(reference="post_index")`` so
+# Layer 1 catches deterministically. See ``docs/lineage/csu_field_audit.md``
+# §3 rows 36–40, 43 for the canonical pre-existing audit; this manifest
+# move reconciles the manifest declaration with that audit.
+#
+# ``procedure_claim_count`` and ``lab_claim_count`` retain
+# ``KnowableAt(reference="index_date")``: they derive from independent
+# event panels (``_proc_by_pat`` / ``_lab_by_pat``), and patients can
+# have procedures or labs without being in the medication panel, so
+# they are NOT structurally coupled to ``treatment_initiated``.
 
 _WINDOWED_AGG = [
-    FeatureContract(
-        name="medication_claim_count",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="medication_events",
-        derivation_inputs=("medication_date",),
-        aggregation="count",
-        window_days=CSU_LOOKBACK_DAYS,
-    ),
     FeatureContract(
         name="procedure_claim_count",
         knowable_at=KnowableAt(reference="index_date"),
@@ -128,46 +142,6 @@ _WINDOWED_AGG = [
         source="lab_events",
         derivation_inputs=("fst_dt",),
         aggregation="count",
-        window_days=CSU_LOOKBACK_DAYS,
-    ),
-    FeatureContract(
-        name="days_on_therapy",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="medication_events",
-        derivation_inputs=("days_sup", "medication_date"),
-        aggregation="sum",
-        window_days=CSU_LOOKBACK_DAYS,
-    ),
-    FeatureContract(
-        name="hcp_visits",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="medication_events",
-        derivation_inputs=("npi", "medication_date"),
-        aggregation="nunique",
-        window_days=CSU_LOOKBACK_DAYS,
-    ),
-    FeatureContract(
-        name="prior_treatments",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="medication_events",
-        derivation_inputs=("brand_normalised", "medication_date"),
-        aggregation="nunique",
-        window_days=CSU_LOOKBACK_DAYS,
-    ),
-    FeatureContract(
-        name="disease_severity",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="medication_events",
-        derivation_inputs=("medication_date", "proc_code", "abnl_cd"),
-        aggregation="sum",
-        window_days=CSU_LOOKBACK_DAYS,
-    ),
-    FeatureContract(
-        name="engagement_score",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="medication_events",
-        derivation_inputs=("npi", "medication_date", "fst_dt"),
-        aggregation="sum",
         window_days=CSU_LOOKBACK_DAYS,
     ),
 ]
@@ -193,30 +167,21 @@ _WINDOWED_AGG = [
 # max input z on CSU; the amplification heuristic flags ratio-style
 # transforms that manufacture signal not present in either component as
 # leakage-suspect). 4 candidates remain.
+#
+# Backlog #17 (2026-05-12): three of the four B3 engineered features
+# derive from post-index inputs (``engagement_score`` / ``hcp_visits`` /
+# ``prior_treatments`` / ``days_on_therapy`` / ``disease_severity``)
+# and were moved to ``_POST_INDEX_FORBIDDEN`` below to preserve chain
+# validity (a derived feature cannot be knowable earlier than any of
+# its inputs). ``age_x_insurance_interaction`` remains here because
+# its inputs (``age_continuous`` + ``insurance_type``) are both
+# enrollment-knowable.
 _ENGINEERED_B3 = [
     FeatureContract(
         name="age_x_insurance_interaction",
         knowable_at=KnowableAt(reference="index_date"),
         source="derived",
         derivation_inputs=("age_continuous", "insurance_type"),
-    ),
-    FeatureContract(
-        name="engagement_per_visit",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="derived",
-        derivation_inputs=("engagement_score", "hcp_visits"),
-    ),
-    FeatureContract(
-        name="treatment_diversity_intensity",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="derived",
-        derivation_inputs=("prior_treatments", "days_on_therapy"),
-    ),
-    FeatureContract(
-        name="severity_engagement_product",
-        knowable_at=KnowableAt(reference="index_date"),
-        source="derived",
-        derivation_inputs=("disease_severity", "engagement_score"),
     ),
 ]
 
@@ -229,6 +194,93 @@ _ENGINEERED_B3 = [
 # excludes them from the feature surface.
 
 _POST_INDEX_FORBIDDEN = [
+    # ------------------------------------------------------------------
+    # Backlog #17 (2026-05-12) — medication-derived aggregates moved
+    # here from ``_WINDOWED_AGG``. Even when the converter applies a
+    # lookback window, untreated patients are absent from
+    # ``CSUDataConverter._med_by_pat`` so all medication-derived
+    # aggregates collapse to zero for them, making the features
+    # structurally target-coupled (``treatment_initiated`` ≡
+    # "patient in medication panel"). Iter-5 audit caught all six at
+    # z=14.13–69.18 on real CSU n=9607 (`docs/results/...`).
+    # ``contract_window_days`` is preserved at 180 to document the
+    # converter's masking semantics even though the feature is now
+    # declared post-index for Layer 1 catch purposes.
+    # ------------------------------------------------------------------
+    FeatureContract(
+        name="medication_claim_count",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="medication_events",
+        derivation_inputs=("medication_date",),
+        aggregation="count",
+        window_days=CSU_LOOKBACK_DAYS,
+    ),
+    FeatureContract(
+        name="days_on_therapy",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="medication_events",
+        derivation_inputs=("days_sup", "medication_date"),
+        aggregation="sum",
+        window_days=CSU_LOOKBACK_DAYS,
+    ),
+    FeatureContract(
+        name="hcp_visits",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="medication_events",
+        derivation_inputs=("npi", "medication_date"),
+        aggregation="nunique",
+        window_days=CSU_LOOKBACK_DAYS,
+    ),
+    FeatureContract(
+        name="prior_treatments",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="medication_events",
+        derivation_inputs=("brand_normalised", "medication_date"),
+        aggregation="nunique",
+        window_days=CSU_LOOKBACK_DAYS,
+    ),
+    FeatureContract(
+        name="disease_severity",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="medication_events",
+        derivation_inputs=("medication_date", "proc_code", "abnl_cd"),
+        aggregation="sum",
+        window_days=CSU_LOOKBACK_DAYS,
+    ),
+    FeatureContract(
+        name="engagement_score",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="medication_events",
+        derivation_inputs=("npi", "medication_date", "fst_dt"),
+        aggregation="sum",
+        window_days=CSU_LOOKBACK_DAYS,
+    ),
+    # ------------------------------------------------------------------
+    # Backlog #17 (2026-05-12) — B3 engineered features whose inputs
+    # are now post-index. ``age_x_insurance_interaction`` remains in
+    # ``_ENGINEERED_B3`` because its inputs are enrollment-knowable.
+    # ------------------------------------------------------------------
+    FeatureContract(
+        name="engagement_per_visit",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="derived",
+        derivation_inputs=("engagement_score", "hcp_visits"),
+    ),
+    FeatureContract(
+        name="treatment_diversity_intensity",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="derived",
+        derivation_inputs=("prior_treatments", "days_on_therapy"),
+    ),
+    FeatureContract(
+        name="severity_engagement_product",
+        knowable_at=KnowableAt(reference="post_index"),
+        source="derived",
+        derivation_inputs=("disease_severity", "engagement_score"),
+    ),
+    # ------------------------------------------------------------------
+    # Pre-existing post-index columns — journey metadata, brand, targets.
+    # ------------------------------------------------------------------
     FeatureContract(
         name="journey_start_date",
         knowable_at=KnowableAt(reference="post_index"),

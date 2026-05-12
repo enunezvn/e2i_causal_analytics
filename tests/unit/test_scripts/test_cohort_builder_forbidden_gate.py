@@ -28,6 +28,13 @@ def test_csu_drop_filters_forbidden_columns():
             "journey_start_date": "2024-01-01",
             "journey_end_date": "2024-04-30",
             "brand": "competitor",
+            # Backlog #17 — medication-derived aggregates now post_index
+            "medication_claim_count": 12,
+            "days_on_therapy": 365,
+            "hcp_visits": 4,
+            "prior_treatments": 2,
+            "disease_severity": 5.5,
+            "engagement_score": 7.0,
             # Targets — must be preserved
             "treatment_initiated": 1,
             "discontinuation_flag": 0,
@@ -43,6 +50,13 @@ def test_csu_drop_filters_forbidden_columns():
         "journey_start_date",
         "journey_end_date",
         "brand",
+        # Backlog #17 — six medication-derived aggregates moved to post_index
+        "medication_claim_count",
+        "days_on_therapy",
+        "hcp_visits",
+        "prior_treatments",
+        "disease_severity",
+        "engagement_score",
     ):
         assert key not in out, f"{key} should have been dropped"
 
@@ -144,6 +158,24 @@ CSU_INTENDED_DROP = {
     "journey_stage",
     "journey_status",
     "brand",
+    # Backlog #17 (2026-05-12) — medication-derived aggregates
+    # reclassified to post_index. The converter strips them at write
+    # time alongside the journey metadata so the cohort surface only
+    # carries genuinely pre-anchor features. Layer 1 catches them
+    # deterministically when older artifacts still contain them.
+    "medication_claim_count",
+    "days_on_therapy",
+    "hcp_visits",
+    "prior_treatments",
+    "disease_severity",
+    "engagement_score",
+    # Backlog #17 — three B3-engineered features whose inputs are now
+    # post_index. ``age_x_insurance_interaction`` (the fourth B3
+    # feature) remains pre_anchor because its inputs are both
+    # enrollment-knowable.
+    "engagement_per_visit",
+    "treatment_diversity_intensity",
+    "severity_engagement_product",
 }
 
 OPTUM_INTENDED_DROP = {

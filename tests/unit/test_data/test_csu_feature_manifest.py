@@ -109,7 +109,19 @@ def test_known_leak_incidents_are_covered_correctly():
         csu_contract_for,
     )
 
-    # Forbidden as features (post_index by construction)
+    # Forbidden as features (post_index by construction).
+    #
+    # Backlog #17 (2026-05-12) — the medication-derived aggregates
+    # (medication_claim_count, days_on_therapy, hcp_visits,
+    # prior_treatments, disease_severity, engagement_score) were
+    # reclassified from index_date to post_index because the CSU
+    # prediction target `treatment_initiated` ≡ "patient in
+    # medication panel", which makes these features structurally
+    # target-coupled regardless of date filtering. The three B3
+    # engineered features that depend on them (engagement_per_visit,
+    # treatment_diversity_intensity, severity_engagement_product)
+    # are post_index by chain. See manifest docstring + iter-5
+    # empirical audit (2026-05-09).
     for name in [
         "journey_duration_days",
         "journey_status",
@@ -118,6 +130,17 @@ def test_known_leak_incidents_are_covered_correctly():
         "journey_stage",
         "treatment_initiated",
         "discontinuation_flag",
+        # Backlog #17 — medication-derived aggregates
+        "medication_claim_count",
+        "days_on_therapy",
+        "hcp_visits",
+        "prior_treatments",
+        "disease_severity",
+        "engagement_score",
+        # Backlog #17 — B3 engineered derived from the above
+        "engagement_per_visit",
+        "treatment_diversity_intensity",
+        "severity_engagement_product",
     ]:
         c = csu_contract_for(name)
         assert c is not None, f"Manifest missing forbidden column: {name}"
@@ -126,15 +149,15 @@ def test_known_leak_incidents_are_covered_correctly():
         )
         assert name in CSU_FORBIDDEN_AS_FEATURES
 
-    # Documented past incidents that ARE legitimate when windowed
+    # Documented past incidents that ARE legitimate when windowed.
+    # ``procedure_claim_count`` and ``lab_claim_count`` retain
+    # index_date status: they derive from independent event panels
+    # (procedure / lab) and patients can have procedures or labs
+    # without being in the medication panel — they are NOT
+    # structurally coupled to ``treatment_initiated``.
     for name in [
-        "engagement_score",
-        "disease_severity",
-        "days_on_therapy",
-        "medication_claim_count",
         "lab_claim_count",
-        "hcp_visits",
-        "prior_treatments",
+        "procedure_claim_count",
     ]:
         c = csu_contract_for(name)
         assert c is not None, f"Manifest missing windowed feature: {name}"
@@ -241,12 +264,28 @@ def test_manifest_covers_all_csu_feature_columns():
         f"if the column is metadata."
     )
 
-    # Reverse direction: every manifest entry should be a real column.
-    extra = manifest_columns - actual_columns
+    # Reverse direction: every manifest entry should be a real column,
+    # EXCEPT for columns the converter intentionally strips at write
+    # time via ``_drop_forbidden_columns(CSU_FORBIDDEN_NON_TARGET)``.
+    # Those columns are declared in the manifest so Layer 1 can catch
+    # them when they DO appear (e.g., older artifacts, ad-hoc test
+    # injection), but the converter's defense-in-depth gate omits them
+    # from the on-disk JSON.
+    #
+    # Backlog #17 (2026-05-12): six medication-derived aggregates +
+    # three B3 engineered features were moved to forbidden. If the
+    # CSU JSON file in this checkout was written by an older converter
+    # (before backlog #17), those columns may still be present —
+    # tolerated, not required. If the file was written by the new
+    # converter, those columns will be absent — also tolerated.
+    from src.data.manifests.csu_feature_manifest import CSU_FORBIDDEN_NON_TARGET
+
+    extra = manifest_columns - actual_columns - set(CSU_FORBIDDEN_NON_TARGET)
     assert extra == set(), (
         f"Manifest declares contracts for columns the converter doesn't emit: {sorted(extra)}. "
-        f"This means the manifest has drifted from the converter; either remove the entry "
-        f"or fix the converter."
+        f"This means the manifest has drifted from the converter; either remove the entry, "
+        f"add the column to CSU_FORBIDDEN_NON_TARGET (so the converter strips it), or "
+        f"fix the converter."
     )
 
 
@@ -258,3 +297,80 @@ def test_csu_primary_diagnosis_code_has_kg_entity_codes():
     assert by_name["primary_diagnosis_code"].kg_entity_codes, (
         "primary_diagnosis_code must declare kg_entity_codes"
     )
+
+
+# Backlog #17 (2026-05-12) — pin the medication-derived aggregates +
+# their B3-engineered dependents as ``knowable_at=post_index``. The
+# CSU prediction target ``treatment_initiated`` is defined as "patient
+# appears anywhere in the medication panel" (see
+# ``scripts/convert_csu_rwd.py``); untreated patients are absent from
+# ``_med_by_pat`` entirely, which means every medication-derived
+# aggregate (count / sum / nunique) collapses to zero for them
+# regardless of date windowing. The iter-5 empirical audit
+# (2026-05-09) caught all six at Layer 3 z=14.13–69.18 even with
+# ``--lookback-days=180`` applied — confirming the target-coupling is
+# structural, not date-dependent. Reclassifying them to post_index
+# moves the catch from Layer 3 (statistical, slower) to Layer 1
+# (declarative, cheaper, deterministic).
+_BACKLOG_17_POST_INDEX_FEATURES = [
+    # Six medication-derived aggregates flagged by iter-5 audit.
+    "medication_claim_count",
+    "days_on_therapy",
+    "hcp_visits",
+    "prior_treatments",
+    "disease_severity",
+    "engagement_score",
+    # Three B3-engineered features whose inputs are now post_index.
+    # ``age_x_insurance_interaction`` (the fourth B3 feature) is NOT
+    # listed here because its inputs (age_continuous + insurance_type)
+    # are both enrollment-knowable.
+    "engagement_per_visit",
+    "treatment_diversity_intensity",
+    "severity_engagement_product",
+]
+
+
+def test_backlog_17_med_aggregates_are_post_index():
+    """The six medication-derived aggregates + three dependent B3
+    engineered features MUST be declared post_index per backlog #17."""
+    from src.data.manifests.csu_feature_manifest import (
+        CSU_FORBIDDEN_AS_FEATURES,
+        csu_contract_for,
+    )
+
+    for name in _BACKLOG_17_POST_INDEX_FEATURES:
+        contract = csu_contract_for(name)
+        assert contract is not None, f"Manifest missing contract for {name!r}"
+        assert contract.knowable_at.reference == "post_index", (
+            f"{name!r} must be declared knowable_at=post_index per backlog #17 "
+            f"(medication-target-coupling); got knowable_at={contract.knowable_at}. "
+            f"See manifest docstring + tests/integration/test_csu_val_auc_measurement.py"
+            f"::test_csu_post_index_med_aggregates_dropped_via_layer_1."
+        )
+        assert name in CSU_FORBIDDEN_AS_FEATURES, (
+            f"{name!r} must appear in CSU_FORBIDDEN_AS_FEATURES (the "
+            f"computed view from knowable_at=post_index); got missing. "
+            f"This likely means the convenience view fell out of sync."
+        )
+
+
+def test_backlog_17_procedure_and_lab_remain_pre_index():
+    """``procedure_claim_count`` and ``lab_claim_count`` retain
+    knowable_at=index_date status: they derive from independent event
+    panels and patients can have procedures or labs without being in
+    the medication panel — they are NOT structurally coupled to the
+    target."""
+    from src.data.manifests.csu_feature_manifest import (
+        CSU_SAFE_FEATURES,
+        csu_contract_for,
+    )
+
+    for name in ("procedure_claim_count", "lab_claim_count"):
+        contract = csu_contract_for(name)
+        assert contract is not None
+        assert contract.knowable_at.is_pre_or_at_index(), (
+            f"{name!r} must remain pre-or-at-index per backlog #17 audit "
+            f"(independent event panels are NOT target-coupled); got "
+            f"knowable_at={contract.knowable_at}"
+        )
+        assert name in CSU_SAFE_FEATURES

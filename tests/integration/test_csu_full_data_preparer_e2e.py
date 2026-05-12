@@ -66,7 +66,9 @@ def csu_data_source(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "patient_id",
         # Pandera may validate these if present
         "geographic_region",
-        # SAFE features (manifest)
+        # SAFE features (manifest) — backlog #17 moved six medication-
+        # derived aggregates to post_index; they now live in the
+        # ``post_index_to_inject`` block below alongside journey_*.
         "age_continuous",
         "age_group",
         "gender",
@@ -74,14 +76,8 @@ def csu_data_source(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "insurance_type",
         "primary_diagnosis_code",
         "eligibility_duration_days",
-        "medication_claim_count",
         "procedure_claim_count",
         "lab_claim_count",
-        "days_on_therapy",
-        "hcp_visits",
-        "prior_treatments",
-        "disease_severity",
-        "engagement_score",
         # Target
         "treatment_initiated",
         # Split column (consumed by data_loader)
@@ -91,6 +87,12 @@ def csu_data_source(tmp_path_factory: pytest.TempPathFactory) -> dict:
     # converter boundary. We RE-INJECT them synthetically here so Layer 5
     # has something to catch. Values are derived from the kept fields so
     # the test stays deterministic.
+    #
+    # Backlog #17 (2026-05-12): the six medication-derived aggregates
+    # are now declared post_index in the manifest (see
+    # ``src/data/manifests/csu_feature_manifest.py``). They are
+    # re-injected here so the e2e Layer 1 pass deterministically fires
+    # on them — exercising the iter-5 audit's recommended catch path.
     post_index_to_inject = {
         "journey_start_date": "2024-01-01",
         "journey_end_date": "2024-12-31",
@@ -105,6 +107,15 @@ def csu_data_source(tmp_path_factory: pytest.TempPathFactory) -> dict:
         # a realistic cue.
         "brand": "competitor",
         "discontinuation_flag": 0,
+        # Backlog #17 — re-inject so Layer 1 catches deterministically.
+        # Constant values are fine; Layer 1 fires on the contract's
+        # ``knowable_at=post_index``, not the value distribution.
+        "medication_claim_count": 0,
+        "days_on_therapy": 0,
+        "hcp_visits": 0,
+        "prior_treatments": 0,
+        "disease_severity": 2.0,
+        "engagement_score": 0.0,
     }
 
     records = json.loads(CSU_JOURNEYS_PATH.read_text())
@@ -275,6 +286,17 @@ def test_layer_1_catches_documented_post_index_columns(csu_data_source: dict, cs
         "journey_start_date",
         "discontinuation_flag",
         "brand",
+        # Backlog #17 (2026-05-12) — medication-derived aggregates
+        # reclassified from index_date to post_index. Each one is
+        # now deterministically caught at Layer 1 when the cohort
+        # contains the column (the e2e fixture re-injects them so
+        # Layer 1 must see them).
+        "medication_claim_count",
+        "days_on_therapy",
+        "hcp_visits",
+        "prior_treatments",
+        "disease_severity",
+        "engagement_score",
     ]
     missing = []
     wrong_layer = []
