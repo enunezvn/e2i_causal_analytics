@@ -20,6 +20,8 @@ Empirical inspection of `data/rwd/optum/initiation/e2i_ml_v3_treatment_events.pa
 | **CSU** | 9607 | 1743 | 9223 / 10000 | 1743 (100% of positives) | **REAL** — derive T from first post-index rx `days_from_diagnosis` |
 | **Optum initiation** | 1294 | 37 | 0 / 22 | 6 (16% of positives) | **DATA-FIDELITY-BOUND** — no usable post-index rx; fall back to artificial 180d horizon |
 
+**Coverage threshold rationale (M5 codex pass-1)**: REAL/DATA-FIDELITY-BOUND verdict pivots on `post_index_rx_coverage_of_positives >= 0.10`. Below 10%, survival imputation noise (fallback to journey_duration censoring time for unmatched positives) dominates the event-time signal, and the cohort effectively reduces to a binary-with-fixed-horizon problem. The 10% floor preserves ≥175 informative event-time observations on CSU (1743 positives × 10%) which is the minimum for stable Cox partial-likelihood fitting.
+
 **Implication**: the v5 plan §B2 phrasing assumed Optum was primary because its binary AUC sits in the marginal [0.62, 0.68] band. The actual data carries time-to-event signal only on CSU. **Primary cohort for B2 acceptance is CSU**; Optum is secondary and is expected to NULL because survival collapses to binary at a fixed administrative censoring horizon.
 
 This is a load-bearing audit finding — committed in this memo BEFORE running the model so the choice of primary cohort cannot be HARKed post-hoc.
@@ -51,11 +53,16 @@ For each cohort independently:
 The derived columns `survival_time_days` (continuous) + `survival_event` (binary) are **derived outputs**, not features. They are NOT added to the feature manifest. They are declared in the model_trainer state contract:
 
 ```python
-# In src/agents/ml_foundation/model_trainer/state.py
-survival_time_days: Optional[np.ndarray] = None
-survival_event: Optional[np.ndarray] = None
-enable_survival_modeling: bool = False  # default off; opt-in via runner flag
+# In src/agents/ml_foundation/model_trainer/state.py — 5 fields total.
+enable_survival_modeling: bool = False  # gate; default off
+survival_time_days: Optional[np.ndarray] = None  # float days
+survival_event: Optional[np.ndarray] = None  # bool
+survival_manifest_source: Optional[str] = None  # echoes manifest_source
+survival_target_error: Optional[str] = None  # set if derivation raised
 ```
+
+(L1 codex pass-1: this list shows all 5 fields. The §10 planned-files line
+below is rounded up to 5 as well.)
 
 Default `enable_survival_modeling=False` preserves existing binary-classifier pipeline behavior. Opt-in for B2 measurement.
 
@@ -124,7 +131,7 @@ After running `scripts/measure_b2_cindex_contrast.py`:
 
 - `src/agents/ml_foundation/model_trainer/nodes/survival_model.py` (NEW; ~250 LOC) — pure helper `fit_cox_rsf(X, time, event, seed) -> Dict[str, BaseEstimator]` + LangGraph node `survival_model_node(state) -> Dict[str, Any]` (replay-safe per B3 H3 lesson — returns mutated state in patch, no in-place mutation).
 - `src/agents/ml_foundation/model_trainer/nodes/__init__.py` (export).
-- `src/agents/ml_foundation/model_trainer/state.py` (3 new fields).
+- `src/agents/ml_foundation/model_trainer/state.py` (5 new fields).
 - `scripts/audit_b2_survival_target_feasibility.py` (NEW; reproducibility-anchor for §2 audit table).
 - `scripts/measure_b2_cindex_contrast.py` (NEW; CV contrast script).
 - `tests/unit/test_model_trainer/test_survival_model.py` (NEW; ~15-25 tests).

@@ -271,6 +271,36 @@ def test_fit_rsf_raises_on_constant_time():
         fit_rsf(X, t, e, n_estimators=10)
 
 
+def test_cross_val_skips_single_class_validation_folds():
+    """L2 codex pass-1: zero-event val folds must be skipped, not crashed on.
+
+    Validates the skip-degenerate-fold guard in
+    scripts/measure_b2_cindex_contrast.py._cross_val. The contrast
+    script has no unit-test entry point (it's a script), so we test
+    the guard indirectly by constructing a tiny cohort where some
+    folds will have single-class val sets.
+    """
+    # Note: this is an integration-style smoke test using the script's
+    # helper directly. Stratified KFold should distribute events across
+    # folds, but with only 2 events out of 100 patients some folds will
+    # have 0 val events (single-class). The _cross_val guard must skip
+    # those folds and report n_folds < 5.
+    from scripts.measure_b2_cindex_contrast import _cross_val
+
+    rng = np.random.default_rng(42)
+    n = 100
+    X = pd.DataFrame({"x0": rng.normal(size=n), "x1": rng.normal(size=n)})
+    y = np.zeros(n, dtype=int)
+    y[:2] = 1  # Only 2 positives.
+    time = np.where(y == 1, 50.0, 100.0)
+    event = y.astype(bool)
+    metrics = _cross_val(X, y, time, event, seed=42)
+    # With 2 positives spread across 5 folds, at most 2 folds can have
+    # a positive val sample. Other folds skip.
+    # The skip-guard fires when y_va_bin has only one class.
+    assert metrics["binary_auc"]["n_folds"] <= 2
+
+
 def test_fit_rsf_works_with_two_unique_times():
     """RSF should work the moment there is variation in time."""
     rng = np.random.default_rng(42)
@@ -323,7 +353,13 @@ async def test_node_returns_patch_for_optum(synthetic_optum_journey):
 
 @pytest.mark.asyncio
 async def test_node_does_not_mutate_state_in_place(synthetic_csu_journey, synthetic_csu_events):
-    """B3 H3 lesson: node must return a patch, not mutate state."""
+    """B3 H3 lesson: node must return a patch, not mutate state.
+
+    M2 codex pass-1 strengthening: also verify the input DataFrames
+    themselves are not mutated (object identity preserved + column
+    set + row count + dtypes), so an in-place sort/append regression
+    in a future refactor would be caught.
+    """
     state = {
         "enable_survival_modeling": True,
         "manifest_source": "csu",
@@ -331,10 +367,30 @@ async def test_node_does_not_mutate_state_in_place(synthetic_csu_journey, synthe
         "treatment_events_df": synthetic_csu_events,
     }
     state_before_keys = set(state.keys())
+    pj_id_before = id(state["patient_journeys_df"])
+    ev_id_before = id(state["treatment_events_df"])
+    pj_cols_before = set(state["patient_journeys_df"].columns)
+    ev_cols_before = set(state["treatment_events_df"].columns)
+    pj_rows_before = len(state["patient_journeys_df"])
+    ev_rows_before = len(state["treatment_events_df"])
+    pj_dtypes_before = dict(state["patient_journeys_df"].dtypes)
+    ev_dtypes_before = dict(state["treatment_events_df"].dtypes)
+
     patch = await survival_model_node(state)
-    # State must NOT have been mutated to include the patch keys.
+
+    # State key-set unchanged.
     assert set(state.keys()) == state_before_keys
-    # But the patch must carry them.
+    # Frames not replaced.
+    assert id(state["patient_journeys_df"]) == pj_id_before
+    assert id(state["treatment_events_df"]) == ev_id_before
+    # Frame columns / rows / dtypes preserved.
+    assert set(state["patient_journeys_df"].columns) == pj_cols_before
+    assert set(state["treatment_events_df"].columns) == ev_cols_before
+    assert len(state["patient_journeys_df"]) == pj_rows_before
+    assert len(state["treatment_events_df"]) == ev_rows_before
+    assert dict(state["patient_journeys_df"].dtypes) == pj_dtypes_before
+    assert dict(state["treatment_events_df"].dtypes) == ev_dtypes_before
+    # Patch carries the survival fields.
     assert "survival_time_days" in patch
 
 

@@ -193,7 +193,6 @@ def fit_cox(
     time: np.ndarray,
     event: np.ndarray,
     alpha: float = 1e-3,
-    seed: int = 42,
 ) -> Any:
     """Fit a Cox proportional-hazards model on (X, time, event).
 
@@ -201,12 +200,12 @@ def fit_cox(
     1e-3 regularizes against the collinear CSU feature surface per B3
     finding.
 
-    Returns the fitted model. ``seed`` is unused by CoxPHSurvivalAnalysis
-    but threaded for caller-side reproducibility plumbing.
+    L4 codex pass-1: no ``seed`` parameter — CoxPHSurvivalAnalysis is
+    deterministic given inputs, and a seed kwarg in the public API
+    was misleading (silently discarded).
     """
     from sksurv.linear_model import CoxPHSurvivalAnalysis
 
-    del seed  # Cox is deterministic given inputs; no RNG.
     y = _make_structured_target(time, event)
     model = CoxPHSurvivalAnalysis(alpha=alpha)
     model.fit(X.values, y)
@@ -315,10 +314,14 @@ async def survival_model_node(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         time, event = derive_survival_target(pj, manifest_source, treatment_events=ev)
     except Exception as exc:  # noqa: BLE001
-        logger.exception(
+        # L3 codex pass-1: warning (not exception) — the error is
+        # surface-handled into the patch; logger.exception triggers
+        # false-positive ERROR alerts in log aggregators.
+        logger.warning(
             "survival_model_node: derive_survival_target failed (manifest_source=%s): %s",
             manifest_source,
             exc,
+            exc_info=True,
         )
         return {"survival_target_error": str(exc)}
 

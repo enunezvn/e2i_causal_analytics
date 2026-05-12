@@ -51,13 +51,21 @@ def _audit_cohort(label: str, pj: pd.DataFrame, ev: pd.DataFrame) -> Dict[str, A
     n_post_rx = int(len(post_rx))
     n_unique_pids = int(post_rx["patient_id"].nunique()) if "patient_id" in post_rx.columns else 0
 
-    # Verdict: REAL if at least 10% of positives have a usable post-index rx;
-    # otherwise DATA-FIDELITY-BOUND.
+    # M5 codex pass-1: 10% threshold rationale. With <10% coverage,
+    # the survival time imputation for unmatched positives (fallback
+    # to journey_duration_days censoring time) dominates the
+    # event-time signal, since the survival regression loss is
+    # ranking-based on event-time order. At >=10%, at least ~175 of
+    # CSU's 1743 positives have usable rx event-time data; at <10%
+    # (e.g., Optum's 0%), the survival framing reduces to binary at
+    # the administrative censoring horizon and is documented as
+    # DATA-FIDELITY-BOUND in pre-spec §2.
     pids_pos = set(pj.loc[pj["treatment_initiated"] == 1, "patient_id"].unique())
     pids_with_post_rx = set(post_rx["patient_id"].unique())
     n_pos_with_rx = len(pids_pos & pids_with_post_rx)
     coverage = (n_pos_with_rx / n_pos) if n_pos > 0 else 0.0
-    verdict = "REAL" if coverage >= 0.10 else "DATA-FIDELITY-BOUND"
+    coverage_threshold = 0.10
+    verdict = "REAL" if coverage >= coverage_threshold else "DATA-FIDELITY-BOUND"
 
     return {
         "cohort": label,
@@ -67,6 +75,7 @@ def _audit_cohort(label: str, pj: pd.DataFrame, ev: pd.DataFrame) -> Dict[str, A
         "n_unique_patients_with_post_index_rx": n_unique_pids,
         "n_positives_with_post_index_rx": n_pos_with_rx,
         "post_index_rx_coverage_of_positives": coverage,
+        "coverage_threshold": coverage_threshold,
         "verdict": verdict,
     }
 
