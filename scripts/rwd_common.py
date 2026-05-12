@@ -578,6 +578,13 @@ VA_MEDICAL_CENTER_CODES: tuple[str, ...] = ("261QM2500X",)
 #
 # Source: https://www.nucc.org/index.php/code-sets-mainmenu-41/provider-taxonomy
 # Codes verified against the 24.0 release (2024).
+
+# NPPES entity_type codes per CMS NPPES schema. Used by lookup_npi consumers
+# to disambiguate individual providers (Type 1) from organizational providers
+# (Type 2). Codex PR #162 post-merge LOW: named constants over `"1"` / `"2"`.
+NPPES_ENTITY_TYPE_INDIVIDUAL: str = "1"
+NPPES_ENTITY_TYPE_ORGANIZATION: str = "2"
+
 NUCC_ALLERGY_IMMUNOLOGY_CODES: tuple[str, ...] = (
     "207K00000X",  # Allergy & Immunology
     "207KA0200X",  # Clinical & Laboratory Immunology
@@ -593,12 +600,30 @@ NUCC_DERMATOLOGY_CODES: tuple[str, ...] = (
     "207NS0135X",  # Procedural Dermatology
 )
 
+# Primary care provider taxonomy codes per CMS definition (Family Medicine
+# + Internal Medicine + Pediatrics + General Practice + Primary Care Clinic).
+# Codes verified against NUCC 24.0 (January 2024). All Family Medicine sub-
+# codes are enumerated explicitly — the legacy `startswith("207Q")` matched
+# any 207Q* prefix, so dropping any active sub-code would silently exclude
+# legitimate PCPs. Codex PR #162 post-merge MEDIUM-1: parity-with-NUCC.
 NUCC_PCP_CODES: tuple[str, ...] = (
+    # Family Medicine (parent + all active sub-codes per NUCC 24.0)
     "207Q00000X",  # Family Medicine
     "207QA0000X",  # Adolescent Medicine (Family Medicine)
-    "208D00000X",  # General Practice
+    "207QA0401X",  # Addiction Medicine (Family Medicine)
+    "207QA0505X",  # Adult Medicine
+    "207QB0002X",  # Obesity Medicine (Family Medicine)
+    "207QG0300X",  # Geriatric Medicine (Family Medicine)
+    "207QH0002X",  # Hospice and Palliative Care (Family Medicine)
+    "207QS0010X",  # Sports Medicine (Family Medicine)
+    "207QS1201X",  # Sleep Medicine (Family Medicine)
+    # Internal Medicine (CMS PCP per primary-care definition)
     "207R00000X",  # Internal Medicine
+    # General Practice
+    "208D00000X",  # General Practice
+    # Pediatrics (CMS PCP)
     "208000000X",  # Pediatrics
+    # Primary care clinic / center (organizational)
     "261QP2300X",  # Primary Care Clinic/Center
 )
 
@@ -854,12 +879,23 @@ def parse_nppes_api_result(payload: Mapping[str, Any], npi: str) -> NppesRecord 
     )
 
 
-def _is_valid_npi(npi: Any) -> bool:
-    """Conservative NPI well-formedness check (10 digits)."""
+def is_valid_npi(npi: Any) -> bool:
+    """Conservative NPI well-formedness check (10 digits, all numeric).
+
+    Public API for converters to detect whether an input is a real 10-digit
+    NPI vs an obfuscated vendor key that needs ``generate_luhn_npi`` to
+    produce a Luhn-valid output. Codex PR #162 post-merge MEDIUM-2 introduced
+    this branch in ``_build_hcp_profiles``.
+    """
     if npi is None:
         return False
     s = str(npi).strip()
     return len(s) == 10 and s.isdigit()
+
+
+# Backwards-compat alias for callers that imported the private name. New
+# callers should use the public ``is_valid_npi``.
+_is_valid_npi = is_valid_npi
 
 
 def _api_rate_limit_check() -> None:
