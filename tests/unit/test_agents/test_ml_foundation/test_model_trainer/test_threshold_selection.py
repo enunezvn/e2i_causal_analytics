@@ -460,6 +460,47 @@ class TestThresholdRebinarisationGuard:
             result["test_metrics_at_optimal"].keys()
         )
 
+    def test_threshold_within_isclose_tolerance_imbalanced_path(self):
+        """Codex pass-1 M2 regression: the `imbalance_detected=True` branch
+        of the #37 fix mirrors `test_metrics_optimal` (the enriched dict in
+        the imbalanced flow) into `test_metrics_standard`. Without this
+        test, that branch would have zero coverage."""
+        np.random.seed(RANDOM_STATE)
+        n = 80
+        # Same degenerate validation set as the previous test — all proba=0.5
+        # collapses Youden's J to the sentinel, which the guard clamps to 0.5.
+        y_val = np.random.randint(0, 2, n)
+        y_val_proba = np.column_stack([np.full(n, 0.5), np.full(n, 0.5)])
+        y_val_pred = (y_val_proba[:, 1] >= 0.5).astype(int)
+
+        y_test = np.random.randint(0, 2, n)
+        y_test_proba = np.column_stack([np.random.rand(n), np.random.rand(n)])
+        y_test_proba[:, 0] = 1 - y_test_proba[:, 1]
+        y_test_pred = (y_test_proba[:, 1] >= 0.5).astype(int)
+
+        result = _compute_classification_metrics(
+            y_train=None,
+            y_train_pred=None,
+            y_train_proba=None,
+            y_validation=y_val,
+            y_validation_pred=y_val_pred,
+            y_validation_proba=y_val_proba,
+            y_test=y_test,
+            y_test_pred=y_test_pred,
+            y_test_proba=y_test_proba,
+            imbalance_detected=True,  # exercises the M2 branch
+            minority_ratio=0.1,
+        )
+
+        # Guard skipped → threshold clamps to 0.5.
+        assert result["optimal_threshold"] == 0.5
+        # Same invariants as the imbalance_detected=False test: identical
+        # values and identical keysets across the two slots.
+        assert result["test_metrics_at_05"] == result["test_metrics_at_optimal"]
+        assert set(result["test_metrics_at_05"].keys()) == set(
+            result["test_metrics_at_optimal"].keys()
+        )
+
 
 # ============================================================================
 # Backlog #20 Gap 1: cost-aware threshold selection
