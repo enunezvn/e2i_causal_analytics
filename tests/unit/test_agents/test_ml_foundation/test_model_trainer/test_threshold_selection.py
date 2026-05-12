@@ -452,6 +452,13 @@ class TestThresholdRebinarisationGuard:
         assert result["optimal_threshold"] == 0.5
         # Same y_pred → identical metrics in both at-0.5 and at-optimal blocks.
         assert result["test_metrics_at_05"] == result["test_metrics_at_optimal"]
+        # Backlog #37 regression: the dict-mirroring fix must preserve identical
+        # keysets (not just core scalar metrics). Asymmetric enrichment of the
+        # at-0.5 vs at-optimal dicts pre-#37 left e.g. calibration_* and
+        # business_utility on one side only.
+        assert set(result["test_metrics_at_05"].keys()) == set(
+            result["test_metrics_at_optimal"].keys()
+        )
 
 
 # ============================================================================
