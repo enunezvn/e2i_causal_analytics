@@ -110,6 +110,14 @@ class RwdRealisticConfig:
     missing_demo_rate: float = 0.05  # Fraction with demo missing fields
     leakage_pattern: LeakagePattern = "none"
     leakage_strength: float = 1.0  # Multiplier on injected leak signal (0–1)
+    # Backlog #135: multiplier on the 4 demographic coefficients in
+    # _generate_target. Default 1.0 reproduces the [0.62, 0.68] AUC band
+    # calibrated for the published claims-only ceiling. signal_scale=0
+    # produces a pure-noise cohort (single-feature AUC ≈ 0.50);
+    # signal_scale > 1 produces higher AUCs. The T2.2 calibration sweep
+    # at scripts/calibration/run_t22_synth_sweep.py varies this knob to
+    # span target AUCs [0.55, 0.85].
+    signal_scale: float = 1.0
     seed: int = 42
     start_date: str = "2022-01-01"
     end_date: str = "2024-12-31"
@@ -254,13 +262,19 @@ def _generate_target(
     )
     long_eligibility = (df["eligibility_duration_days"].values > 365).astype(int)
 
-    # Logit linear combination — coefficients tuned for AUC 0.62-0.68
+    # Logit linear combination — coefficients tuned for AUC 0.62-0.68 at
+    # signal_scale=1.0. Backlog #135: signal_scale multiplier on the 4
+    # demographic coefficients enables T2.2 calibration sweep across
+    # target AUCs [0.55, 0.85]. The base-rate and noise terms are NOT
+    # scaled (otherwise scale=0 would still inherit the prevalence offset
+    # and noise floor and not produce a pure-noise cohort).
+    scale = config.signal_scale
     logit = (
         np.log(config.prevalence / (1 - config.prevalence))  # Base rate
-        + 0.25 * age_norm
-        + 0.45 * icd_severe
-        + 0.20 * insurance_premium
-        + 0.15 * long_eligibility
+        + scale * 0.25 * age_norm
+        + scale * 0.45 * icd_severe
+        + scale * 0.20 * insurance_premium
+        + scale * 0.15 * long_eligibility
         + rng.normal(0, 0.5, n)  # Noise dominates over modest signal
     )
     prob = 1 / (1 + np.exp(-logit))

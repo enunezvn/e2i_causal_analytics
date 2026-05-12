@@ -35,9 +35,20 @@ from tests.unit.test_agents.test_ml_foundation.test_model_trainer.conftest impor
 # --------------------------------------------------------------------------- #
 
 
-def test_default_buffer_is_005() -> None:
-    """Plan v3 §4 T2.2 default buffer: 0.05 (5pp above null p99)."""
-    assert T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT == 0.05
+def test_default_buffer_is_004() -> None:
+    """Plan v3 §4 T2.2 default buffer: 0.04 (4pp above perm-null p99).
+
+    Backlog #135: calibrated 2026-05-12 via the 5-seed × 7-target-AUC sweep
+    at `scripts/calibration/aggregate_t22_sweep.py` against
+    `synthetic_rwd_realistic`. The well-conditioned §2.3 reading (target
+    cells where every seed exceeds perm-null p99) yielded a floor of
+    `floor(0.0597) - 0.01 = 0.04` at limiting target_auc=0.70. The prior
+    provisional 0.05 was a domain-typical placeholder; the empirical
+    calibration tightens it by 1pp.
+
+    See `docs/calibration/t22_perm_anchored_synth_20260510_results.md`.
+    """
+    assert T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT == 0.04
 
 
 # --------------------------------------------------------------------------- #
@@ -118,7 +129,8 @@ def test_advisory_keys_are_none_when_perm_p99_is_none() -> None:
     val = mr["validation_metrics"]
     assert val["auc_above_permutation_null"] is None
     assert val["permutation_anchored_auc_advisory_violated"] is None
-    assert val["permutation_anchored_auc_buffer"] == 0.05
+    # Backlog #135: default buffer empirically calibrated 0.05 → 0.04.
+    assert val["permutation_anchored_auc_buffer"] == 0.04
 
 
 def test_advisory_keys_are_none_when_perm_p99_absent() -> None:
@@ -255,7 +267,8 @@ async def test_evaluate_model_emits_t22_advisory_on_validation_metrics(
     assert "auc_above_permutation_null" in val
     assert "permutation_anchored_auc_buffer" in val
     assert "permutation_anchored_auc_advisory_violated" in val
-    assert val["permutation_anchored_auc_buffer"] == 0.05
+    # Backlog #135: default buffer empirically calibrated 0.05 → 0.04.
+    assert val["permutation_anchored_auc_buffer"] == 0.04
 
 
 @pytest.mark.asyncio
