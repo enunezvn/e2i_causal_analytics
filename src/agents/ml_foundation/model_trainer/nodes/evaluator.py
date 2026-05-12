@@ -1955,6 +1955,24 @@ def _compute_classification_metrics(
         random_state=bootstrap_random_state,
     )
 
+    # Backlog #37: when the rebinarisation guard at the top of this block
+    # skipped because optimal_threshold ≈ 0.5 (math.isclose), y_test_pred
+    # and y_test_pred_optimal are the same array, so the two
+    # _compute_split_classification_metrics calls above produce equivalent
+    # core metrics. The post-call enrichment (calibration_*, business_utility,
+    # baseline_test_auc, minimum_lift_over_baseline, train_val_auc_delta,
+    # net_benefit_grid, decision_curve_data, NB-area block, anchor-point block)
+    # attaches only to ``test_metrics``, which aliases test_metrics_standard
+    # when imbalance_detected=False or test_metrics_optimal when True — so the
+    # unaliased dict ends up with a strict subset of keys. Mirror the enriched
+    # dict into the other slot so both retain identical keysets, matching
+    # their documented invariant: same y_pred → identical metrics dict.
+    if math.isclose(optimal_threshold, 0.5):
+        if imbalance_detected:
+            test_metrics_standard = dict(test_metrics_optimal)
+        else:
+            test_metrics_optimal = dict(test_metrics_standard)
+
     # Build result dictionary
     result = {
         "train_metrics": train_metrics,
