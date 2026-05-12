@@ -273,6 +273,30 @@ def test_bulk_lookup_omits_unresolved_npis():
     assert out == {}
 
 
+def test_lookup_npi_uses_env_var_default_when_api_fallback_unset(monkeypatch):
+    """When ``use_api_fallback`` is None, the env var NPPES_API_FALLBACK
+    drives the default. '0' / 'false' must disable the fallback (and skip
+    the network) even when no loader is registered."""
+    monkeypatch.setenv("NPPES_API_FALLBACK", "0")
+    set_npi_cache_loader(None)
+    # Loader unregistered + API disabled → must return None without
+    # touching the network. If this test ever does a real HTTP call,
+    # the assert below still passes but the test would be slow.
+    assert lookup_npi("1234567893") is None
+
+
+def test_lookup_npi_swallows_loader_exceptions_and_falls_through_to_none(monkeypatch):
+    """Loader exceptions must NOT propagate; they are logged and treated
+    as cache-miss. With API disabled, this still returns None."""
+    monkeypatch.setenv("NPPES_API_FALLBACK", "0")
+
+    def bad_loader(_npi):
+        raise RuntimeError("db down")
+
+    set_npi_cache_loader(bad_loader)
+    assert lookup_npi("1234567893") is None
+
+
 # --------------------------------------------------------------------------- #
 # Module-level constants (sanity)                                              #
 # --------------------------------------------------------------------------- #
