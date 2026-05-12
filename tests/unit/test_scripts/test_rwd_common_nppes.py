@@ -285,6 +285,38 @@ def test_lookup_npi_uses_env_var_default_when_api_fallback_unset(monkeypatch):
     assert lookup_npi("1234567893") is None
 
 
+def test_lookup_npi_default_when_env_unset_is_opt_in(monkeypatch):
+    """Regression for PR #161 codex post-merge MEDIUM (defense-in-depth):
+    the NPPES_API_FALLBACK default is "0" (opt-in). With env unset and no
+    explicit ``use_api_fallback`` arg, the helper must NOT touch the
+    network."""
+    monkeypatch.delenv("NPPES_API_FALLBACK", raising=False)
+    set_npi_cache_loader(None)
+    # Default opt-in: env unset, kwarg None, loader unregistered → None.
+    # If a future regression flips this default back to opt-out, the
+    # assertion still passes for invalid NPIs but real callers would hit
+    # the live CMS API by surprise.
+    assert lookup_npi("1234567893") is None
+
+
+def test_lookup_npi_default_when_env_unset_does_not_call_api_fetcher(monkeypatch):
+    """Defense-in-depth regression: with env unset and no kwarg, the
+    private API fetcher must not be called even once."""
+    import scripts.rwd_common as rwdc
+
+    monkeypatch.delenv("NPPES_API_FALLBACK", raising=False)
+    set_npi_cache_loader(None)
+    called = {"n": 0}
+
+    def boom(*_a, **_k):  # pragma: no cover - assert no-call
+        called["n"] += 1
+        raise AssertionError("API fetcher should not be called when env is unset")
+
+    monkeypatch.setattr(rwdc, "_fetch_nppes_via_api_sync", boom)
+    assert lookup_npi("1234567893") is None
+    assert called["n"] == 0
+
+
 def test_lookup_npi_swallows_loader_exceptions_and_falls_through_to_none(monkeypatch):
     """Loader exceptions must NOT propagate; they are logged and treated
     as cache-miss. With API disabled, this still returns None."""

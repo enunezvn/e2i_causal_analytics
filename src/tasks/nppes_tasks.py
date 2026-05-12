@@ -250,6 +250,27 @@ ON CONFLICT (npi) DO UPDATE SET
 """
 
 
+def _chunked(iterable: Iterable[Any], chunk_size: int) -> Iterator[list[Any]]:
+    """Yield successive ``chunk_size``-row lists drawn from ``iterable``.
+
+    Used by ``refresh_npi_taxonomy_cache`` so the monthly NPPES ingest commits
+    its transaction at chunk boundaries instead of all-or-nothing at the end.
+    A worker death between commits loses at most one chunk of progress; the
+    NPI UPSERT is idempotent on the PK so a retry safely re-applies any
+    already-committed range.
+    """
+    if chunk_size < 1:
+        raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+    chunk: list[Any] = []
+    for item in iterable:
+        chunk.append(item)
+        if len(chunk) >= chunk_size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
+
 def upsert_npi_records(
     records: Iterable[NppesRecord],
     *,
@@ -445,12 +466,23 @@ def refresh_npi_taxonomy_cache(
         fh = open(path, "r", newline="", encoding="utf-8", errors="replace")
 
     rows_upserted = 0
+    # Commit every COMMIT_CHUNK_SIZE rows so worker death / Celery hard-time-
+    # limit hit doesn't discard the entire ~10 GB ingest. UPSERT is idempotent
+    # on the `npi` PK, so a fresh retry safely re-runs the already-committed
+    # range — no checkpoint table required.
+    commit_chunk_size = int(os.environ.get("NPPES_REFRESH_COMMIT_CHUNK", "10000"))
     try:
         reader = csv.DictReader(fh)
+        records_iter = ingest_bulk_dump_csv(reader)
         with psycopg.connect(db_url) as conn:
-            with conn.cursor() as cur:
-                rows_upserted = upsert_npi_records(ingest_bulk_dump_csv(reader), cursor=cur)
-            conn.commit()
+            for chunk in _chunked(records_iter, commit_chunk_size):
+                with conn.cursor() as cur:
+                    rows_upserted += upsert_npi_records(chunk, cursor=cur)
+                conn.commit()
+                logger.info(
+                    "NPPES cache refresh progress: %d rows committed",
+                    rows_upserted,
+                )
     finally:
         fh.close()
 
