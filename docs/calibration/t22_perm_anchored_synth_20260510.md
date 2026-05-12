@@ -6,7 +6,7 @@
 **Plan:** v4 §6 G4 — calibration-protocol artifacts (codex-rescue HIGH-4 fix)
 **Code surface:**
 - `src/agents/ml_foundation/model_trainer/nodes/evaluator.py:154` `_emit_permutation_anchored_auc_advisory`
-- `src/agents/ml_foundation/model_trainer/nodes/evaluator.py:71` `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT = 0.05`
+- `src/agents/ml_foundation/model_trainer/nodes/evaluator.py:84` `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT = 0.04` (calibrated 2026-05-12 via backlog #135; was 0.05 provisional)
 - Synthetic regime: `src/data/synthetic_rwd/synthetic_rwd_realistic.py` (signal scaling parameter sweepable)
 
 ---
@@ -17,7 +17,7 @@ The T2.2 advisory criterion gates on the margin
 ```
 auc_above_permutation_null = test_auc - permutation_null_p99
 ```
-A run violates the advisory when this margin is below the buffer (default `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT = 0.05`).
+A run violates the advisory when this margin is below the buffer (default `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT = 0.04`, calibrated 2026-05-12 via backlog #135; was 0.05 provisional).
 
 **The buffer literal needs calibration evidence**: the 0.05 default is a domain-typical "above-noise" margin (5pp lift over the upper tail of label-shuffle noise). To know that 0.05 is the correct floor — not 0.03, not 0.08 — we need to:
 
@@ -67,23 +67,30 @@ After all 35 cells run:
 
 ---
 
-## 3. Recommended threshold: TBD — current 0.05 is PROVISIONAL, NOT CALIBRATED
+## 3. Recommended threshold: 0.04 — CALIBRATED 2026-05-12 via backlog #135 sweep
 
-> **COMPUTE PENDING.** The full 35-cell sweep is estimated at 30-45 min wall-time on a single-process pipeline runner. It is deferred from this G4 documentation gate to a separate compute-runtime step. This section will be filled in once the sweep completes.
+> **CALIBRATED.** The full 35-cell sweep completed via `scripts/calibration/run_t22_synth_sweep.py` (5 seeds × 7 target AUCs). Empirical results are in `t22_perm_anchored_synth_20260510_results.md` (sibling file). Buffer was updated from the provisional 0.05 to the empirically-fitted 0.04 in `evaluator.py:84` (commit on backlog-135 branch).
 
-> **G4 SCOPE NOTE:** G4 (PR #130) ships the documentation framework for T2.2 calibration. **G4 does NOT complete T2.2 calibration** — the 35-cell synthetic sweep that would actually fit the buffer literal is deferred to a follow-up step. The current `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT = 0.05` is **provisional, not calibrated**, and SHOULD be treated as a placeholder until the sweep results land in §3 below.
+> **§2.3 fit summary.** Two readings:
+>
+> - **Mechanical** (all targets, no exclusion): `buffer_recommended = 0.0` clamped from `-0.16` raw. At small-n the regime can produce nominal target=0.55 cells whose realized AUC falls below perm-null p99 by ≈0.14; no positive buffer accommodates them. This is a regime+sample-size property, not a calibration one.
+> - **Well-conditioned** (target cells where every seed exceeds perm-null p99): `buffer_recommended = 0.04`. Limiting target=0.70 with P5 margin=+0.0597; `floor(0.06) - 0.01 safety = 0.04`.
+>
+> Adopted: **well-conditioned 0.04**. The mechanical 0.0 reading is a tautology when low-signal cells are below the perm-null floor by construction at this sample size; the well-conditioned reading is the empirical floor for the cells where the regime produces signal that the model can reliably capture.
 
-| Target AUC | Realized AUC (mean ± std over 5 seeds) | Perm null p99 (mean ± std) | Margin p99 (mean ± std) | Margin p99 (P5) |
-| ---------- | -------------------------------------- | -------------------------- | ----------------------- | --------------- |
-| 0.55       | TBD                                    | TBD                        | TBD                     | TBD             |
-| 0.60       | TBD                                    | TBD                        | TBD                     | TBD             |
-| 0.65       | TBD                                    | TBD                        | TBD                     | TBD             |
-| 0.70       | TBD                                    | TBD                        | TBD                     | TBD             |
-| 0.75       | TBD                                    | TBD                        | TBD                     | TBD             |
-| 0.80       | TBD                                    | TBD                        | TBD                     | TBD             |
-| 0.85       | TBD                                    | TBD                        | TBD                     | TBD             |
+| Target AUC | Realized AUC (mean ± std over 5 seeds) | Perm null p99 (mean ± std) | Margin p99 (mean ± std) | Margin p99 (P5 = min) |
+| ---------- | -------------------------------------- | -------------------------- | ----------------------- | --------------------- |
+| 0.55       | 0.5514 ± 0.0505                        | 0.6012 ± 0.0044            | -0.0499 ± 0.0514        | -0.1447               |
+| 0.60       | 0.6005 ± 0.0265                        | 0.5876 ± 0.0024            | +0.0129 ± 0.0260        | -0.0091               |
+| 0.65       | 0.6111 ± 0.0469                        | 0.5865 ± 0.0044            | +0.0246 ± 0.0451        | -0.0143               |
+| 0.70       | 0.6766 ± 0.0363                        | 0.5781 ± 0.0069            | +0.0985 ± 0.0342        | +0.0597               |
+| 0.75       | 0.7606 ± 0.0159                        | 0.5748 ± 0.0116            | +0.1858 ± 0.0131        | +0.1759               |
+| 0.80       | 0.7991 ± 0.0229                        | 0.5635 ± 0.0067            | +0.2356 ± 0.0242        | +0.2066               |
+| 0.85       | 0.8672 ± 0.0121                        | 0.5620 ± 0.0059            | +0.3051 ± 0.0136        | +0.2910               |
 
-**Recommended `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT`:** TBD (after sweep). Current code value `0.05` is **provisional, not calibrated** — it is a domain-typical "above-noise" placeholder, NOT the output of the §2.3 threshold-fit logic. The advisory built on this provisional value is fit-for-purpose for surfacing observability signals (it does NOT block the deployer; see §1.5 of the v3 plan), but the value MUST NOT be promoted to enforcement until the sweep completes.
+**Recommended `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT`:** **0.04** (well-conditioned reading). Calibrated 2026-05-12 via backlog #135 sweep — see `t22_perm_anchored_synth_20260510_results.md` for the auto-generated artifact + reproduction command. The advisory remains observability-only (does NOT block the deployer; see §1.5 of the v3 plan); promotion to enforcement still requires the §7 promotion gate (at-least-one un-touched real-cohort run + domain expert sign-off).
+
+**Drift flags:** target_auc=0.65 (drift -0.039) and target_auc=0.70 (drift -0.023) exceeded the ±0.02 spec band at n=1400. Both flagged in the auto-generated table; not excluded from the well-conditioned fit (0.70 is the limiting cell). The drift is a property of small-n sklearn LR on 4 demographic features and would tighten at larger n; for this calibration it surfaces honest spread and the §2.3 logic accommodates it via the P5 floor.
 
 ### 3.1 Follow-up tracking issue
 
@@ -95,7 +102,7 @@ After all 35 cells run:
 - [ ] Implement `scripts/calibration/run_t22_synth_sweep.py` and `scripts/calibration/aggregate_t22_sweep.py` per §4 of this doc.
 - [ ] Run the 35-cell sweep (5 seeds × 7 target AUCs) on `synthetic_rwd_realistic` and produce the §3 results table.
 - [ ] Apply the §2.3 threshold-fit logic to derive the recommended buffer.
-- [ ] If the recommended buffer differs from the provisional 0.05, update `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT` in `evaluator.py:71` AND update the §3 doc table in lockstep (per §7 re-tuning trigger).
+- [x] If the recommended buffer differs from the provisional 0.05, update `T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT` in `evaluator.py:84` AND update the §3 doc table in lockstep (per §7 re-tuning trigger). _DONE 2026-05-12: 0.05 → 0.04._
 - [ ] Confirm the §5 acceptance criteria all hold.
 - [ ] Update `T22_BUFFER_LIFECYCLE_STATE` (if added) and the doc's lifecycle/promotion section.
 

@@ -75,13 +75,22 @@ _PERMUTATION_PROMOTED_KEYS: tuple[str, ...] = (
 
 # Plan v3 §4 T2.2 — Permutation-anchored AUC floor (advisory mode).
 # Default buffer above the empirical permutation null p99 that a deployable
-# model's test AUC must exceed. 0.05 (5pp) is a domain-typical "above-noise"
-# margin; calibration on synthetic [0.55, 0.85] regimes + retrospective
-# held-out cohorts will refine this in the T2.6c enforcement phase.
-# Until then, this is an OBSERVABILITY threshold only — violations emit a
-# structured warning and a flag on validation_metrics, but do NOT enter
-# `success_criteria` and do NOT block the deployer.
-T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT: float = 0.05
+# model's test AUC must exceed. Backlog #135: empirically calibrated to
+# 0.04 via the 5-seed × 7-target-AUC sweep at
+# `scripts/calibration/aggregate_t22_sweep.py` against
+# `synthetic_rwd_realistic` (n=1400, prevalence=0.10). The §2.3 well-
+# conditioned reading (target cells where every seed exceeds perm null
+# p99) yielded `buffer = floor(min P5 margin) - safety_margin = floor(0.06)
+# - 0.01 = 0.04`. The limiting cell is target_auc=0.70 with P5=+0.0597.
+# The mechanical reading (all cells, no exclusion) clamps to 0.0 at
+# small n because low-signal target cells (0.55-0.65) can produce models
+# whose AUC falls below the perm-null p99 — that's a regime+sample-size
+# property, not a buffer-calibration one. See
+# `docs/calibration/t22_perm_anchored_synth_20260510_results.md`.
+# Until T2.6c promotion, this is an OBSERVABILITY threshold only —
+# violations emit a structured warning and a flag on validation_metrics,
+# but do NOT enter `success_criteria` and do NOT block the deployer.
+T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT: float = 0.04
 
 # Plan v3 §4 T2.3 — Cohort-derived honest band defaults.
 # The "honest band" is the cohort-conditional range of test AUCs that a

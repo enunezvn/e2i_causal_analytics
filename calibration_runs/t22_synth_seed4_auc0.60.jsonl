@@ -1,0 +1,1 @@
+{"seed": 4, "target_auc": 0.6, "signal_scale": 1.1, "realized_auc": 0.5834663184873543, "perm_null_p99": 0.5895004594032592, "margin_p99": -0.006034140915904929, "n_patients": 1400, "prevalence": 0.1, "test_size": 400, "n_permutations": 200, "computed_at": "2026-05-12T13:39:57.310708+00:00"}
