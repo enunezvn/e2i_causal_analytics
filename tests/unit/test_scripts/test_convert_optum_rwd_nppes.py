@@ -91,7 +91,9 @@ def _seed_claims(c: OptumDataConverter, npi_to_rx: dict[str, list[int]]) -> None
     med_rows = []
     for npi, patids in npi_to_rx.items():
         for pid in patids:
-            med_rows.append({"npi": npi, "patid": pid, "medication_date": pd.Timestamp("2023-01-01")})
+            med_rows.append(
+                {"npi": npi, "patid": pid, "medication_date": pd.Timestamp("2023-01-01")}
+            )
     c.med = pd.DataFrame(med_rows)
     c.proc = pd.DataFrame(columns=["npi", "patid", "proc_date"])
     c.now_iso = "2024-01-01T00:00:00"
@@ -151,9 +153,7 @@ def test_build_hcp_profiles_populates_eight_fields_when_lookup_hits():
         npi=generated,
         entity_type="1",
         enumeration_date=date(2010, 1, 1),
-        taxonomies=(
-            NppesTaxonomy(code="207K00000X", desc="Allergy & Immunology", primary=True),
-        ),
+        taxonomies=(NppesTaxonomy(code="207K00000X", desc="Allergy & Immunology", primary=True),),
         practice_address=NppesAddress(city="Boston", state="MA", postal_code="02101"),
         parent_organization_legal_name="Big Health System",
         sole_proprietor=False,
