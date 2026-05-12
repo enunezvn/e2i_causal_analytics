@@ -139,13 +139,12 @@ def _row_to_record(row: Mapping[str, str]) -> NppesRecord | None:
         or None,
         state=(row.get("Provider Business Practice Location Address State Name") or "").strip()
         or None,
-        postal_code=(row.get("Provider Business Practice Location Address Postal Code") or "")
-        .strip()
+        postal_code=(
+            row.get("Provider Business Practice Location Address Postal Code") or ""
+        ).strip()
         or None,
         country_code=(
-            row.get(
-                "Provider Business Practice Location Address Country Code (If outside U.S.)"
-            )
+            row.get("Provider Business Practice Location Address Country Code (If outside U.S.)")
             or ""
         ).strip()
         or None,
@@ -157,9 +156,9 @@ def _row_to_record(row: Mapping[str, str]) -> NppesRecord | None:
         enumeration_date=_parse_nppes_date(row.get("Provider Enumeration Date")),
         last_updated_nppes=_parse_nppes_date(row.get("Last Update Date")),
         taxonomies=_extract_bulk_taxonomies(row),
-        practice_address=address if any(
-            v for v in (address.address_1, address.city, address.state, address.postal_code)
-        ) else None,
+        practice_address=address
+        if any(v for v in (address.address_1, address.city, address.state, address.postal_code))
+        else None,
         parent_organization_legal_name=(row.get("Parent Organization LBN") or "").strip() or None,
         organization_legal_name=(
             row.get("Provider Organization Name (Legal Business Name)") or ""
@@ -450,17 +449,13 @@ def refresh_npi_taxonomy_cache(
         reader = csv.DictReader(fh)
         with psycopg.connect(db_url) as conn:
             with conn.cursor() as cur:
-                rows_upserted = upsert_npi_records(
-                    ingest_bulk_dump_csv(reader), cursor=cur
-                )
+                rows_upserted = upsert_npi_records(ingest_bulk_dump_csv(reader), cursor=cur)
             conn.commit()
     finally:
         fh.close()
 
     elapsed = (datetime.now(timezone.utc) - start).total_seconds()
-    logger.info(
-        "NPPES cache refresh complete: %d rows upserted in %.1fs", rows_upserted, elapsed
-    )
+    logger.info("NPPES cache refresh complete: %d rows upserted in %.1fs", rows_upserted, elapsed)
     return {
         "status": "ok",
         "rows_upserted": rows_upserted,
