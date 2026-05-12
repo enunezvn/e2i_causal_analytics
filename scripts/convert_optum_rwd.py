@@ -3399,6 +3399,40 @@ def main() -> int:
             "If omitted, inferred from a YYYYMM substring in --input dir name."
         ),
     )
+    # Issue #156 item 3
+    parser.add_argument(
+        "--comorbidity-method",
+        choices=list(COMORBIDITY_METHODS_ALLOWED),
+        default=COMORBIDITY_METHOD_DEFAULT,
+        help=(
+            "Comorbidity scoring algorithm. 'quan' (default) uses Quan (2005) "
+            "ICD-10 mappings with classical Charlson weights + van Walraven "
+            "(2009) Elixhauser weights. 'approx' uses the legacy chapter-count "
+            "Elixhauser proxy + 5-category Charlson proxy (retained for parity)."
+        ),
+    )
+    # Issue #156 item 5 — soft enrollment filter (opt-in).
+    parser.add_argument(
+        "--soft-enrollment-filter",
+        action="store_true",
+        help=(
+            "Keep partial-enrollment patients in the cohort (DQS gates "
+            "downstream). When OMITTED (default), the historical hard filter "
+            "`continuous_enrollment == 1` + strict pre/post-day enrollment "
+            "window is preserved — CSU cohort behavior unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--min-data-quality-score",
+        type=float,
+        default=None,
+        help=(
+            "Soft data-quality threshold for downstream model-training "
+            "filtering. Patients below this DQS are LOGGED in attrition "
+            "(not dropped). Only meaningful when --soft-enrollment-filter "
+            f"is set. Default: {DEFAULT_MIN_DATA_QUALITY_SCORE}."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
 
@@ -3424,6 +3458,9 @@ def main() -> int:
         pilot_audit=args.pilot_audit,
         enrollment_regime=args.enrollment_regime,
         extract_ym=args.extract_ym,
+        comorbidity_method=args.comorbidity_method,
+        soft_enrollment_filter=args.soft_enrollment_filter,
+        min_data_quality_score=args.min_data_quality_score,
     )
 
     if args.dry_run:

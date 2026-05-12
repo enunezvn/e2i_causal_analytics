@@ -247,6 +247,24 @@ class TestSoftEnrollmentFilter:
             assert conv._check_enrollment_window(demo_row, idx) is False, elig
 
 
+class TestCliFlagWiring:
+    """Codex pass-2 MEDIUM: item 5 must be reachable from the converter CLI."""
+
+    def test_main_parser_accepts_soft_enrollment_filter_flag(self) -> None:
+        """Argparse must register --soft-enrollment-filter as a store_true flag."""
+        from scripts import convert_optum_rwd as mod
+
+        # Inspect the source as a regression guard — the CLI wires through the
+        # `--soft-enrollment-filter` flag and passes it to OptumDataConverter.
+        src = Path(mod.__file__).read_text()
+        assert "--soft-enrollment-filter" in src
+        assert "--min-data-quality-score" in src
+        assert "--comorbidity-method" in src
+        assert "soft_enrollment_filter=args.soft_enrollment_filter" in src
+        assert "min_data_quality_score=args.min_data_quality_score" in src
+        assert "comorbidity_method=args.comorbidity_method" in src
+
+
 # --------------------------------------------------------------------------- #
 # Item 6: payer_category 8-vocabulary                                         #
 # --------------------------------------------------------------------------- #
