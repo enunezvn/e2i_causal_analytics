@@ -255,6 +255,31 @@ def test_build_hcp_profiles_dupixent_offlabel_flag_set():
     assert profiles[0]["adoption_category"] == "non_adopter"
 
 
+def test_build_hcp_profiles_dupixent_hcpcs_code_only_flagged_offlabel():
+    """Regression for codex pass-1 HIGH-1: a row with HCPCS J0517 and NO
+    brand/generic/NDC must be flagged dupixent_offlabel=True and excluded
+    from the on-label Rogers curve. Before the fix, J0517-only rows passed
+    `_csu_biologic_mask` (J0517 is in CSU_BIOLOGIC_HCPCS) but missed the
+    dupixent_mask (which only checked brand/generic/NDC), so the HCP got an
+    adopter category with dupixent_offlabel=False."""
+    c = _make_converter()
+    rows = [
+        {
+            "npi": "NPI_J0517",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2020-01-01"),
+            "Brand_Name": None,
+            "Generic_Name": None,
+            "code": "J0517",
+        },
+    ]
+    _seed_for_rogers(c, rows)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["dupixent_offlabel"] is True
+    assert profiles[0]["adoption_category"] == "non_adopter"
+
+
 def test_build_hcp_profiles_dupixent_and_xolair_classifies_via_xolair():
     """An HCP with BOTH Xolair (on-label) and Dupixent (off-label) gets the
     flag set AND a Rogers category based on Xolair-only adoption timing."""

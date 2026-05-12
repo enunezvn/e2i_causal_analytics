@@ -1601,6 +1601,13 @@ class OptumDataConverter:
             # Dupixent NDC prefix per CSU_BIOLOGIC_NDC_PREFIXES is "00024" / "0024"
             for pref in ("00024", "0024"):
                 dupixent_mask = dupixent_mask | c.str.startswith(pref)
+            # Dupixent HCPCS code (J0517 per CSU_BIOLOGIC_HCPCS — spec lists it
+            # as Dupixent even though J0517 is canonically eculizumab). A
+            # code-only row with c == "J0517" matches _csu_biologic_mask but
+            # without this clause would NOT be flagged off-label, so the HCP
+            # would land in onlabel and receive a Rogers category while
+            # dupixent_offlabel stays False.
+            dupixent_mask = dupixent_mask | (c == "J0517")
 
         # First on-label fill per NPI (Xolair-equivalent only).
         onlabel = sub.loc[~dupixent_mask].copy()
