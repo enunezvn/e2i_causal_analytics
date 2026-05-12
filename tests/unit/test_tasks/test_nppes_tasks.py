@@ -266,3 +266,30 @@ def test_chunked_rejects_nonpositive_chunk_size():
 
 def test_chunked_size_larger_than_iterable_emits_single_partial_chunk():
     assert list(_chunked([1, 2, 3], chunk_size=100)) == [[1, 2, 3]]
+
+
+def test_refresh_task_rejects_non_integer_commit_chunk(monkeypatch, tmp_path):
+    """Regression for codex PR #164 pass-1 LOW: a malformed
+    NPPES_REFRESH_COMMIT_CHUNK env var must be rejected BEFORE the bulk-dump
+    file is opened. Returns error status; does not leave a dangling fh."""
+    fake_dump = tmp_path / "dump.csv"
+    fake_dump.write_text("NPI\n1234567893\n")
+    monkeypatch.setenv("NPPES_BULK_DUMP_PATH", str(fake_dump))
+    monkeypatch.setenv("NPPES_DB_URL", "postgresql://fake")
+    monkeypatch.setenv("NPPES_REFRESH_COMMIT_CHUNK", "not-a-number")
+    result = refresh_npi_taxonomy_cache.run()
+    assert result["status"] == "error"
+    assert result["reason"] == "invalid_commit_chunk"
+
+
+def test_refresh_task_rejects_non_positive_commit_chunk(monkeypatch, tmp_path):
+    """A NPPES_REFRESH_COMMIT_CHUNK value of 0 or negative is invalid; the
+    refresh task must error out, not silently produce an empty commit loop."""
+    fake_dump = tmp_path / "dump.csv"
+    fake_dump.write_text("NPI\n1234567893\n")
+    monkeypatch.setenv("NPPES_BULK_DUMP_PATH", str(fake_dump))
+    monkeypatch.setenv("NPPES_DB_URL", "postgresql://fake")
+    monkeypatch.setenv("NPPES_REFRESH_COMMIT_CHUNK", "0")
+    result = refresh_npi_taxonomy_cache.run()
+    assert result["status"] == "error"
+    assert result["reason"] == "invalid_commit_chunk"
