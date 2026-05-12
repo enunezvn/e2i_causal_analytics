@@ -530,7 +530,26 @@ def test_csu_post_index_med_aggregates_dropped_via_layer_1(csu_artifact: dict) -
     features to compete with the Layer 1 drop. The artifact carries no
     per-feature drop provenance, so we assert (a) the Layer 1 verdict
     exists with the expected severity+remediation AND (b) the feature
-    is in the dropped set."""
+    is in the dropped set.
+
+    Codex pass-1 L2 scope note (2026-05-12): this pin covers only the
+    six medication-derived AGGREGATES. The three B3 engineered
+    dependents (``engagement_per_visit``,
+    ``treatment_diversity_intensity``, ``severity_engagement_product``)
+    are declared post_index in the manifest by chain validity and
+    pinned in ``tests/unit/test_data/test_csu_feature_manifest.py``
+    ::``test_backlog_17_med_aggregates_are_post_index``. They are NOT
+    pinned here because the data_preparer pipeline runs
+    ``engineer_features`` only when ``state['enable_feature_engineering']
+    is True`` (default False — runner does not opt in for the CSU val_AUC
+    measurement). When the B3 pipeline path is exercised end-to-end
+    (e.g., a v5 B3 contrast run), Layer 1 will catch the three
+    dependents the same way it catches the six aggregates here; the
+    cohort-builder gate
+    (``scripts.convert_csu_rwd._drop_forbidden_columns``) also strips
+    them at write time, exercised by
+    ``tests/unit/test_scripts/test_cohort_builder_forbidden_gate.py``
+    ::``test_csu_drop_filters_forbidden_columns``."""
     dropped = set(csu_artifact.get("leakage_dropped_features") or [])
     verdicts = csu_artifact.get("adaptive_verdicts") or []
 
