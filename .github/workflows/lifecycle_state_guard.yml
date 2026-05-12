@@ -117,11 +117,16 @@ jobs:
         # Second pass: any change to a `LIFECYCLE_STATE_*` value must have
         # a corresponding signed doc. Runs against the PR base branch (or
         # the previous push SHA for direct pushes).
+        #
+        # Codex pass-1 L1: same env-block lift as the prior step, applied
+        # to the consumer of base-ref output for convention consistency.
+        env:
+          BASE_REF_OUT: ${{ steps.base-ref.outputs.ref }}
         run: |
           set -o pipefail
           python scripts/check_lifecycle_state.py \
             --check-changes \
-            --base-ref "${{ steps.base-ref.outputs.ref }}" \
+            --base-ref "$BASE_REF_OUT" \
             --json | tee lifecycle_state_changes.json
           EXIT=${PIPESTATUS[0]}
           echo "::group::Scanner findings (change-detection)"
