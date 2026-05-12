@@ -389,6 +389,33 @@ def test_extract_ym_infer_from_dir_name():
     assert c.source_timestamp_iso.startswith("2026-04-30T23:59:59")
 
 
+def test_extract_ym_infer_from_parent_path_component():
+    """Regression for codex pass-1 MEDIUM-1: YYYYMM in a parent directory
+    (e.g. ``/vendor/202604/optum``) must be inferred, not silently dropped
+    because the basename happens to be `optum`. Walks path components
+    right-to-left."""
+    c = OptumDataConverter(
+        parquet_dir=Path("/vendor/202604/optum"),
+        output_dir=Path("."),
+        cohorts=("initiation",),
+    )
+    assert c.extract_ym == "202604"
+    assert c.source_timestamp_iso is not None
+    assert c.source_timestamp_iso.startswith("2026-04-30T23:59:59")
+
+
+def test_extract_ym_infer_deepest_path_component_wins():
+    """When MULTIPLE path components contain a YYYYMM, the deepest (rightmost
+    in the path) wins. This matches the convention of vendor drop layouts
+    that nest the most-specific date at the leaf."""
+    c = OptumDataConverter(
+        parquet_dir=Path("/archive_202301/run_202604/optum"),
+        output_dir=Path("."),
+        cohorts=("initiation",),
+    )
+    assert c.extract_ym == "202604"
+
+
 def test_extract_ym_explicit_overrides_inference():
     """An explicit --extract-ym beats any inference from the dir name."""
     c = OptumDataConverter(
