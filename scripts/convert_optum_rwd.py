@@ -1876,6 +1876,74 @@ class OptumDataConverter:
                 "lookback_window": "[index-180, index-1]",
                 "notes": "§7.7 — Herfindahl over full taxonomy codes (issue #154)",
             },
+            # Issue #155 §1 / §2 / §3
+            {
+                "feature": "adoption_category",
+                "type": "enum{innovator,early_adopter,early_majority,late_majority,laggard,non_adopter}",
+                "source_table": "medication (Xolair on-label fills) via NPI",
+                "lookback_window": "all CSU biologic fills in scope",
+                "notes": (
+                    "Issue #155 §1 — Rogers Diffusion of Innovations TIME-to-"
+                    "first-fill (anchor: Xolair-CSU launch 2014-03-21). "
+                    "non_adopter for HCPs with no on-label fill. Dupixent "
+                    "fills excluded from curve (off-label for CSU; see "
+                    "dupixent_offlabel flag). Replaces legacy volume "
+                    "quartile classification."
+                ),
+            },
+            {
+                "feature": "dupixent_offlabel",
+                "type": "bool",
+                "source_table": "medication (Dupixent fills) via NPI",
+                "lookback_window": "all CSU biologic fills in scope",
+                "notes": (
+                    "Issue #155 §1 — TRUE if HCP has any Dupixent fill in "
+                    "the CSU cohort. Dupixent is NOT FDA-approved for CSU "
+                    "as of 2026-05-12; flagged for downstream cross-"
+                    "indication adoption analysis."
+                ),
+            },
+            {
+                "feature": "journey_stage",
+                "type": (
+                    "enum{aware,considering,first_fill,adherent,"
+                    "discontinued,maintained} (+ legacy diagnosis/"
+                    "initial_treatment/treatment_optimization/maintenance/"
+                    "treatment_switch)"
+                ),
+                "source_table": "derived from cohort + targets + saw_specialist",
+                "lookback_window": "post-index (knowable_at=post_index in manifest)",
+                "notes": (
+                    "Issue #155 §2 — granular PR #152 engagement-funnel "
+                    "value. `prescribed` NOT emitted (Optum is dispensed-"
+                    "only). See migration 035."
+                ),
+            },
+            {
+                "feature": "source_timestamp",
+                "type": "ISO 8601 UTC timestamp",
+                "source_table": "extract_ym (vendor drop month)",
+                "lookback_window": "n/a (drop-level metadata)",
+                "notes": (
+                    "Issue #155 §3 — LAST_DAY of extract_ym at 23:59:59 "
+                    "UTC. Worst-case lag estimate (never understates). "
+                    "Off by up to 30 days vs the true claim-emission "
+                    "timestamp. NULL if --extract-ym is omitted and not "
+                    "inferable from --input dir name."
+                ),
+            },
+            {
+                "feature": "data_lag_hours",
+                "type": "int (may be negative)",
+                "source_table": "derived from extract_ym + parquet mtime",
+                "lookback_window": "n/a",
+                "notes": (
+                    "Issue #155 §3 — floor((ingestion_timestamp - "
+                    "source_timestamp) / 3600). Negative for rare back-"
+                    "dated drops; downstream consumers should surface "
+                    "the anomaly."
+                ),
+            },
         ]
 
         # Target
