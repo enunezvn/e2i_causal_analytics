@@ -446,11 +446,18 @@ def test_real_feature_analyzer_actually_prunes_features(
         f"select_features did not return a list under 'selected_features'; "
         f"got {type(selected_features).__name__}"
     )
-    full_numeric_cols = [c for c in real_pruning_state["X_train"].columns if c.startswith("num_")]
-    assert len(selected_features) < len(full_numeric_cols), (
+    # Per the node's contract at
+    # src/agents/ml_foundation/feature_analyzer/nodes/feature_selector.py:215-216,
+    # `selected_features` is NUMERIC-only (variance / correlation / VIF filters
+    # operate on `X_train.select_dtypes([np.number])`), while
+    # `selected_features_all` carries the numeric set + the pass-through
+    # non-numeric columns. We compare against the pre-pruning numeric set so
+    # this test cannot fail for a semantic rename of which key holds what.
+    full_numeric_cols = set(real_pruning_state["X_train"].select_dtypes("number").columns)
+    assert set(selected_features) < full_numeric_cols, (
         f"pruning was vacuous — selected {len(selected_features)} of "
         f"{len(full_numeric_cols)} numeric columns; expected strict subset. "
-        f"selected={selected_features}; full={full_numeric_cols}"
+        f"selected={selected_features}; full_numeric={sorted(full_numeric_cols)}"
     )
     # Specifically: the columns we engineered to be prunable MUST be absent.
     assert "num_zero_var" not in selected_features, (
@@ -626,13 +633,15 @@ def test_serving_schema_after_real_pruning_still_equals_preprocessor_fit(
     categorical_features). That preprocessor was fit BEFORE pruning, so its
     schema is the pre-pruning schema. If a future PR refits the preprocessor
     on the pruned schema but forgets to re-register the BentoML model — or
-    vice versa — this assertion catches the resulting skew.
+    vice versa — this assertion catches the resulting schema drift.
 
     Failure mode this catches: ``fitted_preprocessor.numeric_features``
     silently shrinks to match ``selected_features``, causing the serving
-    wrapper to request fewer columns than were used at training. End-to-end
-    serving would then 200 OK on payloads missing the pruned columns,
-    silently scoring on degraded inputs.
+    wrapper to request a different column set than the one the
+    pre-pruning preprocessor + model were calibrated on. Whether that
+    surfaces as "degraded inputs" or "outright transform error" depends
+    on whether the model was also refit consistently; either way, the
+    SCHEMA invariant is broken and this assertion fires.
     """
     preprocessor = real_pruning_state["fitted_preprocessor"]
     selected_features = set(real_pruning_state["selected_features"])
