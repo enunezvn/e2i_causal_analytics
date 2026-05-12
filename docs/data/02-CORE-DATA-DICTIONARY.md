@@ -56,7 +56,7 @@ All custom PostgreSQL ENUM types defined in the schema. These types enforce doma
 | `brand_type` | `Remibrutinib`, `Fabhalta`, `Kisqali`, `competitor`, `other` | patient_journeys, treatment_events, business_metrics, reference_universe, hcp_intent_surveys |
 | `region_type` | `northeast`, `south`, `midwest`, `west` | hcp_profiles, patient_journeys, business_metrics, reference_universe, user_sessions |
 | `priority_type` | `critical`, `high`, `medium`, `low` | triggers |
-| `journey_stage_type` | `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance`, `treatment_switch` | patient_journeys |
+| `journey_stage_type` | `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance`, `treatment_switch`, `aware`, `considering`, `prescribed`, `first_fill`, `adherent`, `discontinued`, `maintained` (migration 035 / issue #155 §2: 7 engagement-funnel values added — `aware`/`considering`/`prescribed`/`first_fill`/`adherent`/`discontinued`/`maintained`) | patient_journeys |
 | `journey_status_type` | `active`, `stable`, `transitioning`, `completed` | patient_journeys |
 | `event_type` | `diagnosis`, `prescription`, `lab_test`, `procedure`, `consultation`, `hospitalization` | treatment_events |
 | `prediction_type` | `trigger`, `propensity`, `risk`, `churn`, `next_best_action` | ml_predictions |
