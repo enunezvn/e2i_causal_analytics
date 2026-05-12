@@ -161,7 +161,9 @@ def test_optum_derivation_admin_horizon_configurable(synthetic_optum_journey):
 
 
 def test_dispatch_csu(synthetic_csu_journey, synthetic_csu_events):
-    t, e = derive_survival_target(synthetic_csu_journey, "csu", treatment_events=synthetic_csu_events)
+    t, e = derive_survival_target(
+        synthetic_csu_journey, "csu", treatment_events=synthetic_csu_events
+    )
     assert t.shape == (10,)
     assert e.shape == (10,)
 

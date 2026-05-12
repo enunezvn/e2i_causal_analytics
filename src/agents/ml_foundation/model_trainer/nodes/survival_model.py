@@ -83,9 +83,9 @@ def _derive_csu_survival_target(
 
     # Censoring time for non-events: min(journey_duration_days, cap).
     if "journey_duration_days" in patient_journeys.columns:
-        jdd = pd.to_numeric(
-            patient_journeys["journey_duration_days"], errors="coerce"
-        ).fillna(followup_cap_days)
+        jdd = pd.to_numeric(patient_journeys["journey_duration_days"], errors="coerce").fillna(
+            followup_cap_days
+        )
         time = np.minimum(jdd.to_numpy(dtype=float), float(followup_cap_days))
 
     # Event time for positives: first post-index rx days_from_diagnosis.
@@ -331,8 +331,7 @@ async def survival_model_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "survival_manifest_source": manifest_source,
     }
     logger.info(
-        "survival_model_node: derived target for %s (n=%d, n_events=%d, "
-        "median_time=%.1f days)",
+        "survival_model_node: derived target for %s (n=%d, n_events=%d, median_time=%.1f days)",
         manifest_source,
         len(time),
         int(np.sum(event)),

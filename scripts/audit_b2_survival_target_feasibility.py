@@ -22,8 +22,12 @@ import pandas as pd
 
 
 def _load_optum_initiation(repo_root: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-    pj_path = repo_root / "data" / "rwd" / "optum" / "initiation" / "e2i_ml_v3_patient_journeys.parquet"
-    ev_path = repo_root / "data" / "rwd" / "optum" / "initiation" / "e2i_ml_v3_treatment_events.parquet"
+    pj_path = (
+        repo_root / "data" / "rwd" / "optum" / "initiation" / "e2i_ml_v3_patient_journeys.parquet"
+    )
+    ev_path = (
+        repo_root / "data" / "rwd" / "optum" / "initiation" / "e2i_ml_v3_treatment_events.parquet"
+    )
     if not pj_path.exists() or not ev_path.exists():
         return None
     return pd.read_parquet(pj_path), pd.read_parquet(ev_path)
