@@ -10,8 +10,11 @@ import io
 import json
 from datetime import date
 
+import pytest
+
 from scripts.rwd_common import NppesRecord, NppesTaxonomy
 from src.tasks.nppes_tasks import (
+    _chunked,
     _record_to_upsert_params,
     _row_to_record,
     _row_tuple_to_record,
@@ -238,3 +241,28 @@ def test_refresh_task_reports_missing_bulk_dump(monkeypatch, tmp_path):
     result = refresh_npi_taxonomy_cache.run()
     assert result["status"] == "error"
     assert result["reason"] == "bulk_dump_missing"
+
+
+# --------------------------------------------------------------------------- #
+# PR #161 codex post-merge MEDIUM — batch-commit refresh                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_chunked_emits_full_chunks_then_partial_tail():
+    chunks = list(_chunked(range(10), chunk_size=3))
+    assert chunks == [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9]]
+
+
+def test_chunked_with_empty_iterable_emits_nothing():
+    assert list(_chunked([], chunk_size=5)) == []
+
+
+def test_chunked_rejects_nonpositive_chunk_size():
+    with pytest.raises(ValueError):
+        list(_chunked(range(10), chunk_size=0))
+    with pytest.raises(ValueError):
+        list(_chunked(range(10), chunk_size=-1))
+
+
+def test_chunked_size_larger_than_iterable_emits_single_partial_chunk():
+    assert list(_chunked([1, 2, 3], chunk_size=100)) == [[1, 2, 3]]

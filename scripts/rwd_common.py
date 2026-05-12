@@ -963,9 +963,11 @@ def lookup_npi(
         10-digit NPI string. Non-conforming inputs return ``None``.
     use_api_fallback
         Override for the global default. When ``None`` (default), the value
-        is read from the ``NPPES_API_FALLBACK`` env var (default: "1").
-        Set ``False`` in offline / CI contexts that should not hit the
-        public CMS API.
+        is read from the ``NPPES_API_FALLBACK`` env var (default ``"0"`` —
+        OPT-IN). Callers that need live-API fallback must explicitly pass
+        ``True`` or set ``NPPES_API_FALLBACK=1``. The default flipped from
+        ``"1"`` to ``"0"`` after PR #161 codex post-merge review surfaced
+        defense-in-depth concerns about implicit network egress.
 
     Returns
     -------
@@ -997,7 +999,10 @@ def lookup_npi(
             return cached
 
     if use_api_fallback is None:
-        use_api_fallback = os.environ.get("NPPES_API_FALLBACK", "1") not in {"0", "false", "False"}
+        # OPT-IN default ("0"): callers must explicitly enable API fallback by
+        # passing use_api_fallback=True or setting NPPES_API_FALLBACK=1. This
+        # prevents implicit network egress in any context that hasn't opted in.
+        use_api_fallback = os.environ.get("NPPES_API_FALLBACK", "0") in {"1", "true", "True"}
 
     if not use_api_fallback:
         return None
