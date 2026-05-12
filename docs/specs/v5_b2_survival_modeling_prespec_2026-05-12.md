@@ -167,7 +167,7 @@ Run: `PYTHONPATH=. python scripts/measure_b2_cindex_contrast.py` at branch HEAD 
 | cox_cindex (5-fold CV mean) | 0.8790 ± 0.0040 |
 | rsf_cindex (5-fold CV mean) | 0.8721 ± 0.0029 |
 | Δ cox (cox - auc) | **-0.0267** |
-| Δ rsf (rsf - auc) | -0.0336 |
+| Δ rsf (rsf - auc) | -0.0337 |
 | Δ best | -0.0267 |
 | **Verdict** | **NULL** (|delta| < 0.03 threshold) |
 
