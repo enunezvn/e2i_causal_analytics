@@ -38,7 +38,7 @@ dependencies = [
     "causal-learn>=0.1.3.8",          # Structure learning (GES, PC, FCI, LiNGAM)
 
     # ML & Data Science
-    "scikit-learn>=1.5.0",
+    "scikit-learn>=1.6.1,<1.7",    # Joint window: econml 0.16 needs <1.7; sksurv 0.26 needs >=1.6.1,<1.8. See backlog #36 codex pass-1 MEDIUM.
     "scikit-survival>=0.26,<0.27", # Cox PH + Random Survival Forest (v5 B2); 0.26 lifts osqp constraint to >=1.0.2 (matches cvxpy 1.7.5) while staying under sklearn<1.8 (preserves econml 0.16 sklearn<1.7 pin). 0.27 requires sklearn>=1.8 — incompatible with econml. See backlog #36.
     "lifelines>=0.30.0",           # Kaplan-Meier, log-rank, time-to-event utilities
     "pandas>=2.2.0",
