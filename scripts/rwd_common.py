@@ -49,6 +49,95 @@ INSURANCE_TYPE_MAP: dict[str, str] = {
 }
 
 # --------------------------------------------------------------------------- #
+# payer_category — issue #156 item 6                                          #
+# 8-value vocabulary replacing the legacy 3-way INSURANCE_TYPE_MAP. The       #
+# legacy mapping is RETAINED for backwards compatibility; new pipeline code   #
+# should call `derive_payer_category` and persist BOTH the raw source fields  #
+# (bus / product / health_exch / lis_dual) AND the derived value.             #
+# --------------------------------------------------------------------------- #
+
+PAYER_CATEGORY_VOCABULARY: tuple[str, ...] = (
+    "commercial",
+    "commercial_exchange",
+    "medicare",
+    "medicare_advantage",
+    "medicare_lis_dual",
+    "medicaid",
+    "cash",
+    "other",
+)
+
+# Medicare Advantage product codes — Optum stores Medicare Part D (Rx) plans
+# under MAPD and pure Medicare Advantage (medical-only) under MA. Extend here
+# as additional product codes are observed.
+MEDICARE_ADVANTAGE_PRODUCT_CODES: frozenset[str] = frozenset({"MAPD", "MA"})
+
+
+def is_truthy_flag(value: object) -> bool:
+    """Coerce demographics flag fields (bool, 0/1 int, "Y"/"N", "1"/"0") to bool.
+
+    Returns False for None/NaN/empty/falsy values. Issue #156 item 6: the
+    health_exch and lis_dual flags arrive as varying source types.
+    """
+    if value is None:
+        return False
+    try:
+        if value != value:  # NaN check without pandas dep at module level
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return value == 1
+    s = str(value).strip().upper()
+    return s in {"Y", "YES", "1", "TRUE", "T"}
+
+
+# Private alias retained for any internal caller that adopted the underscore
+# name pre-merge.
+_is_truthy_flag = is_truthy_flag
+
+
+def derive_payer_category(
+    bus: object, product: object = None, health_exch: object = None, lis_dual: object = None
+) -> str:
+    """Derive payer_category from raw demographics fields (issue #156 item 6).
+
+    Priority order (short-circuit on first match):
+      COM + health_exch  → commercial_exchange
+      COM                → commercial
+      MCR + lis_dual     → medicare_lis_dual
+      MCR + product MA/MAPD → medicare_advantage
+      MCR                → medicare
+      MCD                → medicaid
+      CASH               → cash
+      anything else      → other
+
+    Specialty-pharmacy flag is out of scope here (requires NPI taxonomy
+    lookup against NPPES; tracked in #154 / PR B-prime).
+    """
+    bus_s = str(bus).strip().upper() if bus is not None else ""
+    product_s = str(product).strip().upper() if product is not None else ""
+    exch_flag = is_truthy_flag(health_exch)
+    lis_flag = is_truthy_flag(lis_dual)
+
+    if bus_s == "COM":
+        return "commercial_exchange" if exch_flag else "commercial"
+    if bus_s == "MCR":
+        if lis_flag:
+            return "medicare_lis_dual"
+        if product_s in MEDICARE_ADVANTAGE_PRODUCT_CODES:
+            return "medicare_advantage"
+        return "medicare"
+    if bus_s == "MCD":
+        return "medicaid"
+    if bus_s == "CASH":
+        return "cash"
+    return "other"
+
+
+# --------------------------------------------------------------------------- #
 # Brand launch dates — anchor for Rogers Diffusion of Innovations time-to-     #
 # adoption analysis (issue #155 §1). days_to_first_fill = first_fill_date -    #
 # brand_launch_date; HCPs are ranked ascending by days_to_first_fill and       #
