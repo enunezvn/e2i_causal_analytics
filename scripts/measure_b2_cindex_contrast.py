@@ -57,7 +57,8 @@ def _filter_to_manifest_safe(
     return X[safe_cols].copy(), dropped
 
 
-def _build_pipeline(seed: int):
+def _build_scaled_pipeline():
+    """Impute + StandardScaler pipeline for linear models (LR, Cox)."""
     from sklearn.impute import SimpleImputer
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
@@ -66,6 +67,18 @@ def _build_pipeline(seed: int):
         [
             ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
             ("scaler", StandardScaler()),
+        ]
+    )
+
+
+def _build_unscaled_pipeline():
+    """Impute-only pipeline for tree-based models (RSF). Per pre-spec §7."""
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+
+    return Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
         ]
     )
 
@@ -93,6 +106,7 @@ def _cross_val(
     aucs: List[float] = []
     c_cox: List[float] = []
     c_rsf: List[float] = []
+    rsf_constant_time_skips = 0  # M3 codex: track structural inapplicability.
 
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X.values, y_binary)):
         X_tr, X_va = X.iloc[train_idx], X.iloc[val_idx]
@@ -104,36 +118,51 @@ def _cross_val(
         if len(np.unique(y_va_bin)) < 2:
             continue
 
-        pre = _build_pipeline(seed)
-        X_tr_pre = pre.fit_transform(X_tr.values)
-        X_va_pre = pre.transform(X_va.values)
+        # M1 codex: separate pipelines for scaled-linear vs unscaled-tree.
+        # Pre-spec §7 says RSF gets unscaled input.
+        pre_scaled = _build_scaled_pipeline()
+        pre_unscaled = _build_unscaled_pipeline()
+        X_tr_scaled = pre_scaled.fit_transform(X_tr.values)
+        X_va_scaled = pre_scaled.transform(X_va.values)
+        X_tr_unscaled = pre_unscaled.fit_transform(X_tr.values)
+        X_va_unscaled = pre_unscaled.transform(X_va.values)
 
-        # Wrap as DataFrames for the survival fitters (they call .values internally).
-        X_tr_df = pd.DataFrame(X_tr_pre, columns=X_tr.columns)
-        X_va_df = pd.DataFrame(X_va_pre, columns=X_va.columns)
+        X_tr_scaled_df = pd.DataFrame(X_tr_scaled, columns=X_tr.columns)
+        X_va_scaled_df = pd.DataFrame(X_va_scaled, columns=X_va.columns)
+        X_tr_unscaled_df = pd.DataFrame(X_tr_unscaled, columns=X_tr.columns)
+        X_va_unscaled_df = pd.DataFrame(X_va_unscaled, columns=X_va.columns)
 
-        # Binary baseline.
+        # Binary baseline (scaled).
         lr = LogisticRegression(class_weight="balanced", max_iter=2000, random_state=seed)
-        lr.fit(X_tr_pre, y_tr_bin)
-        auc = float(roc_auc_score(y_va_bin, lr.predict_proba(X_va_pre)[:, 1]))
+        lr.fit(X_tr_scaled, y_tr_bin)
+        auc = float(roc_auc_score(y_va_bin, lr.predict_proba(X_va_scaled)[:, 1]))
         aucs.append(auc)
 
-        # Cox.
+        # Cox (scaled — linear model).
         try:
-            cox = fit_cox(X_tr_df, t_tr, e_tr, alpha=1e-3, seed=seed)
-            c_c = survival_concordance(cox, X_va_df, t_va, e_va)
+            cox = fit_cox(X_tr_scaled_df, t_tr, e_tr, alpha=1e-3)
+            c_c = survival_concordance(cox, X_va_scaled_df, t_va, e_va)
             c_cox.append(c_c)
         except Exception as exc:  # noqa: BLE001
             print(f"  fold {fold_idx}: Cox fit failed: {exc}", file=sys.stderr)
             c_cox.append(float("nan"))
 
-        # RSF.
+        # RSF (unscaled — tree model).
         try:
             rsf = fit_rsf(
-                X_tr_df, t_tr, e_tr, n_estimators=100, min_samples_leaf=15, seed=seed
+                X_tr_unscaled_df, t_tr, e_tr, n_estimators=100, min_samples_leaf=15, seed=seed
             )
-            c_r = survival_concordance(rsf, X_va_df, t_va, e_va)
+            c_r = survival_concordance(rsf, X_va_unscaled_df, t_va, e_va)
             c_rsf.append(c_r)
+        except ValueError as exc:
+            # M3 codex: distinguish structural constant-time inapplicability
+            # from genuine failure (e.g., numerical, dimension mismatch).
+            if "constant-time" in str(exc):
+                rsf_constant_time_skips += 1
+                print(f"  fold {fold_idx}: RSF inapplicable (constant-time horizon)", file=sys.stderr)
+            else:
+                print(f"  fold {fold_idx}: RSF fit failed: {exc}", file=sys.stderr)
+            c_rsf.append(float("nan"))
         except Exception as exc:  # noqa: BLE001
             print(f"  fold {fold_idx}: RSF fit failed: {exc}", file=sys.stderr)
             c_rsf.append(float("nan"))
@@ -149,10 +178,16 @@ def _cross_val(
             "per_fold": [float(v) for v in vals],
         }
 
+    # M3 codex: rsf_applicable=False when EVERY non-skipped fold raised
+    # constant-time. n_splits is the requested fold count; subtract any
+    # single-class val-fold skips (none in current cohorts).
+    rsf_applicable = rsf_constant_time_skips == 0
     return {
         "binary_auc": _summary(aucs),
         "cox_cindex": _summary(c_cox),
         "rsf_cindex": _summary(c_rsf),
+        "rsf_applicable": rsf_applicable,
+        "rsf_constant_time_skips": rsf_constant_time_skips,
     }
 
 
@@ -213,7 +248,12 @@ def _measure_cohort(
     auc_mean = metrics["binary_auc"]["mean"]
     c_cox_mean = metrics["cox_cindex"]["mean"]
     c_rsf_mean = metrics["rsf_cindex"]["mean"]
-    c_best = max(c_cox_mean, c_rsf_mean) if not (np.isnan(c_cox_mean) and np.isnan(c_rsf_mean)) else float("nan")
+    # H1 codex: np.nanmax preserves the valid arm when the other is NaN.
+    # Python's max(NaN, x) returns NaN (depends on arg order); nanmax does not.
+    if np.isnan(c_cox_mean) and np.isnan(c_rsf_mean):
+        c_best = float("nan")
+    else:
+        c_best = float(np.nanmax([c_cox_mean, c_rsf_mean]))
     delta_cox = c_cox_mean - auc_mean if not np.isnan(c_cox_mean) else float("nan")
     delta_rsf = c_rsf_mean - auc_mean if not np.isnan(c_rsf_mean) else float("nan")
     delta_best = c_best - auc_mean if not np.isnan(c_best) else float("nan")

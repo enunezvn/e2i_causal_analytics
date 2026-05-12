@@ -30,20 +30,22 @@
         ]
       },
       "rsf_cindex": {
-        "mean": 0.8720930787426966,
-        "std": 0.00505404946526311,
+        "mean": 0.8720917447156691,
+        "std": 0.005056061142177221,
         "n_folds": 5,
         "per_fold": [
           0.8791846506221009,
           0.869750532497082,
           0.8757365641135483,
           0.8713207872606239,
-          0.8644728592201278
+          0.8644661890849908
         ]
-      }
+      },
+      "rsf_applicable": true,
+      "rsf_constant_time_skips": 0
     },
     "delta_cox": -0.026735225059245415,
-    "delta_rsf": -0.033649362737513844,
+    "delta_rsf": -0.033650696764541355,
     "delta_best": -0.026735225059245415,
     "verdict": "null",
     "acceptance_threshold": 0.03
@@ -89,7 +91,9 @@
           NaN,
           NaN
         ]
-      }
+      },
+      "rsf_applicable": false,
+      "rsf_constant_time_skips": 5
     },
     "delta_cox": 0.0017950872247969318,
     "delta_rsf": NaN,
