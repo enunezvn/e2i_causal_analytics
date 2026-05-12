@@ -1141,6 +1141,56 @@ class OptumDataConverter:
     # Journey record assembly                                             #
     # ------------------------------------------------------------------ #
 
+    def _derive_journey_stage(
+        self,
+        *,
+        cohort: str,
+        init_t: int,
+        disc_t: int | None,
+        pers_t: int | None,
+        saw_specialist: bool,
+    ) -> str:
+        """Map cohort + targets + signals → 7-stage engagement-funnel value.
+
+        Issue #155 §2 / PR #152 row 2 derivation rules (Optum-cohort proxies):
+
+          aware         dx anchored cohort entry, no specialist visit pre-index,
+                        no biologic fill in prediction window
+          considering   has specialist visit pre-index, no biologic fill in
+                        prediction window
+          first_fill    biologic fill in prediction window (initiation event)
+          adherent      cohort=persistence, persistent_at_180d=1
+          discontinued  cohort=discontinuation, discontinued_180d=1
+          maintained    cohort=persistence, persistent_at_180d=1 over the
+                        full 180-day window (proxy for adherent >= 6mo;
+                        180d == ~6mo for CSU biologics)
+
+        Optum claims data is dispensed-only (no Rx-written stream), so
+        the `prescribed` value is NOT emitted from this converter — it
+        is reserved for cohorts with EHR Rx-write signals. Code paths
+        that fall through return `initial_treatment` (legacy value) as
+        a safe default so downstream consumers never receive an
+        un-derivable empty string.
+        """
+        # Cohort B / C (already initiated): derive from persistence / disc flags.
+        if cohort == "discontinuation":
+            if disc_t == 1:
+                return "discontinued"
+            return "first_fill"  # initiated but not yet discontinued in window
+        if cohort == "persistence":
+            if pers_t == 1:
+                # 180-day persistence in the CSU biologics window ≈ 6mo
+                # adherent → maintained per PR #152 derivation.
+                return "maintained"
+            return "adherent" if init_t == 1 else "first_fill"
+
+        # Cohort A (initiation): derive from init_t + pre-index specialist signal.
+        if init_t == 1:
+            return "first_fill"
+        if saw_specialist:
+            return "considering"
+        return "aware"
+
     def _build_journey_record(
         self, patid: int, index_date: pd.Timestamp, cohort: str
     ) -> dict[str, Any] | None:
@@ -1174,6 +1224,18 @@ class OptumDataConverter:
         non_null = sum(1 for v in feat_vals if v is not None and v != "")
         dq_score = round(non_null / max(len(feat_vals), 1), 3)
 
+        # Issue #155 §2: granular 7-stage engagement-funnel value.
+        saw_specialist = bool(
+            feats.get("saw_allergist_flag") or feats.get("saw_dermatologist_flag")
+        )
+        granular_stage = self._derive_journey_stage(
+            cohort=cohort,
+            init_t=init_t,
+            disc_t=disc_t,
+            pers_t=pers_t,
+            saw_specialist=saw_specialist,
+        )
+
         record: dict[str, Any] = {
             "patient_journey_id": pj_id,
             "patient_id": pat_id_str,
@@ -1185,9 +1247,7 @@ class OptumDataConverter:
             "journey_start_date": rwdc.safe_date(index_date),
             "journey_end_date": rwdc.safe_date(index_date + timedelta(days=PREDICTION_DAYS)),
             "journey_duration_days": PREDICTION_DAYS + LOOKBACK_DAYS,
-            "journey_stage": "initial_treatment"
-            if cohort == "initiation"
-            else "treatment_optimization",
+            "journey_stage": granular_stage,
             "journey_status": "active",
             "primary_diagnosis_code": rwdc.format_diagcode(str(demo_row.get("diagcode_raw") or "")),
             "primary_diagnosis_desc": "Chronic Spontaneous Urticaria",
