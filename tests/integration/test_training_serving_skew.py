@@ -32,6 +32,7 @@ resulting skew. It is gated to the default Integration Tests CI lane
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 from typing import Any
@@ -533,8 +534,6 @@ def test_real_step_7_source_does_not_reference_pruning_artifacts() -> None:
        `ast.get_source_segment` so it cannot leak into unrelated code that
        legitimately references `selected_features` elsewhere in the file.
     """
-    import ast
-
     runner_path = REPO_ROOT / "scripts" / "run_tier0_test.py"
     assert runner_path.exists(), f"runner script missing at {runner_path}"
     source = runner_path.read_text(encoding="utf-8")
@@ -575,6 +574,139 @@ def test_real_step_7_source_does_not_reference_pruning_artifacts() -> None:
         f"in src/mlops/bentoml_service.py, (b) `fitted_preprocessor` refit story, "
         f"and (c) the parity assertions in this file. See backlog #15."
     )
+
+
+def _find_step_7_call_sites(tree: ast.AST) -> list[ast.Call]:
+    """Return every `step_7_model_deployer(...)` call node in the parsed tree.
+
+    The runner currently has exactly one call site at line 6496, but we
+    enumerate all of them so this guard doesn't silently miss a future
+    refactor that introduces a second call path.
+    """
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            # Match both bare `step_7_model_deployer(...)` and attribute
+            # access like `mod.step_7_model_deployer(...)`.
+            target_name: str | None = None
+            if isinstance(func, ast.Name):
+                target_name = func.id
+            elif isinstance(func, ast.Attribute):
+                target_name = func.attr
+            if target_name == "step_7_model_deployer":
+                calls.append(node)
+    return calls
+
+
+def _state_get_argument(arg: ast.expr) -> str | None:
+    """If `arg` is `state.get("KEY", ...)`, return KEY. Else None.
+
+    Used to verify that the runner sources deployer kwargs from the
+    pre-pruning state keys, not from feature_analyzer artifacts.
+    """
+    if not isinstance(arg, ast.Call):
+        return None
+    func = arg.func
+    if not (isinstance(func, ast.Attribute) and func.attr == "get"):
+        return None
+    if not (isinstance(func.value, ast.Name) and func.value.id == "state"):
+        return None
+    if not arg.args:
+        return None
+    first = arg.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    return None
+
+
+def test_real_step_7_call_site_does_not_thread_pruning_artifacts() -> None:
+    """P2-call-site — pin the REAL `step_7_model_deployer` invocation.
+
+    Closes the codex pass-2 MEDIUM: the function-body guard at
+    `test_real_step_7_source_does_not_reference_pruning_artifacts` would
+    miss drift through existing kwargs, e.g.:
+
+        feature_columns=state.get("selected_features")  # pruning leak!
+        fitted_preprocessor=state.get("pruned_preprocessor")  # refit leak!
+
+    Those changes don't introduce any forbidden name inside the function
+    BODY (the body still says `feature_columns: list[str] | None = None`),
+    so the body guard would still pass. This call-site guard closes that
+    gap by inspecting EACH invocation of `step_7_model_deployer` and
+    asserting two invariants:
+
+    (i)  No forbidden pruning artifact name appears in the source of any
+         argument expression (positional or keyword).
+    (ii) The two load-bearing kwargs are sourced from the expected
+         pre-pruning state keys:
+           - `feature_columns` ← `state.get("feature_names")`
+           - `fitted_preprocessor` ← `state.get("fitted_preprocessor")`
+
+    Together with `test_real_step_7_source_does_not_reference_pruning_artifacts`
+    this catches both function-body drift AND call-site drift.
+    """
+    runner_path = REPO_ROOT / "scripts" / "run_tier0_test.py"
+    source = runner_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    call_sites = _find_step_7_call_sites(tree)
+    assert call_sites, (
+        "could not locate any `step_7_model_deployer(...)` call in "
+        "scripts/run_tier0_test.py — has the runner been refactored? "
+        "Update this guard."
+    )
+
+    forbidden_names = (
+        "selected_features",  # subsumes selected_features_all by substring
+        "X_train_selected",
+        "X_val_selected",
+        "X_test_selected",
+        "removed_features",
+        "feature_importance",  # subsumes feature_importance_ranked
+        "pruned_preprocessor",  # hypothetical future refit-pruned artifact
+    )
+
+    for call in call_sites:
+        # Stitch together every argument expression (positional + kwarg)
+        # and verify no forbidden name appears.
+        arg_sources: list[str] = []
+        for arg in call.args:
+            seg = ast.get_source_segment(source, arg)
+            if seg is not None:
+                arg_sources.append(seg)
+        for kw in call.keywords:
+            seg = ast.get_source_segment(source, kw.value)
+            if seg is not None:
+                arg_sources.append(seg)
+
+        full_arg_source = "\n".join(arg_sources)
+        leaked = [name for name in forbidden_names if name in full_arg_source]
+        assert leaked == [], (
+            f"`step_7_model_deployer(...)` call at line {call.lineno} now threads "
+            f"feature_analyzer pruning artifacts: {leaked}. Argument sources:\n"
+            f"{full_arg_source}\n\nThe deployer must consume only pre-pruning "
+            f"state ({'feature_names', 'fitted_preprocessor'}). See backlog #15."
+        )
+
+        # Verify the two load-bearing kwargs are sourced from the right keys.
+        kw_by_name = {kw.arg: kw.value for kw in call.keywords if kw.arg is not None}
+        for kw_name, expected_state_key in (
+            ("feature_columns", "feature_names"),
+            ("fitted_preprocessor", "fitted_preprocessor"),
+        ):
+            if kw_name not in kw_by_name:
+                # Not present at this call site — fine; the source-scan above
+                # already proved no forbidden name leaked. Skip the value check.
+                continue
+            actual_state_key = _state_get_argument(kw_by_name[kw_name])
+            assert actual_state_key == expected_state_key, (
+                f"`step_7_model_deployer(...)` call at line {call.lineno}: "
+                f"`{kw_name}=` is no longer sourced from "
+                f"`state.get({expected_state_key!r})`. "
+                f"Got: {ast.get_source_segment(source, kw_by_name[kw_name])!r}. "
+                f"This is the call-site drift backlog #15 guards against."
+            )
 
 
 def test_model_deployer_input_dict_excludes_pruning_artifacts(
