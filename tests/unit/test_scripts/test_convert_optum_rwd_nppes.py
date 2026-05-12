@@ -366,3 +366,67 @@ def test_is_valid_npi_recognizes_real_npi_and_rejects_obfuscated():
     assert rwdc.is_valid_npi("12345678901") is False  # too long
     # Backwards-compat alias still works
     assert rwdc._is_valid_npi("1234567893") is True
+
+
+def test_is_real_cms_npi_passes_real_npi_fails_generated_obfuscated():
+    """Regression for codex PR #165 pass-1 MEDIUM: the strict CMS-NPI Luhn
+    (80840-prefix variant) must DISTINGUISH real CMS NPIs from generated
+    obfuscated ones, even when both are 10-digit Luhn-numeric.
+
+    Real NPI ``1234567893`` is CMS-Luhn-valid (verified manually). Any
+    output of ``generate_luhn_npi`` is plain-Luhn valid but FAILS CMS-NPI
+    Luhn because plain Luhn doesn't include the 80840 prefix → the check
+    digit lands on a different residue."""
+    # Real CMS-style NPI (Luhn-valid against 80840 prefix)
+    assert rwdc.is_real_cms_npi("1234567893") is True
+
+    # Generated obfuscated NPIs (deterministic Luhn-valid w/o 80840 prefix)
+    # MUST fail the strict check. Try 10 obfuscated inputs — none should
+    # accidentally pass.
+    for obf in [f"OBF_{i:04d}" for i in range(10)]:
+        generated = rwdc.generate_luhn_npi(obf)
+        assert rwdc.is_valid_npi(generated) is True, (
+            f"generated NPI {generated!r} should pass syntactic check"
+        )
+        assert rwdc.is_real_cms_npi(generated) is False, (
+            f"generated obfuscated NPI {generated!r} accidentally passed "
+            f"CMS-Luhn — the 80840-prefix variant is not discriminating "
+            f"correctly"
+        )
+
+
+def test_is_real_cms_npi_rejects_malformed():
+    """Strict Luhn-NPI rejects anything not 10 digits or not Luhn-valid."""
+    assert rwdc.is_real_cms_npi("") is False
+    assert rwdc.is_real_cms_npi(None) is False
+    assert rwdc.is_real_cms_npi("12345") is False  # too short
+    assert rwdc.is_real_cms_npi("12345678901") is False  # too long
+    assert rwdc.is_real_cms_npi("123456789A") is False  # non-digit
+    assert rwdc.is_real_cms_npi("1234567894") is False  # wrong check digit
+
+
+def test_build_hcp_profiles_coincidental_10_digit_obfuscated_routes_to_hashing():
+    """Regression for codex PR #165 pass-1 MEDIUM: an obfuscated key that
+    happens to be 10 digits but fails CMS-NPI Luhn MUST route to the
+    hashing branch — not the real-NPI lookup branch."""
+    # 10-digit numeric string with WRONG CMS-Luhn checksum.
+    obf_10digit = "1234567894"  # last digit deliberately wrong vs 1234567893
+    assert rwdc.is_valid_npi(obf_10digit) is True  # syntactic passes
+    assert rwdc.is_real_cms_npi(obf_10digit) is False  # strict fails
+
+    c = _make_converter()
+    _seed_provider(c, {obf_10digit: "207K00000X"})
+    _seed_claims(c, {obf_10digit: [1]})
+
+    queried_keys: list[str] = []
+
+    def loader(npi):
+        queried_keys.append(npi)
+        return None
+
+    rwdc.set_npi_cache_loader(loader)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    expected_generated = rwdc.generate_luhn_npi(obf_10digit)
+    # Must have been hashed: lookup_key == generated, not raw obf_10digit.
+    assert queried_keys == [expected_generated]
+    assert profiles[0]["npi"] == expected_generated
