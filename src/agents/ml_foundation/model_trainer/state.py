@@ -94,6 +94,21 @@ class ModelTrainerState(BaseAgentSchema):
     enable_mlflow: Optional[bool] = None
     enable_checkpointing: Optional[bool] = None
 
+    # v5 Gate B2 — survival modeling (Cox + RSF) target derivation.
+    # ``enable_survival_modeling`` gates the survival_model_node; when
+    # False (default), the node is a no-op and the binary pipeline is
+    # unaffected. ``survival_time_days`` and ``survival_event`` are the
+    # cohort-scoped target arrays derived in the node. ``Any`` since
+    # numpy arrays are not pydantic types (arbitrary_types_allowed in
+    # BaseAgentSchema). Default ``bool = False`` for the gate matches
+    # the B3 ``enable_feature_engineering`` codex L2 convention so the
+    # ``if state["enable_survival_modeling"]:`` guard does not get None.
+    enable_survival_modeling: bool = False
+    survival_time_days: Optional[Any] = None  # np.ndarray of float days
+    survival_event: Optional[Any] = None  # np.ndarray of bool
+    survival_manifest_source: Optional[str] = None  # echoes the manifest_source used
+    survival_target_error: Optional[str] = None  # set if derivation raised
+
     # W3-lite Day 3 + Day 4 (shard 17 W3 rows Day 3-4 + shard 21 §A/§B):
     # repeated train/val/test fold-iteration plumbing.
     evaluation_mode: Optional[str] = None  # "single" (default) | "repeated_k10"

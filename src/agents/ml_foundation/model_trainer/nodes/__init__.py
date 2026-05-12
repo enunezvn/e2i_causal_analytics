@@ -12,20 +12,32 @@ from .qc_gate_checker import check_qc_gate
 from .quality_remediation import diagnose_and_remediate_quality
 from .split_enforcer import enforce_splits
 from .split_loader import load_splits
+from .survival_model import (
+    derive_survival_target,
+    fit_cox,
+    fit_rsf,
+    survival_concordance,
+    survival_model_node,
+)
 
 __all__ = [
     "apply_resampling",
     "check_qc_gate",
+    "derive_survival_target",
     "detect_class_imbalance",
     "diagnose_and_remediate_quality",
     "enforce_splits",
     "evaluate_model",
+    "fit_cox",
     "fit_preprocessing",
+    "fit_rsf",
     "load_checkpoint",
     "list_checkpoints",
     "load_splits",
     "log_to_mlflow",
     "save_checkpoint",
+    "survival_concordance",
+    "survival_model_node",
     "train_model",
     "tune_hyperparameters",
 ]
