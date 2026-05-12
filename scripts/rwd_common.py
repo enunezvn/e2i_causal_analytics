@@ -82,11 +82,11 @@ BRAND_LAUNCH_DATES: dict[str, dict[str, date]] = {
 # thresholds. Each tuple is (upper_cumulative_share, category). HCPs are sorted #
 # ascending by days_to_first_fill, then walked through these thresholds.        #
 ROGERS_CUMULATIVE_THRESHOLDS: list[tuple[float, str]] = [
-    (0.025, "innovator"),       # first 2.5%
-    (0.160, "early_adopter"),   # next 13.5% (cum 16%)
+    (0.025, "innovator"),  # first 2.5%
+    (0.160, "early_adopter"),  # next 13.5% (cum 16%)
     (0.500, "early_majority"),  # next 34.0% (cum 50%)
-    (0.840, "late_majority"),   # next 34.0% (cum 84%)
-    (1.000, "laggard"),         # last 16.0% (cum 100%)
+    (0.840, "late_majority"),  # next 34.0% (cum 84%)
+    (1.000, "laggard"),  # last 16.0% (cum 100%)
 ]
 
 

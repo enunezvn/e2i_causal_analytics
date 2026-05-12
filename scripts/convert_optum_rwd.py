@@ -34,11 +34,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import calendar
 import logging
+import re
 import sys
 import uuid
-import calendar
-import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -317,8 +317,7 @@ class OptumDataConverter:
 
         # Pick the first parquet that exists for ingestion_timestamp.
         ingest_ts: datetime | None = None
-        for name in ("demographics", "medication", "procedure", "lab",
-                     "inpatientdata", "provider"):
+        for name in ("demographics", "medication", "procedure", "lab", "inpatientdata", "provider"):
             p = self.parquet_dir / f"{name}.parquet"
             if p.exists():
                 try:
@@ -329,8 +328,7 @@ class OptumDataConverter:
         if ingest_ts is None:
             ingest_ts = datetime.now(tz=UTC)
             logger.info(
-                "No parquet files in %s — using current UTC time as "
-                "ingestion_timestamp fallback.",
+                "No parquet files in %s — using current UTC time as ingestion_timestamp fallback.",
                 self.parquet_dir,
             )
 
@@ -1565,8 +1563,8 @@ class OptumDataConverter:
         off-label flag preserved separately so downstream consumers can
         carve them out for cross-indication adoption analysis.
         """
-        days_out: dict[str, int | None] = {npi: None for npi in npi_rx}
-        offlabel: dict[str, bool] = {npi: False for npi in npi_rx}
+        days_out: dict[str, int | None] = dict.fromkeys(npi_rx)
+        offlabel: dict[str, bool] = dict.fromkeys(npi_rx, False)
 
         med = self.med
         if (
@@ -1606,9 +1604,7 @@ class OptumDataConverter:
 
         # First on-label fill per NPI (Xolair-equivalent only).
         onlabel = sub.loc[~dupixent_mask].copy()
-        onlabel["medication_date"] = pd.to_datetime(
-            onlabel["medication_date"], errors="coerce"
-        )
+        onlabel["medication_date"] = pd.to_datetime(onlabel["medication_date"], errors="coerce")
         onlabel = onlabel.dropna(subset=["medication_date"])
         if not onlabel.empty:
             onlabel["npi"] = onlabel["npi"].astype(str).str.strip()
