@@ -147,13 +147,24 @@ CREATE TYPE priority_type AS ENUM (
     'low'
 );
 
--- Journey stage types
+-- Journey stage types.
+-- Issue #155 §2: extended from 5 legacy values to 12 (5 legacy + 7 PR #152
+-- engagement-funnel values: aware / considering / prescribed / first_fill /
+-- adherent / discontinued / maintained). Migration 035 lands the 7 new
+-- values on existing databases (ALTER TYPE ADD VALUE is forward-only).
 CREATE TYPE journey_stage_type AS ENUM (
     'diagnosis',
     'initial_treatment',
     'treatment_optimization',
     'maintenance',
-    'treatment_switch'
+    'treatment_switch',
+    'aware',
+    'considering',
+    'prescribed',
+    'first_fill',
+    'adherent',
+    'discontinued',
+    'maintained'
 );
 
 -- Journey status types

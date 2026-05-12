@@ -98,6 +98,14 @@ JOURNEY_STAGES = [
     "treatment_optimization",
     "maintenance",
     "treatment_switch",
+    # Issue #155 §2 / migration 035: PR #152 engagement-funnel values.
+    "aware",
+    "considering",
+    "prescribed",
+    "first_fill",
+    "adherent",
+    "discontinued",
+    "maintained",
 ]
 JOURNEY_STATUSES = ["active", "stable", "transitioning", "completed"]
 PRIORITY_LEVELS = ["critical", "high", "medium", "low"]

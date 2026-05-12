@@ -47,8 +47,25 @@ E2I_PREDICTION_TYPES = ["trigger", "propensity", "risk", "churn"]
 # Valid priority types (from priority_type ENUM)
 E2I_PRIORITY_TYPES = ["critical", "high", "medium", "low"]
 
-# Valid journey stages (from journey_stage_type ENUM)
-E2I_JOURNEY_STAGES = ["diagnosis", "initial_treatment", "treatment_optimization", "maintenance"]
+# Valid journey stages (from journey_stage_type ENUM).
+# Issue #155 §2: extended to 12 values (5 legacy + 7 PR #152 engagement-funnel
+# values: aware / considering / prescribed / first_fill / adherent /
+# discontinued / maintained). Migration 035 lands the 7 new values on
+# existing Postgres databases.
+E2I_JOURNEY_STAGES = [
+    "diagnosis",
+    "initial_treatment",
+    "treatment_optimization",
+    "maintenance",
+    "treatment_switch",
+    "aware",
+    "considering",
+    "prescribed",
+    "first_fill",
+    "adherent",
+    "discontinued",
+    "maintained",
+]
 
 # Valid journey statuses (from journey_status_type ENUM)
 E2I_JOURNEY_STATUSES = ["active", "stable", "transitioning", "completed"]
