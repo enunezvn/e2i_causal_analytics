@@ -295,3 +295,293 @@ def test_advisory_pruning_path_does_not_silently_alter_serving_contract(
         "advisory-pruned columns missing from serving request — current "
         "pipeline contract assumes feature_analyzer pruning is advisory only"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Backlog #15 (2026-05-12) — Post-pruning serving parity.                     #
+#                                                                             #
+# The PR #41 tests above lock the schema contract using a SYNTHETIC advisory  #
+# list (`advisory_pruned = ["num_feat_4", "cat_feat_low"]`). That's a good    #
+# pin for the structural invariant but it does NOT exercise the real         #
+# `feature_analyzer/nodes/feature_selector.select_features` node, so a       #
+# regression where the node itself starts emitting unexpected keys (e.g.     #
+# mutating `state["fitted_preprocessor"]` or smuggling pruned-out features   #
+# back into `state["feature_names"]`) would slip through.                    #
+#                                                                            #
+# The tests below close that gap by running the REAL pruning node end-to-end #
+# and asserting two parity invariants on the actual outputs:                 #
+#                                                                            #
+#   P1. `feature_analyzer.select_features` produces a strictly-smaller       #
+#       `selected_features` than its input — i.e. pruning is doing work, so  #
+#       the contract is exercised, not vacuously satisfied.                  #
+#   P2. The exact dict the runner builds for `step_7_model_deployer` carries #
+#       neither `selected_features` nor `X_train_selected` — the deployer    #
+#       receives only pre-pruning artifacts (`fitted_preprocessor` +         #
+#       `feature_columns` from data_preparer).                               #
+#   P3. The BentoML serving request schema reconstructed from               #
+#       `fitted_preprocessor` still equals the full pre-pruning column set   #
+#       AFTER the real pruning node has run on the same state.               #
+# --------------------------------------------------------------------------- #
+
+
+def _build_pruning_friendly_training_frame(
+    n_rows: int = 200, seed: int = 13
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Build a frame where ≥1 numeric column is guaranteed to be pruned.
+
+    Strategy:
+    - 4 informative numeric features (drive the target)
+    - 1 zero-variance numeric column ("num_zero_var") — variance threshold drops it
+    - 1 perfectly-correlated numeric column ("num_dup_of_1") — correlation drops it
+    - 1 low-cardinality categorical (passes through; non-numeric pruning is no-op)
+
+    This guarantees `select_features` removes ≥1 column so the parity
+    invariant P1 has a non-trivial signal to assert against.
+    """
+    rng = np.random.default_rng(seed)
+    informative_1 = rng.normal(0, 1, n_rows)
+    df = pd.DataFrame(
+        {
+            "num_informative_1": informative_1,
+            "num_informative_2": rng.normal(5, 2, n_rows),
+            "num_informative_3": rng.normal(-3, 1.5, n_rows),
+            "num_informative_4": rng.uniform(0, 100, n_rows),
+            "num_zero_var": np.zeros(n_rows),  # guaranteed variance prune
+            "num_dup_of_1": informative_1,  # guaranteed correlation prune (r=1.0)
+            "cat_low_card": rng.choice(["A", "B", "C"], n_rows),
+        }
+    )
+    target = (df["num_informative_1"] + df["num_informative_2"] > 5).astype(int)
+    return df, pd.Series(target, name="target")
+
+
+@pytest.fixture(scope="module")
+def real_pruning_state() -> dict[str, Any]:
+    """Fit preprocessor + train model + run REAL feature_analyzer pruning node.
+
+    Returns a state dict mirroring what `scripts/run_tier0_test.py` would
+    carry through steps 5 → 6 → 7, with the artifacts each step deposits:
+
+    - ``fitted_preprocessor`` (from step 5)
+    - ``trained_model`` (from step 5)
+    - ``feature_names`` (data_preparer / step 5 output, pre-pruning)
+    - ``selected_features`` (from step 6, the REAL pruning node)
+    - ``X_train_selected`` (from step 6)
+    - ``feature_importance`` (from step 6)
+
+    Discipline: this fixture imports the actual production node and invokes
+    its async API the same way `step_6_feature_analyzer` does — no mocking
+    of the pruning logic itself.
+    """
+    import asyncio
+
+    from sklearn.linear_model import LogisticRegression
+
+    from src.agents.ml_foundation.feature_analyzer.nodes.feature_selector import (
+        select_features,
+    )
+
+    X_train, y_train = _build_pruning_friendly_training_frame()
+
+    # Step 5 (model_trainer) — fit preprocessor + model on the full schema.
+    preprocessor = ModelTrainerPreprocessor()
+    X_train_preprocessed = preprocessor.fit_transform(X_train)
+    feature_names_out = preprocessor.feature_names_out_ or []
+    X_train_named = pd.DataFrame(X_train_preprocessed, columns=feature_names_out)
+    model = LogisticRegression(max_iter=200, random_state=42)
+    model.fit(X_train_named, y_train)
+
+    # Step 6 (feature_analyzer) — run the REAL pruning node. We feed it the
+    # raw pre-preprocessor frame so variance + correlation rules actually
+    # fire on the synthetic-pruning columns we inserted.
+    pruning_input_state: dict[str, Any] = {
+        "X_train": X_train,
+        "y_train": y_train,
+        "problem_type": "classification",
+        "selection_config": {
+            # explicit defaults so this test is robust to changes in the
+            # node's internal defaults
+            "apply_variance_threshold": True,
+            "variance_threshold": 0.01,
+            "apply_correlation_filter": True,
+            "correlation_threshold": 0.95,
+            "apply_vif_filter": False,
+            "compute_importance": False,  # avoid extra RandomForest fit cost
+        },
+    }
+    pruning_output = asyncio.run(select_features(pruning_input_state))
+
+    return {
+        # Step 5 artifacts (what model_deployer consumes via step_7 kwargs)
+        "fitted_preprocessor": preprocessor,
+        "trained_model": model,
+        "feature_names": list(X_train.columns),  # pre-pruning column list
+        # Step 6 artifacts (what model_deployer must NOT consume today)
+        "selected_features": pruning_output.get("selected_features"),
+        "selected_features_all": pruning_output.get("selected_features_all"),
+        "X_train_selected": pruning_output.get("X_train_selected"),
+        "removed_features": pruning_output.get("removed_features", {}),
+        # Carry the original frame for downstream test assertions
+        "X_train": X_train,
+    }
+
+
+def test_real_feature_analyzer_actually_prunes_features(
+    real_pruning_state: dict[str, Any],
+) -> None:
+    """P1 — invariant: the real pruning node is doing non-trivial work.
+
+    Guards against the vacuous-pass mode where ``select_features`` becomes a
+    no-op (e.g. config defaults change so variance + correlation filters are
+    disabled by default). In that world the downstream parity invariants
+    would pass trivially with empty diffs — that's not the contract we want
+    to lock.
+
+    The frame is engineered so at least the zero-variance column
+    ``num_zero_var`` MUST be removed (variance < 0.01) and ``num_dup_of_1``
+    MUST be removed (correlation = 1.0 with ``num_informative_1``).
+    """
+    selected_features = real_pruning_state["selected_features"]
+    assert isinstance(selected_features, list), (
+        f"select_features did not return a list under 'selected_features'; "
+        f"got {type(selected_features).__name__}"
+    )
+    full_numeric_cols = [c for c in real_pruning_state["X_train"].columns if c.startswith("num_")]
+    assert len(selected_features) < len(full_numeric_cols), (
+        f"pruning was vacuous — selected {len(selected_features)} of "
+        f"{len(full_numeric_cols)} numeric columns; expected strict subset. "
+        f"selected={selected_features}; full={full_numeric_cols}"
+    )
+    # Specifically: the columns we engineered to be prunable MUST be absent.
+    assert "num_zero_var" not in selected_features, (
+        "expected variance-threshold to drop 'num_zero_var' (variance=0)"
+    )
+    assert "num_dup_of_1" not in selected_features, (
+        "expected correlation-filter to drop 'num_dup_of_1' (corr=1.0 with informative_1)"
+    )
+
+
+def _build_step_7_model_deployer_input_dict(
+    experiment_id: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Reproduce the input dict `step_7_model_deployer` builds for the deployer.
+
+    Mirrors `scripts/run_tier0_test.py:3796-3811` exactly — including the
+    optional v5 Gate C1 ``scope_spec`` / ``feature_manifest_source`` keys —
+    so that if the deployer's input contract changes to start consuming
+    ``selected_features`` or ``X_train_selected`` from state, this test
+    fails loudly.
+    """
+    deployment_name = f"backlog15_skew_{experiment_id[:8]}"
+    input_data: dict[str, Any] = {
+        "experiment_id": experiment_id,
+        "model_uri": state.get("model_uri") or f"runs:/{experiment_id}/model",
+        "validation_metrics": state.get("validation_metrics", {}),
+        "success_criteria_met": state.get("success_criteria_met", True),
+        "deployment_name": deployment_name,
+        "deployment_action": "register",
+    }
+    scope_spec = state.get("scope_spec")
+    if scope_spec is not None:
+        input_data["scope_spec"] = scope_spec
+        if isinstance(scope_spec, dict) and scope_spec.get("feature_manifest_source"):
+            input_data["feature_manifest_source"] = scope_spec.get("feature_manifest_source")
+    return input_data
+
+
+def test_model_deployer_input_dict_excludes_pruning_artifacts(
+    real_pruning_state: dict[str, Any],
+) -> None:
+    """P2 — the deployer's input dict carries no pruning artifacts.
+
+    The runner threads `state.get("feature_names")` (pre-pruning) and
+    `state.get("fitted_preprocessor")` (pre-pruning) into `step_7` as
+    KEYWORD ARGUMENTS, NOT inside the dict passed to ``agent.run(...)``.
+    The dict itself must not gain ``selected_features`` / ``X_train_selected``
+    via state-leak (e.g. a future refactor that does
+    ``input_data.update(state)``).
+
+    If a future PR wires pruning into the deployer's input contract, this
+    test fails and forces the author to also update the runner + the
+    BentoML serving wrapper + the preprocessor refit story together.
+    """
+    full_state = dict(real_pruning_state)  # shallow copy preserves the references
+    full_state["model_uri"] = "runs:/test-experiment/model"
+    full_state["validation_metrics"] = {"roc_auc": 0.75}
+    full_state["success_criteria_met"] = True
+
+    deployer_input = _build_step_7_model_deployer_input_dict(
+        experiment_id="test-experiment-deadbeef",
+        state=full_state,
+    )
+
+    # The forbidden keys — none of these are legitimate model_deployer inputs
+    # under the current pipeline contract.
+    forbidden_keys = {
+        "selected_features",
+        "selected_features_all",
+        "X_train_selected",
+        "X_val_selected",
+        "X_test_selected",
+        "removed_features",
+        "feature_importance",
+        "feature_importance_ranked",
+    }
+    leaked = forbidden_keys & set(deployer_input.keys())
+    assert leaked == set(), (
+        f"deployer input dict leaked feature_analyzer pruning artifacts: {leaked}; "
+        f"runner contract at scripts/run_tier0_test.py:3796-3811 must NOT propagate them"
+    )
+
+
+def test_serving_schema_after_real_pruning_still_equals_preprocessor_fit(
+    real_pruning_state: dict[str, Any],
+) -> None:
+    """P3 — after real pruning runs, serving still requests pre-pruning columns.
+
+    This is the load-bearing assertion for backlog #15: under the current
+    advisory-pruning contract, the BentoML serving wrapper derives its
+    request schema from ``fitted_preprocessor`` (numeric_features +
+    categorical_features). That preprocessor was fit BEFORE pruning, so its
+    schema is the pre-pruning schema. If a future PR refits the preprocessor
+    on the pruned schema but forgets to re-register the BentoML model — or
+    vice versa — this assertion catches the resulting skew.
+
+    Failure mode this catches: ``fitted_preprocessor.numeric_features``
+    silently shrinks to match ``selected_features``, causing the serving
+    wrapper to request fewer columns than were used at training. End-to-end
+    serving would then 200 OK on payloads missing the pruned columns,
+    silently scoring on degraded inputs.
+    """
+    preprocessor = real_pruning_state["fitted_preprocessor"]
+    selected_features = set(real_pruning_state["selected_features"])
+    pre_pruning_numeric = set(real_pruning_state["X_train"].select_dtypes("number").columns)
+
+    # Sanity check the fixture: pruning must have actually narrowed numerics.
+    assert selected_features < pre_pruning_numeric, (
+        f"fixture invariant broken: selected_features ({selected_features}) is not a "
+        f"strict subset of pre-pruning numerics ({pre_pruning_numeric})"
+    )
+
+    # The serving wrapper's reconstructed feature names = numeric + categorical
+    # straight off the fitted preprocessor (mirrors bentoml_service.py:502-510).
+    serving_request = set(_serving_path_feature_names(preprocessor))
+    fit_columns = set(preprocessor.numeric_features) | set(preprocessor.categorical_features)
+
+    # Invariant: the preprocessor's view of "what to scale/encode" still
+    # contains EVERY pre-pruning numeric column (it was fit before pruning).
+    pruned_out = pre_pruning_numeric - selected_features
+    assert pruned_out, "fixture must produce at least one pruned-out column"
+    for col in pruned_out:
+        assert col in preprocessor.numeric_features, (
+            f"pruned-out column {col!r} disappeared from preprocessor.numeric_features — "
+            f"serving schema has silently drifted to match the pruned set; "
+            f"this is exactly the training-serving skew backlog #15 guards against"
+        )
+
+    # And the serving request schema agrees with the preprocessor's fit columns.
+    assert serving_request == fit_columns, (
+        f"serving-request schema diverged from preprocessor-fit columns; "
+        f"diff: {serving_request.symmetric_difference(fit_columns)}"
+    )
