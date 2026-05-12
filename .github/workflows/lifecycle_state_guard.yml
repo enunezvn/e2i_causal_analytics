@@ -71,19 +71,25 @@ jobs:
         # multi-commit pushes — using HEAD~1 only checks the LAST commit
         # and silently skips lifecycle changes in earlier commits of the
         # same push (see N2 finding M3).
+        #
+        # Semgrep yaml.github-actions.security.run-shell-injection: lift
+        # github.* context values into env vars and reference them as
+        # "$VAR" in the shell, mirroring the EVENT_BEFORE pattern.
         env:
           EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "ref=origin/${{ github.base_ref }}" >> $GITHUB_OUTPUT
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
           else
             # github.event.before is the all-zeros SHA on the very first
             # push to a new branch. Fall back to HEAD~1 in that case.
             ZERO_SHA="0000000000000000000000000000000000000000"
             if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "$ZERO_SHA" ]; then
-              echo "ref=HEAD~1" >> $GITHUB_OUTPUT
+              echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
             else
-              echo "ref=$EVENT_BEFORE" >> $GITHUB_OUTPUT
+              echo "ref=$EVENT_BEFORE" >> "$GITHUB_OUTPUT"
             fi
           fi
 
