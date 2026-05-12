@@ -1634,10 +1634,15 @@ class OptumDataConverter:
         # they also had a post-approval on-label fill.
         offlabel_mask = dupixent_mask & (sub["medication_date"] < dupixent_csu_launch)
 
-        # On-label CSU fill = Xolair (any date) OR Dupixent on/after CSU approval.
-        # NaT medication_date drops out via the comparison.
+        # On-label CSU fill = Xolair on/after 2014-03-21 OR Dupixent on/after
+        # 2025-04-18. Pre-launch fills of either drug are data errors (the
+        # drug literally didn't exist for CSU yet) and would otherwise clamp
+        # to `innovator` via max(delta, 0), giving the HCP an artificially
+        # early adoption rank. Apply the same date-aware gate to BOTH drugs.
+        # NaT medication_date drops out via these comparisons.
+        onlabel_xolair_mask = (~dupixent_mask) & (sub["medication_date"] >= brand_launch)
         onlabel_dupixent_mask = dupixent_mask & (sub["medication_date"] >= dupixent_csu_launch)
-        onlabel_mask = (~dupixent_mask) | onlabel_dupixent_mask
+        onlabel_mask = onlabel_xolair_mask | onlabel_dupixent_mask
 
         onlabel = sub.loc[onlabel_mask].dropna(subset=["medication_date"])
         if not onlabel.empty:
@@ -1648,10 +1653,10 @@ class OptumDataConverter:
                 npi_key = str(npi_val)
                 if npi_key not in days_out:
                     continue
+                # By construction first_dt >= brand_launch (or
+                # dupixent_csu_launch >= brand_launch), so delta_days >= 0
+                # and no clamp is needed.
                 delta_days = int((first_dt - brand_launch).days)
-                # Negative deltas (Xolair fill before launch — data error)
-                # clamp to 0 so they still get an `innovator` rank rather than
-                # skewing the curve.
                 days_out[npi_key] = max(delta_days, 0)
 
         # Off-label flag — only pre-approval Dupixent fills flag the HCP.

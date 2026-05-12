@@ -255,6 +255,53 @@ def test_build_hcp_profiles_dupixent_offlabel_flag_set():
     assert profiles[0]["adoption_category"] == "non_adopter"
 
 
+def test_build_hcp_profiles_pre_launch_xolair_excluded_from_onlabel():
+    """Regression for codex pass-3 MEDIUM-1: a Xolair fill BEFORE the CSU
+    launch date 2014-03-21 is a data error (Xolair was not FDA-approved for
+    CSU yet) and must NOT be counted as on-label adoption. Without this
+    filter the HCP would have first-fill clamped to innovator timing via
+    max(delta_days, 0)."""
+    c = _make_converter()
+    rows = [
+        {
+            "npi": "NPI_EARLY_XOL",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2010-01-01"),  # before CSU launch
+            "Brand_Name": "XOLAIR",
+            "Generic_Name": None,
+            "code": None,
+        },
+    ]
+    _seed_for_rogers(c, rows)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    # Pre-launch Xolair excluded from on-label → no adoption category.
+    assert profiles[0]["adoption_category"] == "non_adopter"
+    # Pre-launch Xolair is NOT a Dupixent pre-approval row, so the
+    # dupixent_offlabel flag stays False.
+    assert profiles[0]["dupixent_offlabel"] is False
+
+
+def test_build_hcp_profiles_xolair_launch_date_boundary_is_inclusive():
+    """A Xolair fill ON the exact CSU launch date 2014-03-21 is on-label
+    (inclusive boundary, symmetric with the Dupixent approval-date check)."""
+    c = _make_converter()
+    rows = [
+        {
+            "npi": "NPI_XOL_BOUNDARY",
+            "patid": 1,
+            "medication_date": pd.Timestamp("2014-03-21"),  # exact CSU launch
+            "Brand_Name": "XOLAIR",
+            "Generic_Name": None,
+            "code": None,
+        },
+    ]
+    _seed_for_rogers(c, rows)
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["adoption_category"] != "non_adopter"
+
+
 def test_build_hcp_profiles_dupixent_pre_approval_csu_is_offlabel():
     """Regression for codex pass-2 HIGH: Dupixent CSU fills BEFORE the FDA
     approval date 2025-04-18 are off-label. HCP gets dupixent_offlabel=True
