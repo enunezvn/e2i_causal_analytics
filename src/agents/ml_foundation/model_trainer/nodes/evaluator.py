@@ -80,8 +80,8 @@ _PERMUTATION_PROMOTED_KEYS: tuple[str, ...] = (
 # `scripts/calibration/aggregate_t22_sweep.py` against
 # `synthetic_rwd_realistic` (n=1400, prevalence=0.10). The §2.3 well-
 # conditioned reading (target cells where every seed exceeds perm null
-# p99) yielded `buffer = floor(min P5 margin) - safety_margin = floor(0.06)
-# - 0.01 = 0.04`. The limiting cell is target_auc=0.70 with P5=+0.0597.
+# p99) yielded: limiting cell target_auc=0.70 with P5 margin = 0.0597 →
+# floor(0.0597 * 100)/100 = 0.05 → 0.05 - 0.01 safety = **0.04** buffer.
 # The mechanical reading (all cells, no exclusion) clamps to 0.0 at
 # small n because low-signal target cells (0.55-0.65) can produce models
 # whose AUC falls below the perm-null p99 — that's a regime+sample-size
@@ -232,7 +232,8 @@ def _emit_permutation_anchored_auc_advisory(
         minus the empirical permutation null p99). Negative ⇒ test AUC is
         below the upper tail of the null; positive but small ⇒ in the
         gray zone of "barely above noise".
-      * ``permutation_anchored_auc_buffer`` — the buffer (default 0.05).
+      * ``permutation_anchored_auc_buffer`` — the buffer (default 0.04;
+        calibrated 2026-05-12 via backlog #135).
         Ships on the artifact so an operator reading
         ``validation_metrics`` can audit the threshold even when the
         advisory is not violated.

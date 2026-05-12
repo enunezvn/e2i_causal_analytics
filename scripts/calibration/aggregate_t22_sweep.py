@@ -114,12 +114,16 @@ def _summarize_target(
         "perm_p99_std": float(np.std(perm_p99)),
         "margin_mean": float(np.mean(margins)),
         "margin_std": float(np.std(margins)),
-        # P5 = 5th percentile via numpy's default "linear" interpolation.
-        # At n_seeds=5, P5 ≈ the minimum (with linear interpolation between
-        # the 0th and 1st order statistic). Using "lower" would emit the
-        # strict minimum; "linear" gives a slightly less-pessimistic floor.
-        # Per spec §2.3 step 2, the intent is "worst-seed margin" — using
-        # min() directly would be the most defensible interpretation.
+        # Spec §2.3 step 2: "5th-percentile margin across seeds (i.e., the
+        # worst-seed margin)". Using ``np.min`` directly (NOT
+        # ``np.percentile(..., 5)``) — at n_seeds=5 the empirical 5th
+        # percentile under linear interpolation would equal the minimum
+        # only at the boundary; using min() makes the worst-seed semantics
+        # unambiguous and matches the spec's parenthetical. Codex L2: do
+        # NOT switch this to np.percentile without re-running the sweep —
+        # the buffer is calibrated against min(), and at n=5 the two
+        # estimators can differ by ~0.005 which flips the floor across
+        # the 0.01 quantisation boundary.
         "margin_p5": float(np.min(margins)),
         "drift_vs_target": drift,
         "drift_flagged": drift_flagged,
@@ -370,7 +374,7 @@ def main() -> int:
         f"(limiting target_auc={buffer_fit['well_conditioned']['limiting_target_auc']}, "
         f"clamped={buffer_fit['well_conditioned']['buffer_clamp_zero']})"
     )
-    print(f"per-target margin_p5: " + ", ".join(
+    print("per-target margin_p5: " + ", ".join(
         f"{t['target_auc']:.2f}=" + (
             "DEGEN" if t["margin_p5"] is None else f"{t['margin_p5']:+.4f}"
         )
