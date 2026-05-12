@@ -87,9 +87,7 @@ def _extract_target_features(df) -> np.ndarray:
     underestimate the achievable AUC at each signal_scale).
     """
     age_norm = (df["age"].values - 50) / 20
-    icd_severe = (
-        df["primary_diagnosis_code"].isin(["L50.1", "L50.8"]).astype(int).values
-    )
+    icd_severe = df["primary_diagnosis_code"].isin(["L50.1", "L50.8"]).astype(int).values
     insurance_premium = (
         df["insurance_product"].isin(["commercial_PPO", "self_insured"]).astype(int).values
     )
@@ -141,9 +139,7 @@ def run_cell(seed: int, target_auc: float) -> dict[str, float | int | str | None
         "target_auc": float(target_auc),
         "signal_scale": float(signal_scale),
         "realized_auc": realized_auc,
-        "perm_null_p99": (
-            float(perm_null_p99) if perm_null_p99 is not None else None
-        ),
+        "perm_null_p99": (float(perm_null_p99) if perm_null_p99 is not None else None),
         "margin_p99": margin_p99,
         "n_patients": int(N_PATIENTS),
         "prevalence": float(PREVALENCE),
