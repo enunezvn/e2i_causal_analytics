@@ -159,8 +159,18 @@ class TestQuanCharlson:
         conv = _converter()
         # Single record with admit_date pre-window
         conv._inpatient_by_pat = {
-            1: pd.DataFrame([{"admit_date": _ts("2020-01-01"), "diag1": "I21",
-                              "diag2": None, "diag3": None, "diag4": None, "diag5": None}])
+            1: pd.DataFrame(
+                [
+                    {
+                        "admit_date": _ts("2020-01-01"),
+                        "diag1": "I21",
+                        "diag2": None,
+                        "diag3": None,
+                        "diag4": None,
+                        "diag5": None,
+                    }
+                ]
+            )
         }
         assert conv._charlson_quan(1, _ts("2024-01-01"), _ts("2025-12-31")) == 0
 
@@ -223,9 +233,27 @@ class TestVanWalravenElixhauser:
         # E13x and E14x complicated buckets so a regression dropping either
         # is caught.
         for prefix in (
-            "E122", "E123", "E124", "E125", "E126", "E127", "E128",
-            "E132", "E133", "E134", "E135", "E136", "E137", "E138",
-            "E142", "E143", "E144", "E145", "E146", "E147", "E148",
+            "E122",
+            "E123",
+            "E124",
+            "E125",
+            "E126",
+            "E127",
+            "E128",
+            "E132",
+            "E133",
+            "E134",
+            "E135",
+            "E136",
+            "E137",
+            "E138",
+            "E142",
+            "E143",
+            "E144",
+            "E145",
+            "E146",
+            "E147",
+            "E148",
         ):
             assert prefix in comp, f"comp missing {prefix}"
 
