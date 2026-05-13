@@ -1523,9 +1523,13 @@ class OptumDataConverter:
         # 8. Treatment events + HCP profiles from the kept patients
         kept_patids = {j["_patid"] for j in journeys}
         events = self._build_treatment_events(kept_patids, journeys)
-        # Issue #156 item 1: pass patid → index_date so priority_tier
-        # can anchor its rolling-12-month TRx window on the cohort's
-        # latest index date (stable cohort-wide endpoint).
+        # Issue #156 items 1 + 2: pass patid → index_date so both
+        # priority_tier (rolling 12-month TRx) and influence_network
+        # (pre-index 180d lookback) can apply PER-PATIENT temporal
+        # gating. Updated per codex PR-2 pass-1 MEDIUM-1 + MEDIUM-2:
+        # the pre-fix code used a cohort-wide endpoint that admitted
+        # post-index leakage for early-index patients. Per-patient
+        # gating eliminates that leakage path.
         idx_by_patid_for_hcp = {int(j["_patid"]): pd.Timestamp(j["index_date"]) for j in journeys}
         hcps = self._build_hcp_profiles(kept_patids, idx_by_patid_for_hcp)
 
