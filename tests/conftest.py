@@ -373,6 +373,23 @@ async def redis_client():
         await client.aclose()
 
 
+def _enforce_falkordb_preconditions() -> None:
+    """Shared skip-or-proceed guard for the ``falkordb_client`` fixture.
+
+    Extracted as a top-level helper so unit tests can exercise it without
+    pulling the full pytest_asyncio fixture machinery (codex pass-2 LOW-2).
+
+    Raises:
+        pytest.skip.Exception: when either the global availability flag is
+            False (no probe success) or ``FALKORDB_URL`` is empty (issue
+            #183 defensive guard against ``aioredis.from_url("")``).
+    """
+    if not SERVICES_AVAILABLE["falkordb"]:
+        pytest.skip("FalkorDB not available")
+    if not FALKORDB_URL:
+        pytest.skip("FalkorDB URL not configured")
+
+
 @pytest_asyncio.fixture
 async def falkordb_client():
     """Create a FalkorDB client with automatic skip if unavailable.
@@ -386,13 +403,7 @@ async def falkordb_client():
     Yields:
         redis.asyncio.Redis: Connected FalkorDB client (Redis protocol)
     """
-    if not SERVICES_AVAILABLE["falkordb"]:
-        pytest.skip("FalkorDB not available")
-
-    # Defensive: if availability check somehow flipped True without a URL,
-    # skip rather than throwing inside ``aioredis.from_url("")`` (issue #183).
-    if not FALKORDB_URL:
-        pytest.skip("FalkorDB URL not configured")
+    _enforce_falkordb_preconditions()
 
     import redis.asyncio as aioredis
 
