@@ -411,6 +411,7 @@ class FalkorDBSemanticMemory:
         max_depth: int = 2,
         limit: int = 100,
         offset: int = 0,
+        cohort_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get the influence network around an HCP with pagination.
@@ -420,6 +421,12 @@ class FalkorDBSemanticMemory:
             max_depth: Maximum traversal depth (1-5, clamped for safety)
             limit: Maximum nodes to return (default 100, max 500)
             offset: Pagination offset for results
+            cohort_id: optional cohort tag (e.g., ``"optum_initiation_v3"``).
+                When supplied, restricts traversal to nodes carrying the
+                same ``cohort_id`` property as the start HCP — required
+                to keep CSU and Optum influence graphs queryable
+                independently after issue #169 ingestion populates the
+                backend.
 
         Returns:
             Dict with hcp_id, influenced_hcps, patients, brands_prescribed, pagination
@@ -429,15 +436,31 @@ class FalkorDBSemanticMemory:
         safe_limit = max(1, min(500, int(limit)))
         safe_offset = max(0, int(offset))
 
-        # FalkorDB doesn't support parameterized variable-length bounds
-        query = f"""
-        MATCH (h:HCP {{id: $hcp_id}})-[*1..{safe_depth}]-(connected)
-        RETURN DISTINCT connected
-        SKIP {safe_offset}
-        LIMIT {safe_limit}
-        """
+        # FalkorDB doesn't support parameterized variable-length bounds.
+        # Issue #169: cohort filter is applied as a property predicate on
+        # both endpoints so that the SHARED_PATIENTS edges ingested by the
+        # FalkorDB persistence script don't leak cross-cohort traversal
+        # paths. The `cohort_id` property is set on every HCP node + edge
+        # by `scripts/persist_hcp_influence_to_falkordb.py`.
+        if cohort_id is not None:
+            query = f"""
+            MATCH (h:HCP {{id: $hcp_id, cohort_id: $cohort_id}})-[*1..{safe_depth}]-(connected)
+            WHERE connected.cohort_id = $cohort_id
+            RETURN DISTINCT connected
+            SKIP {safe_offset}
+            LIMIT {safe_limit}
+            """
+            params: Dict[str, Any] = {"hcp_id": hcp_id, "cohort_id": cohort_id}
+        else:
+            query = f"""
+            MATCH (h:HCP {{id: $hcp_id}})-[*1..{safe_depth}]-(connected)
+            RETURN DISTINCT connected
+            SKIP {safe_offset}
+            LIMIT {safe_limit}
+            """
+            params = {"hcp_id": hcp_id}
 
-        result = self.graph.query(query, {"hcp_id": hcp_id})
+        result = self.graph.query(query, params)
 
         network: Dict[str, Any] = {
             "hcp_id": hcp_id,
@@ -546,7 +569,12 @@ class FalkorDBSemanticMemory:
         result = self.graph.query(query, {"patient_id": patient_id})
         return result.result_set[0][0] if result.result_set else 0
 
-    def count_hcp_influence_network(self, hcp_id: str, max_depth: int = 2) -> int:
+    def count_hcp_influence_network(
+        self,
+        hcp_id: str,
+        max_depth: int = 2,
+        cohort_id: Optional[str] = None,
+    ) -> int:
         """
         Count total nodes in HCP influence network.
 
@@ -555,18 +583,29 @@ class FalkorDBSemanticMemory:
         Args:
             hcp_id: HCP entity ID
             max_depth: Maximum traversal depth (1-5)
+            cohort_id: optional cohort tag — see :meth:`get_hcp_influence_network`
+                for the rationale (issue #169 cross-cohort isolation).
 
         Returns:
             Total count of connected nodes
         """
         safe_depth = max(1, min(5, int(max_depth)))
 
-        query = f"""
-        MATCH (h:HCP {{id: $hcp_id}})-[*1..{safe_depth}]-(connected)
-        RETURN count(DISTINCT connected) as total
-        """
+        if cohort_id is not None:
+            query = f"""
+            MATCH (h:HCP {{id: $hcp_id, cohort_id: $cohort_id}})-[*1..{safe_depth}]-(connected)
+            WHERE connected.cohort_id = $cohort_id
+            RETURN count(DISTINCT connected) as total
+            """
+            params: Dict[str, Any] = {"hcp_id": hcp_id, "cohort_id": cohort_id}
+        else:
+            query = f"""
+            MATCH (h:HCP {{id: $hcp_id}})-[*1..{safe_depth}]-(connected)
+            RETURN count(DISTINCT connected) as total
+            """
+            params = {"hcp_id": hcp_id}
 
-        result = self.graph.query(query, {"hcp_id": hcp_id})
+        result = self.graph.query(query, params)
         return result.result_set[0][0] if result.result_set else 0
 
     def count_causal_chains(self, start_entity_id: str, max_depth: int = 3) -> int:

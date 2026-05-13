@@ -351,6 +351,45 @@ The data_preparer loads the cohort parquet directly — no JSON conversion
 needed — via the generic `FileIngestor` capability. The precomputed
 `data_split` column is honored; no re-splitting is applied.
 
+## Persisting the HCP influence graph to FalkorDB (issue #169)
+
+PR #168 (issue #156 item 2) populates `influence_network_size` +
+`peer_influence_score` on the HCP parquet artifact by building an
+in-memory `networkx.Graph` from shared-patient cliques. To make those
+same numbers queryable through the semantic-memory Cypher helpers
+(`get_hcp_influence_network` / `count_hcp_influence_network` in
+`src/memory/semantic_memory.py`), run the persistence script AFTER the
+converter:
+
+```bash
+# Optum initiation cohort
+python scripts/persist_hcp_influence_to_falkordb.py \
+    --parquet-dir data/rwd/Optum_Parquet \
+    --cohort-dir data/rwd/optum/initiation \
+    --cohort-id optum_initiation_v3
+
+# Wipe-and-reload (deletes only the rows tagged with --cohort-id):
+python scripts/persist_hcp_influence_to_falkordb.py ... --replace
+
+# Dry run (build graph + log counts, no FalkorDB writes):
+python scripts/persist_hcp_influence_to_falkordb.py ... --dry-run
+```
+
+The script rebuilds the EXACT graph PR #168 builds via the shared
+`build_hcp_influence_graph` helper (same temporal gate, same edge weight
+definition), then emits `(:HCP {id, npi, cohort_id})` nodes and
+`(:HCP)-[:SHARED_PATIENTS {weight, cohort_id, ingested_at}]->(:HCP)`
+edges via Cypher `MERGE` (idempotent). The semantic-memory query helpers
+accept an optional `cohort_id` kwarg so CSU and Optum graphs stay
+independently queryable; persist each cohort under a distinct tag
+(e.g. `csu_initiation_v3`, `optum_initiation_v3`).
+
+Connection: the script uses `src.memory.services.factories.get_falkordb_client`,
+which reads `FALKORDB_URL` (or `FALKORDB_HOST`/`PORT`/`PASSWORD`) from
+the environment. Real-instance smoke validation is recommended whenever
+the schema in `src/memory/semantic_memory.py` changes; unit tests cover
+the round-trip parity contract against an in-process FalkorDB fake.
+
 ## Related files
 
 - `scripts/convert_optum_rwd.py` — the converter itself

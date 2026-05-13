@@ -1105,6 +1105,184 @@ ALLOWED_COHORTS = ("initiation", "discontinuation", "persistence", "all")
 
 
 # --------------------------------------------------------------------------- #
+# Issue #169: reusable HCP-influence graph helpers (factored out of the      #
+# converter so that the FalkorDB persistence script can build the EXACT     #
+# same shared-patient clique graph PR #168 builds for in-memory scoring).   #
+# --------------------------------------------------------------------------- #
+
+
+def build_hcp_influence_graph(
+    kept_patids: set[int],
+    med: pd.DataFrame,
+    proc: pd.DataFrame,
+    idx_by_patid: dict[int, pd.Timestamp] | None = None,
+    lookback_days: int = LOOKBACK_DAYS,
+) -> Any:
+    """Issue #169: build the per-cohort HCP-HCP influence graph.
+
+    Pure helper factored out of ``OptumDataConverter._compute_influence_network``
+    so that both the converter (in-memory scoring) and the FalkorDB
+    persistence script (Cypher ingest) consume the SAME shared-patient
+    clique graph. PR #168 fixed the leakage-safe temporal gate; this
+    helper preserves that contract verbatim.
+
+    For each patient in ``kept_patids``, collect the set of treating
+    HCPs from ``med.npi ∪ proc.npi`` WITHIN THE PER-PATIENT LOOKBACK
+    WINDOW ``(patient_index - lookback_days, patient_index]``. Each
+    per-patient set forms a clique; the weighted undirected HCP-HCP
+    graph aggregates edge counts over patients (edge weight = number of
+    distinct patients seen by BOTH endpoints in the window).
+
+    Args:
+        kept_patids: cohort-membership patid filter.
+        med: medication.parquet-shaped DataFrame; needs ``npi``, ``patid``,
+            ``medication_date`` columns. Rows lacking ``npi`` are skipped.
+        proc: procedure.parquet-shaped DataFrame; needs ``npi``, ``patid``,
+            ``proc_date`` columns.
+        idx_by_patid: per-patient index date. When ``None`` (test
+            invocation only), the lookback gate is skipped and ALL
+            med/proc rows for kept patients contribute — production
+            callers always thread this map.
+        lookback_days: days before index_date that bound the inclusion
+            window. Defaults to ``LOOKBACK_DAYS`` (180d).
+
+    Returns:
+        A ``networkx.Graph`` with string-valued NPI nodes and integer
+        ``weight`` edge property, or ``None`` if networkx isn't
+        importable (the converter logs and falls back to empty
+        dicts in that case). An empty graph (no edges) is still
+        returned as a valid ``nx.Graph`` so callers can branch on
+        ``graph is None`` for "networkx missing" vs ``len(graph) == 0``
+        for "no data".
+    """
+    try:
+        import networkx as nx
+    except ImportError:
+        logger.warning(
+            "networkx not available — influence_network fields will be None. "
+            "Add networkx>=3.0 to dependencies."
+        )
+        return None
+
+    idx_map: dict[int, pd.Timestamp] = {}
+    if idx_by_patid:
+        for k, v in idx_by_patid.items():
+            if v is not None:
+                idx_map[int(k)] = pd.Timestamp(v)
+
+    hcps_by_patient: dict[int, set[str]] = defaultdict(set)
+
+    def _collect(df: pd.DataFrame, date_col: str) -> None:
+        if "npi" not in df.columns or "patid" not in df.columns:
+            return
+        sub = df[df["patid"].isin(kept_patids)]
+        has_date = date_col in sub.columns
+        for _, r in sub.iterrows():
+            pid = r.get("patid")
+            if pd.isna(pid):
+                continue
+            pid_int = int(pid)
+            if idx_map and has_date:
+                fill_date = r.get(date_col)
+                if pd.isna(fill_date):
+                    continue
+                idx_dt = idx_map.get(pid_int)
+                if idx_dt is None:
+                    continue
+                if not (
+                    (fill_date > idx_dt - timedelta(days=lookback_days)) and (fill_date <= idx_dt)
+                ):
+                    continue
+            nv = r.get("npi")
+            if pd.isna(nv):
+                continue
+            ns = str(nv).strip()
+            if not ns or ns == "nan":
+                continue
+            hcps_by_patient[pid_int].add(ns)
+
+    _collect(med, "medication_date")
+    _collect(proc, "proc_date")
+
+    edge_weight: dict[tuple[str, str], int] = defaultdict(int)
+    node_set: set[str] = set()
+    for hcp_set in hcps_by_patient.values():
+        members = sorted(hcp_set)
+        node_set.update(members)
+        n = len(members)
+        for i in range(n):
+            for j in range(i + 1, n):
+                edge_weight[(members[i], members[j])] += 1
+
+    graph: Any = nx.Graph()
+    graph.add_nodes_from(node_set)
+    for (a, b), w in edge_weight.items():
+        graph.add_edge(a, b, weight=int(w))
+    return graph
+
+
+def score_hcp_influence_graph(
+    graph: Any,
+    scale: float = PEER_INFLUENCE_SCALE,
+) -> tuple[dict[str, int], dict[str, float]]:
+    """Issue #169: derive degree + scaled eigenvector centrality from a graph.
+
+    Pure helper factored out of the converter for re-use by the
+    FalkorDB round-trip parity test. Matches PR #168's behaviour
+    exactly:
+
+    - ``influence_network_size`` = ``graph.degree(n)`` per node.
+    - ``peer_influence_score`` = ``eigenvector_centrality`` per
+      connected component (to avoid ``PowerIterationFailedConvergence``
+      on disconnected graphs), then ``round(min(v, 1.0) * scale, 2)``
+      clamped to ``[0.00, 9.99]`` to fit ``DECIMAL(3,2)``.
+
+    Args:
+        graph: a ``networkx.Graph`` as returned by
+            :func:`build_hcp_influence_graph`. An empty graph yields
+            two empty dicts.
+        scale: ``PEER_INFLUENCE_SCALE`` (9.99). Exposed for
+            unit-test ergonomics; production callers use the default.
+
+    Returns:
+        ``(degree_by_npi, centrality_by_npi)`` — same shape as the
+        converter's pre-issue-169 internal API.
+    """
+    try:
+        import networkx as nx
+    except ImportError:
+        return {}, {}
+
+    if graph is None or graph.number_of_nodes() == 0:
+        return {}, {}
+
+    degree_by_npi: dict[str, int] = {n: int(graph.degree(n)) for n in graph.nodes()}
+
+    centrality_raw: dict[str, float] = dict.fromkeys(graph.nodes(), 0.0)
+    for component in nx.connected_components(graph):
+        sub_g = graph.subgraph(component)
+        if sub_g.number_of_edges() == 0:
+            continue
+        try:
+            c = nx.eigenvector_centrality(sub_g, max_iter=1000, tol=1e-6, weight="weight")
+        except nx.PowerIterationFailedConvergence:
+            logger.warning(
+                "eigenvector_centrality failed on component size %d — falling back to 0.0",
+                sub_g.number_of_nodes(),
+            )
+            continue
+        for k, v in c.items():
+            centrality_raw[k] = float(v)
+
+    centrality_by_npi: dict[str, float] = {}
+    for n, v in centrality_raw.items():
+        scaled = round(min(v, 1.0) * scale, 2)
+        centrality_by_npi[n] = max(0.0, min(9.99, scaled))
+
+    return degree_by_npi, centrality_by_npi
+
+
+# --------------------------------------------------------------------------- #
 # OptumDataConverter                                                          #
 # --------------------------------------------------------------------------- #
 
@@ -2822,7 +3000,9 @@ class OptumDataConverter:
         if not switched:
             # Immunosuppressant addition.
             immuno_generics = NON_TARGET_DRUG_CLASSES.get("immunosupp", ())
-            win = grp[(grp["medication_date"] >= init_date) & (grp["medication_date"] <= end_window)]
+            win = grp[
+                (grp["medication_date"] >= init_date) & (grp["medication_date"] <= end_window)
+            ]
             gen_series = win.get("Generic_Name") if not win.empty else None
             if gen_series is not None:
                 gen_lower = gen_series.astype(str).str.lower()
@@ -3612,6 +3792,12 @@ class OptumDataConverter:
     ) -> tuple[dict[str, int], dict[str, float]]:
         """Issue #156 item 2: shared-patient clique → degree + eigenvector_centrality.
 
+        Delegates to the module-level :func:`build_hcp_influence_graph` and
+        :func:`score_hcp_influence_graph` helpers so that the issue #169
+        FalkorDB persistence script can reuse the exact same graph
+        construction without depending on the converter class. The
+        behaviour described below is the contract of those helpers.
+
         For each patient in ``kept_patids``, collect the set of treating
         HCPs from ``medication.npi ∪ procedure.npi`` WITHIN THE PER-PATIENT
         LOOKBACK WINDOW ``(patient_index - LOOKBACK_DAYS, patient_index]``.
@@ -3642,105 +3828,16 @@ class OptumDataConverter:
         PubMed co-authorship — explicitly out of scope per issue #156.
         Documented in the data dictionary.
         """
-        try:
-            import networkx as nx
-        except ImportError:
-            logger.warning(
-                "networkx not available — influence_network fields will be None. "
-                "Add networkx>=3.0 to dependencies."
-            )
+        graph = build_hcp_influence_graph(
+            kept_patids=kept_patids,
+            med=self.med,
+            proc=self.proc,
+            idx_by_patid=idx_by_patid,
+            lookback_days=LOOKBACK_DAYS,
+        )
+        if graph is None:
             return {}, {}
-
-        idx_map: dict[int, pd.Timestamp] = {}
-        if idx_by_patid:
-            for k, v in idx_by_patid.items():
-                if v is not None:
-                    idx_map[int(k)] = pd.Timestamp(v)
-
-        # Per-patient HCP sets across med + proc, with per-patient
-        # pre-index lookback gating.
-        hcps_by_patient: dict[int, set[str]] = defaultdict(set)
-
-        def _collect(df: pd.DataFrame, date_col: str) -> None:
-            if "npi" not in df.columns or "patid" not in df.columns:
-                return
-            sub = df[df["patid"].isin(kept_patids)]
-            has_date = date_col in sub.columns
-            for _, r in sub.iterrows():
-                pid = r.get("patid")
-                if pd.isna(pid):
-                    continue
-                pid_int = int(pid)
-                if idx_map and has_date:
-                    fill_date = r.get(date_col)
-                    if pd.isna(fill_date):
-                        continue
-                    idx_dt = idx_map.get(pid_int)
-                    if idx_dt is None:
-                        continue
-                    if not (
-                        (fill_date > idx_dt - timedelta(days=LOOKBACK_DAYS))
-                        and (fill_date <= idx_dt)
-                    ):
-                        continue
-                nv = r.get("npi")
-                if pd.isna(nv):
-                    continue
-                ns = str(nv).strip()
-                if not ns or ns == "nan":
-                    continue
-                hcps_by_patient[pid_int].add(ns)
-
-        _collect(self.med, "medication_date")
-        _collect(self.proc, "proc_date")
-
-        # Aggregate to undirected weighted edge counts.
-        edge_weight: dict[tuple[str, str], int] = defaultdict(int)
-        node_set: set[str] = set()
-        for hcp_set in hcps_by_patient.values():
-            members = sorted(hcp_set)
-            node_set.update(members)
-            n = len(members)
-            for i in range(n):
-                for j in range(i + 1, n):
-                    edge_weight[(members[i], members[j])] += 1
-
-        if not node_set:
-            return {}, {}
-
-        graph: Any = nx.Graph()
-        graph.add_nodes_from(node_set)
-        for (a, b), w in edge_weight.items():
-            graph.add_edge(a, b, weight=w)
-
-        degree_by_npi: dict[str, int] = {n: int(graph.degree(n)) for n in graph.nodes()}
-
-        # eigenvector_centrality may not converge on disconnected graphs.
-        # Compute per connected component to avoid PowerIterationFailedConvergence,
-        # then map back to global keys. Singletons (no edges) get 0.0.
-        centrality_raw: dict[str, float] = dict.fromkeys(graph.nodes(), 0.0)
-        for component in nx.connected_components(graph):
-            sub_g = graph.subgraph(component)
-            if sub_g.number_of_edges() == 0:
-                continue
-            try:
-                c = nx.eigenvector_centrality(sub_g, max_iter=1000, tol=1e-6, weight="weight")
-            except nx.PowerIterationFailedConvergence:
-                logger.warning(
-                    "eigenvector_centrality failed on component size %d — falling back to 0.0",
-                    sub_g.number_of_nodes(),
-                )
-                continue
-            for k, v in c.items():
-                centrality_raw[k] = float(v)
-
-        centrality_by_npi: dict[str, float] = {}
-        for n, v in centrality_raw.items():
-            scaled = round(min(v, 1.0) * PEER_INFLUENCE_SCALE, 2)
-            # Clamp into DECIMAL(3,2) range [0.00, 9.99].
-            centrality_by_npi[n] = max(0.0, min(9.99, scaled))
-
-        return degree_by_npi, centrality_by_npi
+        return score_hcp_influence_graph(graph, scale=PEER_INFLUENCE_SCALE)
 
     def _build_hcp_profiles(
         self,
