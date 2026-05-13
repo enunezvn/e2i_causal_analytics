@@ -63,8 +63,11 @@
 -- inner `BEGIN;` ... `COMMIT;` here would prematurely commit before the
 -- bookkeeping insert, leaving the migration applied but unrecorded on a
 -- bookkeeping-insert failure. PL/pgSQL function-body `BEGIN ... END`
--- blocks below are fine — only top-of-file `^BEGIN;$` / `^COMMIT;$` are
--- the bug.
+-- blocks below are fine — they live inside `$$ ... $$` dollar-quoted
+-- function bodies; the runner doesn't interpret them as transaction
+-- markers. Any script-level transaction-control statement is the bug,
+-- regardless of position in the file — see
+-- `tests/integration/test_migrations_no_inner_txn.py` for the lint.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------

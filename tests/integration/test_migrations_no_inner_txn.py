@@ -160,6 +160,71 @@ def _split_line_at_dollar_boundaries(
     return segments, in_dollar_block, open_tag
 
 
+def _split_statements_outside_strings(text: str) -> list[str]:
+    """Split ``text`` on ``;`` boundaries that are NOT inside a
+    single-quoted SQL string literal. Handles SQL's standard
+    ``''`` escape (a doubled single-quote represents a literal
+    apostrophe inside a string, and does NOT close the string).
+
+    This is a minimal SQL tokenizer scoped to the lint's needs:
+
+    * Tracks ``'`` open/close. Doubled ``''`` toggles in then back
+      out, which is equivalent to "stay open" (per SQL spec).
+    * Does NOT handle PostgreSQL's ``E'\\''`` C-style escape syntax;
+      this repo doesn't use it in migrations. If a future migration
+      starts using ``E'...'``, the tokenizer will need a second
+      state for that quoting style.
+    * Does NOT handle ``"..."`` identifier quoting (no transaction
+      keywords are valid identifiers in standard contexts; double-
+      quoted identifiers can contain ``;`` but never as
+      statement-separator).
+    * Does NOT handle ``/* ... */`` block comments. Migrations in
+      this repo use ``--`` line comments exclusively.
+    * Dollar-quoted strings are already filtered upstream by
+      ``_split_line_at_dollar_boundaries`` — by the time text
+      reaches this function, all content is script-level (outside
+      function bodies). Within a script-level context, dollar
+      quoting is rare (it's primarily a function-body construct)
+      but if it appeared, this tokenizer would NOT skip semicolons
+      inside it. Codex pass-4 documented limitation.
+
+    Codex pass-4 LOW-1.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    in_single_quote = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "'":
+            current.append(ch)
+            if in_single_quote:
+                # SQL ``''`` escape: if next char is also ``'``,
+                # consume it and stay inside the string.
+                if i + 1 < n and text[i + 1] == "'":
+                    current.append(text[i + 1])
+                    i += 2
+                    continue
+                in_single_quote = False
+            else:
+                in_single_quote = True
+            i += 1
+            continue
+        if ch == ";" and not in_single_quote:
+            statements.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    # Tail (any trailing text after the last ``;`` or whole text if no
+    # ``;`` found).
+    if current:
+        statements.append("".join(current))
+    return statements
+
+
 def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
     """Return a list of ``(line_number, line_text)`` for every
     script-level transaction-control statement in ``sql_path``.
@@ -201,14 +266,12 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
         # transaction-control statements.)
         cleaned_segments = [_strip_inline_comment(seg) for seg in segments]
         joined = " ".join(cleaned_segments)
-        # Split on ``;`` to recover individual statements; each
-        # statement is then stripped and matched against the regex
-        # WITHOUT requiring a trailing ``;`` (we already split on
-        # it). The regex was authored to match the full statement
-        # including ``;``; we strip the ``;`` from the regex by
-        # using a "head-only" variant. Equivalently: re-append a
-        # ``;`` to each non-empty stripped segment before matching.
-        for raw_statement in joined.split(";"):
+        # Split on ``;`` to recover individual statements, but only
+        # at semicolons OUTSIDE single-quoted SQL string literals
+        # (codex pass-4 LOW-1: a literal like
+        # ``VALUES ('before; COMMIT; after')`` should not split into
+        # a fake ``COMMIT;`` statement).
+        for raw_statement in _split_statements_outside_strings(joined):
             statement = raw_statement.strip()
             if not statement:
                 continue
@@ -459,6 +522,73 @@ def test_scanner_detects_txn_control_after_same_line_dollar_close(
     assert len(findings) == 1, f"expected 1 finding on line 5, got: {findings}"
     assert findings[0][0] == 5
     assert "COMMIT;" in findings[0][1].upper()
+
+
+def test_scanner_ignores_semicolons_inside_single_quoted_strings(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-4 LOW-1: semicolons inside SQL string literals must
+    NOT be treated as statement separators. Otherwise a benign
+    ``INSERT INTO audit_log VALUES ('before; COMMIT; after');``
+    would surface a fake ``COMMIT;`` finding.
+
+    The fix is the ``_split_statements_outside_strings`` tokenizer
+    which tracks single-quote open/close state.
+    """
+    sql = tmp_path / "string_literal_semicolons.sql"
+    sql.write_text(
+        "INSERT INTO audit_log(message) VALUES ('before; COMMIT; after');\n"
+        "SELECT 'before; BEGIN; after';\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    assert findings == [], (
+        f"scanner false-positive on semicolons inside string literals: {findings}"
+    )
+
+
+def test_scanner_handles_doubled_quote_escape_in_strings(tmp_path: Path) -> None:
+    """SQL standard ``''`` (two single quotes) is the escape for a
+    literal apostrophe inside a string. A doubled quote must NOT be
+    interpreted as a string close-then-reopen, otherwise the
+    tokenizer's state would drift and a subsequent ``;`` would be
+    treated as a statement separator.
+
+    Pattern: ``VALUES ('it''s a test; COMMIT; here')`` — the ``''``
+    is an escaped apostrophe, the whole literal is one string, and
+    the ``;`` characters are inside it.
+    """
+    sql = tmp_path / "escaped_quotes.sql"
+    sql.write_text(
+        "INSERT INTO audit_log(message) VALUES ('it''s a test; COMMIT; here');\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    assert findings == [], f"scanner false-positive on ``''`` quote escape: {findings}"
+
+
+def test_split_statements_outside_strings_basic_cases() -> None:
+    """Direct unit-test of ``_split_statements_outside_strings`` to
+    pin the tokenizer's behavior.
+    """
+    # No string, two statements:
+    assert _split_statements_outside_strings("BEGIN;COMMIT") == ["BEGIN", "COMMIT"]
+    # Trailing semicolon → trailing empty segment is NOT emitted; the
+    # caller is responsible for stripping empties anyway:
+    assert _split_statements_outside_strings("BEGIN;") == ["BEGIN"]
+    # Semicolon inside single-quoted string:
+    assert _split_statements_outside_strings("VALUES ('a;b')") == ["VALUES ('a;b')"]
+    # Doubled quote escape:
+    assert _split_statements_outside_strings("VALUES ('it''s;a;test')") == [
+        "VALUES ('it''s;a;test')"
+    ]
+    # Multiple strings:
+    assert _split_statements_outside_strings("INSERT INTO t VALUES ('a;b'), ('c;d');COMMIT") == [
+        "INSERT INTO t VALUES ('a;b'), ('c;d')",
+        "COMMIT",
+    ]
+    # Empty input:
+    assert _split_statements_outside_strings("") == []
 
 
 def test_scanner_detects_multi_statement_per_line_txn_control(tmp_path: Path) -> None:
