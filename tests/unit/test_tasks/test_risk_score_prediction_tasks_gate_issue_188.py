@@ -94,3 +94,13 @@ class TestGatedSentinelConstant:
         dashboards / trigger generators — pinned to prevent silent renames.
         """
         assert GATED_SENTINEL_PREDICTION_CLASS == "gated_honest_failure"
+
+    def test_sentinel_matches_repository_constant(self) -> None:
+        """The Celery task writes the sentinel; the repository read paths
+        filter on it. Both must agree on the exact string. If a future
+        refactor renames either side without the other, this test fails
+        loud (codex pass-3 MEDIUM-1).
+        """
+        from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
+
+        assert GATED_SENTINEL_PREDICTION_CLASS == GATED_HONEST_FAILURE_SENTINEL

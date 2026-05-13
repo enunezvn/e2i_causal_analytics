@@ -529,6 +529,24 @@ class TestFitInputValidation:
         with pytest.raises(ValueError, match="y_val must contain BOTH"):
             trainer.fit(X_tr, y_tr, X_va, np.array([1, 1, 1, 1, 1, 1]))
 
+    def test_leakage_check_fires_before_single_class_val(self) -> None:
+        """Codex pass-3 MEDIUM-2: leakage error must surface BEFORE the
+        y_val single-class error when both conditions hold.
+
+        Leakage is a structural correctness property of the feature set
+        (will produce wrong gradients even with stratified splits);
+        class imbalance is a data-shape property (can be fixed by
+        re-stratifying). The structural error should always surface
+        first so the operator fixes the root cause.
+        """
+        # Both errors present: leaky feature AND all-zero y_val.
+        X = pd.DataFrame({"xolair_ever_filled": [0, 1, 0, 1], "age": [30, 40, 50, 60]})
+        y_tr = np.array([0, 1, 0, 1])
+        y_va_single_class = np.array([0, 0, 0, 0])
+        trainer = RiskScoreTrainer(enable_mlflow=False, hpo_trials=2, cv_folds=2)
+        with pytest.raises(LeakageError):
+            trainer.fit(X, y_tr, X, y_va_single_class)
+
 
 # ---------------------------------------------------------------------------
 # Issue #188: prevalence-aware AUC-PR floor
@@ -580,15 +598,32 @@ class TestComputeAucPrFloor:
         """The headline regression: n=1294, 37 pos -> floor = 0.145.
 
         This is the load-bearing acceptance criterion from issue #188 and
-        the research report (issue_188_aucpr_floor_research_20260513.md).
+        the research report (issue_188_aucpr_floor_research_20260513.md):
+        the default Optum Initiation cohort has n=1294 patients with 37
+        positives (per attrition_report.csv + the issue body) and a
+        random-classifier AUC-PR baseline ~= 0.029. The K=5 lift factor
+        sets the floor at 5 * (37/1294) = 0.14297 (no FLOOR_FLOOR clamp).
+
+        Codex pass-3 LOW-1: the issue-body "val_auc_pr=0.0895" was the
+        observed run reported in the issue + PR #175 closure memo. A
+        fresh local run on this worktree (different HPO seed, hpo_trials=3
+        vs the issue's 50) yielded val_auc_pr=0.1020 with a slightly
+        different stratified split (val_prevalence=0.0388). Either way
+        the model is well below the prevalence-aware floor (3.1x-3.6x
+        random baseline, not the required 5x), so the gate correctly
+        fires for the documented cohort.
         """
         floor = compute_auc_pr_floor(n_pos=37, n_total=1294)
-        # 5 * (37/1294) = 0.14296... -> round to 4 dp
+        # 5 * (37/1294) = 0.14297... -> round to 4 dp
         assert math.isclose(floor, 5.0 * 37 / 1294, abs_tol=1e-9)
         # Sanity: this exceeds FLOOR_FLOOR (no clamp), and exceeds the
-        # observed val_auc_pr=0.0895 (so the model correctly fails).
+        # range of plausible val_auc_pr values for this cohort.
         assert floor > MIN_AUC_PR_FLOOR_FLOOR
+        # Both the issue-body value (0.0895) and the local re-run
+        # (0.1020) are below the floor, so the gate fires in both
+        # provenance scenarios.
         assert floor > 0.0895
+        assert floor > 0.1020
 
     def test_empty_returns_floor_floor(self) -> None:
         assert compute_auc_pr_floor(n_pos=0, n_total=0) == MIN_AUC_PR_FLOOR_FLOOR

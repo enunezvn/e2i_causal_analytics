@@ -447,6 +447,13 @@ class RiskScoreTrainer:
             raise ValueError("y_train must be 0/1 binary labels.")
         if set(np.unique(y_val_arr)).difference({0, 1}):
             raise ValueError("y_val must be 0/1 binary labels.")
+        # Codex pass-3 MEDIUM-2: anti-leakage runs BEFORE the y_val
+        # single-class check. Leakage is a structural correctness
+        # property of the feature set; class imbalance is a data-shape
+        # property. If both fail, the structural error must surface
+        # first so the operator fixes the root cause.
+        assert_no_leakage_in_features(feat_names)
+
         # Codex pass-2 MEDIUM-1: validation set must contain BOTH classes.
         # Calibration via CalibratedClassifierCV(cv='prefit') requires at
         # least one positive AND one negative in y_val (sklearn raises
@@ -460,9 +467,6 @@ class RiskScoreTrainer:
                 "Calibration + AUC-PR are undefined on single-class "
                 "validation sets. Re-stratify the split."
             )
-
-        # Anti-leakage contract.
-        assert_no_leakage_in_features(feat_names)
 
         # Coerce features to numeric (XGBoost / LightGBM expect numeric).
         # Non-numeric columns trigger an informative error rather than silent
