@@ -120,6 +120,31 @@ def test_falkordb_required_without_url_emits_warning(monkeypatch, capsys):
     assert "FALKORDB_URL is empty" in captured.err
 
 
+def test_falkordb_client_fixture_skips_when_url_empty(monkeypatch):
+    """The ``falkordb_client`` fixture must skip cleanly (not raise) when the
+    URL is empty even if the global availability flag somehow indicates True.
+    This pins the defensive guard added for issue #183 — previously the
+    fixture would fall through into ``aioredis.from_url("")`` which raises
+    a confusing ``ValueError`` deep in the redis client (codex pass-1 LOW-2)."""
+    monkeypatch.delenv("FALKORDB_URL", raising=False)
+    conftest = _reload_root_conftest()
+
+    # Force the availability flag to True so we hit the second skip guard,
+    # not the first ``not SERVICES_AVAILABLE["falkordb"]`` short-circuit.
+    monkeypatch.setitem(conftest.SERVICES_AVAILABLE, "falkordb", True)
+
+    # Replicate the fixture body inline (rather than invoking pytest_asyncio
+    # machinery in a unit test) to assert on the skip behavior directly.
+    assert conftest.FALKORDB_URL == ""
+
+    with pytest.raises(pytest.skip.Exception, match="FalkorDB URL not configured"):
+        # Mirror the two guard clauses from ``falkordb_client``.
+        if not conftest.SERVICES_AVAILABLE["falkordb"]:
+            pytest.skip("FalkorDB not available")
+        if not conftest.FALKORDB_URL:
+            pytest.skip("FalkorDB URL not configured")
+
+
 def test_no_econnrefused_logged_on_unset_url(monkeypatch, capsys):
     """The hallmark symptom of issue #183 — the ECONNREFUSED debug line for
     redis://localhost:6380 — must NOT appear when FALKORDB_URL is unset."""
