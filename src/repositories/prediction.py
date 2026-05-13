@@ -8,6 +8,24 @@ from typing import Any, Dict, List, Optional
 
 from src.repositories.base import SplitAwareRepository
 
+# Issue #188 (codex pass-3 MEDIUM-1): centralize the sentinel filter.
+# Audit rows written by src/tasks/risk_score_prediction_tasks.py when a
+# model failed its honest-failure gate carry prediction_class equal to
+# this sentinel. They MUST be excluded from every actionable / aggregate
+# read path on ml_predictions; otherwise the gating decision is leaked
+# into downstream rankings, calibration summaries, drift detection, etc.
+GATED_HONEST_FAILURE_SENTINEL: str = "gated_honest_failure"
+
+
+def _exclude_gated_rows(query: Any) -> Any:
+    """Apply the gated-row filter to a supabase-style query builder.
+
+    Centralizing the filter here keeps the sentinel value in one place
+    and makes it trivial to add new actionable read paths without
+    re-deriving the filter semantics.
+    """
+    return query.neq("prediction_class", GATED_HONEST_FAILURE_SENTINEL)
+
 
 class PredictionRepository(SplitAwareRepository):
     """
@@ -45,6 +63,14 @@ class PredictionRepository(SplitAwareRepository):
 
         Returns:
             List of Prediction records
+
+        Note (issue #188): unlike the other actionable read paths
+        (``get_top_predictions``, ``get_by_patient``, etc.) this method
+        does NOT filter out gated audit rows. ``get_by_model`` is the
+        diagnostic / audit-trail entry point — including
+        ``prediction_class='gated_honest_failure'`` rows here is
+        intentional so operators can inspect why specific
+        (patient, model, day) triples were gated.
         """
         return await self.get_many(
             filters={"model_version": model_id},
@@ -77,14 +103,10 @@ class PredictionRepository(SplitAwareRepository):
         if split:
             query = query.eq("data_split", split)
 
-        # Issue #188: exclude gated audit rows from ranking. The Celery
-        # task writes these rows to ml_predictions for observability when
-        # a model failed its honest-failure gate, but their
-        # prediction_value carries the raw (un-gated) score; they MUST
-        # NOT be returned to downstream consumers as actionable
-        # rankings. The sentinel is GATED_SENTINEL_PREDICTION_CLASS
-        # (src/tasks/risk_score_prediction_tasks.py).
-        query = query.neq("prediction_class", "gated_honest_failure")
+        # Issue #188: exclude gated audit rows from ranking. Centralized
+        # filter via _exclude_gated_rows() so every actionable read path
+        # uses the same sentinel value (codex pass-3 MEDIUM-1).
+        query = _exclude_gated_rows(query)
 
         # Order by prediction_value descending to get top predictions
         result = await query.order("prediction_value", desc=True).limit(top_k).execute()
@@ -115,16 +137,14 @@ class PredictionRepository(SplitAwareRepository):
                 "total_predictions": 0,
             }
 
-        # Issue #188: exclude gated audit rows from performance aggregation.
-        # Gated rows are written for observability when a model failed its
-        # honest-failure gate; they MUST NOT contribute to the averaged
-        # pr_auc / brier_score reported as model performance, otherwise
-        # the gating mechanism would silently double-count the failure.
+        # Issue #188: exclude gated audit rows from performance aggregation
+        # via the centralized sentinel filter (codex pass-3 MEDIUM-1).
         result = await (
-            self.client.table(self.table_name)
-            .select("model_pr_auc, brier_score, rank_metrics")
-            .eq("model_version", model_id)
-            .neq("prediction_class", "gated_honest_failure")
+            _exclude_gated_rows(
+                self.client.table(self.table_name)
+                .select("model_pr_auc, brier_score, rank_metrics")
+                .eq("model_version", model_id)
+            )
             .limit(10000)
             .execute()
         )
@@ -196,6 +216,11 @@ class PredictionRepository(SplitAwareRepository):
         if prediction_type:
             query = query.eq("prediction_type", prediction_type)
 
+        # Issue #188 (codex pass-3 MEDIUM-1): patient history must not
+        # surface gated audit rows — patient-facing displays would show
+        # a gated raw score as actionable.
+        query = _exclude_gated_rows(query)
+
         result = await query.order("prediction_timestamp", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in result.data]
@@ -220,11 +245,17 @@ class PredictionRepository(SplitAwareRepository):
         if not self.client:
             return []
 
+        # Issue #188 (codex pass-3 MEDIUM-1): high-confidence reads must
+        # exclude gated audit rows. The Celery gate retains the raw
+        # confidence_score so a gated row could spuriously satisfy the
+        # threshold predicate.
         result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("model_version", model_id)
-            .gte("confidence_score", confidence_threshold)
+            _exclude_gated_rows(
+                self.client.table(self.table_name)
+                .select("*")
+                .eq("model_version", model_id)
+                .gte("confidence_score", confidence_threshold)
+            )
             .order("confidence_score", desc=True)
             .limit(limit)
             .execute()
@@ -259,10 +290,15 @@ class PredictionRepository(SplitAwareRepository):
                 "total_evaluated": 0,
             }
 
+        # Issue #188 (codex pass-3 MEDIUM-1): calibration aggregates must
+        # exclude gated audit rows — including them would average the raw
+        # calibration_score of a gated model into the reported summary.
         result = await (
-            self.client.table(self.table_name)
-            .select("calibration_score, brier_score")
-            .eq("model_version", model_id)
+            _exclude_gated_rows(
+                self.client.table(self.table_name)
+                .select("calibration_score, brier_score")
+                .eq("model_version", model_id)
+            )
             .limit(10000)
             .execute()
         )
