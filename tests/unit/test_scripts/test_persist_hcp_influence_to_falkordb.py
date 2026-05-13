@@ -143,26 +143,28 @@ class _FakeFalkorGraph:
 
         # Read edges. The production Cypher AFTER codex pass-2 MEDIUM
         # uses an UNDIRECTED match (`-` no arrow) with `WHERE a.id < b.id`
-        # to canonicalize endpoint order on readback. The fake honors
-        # the same predicate so edges stored under non-canonical
-        # endpoint order would surface as test failures rather than
-        # silently passing.
-        if "r.weight AS weight" in c:
+        # AND `WITH ... max(r.weight)` aggregation (pass-3 MEDIUM) so
+        # duplicate legacy rows are deduplicated. The fake mirrors that
+        # aggregation by collapsing on the canonical key and taking max
+        # weight.
+        if "max(r.weight) AS weight" in c or "r.weight AS weight" in c:
             cohort = params["cohort_id"]
-            rows: list[list[Any]] = []
+            agg: dict[tuple[str, str], int] = {}
             for k, v in self.edges.items():
                 if k[0] != cohort:
                     continue
-                src, dst = k[1], k[2]
-                # Mirror the production `WHERE a.id < b.id` filter.
-                if src < dst:
-                    rows.append([src, dst, v["weight"]])
-                elif dst < src:
-                    # Non-canonical persistence path — also emit so the
-                    # readback Cypher can deduplicate via DISTINCT in
-                    # production. The fake is permissive so a buggy
-                    # persistence isn't masked at readback time.
-                    rows.append([dst, src, v["weight"]])
+                a_id, b_id = k[1], k[2]
+                # Mirror the production `WHERE a.id < b.id` filter +
+                # the canonical-key aggregation.
+                if a_id < b_id:
+                    key = (a_id, b_id)
+                elif b_id < a_id:
+                    key = (b_id, a_id)
+                else:
+                    continue  # self-loop with `a.id < b.id` predicate
+                w = int(v["weight"])
+                agg[key] = max(agg.get(key, 0), w)
+            rows = [[src, dst, w] for (src, dst), w in agg.items()]
             return _Result(result_set=rows)
 
         # Cohort-scoped influence-network traversal (depth 1 only for
@@ -455,6 +457,29 @@ class TestIdempotency:
         assert len(fake.edges) == 1
         # ON MATCH SET r.weight = row.weight → the new weight wins.
         assert fake.edges[key]["weight"] == 5
+
+    def test_readback_dedupes_legacy_duplicate_directed_edges(self) -> None:
+        """Codex pass-3 MEDIUM: legacy duplicate edges aggregate to one row.
+
+        If a pre-canonicalisation run left both ``(A)->(B)`` and
+        ``(B)->(A)`` for the same logical pair, the undirected readback
+        would surface two rows with src=A, dst=B. The Cypher uses
+        ``WITH ... max(r.weight) AS weight`` to collapse them. The
+        fake mirrors that aggregation; this test seeds the legacy
+        artifact and asserts the readback returns ONE edge with the
+        max weight.
+        """
+        fake = _FakeFalkorGraph()
+        # Pretend pre-canonicalisation persisted both directions with
+        # divergent weights — a legacy artifact.
+        fake.nodes[("legacy", "A")] = {"id": "A", "cohort_id": "legacy"}
+        fake.nodes[("legacy", "B")] = {"id": "B", "cohort_id": "legacy"}
+        fake.edges[("legacy", "A", "B")] = {"weight": 3, "cohort_id": "legacy"}
+        fake.edges[("legacy", "B", "A")] = {"weight": 7, "cohort_id": "legacy"}
+
+        deg, _ = read_influence_from_falkordb(fake, "legacy")
+        # Both A and B see exactly one neighbour (each other).
+        assert deg == {"A": 1, "B": 1}
 
     def test_double_ingest_no_doubling(self) -> None:
         fake = _FakeFalkorGraph()
