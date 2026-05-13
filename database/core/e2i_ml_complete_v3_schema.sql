@@ -487,6 +487,19 @@ CREATE TABLE treatment_events (
     facility_id VARCHAR(20),
     cost DECIMAL(10,2),
     outcome_indicator VARCHAR(20),
+    -- Issue #157 PR C: CSU biologic-fill claim-pattern response proxy.
+    -- Vocabulary: controlled, inadequate, uncontrolled, refractory,
+    -- discontinued. NULL outside the biologic-fill universe or when the
+    -- >=60d coverage / >=90d follow-up pre-conditions are unmet. See
+    -- migration 037_treatment_response_column.sql.
+    treatment_response VARCHAR(20)
+        CHECK (treatment_response IS NULL OR treatment_response IN (
+            'controlled',
+            'inadequate',
+            'uncontrolled',
+            'refractory',
+            'discontinued'
+        )),
     adverse_event_flag BOOLEAN DEFAULT FALSE,
     discontinuation_flag BOOLEAN DEFAULT FALSE,
     discontinuation_reason VARCHAR(100),

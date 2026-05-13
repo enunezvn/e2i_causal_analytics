@@ -245,6 +245,64 @@ Schema migration: `database/migrations/036_add_payer_category.sql`
 (forward-only; CHECK constraint on the 8 values; partial index on
 `payer_category IS NOT NULL`).
 
+## treatment_response CSU claim-pattern proxies (issue #157 PR C / Sub-PR-A)
+
+`treatment_response` is a claim-pattern proxy for CSU biologic response,
+written to `treatment_events.treatment_response` on the **first biologic-fill
+row within the post-init 180-day window** of the discontinuation cohort. CSU
+has no validated lab biomarker for clinical control (UAS7/UCT/CU-Q2oL are
+patient-reported and absent from Optum claims), so we derive a 5-value
+classifier from claim signals.
+
+**Pre-conditions** (otherwise emit `treatment_response = NULL`):
+
+| Pre-condition | Threshold | Source |
+|---|---|---|
+| Treatment initiated | ≥1 fill of Xolair or Dupixent | `_csu_biologic_mask` |
+| Persistence | ≥60d coverage by `days_sup` (union of fills) | `_coverage_days` |
+| Follow-up | ≥90d observation window | `TREATMENT_RESPONSE_WINDOW_DAYS=180` |
+
+**Classification rules** (first match wins):
+
+| Value | Rule |
+|---|---|
+| `discontinued` | Gap > 90d between fill_end and next fill within window. |
+| `refractory` | Switch to OTHER biologic (different NDC prefix) OR addition of immunosuppressant (`NON_TARGET_DRUG_CLASSES["immunosupp"]` = cyclosporine, methotrexate, azathioprine, mycophenolate). |
+| `inadequate` | ≥1 oral steroid burst (prednisone OR methylprednisolone, `days_sup ≥ 5`) OR ≥1 urticaria/angioedema ED visit (`pos=23` AND dx in L50.x or T78.3). |
+| `controlled` | Persistence met, no rescue events, no ED visit. |
+
+`uncontrolled` is in the schema vocabulary but is reserved for non-Optum
+cohorts (EHR-anchored UAS7/UCT cohorts) — the Optum converter never emits
+that value because the distinction between "uncontrolled" and "inadequate
+response to biologic" is not claim-derivable.
+
+**outcome_indicator mapping**:
+
+| treatment_response | outcome_indicator |
+|---|---|
+| `controlled` | `improved` |
+| `inadequate`, `uncontrolled`, `refractory` | `worsened` |
+| `discontinued` (no subsequent fill outside window) | `worsened` |
+| `discontinued` (subsequent fill outside window — re-engagement signal) | `stable` |
+
+**Anti-leakage discipline**: biologic-fill events are emitted to
+`treatment_events` for the discontinuation cohort but are NEVER written to
+the journey feature matrix consumed by the ML pipeline. The risk model
+(issue #157 Sub-PR-B) still trains on pre-index lookback-only features.
+
+**Important caveats**:
+- `proc_code` is the only CMS POS-bearing column in Optum, but the
+  `procedure.parquet` does NOT include POS — only the `inpatient.parquet`
+  exposes `pos`. ED visits are therefore detected from inpatient claims
+  only (POS=23). This is the documented Optum POS-sparsity caveat (issue
+  #156 PR B item 7).
+- The rule order is non-commutative: a patient with BOTH a >90d gap and a
+  switch within the window classifies as `discontinued` (rule 1) not
+  `refractory` (rule 2). This matches the spec's "first match wins" intent.
+
+Schema migration: `database/migrations/037_treatment_response_column.sql`
+(forward-only; CHECK constraint on the 5-value vocabulary; NULL permitted).
+
 ## Attrition expectations
 
 Given the Optum parquet's fragmented patient panels (5,000 demographics rows,
