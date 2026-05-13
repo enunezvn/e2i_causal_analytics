@@ -166,11 +166,21 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
 
     Statements inside dollar-quoted PL/pgSQL function bodies are
     skipped. The scanner uses ``_split_line_at_dollar_boundaries`` to
-    extract per-line script-level segments — this correctly handles
-    both whole-line-inside-dollar-block (returns empty segments) and
-    the edge case where the dollar block closes mid-line and is
-    followed by additional script SQL on the same line (returns just
-    the post-close tail as a segment). Codex pass-2 LOW-2.
+    extract per-line script-level segments, then splits each segment
+    on ``;`` to recover individual statements. Each candidate
+    statement-head is then matched against the txn regex.
+
+    This handles:
+
+    * The historical bug shape: top-of-line ``BEGIN;`` / ``COMMIT;``.
+    * Whole-line-inside-dollar-block: zero script segments → skipped.
+    * Mid-line dollar close followed by script SQL on the same line:
+      the post-close tail is captured as a script segment, then
+      semicolon-split into statements (codex pass-3 LOW-1).
+    * Multi-statement-per-line script SQL like
+      ``ALTER TABLE foo ADD COLUMN bar INTEGER; COMMIT;`` —
+      semicolon-split surfaces the ``COMMIT`` as its own statement
+      and flags it.
     """
     findings: list[tuple[int, str]] = []
     text = sql_path.read_text(encoding="utf-8")
@@ -183,20 +193,34 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
             in_dollar_block,
             open_tag,
         )
-        # Concatenate script-level segments (with whitespace between)
-        # and scan the result. Joining is safe because:
-        # - The regex anchors on ``^...$`` after strip, so leading or
-        #   trailing whitespace and ``--`` comments don't matter.
-        # - A txn-control statement straddling a dollar boundary would
-        #   be syntactically invalid SQL anyway (the closer or opener
-        #   appears inside the statement-head text), so we will not
-        #   misclassify such pathological inputs.
-        joined = " ".join(segments)
-        stripped = _strip_inline_comment(joined).strip()
-        if not stripped:
+        if not segments:
             continue
-        if _TXN_STATEMENT_RE.match(stripped):
-            findings.append((lineno, raw_line.rstrip()))
+        # Strip inline ``--`` comments from each segment BEFORE
+        # joining. (After joining, a ``--`` in one segment would
+        # consume the next segment's text too, missing real
+        # transaction-control statements.)
+        cleaned_segments = [_strip_inline_comment(seg) for seg in segments]
+        joined = " ".join(cleaned_segments)
+        # Split on ``;`` to recover individual statements; each
+        # statement is then stripped and matched against the regex
+        # WITHOUT requiring a trailing ``;`` (we already split on
+        # it). The regex was authored to match the full statement
+        # including ``;``; we strip the ``;`` from the regex by
+        # using a "head-only" variant. Equivalently: re-append a
+        # ``;`` to each non-empty stripped segment before matching.
+        for raw_statement in joined.split(";"):
+            statement = raw_statement.strip()
+            if not statement:
+                continue
+            # Re-append the ``;`` we split on so the existing regex
+            # (which anchors on ``;\s*$``) still matches.
+            candidate = statement + ";"
+            if _TXN_STATEMENT_RE.match(candidate):
+                findings.append((lineno, raw_line.rstrip()))
+                # Only one finding per line is useful — additional
+                # txn statements on the same line will point at the
+                # same line and aren't actionable separately.
+                break
     return findings
 
 
@@ -412,18 +436,15 @@ def test_scanner_documented_limit_on_begin_atomic_function_bodies(
 def test_scanner_detects_txn_control_after_same_line_dollar_close(
     tmp_path: Path,
 ) -> None:
-    """Codex pass-2 LOW-2: if a dollar-quoted block closes mid-line
-    and the same line then has script-level transaction-control SQL,
-    that SQL must NOT be silently exempted by virtue of sharing a
-    line with the closer.
+    """Codex pass-2 LOW-2 + pass-3 LOW-1: if a dollar-quoted block
+    closes mid-line and the same line then has script-level
+    transaction-control SQL, that SQL must NOT be silently exempted.
 
-    Postgres allows ``$$; COMMIT;`` on a single line (the function
-    body closes at ``$$``, the ``;`` ends the ``CREATE FUNCTION``
-    statement, and ``COMMIT;`` is then a separate script-level
-    statement). The runner-contract violation is real in that case.
-
-    The fix is to extract per-line script-level segments rather than
-    skip whole lines that started inside a dollar block.
+    Postgres allows ``$$ LANGUAGE plpgsql; COMMIT;`` on a single line
+    (the function body closes at ``$$``, the ``;`` ends the
+    ``CREATE FUNCTION`` statement, ``COMMIT;`` is then a separate
+    script-level statement). Closed by adding semicolon-level
+    statement splitting in ``_scan_for_bare_txn`` (pass-3).
     """
     sql = tmp_path / "same_line_close_then_commit.sql"
     sql.write_text(
@@ -435,24 +456,32 @@ def test_scanner_detects_txn_control_after_same_line_dollar_close(
         encoding="utf-8",
     )
     findings = _scan_for_bare_txn(sql)
-    # Note: regex anchors on `^...$` after strip; the segment from the
-    # last line (after dollar close) joins to e.g. " LANGUAGE plpgsql; COMMIT;"
-    # which (post-strip) does NOT match `^COMMIT;$`. So this test
-    # currently documents a SECOND known limit: same-line script SQL
-    # after the dollar close is collected as a segment but the regex
-    # anchor requires the segment to be a single statement.
-    #
-    # This is a documented gap, not a fix. The runner-contract
-    # invariant is robust against pre-existing migrations because they
-    # all use one-statement-per-line convention. Future migrations
-    # that violate the one-line convention will need a fuller
-    # statement splitter (split on `;` at script level). Pin this so
-    # the limit stays visible.
-    assert findings == [], (
-        f"unexpected match — if we now split per-statement at the "
-        f"semicolon level, update this test rather than silently "
-        f"flipping behavior. Findings: {findings}"
+    assert len(findings) == 1, f"expected 1 finding on line 5, got: {findings}"
+    assert findings[0][0] == 5
+    assert "COMMIT;" in findings[0][1].upper()
+
+
+def test_scanner_detects_multi_statement_per_line_txn_control(tmp_path: Path) -> None:
+    """Codex pass-3 LOW-1: multi-statement-per-line script SQL must
+    surface txn-control as its own statement. The semicolon-level
+    splitter handles this.
+
+    Example pattern (deliberately ugly, but valid SQL):
+
+        ALTER TABLE foo ADD COLUMN bar INTEGER; COMMIT;
+
+    The legitimate ``ALTER`` doesn't trip the regex; ``COMMIT;``
+    does.
+    """
+    sql = tmp_path / "multi_statement_line.sql"
+    sql.write_text(
+        "ALTER TABLE foo ADD COLUMN bar INTEGER; COMMIT;\n",
+        encoding="utf-8",
     )
+    findings = _scan_for_bare_txn(sql)
+    assert len(findings) == 1, f"expected 1 finding on line 1, got: {findings}"
+    assert findings[0][0] == 1
+    assert "COMMIT;" in findings[0][1].upper()
 
 
 def test_scanner_detects_isolated_script_commit_after_dollar_close(
